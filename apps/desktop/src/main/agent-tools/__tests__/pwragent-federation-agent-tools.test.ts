@@ -151,6 +151,25 @@ describe("pwragent federation agent tools", () => {
       },
     },
     {
+      name: "rejects an unknown requiredWorkMode before dispatching create_instance_thread",
+      tool: "create_instance_thread",
+      arguments: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        requiredWorkMode: "container",
+      },
+    },
+    {
+      name: "rejects a requiredWorkMode that contradicts workMode before dispatching create_instance_thread",
+      tool: "create_instance_thread",
+      arguments: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        workMode: "local",
+        requiredWorkMode: "worktree",
+      },
+    },
+    {
       name: "rejects an unknown worktreeBase before dispatching create_instance_thread",
       tool: "create_instance_thread",
       arguments: {
@@ -276,6 +295,7 @@ describe("pwragent federation agent tools", () => {
           workMode: "worktree",
           branchName: " origin/main ",
           worktreeBase: "default_branch",
+          requiredWorkMode: "worktree",
           groupingMode: "subthread",
           fastMode: true,
           tokenMiserEnabled: false,
@@ -300,6 +320,7 @@ describe("pwragent federation agent tools", () => {
         workMode: "worktree",
         branchName: "origin/main",
         worktreeBase: "default_branch",
+        requiredWorkMode: "worktree",
         groupingMode: "subthread",
         fastMode: true,
         tokenMiserEnabled: false,

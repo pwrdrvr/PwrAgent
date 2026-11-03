@@ -6850,6 +6850,28 @@ function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): bo
   );
 }
 
+/**
+ * Refuse a thread whose workspace resolved to another mode than the caller
+ * required, after removing what was prepared. A worktree request otherwise
+ * falls back to sharing the project checkout.
+ */
+async function refuseResolvedWorkMode(params: {
+  required: LaunchpadWorkMode;
+  resolved: LaunchpadWorkMode | undefined;
+  rollback: (() => Promise<void>) | undefined;
+  backend: AppServerBackendKind;
+}): Promise<never> {
+  await params.rollback?.().catch((error) => {
+    backendRegistryLog.warn("required work mode rollback failed", {
+      backend: params.backend,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  throw new Error(
+    `Requested ${params.required} workspace, but workspace preparation resolved to ${params.resolved ?? "none"}. Verify the source directory is a Git repository and any branchName resolves to an existing branch or ref.`,
+  );
+}
+
 function defaultLaunchpadWorkMode(
   request: Pick<EnsureDirectoryLaunchpadRequest, "directoryKind" | "directoryPath">,
   defaults: NavigationLaunchpadDefaults
@@ -20130,15 +20152,12 @@ export class DesktopBackendRegistry {
           : buildLocalLinkedDirectory(cwd);
     }
     if (requiredWorkMode && effectiveWorkMode !== requiredWorkMode) {
-      await preparedWorkspaceRollback?.().catch((error) => {
-        backendRegistryLog.warn("startThread workspace rollback failed", {
-          backend,
-          error: error instanceof Error ? error.message : String(error),
-        });
+      await refuseResolvedWorkMode({
+        required: requiredWorkMode,
+        resolved: effectiveWorkMode,
+        rollback: preparedWorkspaceRollback,
+        backend,
       });
-      throw new Error(
-        `Requested ${requiredWorkMode} workspace, but workspace preparation resolved to ${effectiveWorkMode ?? "none"}. Verify the source directory is a Git repository and branchName resolves to an existing branch or ref.`,
-      );
     }
     let codexEnvironmentRuntime = request.codexEnvironmentRuntime;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
@@ -29813,6 +29832,17 @@ export class DesktopBackendRegistry {
     // Retain ownership before the next await/check: cancellation may have
     // overtaken preparation. Existing/local workspaces supply no rollback.
     if (operation) operation.workspaceRollback = preparedWorkspace.rollback;
+    if (request.requiredWorkMode && preparedWorkspace.workMode !== request.requiredWorkMode) {
+      // Refuse before a thread exists. A worktree request that falls back
+      // would otherwise share the project checkout.
+      if (operation) operation.workspaceRollback = undefined;
+      await refuseResolvedWorkMode({
+        required: request.requiredWorkMode,
+        resolved: preparedWorkspace.workMode,
+        rollback: preparedWorkspace.rollback,
+        backend: launchpad.backend,
+      });
+    }
     const workspace =
       launchpad.directoryKind === "workspace" && !preparedWorkspace.cwd
         ? {
