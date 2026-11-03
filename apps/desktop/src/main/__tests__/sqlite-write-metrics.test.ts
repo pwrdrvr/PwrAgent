@@ -2784,6 +2784,71 @@ describe("sqlite write metrics", () => {
     });
   });
 
+  it("bounds automation lifecycle writes and ignores duplicate terminal outcomes", async () => {
+    const automationStore = new AutomationStore(stateDb);
+    automationStore.createAutomation({
+      id: "automation-lifecycle",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      now: 0,
+    });
+    automationStore.createRun({
+      id: "run-1",
+      automationId: "automation-lifecycle",
+      trigger: "manual",
+      now: 0,
+    });
+
+    const lifecycle = await measureSqliteWrites(() => {
+      automationStore.markRunStarted({ runId: "run-1", backendTurnId: "turn-1", now: 100 });
+      automationStore.markRunTerminal({ runId: "run-1", status: "completed", now: 1_000 });
+      automationStore.markRunStarted({
+        runId: "run-1",
+        backendThreadId: "headless-1",
+        backendTurnId: "turn-1",
+        queueEntryId: "queue-1",
+        now: 0,
+      });
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-run-lifecycle",
+      note: "One start, one terminal outcome and one late identity acknowledgement: 4 boundary commits, ~86.5 KB/run or ~8.7 MB/day at 100 runs/day; 0 MB/day idle.",
+      writes: lifecycle.writes,
+    });
+
+    const duplicates = await measureSqliteWrites(() => {
+      for (let index = 0; index < 100; index += 1) {
+        automationStore.markRunStarted({
+          runId: "run-1",
+          backendThreadId: "headless-1",
+          backendTurnId: "turn-1",
+          queueEntryId: "queue-1",
+          now: 2_000 + index,
+        });
+        automationStore.markRunQueued({ runId: "run-1", queueEntryId: "queue-1", now: 2_000 + index });
+        for (const status of ["completed", "failed", "cancelled", "skipped"] as const) {
+          automationStore.markRunTerminal({ runId: "run-1", status, errorMessage: "Late", now: 2_000 + index });
+        }
+      }
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-run-duplicate-lifecycle",
+      note: "100 repeated started/queued acknowledgements and conflicting terminal outcomes: zero commits, 0 MB/day.",
+      writes: duplicates.writes,
+    });
+    expect(automationStore.getRun("run-1")).toMatchObject({
+      status: "completed",
+      completedAt: 1_000,
+      startedAt: 100,
+      backendThreadId: "headless-1",
+      backendTurnId: "turn-1",
+      queueEntryId: "queue-1",
+    });
+  });
+
   it("holds a burst of automation pricing snapshots to one run-usage write", async () => {
     vi.useFakeTimers();
     const automationStore = new AutomationStore(stateDb);

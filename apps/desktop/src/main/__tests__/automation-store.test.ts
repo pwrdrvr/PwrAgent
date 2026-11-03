@@ -15,7 +15,111 @@ afterEach(() => {
   stateDb.close();
 });
 
+function createRun() {
+  store.createAutomation({
+    id: "automation-1",
+    backend: "codex",
+    threadId: "thread-1",
+    name: "Check email",
+    taskPrompt: "Check mail",
+    schedule: { kind: "interval", every: 5, unit: "minutes" },
+    now: 0,
+  });
+  store.createRun({ id: "run-1", automationId: "automation-1", trigger: "manual", now: 0 });
+}
+
 describe("AutomationStore", () => {
+  it("keeps a run running when its queued acknowledgement arrives late", () => {
+    createRun();
+    store.markRunStarted({ runId: "run-1", backendTurnId: "turn-1", now: 100 });
+
+    expect(store.markRunQueued({ runId: "run-1", queueEntryId: "queue-1", now: 50 }))
+      .toMatchObject({ status: "running", startedAt: 100, queueEntryId: "queue-1" });
+    store.markRunStarted({
+      runId: "run-1",
+      backendThreadId: "headless-1",
+      backendTurnId: "turn-1",
+      now: 200,
+    });
+
+    expect(store.getRun("run-1")).toMatchObject({
+      status: "running",
+      startedAt: 100,
+      backendThreadId: "headless-1",
+      backendTurnId: "turn-1",
+      queueEntryId: "queue-1",
+    });
+    expect(store.getRun("run-1")?.queuedAt).toBeUndefined();
+  });
+
+  it.each(["completed", "failed", "cancelled", "skipped"] as const)(
+    "retains late identities without reopening a %s run",
+    (status) => {
+      createRun();
+      store.markRunTerminal({ runId: "run-1", status, errorMessage: "Original outcome", now: 1_000 });
+      const automation = store.getAutomation("automation-1");
+
+      store.markRunStarted({
+        runId: "run-1",
+        backendThreadId: "headless-1",
+        backendTurnId: "turn-1",
+        now: 2_000,
+      });
+      store.markRunQueued({ runId: "run-1", queueEntryId: "queue-1", now: 3_000 });
+      // Conflicting late identities must not replace the first known turn.
+      store.markRunStarted({
+        runId: "run-1",
+        backendThreadId: "headless-other",
+        backendTurnId: "turn-other",
+        now: 4_000,
+      });
+
+      expect(store.getRun("run-1")).toMatchObject({
+        status,
+        completedAt: 1_000,
+        errorMessage: "Original outcome",
+        backendThreadId: "headless-1",
+        backendTurnId: "turn-1",
+        queueEntryId: "queue-1",
+      });
+      expect(store.getRun("run-1")?.startedAt).toBeUndefined();
+      expect(store.getRun("run-1")?.queuedAt).toBeUndefined();
+      expect(store.findActiveRunForAutomation("automation-1")).toBeUndefined();
+      expect(store.getAutomation("automation-1")).toEqual(automation);
+    },
+  );
+
+  it.each(["completed", "failed", "cancelled", "skipped"] as const)(
+    "ignores duplicate and conflicting terminal outcomes after %s",
+    (status) => {
+      createRun();
+      const first = store.markRunTerminal({
+        runId: "run-1",
+        status,
+        errorMessage: "First outcome",
+        now: 1_000,
+      });
+      expect(first?.status).toBe(status);
+      store.createRun({ id: "run-2", automationId: "automation-1", trigger: "manual", now: 2_000 });
+      store.markRunTerminal({ runId: "run-2", status: "completed", now: 3_000 });
+      const automation = store.getAutomation("automation-1");
+
+      for (const nextStatus of [status, "completed", "failed", "cancelled", "skipped"] as const) {
+        expect(store.markRunTerminal({
+          runId: "run-1",
+          status: nextStatus,
+          errorMessage: "Late outcome",
+          skipReason: "rate_limited",
+          coalescedCount: 10,
+          now: 4_000,
+        })).toEqual(first);
+      }
+
+      expect(store.getRun("run-1")).toEqual(first);
+      expect(store.getAutomation("automation-1")).toEqual(automation);
+    },
+  );
+
   it("creates, updates, pauses, resumes, and soft-deletes automation records", () => {
     const created = store.createAutomation({
       id: "automation-1",

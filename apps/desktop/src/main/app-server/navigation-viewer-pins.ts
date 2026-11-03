@@ -170,14 +170,50 @@ function remoteDirectoryPlaceholder(
     return undefined;
   }
 
+  // The key stays name-based so existing rows keep their grouping. The
+  // owner's repository identity rides along, so the row's New chat menu
+  // matches peers by origin rather than by folder name alone.
   return {
     key: `unconfigured-directory:${encodeURIComponent(label.toLowerCase())}`,
     kind: "directory",
     label,
     localAvailability: "unconfigured",
+    ...(home.repositoryKey ? { repositoryKey: home.repositoryKey } : {}),
+    ...(home.repositoryKeys?.length ? { repositoryKeys: [...home.repositoryKeys] } : {}),
     threadKeys: [],
     needsAttentionCount: 0,
   };
+}
+
+/**
+ * One placeholder can hold threads from two repositories that share a
+ * folder name. It then stands for both, so a peer with either counts as
+ * having the project. A thread whose owner sent no identity adds nothing:
+ * it cannot say which repository it is in.
+ */
+function mergePlaceholderRepositories(
+  existing: NavigationDirectorySummary,
+  incoming: NavigationDirectorySummary,
+): NavigationDirectorySummary {
+  const incomingRepositories = repositoriesOf(incoming);
+  if (!incomingRepositories.length) return existing;
+  const existingRepositories = repositoriesOf(existing);
+  if (!existingRepositories.length) {
+    return {
+      ...existing,
+      ...(incoming.repositoryKey ? { repositoryKey: incoming.repositoryKey } : {}),
+      ...(incoming.repositoryKeys ? { repositoryKeys: incoming.repositoryKeys } : {}),
+    };
+  }
+  const added = incomingRepositories.filter((repository) => !existingRepositories.includes(repository));
+  return added.length
+    ? { ...existing, repositoryKeys: [...existing.repositoryKeys ?? [], ...added] }
+    : existing;
+}
+
+function repositoriesOf(directory: NavigationDirectorySummary): string[] {
+  return [directory.repositoryKey, ...directory.repositoryKeys ?? []]
+    .filter((repository): repository is string => Boolean(repository));
 }
 
 function linkedDirectoryMatchesProjectKey(
@@ -229,6 +265,14 @@ export function attachRemoteThreadsToLocalDirectories(
       );
       if (homeIndex === -1) {
         homeIndex = mergedDirectories.push(placeholder) - 1;
+      }
+    } else if (mergedDirectories[homeIndex]!.localAvailability === "unconfigured") {
+      // A later thread finds an earlier thread's placeholder by name. Only
+      // its home project's identity belongs there: a secondary link's name
+      // can match too, and the home repository is a different project.
+      const placeholder = remoteDirectoryPlaceholder(thread);
+      if (placeholder?.key === mergedDirectories[homeIndex]!.key) {
+        mergedDirectories[homeIndex] = mergePlaceholderRepositories(mergedDirectories[homeIndex]!, placeholder);
       }
     }
     // Every member counts, including one that found the placeholder by

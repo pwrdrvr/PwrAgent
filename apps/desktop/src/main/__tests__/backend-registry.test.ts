@@ -58063,6 +58063,66 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("does not release a later monitor thread reservation while persisting its start origin", async () => {
+    const causalMessagingSource = { ownerId: "owner-1", requestId: "request-1" };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+      startTurnResults: [{ threadId: "monitor-thread", turnId: "monitor-turn" }],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    await overlayStore.upsertThreadMessageOrigin!({
+      backend: "codex", threadId: "thread-1", messageId: "user:turn-1",
+      origin: { kind: "messaging", causalMessagingSource },
+    });
+    const persistenceStarted = createDeferred<void>();
+    const releasePersistence = createDeferred<void>();
+    const upsertOrigin = overlayStore.upsertThreadMessageOrigin!;
+    overlayStore.upsertThreadMessageOrigin = async (params) => {
+      if (params.threadId === "monitor-thread" && params.messageId === "user:monitor-turn") {
+        persistenceStarted.resolve();
+        await releasePersistence.promise;
+      }
+      await upsertOrigin(params);
+    };
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1" } },
+      },
+    });
+    const delegation = codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: { task: "Watch an asynchronous task until it finishes." },
+      },
+    } as AppServerPendingRequestNotification);
+    try {
+      await persistenceStarted.promise;
+      const reservations = (registry as unknown as { reservedCodexStartThreadIds: Set<string> })
+        .reservedCodexStartThreadIds;
+      expect(reservations.has("monitor-thread")).toBe(false);
+      // A later operation acquires the same thread while persistence is pending.
+      reservations.add("monitor-thread");
+      releasePersistence.resolve();
+      await delegation;
+      expect(reservations.has("monitor-thread")).toBe(true);
+      reservations.delete("monitor-thread");
+    } finally {
+      releasePersistence.resolve();
+      await registry.close();
+    }
+  });
+
   it("gates a Codex monitor's recovery turn by its messaging origin", async () => {
     const causalMessagingSource = { ownerId: "owner-1", requestId: "request-1" };
     const codexClient = new MockBackendClient({
