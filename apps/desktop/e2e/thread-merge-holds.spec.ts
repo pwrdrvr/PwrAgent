@@ -73,9 +73,12 @@ test("waits until done with merging held and the composer available, then remind
     await expect(app.window.locator(".thread-merge-holds__status")).toHaveCount(0);
     // Marking it done reminds the operator of the steps; it starts no turn.
     await expect(stack).toContainText(/done: Rebase onto the validation fix \(\+1 more\)/);
-    await expect(stack).toContainText(/Squash merge|Retry merge/);
     await expect(stack).toContainText("Done: Windows validation passed on the fix.");
     await expect(stack).toContainText("Merge PR #17");
     await app.window.screenshot({ path: testInfo.outputPath("merge-hold-reminder.png") });
+    await expect(stack.getByRole("checkbox", { name: "Merge PR #17" })).not.toBeChecked();
+    // The merge card is the next page of the stack, and it can merge again.
+    await stack.getByRole("button", { name: "Next to-do" }).click();
+    await expect(stack.getByRole("button", { name: /Squash merge|Retry merge/ }).first()).toBeVisible();
   } finally { await app.close(); await rm(root, { recursive: true, force: true }); }
 });
