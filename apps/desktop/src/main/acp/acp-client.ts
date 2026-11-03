@@ -91,6 +91,17 @@ const ACP_CONTROL_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
 const ACP_TERMINAL_RESPONSE_GRACE_MS = 5_000;
 const ACP_PROVIDER_STATUS_REQUEST_TIMEOUT_MS = 20_000;
 const ACP_REWIND_REQUEST_TIMEOUT_MS = 20_000;
+const ACP_SESSION_CLOSE_REQUEST_TIMEOUT_MS = 20_000;
+/** Most sessions `closeIdleSessions` releases in one pass. */
+const ACP_IDLE_SESSION_CLOSE_LIMIT = 16;
+
+/** A session `closeIdleSessions` released, until a request reloads it. */
+type AcpIdleClosedSession = {
+  /** Settles when the session/close request does, whatever its outcome. */
+  closed: Promise<void>;
+  /** The session/load in flight, shared by every request that needs it. */
+  reopening?: Promise<void>;
+};
 
 // Host configurations keep record environments for process/Codex callers;
 // only ACP session requests use the protocol's array-based wire type.
@@ -268,6 +279,25 @@ export class AcpAgentClient {
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly retainableSessionIds = new Set<string>();
+  /**
+   * When each session last saw a request, an update or a permission request,
+   * by app session id. An ACP agent keeps a session's MCP servers running
+   * until session/close, so `closeIdleSessions` releases quiet ones.
+   */
+  private readonly sessionLastActivityAt = new Map<string, number>();
+  /** Permission requests the agent is waiting on, by app session id. */
+  private readonly pendingPermissionRequests = new Map<string, number>();
+  /**
+   * Sessions released by `closeIdleSessions`. They keep their id routing and
+   * in-memory transcript; the next request for one reloads it first.
+   */
+  private readonly idleClosedSessions = new Map<string, AcpIdleClosedSession>();
+  /**
+   * Helper sessions that session/load cannot rebuild as they were created:
+   * session/new carried an agent profile in `_meta`, or no MCP servers, and
+   * session/load would bring back neither. They are never idle-closed.
+   */
+  private readonly sessionsWithoutFaithfulReload = new Set<string>();
   private readonly now: () => number;
   private readonly approvalRequesterName: string;
   private unsubscribe?: () => void;
@@ -384,16 +414,203 @@ export class AcpAgentClient {
       throw new Error("An ACP operation is still active; the checkout was kept.");
     }
     if (!this.ownsSession(sessionId)) return true;
-    if (this.runtimeCapabilities?.agentCapabilities?.session?.close !== true) return false;
+    if (!this.supportsSessionClose()) return false;
     return await this.withOperation(async () => {
       const protocolSessionId = this.protocolSessionIdFor(sessionId);
-      await this.options.transport.request("session/close", { sessionId: protocolSessionId });
+      const idleClosed = this.idleClosedSessions.get(sessionId);
+      await idleClosed?.closed;
+      // An idle close already released it, unless a request reloaded it.
+      if (!idleClosed || this.idleClosedSessions.get(sessionId) !== idleClosed) {
+        await this.options.transport.request("session/close", { sessionId: protocolSessionId });
+      }
       this.loadedSessionCwds.delete(protocolSessionId);
       this.agentSessionIdsByAppSessionId.delete(sessionId);
       this.appSessionIdsByAgentSessionId.delete(protocolSessionId);
       this.retainableSessionIds.delete(sessionId);
+      this.forgetSessionActivity(sessionId);
       return true;
     });
+  }
+
+  private supportsSessionClose(): boolean {
+    return this.runtimeCapabilities?.agentCapabilities?.session?.close === true;
+  }
+
+  /**
+   * Close sessions nothing has used for `idleMs`, so the agent stops their
+   * MCP servers. An ACP agent keeps every session it created or loaded open
+   * until session/close; before this, one Grok process held 39 PwrAgent MCP
+   * bridges after a day.
+   *
+   * Only an agent that advertises both session/close and session/load
+   * qualifies, since the next request must reload the session. A session
+   * stays open while it runs a turn or a control prompt, loads, waits on a
+   * permission request, or `isSessionBusy` (the owner's view: queued input,
+   * reserved turns) says so, and the whole pass is skipped while another
+   * operation is in flight. The session keeps its routing and in-memory
+   * transcript; the next request for it runs session/load first.
+   */
+  async closeIdleSessions(params: {
+    idleMs: number;
+    isSessionBusy?: (sessionId: string) => boolean;
+    limit?: number;
+  }): Promise<string[]> {
+    if (
+      !this.supportsSessionClose()
+      || !this.supportsSessionLoad()
+      || this.hasActiveOperations()
+    ) {
+      return [];
+    }
+    const isIdle = (sessionId: string): boolean =>
+      this.sessionIsIdle(sessionId, params.idleMs)
+      && params.isSessionBusy?.(sessionId) !== true;
+    const candidates = [...this.loadedSessionCwds.keys()]
+      .map((protocolSessionId) => this.appSessionIdFor(protocolSessionId))
+      .filter(isIdle)
+      .slice(0, params.limit ?? ACP_IDLE_SESSION_CLOSE_LIMIT);
+    if (candidates.length === 0) return [];
+    const closed = await this.withOperation(async () => {
+      const released: string[] = [];
+      for (const sessionId of candidates) {
+        // A request may have touched it while an earlier close ran.
+        if (!isIdle(sessionId)) continue;
+        if (await this.closeIdleSession(sessionId)) released.push(sessionId);
+      }
+      return released;
+    });
+    if (closed.length > 0) {
+      acpClientLog.info("closed idle ACP sessions", {
+        backendId: this.options.backendId,
+        count: closed.length,
+        stillOpen: this.loadedSessionCwds.size,
+      });
+    }
+    return closed;
+  }
+
+  private sessionIsIdle(sessionId: string, idleMs: number): boolean {
+    const protocolSessionId = this.agentSessionIdsByAppSessionId.get(sessionId) ?? sessionId;
+    if (
+      !this.loadedSessionCwds.has(protocolSessionId)
+      || this.idleClosedSessions.has(sessionId)
+      || this.sessionsWithoutFaithfulReload.has(sessionId)
+      || this.activeTurns.has(sessionId)
+      || this.pendingPermissionRequests.has(sessionId)
+      || this.loadingSessions.has(protocolSessionId)
+      || this.suppressedControlPromptSessions.has(protocolSessionId)
+    ) {
+      return false;
+    }
+    const lastActiveAt = this.sessionLastActivityAt.get(sessionId);
+    if (lastActiveAt === undefined) {
+      // Loaded before tracking saw it; start its clock now.
+      this.touchSession(sessionId);
+      return false;
+    }
+    return this.now() - lastActiveAt >= idleMs;
+  }
+
+  private async closeIdleSession(sessionId: string): Promise<boolean> {
+    const protocolSessionId = this.protocolSessionIdFor(sessionId);
+    const cwd = this.loadedSessionCwds.get(protocolSessionId);
+    // Mark it closed before the request, so a request that starts meanwhile
+    // waits for the close and then reloads the session.
+    let settle!: () => void;
+    const idleClosed: AcpIdleClosedSession = {
+      closed: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    };
+    this.loadedSessionCwds.delete(protocolSessionId);
+    this.idleClosedSessions.set(sessionId, idleClosed);
+    try {
+      await this.options.transport.request(
+        "session/close",
+        { sessionId: protocolSessionId },
+        ACP_SESSION_CLOSE_REQUEST_TIMEOUT_MS,
+      );
+      this.sessionLastActivityAt.delete(sessionId);
+      return true;
+    } catch (error) {
+      // The agent may still hold the session; keep treating it as loaded.
+      if (this.idleClosedSessions.get(sessionId) === idleClosed) {
+        this.idleClosedSessions.delete(sessionId);
+        this.loadedSessionCwds.set(protocolSessionId, cwd);
+        this.touchSession(sessionId);
+      }
+      acpClientLog.warn("idle ACP session close failed", {
+        backendId: this.options.backendId,
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      settle();
+    }
+  }
+
+  /**
+   * Reload a session `closeIdleSessions` released, before a request uses it.
+   * The in-memory transcript is still current, so the replay session/load
+   * sends is dropped unless the caller asks for it.
+   */
+  private async reopenIdleClosedSession(
+    sessionId: string,
+    options: {
+      metadata?: AcpSessionMetadata;
+      suppressTranscriptReplay?: boolean;
+    } = {},
+  ): Promise<void> {
+    const idleClosed = this.idleClosedSessions.get(sessionId);
+    if (!idleClosed) return;
+    if (!idleClosed.reopening) {
+      const reopening = (async () => {
+        await idleClosed.closed;
+        // The close failed, or the session was archived meanwhile.
+        if (this.idleClosedSessions.get(sessionId) !== idleClosed) return;
+        const metadata =
+          options.metadata
+          ?? this.options.store.getSession(this.options.backendId, sessionId);
+        if (!metadata) {
+          throw new Error(`ACP session not found: ${sessionId}`);
+        }
+        await this.loadSessionFromAgent(metadata, {
+          suppressTranscriptReplay: options.suppressTranscriptReplay ?? true,
+        });
+        if (this.idleClosedSessions.get(sessionId) === idleClosed) {
+          this.idleClosedSessions.delete(sessionId);
+        }
+        this.touchSession(sessionId);
+      })();
+      idleClosed.reopening = reopening;
+      // A failed load leaves the session closed; the next request retries.
+      reopening.catch(() => {
+        if (idleClosed.reopening === reopening) idleClosed.reopening = undefined;
+      });
+    }
+    await idleClosed.reopening;
+  }
+
+  /**
+   * The protocol id for a request about to use this session. Records the
+   * activity and reloads the session first if it was idle-closed.
+   */
+  private async openSessionForRequest(sessionId: string): Promise<string> {
+    this.touchSession(sessionId);
+    await this.reopenIdleClosedSession(sessionId);
+    return this.protocolSessionIdFor(sessionId);
+  }
+
+  private touchSession(sessionId: string): void {
+    this.sessionLastActivityAt.set(sessionId, this.now());
+  }
+
+  private forgetSessionActivity(sessionId: string): void {
+    this.sessionLastActivityAt.delete(sessionId);
+    this.idleClosedSessions.delete(sessionId);
+    this.pendingPermissionRequests.delete(sessionId);
+    this.sessionsWithoutFaithfulReload.delete(sessionId);
   }
 
   supportsTurnSteering(): boolean {
@@ -425,6 +642,10 @@ export class AcpAgentClient {
     this.retainableSessionIds.clear();
     this.loadedSessionCwds.clear();
     this.sessionConfigOptions.clear();
+    this.sessionLastActivityAt.clear();
+    this.pendingPermissionRequests.clear();
+    this.idleClosedSessions.clear();
+    this.sessionsWithoutFaithfulReload.clear();
     await this.options.transport.close?.();
   }
 
@@ -453,9 +674,10 @@ export class AcpAgentClient {
 
   async listRewindPoints(sessionId: string): Promise<AcpThreadRewindPoint[]> {
     return await this.withOperation(async () => {
+      const protocolSessionId = await this.openSessionForRequest(sessionId);
       const result = asRecord(await this.options.transport.request(
         "_x.ai/rewind/points",
-        { sessionId: this.protocolSessionIdFor(sessionId) },
+        { sessionId: protocolSessionId },
         ACP_REWIND_REQUEST_TIMEOUT_MS,
       ));
       const points = Array.isArray(result?.rewind_points)
@@ -497,10 +719,11 @@ export class AcpAgentClient {
     targetPromptIndex: number;
   }): Promise<{ promptText?: string; updatedAt: number }> {
     return await this.withOperation(async () => {
+      const protocolSessionId = await this.openSessionForRequest(params.sessionId);
       const result = asRecord(await this.options.transport.request(
         "_x.ai/rewind/execute",
         {
-          sessionId: this.protocolSessionIdFor(params.sessionId),
+          sessionId: protocolSessionId,
           targetPromptIndex: params.targetPromptIndex,
           force: true,
           mode: "conversation_only",
@@ -541,10 +764,11 @@ export class AcpAgentClient {
       throw new Error("Installed Grok Build does not support turn steering over ACP");
     }
     return await this.withOperation(async () => {
+      const protocolSessionId = await this.openSessionForRequest(params.sessionId);
       const response = asRecord(await this.options.transport.request(
         "_x.ai/session/steer",
         {
-          sessionId: this.protocolSessionIdFor(params.sessionId),
+          sessionId: protocolSessionId,
           text: params.text,
           interjectionId: params.interjectionId,
           content: params.content,
@@ -566,10 +790,11 @@ export class AcpAgentClient {
     maxAgentBudget?: number;
   }): Promise<GrokWorkflowBudgetPolicy> {
     return await this.withOperation(async () => {
+      const protocolSessionId = await this.openSessionForRequest(params.sessionId);
       const response = asRecord(await this.options.transport.request(
         "_x.ai/session/workflow_budget",
         {
-          sessionId: this.protocolSessionIdFor(params.sessionId),
+          sessionId: protocolSessionId,
           ...(params.defaultAgentBudget !== undefined
             ? { defaultAgentBudget: params.defaultAgentBudget }
             : {}),
@@ -671,6 +896,10 @@ export class AcpAgentClient {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
     this.loadedSessionCwds.set(sessionId, cwd);
+    this.touchSession(appSessionId);
+    if (params.sessionMeta || params.mcpServers === "none") {
+      this.sessionsWithoutFaithfulReload.add(appSessionId);
+    }
     this.rememberSessionConfigOptions(sessionId, result);
     await Promise.resolve(mcpRegistration.bindThread?.(appSessionId));
     this.notifyRuntimeCapabilities({
@@ -751,7 +980,15 @@ export class AcpAgentClient {
     const storedMetadata =
       this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
       metadata;
-    if (this.supportsSessionLoad() && this.isSessionLoaded(storedMetadata)) {
+    // Showing an idle-closed session needs no reload; the next request
+    // reloads it.
+    if (
+      this.supportsSessionLoad()
+      && (
+        this.isSessionLoaded(storedMetadata)
+        || this.idleClosedSessions.has(metadata.sessionId)
+      )
+    ) {
       const replay = this.normalizers.get(metadata.sessionId)?.replay();
       if (replay && (replay.entries.length > 0 || replay.messages.length > 0)) {
         return this.replayForSessionMetadata(storedMetadata);
@@ -816,6 +1053,16 @@ export class AcpAgentClient {
     options: { suppressTranscriptReplay?: boolean },
   ): Promise<void> {
     this.rememberSessionIds(metadata);
+    // A turn usually follows; keep an idle close from racing it.
+    this.touchSession(metadata.sessionId);
+    if (this.idleClosedSessions.has(metadata.sessionId)) {
+      this.options.store.upsertSession(metadata);
+      await this.reopenIdleClosedSession(metadata.sessionId, {
+        metadata,
+        suppressTranscriptReplay: options.suppressTranscriptReplay,
+      });
+      return;
+    }
     if (this.supportsSessionLoad() && this.isSessionLoaded(metadata)) {
       return;
     }
@@ -951,7 +1198,7 @@ export class AcpAgentClient {
     model?: string;
     tokenUsage?: AcpSuppressedControlPrompt["tokenUsage"];
   }> {
-    const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
+    const protocolSessionId = await this.openSessionForRequest(params.sessionId);
     const selectedModel = readAcpSelectedModel(
       this.options.store.getSession(this.options.backendId, params.sessionId)
         ?.acpRuntime,
@@ -1010,7 +1257,7 @@ export class AcpAgentClient {
     reasoningEffort?: string;
     rejectUnofferedThoughtLevel?: boolean;
   }): Promise<BackendAcpSessionRuntimeState | undefined> {
-    const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
+    const protocolSessionId = await this.openSessionForRequest(params.sessionId);
     const write = await this.setRuntimeOptionOnTransport({
       protocolSessionId,
       source: params.source,
@@ -1342,6 +1589,7 @@ export class AcpAgentClient {
     }
     const sessionId = this.appSessionIdFor(protocolSessionId);
     const receivedAt = this.now();
+    if (this.sessionLastActivityAt.has(sessionId)) this.touchSession(sessionId);
     const activityAt = readAcpUpdateTimestamp(update) ?? receivedAt;
     const loadState = this.loadingSessions.get(protocolSessionId);
     const isExplicitSessionReplay = isAcpSessionReplayUpdate(update);
@@ -1496,11 +1744,25 @@ export class AcpAgentClient {
       return cancelledPermissionOutcome();
     }
 
-    const response = await this.options.onRequest(request);
-    return permissionOutcomeFromResponse(
-      response,
-      readPermissionOptions(params.options),
+    // A session waiting on the operator must stay open to hear the answer.
+    const sessionId = request.params.threadId;
+    this.pendingPermissionRequests.set(
+      sessionId,
+      (this.pendingPermissionRequests.get(sessionId) ?? 0) + 1,
     );
+    this.touchSession(sessionId);
+    try {
+      const response = await this.options.onRequest(request);
+      return permissionOutcomeFromResponse(
+        response,
+        readPermissionOptions(params.options),
+      );
+    } finally {
+      const remaining = (this.pendingPermissionRequests.get(sessionId) ?? 1) - 1;
+      if (remaining > 0) this.pendingPermissionRequests.set(sessionId, remaining);
+      else this.pendingPermissionRequests.delete(sessionId);
+      this.touchSession(sessionId);
+    }
   }
 
   private normalizePermissionRequest(
@@ -1777,6 +2039,7 @@ export class AcpAgentClient {
       runtimeState,
     });
     this.loadedSessionCwds.set(protocolSessionId, cwd);
+    this.touchSession(metadata.sessionId);
     return result;
   }
 
@@ -1812,6 +2075,7 @@ export class AcpAgentClient {
       assistantText: "",
       turnId,
     });
+    this.touchSession(sessionId);
     this.updateSessionStatus(sessionId, "active");
   }
 
@@ -1838,13 +2102,17 @@ export class AcpAgentClient {
       };
     });
     return Promise.race([
-      this.options.transport.request(
-        "session/prompt",
-        {
-          sessionId: params.protocolSessionId,
-          prompt: params.prompt,
-        },
-        ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
+      // The turn is already tracked, so no idle close can start now; one
+      // that already released the session is undone first.
+      this.reopenIdleClosedSession(params.sessionId).then(
+        async () => await this.options.transport.request(
+          "session/prompt",
+          {
+            sessionId: params.protocolSessionId,
+            prompt: params.prompt,
+          },
+          ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
+        ),
       ),
       terminalResponseGuard,
     ]);
@@ -1861,6 +2129,8 @@ export class AcpAgentClient {
   } {
     const activeTurn = this.activeTurns.get(sessionId);
     this.activeTurns.delete(sessionId);
+    // The idle clock starts when the turn ends, not when it began.
+    this.touchSession(sessionId);
     const replay = this.normalizerFor(sessionId).recordTurnFinished(
       activeTurn?.turnId,
       completedAt,
