@@ -243,6 +243,8 @@ class MockTransport implements JsonRpcTransport {
   readonly options?: unknown;
   closeCount = 0;
   connectCount = 0;
+  processInfo: { pid: number; startedAt: number } | undefined = { pid: 4242, startedAt: 0 };
+  stopReport: { descendants: number; orphansReaped: number } | undefined;
   readonly loadedThreads = new Set<string>();
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
@@ -264,6 +266,16 @@ class MockTransport implements JsonRpcTransport {
     this.closeCount += 1;
     this.loadedThreads.clear();
     this.closeHandler();
+  }
+
+  getProcessInfo(): { pid: number; startedAt: number } | undefined {
+    return this.processInfo;
+  }
+
+  takeLastStopReport(): { descendants: number; orphansReaped: number } | undefined {
+    const report = this.stopReport;
+    this.stopReport = undefined;
+    return report;
   }
 
   /** What the stdio transport does when the process ends without close(). */
@@ -16854,6 +16866,216 @@ describe("CodexAppServerClient", () => {
     expect(transport.connectCount).toBe(connects);
   });
 
+
+  describe("idle app server recycle", () => {
+    const MINUTE = 60_000;
+    const settings = {
+      enabled: true,
+      idleMs: 20 * MINUTE,
+      maxUptimeMs: 8 * 60 * MINUTE,
+      maxChildProcesses: 64,
+      maxOpenFds: 1_024,
+      minUptimeMs: 30 * MINUTE,
+    };
+    const quiescent = () => true;
+
+    async function recycleFixture(children = 557) {
+      let now = 0;
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+        now: () => now,
+        sampleAppServerProcessTree: async () => ({ childProcessCount: children }),
+      });
+      await client.getInitializeResult();
+      const transport = MockTransport.instances.at(-1)!;
+      const initializeCount = () => transport.sentMessages
+        .filter((message) => JSON.parse(message).method === "initialize").length;
+      return {
+        client,
+        transport,
+        initializeCount,
+        advance: (ms: number) => { now += ms; },
+      };
+    }
+
+    it("replaces an idle server that leaked child processes; the next request starts a fresh one", async () => {
+      const { client, transport, initializeCount, advance } = await recycleFixture(557);
+      transport.stopReport = { descendants: 557, orphansReaped: 3 };
+      advance(45 * MINUTE);
+
+      const outcome = await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent });
+
+      expect(outcome).toEqual({
+        kind: "recycled",
+        record: expect.objectContaining({
+          reasons: ["child-processes"],
+          pid: 4242,
+          uptimeMs: 45 * MINUTE,
+          idleMs: 45 * MINUTE,
+          childProcessCount: 557,
+          orphansReaped: 3,
+        }),
+      });
+      expect(transport.closeCount).toBe(1);
+      expect(codexClientLogInfo).toHaveBeenCalledWith(
+        "Codex app server recycled while idle",
+        expect.objectContaining({ reasons: ["child-processes"], childProcessCount: 557 }),
+      );
+      expect(client.getAppServerRecycleStatus()).toEqual(expect.objectContaining({
+        recycleCount: 1,
+        lastCheck: expect.objectContaining({ outcome: "recycled" }),
+      }));
+      // Lazy restart: nothing starts until something needs Codex.
+      expect(initializeCount()).toBe(1);
+      await client.getInitializeResult();
+      expect(initializeCount()).toBe(2);
+      await client.close();
+    });
+
+    it("replaces an idle server past its uptime limit even with few children", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      const outcome = await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent });
+      expect(outcome).toEqual({
+        kind: "recycled",
+        record: expect.objectContaining({ reasons: ["uptime"], childProcessCount: 3 }),
+      });
+      expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("leaves a young or healthy server running", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(45 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "healthy" }));
+      const young = await recycleFixture(557);
+      young.advance(25 * MINUTE);
+      expect(await young.client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "healthy" }));
+      expect(transport.closeCount).toBe(0);
+      expect(young.transport.closeCount).toBe(0);
+      await client.close();
+      await young.client.close();
+    });
+
+    it("measures the idle window from the last message Codex sent", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      advance(40 * MINUTE);
+      transport.emitInbound({ method: "thread/status/changed", params: {
+        threadId: "thread-2", status: { type: "idle" },
+      } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      advance(5 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 5 * MINUTE });
+      advance(15 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("never restarts while a turn runs", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      transport.emitInbound({ method: "turn/started", params: {
+        threadId: "thread-busy", turn: { id: "turn-busy", status: "inProgress" },
+      } });
+      advance(10 * 60 * MINUTE);
+      await vi.waitFor(async () => expect(
+        await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }),
+      ).toEqual({ kind: "busy", blocker: "running-turn" }));
+      expect(transport.closeCount).toBe(0);
+
+      transport.emitInbound({ method: "turn/completed", params: {
+        threadId: "thread-busy", turn: { id: "turn-busy", status: "completed" },
+      } });
+      await vi.waitFor(async () => expect(
+        await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }),
+      ).toEqual(expect.objectContaining({ kind: "not-idle" })));
+      advance(21 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("never restarts while an approval waits for the operator", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      let answer!: (value: unknown) => void;
+      const requests: unknown[] = [];
+      client.onRequest((request) => {
+        requests.push(request);
+        return new Promise((resolve) => { answer = resolve; });
+      });
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        id: "approval-1",
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-2", turnId: "turn-7", itemId: "call-1", command: "ls" },
+      });
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      advance(10 * 60 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "busy", blocker: "pending-server-request" });
+      expect(transport.closeCount).toBe(0);
+
+      answer({ decision: "accept" });
+      await vi.waitFor(async () => expect(
+        await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }),
+      ).toEqual(expect.objectContaining({ kind: "not-idle" })));
+      advance(21 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("asks Codex before stopping and keeps a server with an active thread", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      transport.loadedThreads.add("thread-quiet");
+      MockTransport.threadStatusByThreadId.set("thread-quiet", {
+        type: "active", activeFlags: ["waitingOnUserInput"],
+      } as { type: string });
+      advance(45 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "busy", blocker: "codex-active-thread" });
+      expect(transport.closeCount).toBe(0);
+
+      MockTransport.threadStatusByThreadId.set("thread-quiet", { type: "idle" });
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("re-checks the owner's quiescence at the barrier, right before stopping", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      advance(45 * MINUTE);
+      let checks = 0;
+      // Idle when the check starts; a turn is reserved before the barrier.
+      const outcome = await client.maybeRecycleIdleAppServer({
+        settings,
+        isQuiescent: () => ++checks === 1,
+      });
+      expect(outcome).toEqual({ kind: "busy", blocker: "registry-work" });
+      expect(checks).toBe(2);
+      expect(transport.closeCount).toBe(0);
+      expect(client.getAppServerRecycleStatus()).toEqual({
+        recycleCount: 0,
+        lastCheck: expect.objectContaining({ outcome: "busy", blocker: "registry-work" }),
+      });
+      await client.close();
+    });
+
+    it("does nothing when no server is running", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-running" });
+      expect(await client.readAppServerProcessSample()).toBeUndefined();
+      expect(MockTransport.instances.at(-1)!.connectCount).toBe(0);
+      await client.close();
+    });
+  });
 
   describe("idle thread unsubscribe", () => {
     const MINUTE = 60_000;

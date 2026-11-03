@@ -543,7 +543,16 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
       error: error instanceof Error ? error.message : String(error),
     });
   });
-  // The same for idle ACP sessions.
+  // The idle app-server recycle is the leak backstop; it gets its own chain
+  // for the same reason.
+  void startupProviderRefresh.then(() => {
+    getExistingDesktopBackendRegistry()?.startCodexAppServerRecycler();
+  }).catch((error) => {
+    mainLog.warn("startup Codex app server recycler initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  // And for idle ACP sessions.
   void startupProviderRefresh.then(() => {
     getExistingDesktopBackendRegistry()?.startAcpIdleSessionCloser();
   }).catch((error) => {
@@ -1641,6 +1650,8 @@ export function bootstrapApp(): void {
       createPwrAgentAppManagementHandler({
         startedAt: mainProcessStartedAt,
         version: () => app.getVersion(),
+        readCodexAppServerDiagnostics: async () =>
+          await getExistingDesktopBackendRegistry()?.readCodexAppServerDiagnostics(),
       }),
     );
     // Reads the view the Star Map renderer publishes, so an Agent turn can

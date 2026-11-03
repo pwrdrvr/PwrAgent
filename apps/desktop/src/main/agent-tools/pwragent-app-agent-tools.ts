@@ -95,7 +95,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: PWRAGENT_APP_MANAGEMENT_ACTIONS,
             description:
-              "`status` gets version, start time, uptime, and update state. `upgrade_check` checks for an available or downloaded upgrade. `restart` installs a ready upgrade and restarts PwrAgent. `stop` quits PwrAgent.",
+              "`status` gets version, start time, uptime, update state, and the Codex app server's uptime, child-process count, and last idle recycle. `upgrade_check` checks for an available or downloaded upgrade. `restart` installs a ready upgrade and restarts PwrAgent. `stop` quits PwrAgent.",
           },
         },
       };
