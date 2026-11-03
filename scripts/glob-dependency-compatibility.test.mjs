@@ -55,9 +55,10 @@ describe("glob dependency compatibility", () => {
       });
       expect(asar.extractFile(archive, "main.js").toString()).toBe("main.js");
       expect(asar.extractFile(archive, ".metadata").toString()).toBe(".metadata");
-      expect(asar.statFile(archive, "native/addon.node").unpacked).toBe(true);
-      expect(asar.statFile(archive, "vendor/tool/data.bin").unpacked).toBe(true);
-      expect(asar.extractFile(archive, "native/addon.node").toString()).toBe("native/addon.node");
+      expect(asar.statFile(archive, join("native", "addon.node")).unpacked).toBe(true);
+      expect(asar.statFile(archive, join("vendor", "tool", "data.bin")).unpacked).toBe(true);
+      expect(asar.extractFile(archive, join("native", "addon.node")).toString()).toBe("native/addon.node");
+      expect(asar.extractFile(archive, join("vendor", "tool", "data.bin")).toString()).toBe("vendor/tool/data.bin");
     });
   }
 
@@ -108,7 +109,12 @@ describe("glob dependency compatibility", () => {
     const included = write(directory, "templates/installer.ejs");
     write(directory, "templates/ignored.txt");
     const filelist = dependenciesOf(dependenciesOf(builder, "ejs"), "jake")("filelist");
-    expect(new filelist.FileList(join(directory, "**/*.ejs")).toArray()).toEqual([included]);
+    // Filelist normalizes results to forward slashes; its native pattern
+    // still needs backslashes treated as separators rather than escapes.
+    const files = new filelist.FileList(join(directory, "**/*.ejs"), {
+      windowsPathsNoEscape: true,
+    });
+    expect(files.toArray()).toEqual([included.replaceAll("\\", "/")]);
   });
 
   it("preserves packaging inclusions, exclusions, directory descent, and Windows patterns", () => {
