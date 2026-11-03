@@ -1094,7 +1094,8 @@ function buildLaunchpadDraft(params: {
     backend,
     executionMode:
       stored?.executionMode ?? defaults.executionMode,
-    workMode: args.workMode ?? stored?.workMode ?? defaults.workMode ?? "worktree",
+    // A required mode names the mode when the caller gave none.
+    workMode: args.workMode ?? args.requiredWorkMode ?? stored?.workMode ?? defaults.workMode ?? "worktree",
     ...(model !== undefined ? { model } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(serviceTier !== undefined ? { serviceTier } : {}),

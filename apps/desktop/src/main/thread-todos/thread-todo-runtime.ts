@@ -765,9 +765,8 @@ export function createThreadTodoRunners(params: {
                 ...(speed ? { fastMode: speed === "fast" } : {}),
                 ...((workMode ?? action.workMode) ? { workMode: workMode ?? action.workMode } : {}),
                 // As on this machine, the peer's checkout can sit on a branch
-                // with another thread's unpublished work.
-                // A card that says New worktree must not fall back to
-                // sharing that checkout.
+                // with another thread's unpublished work, and a card that
+                // says New worktree must not fall back to sharing it.
                 ...((workMode ?? action.workMode) === "worktree"
                   ? { worktreeBase: "default_branch" as const, requiredWorkMode: "worktree" as const }
                   : {}),

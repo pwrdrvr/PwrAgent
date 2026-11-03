@@ -89,10 +89,12 @@ export type ThreadTodoActionRunners = {
     modelSettings?: ThreadTodoModelSettings;
     /** Raised on the peer when it answers `threadTodos.raisePlan`. */
     plan?: ThreadTodoPlan;
-  } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread & {
-    /** Added to the card's result, as when the peer could not honor its Where. */
-    notice?: string;
-  }>;
+  } & ThreadTodoStartChoices) => Promise<ThreadTodoInstanceStartedThread>;
+};
+
+export type ThreadTodoInstanceStartedThread = ThreadTodoStartedThread & {
+  /** Added to the card's result, as when the peer could not honor its Where. */
+  notice?: string;
 };
 
 /**
@@ -744,7 +746,7 @@ export class ThreadTodoService {
       const plan: ThreadTodoPlan | undefined = steps.length > 0
         ? { title: action.title ?? todo.title, items: steps }
         : undefined;
-      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> & { notice?: string } = startOnInstance && options.startOnInstanceId
+      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> & Pick<ThreadTodoInstanceStartedThread, "notice"> = startOnInstance && options.startOnInstanceId
         ? await startOnInstance({
             instanceId: options.startOnInstanceId,
             sourceBackend: todo.backend,

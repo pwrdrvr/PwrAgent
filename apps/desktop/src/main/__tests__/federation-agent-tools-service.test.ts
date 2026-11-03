@@ -1236,6 +1236,17 @@ describe("federation agent tools service", () => {
     // A caller that must not share the checkout says so; the owner refuses.
     await create({ requiredWorkMode: "worktree" });
     expect(materializeDirectoryLaunchpad.mock.calls[3]![0].requiredWorkMode).toBe("worktree");
+
+    // Alone, it also names the mode instead of inheriting the launchpad's.
+    await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", requiredWorkMode: "local" },
+    });
+    expect(materializeDirectoryLaunchpad.mock.calls[4]![0]).toMatchObject({
+      requiredWorkMode: "local",
+      launchpad: { workMode: "local" },
+    });
   });
 
   it("uses an explicit backend instead of a remote Grok launchpad backend", async () => {

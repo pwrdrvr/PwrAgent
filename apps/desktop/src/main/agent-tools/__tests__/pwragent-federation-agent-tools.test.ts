@@ -160,6 +160,16 @@ describe("pwragent federation agent tools", () => {
       },
     },
     {
+      name: "rejects a requiredWorkMode that contradicts workMode before dispatching create_instance_thread",
+      tool: "create_instance_thread",
+      arguments: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        workMode: "local",
+        requiredWorkMode: "worktree",
+      },
+    },
+    {
       name: "rejects an unknown worktreeBase before dispatching create_instance_thread",
       tool: "create_instance_thread",
       arguments: {
