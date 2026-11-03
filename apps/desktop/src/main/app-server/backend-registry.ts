@@ -606,6 +606,14 @@ import {
   type HelperThreadToolCallHandler,
 } from "../codex-app-server/client";
 import {
+  DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
+  codexAppServerRecycleCheckIntervalMs,
+  type CodexAppServerProcessSample,
+  type CodexAppServerRecycleOutcome,
+  type CodexAppServerRecycleSettings,
+  type CodexAppServerRecycleStatus,
+} from "../codex-app-server/app-server-recycle-policy";
+import {
   isCodexInvalidResponseMessageIdError,
   type CodexInvalidResponseMessageIdRecoveryResult,
   type CodexRecoveryBlockingTurn,
@@ -1294,6 +1302,12 @@ type BackendClient = {
     isThreadBusy: (threadId: string) => boolean;
   }): Promise<string[] | void>;
   resetAppServerRestarts?(reason: string): void;
+  readAppServerProcessSample?(): Promise<CodexAppServerProcessSample | undefined>;
+  getAppServerRecycleStatus?(): CodexAppServerRecycleStatus;
+  maybeRecycleIdleAppServer?(params: {
+    settings: CodexAppServerRecycleSettings;
+    isQuiescent: () => boolean;
+  }): Promise<CodexAppServerRecycleOutcome | void>;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
   interruptTurn(params: {
@@ -10722,6 +10736,9 @@ export class DesktopBackendRegistry {
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
+  private readonly resolveCodexAppServerRecycleSettingsFn: () => CodexAppServerRecycleSettings;
+  private codexAppServerRecycleTimer?: NodeJS.Timeout;
+  private codexAppServerRecycleCheck?: Promise<void>;
   private readonly codexThreadIdleUnsubscribeMs: number;
   private codexIdleThreadTimer?: NodeJS.Timeout;
   private codexIdleThreadSweep?: Promise<void>;
@@ -10874,6 +10891,7 @@ export class DesktopBackendRegistry {
     resolvePdfAnalysisEnabled?: () => boolean;
     resolveTokenMiserEnabled?: () => boolean;
     resolveTokenMiserPollingReviewsEnabled?: () => boolean;
+    resolveCodexAppServerRecycleSettings?: () => CodexAppServerRecycleSettings;
     /** Test seam: how long a Codex thread idles before it is released. */
     codexThreadIdleUnsubscribeMs?: number;
     configStore?: Pick<DesktopConfigStore, "read" | "subscribe">;
@@ -11088,6 +11106,19 @@ export class DesktopBackendRegistry {
         return false;
       }
     });
+    this.resolveCodexAppServerRecycleSettingsFn =
+      options?.resolveCodexAppServerRecycleSettings ?? (() => {
+        try {
+          return (
+            settingsService ?? getDesktopSettingsService()
+          ).resolveCodexAppServerRecycleSettings();
+        } catch (error) {
+          backendRegistryLog.warn("failed to resolve Codex app server recycle settings", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS;
+        }
+      });
     this.resolveTokenMiserDefaultEnabledFn = () => {
       try {
         return (
@@ -16089,6 +16120,88 @@ export class DesktopBackendRegistry {
       return;
     }
     throw new Error(ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR);
+  }
+
+  /**
+   * Replace the Codex app server when it has sat idle for a while and has run
+   * too long or started too many processes (`app-server-recycle-policy.ts`).
+   * A leak in any MCP server it starts then lives hours, not days. Started by
+   * the app after startup discovery, like the archive sweeper; tests that
+   * never call this get no timer.
+   */
+  startCodexAppServerRecycler(): void {
+    if (this.closed || this.shutdownRequested || this.codexAppServerRecycleTimer) return;
+    this.scheduleCodexAppServerRecycleCheck();
+  }
+
+  private scheduleCodexAppServerRecycleCheck(): void {
+    if (this.closed || this.shutdownRequested) return;
+    const delayMs = codexAppServerRecycleCheckIntervalMs(
+      this.resolveCodexAppServerRecycleSettingsFn(),
+    );
+    this.codexAppServerRecycleTimer = setTimeout(() => {
+      void this.checkCodexAppServerRecycle()
+        .finally(() => this.scheduleCodexAppServerRecycleCheck());
+    }, delayMs);
+    this.codexAppServerRecycleTimer.unref?.();
+  }
+
+  /**
+   * One recycle check. Never throws; the client logs what it did. Registry
+   * work is passed in as `isQuiescent`, not checked here, so the client
+   * records a busy check in its status as it does any other.
+   */
+  async checkCodexAppServerRecycle(): Promise<void> {
+    if (this.closed || this.shutdownRequested || this.codexAppServerRecycleCheck) return;
+    const settings = this.resolveCodexAppServerRecycleSettingsFn();
+    const recycle = this.codexClient.maybeRecycleIdleAppServer?.bind(this.codexClient);
+    if (!settings.enabled || !recycle) return;
+    const check = (async () => {
+      await recycle({
+        settings,
+        isQuiescent: () => !this.closed
+          && !this.shutdownRequested
+          && !this.hasCodexWorkBlockingRecycle(),
+      });
+    })().catch((error) => {
+      backendRegistryLog.warn("Codex app server recycle check failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => {
+      this.codexAppServerRecycleCheck = undefined;
+    });
+    this.codexAppServerRecycleCheck = check;
+    await check;
+  }
+
+  /**
+   * Work the registry tracks that a Codex stop would interrupt: turns and
+   * their approvals, reserved thread starts, live tool items, background
+   * terminals, voice, accepted compactions, and the other lifecycle owners
+   * that stop or restart Codex themselves.
+   */
+  private hasCodexWorkBlockingRecycle(): boolean {
+    return this.hasActiveCodexRuntimeWork()
+      || this.hasActiveCodexWork()
+      || this.codexRuntimeRestartPending
+      || this.codexRuntimeRestartPromise !== undefined
+      || this.codexInvalidIdRecoveryDrain !== undefined
+      || this.pendingCodexInvalidIdRecoveries.length > 0;
+  }
+
+  /** The Codex app server's process, settings and last recycle, for diagnostics. */
+  async readCodexAppServerDiagnostics(): Promise<{
+    process?: CodexAppServerProcessSample;
+    recycle: CodexAppServerRecycleStatus;
+    settings: CodexAppServerRecycleSettings;
+  }> {
+    const process = await this.codexClient.readAppServerProcessSample?.()
+      .catch(() => undefined);
+    return {
+      ...(process ? { process } : {}),
+      recycle: this.codexClient.getAppServerRecycleStatus?.() ?? { recycleCount: 0 },
+      settings: this.resolveCodexAppServerRecycleSettingsFn(),
+    };
   }
 
   /**
@@ -30273,6 +30386,10 @@ export class DesktopBackendRegistry {
     this.workingStateCacheLoad = undefined;
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
+    }
+    if (this.codexAppServerRecycleTimer) {
+      clearTimeout(this.codexAppServerRecycleTimer);
+      this.codexAppServerRecycleTimer = undefined;
     }
     if (this.codexIdleThreadTimer) {
       clearInterval(this.codexIdleThreadTimer);

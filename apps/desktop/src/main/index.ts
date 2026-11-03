@@ -543,6 +543,15 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
       error: error instanceof Error ? error.message : String(error),
     });
   });
+  // The idle app-server recycle is the leak backstop; it gets its own chain
+  // for the same reason.
+  void startupProviderRefresh.then(() => {
+    getExistingDesktopBackendRegistry()?.startCodexAppServerRecycler();
+  }).catch((error) => {
+    mainLog.warn("startup Codex app server recycler initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   void startupProviderRefresh.then(() => {
     getExistingDesktopBackendRegistry()?.startThreadArchiveSweeper();
   }).catch((error) => {
@@ -1633,6 +1642,8 @@ export function bootstrapApp(): void {
       createPwrAgentAppManagementHandler({
         startedAt: mainProcessStartedAt,
         version: () => app.getVersion(),
+        readCodexAppServerDiagnostics: async () =>
+          await getExistingDesktopBackendRegistry()?.readCodexAppServerDiagnostics(),
       }),
     );
     // Reads the view the Star Map renderer publishes, so an Agent turn can
