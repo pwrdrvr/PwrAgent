@@ -134,6 +134,12 @@ describe("archive worktrees across a desktop restart", () => {
       await expect(second.registry.restoreThread({ backend: "claude", threadId })).rejects.toThrow("thread remains archived");
       expect((await fixture.claudeStore.read(threadId)).thread.archivedAt).toBeDefined();
     } finally { failedRestore.mockRestore(); }
+    await mkdir(fixture.worktree);
+    await writeFile(path.join(fixture.worktree, "partial.txt"), "keep unexpected files\n");
+    await expect(second.registry.restoreThread({ backend: "claude", threadId })).rejects.toThrow("incomplete checkout already exists");
+    expect((await fixture.claudeStore.read(threadId)).thread.archivedAt).toBeDefined();
+    expect(await readFile(path.join(fixture.worktree, "partial.txt"), "utf8")).toBe("keep unexpected files\n");
+    await rm(fixture.worktree, { recursive: true });
     const { writes } = await measureSqliteWrites(async () => {
       expect(await second.registry.restoreThread({ backend: "claude", threadId })).toMatchObject({ worktrees: [expect.objectContaining({ restored: true })] });
     });

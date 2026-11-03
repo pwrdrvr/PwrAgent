@@ -38743,6 +38743,9 @@ export class DesktopBackendRegistry {
         async (candidate): Promise<RestoreThreadWorktreeResult> => {
           try {
             if (await pathExists(candidate.worktreePath)) {
+              if (params.backend === "claude" && candidate.snapshot?.state === "archived") {
+                throw new Error("An unexpected or incomplete checkout already exists at the archived worktree path; it was kept without modification.");
+              }
               return {
                 worktreePath: candidate.worktreePath,
                 repositoryPath: candidate.repositoryPath,
