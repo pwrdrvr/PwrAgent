@@ -40,4 +40,19 @@ describe("archive cleanup provider slices", () => {
       await expect(client.listArchiveCleanupThreadsPage({ archived: false, limit: 1, checkpoint: async () => {} })).rejects.toThrow("page budget");
     } finally { await client.close(); }
   });
+
+  it("reads fresh ownership pages without Git discovery for unrelated workspaces", async () => {
+    const enrich = vi.fn(async () => ({ linkedDirectories: [] }));
+    const checkpoint = vi.fn(async () => {});
+    const client = new CodexAppServerClient({ threadDirectoryEnricher: enrich });
+    try {
+      const directoryFilter = vi.fn(async () => false);
+      await client.listArchiveCleanupThreadsPage({ archived: false, limit: 250, checkpoint, directoryFilter });
+      await client.listArchiveCleanupThreadsPage({ archived: false, limit: 250, checkpoint, directoryFilter });
+      expect(ArchiveCleanupTransport.latest.listings).toHaveLength(2);
+      expect(enrich).not.toHaveBeenCalled();
+      expect(checkpoint).not.toHaveBeenCalled();
+      expect(directoryFilter).toHaveBeenCalled();
+    } finally { await client.close(); }
+  });
 });

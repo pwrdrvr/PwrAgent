@@ -559,6 +559,44 @@ describe("archive cleanup pipeline", () => {
     expect(result.candidates).toEqual([{ backend: "codex", threadId: "valid", worktreePath: path.normalize("/contrived/valid") }]);
   });
 
+  it("bounds fresh removal admission pages for Harold's 399 active and 1477 archived threads", async () => {
+    vi.useFakeTimers();
+    const rows = Array.from({ length: 1477 }, (_, index) => codexThread({ id: `archived-${index}`,
+      linkedDirectories: index < 4 ? [{ id: String(index), kind: "worktree", label: "repo",
+        path: "/contrived/repo", worktreePath: `/contrived/worktree-${index}` }] : [],
+    }));
+    const active = Array.from({ length: 399 }, (_, index) => codexThread({ id: `active-${index}` }));
+    const fixture = build(active);
+    const limits: number[] = [];
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+      const source = params.archived ? rows : active;
+      const offset = Number(params.cursor ?? 0);
+      const threads = source.slice(offset, offset + params.limit);
+      limits.push(params.limit);
+      return { threads, nextCursor: offset + threads.length < source.length ? String(offset + threads.length) : undefined };
+    });
+    const removed = new Set<string>();
+    vi.mocked(stat).mockImplementation(async (filePath) => {
+      if (removed.has(String(filePath))) throw Object.assign(new Error("Removed"), { code: "ENOENT" });
+      return { isDirectory: () => true } as Awaited<ReturnType<typeof stat>>;
+    });
+    const archive = fixture.archiveWorktree.getMockImplementation()!;
+    fixture.archiveWorktree.mockImplementation(async (params) => {
+      const snapshot = await archive(params);
+      removed.add(params.worktreePath);
+      return snapshot;
+    });
+    const repair = fixture.registry.repairArchivedThreadWorktrees();
+    await vi.advanceTimersByTimeAsync(100_000);
+    const result = await repair;
+    expect(result.cleanup.filter((item) => item.removedWorktree)).toHaveLength(4);
+    // Discovery: ceil(399/25) + ceil(1477/25) = 76 pages.
+    // Each independent authoritative admission: 2 + 6 = 8 pages.
+    expect(limits).toHaveLength(76 + 4 * 8);
+    expect(limits.filter((limit) => limit === 250)).toHaveLength(32);
+    expect(fixture.counts.largestOverlaySlice).toBeLessThanOrEqual(25);
+  });
+
   it("discovers more than 500 archived worktrees while excluding live Codex, Claude, and overlay checkout users", async () => {
     vi.useFakeTimers();
     const fixture = build([]);
