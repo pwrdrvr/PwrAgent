@@ -62,15 +62,14 @@ it.each([0, 160])("budgets owner projection reads under repeated local and peer 
       if (!sql.trimStart().startsWith("SELECT")) return statement;
       // These statements belong to this test's database. Wrap them directly so
       // the uncached control does not retain thousands of spies and call logs.
-      for (const method of ["get", "all"] as const) {
-        const execute = statement[method].bind(statement);
-        statement[method] = (...args: unknown[]) => {
-          recordQuery(sql, args);
-          const result = execute(...args);
-          for (const row of Array.isArray(result) ? result : [result]) record(row);
-          return result;
-        };
-      }
+      const wrap = <Result>(execute: (...args: unknown[]) => Result) => (...args: unknown[]): Result => {
+        recordQuery(sql, args);
+        const result = execute(...args);
+        for (const row of Array.isArray(result) ? result : [result]) record(row);
+        return result;
+      };
+      statement.get = wrap(statement.get.bind(statement));
+      statement.all = wrap(statement.all.bind(statement));
       const iterate = statement.iterate.bind(statement);
       statement.iterate = function* (...args: unknown[]) {
         recordQuery(sql, args);
