@@ -28,6 +28,7 @@ const installPermissionPolicyMock = vi.fn();
 const nativeVoiceMediaRulesFixture = { check: vi.fn(), request: vi.fn() };
 const startAppServerOwnerNavigationMock = vi.fn(async () => undefined);
 const disposeAppServerIpcHandlersMock = vi.fn();
+const closeDesktopSettingsCommandDiscoveryMock = vi.fn<() => Promise<void>>();
 const registerAgentIpcHandlersMock = vi.fn();
 const disposeAgentIpcHandlersMock = vi.fn();
 const registerScheduledActionIpcHandlersMock = vi.fn();
@@ -641,6 +642,7 @@ vi.mock("../storage-maintenance", () => ({
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
+  closeDesktopSettingsCommandDiscovery: closeDesktopSettingsCommandDiscoveryMock,
   disposeDesktopConfigStore: vi.fn(),
   getDesktopConfigStore: vi.fn(() => ({
     read: vi.fn((domain: string) =>
@@ -773,6 +775,8 @@ describe("bootstrapApp", () => {
     installPermissionPolicyMock.mockReset();
     startAppServerOwnerNavigationMock.mockClear();
     disposeAppServerIpcHandlersMock.mockReset();
+    closeDesktopSettingsCommandDiscoveryMock.mockReset();
+    closeDesktopSettingsCommandDiscoveryMock.mockResolvedValue(undefined);
     registerAgentIpcHandlersMock.mockReset();
     disposeAgentIpcHandlersMock.mockReset();
     registerScheduledActionIpcHandlersMock.mockReset();
@@ -2443,6 +2447,33 @@ describe("bootstrapApp", () => {
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
     expect(closeMcpConnectionGatewayServiceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes discovery admission immediately and awaits its drain before quit", async () => {
+    let finishDiscovery!: () => void;
+    closeDesktopSettingsCommandDiscoveryMock.mockReturnValue(new Promise<void>((resolve) => {
+      finishDiscovery = resolve;
+    }));
+    startupProfilerInstance.start.mockResolvedValue();
+    await import("../index");
+    await flushMicrotasks();
+
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    // The first call closes admission synchronously; the resource phase
+    // subsequently awaits the same drain after the other owners settle.
+    expect(closeDesktopSettingsCommandDiscoveryMock).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(closeDesktopSettingsCommandDiscoveryMock).toHaveBeenCalledTimes(2));
+    expect(closeDesktopSettingsCommandDiscoveryMock.mock.invocationCallOrder[0]).toBeLessThan(
+      stopWindowDiagnosticsMock.mock.invocationCallOrder[0],
+    );
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
+    expect(quitMock).not.toHaveBeenCalled();
+
+    finishDiscovery();
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledOnce());
+    expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce();
   });
 
   it("closes renderer windows before disposing their ipc handlers", async () => {

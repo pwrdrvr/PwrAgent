@@ -196,6 +196,7 @@ import {
   getRuntimeFederationLeaseCoordinator,
 } from "./runtime-federation-lease";
 import {
+  closeDesktopSettingsCommandDiscovery,
   disposeDesktopConfigStore,
   getDesktopConfigStore,
   getDesktopSettingsService,
@@ -284,6 +285,10 @@ import {
   E2E_SHUTDOWN_LAUNCH_ID_ENV,
   type E2eShutdownPhase,
 } from "./e2e-shutdown-diagnostics";
+import {
+  E2E_CHILD_PROCESS_DIAGNOSTICS_FILE_ENV,
+  installE2eChildProcessDiagnostics,
+} from "./e2e-child-process-diagnostics";
 
 configureBundledGit(app.isPackaged ? process.resourcesPath : undefined);
 
@@ -312,6 +317,14 @@ const e2eShutdownDiagnostics = createE2eShutdownDiagnosticsRecorder({
   enabled: process.env.PWRAGENT_E2E === "1" && !app.isPackaged,
   filePath: process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV],
   launchId: process.env[E2E_SHUTDOWN_LAUNCH_ID_ENV],
+});
+const childProcessDiagnostics = installE2eChildProcessDiagnostics({
+  enabled: process.env.PWRAGENT_E2E === "1" && !app.isPackaged,
+  filePath: process.env[E2E_CHILD_PROCESS_DIAGNOSTICS_FILE_ENV],
+  launchId: process.env[E2E_SHUTDOWN_LAUNCH_ID_ENV],
+});
+process.once("exit", () => {
+  childProcessDiagnostics.snapshot("process-exit");
 });
 
 // Tart's AppleParavirtGPU can reset under sustained Electron E2E load,
@@ -880,6 +893,11 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
       },
     },
     {
+      name: "settings-discovery",
+      timeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
+      run: closeDesktopSettingsCommandDiscovery,
+    },
+    {
       name: "app-server",
       timeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
       run: disposeAppServerIpcHandlers,
@@ -932,6 +950,9 @@ async function disposeMainProcessResources(source: string): Promise<void> {
     getExistingRuntimeMessagingLeaseCoordinator()?.stopRecovery();
     getExistingRuntimeFederationLeaseCoordinator()?.stopRecovery();
     e2eShutdownDiagnostics.beginOverall();
+    childProcessDiagnostics.snapshot("shutdown-started");
+    // Close probe admission before renderer shutdown or any other async wait.
+    void closeDesktopSettingsCommandDiscovery();
     try {
       await flushDiagnostics(source);
       // Electron emits before-quit while renderer windows are still live. Close
@@ -950,6 +971,7 @@ async function disposeMainProcessResources(source: string): Promise<void> {
       // Only the process exit hook closes it, after synchronous cleanup.
       mainProcessShutdownComplete = true;
       e2eShutdownDiagnostics.finishOverall("completed");
+      childProcessDiagnostics.snapshot("shutdown-completed");
     } catch (error) {
       e2eShutdownDiagnostics.finishOverall("failed");
       throw error;
@@ -1092,8 +1114,15 @@ function installProcessShutdownHandlers(): void {
   process.once("SIGTERM", handleSignal);
   process.once("SIGINT", handleSignal);
   process.once("exit", () => {
-    disposeMainProcessResourcesSync();
-    disposeAppState();
+    try {
+      childProcessDiagnostics.snapshot("synchronous-cleanup-started");
+      disposeMainProcessResourcesSync();
+      childProcessDiagnostics.snapshot("app-state-close-started");
+      disposeAppState();
+      childProcessDiagnostics.snapshot("app-state-close-completed");
+    } finally {
+      childProcessDiagnostics.dispose();
+    }
   });
 }
 
@@ -2088,6 +2117,7 @@ export function bootstrapApp(): void {
   });
 
   app.on("will-quit", () => {
+    childProcessDiagnostics.snapshot("will-quit");
     disposeMainProcessResourcesSync();
   });
 }

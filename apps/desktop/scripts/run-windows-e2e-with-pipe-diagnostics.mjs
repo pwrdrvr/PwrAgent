@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
 import { nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
+import { childProcessLocations } from "./windows-child-process-locations.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
@@ -366,7 +367,10 @@ async function main() {
   // The watcher starts before launcher pipes exist. Later diagnostic queries
   // are controller children, outside Electron's process ownership tree.
   const child = spawn(command.file, command.args, {
-    stdio: "inherit", env: { ...process.env, ...(enabled ? { PWRAGENT_WINDOWS_PIPE_REQUESTS: requests } : {}) },
+    stdio: "inherit", env: { ...process.env, ...(enabled ? {
+      PWRAGENT_WINDOWS_PIPE_REQUESTS: requests,
+      PWRAGENT_E2E_CHILD_PROCESS_DIAGNOSTICS_FILE: path.join(desktop, "test-results", "worker-shutdown", "main-children.jsonl"),
+    } : {}) },
   });
   let code;
   try {
@@ -374,6 +378,11 @@ async function main() {
   } finally {
     try { await closeObserver(); }
     catch (error) { log("controller-cleanup-error", { error: error.message }); }
+    try {
+      const locations = childProcessLocations(desktop, path.join(desktop, "test-results", "worker-shutdown", "main-children.jsonl"));
+      mkdirSync(artifact, { recursive: true });
+      writeFileSync(path.join(artifact, "main-child-locations.json"), json(locations) + "\n");
+    } catch { log("child-location-error", { unavailable: true }); }
   }
   process.exitCode = code ?? 1;
 }
