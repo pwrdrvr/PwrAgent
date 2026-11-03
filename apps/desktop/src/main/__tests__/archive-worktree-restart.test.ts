@@ -607,6 +607,32 @@ describe("archive worktrees across a desktop restart", () => {
     expect((await instance.store.getThreadOverlayState({ backend: "codex", threadId: "old-target" }))?.worktreeSnapshots ?? []).toEqual([]);
   });
 
+  it.each([false, true])("does not retain a checkout for six completed native review children after restart (repair=%s)", async (repair) => {
+    const fixture = await createFixture(true);
+    ArchiveWorktreeTransport.threads = [
+      { id: "reviewed-parent", cwd: fixture.worktree, source: "cli", archived: repair },
+      ...Array.from({ length: 6 }, (_, index): ArchiveWorktreeThread => ({
+        id: `completed-review-${index}`, cwd: fixture.worktree, source: "subAgentReview",
+        wireSource: { subAgent: "review" }, threadSource: "subagent", parentThreadId: "reviewed-parent",
+        status: { type: index % 2 ? "idle" : "notLoaded" },
+      })),
+    ];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "dirty parent edit\n");
+    await writeFile(path.join(fixture.worktree, "notes.txt"), "untracked parent notes\n");
+    const first = fixture.reopen();
+    const result = repair ? await first.registry.repairArchivedThreadWorktrees()
+      : await first.registry.archiveThread({ backend: "codex", threadId: "reviewed-parent" });
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const second = fixture.reopen();
+    await second.registry.restoreThread({ backend: "codex", threadId: "reviewed-parent" });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("dirty parent edit\n");
+    expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("untracked parent notes\n");
+  });
+
   it.each([
     { kind: "source", status: "notLoaded" },
     { kind: "source", status: "idle" },

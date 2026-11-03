@@ -8,6 +8,7 @@ export type ArchiveWorktreeThread = {
   source: string;
   wireSource?: Thread["source"];
   threadSource?: Thread["threadSource"];
+  parentThreadId?: Thread["parentThreadId"];
   status?: Thread["status"];
   originator?: string;
   name?: string;
