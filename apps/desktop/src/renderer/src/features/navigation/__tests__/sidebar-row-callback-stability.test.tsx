@@ -591,9 +591,18 @@ describe("sidebar thread row callback stability", () => {
 
   it("keeps the platform whole and elides only the conversation name in Unbind", () => {
     const title = "PwrAgent mobile: consolidated iPhone remote and GPT Live";
+    const untitled: MessagingThreadBindingSummary = {
+      ...BINDING,
+      bindingId: "binding-dc-1",
+      platform: "discord",
+      conversationTitle: undefined,
+    };
     const threads = THREADS.map((entry) =>
       entry.id === "thread-8"
-        ? { ...entry, messagingBindings: [{ ...BINDING, conversationTitle: title }] }
+        ? {
+          ...entry,
+          messagingBindings: [{ ...BINDING, conversationTitle: title }, untitled],
+        }
         : entry,
     );
     render(sidebar({
@@ -611,8 +620,18 @@ describe("sidebar thread row callback stability", () => {
       .toBe("Unbind from Telegram");
     expect(item.querySelector(".thread-context-menu__binding-name")?.textContent)
       .toBe(`(${title})`);
-    // The full name stays readable on hover once the row elides it.
-    expect(item).toHaveAttribute("title", `Unbind from Telegram (${title})`);
+    // The full name stays readable on hover once the row elides it, through
+    // the app's portal tooltip layer rather than a native title.
+    expect(item).toHaveClass("tooltip-target");
+    expect(item).toHaveAttribute("data-tooltip", `Unbind from Telegram (${title})`);
+    expect(item).not.toHaveAttribute("title");
+
+    // A binding with no conversation name has no name span and no tooltip.
+    const bare = within(screen.getByRole("menu")).getByRole("menuitem", {
+      name: "Unbind from Discord",
+    });
+    expect(bare.querySelector(".thread-context-menu__binding-name")).toBeNull();
+    expect(bare).not.toHaveAttribute("data-tooltip");
   });
 
   it("keeps a pin drag wired to the newest onReorderThreadPins", async () => {

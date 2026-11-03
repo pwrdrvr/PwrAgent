@@ -4119,7 +4119,8 @@ export function Sidebar(props: SidebarProps) {
                         key={binding.bindingId}
                         role="menuitem"
                         type="button"
-                        title={name ? `${action} ${name}` : undefined}
+                        className={name ? "tooltip-target" : undefined}
+                        data-tooltip={name ? `${action} ${name}` : undefined}
                         onClick={() => {
                           const target = contextMenu.thread;
                           setContextMenu(undefined);

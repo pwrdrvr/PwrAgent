@@ -9848,6 +9848,11 @@ a.button {
   line-height: 14px;
 }
 
+.thread-context-menu button:hover:not(:disabled) .thread-context-menu__item-detail,
+.thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__item-detail {
+  color: var(--accent-bright);
+}
+
 /* Unbind from <platform> (<conversation>). The platform says what the item
    does, so it never shrinks. The conversation name can be any length:
    `contain: inline-size` keeps it out of the menu's intrinsic width, so the
@@ -9865,11 +9870,6 @@ a.button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.thread-context-menu button:hover:not(:disabled) .thread-context-menu__item-detail,
-.thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__item-detail {
-  color: var(--accent-bright);
 }
 
 /* macOS-native pattern: action label on the left, keyboard
