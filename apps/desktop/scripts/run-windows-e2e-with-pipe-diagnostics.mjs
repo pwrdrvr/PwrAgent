@@ -1,11 +1,11 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
-import { localSymbolDirectories, nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
+import { nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
@@ -16,9 +16,6 @@ const stopFile = path.join(root, "stop");
 const executable = path.join(root, "windows-pipe-diagnostics.exe");
 const handleExecutable = process.env.PWRAGENT_WINDOWS_HANDLE_EXE;
 const cdbExecutable = process.env.PWRAGENT_WINDOWS_CDB_EXE;
-const symchkExecutable = process.env.PWRAGENT_WINDOWS_SYMCHK_EXE;
-// Never copy this directory into evidence/test-results or print its contents.
-const privateSymbols = path.join(root, "private-symbols");
 const captureSymbols = path.join(root, "capture-symbols");
 const rows = new Map();
 const launches = new Map();
@@ -31,7 +28,6 @@ let nativeBytes = 0, omittedNativeRecords = 0, captures = 0, watcherAvailable = 
 let stalledCaptures = 0;
 let nativeCaptures = 0;
 let nativeStackEnabled = false;
-let nativeSymbols = [];
 
 // Raw tool output may contain unrelated file paths; persist only parsed pipe names.
 const json = (data) => JSON.stringify(data, (key, value) => key === "toolText" ? undefined : value);
@@ -216,7 +212,7 @@ async function captureNativeStack(event) {
   const started = Date.now();
   const result = await new Promise((resolve) => {
     // Loading Electron's multi-GB PDB can outlive the capture window. Retain
-    // image-relative code locations now; resolve them after measured tests.
+    // image-relative code locations now for separate offline symbolization.
     const child = execFile(cdbExecutable, nativeStackArguments(event.pid, captureSymbols, "lm;~* kn 40;q"),
       { timeout: 1000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
         scanners.delete(child);
@@ -239,14 +235,11 @@ async function captureNativeStack(event) {
 }
 
 async function prepareNativeStacks() {
-  if (!cdbExecutable || !symchkExecutable) { write("native-stack-setup.json", { enabled: false, error: "Signed debugger tools unavailable." }); return; }
-  // Warm only the matching executable's symbols before launcher pipes exist.
-  mkdirSync(privateSymbols, { recursive: true });
+  if (!cdbExecutable) { write("native-stack-setup.json", { enabled: false, error: "Signed CDB unavailable." }); return; }
+  // Live capture uses module offsets. Downloading PDBs here would add startup
+  // work without improving these captures; resolve retained offsets offline.
   mkdirSync(captureSymbols, { recursive: true });
   const electron = createRequire(new URL("../package.json", import.meta.url))("electron");
-  const symbols = `srv*${privateSymbols}*https://msdl.microsoft.com/download/symbols;srv*${privateSymbols}*https://symbols.electronjs.org`;
-  const warmed = await run(symchkExecutable, [electron, "/s", symbols], 90000);
-  nativeSymbols = localSymbolDirectories(privateSymbols);
   let probe;
   let probeFailed = false;
   let probeFailure;
@@ -256,8 +249,7 @@ async function prepareNativeStacks() {
   write("native-stack-setup.json", { enabled: nativeStackEnabled,
     captureFormat: "module-offsets",
     electronSha256: createHash("sha256").update(readFileSync(electron)).digest("hex"),
-    symbolPreload: { started: warmed.started, ended: warmed.ended, code: warmed.error?.code, stdoutBytes: warmed.stdoutBytes },
-    localSymbolDirectoryCount: nativeSymbols.length, probe, probeFailed, probeFailure });
+    probe, probeFailed, probeFailure });
 }
 
 function enqueue(task) {
@@ -382,13 +374,11 @@ async function main() {
   } finally {
     try { await closeObserver(); }
     catch (error) { log("controller-cleanup-error", { error: error.message }); }
-    finally { rmSync(privateSymbols, { recursive: true, force: true }); }
   }
   process.exitCode = code ?? 1;
 }
 process.once("exit", () => {
   watcher?.kill();
   for (const child of scanners) child.kill();
-  rmSync(privateSymbols, { recursive: true, force: true });
 });
 await main();
