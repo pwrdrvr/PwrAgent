@@ -27,7 +27,7 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function createArchiveWorktreeFixture(ownerRoot = ".codex"): Promise<{
+async function createArchiveWorktreeFixture(ownerRoot = ".codex", completedReviewCount = 0): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
   repoPath: string;
@@ -74,6 +74,11 @@ async function createArchiveWorktreeFixture(ownerRoot = ".codex"): Promise<{
     updatedAt: 1760000000000,
   };
 
+  const completedReviews = Array.from({ length: completedReviewCount }, (_, index) => ({
+    id: `completed-native-review-${index}`, title: "Completed review helper", source: { subAgent: "review" },
+    threadSource: "subagent", parentThreadId: thread.id, status: { type: "notLoaded" },
+    cwd: resolvedWorktreePath, ephemeral: false, linkedDirectories: thread.linkedDirectories,
+  }));
   await writeFile(
     fixturePath,
     JSON.stringify(
@@ -100,7 +105,7 @@ async function createArchiveWorktreeFixture(ownerRoot = ".codex"): Promise<{
             id: "thread-list-1",
             kind: "response",
             method: "thread/list",
-            result: [thread],
+            result: [thread, ...completedReviews],
           },
           {
             id: "thread-read-1",
@@ -142,7 +147,7 @@ async function createArchiveWorktreeFixture(ownerRoot = ".codex"): Promise<{
             afterResponseId: "thread-archive-1",
             kind: "response",
             method: "thread/list",
-            result: [],
+            result: completedReviews,
           },
           // Codex moves an archived thread into the archived listing. The
           // cleanup finds its target there, however many active reads ran.
@@ -172,8 +177,8 @@ async function createArchiveWorktreeFixture(ownerRoot = ".codex"): Promise<{
   };
 }
 
-test("archiving a replay-backed thread removes its real Git worktree", async () => {
-  const fixture = await createArchiveWorktreeFixture();
+test("archive removes a real Git worktree referenced by six completed native reviews", async () => {
+  const fixture = await createArchiveWorktreeFixture(".codex", 6);
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
   });

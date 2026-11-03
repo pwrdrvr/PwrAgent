@@ -69,6 +69,7 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   setTurnApprovalReviewer: "thread",
   setThreadPermissions: "thread",
   archiveThread: "thread",
+  retireReviewThread: "thread",
   deleteThread: "thread",
   restoreThread: "thread",
   renameThread: "thread",

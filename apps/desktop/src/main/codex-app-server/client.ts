@@ -9508,11 +9508,13 @@ export class CodexAppServerClient {
     });
     const page = extractThreadListPage(result, this.threadListTextCache);
     if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
-    // Completed approval and native code-review helpers inherit their parent's
-    // cwd; they are not independent checkout users. Keep active or uncertain
-    // reviews, every ordinary thread/worker, and archived ownership evidence.
-    const checkoutUsers = params.archived ? page.threads : page.threads.filter((thread) =>
-      !["guardian_review", "subAgentReview"].includes(thread.codexThreadSourceKind ?? "")
+    // Native code-review children inherit their parent's cwd and have no
+    // independent checkout to restore, even after retirement. Completed
+    // Guardian approvals are also excluded from active checkout users. Keep
+    // active/uncertain reviews and every ordinary thread or worker.
+    const checkoutUsers = page.threads.filter((thread) =>
+      (thread.codexThreadSourceKind !== "subAgentReview"
+        && (params.archived || thread.codexThreadSourceKind !== "guardian_review"))
       || (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded"),
     );
     const threads = await this.enrichRawThreadDirectories(checkoutUsers, "thread-list", {

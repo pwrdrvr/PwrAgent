@@ -612,7 +612,7 @@ describe("archive worktrees across a desktop restart", () => {
   it.each(["completed", "cancelled", "failed", "early", "new work", "archive failure"])("retires a distinct native review child after its result is retained (%s)", async (terminal) => {
     vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
     const fixture = await createFixture();
-    const parent = { id: "reviewed-parent", cwd: fixture.worktree, source: "cli" };
+    const parent: ArchiveWorktreeThread = { id: "reviewed-parent", cwd: fixture.worktree, source: "cli" };
     const child: ArchiveWorktreeThread = { id: "native-review", cwd: fixture.worktree, source: "subAgentReview",
       wireSource: { subAgent: "review" }, threadSource: "subagent", parentThreadId: parent.id, status: { type: "notLoaded" } };
     ArchiveWorktreeTransport.threads = [parent, child];
@@ -620,10 +620,12 @@ describe("archive worktrees across a desktop restart", () => {
     const instance = fixture.reopen();
     await instance.registry.listBackends({ includeUnavailable: true });
     let transport!: ArchiveWorktreeTransport;
-    const notification = { method: terminal === "cancelled" ? "turn/cancelled" as const : terminal === "failed" ? "turn/failed" as const : "turn/completed" as const,
-      params: { threadId: child.id, turnId: "native-review-turn", turn: { id: "native-review-turn",
-        status: terminal === "cancelled" ? "cancelled" as const : terminal === "failed" ? "failed" as const : "completed" as const,
-        ...(terminal === "failed" ? { error: { message: "Contrived review failure" } } : {}) } } };
+    const params = { threadId: child.id, turnId: "native-review-turn" };
+    const notification = terminal === "failed"
+      ? { method: "turn/failed" as const, params: { ...params, turn: { id: params.turnId, status: "failed" as const, error: { message: "Contrived review failure" } } } }
+      : terminal === "cancelled"
+        ? { method: "turn/cancelled" as const, params: { ...params, turn: { id: params.turnId, status: "cancelled" as const } } }
+        : { method: "turn/completed" as const, params: { ...params, turn: { id: params.turnId, status: "completed" as const } } };
     ArchiveWorktreeTransport.onReviewStart = (_params, connection) => {
       transport = connection;
       const result = { reviewThreadId: child.id, turn: { id: "native-review-turn", status: "inProgress" } };
@@ -698,7 +700,7 @@ describe("archive worktrees across a desktop restart", () => {
       { id: "reviewed-parent", cwd: fixture.worktree, source: "cli", archived: repair },
       ...Array.from({ length: 6 }, (_, index): ArchiveWorktreeThread => ({
         id: `completed-review-${index}`, cwd: fixture.worktree, source: "subAgentReview",
-        wireSource: { subAgent: "review" }, threadSource: "subagent", parentThreadId: "reviewed-parent",
+        wireSource: { subAgent: "review" }, threadSource: "subagent", parentThreadId: "reviewed-parent", archived: index >= 3,
         status: { type: index % 2 ? "idle" : "notLoaded" },
       })),
     ];
@@ -709,6 +711,9 @@ describe("archive worktrees across a desktop restart", () => {
       : await first.registry.archiveThread({ backend: "codex", threadId: "reviewed-parent" });
     expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
     await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    for (let index = 0; index < 6; index += 1) {
+      expect((await first.store.getThreadOverlayState({ backend: "codex", threadId: `completed-review-${index}` }))?.worktreeSnapshots ?? []).toEqual([]);
+    }
     await first.registry.close();
     first.db.close();
     databases.splice(databases.indexOf(first.db), 1);
