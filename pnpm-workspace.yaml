@@ -175,8 +175,13 @@ overrides:
   "ws": "8.22.0"
 
 patchedDependencies:
+  # Preserve legacy packaging APIs when adopting minimatch's named exports
+  # and non-RegExp parser results. The patches also support current versions.
+  "@electron/asar@3.4.1": "patches/@electron__asar@3.4.1.patch"
   "@sigstore/core@4.0.1": "patches/@sigstore__core@4.0.1.patch"
   "@tufjs/models@5.0.0": "patches/@tufjs__models@5.0.0.patch"
+  "dir-compare@4.2.0": "patches/dir-compare@4.2.0.patch"
+  "glob@7.2.3": "patches/glob@7.2.3.patch"
   "khroma@2.1.0": "patches/khroma@2.1.0.patch"
   "playwright@1.63.0": "patches/playwright@1.63.0.patch"
   "playwright-core@1.63.0": "patches/playwright-core@1.63.0.patch"

@@ -192,8 +192,11 @@ overrides:
 pnpmfileChecksum: sha256-C0qCcO/uNFL1nD3e7TuraaxvMw+xlx4EdoRWxgv4fnk=
 
 patchedDependencies:
+  '@electron/asar@3.4.1': 832c534c00593f13ae821ffa133ff244413c5317940f92dd3848e8b510f60186
   '@sigstore/core@4.0.1': 114fda379171cf845319631cc801b3ee84fc2b10b7a95e19bd05bc626f050947
   '@tufjs/models@5.0.0': cda0010163043e933ba6f86a04f2852496a944bf384d5bae3cea219e226ff6dc
+  dir-compare@4.2.0: c710b5253a5a38b5f100c39da679af788635c08dafbb94f46079142420c372c6
+  glob@7.2.3: a3adbd52146b551c396de60757d254b6a90c1f4dec601cb652096ca65ca0a617
   khroma@2.1.0: 2d947e3babbdfcfad137cbccca33429445e6e185c1c94a32039fe95af34623c7
   playwright-core@1.63.0: a37ce745327626d7a5d542880d019f19eb6436864ed3b0db8491166ee666c5e7
   playwright@1.63.0: ccabdd5daece7ce9554aa2d1f3b012c121461ddaa14f7ca7dfe4d48289866487
@@ -6244,10 +6247,10 @@ snapshots:
 
   '@electron-internal/extract-zip@1.0.5': {}
 
-  '@electron/asar@3.4.1':
+  '@electron/asar@3.4.1(patch_hash=832c534c00593f13ae821ffa133ff244413c5317940f92dd3848e8b510f60186)':
     dependencies:
       commander: 5.1.0
-      glob: 7.2.3
+      glob: 7.2.3(patch_hash=a3adbd52146b551c396de60757d254b6a90c1f4dec601cb652096ca65ca0a617)
       minimatch: 3.1.5
 
   '@electron/asar@4.3.1':
@@ -6320,10 +6323,10 @@ snapshots:
 
   '@electron/universal@2.0.3(supports-color@7.2.0)':
     dependencies:
-      '@electron/asar': 3.4.1
+      '@electron/asar': 3.4.1(patch_hash=832c534c00593f13ae821ffa133ff244413c5317940f92dd3848e8b510f60186)
       '@malept/cross-spawn-promise': 2.0.0
       debug: 4.4.3(supports-color@7.2.0)
-      dir-compare: 4.2.0
+      dir-compare: 4.2.0(patch_hash=c710b5253a5a38b5f100c39da679af788635c08dafbb94f46079142420c372c6)
       fs-extra: 11.4.1
       minimatch: 9.0.9
       plist: 3.1.0
@@ -7852,7 +7855,7 @@ snapshots:
 
   app-builder-lib@26.18.0(dmg-builder@26.18.0)(electron-builder-squirrel-windows@26.18.0)(supports-color@7.2.0):
     dependencies:
-      '@electron/asar': 3.4.1
+      '@electron/asar': 3.4.1(patch_hash=832c534c00593f13ae821ffa133ff244413c5317940f92dd3848e8b510f60186)
       '@electron/fuses': 1.8.0
       '@electron/get': 3.1.0(supports-color@7.2.0)
       '@electron/notarize': 2.5.0(supports-color@7.2.0)
@@ -8486,7 +8489,7 @@ snapshots:
     dependencies:
       dequal: 2.0.3
 
-  dir-compare@4.2.0:
+  dir-compare@4.2.0(patch_hash=c710b5253a5a38b5f100c39da679af788635c08dafbb94f46079142420c372c6):
     dependencies:
       minimatch: 3.1.5
       p-limit: 3.1.0
@@ -8631,7 +8634,7 @@ snapshots:
 
   electron-winstaller@5.4.0(supports-color@7.2.0):
     dependencies:
-      '@electron/asar': 3.4.1
+      '@electron/asar': 3.4.1(patch_hash=832c534c00593f13ae821ffa133ff244413c5317940f92dd3848e8b510f60186)
       debug: 4.4.3(supports-color@7.2.0)
       fs-extra: 7.0.1
       lodash: 4.18.1
@@ -9048,7 +9051,7 @@ snapshots:
       minipass: 7.1.3
       path-scurry: 2.0.2
 
-  glob@7.2.3:
+  glob@7.2.3(patch_hash=a3adbd52146b551c396de60757d254b6a90c1f4dec601cb652096ca65ca0a617):
     dependencies:
       fs.realpath: 1.0.0
       inflight: 1.0.6
@@ -10958,7 +10961,7 @@ snapshots:
 
   rimraf@2.6.3:
     dependencies:
-      glob: 7.2.3
+      glob: 7.2.3(patch_hash=a3adbd52146b551c396de60757d254b6a90c1f4dec601cb652096ca65ca0a617)
 
   roarr@2.15.4:
     dependencies:
