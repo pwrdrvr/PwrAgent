@@ -77,22 +77,28 @@ describe("command discovery shutdown ownership", () => {
     const ready = deferred();
     let childClosed = false;
     const running = owner.run(() => new Promise<string>((resolve, reject) => {
-      const child = execFile(process.execPath, ["-e", script, release], { env: process.env }, (error, stdout) => {
+      const child = execFile(process.execPath, ["-e", script, release], { env: process.env, timeout: 2_000 }, (error, stdout) => {
         if (error) reject(error);
         else resolve(stdout);
       });
       child.stdout!.once("data", () => ready.resolve());
-      child.once("close", () => { childClosed = true; });
+      child.once("close", () => { childClosed = true; ready.resolve(); });
     }), "");
-    await ready.promise;
-    let closed = false;
-    const closing = owner.close().then(() => { closed = true; });
-    await Promise.resolve();
-    expect(closed).toBe(false);
-    expect(childClosed).toBe(false);
-    await writeFile(release, "release");
-    expect(await running).toBe("readyfinished");
-    await closing;
-    expect(childClosed).toBe(true);
+    try {
+      await ready.promise;
+      let closed = false;
+      const closing = owner.close().then(() => { closed = true; });
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      expect(childClosed).toBe(false);
+      await writeFile(release, "release");
+      expect(await running).toBe("readyfinished");
+      await closing;
+      expect(childClosed).toBe(true);
+    } finally {
+      await writeFile(release, "release");
+      await running;
+      await owner.close();
+    }
   });
 });

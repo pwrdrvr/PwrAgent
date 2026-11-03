@@ -190,6 +190,8 @@ async function readCommandVersion(params: {
   failureReason?: string;
 }> {
   try {
+    // Shutdown cancels admission before this call. Let an admitted probe
+    // finish normally: execFile's AbortSignal can reject before stdio closes.
     const result = await execFile(params.command, params.versionArgs, {
       env: buildPwrAgentChildProcessEnv(params.env),
       timeout: 2_000,
