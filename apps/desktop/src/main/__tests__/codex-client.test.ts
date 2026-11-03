@@ -16879,14 +16879,18 @@ describe("CodexAppServerClient", () => {
     };
     const quiescent = () => true;
 
-    async function recycleFixture(children = 557) {
+    async function recycleFixture(children = 557, options: Partial<ConstructorParameters<
+      typeof import("../codex-app-server/client").CodexAppServerClient
+    >[0]> = {}) {
       let now = 0;
       const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { withCodexRequestActivity } = await import("../codex-app-server/request-activity");
       const client = new CodexAppServerClient({
         command: "codex",
         directoryResolver: async () => [],
         now: () => now,
         sampleAppServerProcessTree: async () => ({ childProcessCount: children }),
+        ...options,
       });
       await client.getInitializeResult();
       const transport = MockTransport.instances.at(-1)!;
@@ -16896,6 +16900,7 @@ describe("CodexAppServerClient", () => {
         client,
         transport,
         initializeCount,
+        withCodexRequestActivity,
         advance: (ms: number) => { now += ms; },
       };
     }
@@ -16943,6 +16948,140 @@ describe("CodexAppServerClient", () => {
         record: expect.objectContaining({ reasons: ["uptime"], childProcessCount: 3 }),
       });
       expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("postpones recycling when the operator reads an old thread", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      advance(5 * MINUTE);
+
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 5 * MINUTE });
+      expect(transport.closeCount).toBe(0);
+      advance(15 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("does not postpone recycling for a background thread read or account poll", async () => {
+      const { client, transport, advance, withCodexRequestActivity } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      await withCodexRequestActivity({ countsAsActivity: false }, async () => {
+        await client.readThread({ threadId: "thread-2", includeTurns: false });
+        await client.readAccount();
+        await client.readRateLimits();
+      });
+
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({
+          kind: "recycled",
+          record: expect.objectContaining({ idleMs: 8 * 60 * MINUTE }),
+        }));
+      expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("does not postpone recycling for idle-thread unsubscribe probes", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      MockTransport.threadStatusByThreadId.set("thread-2", { type: "idle" });
+      await client.startTurn({ threadId: "thread-2", input: [] });
+      advance(8 * 60 * MINUTE);
+      expect(await client.unsubscribeIdleThreads({ idleMs: 10 * MINUTE, isThreadBusy: () => false }))
+        .toEqual(["thread-2"]);
+
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("keeps a concurrent operator read active while a background poll awaits its response", async () => {
+      let started!: () => void;
+      let finish!: () => void;
+      const polling = new Promise<void>((resolve) => { started = resolve; });
+      const response = new Promise<void>((resolve) => { finish = resolve; });
+      const { client, transport, advance, withCodexRequestActivity } = await recycleFixture(3, {
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (event.direction === "outbound" && event.envelope.method === "account/read") {
+              started();
+              await response;
+            }
+          },
+        },
+      });
+      advance(8 * 60 * MINUTE);
+      const poll = withCodexRequestActivity({ countsAsActivity: false }, () => client.readAccount());
+      await polling;
+      advance(MINUTE);
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      advance(10 * MINUTE);
+      finish();
+      await poll;
+      advance(9 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 19 * MINUTE });
+      expect(transport.closeCount).toBe(0);
+      advance(MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("starts the idle window when a slow operator read settles", async () => {
+      let started!: () => void;
+      let finish!: () => void;
+      const reading = new Promise<void>((resolve) => { started = resolve; });
+      const response = new Promise<void>((resolve) => { finish = resolve; });
+      const { client, transport, advance } = await recycleFixture(3, {
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (event.direction === "outbound" && event.envelope.method === "thread/read") {
+              started();
+              await response;
+            }
+          },
+        },
+      });
+      advance(8 * 60 * MINUTE);
+      const read = client.readThread({ threadId: "thread-2", includeTurns: false });
+      await reading;
+      advance(25 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "busy", blocker: "in-flight-request" });
+      finish();
+      await read;
+      advance(5 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 5 * MINUTE });
+      expect(transport.closeCount).toBe(0);
+      await client.close();
+    });
+
+    it("cancels a recycle if an operator read arrives during process sampling", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      const sample = await client.readAppServerProcessSample();
+      let sampled!: () => void;
+      let finish!: () => void;
+      const sampling = new Promise<void>((resolve) => { sampled = resolve; });
+      const response = new Promise<void>((resolve) => { finish = resolve; });
+      vi.spyOn(client, "readAppServerProcessSample").mockImplementationOnce(async () => {
+        sampled();
+        await response;
+        return sample;
+      });
+      const recycle = client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent });
+      await sampling;
+      advance(MINUTE);
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      finish();
+
+      expect(await recycle).toEqual({ kind: "busy", blocker: "app-server-activity" });
+      expect(transport.closeCount).toBe(0);
       await client.close();
     });
 

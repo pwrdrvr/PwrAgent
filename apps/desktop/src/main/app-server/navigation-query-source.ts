@@ -20,6 +20,7 @@ import {
   NavigationDirectorySetAnnouncer,
 } from "./navigation-directory-set-announcer";
 import { getMainLogger } from "../log";
+import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 
 const indexReads = new NavigationIndexReadPool(1_000);
 const latestVisibilityScanByRegistry = new WeakMap<DesktopBackendRegistry, number>();
@@ -146,12 +147,15 @@ async function buildLocalNavigationQueryIndex(params: {
   const registry = params.registry;
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
-  const listedThreads = await registry.listThreads({
-    backend: backend === "all" ? undefined : backend,
-    callerReason: params.callerReason,
-    enrichDirectories: true,
-    ...(params.refreshProviders ? { forceRefresh: true } : {}),
-  });
+  // Membership refreshes also run on navigation and directory-announcer
+  // timers. Opening a thread counts through its own foreground read.
+  const listedThreads = await withCodexRequestActivity({ countsAsActivity: false }, () =>
+    registry.listThreads({
+      backend: backend === "all" ? undefined : backend,
+      callerReason: params.callerReason,
+      enrichDirectories: true,
+      ...(params.refreshProviders ? { forceRefresh: true } : {}),
+    }));
   params.signal?.throwIfAborted();
   // An overtaken scan whose follow-up already has readers hands them over
   // here instead of spending CPU on a projection nobody would keep.

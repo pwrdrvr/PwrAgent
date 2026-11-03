@@ -9144,6 +9144,40 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("keeps quota and terminal polls outside Codex request activity", async () => {
+    const { codexRequestCountsAsActivity } = await import("../codex-app-server/request-activity");
+    const codexClient = new MockBackendClient();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const readAccount = codexClient.readAccount.bind(codexClient);
+    const readRateLimits = codexClient.readRateLimits.bind(codexClient);
+    const activity: Array<[string, boolean]> = [];
+    vi.spyOn(codexClient, "readAccount").mockImplementation(async () => {
+      activity.push(["account/read", codexRequestCountsAsActivity()]);
+      return await readAccount();
+    });
+    vi.spyOn(codexClient, "readRateLimits").mockImplementation(async () => {
+      activity.push(["account/rateLimits/read", codexRequestCountsAsActivity()]);
+      return await readRateLimits();
+    });
+    Object.assign(codexClient, {
+      listBackgroundTerminals: async () => {
+        activity.push(["thread/backgroundTerminals/list", codexRequestCountsAsActivity()]);
+        return { supported: true, terminals: [] };
+      },
+    });
+
+    await registry.listBackends({ refreshRateLimits: true });
+    await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+    expect(activity).toEqual([
+      ["account/read", false],
+      ["account/rateLimits/read", false],
+      ["thread/backgroundTerminals/list", false],
+    ]);
+    expect(codexRequestCountsAsActivity()).toBe(true);
+    await registry.close();
+  });
+
   it("suspends quota probes while Codex authentication is rejected and resumes after verification", async () => {
     const codexClient = Object.assign(new MockBackendClient({
       rateLimits: [{ name: "Weekly limit", remaining: 91 }],

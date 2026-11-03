@@ -80,6 +80,7 @@ import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-
 import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
+import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import type { PendingThreadApprovalSummary } from "@pwragent/shared";
@@ -13418,7 +13419,7 @@ export class DesktopBackendRegistry {
       this.modelCatalog.invalidate("codex");
     }
     if (request.refreshRateLimits) {
-      await this.refreshCodexQuotas();
+      await withCodexRequestActivity({ countsAsActivity: false }, () => this.refreshCodexQuotas());
     }
     const codexSummary =
       request.refreshModels === true || request.refreshModels === "codex"
@@ -23542,7 +23543,8 @@ export class DesktopBackendRegistry {
     turnId: string;
   }): void {
     setTimeout(() => {
-      void this.emitCompletedTurnFromReplay(params).catch((error: unknown) => {
+      void withCodexRequestActivity({ countsAsActivity: false }, () =>
+        this.emitCompletedTurnFromReplay(params)).catch((error: unknown) => {
         backendRegistryLog.warn("failed to emit completed turn replay event", {
           backend: params.backend,
           threadId: params.threadId,
@@ -28997,10 +28999,11 @@ export class DesktopBackendRegistry {
     const revision = ++this.backgroundTerminalReadCounter;
     this.backgroundTerminalReadRevisions.set(threadId, revision);
     try {
-      const response = await this.withCodexThreadClient(threadId, async (client) =>
-        client.listBackgroundTerminals?.(threadId) ?? { supported: false, terminals: [] },
-        undefined, false,
-      );
+      const response = await withCodexRequestActivity({ countsAsActivity: false }, () =>
+        this.withCodexThreadClient(threadId, async (client) =>
+          client.listBackgroundTerminals?.(threadId) ?? { supported: false, terminals: [] },
+          undefined, false,
+        ));
       const applied = !this.closed && response.supported && generation === this.backgroundTerminalGeneration
         && revision === this.backgroundTerminalReadRevisions.get(threadId);
       if (applied) {
@@ -36252,7 +36255,8 @@ export class DesktopBackendRegistry {
       if (scheduled) {
         scheduled.timer = undefined;
       }
-      void this.reconcileCodexNativeSubAgent(params.receiverThreadId);
+      void withCodexRequestActivity({ countsAsActivity: false }, () =>
+        this.reconcileCodexNativeSubAgent(params.receiverThreadId));
     }, params.delayMs);
     timer.unref?.();
     reconciliation.timer = timer;
