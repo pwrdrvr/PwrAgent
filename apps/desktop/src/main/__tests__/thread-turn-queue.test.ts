@@ -21,6 +21,42 @@ function buildEntry(
 }
 
 describe("ThreadTurnQueue", () => {
+  it.each(["turn/completed", "turn/cancelled", "turn/failed"])("settles %s during a queued started callback", async (status) => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const startedEntries: string[] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        return { ...target, turnId: `turn-${entry.id}` };
+      },
+      onLifecycle: async (event) => {
+        events.push(event);
+        if (event.type === "started" && event.entry.id === "early") {
+          await queue.releaseThread({ ...target, turnId: event.turnId, status, errorMessage: "provider failed" });
+        }
+      },
+    });
+    try {
+      await queue.submit(buildEntry({ id: "running" }));
+      await queue.submit(buildEntry({ id: "early" }));
+      await queue.submit(buildEntry({ id: "next" }));
+      await queue.releaseThread({ ...target, turnId: "turn-running", status: "turn/completed" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(events.filter((event) => event.type === "terminal" && event.entry.id === "early"))
+        .toEqual([expect.objectContaining({ status, turnId: "turn-early" })]);
+      expect(startedEntries).toEqual(status === "turn/failed"
+        ? ["running", "early"] : ["running", "early", "next"]);
+      if (status === "turn/failed") {
+        expect(queue.getQueuedEntries(target)).toMatchObject([{
+          id: "next", manualReleaseRequired: true, holdReason: "provider failed",
+        }]);
+      }
+    } finally {
+      queue.close();
+    }
+  });
+
   it.each([
     { startup: "release", errorMessage: "Provider unavailable" },
     { startup: "release", errorMessage: undefined },
@@ -267,6 +303,160 @@ describe("ThreadTurnQueue", () => {
     ]);
   });
 
+  it.each(["submit", "submitIfIdle"] as const)("settles a terminal event received before %s acknowledges startup", async (submit) => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => false,
+      startTurn: async (entry) => {
+        expect(queue.cancelEntryWithDisposition(entry.id)).toEqual({
+          disposition: "already_admitted",
+          entryId: entry.id,
+        });
+        const terminal = { ...target, turnId: `turn-${entry.id}`, status: "turn/completed" };
+        await queue.releaseThread(terminal);
+        await queue.releaseThread(terminal);
+        return terminal;
+      },
+      onLifecycle: (event) => { events.push(event); },
+    });
+
+    await expect(queue[submit](buildEntry())).resolves.toMatchObject({
+      status: "started",
+      turnId: "turn-entry-1",
+    });
+    expect(queue.canStartImmediately(target)).toBe(true);
+    expect(events).toEqual([
+      expect.objectContaining({ type: "started", entry: expect.objectContaining({ id: "entry-1" }), turnId: "turn-entry-1" }),
+      expect.objectContaining({ type: "terminal", entry: expect.objectContaining({ id: "entry-1" }), turnId: "turn-entry-1", status: "turn/completed" }),
+    ]);
+    expect(queue.cancelEntryWithDisposition("entry-1")).toEqual({
+      disposition: "already_admitted",
+      entryId: "entry-1",
+      turnId: "turn-entry-1",
+    });
+    queue.close();
+  });
+
+  it("settles a queued successor that completes while releaseThread awaits its startup", async () => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => false,
+      startTurn: async (entry) => {
+        const result = { ...target, turnId: `turn-${entry.id}` };
+        if (entry.id === "successor") {
+          await queue.releaseThread({ ...result, status: "turn/completed" });
+        }
+        return result;
+      },
+      onLifecycle: (event) => { events.push(event); },
+    });
+
+    await queue.submit(buildEntry({ id: "running" }));
+    await queue.submit(buildEntry({ id: "paused", paused: true }));
+    await queue.submit(buildEntry({ id: "successor" }));
+    await queue.releaseThread({ ...target, turnId: "turn-running", status: "turn/completed" });
+
+    expect(events.map((event) => [event.type, event.entry.id])).toEqual([
+      ["started", "running"],
+      ["queued", "paused"],
+      ["queued", "successor"],
+      ["terminal", "running"],
+      ["started", "successor"],
+      ["terminal", "successor"],
+    ]);
+    expect(queue.canStartImmediately(target)).toBe(true);
+    expect(queue.getQueuedEntries(target)).toMatchObject([{ id: "paused", paused: true }]);
+    expect(queue.cancelEntryWithDisposition("successor")).toEqual({
+      disposition: "already_admitted",
+      entryId: "successor",
+      turnId: "turn-successor",
+    });
+    queue.close();
+  });
+
+  it("ignores stale terminal and idle events while a different turn is starting", async () => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => false,
+      startTurn: async (entry) => {
+        if (entry.id === "starting") {
+          await queue.submit(buildEntry({ id: "successor" }));
+          await queue.releaseThread({ ...target, turnId: "stale-failure", status: "turn/failed" });
+          await queue.releaseThread({ ...target, status: "idle" });
+          await queue.releaseThread({ ...target, turnId: "stale-completion", status: "turn/completed" });
+        }
+        return { ...target, turnId: `turn-${entry.id}` };
+      },
+      onLifecycle: (event) => { events.push(event); },
+    });
+
+    await queue.submit(buildEntry({ id: "starting" }));
+    expect(events.map((event) => [event.type, event.entry.id])).toEqual([
+      ["queued", "successor"],
+      ["started", "starting"],
+    ]);
+    expect(queue.canStartImmediately(target)).toBe(false);
+    expect(queue.getQueuedEntries(target)).toMatchObject([{ id: "successor" }]);
+    expect(queue.getQueuedEntries(target)[0]?.manualReleaseRequired).toBeUndefined();
+
+    await queue.releaseThread({ ...target, turnId: "turn-starting", status: "turn/completed" });
+    expect(events.map((event) => [event.type, event.entry.id])).toEqual([
+      ["queued", "successor"],
+      ["started", "starting"],
+      ["terminal", "starting"],
+      ["started", "successor"],
+    ]);
+    queue.close();
+  });
+
+  it("holds successors after an early turn failure and reports a retry that already completed as started", async () => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => false,
+      startTurn: async (entry) => {
+        const result = { ...target, turnId: `turn-${entry.id}` };
+        if (entry.id === "failing") {
+          await queue.submit(buildEntry({ id: "successor" }));
+          await queue.releaseThread({ ...result, status: "turn/failed", errorMessage: "provider failed" });
+          await queue.releaseThread({ ...target, status: "idle" });
+        } else {
+          await queue.releaseThread({ ...result, status: "turn/completed" });
+        }
+        return result;
+      },
+      onLifecycle: (event) => { events.push(event); },
+    });
+
+    await queue.submit(buildEntry({ id: "failing" }));
+    expect(events.map((event) => [event.type, event.entry.id])).toEqual([
+      ["queued", "successor"],
+      ["started", "failing"],
+      ["terminal", "failing"],
+      ["held", "successor"],
+    ]);
+    expect(queue.getQueuedEntries(target)).toMatchObject([{
+      id: "successor",
+      manualReleaseRequired: true,
+      holdReason: "provider failed",
+    }]);
+    expect(queue.canStartImmediately(target)).toBe(false);
+    await expect(queue.releaseEntryWithDisposition("successor")).resolves.toEqual({
+      disposition: "started",
+      entryId: "successor",
+      turnId: "turn-successor",
+    });
+    expect(queue.canStartImmediately(target)).toBe(true);
+    expect(events.slice(-2).map((event) => [event.type, event.entry.id])).toEqual([
+      ["started", "successor"],
+      ["terminal", "successor"],
+    ]);
+    queue.close();
+  });
+
   it("queues active-thread submissions and starts them FIFO on release", async () => {
     let active = true;
     const startedEntries: string[] = [];
@@ -367,7 +557,67 @@ describe("ThreadTurnQueue", () => {
     });
   });
 
-  it("keeps queued submissions after an in-flight start rejects after release", async () => {
+  it.each(["submit", "submitIfIdle"] as const)("holds queued successors when %s receives a terminal failure before startup rejects", async (submit) => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    let finishStartup!: () => void;
+    const starting = new Promise<void>((resolve) => { finishStartup = resolve; });
+    const startedEntries: string[] = [];
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => false,
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        if (entry.id === "failing") {
+          await starting;
+          await queue.releaseThread({
+            ...target,
+            turnId: `pending:${entry.threadId}`,
+            status: "turn/failed",
+            errorMessage: "provider rejected startup",
+          });
+          await queue.releaseThread({ ...target, status: "idle" });
+          throw new Error("backend rejected start");
+        }
+        return { ...target, turnId: `turn-${entry.id}` };
+      },
+      onLifecycle: (event) => { events.push(event); },
+    });
+
+    try {
+      const submission = queue[submit](buildEntry({ id: "failing" }));
+      await queue.submit(buildEntry({ id: "successor" }));
+      finishStartup();
+      await expect(submission).rejects.toThrow("backend rejected start");
+      // Let startup's normal drain run; the failure must keep it held.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(startedEntries).toEqual(["failing"]);
+      expect(queue.getQueuedEntries(target)).toMatchObject([{
+        id: "successor",
+        manualReleaseRequired: true,
+        holdReason: "provider rejected startup",
+      }]);
+      expect(events.map((event) => [event.type, event.entry.id])).toEqual([
+        ["queued", "successor"],
+        ["held", "successor"],
+        ["failed", "failing"],
+      ]);
+      expect(queue.cancelEntryWithDisposition("failing")).toEqual({ disposition: "not_found" });
+
+      await queue.releaseThread({ ...target, status: "idle" });
+      expect(startedEntries).toEqual(["failing"]);
+      await expect(queue.releaseEntryWithDisposition("successor")).resolves.toEqual({
+        disposition: "started",
+        entryId: "successor",
+        turnId: "turn-successor",
+      });
+      expect(startedEntries).toEqual(["failing", "successor"]);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it("drains queued submissions after an immediate start rejects without a terminal failure", async () => {
     let rejectStart!: (reason?: unknown) => void;
     const starting = new Promise<never>((_resolve, reject) => {
       rejectStart = reject;
@@ -403,6 +653,9 @@ describe("ThreadTurnQueue", () => {
     expect(startedEntries).toEqual([]);
     expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
       .toMatchObject([{ id: "second" }]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(startedEntries).toEqual(["second"]);
+    queue.close();
   });
 
   it("waits for a later release when a failed start leaves the thread active", async () => {
@@ -517,6 +770,12 @@ describe("ThreadTurnQueue", () => {
       turnId: "turn-running-0",
     });
     await firstQueuedAttempt;
+    await queue.releaseThread({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "synthetic-start-failure",
+      status: "turn/failed",
+    });
     await queue.releaseThread({ backend: "codex", threadId: "thread-1" });
     rejectFirstQueuedStart(new Error("backend rejected queued start"));
 

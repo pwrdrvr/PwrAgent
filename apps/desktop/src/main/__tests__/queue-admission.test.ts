@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { transitionQueueAdmission } from "../app-server/queue-admission";
 
 describe("queue admission identity", () => {
+  it("retains matching outcomes received after acknowledgement until the attempt settles", () => {
+    const attempt = Symbol();
+    const starting = transitionQueueAdmission({ phase: "idle" }, { type: "begin", attempt });
+    const acknowledged = transitionQueueAdmission(starting, { type: "acknowledge", attempt, turnId: "current" });
+    const stale = transitionQueueAdmission(acknowledged, {
+      type: "terminal", terminal: { turnId: "old", status: "turn/failed" },
+    });
+    expect(stale).toMatchObject({ phase: "acknowledged", terminal: undefined });
+    const completed = transitionQueueAdmission(stale, {
+      type: "terminal", terminal: { turnId: "current", status: "turn/completed" },
+    });
+    expect(completed).toMatchObject({
+      phase: "acknowledged", terminal: { turnId: "current", status: "turn/completed" },
+    });
+  });
+
   it("matches early completion by turn id and preserves the first terminal", () => {
     const attempt = Symbol();
     const starting = transitionQueueAdmission({ phase: "idle" }, { type: "begin", attempt });

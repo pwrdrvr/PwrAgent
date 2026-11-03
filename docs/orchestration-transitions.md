@@ -16,6 +16,9 @@ the acknowledged turn ID. A matching completion prevents running-entry insertion
 and publishes start then terminal exactly once. An unidentified idle notification
 cannot prove which starting turn ended. Existing release serialization and its
 failed-start idle replay continue to govern those signals.
+Identified outcomes remain buffered through delivery of the started callback.
+A rejected direct admission preserves its buffered failure holds; an acknowledged
+start ignores buffered outcomes for other turn IDs.
 
 A buffered failure also retains its error reason and applies the normal failure
 hold before admission settles and dispatch resumes. Replaying a hold already
