@@ -19,6 +19,7 @@ type HistoryHookProps = {
   current: NavigationHistoryLocation | undefined;
   liveLaunchpadKeys?: ReadonlySet<string>;
   liveThreadKeys?: ReadonlySet<string>;
+  archivedThreadKeys?: ReadonlySet<string>;
 };
 
 /**
@@ -48,6 +49,9 @@ function renderHistory(initial: NavigationHistoryLocation | undefined) {
   const setLiveLaunchpadKeys = (keys: ReadonlySet<string> | undefined): void => {
     update({ liveLaunchpadKeys: keys });
   };
+  const setArchivedThreadKeys = (keys: ReadonlySet<string>): void => {
+    update({ archivedThreadKeys: keys });
+  };
   // Apply what restore asked for, like App's setMainView/showThread would.
   const settle = (): void => {
     const location = restore.mock.lastCall?.[0] as
@@ -63,6 +67,7 @@ function renderHistory(initial: NavigationHistoryLocation | undefined) {
     restore,
     setLiveLaunchpadKeys,
     setLiveThreadKeys,
+    setArchivedThreadKeys,
     settle,
   };
 }
@@ -412,6 +417,92 @@ describe("useNavigationHistory", () => {
     setLiveThreadKeys(new Set(["codex:a", "codex:b"]));
     setLiveThreadKeys(undefined); // e.g. transient empty snapshot
     expect(hook.result.current.canGoBack).toBe(true);
+  });
+
+  it.each(["before", "with", "after"])("skips an archived cursor when its fallback arrives %s the archive update", (timing) => {
+    const h = renderHistory(thread("codex:a"));
+    h.navigate(thread("codex:b"));
+    if (timing === "before") h.navigate(thread("codex:c"));
+    if (timing === "with") {
+      // Both updates commit in the same render in the shell.
+      act(() => h.hook.rerender({ current: thread("codex:c"), archivedThreadKeys: new Set(["codex:b"]) }));
+    } else {
+      h.setArchivedThreadKeys(new Set(["codex:b"]));
+      if (timing === "after") h.navigate(thread("codex:c"));
+    }
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
+    h.settle();
+    expect(h.hook.result.current.canGoBack).toBe(false);
+    expect(h.hook.result.current.canGoForward).toBe(true);
+    act(() => h.hook.result.current.goForward());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("codex:c"));
+  });
+
+  it.each(["back", "forward"])("skips consecutive archived entries in %s history", (direction) => {
+    const h = renderHistory(thread("codex:a"));
+    for (const key of ["b", "c", "d"]) h.navigate(thread(`codex:${key}`));
+    if (direction === "forward") {
+      for (let i = 0; i < 3; i++) {
+        act(() => h.hook.result.current.goBack());
+        h.settle();
+      }
+    }
+    h.setArchivedThreadKeys(new Set(["codex:b", "codex:c"]));
+    expect(direction === "back" ? h.hook.result.current.canGoBack : h.hook.result.current.canGoForward).toBe(true);
+    act(() => direction === "back" ? h.hook.result.current.goBack() : h.hook.result.current.goForward());
+    expect(h.restore).toHaveBeenLastCalledWith(thread(direction === "back" ? "codex:a" : "codex:d"));
+    h.settle();
+    expect(direction === "back" ? h.hook.result.current.canGoBack : h.hook.result.current.canGoForward).toBe(false);
+  });
+
+  it("disables both directions when all thread entries including the cursor are archived", () => {
+    const h = renderHistory(thread("codex:a"));
+    h.navigate(thread("codex:b"));
+    h.navigate(thread("codex:c"));
+    act(() => h.hook.result.current.goBack());
+    h.settle();
+    h.setArchivedThreadKeys(new Set(["codex:a", "codex:b", "codex:c"]));
+    h.navigate(undefined);
+    expect(h.hook.result.current.canGoBack).toBe(false);
+    expect(h.hook.result.current.canGoForward).toBe(false);
+    h.restore.mockClear();
+    act(() => { h.hook.result.current.goBack(); h.hook.result.current.goForward(); });
+    expect(h.restore).not.toHaveBeenCalled();
+  });
+
+  it("does not keep a duplicate Back target when archive falls back to the previous thread", () => {
+    const h = renderHistory(thread("codex:a"));
+    h.navigate(thread("codex:b"));
+    h.navigate(thread("codex:a"));
+    h.setArchivedThreadKeys(new Set(["codex:b"]));
+    expect(h.hook.result.current.canGoBack).toBe(false);
+  });
+
+  it("preserves search and unloaded identities on other backends and instances", () => {
+    const h = renderHistory(thread("codex:same"));
+    h.navigate(SEARCH);
+    h.navigate(thread("claude:same"));
+    h.navigate(thread("remote:peer-a:codex:same"));
+    h.navigate(thread("remote:peer-b:codex:same"));
+    h.setArchivedThreadKeys(new Set(["codex:same", "remote:peer-a:codex:same"]));
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("claude:same"));
+    h.settle();
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(SEARCH);
+  });
+
+  it("allows a restored identity to be visited and recorded again", () => {
+    const h = renderHistory(thread("codex:a"));
+    h.navigate(thread("codex:b"));
+    h.setArchivedThreadKeys(new Set(["codex:b"]));
+    h.navigate(thread("codex:c"));
+    h.setArchivedThreadKeys(new Set());
+    h.navigate(thread("codex:b"));
+    h.navigate(thread("codex:c"));
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("codex:b"));
   });
 
   it("caps the back stack at 50 entries", () => {
