@@ -510,6 +510,7 @@ export class ClaudeBackend {
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   private discovery?: { models: boolean; promise: Promise<void> };
   private modelDiscovery?: Promise<void>;
+  private readonly discoveryOperations = new Set<Promise<unknown>>();
   private nextModelRefreshAt = 0;
   private models?: BackendModelOption[];
   // Account-wide, so one thread's turn must never clear another's view. The
@@ -546,16 +547,22 @@ export class ClaudeBackend {
   }
 
   async discover(options: { models?: boolean } = {}): Promise<void> {
+    if (this.closing) return;
     const models = options.models !== false;
     const inFlight = this.discovery;
     // An installation-only check cannot answer a request for the model catalog.
     if (inFlight && (inFlight.models || !models)) return await inFlight.promise;
     if (inFlight) await inFlight.promise.catch(() => {});
+    if (this.closing) return;
     const discovery = {
       models,
       promise: (async () => {
         const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-        this.installation = await (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env });
+        if (this.closing) return;
+        this.installation = await this.ownDiscoveryOperation(
+          (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env }),
+        );
+        if (this.closing) return;
         if (models && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
           await this.refreshModelCatalog(env);
         }
@@ -1219,13 +1226,17 @@ export class ClaudeBackend {
   }
 
   private refreshModelCatalog(env: NodeJS.ProcessEnv): Promise<void> {
+    if (this.closing) return Promise.resolve();
     if (this.modelDiscovery) return this.modelDiscovery;
     const { executable, version } = this.installation;
     if (!executable) return Promise.resolve();
     this.modelDiscovery = (async () => {
-      const models = await (this.options.discoverModels ?? discoverClaudeModels)({
-        executable, env, ...(version ? { cliVersion: version } : {}),
-      });
+      const models = await this.ownDiscoveryOperation(
+        (this.options.discoverModels ?? discoverClaudeModels)({
+          executable, env, ...(version ? { cliVersion: version } : {}),
+        }),
+      );
+      if (this.closing) return;
       this.nextModelRefreshAt = Date.now() + 60_000;
       await this.publishModels(models);
     })().finally(() => { this.modelDiscovery = undefined; });
@@ -1233,12 +1244,19 @@ export class ClaudeBackend {
   }
 
   private async refreshGlobalModels(): Promise<void> {
+    if (this.closing) return;
     if (Date.now() < this.nextModelRefreshAt) return;
     // A new turn can recover missing/stale metadata, but never spawns more
     // than one global probe per minute or waits for it to consume the stream.
     this.nextModelRefreshAt = Date.now() + 60_000;
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
     await this.refreshModelCatalog(env);
+  }
+
+  private ownDiscoveryOperation<T>(operation: Promise<T>): Promise<T> {
+    this.discoveryOperations.add(operation);
+    void operation.finally(() => this.discoveryOperations.delete(operation)).catch(() => {});
+    return operation;
   }
 
   private async consume(live: LiveSession): Promise<void> {
@@ -2941,6 +2959,9 @@ export class ClaudeBackend {
     // A start may still be reading session metadata before it appears in
     // sessions. Close both groups before callers can remove the store root.
     await Promise.all([
+      // Discovery has no live session entry. Drain its CLI work too, without
+      // joining notification delivery that can itself request backend close.
+      Promise.allSettled([...this.discoveryOperations]),
       Promise.allSettled([...this.turnStarts]),
       Promise.all([...this.sessions.values()].map((live) => this.closeSession(live))),
     ]);
