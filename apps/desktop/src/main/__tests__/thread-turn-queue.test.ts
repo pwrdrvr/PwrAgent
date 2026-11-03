@@ -21,6 +21,93 @@ function buildEntry(
 }
 
 describe("ThreadTurnQueue", () => {
+  it.each([
+    { startup: "release", errorMessage: "Provider unavailable" },
+    { startup: "release", errorMessage: undefined },
+    { startup: "immediate", errorMessage: "Provider unavailable" },
+  ])("holds the queue after an early failure during $startup startup (reason: $errorMessage)", async ({ startup, errorMessage }) => {
+    let active = startup === "release";
+    let fail!: () => void;
+    const readyToFail = new Promise<void>((resolve) => { fail = resolve; });
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const startedEntries: string[] = [];
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    const failure = { ...target, turnId: "turn-entry-1", status: "turn/failed", errorMessage };
+    let queue!: ThreadTurnQueue;
+    queue = new ThreadTurnQueue({
+      isThreadActive: () => active,
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        if (entry.id === "entry-1") {
+          await readyToFail;
+          await queue.releaseThread(failure);
+        }
+        return { ...target, turnId: `turn-${entry.id}` };
+      },
+      onLifecycle: (event) => { events.push(event); },
+    });
+    try {
+      const first = queue.submit(buildEntry());
+      await queue.submit(buildEntry({ id: "entry-2" }));
+      active = false;
+      const starting = startup === "release"
+        ? queue.releaseThread({ ...target, turnId: "previous", status: "turn/completed" })
+        : first;
+      fail();
+      await starting;
+      // Run the scheduled drain before checking that the hold prevented it.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(startedEntries).toEqual(["entry-1"]);
+      expect(queue.getQueuedEntries(target)).toMatchObject([{
+        id: "entry-2",
+        manualReleaseRequired: true,
+        holdReason: errorMessage ?? "The previous turn failed. Review the error before retrying queued messages.",
+      }]);
+      expect(events.filter((event) => event.type === "held")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "terminal" && event.entry.id === "entry-1"))
+        .toEqual([expect.objectContaining({ status: "turn/failed", turnId: "turn-entry-1" })]);
+
+      await queue.releaseThread({ ...target, status: "idle" });
+      await queue.releaseThread(failure);
+      expect(startedEntries).toEqual(["entry-1"]);
+      expect(events.filter((event) => event.type === "held")).toHaveLength(1);
+      await expect(queue.releaseEntryWithDisposition("entry-2"))
+        .resolves.toMatchObject({ disposition: "started", turnId: "turn-entry-2" });
+      expect(startedEntries).toEqual(["entry-1", "entry-2"]);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it.each(["turn/completed", "turn/cancelled"])("drains after an early %s inside a queued release", async (status) => {
+    let active = true;
+    const startedEntries: string[] = [];
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    let queue!: ThreadTurnQueue;
+    queue = new ThreadTurnQueue({
+      isThreadActive: () => active,
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        if (entry.id === "entry-1") {
+          await queue.releaseThread({ ...target, turnId: "turn-entry-1", status });
+        }
+        return { ...target, turnId: `turn-${entry.id}` };
+      },
+    });
+    try {
+      await queue.submit(buildEntry());
+      await queue.submit(buildEntry({ id: "entry-2" }));
+      active = false;
+      await queue.releaseThread({ ...target, turnId: "previous", status: "turn/completed" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(startedEntries).toEqual(["entry-1", "entry-2"]);
+      expect(queue.getQueuedEntries(target)).toEqual([]);
+    } finally {
+      queue.close();
+    }
+  });
+
   it("drains after completion before start acknowledgement and ignores duplicate terminals", async () => {
     let acknowledge!: () => void;
     const pending = new Promise<void>((resolve) => { acknowledge = resolve; });
