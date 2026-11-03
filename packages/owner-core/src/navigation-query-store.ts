@@ -551,7 +551,8 @@ export class NavigationQueryStore {
     pageSize: number;
   }): NavigationQueryPage {
     const materialization = params.generation.materialization;
-    const collectionKind = materialization.modelGroups ? "models" : materialization.directories.length > 0 ? "directories" : "entries";
+    const collectionKind = materialization.modelGroups ? "models"
+      : materialization.collectionKind === "directories" || materialization.directories.length > 0 ? "directories" : "entries";
     const collection = materialization.modelGroups ?? (collectionKind === "directories" ? materialization.directories : materialization.entries);
     if (params.offset > collection.length) {
       throw new NavigationQueryError(
