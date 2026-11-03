@@ -136,6 +136,7 @@ export function resetDesktopSettingsServiceForTests(): void {
   unsubscribeAuth?.();
   unsubscribeAuth = undefined;
   desktopSettingsService = undefined;
+  commandDiscoveryClosed = false;
   setGitCommandResolver(undefined);
   disposeDesktopConfigStore();
 }
