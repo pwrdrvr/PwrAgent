@@ -16320,6 +16320,87 @@ describe("MessagingController", () => {
     );
   });
 
+  it.each(["delivered", "missed"] as const)("revalidates admission after media preparation when completion is %s", async (completion) => {
+    let releaseMedia!: () => void;
+    const mediaGate = new Promise<void>((resolve) => { releaseMedia = resolve; });
+    let active = false;
+    const downloadAttachment = vi.fn(async () => {
+      await mediaGate;
+      return { data: new TextEncoder().encode("fixture file"), fileName: "fixture.txt", mimeType: "text/plain", sizeBytes: 12 };
+    });
+    const harness = await createHarness({
+      downloadAttachment,
+      getThreadAdmissionState: async (request) => ({
+        thread: buildNavigationSnapshot().threads[0],
+        threadStatus: active ? "active" : "idle",
+        ...(active ? { activeTurn: { backend: request.backend, threadId: request.threadId, turnId: "turn-1" } } : {}),
+      }),
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
+    active = true;
+    const handling = harness.controller.handleInboundEvent({
+      ...buildTextEvent("Read this file"), id: "completion-during-media", kind: "media", disposition: "available",
+      attachments: [{ id: "fixture-file", kind: "file", name: "fixture.txt", mimeType: "text/plain", disposition: "available", sizeBytes: 12 }],
+    });
+    try {
+      await vi.waitFor(() => expect(downloadAttachment).toHaveBeenCalledOnce());
+      active = false;
+      if (completion === "delivered") {
+        // Completion drains the empty controller queue before media is ready.
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } },
+          },
+        });
+      }
+      expect(harness.startTurn).toHaveBeenCalledOnce();
+    } finally {
+      releaseMedia();
+      await handling;
+    }
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: expect.stringMatching(/Read this file[\s\S]*fixture file/u) }],
+    }));
+    expect(harness.delivered).not.toContainEqual(expect.objectContaining({ kind: "confirmation", title: "Message queued" }));
+  });
+
+  it("reads admission after media preparation and waits for it before dispatch", async () => {
+    let releaseMedia!: () => void;
+    let releaseAdmission!: () => void;
+    const mediaGate = new Promise<void>((resolve) => { releaseMedia = resolve; });
+    const admissionGate = new Promise<void>((resolve) => { releaseAdmission = resolve; });
+    const downloadAttachment = vi.fn(async () => {
+      await mediaGate;
+      return { data: new TextEncoder().encode("fixture file"), fileName: "fixture.txt", mimeType: "text/plain", sizeBytes: 12 };
+    });
+    const harness = await createHarness({ downloadAttachment });
+    await bindThread(harness);
+    const state = await (harness.getThreadAdmissionState as NonNullable<MessagingBackendBridge["getThreadAdmissionState"]>)({ backend: "codex", threadId: "thread-1" });
+    harness.getThreadAdmissionState.mockClear().mockImplementation(async () => { await admissionGate; return state; });
+    const handling = harness.controller.handleInboundEvent({
+      ...buildTextEvent("Read this file"), id: "parallel-media", kind: "media", disposition: "available",
+      attachments: [{ id: "fixture-file", kind: "file", name: "fixture.txt", mimeType: "text/plain", disposition: "available", sizeBytes: 12 }],
+    });
+    try {
+      await vi.waitFor(() => expect(downloadAttachment).toHaveBeenCalled());
+      expect(harness.getThreadAdmissionState).not.toHaveBeenCalled();
+      expect(harness.startTurn).not.toHaveBeenCalled();
+      releaseMedia();
+      await vi.waitFor(() => expect(harness.getThreadAdmissionState).toHaveBeenCalledOnce());
+      expect(harness.startTurn).not.toHaveBeenCalled();
+    } finally {
+      releaseAdmission();
+      releaseMedia();
+      await handling;
+    }
+    expect(harness.startTurn).toHaveBeenCalledOnce();
+    expect(harness.getThreadAdmissionState).toHaveBeenCalledOnce();
+  });
+
   it("logs bounded PDF preparation subspans on the start-turn event", async () => {
     let clock = 1_000;
     const info = vi.fn();

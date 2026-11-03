@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
+  open,
   readFile,
   readdir,
   realpath,
@@ -24,6 +25,10 @@ import { imageInputFileRoot } from "./image-input-files";
 import { scheduleLegacyAttachmentCleanup } from "./legacy-attachment-cleanup";
 import { resolveReadableLocalFilePath } from "./local-file-input";
 import { isThreadAssetPath, isResolvedThreadAssetPath, storeThreadAsset, threadAssetRoot, withAssetDirectory, type ThreadAssetOwner } from "./thread-assets";
+import { createByteBudget, collectConcurrent } from "../../shared/concurrent-work";
+
+type AttachmentReadBudget = ReturnType<typeof createByteBudget>;
+const withoutReadBudget: AttachmentReadBudget = async (_bytes, action) => await action();
 
 export const TURN_INPUT_ATTACHMENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_TURN_INPUT_ATTACHMENT_BYTES = 128 * 1024 * 1024;
@@ -149,7 +154,7 @@ export async function stageTurnInputAttachments(
 
 export async function stageLocalTurnInputAttachment(
   item: StagedTurnInputAttachment,
-  options?: { privateStorageRoots?: readonly string[]; owner?: ThreadAssetOwner },
+  options?: { privateStorageRoots?: readonly string[]; owner?: ThreadAssetOwner; readBudget?: AttachmentReadBudget },
 ): Promise<StagedTurnInputAttachment> {
   // Admission already validated and retained these immutable paths. Replay
   // bookkeeping can reuse them without re-reading or re-hashing their bytes.
@@ -178,24 +183,43 @@ export async function stageLocalTurnInputAttachment(
   }
   // Transport reads of durable assets do not need a new expiring staging copy.
   if (!options?.owner && await isResolvedThreadAssetPath(readable.path)) return { ...item, path: readable.path };
-  const data = await readFile(readable.path);
-  if (options?.owner) {
-    let name = sanitizeTurnAttachmentName(item.name ?? path.basename(item.path));
-    const extension = item.type === "localImage" ? path.extname(readable.path).toLowerCase() : "";
-    if (/^\.(?:avif|bmp|gif|jpe?g|png|webp)$/u.test(extension)) {
-      name = `${path.parse(name).name}${extension}`;
+  return await (options?.readBudget ?? withoutReadBudget)(fileInfo.size, async () => {
+    // Bound allocation to the admitted size even if an external file grows
+    // while waiting for a reservation. storeThreadAsset also validates the
+    // immutable copy against these bytes before publishing its destination.
+    const source = await open(readable.path, "r");
+    let data: Buffer;
+    try {
+      data = Buffer.allocUnsafe(fileInfo.size);
+      let offset = 0;
+      while (offset < data.length) {
+        const { bytesRead } = await source.read(data, offset, data.length - offset, offset);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      const extra = await source.read(Buffer.allocUnsafe(1), 0, 1, offset);
+      if (offset !== data.length || extra.bytesRead !== 0) throw new Error("Attachment changed while it was being retained.");
+    } finally {
+      await source.close();
     }
-    const ownedPath = await storeThreadAsset(options.owner, data, name, readable.path);
-    void scheduleLegacyAttachmentCleanup();
-    return { ...item, path: ownedPath, ...(item.type === "localFile" ? { sizeBytes: data.byteLength } : {}) };
-  }
-  return await stageTurnInputAttachment({
-    type: item.type,
-    data,
-    name: item.name ?? path.basename(item.path),
-    ...(item.type === "localFile" && item.mimeType
-      ? { mimeType: item.mimeType }
-      : {}),
+    if (options?.owner) {
+      let name = sanitizeTurnAttachmentName(item.name ?? path.basename(item.path));
+      const extension = item.type === "localImage" ? path.extname(readable.path).toLowerCase() : "";
+      if (/^\.(?:avif|bmp|gif|jpe?g|png|webp)$/u.test(extension)) {
+        name = `${path.parse(name).name}${extension}`;
+      }
+      const ownedPath = await storeThreadAsset(options.owner, data, name, readable.path);
+      void scheduleLegacyAttachmentCleanup();
+      return { ...item, path: ownedPath, ...(item.type === "localFile" ? { sizeBytes: data.byteLength } : {}) };
+    }
+    return await stageTurnInputAttachment({
+      type: item.type,
+      data,
+      name: item.name ?? path.basename(item.path),
+      ...(item.type === "localFile" && item.mimeType
+        ? { mimeType: item.mimeType }
+        : {}),
+    });
   });
 }
 
@@ -206,7 +230,7 @@ export async function stageLocalTurnInputAttachment(
  */
 export async function stageTurnInputAttachmentsForRetention(
   input: readonly AppServerTurnInputItem[],
-  options?: { privateStorageRoots?: readonly string[]; owner?: ThreadAssetOwner; strict?: boolean },
+  options?: { privateStorageRoots?: readonly string[]; owner?: ThreadAssetOwner; strict?: boolean; readBudget?: AttachmentReadBudget },
 ): Promise<AppServerTurnInputItem[]> {
   const attachments: AppServerTurnInputItem[] = [];
   for (const item of input) {
@@ -219,27 +243,31 @@ export async function stageTurnInputAttachmentsForRetention(
         continue;
       }
       if (item.type === "file") {
-        const data = decodeBase64(item.data);
-        if (data) {
-          attachments.push(await stageTurnInputAttachment({
-            type: "localFile",
-            data,
-            name: item.name,
-            mimeType: item.mimeType,
-          }, options?.owner));
-        }
+        await (options?.readBudget ?? withoutReadBudget)(Math.ceil(item.data.length * 3 / 4), async () => {
+          const data = decodeBase64(item.data);
+          if (data) {
+            attachments.push(await stageTurnInputAttachment({
+              type: "localFile",
+              data,
+              name: item.name,
+              mimeType: item.mimeType,
+            }, options?.owner));
+          }
+        });
         continue;
       }
       if (item.type === "image" && item.url.startsWith("data:")) {
-        const parsed = parseImageDataUrl(item.url);
-        if (parsed) {
-          attachments.push(await stageTurnInputAttachment({
-            type: "localImage",
-            data: parsed.data,
-            name: item.name,
-            mimeType: parsed.mimeType,
-          }, options?.owner));
-        }
+        await (options?.readBudget ?? withoutReadBudget)(Math.ceil(item.url.length * 3 / 4), async () => {
+          const parsed = parseImageDataUrl(item.url);
+          if (parsed) {
+            attachments.push(await stageTurnInputAttachment({
+              type: "localImage",
+              data: parsed.data,
+              name: item.name,
+              mimeType: parsed.mimeType,
+            }, options?.owner));
+          }
+        });
         continue;
       }
       if (item.type === "image" && item.url.startsWith("file:")) {
@@ -270,31 +298,33 @@ export async function ownThreadInputAttachments(
   owner: ThreadAssetOwner,
   privateStorageRoots?: readonly string[],
 ): Promise<AppServerTurnInputItem[]> {
-  const output: AppServerTurnInputItem[] = [];
   const ownedPaths = new Map<string, string>();
-  for (const item of input) {
+  // Parallelize path validation and reads, while retaining the existing
+  // single-attachment buffer ceiling and the store's per-owner mutation lock.
+  const readBudget = createByteBudget(MAX_TURN_INPUT_ATTACHMENT_BYTES);
+  const retained = await collectConcurrent(input, 4, async (item) => {
     if (item.type === "text" || (item.type === "localImage" || item.type === "localFile") && isThreadAssetPath(item.path, owner)) {
-      output.push(item);
-      continue;
+      return item;
     }
-    const retained = await stageTurnInputAttachmentsForRetention([item], { owner, privateStorageRoots, strict: true });
-    const attachment = retained[0];
-    if (item.type === "localFile" && attachment?.type === "localFile" && item.path !== attachment.path) {
-      ownedPaths.set(path.resolve(item.path), attachment.path);
-    }
+    const attachments = await stageTurnInputAttachmentsForRetention([item], { owner, privateStorageRoots, strict: true, readBudget });
+    return attachments[0];
+  });
+  const output = input.map((item, index) => {
+    const attachment = retained[index];
+    if (item.type === "localFile" && attachment?.type === "localFile" && item.path !== attachment.path) ownedPaths.set(path.resolve(item.path), attachment.path);
     // Preserve established inline payloads for ACP and non-JPEG/PNG images
     // such as animated GIFs. Their owned copy serves replay and forwarding.
     const preserveInlineImage = item.type === "image"
       && (owner.backend.startsWith("acp:")
         || item.url.startsWith("data:") && !/^data:image\/(?:jpeg|jpg|png);base64,/iu.test(item.url));
     if (preserveInlineImage) {
-      output.push(item);
+      return item;
     } else {
-      output.push(attachment
+      return attachment
         ? { ...attachment, ...((item.type === "file" || item.type === "localFile") && item.pdfRenderProfile ? { pdfRenderProfile: item.pdfRenderProfile } : {}) }
-        : item);
+        : item;
     }
-  }
+  });
   if (ownedPaths.size === 0) return output;
   return output.map((item) => {
     if (item.type !== "text" || !item.text.includes("[@")) return item;

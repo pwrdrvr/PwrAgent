@@ -148,6 +148,58 @@ describe("NavigationDetailService", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([false, true])("bounds selected Git reads and keeps directory order and revision after out-of-order completion (peer wakes: %s)", async (includePendingWakes) => {
+    const selected = thread("selected");
+    selected.linkedDirectories = Array.from({ length: 9 }, (_, index) => ({ id: String(index), kind: "local", label: String(index), path: `/repo/${index}` }));
+    mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
+    const project = vi.fn(async () => ({ wakes: [] }));
+    navigationDetail.setNavigationDetailPendingWakesProjector(project);
+    const releases = new Map<string, () => void>();
+    let active = 0;
+    let peak = 0;
+    let gated = true;
+    const read = vi.fn(async (cwd: string) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      if (gated) await new Promise<void>((resolve) => releases.set(cwd, resolve));
+      active -= 1;
+      return { currentBranch: cwd };
+    });
+    const registry = {
+      getCachedThreadSummary: () => selected,
+      getQueuedExecutionModeForThread: () => undefined,
+      canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
+      hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
+      readSelectedWorkspaceGitStatus: read,
+      listLiveTokenMiserSubAgents: () => [], readLiveSubAgentRevisionSource: () => [],
+      mergeLiveTokenMiserSubAgents: (_id: string, cards: unknown[]) => cards,
+    } as unknown as DesktopBackendRegistry;
+    const service = new NavigationDetailService(registry);
+    const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: "selected" }, includeWorkspaceConfiguration: true };
+    const options = { includePendingWakes };
+    const pending = service.readSelectedDetail(request, options);
+    await vi.waitFor(() => expect(releases.size).toBe(4));
+    if (includePendingWakes) expect(project).toHaveBeenCalledExactlyOnceWith(request.ref, mocks.prWatches);
+    else expect(project).not.toHaveBeenCalled();
+    expect(mocks.listActiveThreadPrStatusWatches).toHaveBeenCalledExactlyOnceWith(request.ref);
+    releases.get("/repo/3")!();
+    await vi.waitFor(() => expect(releases.has("/repo/4")).toBe(true));
+    gated = false;
+    for (const release of releases.values()) release();
+    const result = await pending;
+    expect(result.thread?.pendingWakes).toEqual(includePendingWakes ? [] : undefined);
+    expect(peak).toBe(4);
+    expect(result.workspaceDirectories?.map((directory) => directory.key)).toEqual(selected.linkedDirectories.map((directory) => directory.id));
+    const unchanged = await service.readSelectedDetail({ ...request, knownRevision: result.revision }, options);
+    expect(unchanged).toMatchObject({ unchanged: true, revision: result.revision });
+    read.mockRejectedValueOnce(new Error("git failed"));
+    await expect(service.readSelectedDetail(request, options)).rejects.toThrow("git failed");
+    read.mockClear();
+    selected.linkedDirectories = Array.from({ length: 101 }, () => selected.linkedDirectories[0]!);
+    await expect(service.readSelectedDetail(request, options)).rejects.toMatchObject({ code: "navigation_item_too_large" });
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it.each([
     { offset: 0, complete: false },
     { offset: 8, complete: false },

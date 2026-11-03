@@ -4570,10 +4570,12 @@ export class MessagingController {
       : currentBinding;
     let admissionState: MessagingThreadAdmissionState | undefined;
     try {
+      // Completion can drain an empty local queue while media is preparing.
+      // Read occupancy now so an earlier busy snapshot cannot strand this input.
       admissionState = await this.options.backend.getThreadAdmissionState({
-        backend: consumedSkillBinding.backend,
-        federationTarget: federationTargetForBinding(consumedSkillBinding),
-        threadId: consumedSkillBinding.threadId,
+        backend: currentBinding.backend,
+        federationTarget: federationTargetForBinding(currentBinding),
+        threadId: currentBinding.threadId,
       });
       this.markAdmissionStage(bundle.events[0], "admissionStateResolved");
     } catch (error) {

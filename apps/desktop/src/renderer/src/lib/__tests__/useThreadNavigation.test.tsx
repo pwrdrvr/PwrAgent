@@ -5616,7 +5616,7 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 
-  it("creates a mounted remote thread from a peer-populated launchpad", async () => {
+  it.each(["stay", "navigate", "reset-failure", "pin-failure"])("publishes a remote thread before viewer persistence completes: %s", async (scenario) => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "remote-instance",
@@ -5686,20 +5686,27 @@ describe("useThreadNavigation", () => {
       executionMode: "default" as const,
       workMode: "local" as const,
     }));
-    const resetDirectoryLaunchpad = vi.fn(async () => ({
-      directoryKey: project.key,
-      defaults,
-    }));
+    let releaseReset!: () => void;
+    let releasePin!: () => void;
+    const resetGate = new Promise<void>((resolve) => { releaseReset = resolve; });
+    const pinGate = new Promise<void>((resolve) => { releasePin = resolve; });
+    const resetDirectoryLaunchpad = vi.fn(async () => {
+      await resetGate;
+      if (scenario === "reset-failure") throw new Error("draft reset failed");
+      return { directoryKey: project.key, defaults };
+    });
     const addRemoteThreadPin = vi.fn(async (request: Parameters<
       NonNullable<DesktopApi["addRemoteThreadPin"]>
-    >[0]) => ({
-      pin: {
+    >[0]) => {
+      await pinGate;
+      if (scenario === "pin-failure") throw new Error("pin write failed");
+      return { pin: {
         ref: request.ref,
         instanceLabel: request.instanceLabel ?? federationTarget.instanceId,
         pinnedVia: "explicit" as const,
         addedAt: 1,
-      },
-    }));
+      } };
+    });
     const desktopApi: DesktopApi = {
       addRemoteThreadPin,
       ensureDirectoryLaunchpad,
@@ -5733,9 +5740,18 @@ describe("useThreadNavigation", () => {
       federationTarget,
     });
 
-    await act(async () => {
-      await result.current.materializeDirectoryLaunchpad(project.key);
-    });
+    let materializing!: Promise<void>;
+    act(() => { materializing = result.current.materializeDirectoryLaunchpad(project.key); });
+    await waitFor(() => expect(resetDirectoryLaunchpad).toHaveBeenCalled());
+    expect(result.current.selectedThread?.id).toBe("remote-thread-new");
+    expect(addRemoteThreadPin).not.toHaveBeenCalled();
+    await act(async () => { releaseReset(); });
+    await waitFor(() => expect(addRemoteThreadPin).toHaveBeenCalled());
+    expect(result.current.selectedThread?.id).toBe("remote-thread-new");
+    if (scenario === "navigate") {
+      await act(async () => { await result.current.openFederatedWorkspaceLaunchpad(federationTarget); });
+    }
+    await act(async () => { releasePin(); await materializing; });
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -5750,6 +5766,12 @@ describe("useThreadNavigation", () => {
         threadId: "remote-thread-new",
       },
     }));
+    if (scenario === "navigate") {
+      expect(result.current.selectedLaunchpad?.directoryKey).toBe(workspace.key);
+      return;
+    }
+    if (scenario === "reset-failure") expect(result.current.launchpadError).toContain("draft reset failed");
+    if (scenario === "pin-failure") expect(result.current.launchpadError).toContain("pin write failed");
     expect(result.current.selectedThread).toMatchObject({
       id: "remote-thread-new",
       federation: {

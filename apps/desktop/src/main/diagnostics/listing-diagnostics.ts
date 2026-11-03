@@ -2,7 +2,7 @@ import { safeNavigationDiagnosticTrigger } from "../../shared/navigation-diagnos
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { NavigationQueryRequest } from "@pwragent/shared";
 
-export type ListingStage = "ipc" | "navigation" | "owner-page" | "owner-read" | "index" | "registry" | "provider" | "provider-rpc";
+export type ListingStage = "ipc" | "navigation" | "owner-page" | "owner-read" | "index" | "registry" | "provider" | "provider-rpc" | "workflow";
 type Phase = "start" | "end" | "coalesced" | "cache-hit" | "invalidate" | "overtaken" | "cancel" | "cursor-hit";
 export type ListingFields = {
   origin?: string;
@@ -33,6 +33,7 @@ const CAPACITY = 4096;
 const RETENTION_MS = 120_000;
 // Strings are code vocabulary, never request text, error messages, paths or IDs.
 const LABELS = new Set([
+  "transcript", "thread-detail", "selected-detail", "submit-acceptance", "provider-turn-start", "first-send", "thread-start", "input-preparation", "mcp-registration", "mcp-inventory", "usage-durability", "workspace-preparation", "environment-setup",
   "main-sidebar", "star-map", "exact-link", "messaging-browse", "settings", "unknown", "remote-window", "search", "mentions", "agent-tool",
   "directory-index", "directory", "children", "exact", "group-members", "model-inventory", "lens", "star-map-geometry", "messaging-threads", "messaging-projects",
   "demand", "refresh", "continuation", "rebaseline", "pins", "turn", "thread", "metadata", "federation", "messaging-bindings", "timer", "visibility", "event", "cursor-expired", "page-budget", "owner-invalidated", "provider-fallback",
