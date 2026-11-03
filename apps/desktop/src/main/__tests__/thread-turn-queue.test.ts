@@ -385,7 +385,67 @@ describe("ThreadTurnQueue", () => {
     });
   });
 
-  it("keeps queued submissions after an in-flight start rejects after release", async () => {
+  it.each(["submit", "submitIfIdle"] as const)("holds queued successors when %s receives a terminal failure before startup rejects", async (submit) => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    let finishStartup!: () => void;
+    const starting = new Promise<void>((resolve) => { finishStartup = resolve; });
+    const startedEntries: string[] = [];
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => false,
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        if (entry.id === "failing") {
+          await starting;
+          await queue.releaseThread({
+            ...target,
+            turnId: `pending:${entry.threadId}`,
+            status: "turn/failed",
+            errorMessage: "provider rejected startup",
+          });
+          await queue.releaseThread({ ...target, status: "idle" });
+          throw new Error("backend rejected start");
+        }
+        return { ...target, turnId: `turn-${entry.id}` };
+      },
+      onLifecycle: (event) => { events.push(event); },
+    });
+
+    try {
+      const submission = queue[submit](buildEntry({ id: "failing" }));
+      await queue.submit(buildEntry({ id: "successor" }));
+      finishStartup();
+      await expect(submission).rejects.toThrow("backend rejected start");
+      // Let startup's normal drain run; the failure must keep it held.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(startedEntries).toEqual(["failing"]);
+      expect(queue.getQueuedEntries(target)).toMatchObject([{
+        id: "successor",
+        manualReleaseRequired: true,
+        holdReason: "provider rejected startup",
+      }]);
+      expect(events.map((event) => [event.type, event.entry.id])).toEqual([
+        ["queued", "successor"],
+        ["held", "successor"],
+        ["failed", "failing"],
+      ]);
+      expect(queue.cancelEntryWithDisposition("failing")).toEqual({ disposition: "not_found" });
+
+      await queue.releaseThread({ ...target, status: "idle" });
+      expect(startedEntries).toEqual(["failing"]);
+      await expect(queue.releaseEntryWithDisposition("successor")).resolves.toEqual({
+        disposition: "started",
+        entryId: "successor",
+        turnId: "turn-successor",
+      });
+      expect(startedEntries).toEqual(["failing", "successor"]);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it("drains queued submissions after an immediate start rejects without a terminal failure", async () => {
     let rejectStart!: (reason?: unknown) => void;
     const starting = new Promise<never>((_resolve, reject) => {
       rejectStart = reject;
@@ -421,6 +481,9 @@ describe("ThreadTurnQueue", () => {
     expect(startedEntries).toEqual([]);
     expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
       .toMatchObject([{ id: "second" }]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(startedEntries).toEqual(["second"]);
+    queue.close();
   });
 
   it("waits for a later release when a failed start leaves the thread active", async () => {

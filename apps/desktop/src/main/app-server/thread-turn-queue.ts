@@ -1090,6 +1090,13 @@ export class ThreadTurnQueue {
       this.recentlyAdmittedEntries.delete(entry.id);
       const normalized = error instanceof Error ? error : new Error(String(error));
       if (!options?.deferFailureEvent) {
+        // A rejected direct admission has no acknowledgement to match. Keep
+        // its terminal failure holds; startNext owns holds for queued starts.
+        for (const terminal of starting.terminalEvents.values()) {
+          if (terminal.status === "turn/failed") {
+            await this.settleRelease(key, terminal);
+          }
+        }
         await this.emit({ type: "failed", entry, error: normalized });
       }
       throw normalized;
