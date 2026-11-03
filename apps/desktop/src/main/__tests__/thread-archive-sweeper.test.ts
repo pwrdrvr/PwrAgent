@@ -52,7 +52,7 @@ describe("ThreadArchiveSweeper", () => {
   it("reports worktree cleanup independently of conversation policies and joins concurrent sweeps", async () => {
     const { deps } = harness([]);
     let release!: () => void;
-    const cleanupWorktrees = vi.fn(async ({ manual, onProgress, onFailure }) => {
+    const cleanupWorktrees = vi.fn<NonNullable<ConstructorParameters<typeof ThreadArchiveSweeper>[0]["cleanupWorktrees"]>>(async ({ manual, onProgress, onFailure }) => {
       expect(manual).toBe(true);
       onProgress({ candidates: 501, protected: 3, processed: 0, removed: 0 });
       await new Promise<void>((resolve) => { release = resolve; });

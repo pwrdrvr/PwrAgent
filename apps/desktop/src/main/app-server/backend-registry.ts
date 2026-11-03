@@ -16353,8 +16353,8 @@ export class DesktopBackendRegistry {
       || !this.threadTurnQueue.iterateQueuedEntries({ backend, threadId }).next().done;
   }
 
-  async sweepInactiveThreads(): Promise<void> {
-    if (!this.closed) await this.getThreadArchiveSweeper().sweep({ manual: true });
+  async sweepInactiveThreads(options: { manual?: boolean } = {}): Promise<void> {
+    if (!this.closed) await this.getThreadArchiveSweeper().sweep({ manual: options.manual ?? true });
   }
 
   getThreadArchiveSweepStatus(): DesktopThreadArchiveSweepStatus {
@@ -38386,6 +38386,11 @@ export class DesktopBackendRegistry {
       }
       report.candidates.push({ backend: thread.source, threadId: thread.id, worktreePath });
     }
+    backendRegistryLog.info("archived worktree repair discovered", {
+      archivedThreads: report.archivedThreads, discoveredWorktrees: report.discoveredWorktrees,
+      candidates: report.candidates.length, protected: report.protectedWorktrees, missing: report.missingWorktrees,
+      dryRun: options.dryRun === true,
+    });
     if (options.dryRun) return report;
     options.onProgress?.(0, report.candidates.length, report);
     let completed = 0;
@@ -38460,6 +38465,11 @@ export class DesktopBackendRegistry {
       }
     }
     assertCurrent();
+    backendRegistryLog.info("archived worktree repair completed", {
+      candidates: report.candidates.length, removed: report.cleanup.filter((item) => item.removedWorktree).length,
+      failed: [...report.cleanup, ...report.containerCleanup].filter((item) => item.error).length,
+      protected: report.protectedWorktrees, removedContainers: report.containerCleanup.filter((item) => item.removed).length,
+    });
     return report;
   }
 
@@ -51025,7 +51035,7 @@ export class DesktopBackendRegistry {
     }
     if (event.notification.method === "thread/deleted") {
       this.invalidateThreadListCache(event.backend);
-      if (!this.closed) void this.sweepInactiveThreads();
+      if (!this.closed) void this.sweepInactiveThreads({ manual: false });
     }
     const emitted = event.notification.method === "thread/deleted"
       ? deleteThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })
