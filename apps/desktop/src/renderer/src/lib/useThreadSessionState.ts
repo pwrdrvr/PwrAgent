@@ -1,3 +1,14 @@
+import {
+  hydrationLifecycleChanged,
+  isCurrentHydration,
+  transitionHydratedActiveTurn,
+  transitionHydratedInteractions,
+  transitionThreadHydration,
+  type ThreadActiveTurnState,
+  type ThreadHydrationState,
+  type ThreadLiveLifecycleVersion,
+  type ThreadPendingInteractionState,
+} from "./thread-session-transitions";
 import { useCodexBackgroundTerminals, type BackgroundTerminalView } from "./useCodexBackgroundTerminals";
 import { activityDetailsMatch } from "./activity-detail-match";
 import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
@@ -172,10 +183,7 @@ type RecentlyCompletedTurnUsage = {
   turn: AppServerThreadTurnMetadata;
 };
 
-type ThreadSessionEntry = {
-  activeTurnId?: string;
-  activeTurnStartedAt?: number;
-  backendReportedActive?: boolean;
+type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState & {
   completionHydrationRetries: number;
   contextWindow?: ThreadContextWindowState;
   error?: string;
@@ -206,11 +214,7 @@ type ThreadSessionEntry = {
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingUsageActivityEntry?: AppServerThreadActivityEntry;
-  pendingMcpInteraction?: PendingMcpInteractionState;
-  pendingRequest?: AppServerPendingRequestNotification;
   settledTransientMessages: AppServerTransientThreadMessageEntry[];
-  pendingUserInput?: PendingQuestionnaireState;
-  pendingStatusText?: string;
   transientMessage?: AppServerTransientThreadMessageEntry;
   pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
@@ -5088,10 +5092,7 @@ export function useThreadSessionState(params: {
     threadKey,
   ]);
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
-  const liveLifecycleVersionsRef = useRef(new Map<string, {
-    revision: number;
-    turnRevision: number;
-  }>());
+  const liveLifecycleVersionsRef = useRef(new Map<string, ThreadLiveLifecycleVersion>());
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
   const launchpadMessageCandidateRef = useRef<{
     candidate: LaunchpadMessageCandidate;
@@ -5105,11 +5106,10 @@ export function useThreadSessionState(params: {
   const retainedLiveEntriesRef = useRef<
     Record<string, Map<string, AppServerThreadEntry>>
   >({});
-  const requestVersionsRef = useRef<Record<string, number>>({});
   // React can replay the hydration effect before its loading state commits.
   // Track the owning read synchronously so automatic hydration cannot send
   // the same initial request twice. Explicit reloads may still supersede it.
-  const inFlightHydrationsRef = useRef(new Map<string, number>());
+  const hydrationsRef = useRef(new Map<string, ThreadHydrationState>());
   const streamRecoveryVersionsRef = useRef(new Map<string, number>());
   const remoteDetailInterestRef = useRef<string | undefined>(undefined);
   const continuousRemoteInterestsRef = useRef(new Set<string>());
@@ -5189,8 +5189,7 @@ export function useThreadSessionState(params: {
     for (const key of evicted) {
       // Invalidate late reads as well as completed sessions, even if the
       // background stream marked them interacted while they were retained.
-      requestVersionsRef.current[key] = (requestVersionsRef.current[key] ?? 0) + 1;
-      inFlightHydrationsRef.current.delete(key);
+      hydrationsRef.current.set(key, transitionThreadHydration(hydrationsRef.current.get(key), { type: "invalidate" }));
       conditionalReadsRef.current.delete(key);
     }
     setSessions((current) => Object.fromEntries(Object.entries(current)
@@ -5312,10 +5311,13 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      const requestVersion = (requestVersionsRef.current[targetThreadKey] ?? 0) + 1;
-      const readLifecycleVersion = liveLifecycleVersionsRef.current.get(targetThreadKey);
-      requestVersionsRef.current[targetThreadKey] = requestVersion;
-      inFlightHydrationsRef.current.set(targetThreadKey, requestVersion);
+      const hydration = transitionThreadHydration(hydrationsRef.current.get(targetThreadKey), {
+        type: "begin",
+        lifecycle: liveLifecycleVersionsRef.current.get(targetThreadKey),
+      });
+      if (hydration.phase !== "loading") return;
+      const attempt = hydration.attempt;
+      hydrationsRef.current.set(targetThreadKey, hydration);
 
       updateSession(targetThreadKey, (current) => ({
         ...current,
@@ -5371,7 +5373,7 @@ export function useThreadSessionState(params: {
           threadId: targetThread.id,
         });
 
-        if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
+        if (!isCurrentHydration(hydrationsRef.current.get(targetThreadKey), attempt)) {
           return;
         }
         if (response.replayRevision) {
@@ -5390,14 +5392,13 @@ export function useThreadSessionState(params: {
           // own activity and pending interactions (also for a racing start).
           // A compatible active status alone has no turn ID or interaction,
           // so the snapshot must still be allowed to supply those fields.
-          const currentLifecycleVersion = liveLifecycleVersionsRef.current.get(targetThreadKey);
-          const compatibleActiveStatus =
-            (readLifecycleVersion?.turnRevision ?? 0) === (currentLifecycleVersion?.turnRevision ?? 0)
-            && readResponseThreadStatus(response) === "active"
-            && current.backendReportedActive === true;
-          const lifecycleChangedDuringRead =
-            readLifecycleVersion?.revision !== currentLifecycleVersion?.revision
-            && !compatibleActiveStatus;
+          if (!isCurrentHydration(hydrationsRef.current.get(targetThreadKey), attempt)) return current;
+          const lifecycleChangedDuringRead = hydrationLifecycleChanged(
+            attempt,
+            liveLifecycleVersionsRef.current.get(targetThreadKey),
+            readResponseThreadStatus(response) === "active",
+            current.backendReportedActive,
+          );
           const retainedLiveEntryStore =
             retainedLiveEntriesRef.current[targetThreadKey];
           const retainedLiveEntries = retainedLiveEntryStore
@@ -5556,24 +5557,13 @@ export function useThreadSessionState(params: {
               && response.replay.contextWindow.modelContextWindow > 0
               ? { contextWindow: contextWindowFill(response.replay.contextWindow.usedTokens, response.replay.contextWindow.modelContextWindow) }
               : {}),
-            activeTurnId: hydratedPendingTurnId ?? (shouldClearStaleThinking
-              ? undefined
-              : shouldAdoptHydratedTurn
-                ? trailingInProgressTurn.id
-                : current.activeTurnId),
-            activeTurnStartedAt: hydratedPendingTurnId
-              ? current.activeTurnId === hydratedPendingTurnId
-                ? current.activeTurnStartedAt
-                : undefined
-              : shouldClearStaleThinking
-              ? undefined
-              : shouldAdoptHydratedTurn
-                ? trailingInProgressTurn.startedAt
-                  ?? (current.activeTurnId === trailingInProgressTurn.id
-                    ? current.activeTurnStartedAt
-                    : undefined)
-                : current.activeTurnStartedAt,
-            backendReportedActive: hydratedPendingInteraction || backendReportedActive,
+            ...transitionHydratedActiveTurn(current, {
+              clear: shouldClearStaleThinking,
+              pendingTurnId: hydratedPendingTurnId,
+              adoptTurn: shouldAdoptHydratedTurn ? trailingInProgressTurn : undefined,
+              backendReportedActive,
+              hasInteraction: hydratedPendingInteraction,
+            }),
             error: undefined,
             expectOwnUpdate: false,
             failedHydrationVersion: undefined,
@@ -5613,32 +5603,18 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
-            pendingMcpInteraction: shouldClearStaleThinking || shouldClearStaleInteraction
-              ? undefined
-              : hydratedPendingInteraction
-                ? hydratedPendingMcpInteraction
-                : current.pendingMcpInteraction,
-            pendingRequest: shouldClearStaleThinking || shouldClearStaleInteraction
-              ? undefined
-              : hydratedPendingInteraction
-                ? hydratedApprovalRequest
-                : current.pendingRequest,
-            pendingStatusText: hydratedPendingUserInput
-              ? "Waiting for input"
-              : hydratedPendingMcpInteraction
-                ? "Waiting for MCP approval"
-                : hydratedApprovalRequest
-                  ? "Waiting for approval"
-                  : shouldClearStaleThinking
-                    ? undefined
-                    : shouldClearStaleInteraction
-                      ? backendReportedActive ? "Thinking" : undefined
-                      : current.pendingStatusText,
-            pendingUserInput: shouldClearStaleThinking || shouldClearStaleInteraction
-              ? undefined
-              : hydratedPendingInteraction
-                ? hydratedPendingUserInput
-                : current.pendingUserInput,
+            ...transitionHydratedInteractions(current, {
+              clearThinking: shouldClearStaleThinking,
+              clearInteraction: shouldClearStaleInteraction,
+              backendReportedActive,
+              hydrated: hydratedPendingInteraction ? {
+                pendingMcpInteraction: hydratedPendingMcpInteraction,
+                pendingRequest: hydratedApprovalRequest,
+                pendingUserInput: hydratedPendingUserInput,
+                pendingStatusText: hydratedPendingUserInput ? "Waiting for input"
+                  : hydratedPendingMcpInteraction ? "Waiting for MCP approval" : "Waiting for approval",
+              } : undefined,
+            }),
             response: responseWithRetainedTail,
             staleThinkingRecheckAt:
               lifecycleChangedDuringRead
@@ -5657,21 +5633,19 @@ export function useThreadSessionState(params: {
           error: error instanceof Error ? error.message : String(error),
           threadId: targetThread.id,
         });
-        if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
+        if (!isCurrentHydration(hydrationsRef.current.get(targetThreadKey), attempt)) {
           return;
         }
 
-        updateSession(targetThreadKey, (current) => ({
+        updateSession(targetThreadKey, (current) => isCurrentHydration(hydrationsRef.current.get(targetThreadKey), attempt) ? ({
           ...current,
           error: error instanceof Error ? error.message : String(error),
           failedHydrationVersion: hydrationVersion,
           lastTouchedAt: Date.now(),
           loading: false,
-        }));
+        }) : current);
       } finally {
-        if (inFlightHydrationsRef.current.get(targetThreadKey) === requestVersion) {
-          inFlightHydrationsRef.current.delete(targetThreadKey);
-        }
+        hydrationsRef.current.set(targetThreadKey, transitionThreadHydration(hydrationsRef.current.get(targetThreadKey), { type: "settle", attempt }));
       }
     },
     [
@@ -5715,7 +5689,7 @@ export function useThreadSessionState(params: {
       remoteDetailInterestRef.current = remoteDetailInterest;
       if (remoteDetailInterest
         && !continuousRemoteInterestsRef.current.has(remoteDetailInterest)
-        && (sessions[remoteDetailInterest] || inFlightHydrationsRef.current.has(remoteDetailInterest))) {
+        && (sessions[remoteDetailInterest] || hydrationsRef.current.get(remoteDetailInterest)?.phase === "loading")) {
         // Another window can preserve the process-wide subscription while
         // this window misses events. Renewed local interest must catch up
         // independently of owner acknowledgements or navigation timestamps.
@@ -5909,7 +5883,7 @@ export function useThreadSessionState(params: {
     const session = sessions[threadKey];
     const streamRecoveryVersion = streamRecoveryVersionsRef.current.get(threadKey) ?? 0;
     const hydrationVersion = `${getThreadHydrationVersion(thread)}:${streamRecoveryVersion}`;
-    if (inFlightHydrationsRef.current.has(threadKey)) {
+    if (hydrationsRef.current.get(threadKey)?.phase === "loading") {
       return;
     }
     if (!session?.response) {
@@ -7594,7 +7568,7 @@ export function useThreadSessionState(params: {
       return;
     }
 
-    const requestVersion = requestVersionsRef.current[threadKey] ?? 0;
+    const requestVersion = hydrationsRef.current.get(threadKey)?.requestVersion ?? 0;
     updateSession(threadKey, (current) => ({
       ...current,
       error: undefined,
@@ -7635,7 +7609,7 @@ export function useThreadSessionState(params: {
           }
         : olderResponse;
 
-      if ((requestVersionsRef.current[threadKey] ?? 0) !== requestVersion) {
+      if ((hydrationsRef.current.get(threadKey)?.requestVersion ?? 0) !== requestVersion) {
         return;
       }
 
@@ -7647,6 +7621,7 @@ export function useThreadSessionState(params: {
       let appendedHistorySource: LoadedTranscriptHistory | undefined;
       let appendedHistory: LoadedTranscriptHistory | undefined;
       updateSession(threadKey, (current) => {
+        if ((hydrationsRef.current.get(threadKey)?.requestVersion ?? 0) !== requestVersion) return current;
         if (!current.response) {
           delete loadedHistoryIndexesRef.current[threadKey];
           return {
@@ -7675,7 +7650,7 @@ export function useThreadSessionState(params: {
         };
       });
     } catch (error) {
-      if ((requestVersionsRef.current[threadKey] ?? 0) !== requestVersion) {
+      if ((hydrationsRef.current.get(threadKey)?.requestVersion ?? 0) !== requestVersion) {
         return;
       }
 
