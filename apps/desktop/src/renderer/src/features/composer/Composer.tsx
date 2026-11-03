@@ -16317,9 +16317,15 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
 function hasPrimaryWorkspacePullRequest(
   thread: NavigationThreadSummary,
 ): boolean {
+  return primaryWorkspacePullRequests(thread).length > 0;
+}
+
+function primaryWorkspacePullRequests(
+  thread: NavigationThreadSummary,
+): NonNullable<NavigationThreadSummary["prs"]> {
   const primaryRepository = getPrimaryWorkspaceRepository(thread);
-  if (!primaryRepository) return false;
-  return (thread.prs ?? []).some((pr) =>
+  if (!primaryRepository) return [];
+  return (thread.prs ?? []).filter((pr) =>
     normalizeGitOriginUrl(`${pr.provider}/${pr.org}/${pr.repo}`)
       === primaryRepository,
   );
@@ -16333,10 +16339,7 @@ function hasPrimaryWorkspacePullRequest(
 function describeEndedPullRequestAutoFix(
   thread: NavigationThreadSummary,
 ): string | undefined {
-  const primaryRepository = getPrimaryWorkspaceRepository(thread);
-  if (!primaryRepository) return undefined;
-  const prs = (thread.prs ?? []).filter((pr) =>
-    normalizeGitOriginUrl(`${pr.provider}/${pr.org}/${pr.repo}`) === primaryRepository);
+  const prs = primaryWorkspacePullRequests(thread);
   if (prs.length === 0) return undefined;
   let latest: { number: number; state: "merged" | "closed" } | undefined;
   for (const pr of prs) {

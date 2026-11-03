@@ -4057,12 +4057,12 @@ describe("app server ipc", () => {
           { threadId: "thread-late", state: "handled_by_other_thread", prEnded: "merged" },
         ],
       });
-      registry.delete(prKey);
 
       // Git settings stop Auto-fix: windows already hide its rows.
       service.backgroundPrPollingEnabled = false;
       await expect(handler(local, { action: "active" })).resolves.toMatchObject({ autoFix: [] });
     } finally {
+      registry.delete(prKey);
       service.backgroundPrPollingEnabled = previous.polling;
       service.prAutoDispatchAllowed = previous.allowed;
       service.prAutoDispatchBudgetPaused = previous.paused;

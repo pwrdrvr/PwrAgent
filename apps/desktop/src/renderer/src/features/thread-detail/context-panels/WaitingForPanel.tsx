@@ -380,10 +380,11 @@ function groupWakes(wakes: readonly ThreadPendingWake[], thread: NavigationThrea
     for (const [prKey, prWakes] of prGroups) {
       const prNumber = readPrNumber(prKey, prWakes, thread);
       const ended = readPrEnded(prWakes);
+      const aside = [prNumber !== undefined ? `#${prNumber}` : undefined, ended].filter(Boolean).join(" · ");
       groups.push({
         id: `prs:${prKey}`,
         label: spec.label,
-        ...(prNumber !== undefined ? { aside: `#${prNumber}${ended ? ` · ${ended}` : ""}` } : {}),
+        ...(aside ? { aside } : {}),
         wakes: prWakes,
       });
     }
