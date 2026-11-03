@@ -277,7 +277,7 @@ git push origin v1.0.0-alpha.7
 
 The `Release Desktop (macOS universal + arm64 + Windows + Linux DEB)` workflow contains
 the desktop jobs below, plus shared-source/npm preflight, Outpost validation,
-npm publication and a final completion gate (unit tests fan out across two lanes and Linux packaging
+npm publication and a final completion gate (unit tests fan out across four lanes and Linux packaging
 across two architectures). Every macOS job runs on the free GitHub-hosted
 `macos-26` runner. Its macOS 26 host supplies the runtime that actool 26 needs
 to compile the app icon:
@@ -296,15 +296,16 @@ retained for the protected npm job; failure prevents desktop packaging.
    authoritative Homebrew/Winget channels, and runs `pnpm lint`, including
    native typecheck, licensing, syntax and typed Oxlint, and the repository's
    correctness gates. There is no formatting pass.
-3. `macOS unit tests (lane N of 2)` runs the complete workspace suite split
-   with `pnpm test --shard=<lane>/2`. Both lanes select Xcode with actool 26 and
+3. `macOS unit tests (lane N of 4)` runs the complete workspace suite split
+   with `pnpm test --shard=<lane>/4`. All lanes select Xcode with actool 26 and
    set `PWRAGENT_REQUIRE_ACTOOL=1`, so the icon compile test cannot silently skip.
+   Each lane retains its JSON test timings as a seven-day workflow artifact.
 4. `Prepare macOS signing input` runs
    `apps/desktop/scripts/release.mjs --prepare-only` for both architectures.
    It runs alongside lint/typecheck and the unit test lanes after cache setup.
    These jobs have `contents: read`, explicit `id-token: none`, no Apple secrets,
    and checkout credentials disabled. macOS signing, Linux packaging, and
-   Windows preparation require this job, lint/typecheck, and both test lanes
+   Windows preparation require this job, lint/typecheck, and all four test lanes
    to succeed.
 5. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
    environment, with `contents: read` and explicit `id-token: none`. It does
