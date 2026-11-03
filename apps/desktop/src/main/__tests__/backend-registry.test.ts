@@ -64003,7 +64003,9 @@ script = "printf setup"
       bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
     });
     const registryRef: { current?: DesktopBackendRegistry } = {};
-    let nestedNavigationResolved = false;
+    const nestedNavigation = createDeferred<AppServerThreadSummary[]>();
+    const releaseRevocation = createDeferred<void>();
+    const revocationCompleted = createDeferred<void>();
     const messagingArchiveCleaner = {
       requests: [] as Array<{
         backend: AppServerBackendKind;
@@ -64016,8 +64018,9 @@ script = "printf setup"
         origin: "thread-archive";
       }) {
         messagingArchiveCleaner.requests.push(request);
-        await registryRef.current!.listThreads();
-        nestedNavigationResolved = true;
+        nestedNavigation.resolve(await registryRef.current!.listThreads());
+        await releaseRevocation.promise;
+        revocationCompleted.resolve();
         return { notifiedCount: 1, revokedCount: 1 };
       },
     };
@@ -64029,22 +64032,26 @@ script = "printf setup"
     });
     registryRef.current = registry;
 
-    const timeout = new Promise<"timeout">((resolve) => {
-      setTimeout(() => resolve("timeout"), 100);
-    });
+    try {
+      const refresh = registry.listThreads();
+      // The recursive navigation and outer refresh must both resolve while
+      // revocation is held open. Awaiting cleanup from the listing would form
+      // a wait cycle here; the normal test watchdog still detects that bug.
+      await expect(nestedNavigation.promise).resolves.toEqual([]);
+      await expect(refresh).resolves.toEqual([]);
 
-    await expect(Promise.race([registry.listThreads(), timeout])).resolves.toEqual([]);
-    await waitForCondition(() => nestedNavigationResolved);
-
-    expect(messagingArchiveCleaner.requests).toEqual([
-      {
-        backend: "codex",
-        threadId: "thread-1",
-        origin: "thread-archive",
-      },
-    ]);
-
-    await registry.close();
+      expect(messagingArchiveCleaner.requests).toEqual([
+        {
+          backend: "codex",
+          threadId: "thread-1",
+          origin: "thread-archive",
+        },
+      ]);
+    } finally {
+      releaseRevocation.resolve();
+      await revocationCompleted.promise;
+      await registry.close();
+    }
   });
 
   it("cleans messaging state when an active thread refresh transitions to archived", async () => {
