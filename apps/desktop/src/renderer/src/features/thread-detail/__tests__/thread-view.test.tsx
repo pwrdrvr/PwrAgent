@@ -539,7 +539,8 @@ describe("ThreadView", () => {
         if (action === "submitted") expect(reopenedReply.textContent).toBe("");
         else expect(reopenedReply).toHaveTextContent("Keep this edited draft");
       });
-      expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+      if (action === "edited") expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
+      else expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
     },
   );
 
@@ -585,6 +586,7 @@ describe("ThreadView", () => {
       if (draftState === "edited") {
         fireEvent.change(reply, { target: { value: "Keep holding the lock" } });
       } else if (draftState === "replaced") {
+        fireEvent.change(reply, { target: { value: "Discard this edited draft" } });
         fireEvent.change(reply, { target: { value: "" } });
         await waitFor(() => expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument());
         fireEvent.change(reply, { target: { value: "Unrelated draft" } });

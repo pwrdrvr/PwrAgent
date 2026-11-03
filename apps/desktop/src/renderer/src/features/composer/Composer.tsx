@@ -3145,6 +3145,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   );
   const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
   const savedInitialDraft = draftStore.get(composerScopeKey);
+  // The one-shot restore request can be retired while the draft's origin
+  // survives in its snapshot, including across composer remounts.
+  const [rewoundPromptScope, setRewoundPromptScope] = useState<string | undefined>(
+    savedInitialDraft?.rewoundPrompt ? composerScopeKey : undefined,
+  );
+  const rewoundPromptShownRef = useRef(Boolean(savedInitialDraft?.rewoundPrompt));
   const savedInitialQueuedTurns = props.thread || props.launchpad
     ? draftStore.getQueuedTurns(composerScopeKey)
     : undefined;
@@ -4115,6 +4121,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       imageAttachments,
       fileAttachments,
       skillTokens,
+      ...(rewoundPromptScope === composerScopeKey ? { rewoundPrompt: true } : {}),
     },
   };
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
@@ -4135,6 +4142,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setEditorDocument(undefined);
     setDraft("");
     setSkillTokens([]);
+    setRewoundPromptScope(undefined);
+    rewoundPromptShownRef.current = false;
   };
   const createEmptyComposerDraftSnapshot = (): ComposerDraftSnapshot => ({
     draft: "",
@@ -4386,10 +4395,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const appliedDraftRestoreId = useRef<number | undefined>(undefined);
-  // The scope a rewound prompt was put back in. The chip goes once the
-  // composer is cleared, after the prompt showed, or moves to another thread.
-  const [rewoundPromptScope, setRewoundPromptScope] = useState<string>();
-  const rewoundPromptShownRef = useRef(false);
   const composerHasContent = draft.trim().length > 0 || imageAttachments.length > 0;
   useEffect(() => {
     if (rewoundPromptScope === undefined) return;
@@ -4544,6 +4549,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setImageAttachments(snapshot.imageAttachments);
       setFileAttachments(snapshot.fileAttachments ?? []);
       setSkillTokens(snapshot.skillTokens);
+      setRewoundPromptScope(snapshot.rewoundPrompt ? composerScopeKey : undefined);
+      rewoundPromptShownRef.current = Boolean(snapshot.rewoundPrompt);
       setComposerSelectionRequest({
         id: `recovery:${++composerSelectionRequestSequenceRef.current}`,
         index: 0,
@@ -5868,6 +5875,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       imageAttachments,
       fileAttachments,
       skillTokens,
+      ...(rewoundPromptScope === previousScopeKey ? { rewoundPrompt: true } : {}),
     };
     if (retargetingDraft) {
       pendingDraftRetargetRef.current = undefined;
@@ -5958,6 +5966,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setImageAttachments(previousSnapshot.imageAttachments);
       setFileAttachments(previousSnapshot.fileAttachments ?? []);
       setSkillTokens(previousSnapshot.skillTokens);
+      setRewoundPromptScope(previousSnapshot.rewoundPrompt ? composerScopeKey : undefined);
+      rewoundPromptShownRef.current = Boolean(previousSnapshot.rewoundPrompt);
       setPendingSteerState(undefined);
       setQueuedTurnsState([]);
     } else if (props.thread) {
@@ -5969,6 +5979,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setImageAttachments(saved?.imageAttachments ?? []);
       setFileAttachments(saved?.fileAttachments ?? []);
       setSkillTokens(saved?.skillTokens ?? []);
+      setRewoundPromptScope(saved?.rewoundPrompt ? composerScopeKey : undefined);
+      rewoundPromptShownRef.current = Boolean(saved?.rewoundPrompt);
       setPendingSteerState(
         savedPendingSteer ? { ...savedPendingSteer, status: "pending" } : undefined
       );
@@ -5987,7 +5999,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-  }, [composerScopeKey, draft, editorDocument, imageAttachments, fileAttachments, skillTokens]);
+  }, [composerScopeKey, draft, editorDocument, imageAttachments, fileAttachments, skillTokens, rewoundPromptScope]);
 
   useEffect(() => {
     const saved = draftStore.get(composerScopeKey);
@@ -6012,6 +6024,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setImageAttachments(saved.imageAttachments);
     setFileAttachments(saved.fileAttachments ?? []);
     setSkillTokens(saved.skillTokens);
+    setRewoundPromptScope(saved.rewoundPrompt ? composerScopeKey : undefined);
+    rewoundPromptShownRef.current = Boolean(saved.rewoundPrompt);
   }, [composerScopeKey, draftStore, draftStoreHydrationVersion]);
 
   useEffect(() => {
@@ -11990,6 +12004,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       imageAttachments,
       fileAttachments,
       skillTokens: storedSkillTokens,
+      ...(rewoundPromptScope === composerScopeKey ? { rewoundPrompt: true } : {}),
     });
     if (deletedSkillTokenHistoryEntry) {
       deletedSkillTokenHistoryRef.current.push(deletedSkillTokenHistoryEntry);
