@@ -21,6 +21,7 @@ import {
 } from "./config-store/desktop-config-store-singleton";
 import { resolveDesktopConfigPath } from "./desktop-config";
 import { readEvalManagedRuntime } from "../eval-managed-runtime";
+import { closeSharedCommandDiscovery } from "./command-discovery";
 
 let unsubscribeAuth: (() => void) | undefined;
 let desktopSettingsService: DesktopSettingsService | undefined;
@@ -34,7 +35,10 @@ export {
 
 export async function closeDesktopSettingsCommandDiscovery(): Promise<void> {
   commandDiscoveryClosed = true;
-  await desktopSettingsService?.closeCommandDiscovery();
+  await Promise.all([
+    closeSharedCommandDiscovery(),
+    desktopSettingsService?.closeCommandDiscovery(),
+  ]);
 }
 
 export function getDesktopSettingsService(): DesktopSettingsService {
