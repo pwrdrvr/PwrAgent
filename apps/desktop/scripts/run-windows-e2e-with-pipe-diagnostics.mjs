@@ -366,7 +366,10 @@ async function main() {
   // The watcher starts before launcher pipes exist. Later diagnostic queries
   // are controller children, outside Electron's process ownership tree.
   const child = spawn(command.file, command.args, {
-    stdio: "inherit", env: { ...process.env, ...(enabled ? { PWRAGENT_WINDOWS_PIPE_REQUESTS: requests } : {}) },
+    stdio: "inherit", env: { ...process.env, ...(enabled ? {
+      PWRAGENT_WINDOWS_PIPE_REQUESTS: requests,
+      PWRAGENT_E2E_CHILD_PROCESS_DIAGNOSTICS_FILE: path.join(desktop, "test-results", "worker-shutdown", "main-children.jsonl"),
+    } : {}) },
   });
   let code;
   try {
