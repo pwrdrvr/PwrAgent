@@ -16094,11 +16094,13 @@ describe("MessagingController", () => {
 
       await vi.advanceTimersByTimeAsync(60_001);
 
-      expect(harness.readThreadStatus).toHaveBeenCalledExactlyOnceWith({
-        backend: "codex", threadId: "thread-1", countsAsActivity: false,
-      });
-      expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledExactlyOnceWith({
-        backend: "codex", threadId: "thread-1", countsAsActivity: false,
+      await vi.waitFor(() => {
+        expect(harness.readThreadStatus).toHaveBeenCalledExactlyOnceWith({
+          backend: "codex", threadId: "thread-1", countsAsActivity: false,
+        });
+        expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledExactlyOnceWith({
+          backend: "codex", threadId: "thread-1", countsAsActivity: false,
+        });
       });
     } finally {
       harness.controller.dispose();
@@ -16142,11 +16144,13 @@ describe("MessagingController", () => {
 
       await vi.advanceTimersByTimeAsync(60_001);
 
-      expect(harness.readThreadStatus).toHaveBeenCalledExactlyOnceWith({
-        backend: "codex", threadId: "thread-1", countsAsActivity: false,
-      });
-      expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledExactlyOnceWith({
-        backend: "codex", threadId: "thread-1", countsAsActivity: false,
+      await vi.waitFor(() => {
+        expect(harness.readThreadStatus).toHaveBeenCalledExactlyOnceWith({
+          backend: "codex", threadId: "thread-1", countsAsActivity: false,
+        });
+        expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledExactlyOnceWith({
+          backend: "codex", threadId: "thread-1", countsAsActivity: false,
+        });
       });
     } finally {
       harness.controller.dispose();
