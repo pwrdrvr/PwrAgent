@@ -24,11 +24,22 @@ Linux needs a working display, such as the repository's Sandboxer Xvfb setup.
 Windows and macOS need an interactive desktop. The probe opens visible windows.
 Do not run it against an operator's application profile.
 
-Every sample uses two fresh profiles: ordinary quit and quit after
+Every sample uses four fresh profiles: each storage location with ordinary quit and quit after
 `closeAllConnections()`, `cookies.flushStore()`, and `clearData({dataTypes:
-["cache"]})`. The order alternates. These are controlled probe cases, not a
+["cache"]})`. Profiles are placed beside the output artifacts and under
+`os.tmpdir()`, matching the E2E fixture's placement. The order alternates.
+On Windows the checkout and temp directory can reside on different volumes;
+a fast close beside the checkout does not establish temp-volume behavior.
+These are controlled probe cases, not a
 different E2E worker or lane policy. The drain mode tests the existing preparation
 calls; it does not claim they flush BTM.
+
+Use `--profile-location workspace` for the original two-case sample, or
+`--profile-location temp` for the fixture placement alone. The default `both`
+records both locations on the same host. The setup and case results record
+volume roots and device IDs; different path names alone do not prove separate
+devices. A result establishes timing at that location, not a cause of disk
+latency. Each profile path is retained in its case results and is never removed.
 
 The driver preserves four launcher pipes using Chromium's remote-debugging pipe
 transport, without sending DevTools commands. It records application lifecycle
@@ -71,7 +82,8 @@ records, excluding profiles and database contents.
 Output is retained under `apps/desktop/.local/native-quit-probe/` for a direct
 run or `apps/desktop/.local/windows-pipe-diagnostics/` for native observation.
 
-- `setup.json` records the actual Electron image hash and observation budget.
+- `setup.json` records the actual Electron image hash, storage locations and
+  observation budget.
 - Each case has `events.jsonl` and `result.json`. Application timestamps and
   driver observations are distinct. The quit-file delivery delay is visible.
   Failed cases also retain a bounded Chromium stderr tail.

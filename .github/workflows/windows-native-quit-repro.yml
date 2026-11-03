@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       samples:
-        description: Fresh profiles per mode
+        description: Fresh profiles per quit mode and storage location
         type: choice
         options: ["3", "25", "100"]
         default: "25"
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   native-quit:
-    name: Stock Electron native quit
+    name: Stock Electron native quit by storage location
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&

@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -17,10 +18,15 @@ export function probeOptions(args) {
   const { values } = parseArgs({ args, options: {
     samples: { type: "string", default: "3" },
     "output-dir": { type: "string" },
+    "profile-location": { type: "string", default: "both" },
   } });
   const samples = Number(values.samples);
   if (!Number.isInteger(samples) || samples < 1 || samples > 100) throw new Error("samples must be between 1 and 100");
-  return { samples, output: path.resolve(values["output-dir"]
+  const profileLocation = values["profile-location"];
+  if (!["workspace", "temp", "both"].includes(profileLocation)) {
+    throw new Error("profile-location must be workspace, temp, or both");
+  }
+  return { samples, profileLocation, output: path.resolve(values["output-dir"]
     ?? path.join(directory, "../.local/native-quit-probe", randomUUID())) };
 }
 
@@ -49,10 +55,16 @@ export function parseProbeRecord(line) {
   return event;
 }
 
-async function runCase({ output, index, mode, electron }) {
-  const root = path.join(output, `${index}-${mode}`);
+async function runCase({ output, index, mode, electron, profileLocation }) {
+  const root = path.join(output, `${index}-${profileLocation}-${mode}`);
   mkdirSync(root);
-  for (const name of ["user-data", "session-data"]) mkdirSync(path.join(root, name));
+  // E2E's fixture lives under os.tmpdir(), which can be a different Windows
+  // volume from the checkout. Keep artifacts separate from that comparison.
+  const profileRoot = profileLocation === "temp"
+    ? mkdtempSync(path.join(os.tmpdir(), "electron-native-quit-")) : root;
+  const profile = { profileLocation, profileRoot,
+    profileVolume: path.parse(profileRoot).root, profileDevice: statSync(profileRoot).dev };
+  for (const name of ["user-data", "session-data"]) mkdirSync(path.join(profileRoot, name));
   const events = [];
   const record = (kind, data = {}) => {
     const event = { at: Date.now(), observedAt: Date.now(), kind, ...data };
@@ -62,11 +74,12 @@ async function runCase({ output, index, mode, electron }) {
   // and manufacture a launcher timeout. Flush outside the measured interval.
   const flushEvents = () => writeFileSync(path.join(root, "events.jsonl"),
     events.map((event) => JSON.stringify(event)).join("\n") + "\n");
+  record("profile-created", profile);
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = spawn(electron, [
     "--remote-debugging-pipe", path.join(directory, "fixtures/electron-native-quit.cjs"),
-    "--probe-root=" + root, ...(mode === "session-drain" ? ["--session-drain"] : []),
+    "--probe-root=" + profileRoot, ...(mode === "session-drain" ? ["--session-drain"] : []),
   ], { env: childEnv, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"], detached: process.platform !== "win32" });
   const closed = new Promise((resolve, reject) => {
     child.once("error", reject);
@@ -143,7 +156,7 @@ async function runCase({ output, index, mode, electron }) {
     }, 3_000);
     const closing = bounded(closed, CLOSE_MS, "Electron did not close within 6000ms");
     closing.catch(() => undefined);
-    const exit = await Promise.race([writeFile(path.join(root, "quit"), "quit\n").then(() => closing), closing]);
+    const exit = await Promise.race([writeFile(path.join(profileRoot, "quit"), "quit\n").then(() => closing), closing]);
     const elapsedMs = Math.round(performance.now() - closeStarted);
     clearTimeout(timer);
     flushEvents();
@@ -152,10 +165,10 @@ async function runCase({ output, index, mode, electron }) {
     if (!["ready", "app-quit-requested", "before-quit", "will-quit", "quit", "node-exit"].every((stage) => stages.has(stage))) {
       throw new Error("Electron closed without the complete ordinary quit lifecycle");
     }
-    const files = readdirSync(path.join(root, storageDirectory))
+    const files = readdirSync(path.join(profileRoot, storageDirectory))
       .filter((name) => /^DIPS(?:-|$)/.test(name))
-      .map((name) => ({ name, bytes: statSync(path.join(root, storageDirectory, name)).size }));
-    const result = { index, mode, pid: child.pid, launchId, elapsedMs, ...exit, stderrBytes, btmFiles: files,
+      .map((name) => ({ name, bytes: statSync(path.join(profileRoot, storageDirectory, name)).size }));
+    const result = { index, mode, ...profile, pid: child.pid, launchId, elapsedMs, ...exit, stderrBytes, btmFiles: files,
       classification: elapsedMs >= CLOSE_MS ? "deadline-exceeded" : elapsedMs >= 4_000 ? "slow" : "healthy" };
     writeFileSync(path.join(root, "result.json"), JSON.stringify(result, null, 2) + "\n");
     if (exit.code !== 0 || result.classification === "deadline-exceeded") throw new Error("Abnormal native Electron close");
@@ -164,7 +177,7 @@ async function runCase({ output, index, mode, electron }) {
     record("case-error", { message: error.message, stderrBytes });
     flushEvents();
     writeFileSync(path.join(root, "result.json"), JSON.stringify({
-      index, mode, pid: child.pid, launchId, outcome: "failed", error: error.message, stderrBytes,
+      index, mode, ...profile, pid: child.pid, launchId, outcome: "failed", error: error.message, stderrBytes,
     }, null, 2) + "\n");
     writeFileSync(path.join(root, "stderr-tail.txt"), stderrTail);
     // Windows failures leave this worker immediately; its enclosing atomic Job
@@ -184,15 +197,22 @@ async function matrix(options) {
   const electron = require("electron");
   const metadata = { platform: process.platform, arch: process.arch, node: process.version,
     electronSha256: createHash("sha256").update(readFileSync(electron)).digest("hex"), closeDeadlineMs: CLOSE_MS,
-    samplesPerMode: options.samples, observationOnly: true };
+    samplesPerModeAndLocation: options.samples, profileLocation: options.profileLocation,
+    workspaceVolume: path.parse(options.output).root, workspaceDevice: statSync(options.output).dev,
+    tempVolume: path.parse(os.tmpdir()).root, tempDevice: statSync(os.tmpdir()).dev, observationOnly: true };
   writeFileSync(path.join(options.output, "setup.json"), JSON.stringify(metadata, null, 2) + "\n");
   const results = [];
   for (let index = 1; index <= options.samples; index++) {
-    for (const mode of index % 2 ? ["plain", "session-drain"] : ["session-drain", "plain"]) {
-      const result = await runCase({ ...options, index, mode, electron });
-      results.push(result);
-      writeFileSync(path.join(options.output, "summary.json"), JSON.stringify({ ...metadata, results }, null, 2) + "\n");
-      console.log(JSON.stringify(result));
+    const locations = options.profileLocation === "both"
+      ? index % 2 ? ["workspace", "temp"] : ["temp", "workspace"]
+      : [options.profileLocation];
+    for (const profileLocation of locations) {
+      for (const mode of index % 2 ? ["plain", "session-drain"] : ["session-drain", "plain"]) {
+        const result = await runCase({ ...options, index, mode, electron, profileLocation });
+        results.push(result);
+        writeFileSync(path.join(options.output, "summary.json"), JSON.stringify({ ...metadata, results }, null, 2) + "\n");
+        console.log(JSON.stringify(result));
+      }
     }
   }
 }
@@ -208,7 +228,8 @@ async function main() {
   const { wrapCommandInWindowsJob, startWindowsJobReadyPoll, formatWindowsJobStartupTimeout } =
     await import("../src/main/windows-job-wrapper.ts");
   const launch = wrapCommandInWindowsJob({ command: process.execPath,
-    args: [fileURLToPath(import.meta.url), "--samples", String(options.samples), "--output-dir", options.output],
+    args: [fileURLToPath(import.meta.url), "--samples", String(options.samples), "--output-dir", options.output,
+      "--profile-location", options.profileLocation],
     env: { ...process.env, PWRAGENT_NATIVE_QUIT_PROBE_JOB: "1" } });
   const child = spawn(launch.command, launch.args, { env: launch.env, stdio: "inherit", windowsHide: true });
   const stop = () => {
