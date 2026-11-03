@@ -38775,7 +38775,7 @@ export class DesktopBackendRegistry {
                   snapshotCommit: candidate.snapshot.snapshotCommit,
                   snapshot: candidate.snapshot,
                   allowDetachedFallback: params.backend !== "claude",
-                  restoreSourceCheckout: params.backend === "claude",
+                  ...(params.backend === "claude" ? { restoreSourceCheckout: true } : {}),
                 })
               : await this.worktreeArchiveService.restoreDetached({
                   backend: params.backend,
