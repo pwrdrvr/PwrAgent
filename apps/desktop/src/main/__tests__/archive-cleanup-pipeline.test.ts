@@ -162,7 +162,7 @@ function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerT
 }
 
 describe("archive cleanup pipeline", () => {
-  it("Run now re-audits existing archived worktrees even with automatic archiving disabled", async () => {
+  it("Run now re-audits existing archived worktrees", async () => {
     const fixture = build([]);
     const repair = vi.spyOn(fixture.registry, "repairArchivedThreadWorktrees").mockResolvedValue({
       archivedThreads: 1477, discoveredWorktrees: 501, missingWorktrees: 0, protectedWorktrees: 3,
@@ -582,6 +582,9 @@ describe("archive cleanup pipeline", () => {
       thread: codexThread({ id: "live-claude", source: "claude", linkedDirectories: archived[2]!.linkedDirectories,
         projectKey: "/contrived/worktree-2" }), cwd: "/contrived/worktree-2",
     }]);
+    // The resolver is otherwise a real Git subprocess that fake time cannot
+    // finish. Give the fixture its canonical directory without host I/O.
+    Object.assign(fixture.registry, { acpWorktreeRepositoryResolver: async () => archived[2]!.linkedDirectories[0] });
     vi.mocked(stat).mockImplementation(async () => ({ isDirectory: () => true }) as Awaited<ReturnType<typeof stat>>);
     const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
     await vi.advanceTimersByTimeAsync(100_000);

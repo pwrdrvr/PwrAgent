@@ -49,6 +49,30 @@ function harness(candidates = [candidate()]) {
 }
 
 describe("ThreadArchiveSweeper", () => {
+  it("reports worktree cleanup independently of conversation policies and joins concurrent sweeps", async () => {
+    const { deps } = harness([]);
+    let release!: () => void;
+    const cleanupWorktrees = vi.fn(async ({ manual, onProgress, onFailure }) => {
+      expect(manual).toBe(true);
+      onProgress({ candidates: 501, protected: 3, processed: 0, removed: 0 });
+      await new Promise<void>((resolve) => { release = resolve; });
+      onProgress({ candidates: 501, protected: 3, processed: 501, removed: 500 });
+      onFailure(new Error("Snapshot size limit exceeded"));
+    });
+    const sweeper = new ThreadArchiveSweeper({ ...deps, cleanupWorktrees,
+      getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false }) });
+    const run = sweeper.sweep({ manual: true });
+    expect(sweeper.getStatus()).toMatchObject({ running: true, worktrees: { candidates: 501, processed: 0 } });
+    expect(sweeper.sweep({ manual: true })).toBe(run);
+    release();
+    await run;
+    expect(cleanupWorktrees).toHaveBeenCalledOnce();
+    expect(deps.listCandidates).not.toHaveBeenCalled();
+    expect(sweeper.getStatus()).toMatchObject({ running: false, archived: 0, failed: 1,
+      worktrees: { candidates: 501, protected: 3, processed: 501, removed: 500 }, error: "Snapshot size limit exceeded" });
+    await sweeper.stop();
+  });
+
   it("starts after a delay, runs hourly, and stops scheduling on shutdown", async () => {
     vi.useFakeTimers();
     const { deps, sweeper } = harness([]);

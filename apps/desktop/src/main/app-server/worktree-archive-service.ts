@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readdir, realpath, rm, stat, unlink } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readdir, realpath, rm, stat, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -58,7 +58,11 @@ type RestoreDetachedWorktreeParams = {
 
 type WorktreeArchiveServiceOptions = {
   gitEnv?: NodeJS.ProcessEnv;
+  maxSnapshotBytes?: number;
 };
+
+export const MAX_WORKTREE_SNAPSHOT_BYTES = 100 * 1024 * 1024;
+const MAX_WORKTREE_SNAPSHOT_FILES = 10_000;
 
 export class MissingArchiveWorktreeError extends Error {
   constructor(worktreePath: string) {
@@ -184,9 +188,11 @@ async function unlinkWindowsWorktreeLinks(worktreePath: string, assertRemoval?: 
 
 export class WorktreeArchiveService {
   private readonly gitEnv?: NodeJS.ProcessEnv;
+  private readonly maxSnapshotBytes: number;
 
   constructor(options: WorktreeArchiveServiceOptions = {}) {
     this.gitEnv = options.gitEnv;
+    this.maxSnapshotBytes = options.maxSnapshotBytes ?? MAX_WORKTREE_SNAPSHOT_BYTES;
   }
 
   async archive(params: ArchiveWorktreeParams): Promise<WorktreeSnapshotSummary> {
@@ -493,6 +499,27 @@ export class WorktreeArchiveService {
     worktree: WorktreeInfo;
     worktreePath: string;
   }): Promise<string> {
+    // Bound new content before git add writes blobs. Existing committed content
+    // is already retained by HEAD; ignored files are deliberately excluded.
+    const changed = await this.runGit(params.worktreePath, ["diff", "--name-only", "-z", "HEAD", "--", "."]);
+    const untracked = await this.runGit(params.worktreePath, ["ls-files", "--others", "--exclude-standard", "-z"]);
+    const files = new Set(`${changed.stdout}${untracked.stdout}`.split("\0").filter(Boolean));
+    if (files.size > MAX_WORKTREE_SNAPSHOT_FILES) {
+      throw new Error(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
+    }
+    let bytes = 0;
+    for (const file of files) {
+      try {
+        const info = await lstat(path.join(params.worktreePath, file));
+        // Do not follow links into dependencies or unrelated directories.
+        if (info.isFile() || info.isSymbolicLink()) bytes += info.size;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (bytes > this.maxSnapshotBytes) {
+        throw new Error(`Snapshot size limit exceeded (${this.maxSnapshotBytes} bytes); the worktree was kept.`);
+      }
+    }
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-index-"));
     const indexPath = path.join(tempDir, "index");
 

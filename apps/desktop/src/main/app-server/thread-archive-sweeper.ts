@@ -31,6 +31,11 @@ type SweeperDeps = {
   /** Resolves to the number of expired families deleted. A cleanup that
    * logs its own per-thread failures reports each through onFailure. */
   cleanupRetention?: (onFailure: (error: unknown) => void) => Promise<number | void>;
+  cleanupWorktrees?: (options: {
+    manual: boolean;
+    onProgress: (status: NonNullable<DesktopThreadArchiveSweepStatus["worktrees"]>) => void;
+    onFailure: (error: unknown) => void;
+  }) => Promise<void>;
   listCandidates: () => Promise<ThreadArchiveCandidate[]>;
   refreshCandidate: (candidate: ThreadArchiveCandidate) => Promise<ThreadArchiveCandidate>;
   isBusy: (candidate: ThreadArchiveCandidate) => boolean;
@@ -144,13 +149,13 @@ export class ThreadArchiveSweeper {
 
   /** A manual sweep joins a running one. Either way the hourly interval is
    * measured from the last finish, so the advertised next time stays true. */
-  sweep(): Promise<void> {
+  sweep(options: { manual?: boolean } = {}): Promise<void> {
     if (this.abort.signal.aborted) return Promise.resolve();
     if (this.running) return this.running;
     clearTimeout(this.timer);
     const tally: SweepTally = { archived: 0, deleted: 0, failed: 0 };
     this.publish({ ...tally, running: true, startedAt: Date.now() });
-    this.running = this.run(tally).catch((error) => {
+    this.running = this.run(tally, options.manual === true).catch((error) => {
       if (!this.abort.signal.aborted) this.fail(tally, error);
     }).finally(() => {
       this.running = undefined;
@@ -189,7 +194,13 @@ export class ThreadArchiveSweeper {
     this.deps.onError(error, threadId);
   }
 
-  private async run(tally: SweepTally): Promise<void> {
+  private async run(tally: SweepTally, manual: boolean): Promise<void> {
+    try {
+      await this.deps.cleanupWorktrees?.({ manual,
+        onProgress: (worktrees) => this.publish({ ...this.status, ...tally, worktrees }),
+        onFailure: (error) => this.count(tally, error),
+      });
+    } catch (error) { if (!this.abort.signal.aborted) this.fail(tally, error); }
     const policy = this.deps.getPolicy?.() ?? { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" as const };
     try { tally.deleted += await this.deps.cleanupRetention?.((error) => this.count(tally, error)) || 0; }
     catch (error) { if (!this.abort.signal.aborted) this.fail(tally, error); }
