@@ -196,6 +196,7 @@ import {
   getRuntimeFederationLeaseCoordinator,
 } from "./runtime-federation-lease";
 import {
+  closeDesktopSettingsCommandDiscovery,
   disposeDesktopConfigStore,
   getDesktopConfigStore,
   getDesktopSettingsService,
@@ -875,6 +876,11 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
       },
     },
     {
+      name: "settings-discovery",
+      timeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
+      run: closeDesktopSettingsCommandDiscovery,
+    },
+    {
       name: "app-server",
       timeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
       run: disposeAppServerIpcHandlers,
@@ -928,6 +934,8 @@ async function disposeMainProcessResources(source: string): Promise<void> {
     getExistingRuntimeFederationLeaseCoordinator()?.stopRecovery();
     e2eShutdownDiagnostics.beginOverall();
     childProcessDiagnostics.snapshot("shutdown-started");
+    // Close probe admission before renderer shutdown or any other async wait.
+    void closeDesktopSettingsCommandDiscovery();
     try {
       await flushDiagnostics(source);
       // Electron emits before-quit while renderer windows are still live. Close

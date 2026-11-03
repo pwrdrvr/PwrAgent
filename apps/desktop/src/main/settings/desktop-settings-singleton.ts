@@ -24,12 +24,18 @@ import { readEvalManagedRuntime } from "../eval-managed-runtime";
 
 let unsubscribeAuth: (() => void) | undefined;
 let desktopSettingsService: DesktopSettingsService | undefined;
+let commandDiscoveryClosed = false;
 
 export {
   disposeDesktopConfigStore,
   getDesktopConfigStore,
   getExistingDesktopConfigStore,
 } from "./config-store/desktop-config-store-singleton";
+
+export async function closeDesktopSettingsCommandDiscovery(): Promise<void> {
+  commandDiscoveryClosed = true;
+  await desktopSettingsService?.closeCommandDiscovery();
+}
 
 export function getDesktopSettingsService(): DesktopSettingsService {
   if (!desktopSettingsService) {
@@ -95,6 +101,7 @@ export function getDesktopSettingsService(): DesktopSettingsService {
         }
       },
     });
+    if (commandDiscoveryClosed) void desktopSettingsService.closeCommandDiscovery();
     const service = desktopSettingsService;
     setGitCommandResolver(() => service.resolveGitCommandPreference());
     unsubscribeAuth = codexAuthState.subscribe(() => {

@@ -1,3 +1,4 @@
+import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   DEFAULT_THREAD_TODO_MERGE_METHOD,
@@ -610,6 +611,12 @@ function forgeCliPresent(
 }
 
 export class DesktopSettingsService {
+  private readonly commandDiscoveryLifetime = new CommandDiscoveryLifetime();
+
+  closeCommandDiscovery(): Promise<void> {
+    return this.commandDiscoveryLifetime.close();
+  }
+
   private tokenMiserUsageStore?: TokenMiserStore;
   private readonly env: NodeJS.ProcessEnv;
   private readonly argv: readonly string[];
@@ -1954,7 +1961,14 @@ export class DesktopSettingsService {
   ): Promise<DesktopGitDiscoverySnapshot> {
     const key = configuredCommand?.trim() ?? "";
     if (this.gitDiscoveryCache?.key !== key) {
-      const promise = discoverGitCommands({ configuredCommand, env: this.env });
+      const promise = this.commandDiscoveryLifetime.run(
+        () => discoverGitCommands({
+          configuredCommand,
+          env: this.env,
+          signal: this.commandDiscoveryLifetime.signal,
+        }),
+        { candidates: [] },
+      );
       const cache: NonNullable<typeof this.gitDiscoveryCache> = { key, promise };
       void promise.then((result) => {
         cache.result = result;
@@ -1979,7 +1993,14 @@ export class DesktopSettingsService {
   ): ReturnType<typeof discoverGhCommands> {
     const key = configuredCommand ?? "";
     if (this.ghDiscoveryCache?.key !== key) {
-      const promise = discoverGhCommands({ configuredCommand, env: this.env });
+      const promise = this.commandDiscoveryLifetime.run(
+        () => discoverGhCommands({
+          configuredCommand,
+          env: this.env,
+          signal: this.commandDiscoveryLifetime.signal,
+        }),
+        { candidates: [] },
+      );
       const cache: NonNullable<typeof this.ghDiscoveryCache> = { key, promise };
       void promise.then((result) => {
         cache.result = result;
@@ -1994,7 +2015,14 @@ export class DesktopSettingsService {
   ): ReturnType<typeof discoverGlabCommands> {
     const key = configuredCommand ?? "";
     if (this.glabDiscoveryCache?.key !== key) {
-      const promise = discoverGlabCommands({ configuredCommand, env: this.env });
+      const promise = this.commandDiscoveryLifetime.run(
+        () => discoverGlabCommands({
+          configuredCommand,
+          env: this.env,
+          signal: this.commandDiscoveryLifetime.signal,
+        }),
+        { candidates: [] },
+      );
       const cache: NonNullable<typeof this.glabDiscoveryCache> = { key, promise };
       void promise.then((result) => {
         cache.result = result;

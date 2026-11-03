@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
+import * as gitDiscovery from "../settings/git-discovery";
 import { suggestedSlackAppName } from "../messaging/messaging-settings-domain";
 import { managedGrokBuildsEnabledForRuntime } from "../settings/desktop-config";
 import {
@@ -69,6 +70,37 @@ function expectBundledGitPath(actual: string | undefined, inherited: string[]): 
 }
 
 describe("DesktopSettingsService", () => {
+  it("drains superseded discovery caches and closes admission before quit", async () => {
+    const releases: Array<() => void> = [];
+    const discovery = vi.spyOn(gitDiscovery, "discoverGitCommands").mockImplementation(
+      () => new Promise((resolve) => {
+        releases.push(() => resolve({ candidates: [] }));
+      }),
+    );
+    try {
+      const service = new DesktopSettingsService({
+        configPath: path.join(createTempRoot(), "config.toml"),
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      const first = service.refreshGitDiscovery();
+      const second = service.refreshGitDiscovery();
+      expect(discovery).toHaveBeenCalledTimes(2);
+      let closed = false;
+      const closing = service.closeCommandDiscovery().then(() => { closed = true; });
+      releases[1]();
+      await second;
+      expect(closed).toBe(false);
+      releases[0]();
+      await first;
+      await closing;
+      await service.refreshGitDiscovery();
+      expect(discovery).toHaveBeenCalledTimes(2);
+    } finally {
+      discovery.mockRestore();
+    }
+  });
+
   it("refuses default Codex launch arguments after an invalid cold-start profile", () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
