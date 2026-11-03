@@ -24,8 +24,13 @@ vi.mock("../mcp-connections/mcp-connection-rpc-client.js", () => ({
 
 const clients: Client[] = [];
 let now: number;
+// Each bridge import listens for its client's stdin closing; drop them per test.
+let stdinListenersBefore = new Set<unknown>();
+const stdinListenersAdded = (name: "end" | "close") => process.stdin.listeners(name)
+  .filter((listener) => !stdinListenersBefore.has(listener)) as Array<() => void>;
 
 beforeEach(() => {
+  stdinListenersBefore = new Set([...process.stdin.listeners("end"), ...process.stdin.listeners("close")]);
   vi.resetModules();
   bridge.request.mockReset();
   bridge.attach.mockReset();
@@ -40,6 +45,9 @@ beforeEach(() => {
 afterEach(async () => {
   await Promise.all(clients.splice(0).map(async (client) => await client.close()));
   await bridge.transport?.close();
+  for (const name of ["end", "close"] as const) {
+    for (const listener of stdinListenersAdded(name)) process.stdin.removeListener(name, listener);
+  }
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -403,5 +411,20 @@ describe("desktop-owned native bridge discovery", () => {
     await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
     await expect(client.listTools()).rejects.toThrow();
     expect(bridge.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("native bridge lifetime", () => {
+  // Bridges outlived their MCP client because nothing ended the process on
+  // stdin EOF, and the app's request socket kept Node running.
+  it.each(["end", "close"] as const)("exits when its MCP client's stdin reports %s", async (event) => {
+    const exit = vi.mocked(process.exit).mockImplementation((() => undefined) as never);
+    bridge.request.mockResolvedValue({ tools: true });
+    await openBridge();
+    expect(stdinListenersAdded("end")).toHaveLength(1);
+    expect(stdinListenersAdded("close")).toHaveLength(1);
+    expect(exit).not.toHaveBeenCalled();
+    stdinListenersAdded(event)[0]!();
+    expect(exit).toHaveBeenCalledWith(0);
   });
 });

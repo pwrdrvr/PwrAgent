@@ -744,6 +744,7 @@ type RelayedEventSubscription = IncomingEventSubscription & {
 };
 
 const NAVIGATION_EVENT_METHODS = new Set<string>([
+  "thread/dependencies/updated",
   "thread/scheduledAction/updated",
   "automation/run/transcript/updated",
   "automation/run/updated",
@@ -7214,7 +7215,7 @@ function localBackendOperations(): FederationBackendOperations {
           identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
           operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true,
             request.includeWorkspaceConfiguration === true, request.collection ?? null]), deadlineAt: rpcOptions?.deadlineAt,
-          load: () => getDesktopNavigationDetailService().readSelectedDetail(request),
+          load: () => getDesktopNavigationDetailService().readSelectedDetail(request, { includePendingWakes: true }),
         }));
     },
     async getNavigationQueueProjection(request, rpcOptions) {

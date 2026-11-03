@@ -52,6 +52,16 @@ async function main(): Promise<void> {
     logStderr("missing bridge socket or token; refusing to start");
     process.exit(1);
   }
+  // A bridge lives exactly as long as its MCP client. The stdio transport
+  // does not end the process when the client closes stdin, and an open
+  // request socket to the app would keep Node running, so a bridge whose
+  // client is gone exits here instead of holding its pipes indefinitely.
+  const exitWhenClientCloses = (): void => {
+    logStderr("MCP client closed stdin; exiting");
+    process.exit(0);
+  };
+  process.stdin.once("end", exitWhenClientCloses);
+  process.stdin.once("close", exitWhenClientCloses);
   const rpc = new ConnectionRpcClient(socketPath, token);
   // Before anything can start a server for this grant, so no window exists
   // in which a local command runs with no live bridge to own it.

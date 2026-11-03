@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FederationTarget, FederationPeerSummary, NavigationIdentity, NavigationDetailCollections, NavigationDetailCollectionName, NavigationSelectedDetailResponse } from "@pwragent/shared";
-import { buildPullRequestStatusKey, NAVIGATION_DETAIL_COLLECTION_NAMES } from "@pwragent/shared";
+import { buildPullRequestStatusKey, isThreadPendingWakeInvalidation, NAVIGATION_DETAIL_COLLECTION_NAMES } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationThreadEvent } from "./navigation-thread-event";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
@@ -249,12 +249,17 @@ export function useNavigationSelectedDetail(params: {
       const exactThreadEvent = event.backend === selected.backend
         && (("threadId" in notification.params && notification.params.threadId === selected.threadId)
           || ("parentThreadId" in notification.params && notification.params.parentThreadId === selected.threadId)
+          || ("action" in notification.params && notification.params.action
+            && typeof notification.params.action === "object" && "threadId" in notification.params.action
+            && notification.params.action.threadId === selected.threadId)
           || (notification.method === "navigation/threadDirectories/updated"
             && Array.isArray(notification.params.threadIds) && notification.params.threadIds.includes(selected.threadId)));
       // Main-process owner-wide invalidations cancel all exact reads on that
       // owner. Admit the same event here so a cancelled read gets a coalesced
       // replacement instead of leaving its composer permanently unavailable.
       const ownerWideEvent = !("threadId" in notification.params)
+        && !("action" in notification.params && notification.params.action
+          && typeof notification.params.action === "object" && "threadId" in notification.params.action)
         && !("parentThreadId" in notification.params)
         && !("thread" in notification.params && notification.params.thread
           && typeof notification.params.thread === "object" && "id" in notification.params.thread);
@@ -264,7 +269,8 @@ export function useNavigationSelectedDetail(params: {
       if (!navigationQueryEventRequiresRefresh(notification.method)
         && notification.method !== "thread/codexEnvironment/updated"
         && notification.method !== "thread/acpRuntime/updated"
-        && notification.method !== "thread/prWatches/updated") return;
+        && notification.method !== "thread/prWatches/updated"
+        && !(selectedOwner && isThreadPendingWakeInvalidation(notification.method, notification.params))) return;
       // A canonical event supersedes the retained collection too. Otherwise
       // the configuration read overlays its older cache and briefly erases
       // live accounting while replacement history pages are still loading.

@@ -1,0 +1,114 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
+import { cruise } from "dependency-cruiser";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import config from "../.dependency-cruiser.cjs";
+
+const reusable = ["shared", "federation", "agent-tools", "messaging/interface"];
+const providers = ["discord", "feishu", "line", "mattermost", "slack", "telegram"]
+  .map((provider) => `messaging/providers/${provider}`);
+const layers = [
+  { path: "shared", imports: [] },
+  { path: "federation", imports: ["shared"] },
+  { path: "agent-tools", imports: ["shared"] },
+  { path: "messaging/interface", imports: ["shared"] },
+  { path: "owner-core", imports: reusable },
+  ...providers.map((path) => ({ path, imports: ["messaging/interface"] })),
+  { path: "pwragent", imports: [...reusable, "owner-core"] },
+];
+const targets = [
+  ...layers.map(({ path }) => ({
+    path,
+    file: `packages/${path}/src/index.js`,
+    name: path === "pwragent" ? path : `@pwragent/${path.replaceAll("/", "-").replace("messaging-providers-", "messaging-provider-")}`,
+  })),
+  { path: "desktop", file: "apps/desktop/src/main/index.js", name: "@pwragent/desktop" },
+  { path: "future-library", file: "packages/future-library/src/index.js", name: "@pwragent/future-library" },
+];
+const cases = [];
+let root;
+let result;
+
+function source(file, contents) {
+  mkdirSync(dirname(join(root, file)), { recursive: true });
+  writeFileSync(join(root, file), contents);
+}
+
+beforeAll(async () => {
+  root = realpathSync(mkdtempSync(join(tmpdir(), "pwragent-boundaries-")));
+  for (const target of targets) source(target.file, "export const value = 1;\n");
+
+  for (const layer of [...layers, { path: "desktop", imports: targets.map(({ path }) => path) }]) {
+    for (const style of ["relative", "package"]) {
+      for (const target of targets) {
+        const directory = layer.path === "desktop" ? "apps/desktop" : `packages/${layer.path}`;
+        const from = `${directory}/src/probes/${style}-${target.path.replaceAll("/", "-")}.js`;
+        const specifier = style === "package" ? target.name : relative(dirname(from), target.file).replaceAll("\\", "/");
+        source(from, `import ${JSON.stringify(specifier.startsWith(".") || style === "package" ? specifier : `./${specifier}`)};\n`);
+        cases.push({
+          from,
+          to: target.file,
+          allowed: target.path === layer.path
+            || (layer.path !== "pwragent" && layer.imports.includes(target.path)),
+        });
+      }
+    }
+  }
+
+  const entry = "packages/pwragent/src/federation-core.ts";
+  source(entry, targets.map((target) => `export * from ${JSON.stringify(target.name)};`).join("\n"));
+  for (const target of targets) {
+    cases.push({
+      from: entry,
+      to: target.file,
+      allowed: target.path === "pwragent" || [...reusable, "owner-core"].includes(target.path),
+    });
+  }
+
+  // dependency-cruiser normalizes entry paths against cwd, even with baseDir.
+  // This suite runs in the desktop-main fork, so the fixture owns its cwd.
+  const previousDirectory = process.cwd();
+  try {
+    process.chdir(root);
+    ({ output: result } = await cruise(["packages", "apps"], {
+      validate: true,
+      ruleSet: { forbidden: config.forbidden },
+      outputType: "json",
+    }, {
+      alias: Object.fromEntries(targets.map((target) => [target.name, join(root, target.file)])),
+    }));
+  } finally {
+    process.chdir(previousDirectory);
+  }
+  if (typeof result === "string") result = JSON.parse(result);
+});
+
+afterAll(() => {
+  if (root) rmSync(root, { recursive: true, force: true });
+});
+
+describe("workspace dependency layers", () => {
+  it("resolves every fixture import", () => {
+    const unresolved = result.modules.flatMap((module) => module.dependencies
+      .filter((dependency) => dependency.couldNotResolve)
+      .map((dependency) => `${module.source}: ${dependency.module}`));
+    expect(unresolved).toEqual([]);
+  });
+
+  it("enforces the layer matrix for package and relative imports, including the reserved owner-core", () => {
+    const mismatches = [];
+    for (const { from, to, allowed } of cases) {
+      const dependency = result.modules.find((module) => module.source === from)
+        ?.dependencies.find((dependency) => dependency.resolved === to);
+      if (!dependency || dependency.valid !== allowed) {
+        mismatches.push({ from, to, allowed, rules: dependency?.rules });
+      }
+    }
+    expect({ count: mismatches.length, first: mismatches.slice(0, 10) }).toEqual({ count: 0, first: [] });
+  });
+
+  it("keeps every forbidden rule fatal", () => {
+    expect(config.forbidden.every((rule) => rule.severity === "error")).toBe(true);
+  });
+});

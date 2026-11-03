@@ -764,6 +764,11 @@ export function createThreadTodoRunners(params: {
                   : {}),
                 ...(speed ? { fastMode: speed === "fast" } : {}),
                 ...((workMode ?? action.workMode) ? { workMode: workMode ?? action.workMode } : {}),
+                // As on this machine, the peer's checkout can sit on a branch
+                // with another thread's unpublished work.
+                ...((workMode ?? action.workMode) === "worktree"
+                  ? { worktreeBase: "default_branch" as const }
+                  : {}),
                 ...(environment ? { environment } : {}),
                 groupingMode: crossProject ? "none" : "subthread",
               },

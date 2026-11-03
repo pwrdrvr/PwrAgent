@@ -368,6 +368,8 @@ type CodexClientOptions = {
   isCodexBootstrapDeferred?: () => boolean;
   /** Test seam for the backoff and circuit breaker after unexpected exits. */
   appServerRestartPolicy?: CodexAppServerRestartPolicyOptions;
+  /** Test seam for the idle-thread unsubscribe clock. */
+  now?: () => number;
 };
 
 /**
@@ -7755,6 +7757,18 @@ export class CodexAppServerClient {
   private rejectedCodexHome?: string;
   private transportClosePromise: Promise<void> | null = null;
   private readonly restartPolicy: CodexAppServerRestartPolicy;
+  /**
+   * Threads this connection subscribed to with thread/start, thread/fork or
+   * thread/resume, and when each last saw a request or an event. Codex keeps
+   * a subscribed thread loaded, with its MCP servers running, until every
+   * subscriber leaves, so `unsubscribeIdleThreads` must let go of them.
+   */
+  private readonly subscribedThreads = new Map<string, number>();
+  /** Bumped each time a thread unloads, so operations resume it again. */
+  private readonly threadUnloadGenerations = new Map<string, number>();
+  /** Requests from Codex (approvals, user input, tool calls) per thread. */
+  private readonly pendingServerRequestsByThread = new Map<string, number>();
+  private threadUnsubscribeUnsupported = false;
   private restartStatus: CodexAppServerRestartStatus = { stopped: false };
   private readonly restartStatusListeners = new Set<
     (status: CodexAppServerRestartStatus) => void
@@ -7922,6 +7936,14 @@ export class CodexAppServerClient {
         return translator.observeResponse(method, translated, result);
       };
     }
+    // Every route to Codex passes here, so this sees each subscription that
+    // any operation, helper or recovery opens or closes.
+    const requestBeforeSubscriptionTracking = this.rawConnection.request.bind(this.rawConnection);
+    this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
+      const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
+      this.observeThreadSubscription(method, params, result);
+      return result;
+    };
     this.connection = {
       request: (...args) => this.requestWhenAvailable(...args),
     };
@@ -8022,6 +8044,13 @@ export class CodexAppServerClient {
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
       if (method === "thread/name/updated" && this.consumeThreadNameEcho(params)) return;
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
+      if (helperThreadId && method === "thread/closed") {
+        // Codex unloaded it; the next operation must resume it first.
+        this.subscribedThreads.delete(helperThreadId);
+        this.noteThreadUnloaded(helperThreadId);
+      } else if (helperThreadId && this.subscribedThreads.has(helperThreadId)) {
+        this.subscribedThreads.set(helperThreadId, this.now());
+      }
       // Codex can send startup warnings before thread/start returns its ID.
       // Wait only for startup notices, then suppress those belonging to the
       // helper. Interactive turn traffic continues while the RPC is pending.
@@ -8091,7 +8120,11 @@ export class CodexAppServerClient {
         await listener(normalized);
       }
     });
-    this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
+    const handleServerRequest: Parameters<JsonRpcConnection["setRequestHandler"]>[0] = async (
+      method,
+      params,
+      rpcId,
+    ) => {
       const helperToolCallParams = asRecord(params);
       const helperToolHandler = helperToolCallParams
         ? this.resolveHelperThreadToolHandler(method, helperToolCallParams)
@@ -8141,7 +8174,168 @@ export class CodexAppServerClient {
       }
 
       throw new Error(`No desktop request handler registered for ${method}`);
+    };
+    this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
+      // A thread waiting on the operator must stay loaded to hear the answer.
+      const threadId = extractRequestMetadata(params).threadId;
+      if (threadId) {
+        this.pendingServerRequestsByThread.set(
+          threadId,
+          (this.pendingServerRequestsByThread.get(threadId) ?? 0) + 1,
+        );
+      }
+      try {
+        return await handleServerRequest(method, params, rpcId);
+      } finally {
+        if (threadId) {
+          const remaining = (this.pendingServerRequestsByThread.get(threadId) ?? 1) - 1;
+          if (remaining > 0) this.pendingServerRequestsByThread.set(threadId, remaining);
+          else this.pendingServerRequestsByThread.delete(threadId);
+          if (this.subscribedThreads.has(threadId)) this.subscribedThreads.set(threadId, this.now());
+        }
+      }
     });
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private observeThreadSubscription(method: string, params: unknown, result: unknown): void {
+    if (method === "thread/unsubscribe") {
+      const threadId = pickString(asRecord(params) ?? {}, ["threadId"]);
+      if (threadId) this.subscribedThreads.delete(threadId);
+      return;
+    }
+    if (method !== "thread/start" && method !== "thread/resume" && method !== "thread/fork") return;
+    // A resume names its thread; a start or fork learns it from the result.
+    const threadId = method === "thread/resume"
+      ? pickString(asRecord(params) ?? {}, ["threadId"])
+      : extractThreadIdFromValue(result);
+    if (threadId) this.subscribedThreads.set(threadId, this.now());
+  }
+
+  private noteThreadUnloaded(threadId: string): void {
+    this.threadUnloadGenerations.set(threadId, (this.threadUnloadGenerations.get(threadId) ?? 0) + 1);
+  }
+
+  /** Threads this connection keeps loaded in Codex. */
+  getSubscribedThreadCount(): number {
+    return this.subscribedThreads.size;
+  }
+
+  /**
+   * Let go of threads nothing needs live events for, so Codex can unload them
+   * and stop their MCP servers. Codex unloads a thread only when it is idle
+   * and has no subscriber; before this, every thread a long-lived connection
+   * started or resumed stayed loaded until the server stopped, and a day of
+   * use left hundreds of MCP servers running.
+   *
+   * A thread qualifies after `idleMs` with no request or event, when this
+   * client tracks no turn, pending request, helper turn, voice session or
+   * unstarted first turn for it, and `isThreadBusy` (the owner's view: queued
+   * input, background terminals, live tool items, reviews) says no. Each is
+   * checked again under the lifecycle barrier, together with Codex's own
+   * status for the thread; a sub-agent thread stays, since its parent may
+   * still address it. The next operation on the thread resumes it, as every
+   * thread operation does, and one already in flight replays its resume.
+   */
+  async unsubscribeIdleThreads(params: {
+    idleMs: number;
+    isThreadBusy: (threadId: string) => boolean;
+    /** Most threads to release in one pass; the barrier holds RPCs meanwhile. */
+    limit?: number;
+  }): Promise<string[]> {
+    if (!this.initialized || this.pendingCloses > 0 || this.threadUnsubscribeUnsupported) return [];
+    const isIdle = (threadId: string): boolean => {
+      const lastActiveAt = this.subscribedThreads.get(threadId);
+      return lastActiveAt !== undefined
+        && this.now() - lastActiveAt >= params.idleMs
+        && !this.threadKeepsSubscription(threadId)
+        && !params.isThreadBusy(threadId);
+    };
+    const candidates = [...this.subscribedThreads.keys()]
+      .filter(isIdle)
+      .slice(0, params.limit ?? 16);
+    if (candidates.length === 0) return [];
+    const serverGeneration = this.serverGeneration;
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // One barrier per thread, so other RPCs wait for at most one thread's
+    // read and unsubscribe rather than the whole pass.
+    const releaseIfIdle = (threadId: string) => this.runLifecycle(async (): Promise<
+      "released" | "kept" | "stop"
+    > => {
+      // No new RPC is admitted, so nothing can start on it from here on.
+      if (!this.initialized || serverGeneration !== this.serverGeneration) return "stop";
+      if (!isIdle(threadId)) return "kept";
+      let thread: Record<string, unknown> | null;
+      try {
+        thread = asRecord(asRecord(await this.rawConnection.request(
+          "thread/read",
+          { threadId, includeTurns: false },
+          timeoutMs,
+        ))?.thread);
+      } catch (error) {
+        if (/not (found|loaded)/i.test(error instanceof Error ? error.message : String(error))) {
+          this.subscribedThreads.delete(threadId);
+        }
+        return "kept";
+      }
+      const status = readThreadStatus(thread);
+      if (status === "notLoaded") {
+        this.subscribedThreads.delete(threadId);
+        return "kept";
+      }
+      // A thread stopped by a system error runs nothing and can go too.
+      const systemError = thread?.status === "systemError"
+        || asRecord(thread?.status)?.type === "systemError";
+      if ((status !== "idle" && !systemError) || typeof thread?.parentThreadId === "string"
+        || asRecord(thread?.source)?.subAgent !== undefined) {
+        // Busy, or owned by a parent thread: look again next pass.
+        this.subscribedThreads.set(threadId, this.now());
+        return "kept";
+      }
+      if (!isIdle(threadId)) return "kept";
+      try {
+        await this.rawConnection.request("thread/unsubscribe", { threadId }, timeoutMs);
+      } catch (error) {
+        if (isMethodUnavailableError(error, "thread/unsubscribe")) {
+          this.threadUnsubscribeUnsupported = true;
+          return "stop";
+        }
+        codexClientLog.warn("idle Codex thread unsubscribe failed", {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return "kept";
+      }
+      this.subscribedThreads.delete(threadId);
+      this.noteThreadUnloaded(threadId);
+      return "released";
+    });
+    const released: string[] = [];
+    for (const threadId of candidates) {
+      const outcome = await releaseIfIdle(threadId);
+      if (outcome === "stop") break;
+      if (outcome === "released") released.push(threadId);
+    }
+    if (released.length > 0) {
+      codexClientLog.info("unsubscribed idle Codex threads", {
+        count: released.length,
+        stillSubscribed: this.subscribedThreads.size,
+      });
+    }
+    return released;
+  }
+
+  /** Work this client tracks that needs the thread's live events. */
+  private threadKeepsSubscription(threadId: string): boolean {
+    return this.runningTurnIdsByThread.has(threadId)
+      || this.pendingServerRequestsByThread.has(threadId)
+      || this.helperThreadIds.has(threadId)
+      || this.ownedRealtimeThreads.has(threadId)
+      // Its history exists only in this process until the first turn starts.
+      || this.threadsAwaitingFirstTurn.has(threadId);
   }
 
   async close(): Promise<void> {
@@ -8337,6 +8531,10 @@ export class CodexAppServerClient {
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
     this.pendingThreadNameEchoes.clear();
+    // A new process has loaded nothing; operations replay their own resume,
+    // keyed on the server generation, so unload counts can start over.
+    this.subscribedThreads.clear();
+    this.threadUnloadGenerations.clear();
     this.helperThreadIds.clear();
     this.helperThreadToolHandlers.clear();
     this.helperToolTurnThreadIds.clear();
@@ -11676,6 +11874,10 @@ export class CodexAppServerClient {
   private createThreadOperationConnection(): Pick<JsonRpcConnection, "request"> {
     let generation = this.serverGeneration;
     const setup: Array<Parameters<JsonRpcConnection["request"]>> = [];
+    let setupThreadId: string | undefined;
+    let unloadGeneration = 0;
+    const threadUnloaded = () => setupThreadId !== undefined
+      && (this.threadUnloadGenerations.get(setupThreadId) ?? 0) !== unloadGeneration;
     return {
       request: (...args) => this.runAdmittedRequest(async () => {
         const closeGeneration = this.closeGeneration;
@@ -11685,16 +11887,23 @@ export class CodexAppServerClient {
           }
           return this.rawConnection.request(...requestArgs);
         };
-        // Resume and settings belong to a process. Reapply successful setup
-        // after recovery, with setup plus the next RPC admitted as one unit.
+        // Resume and settings belong to a process and to a loaded thread.
+        // Reapply successful setup after recovery or after the thread
+        // unloaded, with setup plus the next RPC admitted as one unit.
         // Never replay the action itself (turn/start, review/start, etc.).
-        if (generation !== this.serverGeneration) {
+        if (generation !== this.serverGeneration || threadUnloaded()) {
           for (const previous of setup) await request(...previous);
           generation = this.serverGeneration;
+          if (setupThreadId) unloadGeneration = this.threadUnloadGenerations.get(setupThreadId) ?? 0;
         }
         const result = await request(...args);
         if (args[0] === "thread/resume" || args[0] === "thread/settings/update") {
           setup.push(args);
+          const threadId = pickString(asRecord(args[1]) ?? {}, ["threadId"]);
+          if (args[0] === "thread/resume" && threadId && setupThreadId === undefined) {
+            setupThreadId = threadId;
+            unloadGeneration = this.threadUnloadGenerations.get(threadId) ?? 0;
+          }
         }
         return result;
       }),
