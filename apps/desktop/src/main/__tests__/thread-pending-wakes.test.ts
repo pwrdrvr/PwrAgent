@@ -303,6 +303,14 @@ describe("held wakes", () => {
     })]);
   });
 
+  it("keeps a failed turn's hold when the thread is also locked, since unlocking does not release it", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      hold: async () => LOCKED,
+      heldEntries: () => [heldEntry({ holdReason: "The previous turn failed." })],
+    }), THREAD);
+    expect(list.wakes[0]?.held).toEqual({ kind: "queue_held", reason: "The previous turn failed." });
+  });
+
   it("marks the list incomplete when the hold cannot be read", async () => {
     const list = await buildThreadPendingWakes(readers({
       hold: async () => { throw new Error("overlay unreadable"); },

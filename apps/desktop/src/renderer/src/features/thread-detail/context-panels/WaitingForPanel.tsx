@@ -125,8 +125,10 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   const readOnlyOnPeer = peer && wakes.some((wake) => wake.stop && !canStop(wake));
   const endedRows = state.ended.slice(0, ENDED_ROWS);
   const notice = readHoldNotice(props.thread, wakes);
-  const canSendHeld = (wake: HeldMessageWake): boolean => wake.held?.kind === "project_paused"
-    && Boolean(props.onSendHeldNow) && (!peer || capabilities.includes("turn_control"));
+  // A peer sends a held wake-up only through its project's release.
+  const canSendHeld = (wake: ThreadPendingWake): boolean => wake.held?.kind === "project_paused"
+    && Boolean(props.onSendHeldNow)
+    && (!peer || (capabilities.includes("project_forge_automation") && capabilities.includes("turn_control")));
   const unlock = props.onUnlockThread;
 
   return (
@@ -178,7 +180,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
               {group.aside ? <span className="waiting-for-panel__eyebrow-aside">{group.aside}</span> : null}
             </p>
             {group.wakes.map((wake) => {
-              const view = describeWake(wake, props.thread, now, props.ownerLabel);
+              const view = describeWake(wake, props.thread, now, props.ownerLabel, canSendHeld(wake));
               const open = openKey === wake.key;
               const detail = open ? renderDetail(wake, props, now) : null;
               return (
@@ -203,7 +205,10 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
                         className="pr-watch-list__action"
                         aria-label={`Send Now: ${view.plainTitle}`}
                         disabled={busy.has(wake.key)}
-                        onClick={() => run(wake.key, async () => await props.onSendHeldNow!(wake))}
+                        onClick={() => run(wake.key, async () => {
+                          await props.onSendHeldNow!(wake);
+                          props.controller.ended(wake.key);
+                        })}
                       >
                         Send Now
                       </button>
@@ -325,14 +330,18 @@ function describeHoldRelease(
 }
 
 /** One line on a row the hold keeps from starting: what holds it, and when it goes. */
-function describeRowHold(wake: ThreadPendingWake): string | undefined {
+function describeRowHold(wake: ThreadPendingWake, canSend: boolean): string | undefined {
   const hold = wake.held;
   if (!hold) return undefined;
   if (hold.kind === "thread_locked") {
     return wake.kind === "held_message" ? "Held while this thread is locked; unlocking sends it." : "Held while this thread is locked.";
   }
   if (hold.kind === "queue_held") return `Held: ${clipText(hold.reason, 160)} Send it again from the queue above the composer.`;
-  if (wake.kind === "held_message") return `Held while ${hold.projectLabel} is paused. Send it now, or resume the project.`;
+  if (wake.kind === "held_message") {
+    return canSend
+      ? `Held while ${hold.projectLabel} is paused. Send it now, or resume the project.`
+      : `Held while ${hold.projectLabel} is paused. Resuming the project sends it.`;
+  }
   if (wake.kind === "pr_watch") return `Waits while ${hold.projectLabel} is paused.`;
   return hold.discardsWakeups
     ? `Dropped if it ends while ${hold.projectLabel} is paused.`
@@ -387,8 +396,9 @@ function describeWake(
   thread: NavigationThreadSummary,
   now: number,
   ownerLabel: string | undefined,
+  canSendHeld = false,
 ): WakeView {
-  const rowHold = describeRowHold(wake);
+  const rowHold = describeRowHold(wake, canSendHeld);
   const transient = (
     <>
       {rowHold ? <span className="waiting-for-panel__held">{` ${rowHold}`}</span> : null}

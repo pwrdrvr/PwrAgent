@@ -82,8 +82,9 @@ const ENDED: ThreadPendingWakeEnded[] = [
 function controller(
   state: ThreadPendingWakesState,
   stop: (key: string) => Promise<ThreadPendingWakesResponse> = async () => ({ ok: true, stopped: true }),
+  ended: (key: string) => void = () => {},
 ): ThreadPendingWakesController {
-  return { state, stop };
+  return { state, stop, ended };
 }
 
 const ready = (wakes = WAKES, ended = ENDED, peer = false): ThreadPendingWakesState =>
@@ -258,9 +259,10 @@ describe("WaitingForPanel", () => {
 
     it("sends a paused project's held wake-up through the project, and says what the pause holds", async () => {
       const sendHeld = vi.fn(async () => {});
+      const ended = vi.fn();
       render(
         <WaitingForPanel thread={thread} now={NOW} onSendHeldNow={sendHeld}
-          controller={controller(ready([pauseHeld, { ...WAKES[1]!, held: { ...PAUSED, discardsWakeups: true } }, { ...WAKES[3]!, held: { ...PAUSED, discardsWakeups: true } }], []))} />,
+          controller={controller(ready([pauseHeld, { ...WAKES[1]!, held: { ...PAUSED, discardsWakeups: true } }, { ...WAKES[3]!, held: { ...PAUSED, discardsWakeups: true } }], []), undefined, ended)} />,
       );
 
       expect(screen.getByRole("note")).toHaveTextContent("widgets is paused.");
@@ -272,9 +274,10 @@ describe("WaitingForPanel", () => {
         fireEvent.click(screen.getByRole("button", { name: "Send Now: Continue After result: Continue After: Lease cleanup finished" }));
       });
       expect(sendHeld).toHaveBeenCalledWith(pauseHeld);
+      expect(ended).toHaveBeenCalledWith(pauseHeld.key);
     });
 
-    it("discards a peer's held message only when its owner accepts turn control", () => {
+    it("discards a peer's held message with turn control, and sends it only with the project's release too", () => {
       const peerThread = (capabilities: string[]): NavigationThreadSummary => ({
         ...thread,
         federation: {
@@ -293,6 +296,13 @@ describe("WaitingForPanel", () => {
           controller={controller(ready([pauseHeld], [], true))} onSendHeldNow={vi.fn()} />,
       );
       expect(screen.getByRole("button", { name: /^Discard/ })).toBeInTheDocument();
+      // Without the owner's project release, the row says how it goes instead.
+      expect(screen.queryByRole("button", { name: /^Send Now/ })).not.toBeInTheDocument();
+      expect(screen.getByText(/Held while widgets is paused\. Resuming the project sends it\./)).toBeInTheDocument();
+      rerender(
+        <WaitingForPanel thread={peerThread(["turn_control", "project_forge_automation"])} now={NOW} ownerLabel="studio-mac"
+          controller={controller(ready([pauseHeld], [], true))} onSendHeldNow={vi.fn()} />,
+      );
       expect(screen.getByRole("button", { name: /^Send Now/ })).toBeInTheDocument();
     });
 

@@ -20423,8 +20423,8 @@ export class DesktopBackendRegistry {
     for (const entry of this.threadTurnQueue.iterateQueuedEntries(params)) {
       if (!entry.projectHold && !entry.manualReleaseRequired) continue;
       const text = entry.title
-        ?? entry.input.find((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")?.text
-        ?? "";
+        || entry.input.find((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")?.text
+        || "";
       held.push({
         entryId: entry.id,
         origin: entry.origin,

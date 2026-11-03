@@ -3,6 +3,7 @@ import {
   THREAD_PENDING_WAKE_TEXT_MAX_CHARS,
   THREAD_PENDING_WAKES_ENDED_MAX_LIMIT,
   buildThreadPendingWakeKey,
+  isThreadLockRefusal,
   parseThreadPendingWakeKey,
   type AppServerBackendKind,
   type AppServerBackgroundTask,
@@ -230,7 +231,8 @@ function heldMessageWake(entry: PendingHeldQueueEntry, threadHold: ThreadPending
         projectLabel: entry.projectHold.projectLabel,
         directoryKey: entry.projectHold.directoryKey,
       }
-    : threadHold?.kind === "thread_locked"
+    // Unlocking releases only a lock's own refusal, not a failed turn.
+    : threadHold?.kind === "thread_locked" && (!entry.holdReason || isThreadLockRefusal(entry.holdReason))
       ? threadHold
       : { kind: "queue_held", reason: clip(entry.holdReason ?? "It waits for you to send it.", DETAIL_MAX_CHARS * 3) };
   const projectSource = entry.projectHold?.source;
