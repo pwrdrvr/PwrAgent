@@ -67,4 +67,6 @@ it("imports an LFS checkout without writing hooks into the new worktree", async 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
+  // About 25 Git processes, several of them running the LFS filter: 3.8s on
+  // a macOS runner, close to the 5s default.
+}, 20_000);
