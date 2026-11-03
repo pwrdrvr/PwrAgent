@@ -855,6 +855,7 @@ import {
   withCodexEnvironmentOptions,
 } from "./codex-environment-config";
 import { describeCreatedThreadEnvironment } from "./created-thread-environment";
+import { assertThreadModelSettingsAvailable } from "./thread-model-admission";
 import { setupVariablesForAgent } from "./agent-setup-variables";
 import {
   applyLocalCodexEnvironmentSelection,
@@ -20172,7 +20173,7 @@ export class DesktopBackendRegistry {
     // profile defaults here too, while preserving an explicit empty selection.
     const mcpConnectionIds = requestedMcpConnectionIds
       ?? await this.resolveNewThreadMcpConnectionIds();
-    const modelSettings = await this.resolveModelSettings(backend, request);
+    const modelSettings = await this.admitNewThreadModelSettings(backend, request);
     let cwd: string | undefined =
       !request.cwd?.trim()
         ? await this.createScratchProjectDirectory()
@@ -20850,7 +20851,7 @@ export class DesktopBackendRegistry {
 
     const executionMode = request.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
-    const modelSettings = await this.resolveModelSettings(backend, request);
+    const modelSettings = await this.admitNewThreadModelSettings(backend, request);
     const directoryKind =
       request.directoryKind ?? (request.directoryPath?.trim() ? "directory" : "workspace");
     const directoryLabel =
@@ -21215,6 +21216,7 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
   }): Promise<ThreadTurnQueueSubmissionResult> {
+    await this.assertRequestedThreadModelAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", queueEntryId, delivery, ...entry } = params;
@@ -22685,6 +22687,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    await this.assertRequestedThreadModelAvailable(params);
     const result = await this.startTurnNow(params);
     await this.publishIncomingWork({ ...params, threadId: result.threadId }, result.turnId);
     return result;
@@ -27531,6 +27534,7 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
+    await this.assertRequestedThreadModelAvailable(params);
     if (params.backend === "codex" && params.model) {
       this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
     }
@@ -29841,6 +29845,8 @@ export class DesktopBackendRegistry {
     if (!draft) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
+    const projectedDraft = projectNavigationLaunchpadProviderSettings(draft);
+    await this.admitNewThreadModelSettings(projectedDraft.backend, projectedDraft);
     let launchpad = options?.sourceInstanceId
       ? await this.resolveRemoteLaunchpadModelSettings(draft)
       : draft;
@@ -30647,6 +30653,29 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async assertRequestedThreadModelAvailable(params: {
+    backend: AppServerBackendKind;
+    model?: string;
+  }): Promise<void> {
+    if (params.model === undefined) return;
+    assertThreadModelSettingsAvailable(params.backend,
+      await this.getBackendLaunchpadOptions(params.backend, "model-override-admission"),
+      { model: params.model });
+  }
+
+  private async admitNewThreadModelSettings(
+    backend: AppServerBackendKind,
+    settings: ModelSettings,
+  ): Promise<ModelSettings> {
+    if (!isAppServerBackendKind(backend)) {
+      throw new Error(`backend="${backend}" is not available.`);
+    }
+    const options = await this.getBackendLaunchpadOptions(backend, "thread-admission");
+    const resolved = resolveModelSettingsFromOptions(backend, options, settings);
+    assertThreadModelSettingsAvailable(backend, options, settings, resolved.model);
+    return this.applyCodexFastPolicy(backend, resolved);
+  }
+
   private async resolveModelSettings(
     backend: AppServerBackendKind,
     settings: ModelSettings,
@@ -30657,6 +30686,10 @@ export class DesktopBackendRegistry {
       await this.getBackendLaunchpadOptions(backend, callerReason),
       settings,
     );
+    return this.applyCodexFastPolicy(backend, resolved);
+  }
+
+  private applyCodexFastPolicy(backend: AppServerBackendKind, resolved: ModelSettings): ModelSettings {
     if (backend !== "codex" || this.resolveCodexFastAllowedFn()) {
       return resolved;
     }
@@ -31234,14 +31267,8 @@ export class DesktopBackendRegistry {
    * Resolve a draft that another instance composed against this instance's
    * provider catalog.
    *
-   * A remote viewer composes and stores the draft for a thread that runs
-   * here, and the viewer fills its model settings from the viewer's own
-   * provider. A viewer with its own Codex therefore sends its own default
-   * model, which this Codex may not have. The remote window shows this
-   * instance's catalog and draws such a model as the provider default, so
-   * resolving it here starts the thread with the model the operator saw.
-   * A review could not start at all: review/start rejects a model the
-   * catalog lacks.
+   * Admission has checked explicit choices against the owner's catalog.
+   * Resolve omitted choices using that same owner's provider defaults.
    */
   private async resolveRemoteLaunchpadModelSettings(
     launchpad: NavigationLaunchpadDraft,
@@ -44936,6 +44963,17 @@ export class DesktopBackendRegistry {
         threadId: sourceThreadId,
         extraLinkedDirectories: [],
       } satisfies ThreadOverlayState);
+
+    try {
+      await this.admitNewThreadModelSettings(backend, {
+        model: request.args.model ?? (backend === sourceBackend ? sourceOverlay.model : undefined),
+        reasoningEffort: request.args.reasoningEffort ?? (backend === sourceBackend ? sourceOverlay.reasoningEffort : undefined),
+        serviceTier: request.args.serviceTier ?? (backend === sourceBackend ? sourceOverlay.serviceTier : undefined),
+        fastMode: request.args.fastMode ?? (backend === sourceBackend ? sourceOverlay.fastMode : undefined),
+      });
+    } catch (error) {
+      return threadOrchestrationFailure("invalid_arguments", error instanceof Error ? error.message : String(error));
+    }
 
     const task = request.args.task.trim();
     if (!task) {

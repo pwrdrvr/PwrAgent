@@ -28024,6 +28024,27 @@ command = "pnpm dev"
     }
   });
 
+  it("refuses cross-provider model overrides before saving or queueing them", async () => {
+    const codexClient = new MockBackendClient({ models: [{ id: "gpt-6.1-terra" }] });
+    const overlayStore = createOverlayStoreMock();
+    const save = vi.spyOn(overlayStore, "setThreadModelSettings");
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const settings = { backend: "claude" as const, threadId: "fixture", model: "gpt-6.1-terra" };
+    try {
+      for (const result of [
+        () => registry.setThreadModelSettings(settings),
+        () => registry.startTurn({ ...settings, input: [{ type: "text", text: "Continue" }] }),
+        () => registry.submitTurn({ ...settings, input: [{ type: "text", text: "Continue" }] }),
+      ]) {
+        await expect(result()).rejects.toThrow('model="gpt-6.1-terra" is not available for backend="claude"');
+      }
+      expect(save).not.toHaveBeenCalled();
+      expect(codexClient.lastStartTurnParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("applies model settings from the selected thread overlay when starting turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

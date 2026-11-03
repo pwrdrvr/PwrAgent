@@ -1,5 +1,5 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
-import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
+import { codexProviderIdOfModel, formatModelOptionLabel, type BackendModelOption } from "@pwragent/shared";
 import { splitModelMenuOptions } from "../../lib/model-menu-options";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
@@ -10873,9 +10873,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     backend?.kind,
     ownModelOptions,
   );
-  const selectedModelOption =
+  const selectedModelOption: BackendModelOption | undefined =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
-    getDefaultModelOption(backend);
+    (currentSettings?.model
+      ? { id: currentSettings.model, label: currentSettings.model }
+      : getDefaultModelOption(backend));
   // Image attachments are allowed unless the active model explicitly reports
   // no image support (Codex Spark) or the ACP agent advertises
   // `prompt.image: false`. `undefined` on either signal means "assume
@@ -14576,7 +14578,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               ariaLabel="Model"
               disabled={launchpadSubmitting}
               value={selectedModelOption?.id ?? ""}
-              options={visibleModelOptions.map(toModelDropdownOption)}
+              options={[
+                ...(selectedModelOption && !modelOptions.some((option) => option.id === selectedModelOption.id)
+                  ? [{ value: selectedModelOption.id, label: selectedModelOption.id, disabled: true,
+                      description: "This model is absent from this provider's catalog. Choose an available model." }]
+                  : []),
+                ...visibleModelOptions.map(toModelDropdownOption),
+              ]}
               optionsLabel={formatBackendLabel(backend.kind)}
               groups={providerModelGroups}
               footnote={modelMenuFootnote}
