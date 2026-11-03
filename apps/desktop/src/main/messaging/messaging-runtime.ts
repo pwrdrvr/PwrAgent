@@ -302,6 +302,8 @@ type RejectedInboundRoute = {
 };
 
 type PendingAdapterStart = {
+  // This object is the attempt identity, not just a cancellation callback.
+  // A late finally may remove only this channel's matching registration.
   cancel(reason: string): void;
 };
 
@@ -1855,6 +1857,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         error instanceof AdapterStartCancelledError
         || error instanceof AdapterStartTimeoutError
       ) {
+        // Cancellation settles the admission race, not adapter.start itself.
+        // Both late success and rejection still own cleanup of this adapter.
         void startPromise.then(
           async () => this.stopAdapterAfterLateStart(adapter),
           async () => this.stopAdapterAfterLateStart(adapter),

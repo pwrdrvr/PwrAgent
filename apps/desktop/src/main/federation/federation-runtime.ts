@@ -1398,9 +1398,11 @@ export class DesktopFederationRuntime {
    * runtime, which dials again.
    */
   private parked = false;
+  // The dial promise owns this token. Its finally cannot clear a newer dial.
   private connectionAttempt?: symbol;
   private reconnectAttempt = 0;
   private readonly connectionFailureLog = new FederationConnectionFailureLog();
+  // Per-client completion fence; separate from the whole endpoint walk epoch.
   private connectionGeneration = 0;
   /** Bumped only by stop(), so an in-flight endpoint walk can detect teardown. */
   private walkEpoch = 0;
