@@ -35,6 +35,8 @@ transport, without sending DevTools commands. It records application lifecycle
 markers, process exit, and all-pipes close separately. The six-second close
 deadline includes session preparation. A timeout remains a failure and stops
 the batch. No retries are performed. No profile is deleted, even on success.
+Lifecycle records are buffered during the measured interval, then persisted
+after closure or failure, so per-marker disk writes cannot stall the driver.
 
 Windows places the entire experiment worker and its Electron descendants in
 the existing atomic `KILL_ON_JOB_CLOSE` wrapper before execution. A failed

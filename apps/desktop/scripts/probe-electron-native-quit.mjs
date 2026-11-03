@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -54,10 +55,13 @@ async function runCase({ output, index, mode, electron }) {
   for (const name of ["user-data", "session-data"]) mkdirSync(path.join(root, name));
   const events = [];
   const record = (kind, data = {}) => {
-    const event = { at: Date.now(), kind, ...data };
+    const event = { at: Date.now(), observedAt: Date.now(), kind, ...data };
     events.push(event);
-    appendFileSync(path.join(root, "events.jsonl"), JSON.stringify(event) + "\n");
   };
+  // Synchronous disk writes in stdout callbacks can delay delivery of close
+  // and manufacture a launcher timeout. Flush outside the measured interval.
+  const flushEvents = () => writeFileSync(path.join(root, "events.jsonl"),
+    events.map((event) => JSON.stringify(event)).join("\n") + "\n");
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = spawn(electron, [
@@ -128,15 +132,21 @@ async function runCase({ output, index, mode, electron }) {
         }
       })(), READY_MS, "Native launch inventory timed out");
     }
+    flushEvents();
     const closeStartedAt = Date.now();
     const closeStarted = performance.now();
     record("quit-requested", { closeStartedAt });
-    timer = setTimeout(() => writeRequest(requests, {
-      kind: "stalled", workerPid: process.pid, pid: child.pid, at: Date.now(), closeStartedAt,
-    }), 3_000);
-    writeFileSync(path.join(root, "quit"), "quit\n");
-    const exit = await bounded(closed, CLOSE_MS, "Electron did not close within 6000ms");
+    timer = setTimeout(() => {
+      try {
+        writeRequest(requests, { kind: "stalled", workerPid: process.pid, pid: child.pid, at: Date.now(), closeStartedAt });
+      } catch (error) { record("diagnostic-error", { message: error.message }); }
+    }, 3_000);
+    const closing = bounded(closed, CLOSE_MS, "Electron did not close within 6000ms");
+    closing.catch(() => undefined);
+    const exit = await Promise.race([writeFile(path.join(root, "quit"), "quit\n").then(() => closing), closing]);
     const elapsedMs = Math.round(performance.now() - closeStarted);
+    clearTimeout(timer);
+    flushEvents();
     if (protocolError) throw protocolError;
     const stages = new Set(events.filter((event) => event.kind === "app-stage").map((event) => event.stage));
     if (!["ready", "app-quit-requested", "before-quit", "will-quit", "quit", "node-exit"].every((stage) => stages.has(stage))) {
@@ -152,6 +162,7 @@ async function runCase({ output, index, mode, electron }) {
     return result;
   } catch (error) {
     record("case-error", { message: error.message, stderrBytes });
+    flushEvents();
     writeFileSync(path.join(root, "result.json"), JSON.stringify({
       index, mode, pid: child.pid, launchId, outcome: "failed", error: error.message, stderrBytes,
     }, null, 2) + "\n");
