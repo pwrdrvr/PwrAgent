@@ -7087,7 +7087,7 @@ describe("App", () => {
     const sidebar = within(screen.getByRole("complementary", { name: "Threads" }));
     await content.findByRole("heading", { level: 2, name: "History fixture C" });
     for (const id of ["A", "B"]) {
-      fireEvent.click(sidebar.getByRole("button", { name: `History fixture ${id}`, exact: true }));
+      fireEvent.click(sidebar.getByRole("button", { name: `History fixture ${id}` }));
       await content.findByRole("heading", { level: 2, name: `History fixture ${id}` });
     }
     await waitFor(() => expect(screen.getByTestId("history-nav-back")).toHaveAttribute(

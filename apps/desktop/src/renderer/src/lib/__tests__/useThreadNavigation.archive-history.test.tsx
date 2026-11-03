@@ -14,11 +14,11 @@ function fixture() {
   });
   const archive = vi.fn<NonNullable<DesktopApi["archiveThread"]>>(async ({ threadId }) => {
     archived.add(threadId);
-    return { backend: "codex", threadId, cleanup: [] };
+    return { backend: "codex", threadId, archivedAt: 1, cleanup: [] };
   });
   const api: DesktopApi = {
     archiveThread: archive,
-    restoreThread: async ({ threadId }) => { archived.delete(threadId); return { backend: "codex", threadId }; },
+    restoreThread: async ({ threadId }) => { archived.delete(threadId); return { backend: "codex", threadId, restoredAt: 2 }; },
     getNavigationQueryPage: async ({ query }) => {
       const pinned = query.kind === "lens" && query.roots === "pinned";
       const rows = query.kind === "lens" && !pinned ? ["c", "a", "b"].filter((id) => !archived.has(id)).map(row)
