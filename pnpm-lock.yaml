@@ -674,6 +674,9 @@ importers:
       '@pwragent/federation':
         specifier: workspace:*
         version: link:../federation
+      '@pwragent/owner-core':
+        specifier: workspace:*
+        version: link:../owner-core
       '@pwragent/shared':
         specifier: workspace:*
         version: link:../shared

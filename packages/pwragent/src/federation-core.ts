@@ -23,3 +23,6 @@ export { resolveMessagingOutboundFile, validateMessagingFileMetadata } from "@pw
 
 export * from "@pwragent/federation/federation-replacement-receiver";
 export { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "@pwragent/federation/federation-backend-methods";
+
+export { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-store";
+export { buildThreadIdentityKey } from "@pwragent/shared";
