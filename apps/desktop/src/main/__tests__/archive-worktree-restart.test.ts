@@ -150,6 +150,23 @@ describe("archive worktrees across a desktop restart", () => {
     expect(await readFile(path.join(localPath, "keep.txt"), "utf8")).toBe("keep local directory\n");
   });
 
+  it("keeps a Claude checkout also owned by an archived ACP session that cannot restore snapshots", async () => {
+    const fixture = await createFixture("claude");
+    const threadId = "11111111-1111-4111-8111-111111111111";
+    await fixture.claudeStore.save({ cwd: fixture.worktree, thread: { id: threadId, source: "claude",
+      title: "Claude shared checkout", titleSource: "explicit", linkedDirectories: [fixture.directory] } });
+    const instance = fixture.reopen();
+    instance.acpAgentStore.upsertInstalledAgent({ backendId: "acp:grok", registryId: "grok", name: "Grok",
+      distributionKind: "local", distributionSource: "grok --acp", installStatus: "installed", authStatus: "not-required",
+      verificationStatus: "not-applicable", allowlistRuleId: "fixture-grok", installedAt: 1, updatedAt: 1 });
+    instance.acpSessionStore.upsertSession({ backendId: "acp:grok", sessionId: "acp-owner", title: "Archived ACP owner",
+      cwd: fixture.worktree, createdAt: 1, updatedAt: 1, executionMode: "default", status: "idle", archivedAt: 1 });
+    const result = await instance.registry.archiveThread({ backend: "claude", threadId });
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: false,
+      skippedReason: expect.stringContaining("Archived ACP session") })]);
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+  });
+
   it("checkpoints a queued cleanup on quit and resumes it without archiving the provider again", async () => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads = [{ id: "queued", cwd: fixture.worktree, source: "cli", archived: false }];

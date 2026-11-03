@@ -16780,6 +16780,7 @@ export class DesktopBackendRegistry {
       ? await this.archiveThreadWorktrees({
           backend, activeThreads: cleanupMetadata.activeThreads, archivedThreads: cleanupMetadata.archivedThreads,
           thread: cleanupMetadata.thread, context, codexRolloutMissing, worktreeEvidence: cleanupMetadata.worktreeEvidence,
+          preserveArchivedAcpWorktrees: backend === "claude",
         })
       : this.buildArchiveCleanupMetadataSkippedResult({ backend, threadId: result.threadId, error: cleanupMetadataError }));
     if (codexRolloutMissing) {
