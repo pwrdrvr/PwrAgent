@@ -8498,21 +8498,40 @@ a.button {
 }
 
 .pr-status-card__row-label {
+  flex: none;
   color: var(--text-secondary);
   font-size: 12px;
 }
 
 .pr-status-card__row-value {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* Auto-fix is a standing setting, not a pending wait. */
 .pr-status-card__row-value--muted {
   color: var(--text-muted);
+}
+
+/* Prose under a wake row, such as the thread that handles Auto-fix. Two
+   lines at most, so a long title cannot grow the card. The card takes no
+   pointer events, so nothing can reveal the clipped rest; the side panel's
+   watch list shows the full title. */
+.pr-status-card__row-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .pr-detach-warning-modal {

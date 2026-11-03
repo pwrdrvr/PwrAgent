@@ -134,15 +134,22 @@ export function PrStatusCard(props: {
         <div className="pr-status-card__section">
           <span className="pr-status-card__section-title">Wakes this thread</span>
           {wakes.map((row) => (
-            <div className="pr-status-card__row" key={row.label}>
-              <span className="pr-status-card__row-label">{row.label}</span>
-              <span
-                className={`pr-status-card__row-value${
-                  row.muted ? " pr-status-card__row-value--muted" : ""
-                }`}
-              >
-                {row.value}
-              </span>
+            <div className="pr-status-card__wake" key={row.label}>
+              <div className="pr-status-card__row">
+                <span className="pr-status-card__row-label">{row.label}</span>
+                <span
+                  className={`pr-status-card__row-value${
+                    row.muted ? " pr-status-card__row-value--muted" : ""
+                  }`}
+                >
+                  {row.value}
+                </span>
+              </div>
+              {row.detail ? (
+                <span className="pr-status-card__row-detail">
+                  {row.detail}
+                </span>
+              ) : null}
             </div>
           ))}
           {props.watchStopHint && stoppable ? (
@@ -306,7 +313,11 @@ function readPrChanges(pr: PrSummary): PrChanges | undefined {
 
 type PrTimelineRow = { label: string; value: string };
 
-type PrWatchRow = PrTimelineRow & { muted?: boolean };
+/**
+ * `detail` is prose, such as a thread title, that goes on its own line under
+ * the row. A row's value never wraps, so prose there ran out of the card.
+ */
+type PrWatchRow = PrTimelineRow & { muted?: boolean; detail?: string };
 
 /**
  * One row per thing that wakes the thread. The attempt is the useful number
@@ -330,13 +341,15 @@ function readWatchRows(watch: PrChipWatch | undefined): PrWatchRow[] {
   }
   if (watch.autoFix) {
     rows.push({ label: "Auto-fix", value: "on", muted: true });
+  } else if (watch.autoFixBlocked?.reason === "paused") {
+    rows.push({ label: "Auto-fix", value: "paused", muted: true });
   } else if (watch.autoFixBlocked) {
+    const threadTitle = watch.autoFixBlocked.threadTitle?.trim();
     rows.push({
       label: "Auto-fix",
-      value: watch.autoFixBlocked.reason === "paused"
-        ? "paused"
-        : `handled by ${watch.autoFixBlocked.threadTitle ?? "another thread"}`,
+      value: "handled elsewhere",
       muted: true,
+      ...(threadTitle ? { detail: `By ${threadTitle}` } : {}),
     });
   }
   return rows;
