@@ -10,6 +10,7 @@ import type {
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
+import { transitionQueueAdmission, type QueueAdmission, type QueueAdmissionEvent } from "./queue-admission";
 
 export type ThreadTurnQueueOrigin =
   | "manual"
@@ -215,10 +216,6 @@ type ThreadTurnQueueReleaseParams = {
   errorMessage?: string;
 };
 
-type StartingEntry = {
-  terminalEvents: Map<string, ThreadTurnQueueReleaseParams>;
-};
-
 type AdmittedEntry = {
   entryId: string;
   turnId?: string;
@@ -275,8 +272,7 @@ function restoreAfter(
 
 export class ThreadTurnQueue {
   private readonly queuedEntries = new Map<string, ThreadTurnQueueEntry[]>();
-  private readonly startingKeys = new Set<string>();
-  private readonly startingEntries = new Map<string, StartingEntry>();
+  private readonly admissions = new Map<string, QueueAdmission>();
   private readonly runningEntries = new Map<string, RunningEntry>();
   private readonly recentlyAdmittedEntries = new Map<string, AdmittedEntry>();
   private readonly releasingKeys = new Set<string>();
@@ -361,7 +357,7 @@ export class ThreadTurnQueue {
         && !current
         && !hasWaitingEntry(queue)
         && this.dispatchSuspensions.get(key) === 1
-        && !this.startingKeys.has(key)
+        && !this.admissions.has(key)
         && !this.runningEntries.has(key)
         && !this.heldQueues.has(key)
         && !(this.options.isThreadActive?.(entry) ?? false)
@@ -404,7 +400,7 @@ export class ThreadTurnQueue {
       if (
         !hasWaitingEntry(queue)
         && this.dispatchSuspensions.get(key) === 1
-        && !this.startingKeys.has(key)
+        && !this.admissions.has(key)
         && !this.runningEntries.has(key)
         && !holdReason
         && !(this.options.isThreadActive?.(entry) ?? false)
@@ -570,7 +566,7 @@ export class ThreadTurnQueue {
 
   /**
    * Atomically reject instead of queueing when the thread is busy. The
-   * availability check and `startingKeys` claim happen in the same JS turn,
+   * availability check and admission attempt claim happen in the same JS turn,
    * so another submit cannot slip between them and push this entry on deck.
    */
   async submitIfIdle(
@@ -606,7 +602,7 @@ export class ThreadTurnQueue {
   }): boolean {
     const key = this.keyFor(params);
     return (
-      !this.startingKeys.has(key) &&
+      !this.admissions.has(key) &&
       !this.dispatchSuspensions.has(key) &&
       !this.runningEntries.has(key) &&
       !this.heldQueues.has(key) &&
@@ -880,7 +876,7 @@ export class ThreadTurnQueue {
       return { disposition: "not_held", entryId };
     }
     if (
-      this.startingKeys.has(found.key)
+      this.admissions.has(found.key)
       || this.dispatchSuspensions.has(found.key)
       || this.runningEntries.has(found.key)
       || (this.options.isThreadActive?.(found.entry) ?? false)
@@ -922,14 +918,14 @@ export class ThreadTurnQueue {
 
   async releaseThread(params: ThreadTurnQueueReleaseParams): Promise<void> {
     const key = this.keyFor(params);
-    const starting = this.startingEntries.get(key);
-    if (starting && params.turnId !== undefined) {
-      // The acknowledgement identifies which terminal event belongs to this
-      // admission. Claim it before the release guard: an older release can
-      // itself be awaiting this start. Idle events cannot identify the turn.
-      if (!starting.terminalEvents.has(params.turnId)) {
-        starting.terminalEvents.set(params.turnId, params);
-      }
+    const admission = this.admissions.get(key);
+    // Buffer identified outcomes through the started callback as well as the
+    // backend handoff. Only the acknowledgement proves which turn they end.
+    if (params.turnId !== undefined && admission && admission.phase !== "idle" && admission.kind === "start") {
+      this.applyAdmission(key, {
+        type: "terminal",
+        terminal: { turnId: params.turnId, status: params.status, errorMessage: params.errorMessage },
+      });
       return;
     }
     if (this.releasingKeys.has(key)) {
@@ -982,16 +978,12 @@ export class ThreadTurnQueue {
       });
     }
     if (params.status === "turn/failed") {
-      await this.holdQueue(
-        key,
-        params.errorMessage
-          ?? "The previous turn failed. Review the error before retrying queued messages.",
-      );
+      await this.holdAfterTurnFailure(key, params.errorMessage);
     }
   }
 
   private async startNext(key: string): Promise<StartNextResult> {
-    if (this.startingKeys.has(key) || this.dispatchSuspensions.has(key)
+    if (this.admissions.has(key) || this.dispatchSuspensions.has(key)
       || this.heldQueues.has(key)) return "none";
     const queue = this.queueFor(key);
     const index = nextWaitingIndex(queue);
@@ -1010,23 +1002,27 @@ export class ThreadTurnQueue {
       if (steer && this.options.steerTurn) {
         // Shift and claim synchronously. The backend now owns this immutable
         // batch; new senders can only append to the next queued steer.
-        this.startingKeys.add(key);
+        const attempt = Symbol("queue admission");
+        this.applyAdmission(key, { type: "begin", attempt, kind: "steer" });
         this.rememberAdmittedEntry({ entryId: next.id });
         let delivered = false;
         try {
           const result = await this.options.steerTurn(next);
+          const admission = this.admissions.get(key);
+          if (admission?.phase !== "starting" || admission.attempt !== attempt) return "none";
           if (!result || result === "retry") {
             this.recentlyAdmittedEntries.delete(next.id);
             restoreAfter(this.queueFor(key), next, previousId);
             if (result === "retry") this.scheduleDrain(key);
             return "none";
           }
+          this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
           this.rememberAdmittedEntry({ entryId: next.id, turnId: result.turnId });
           delivered = true;
           await this.emit({ type: "started", entry: next, turnId: result.turnId });
           return "started";
         } finally {
-          this.startingKeys.delete(key);
+          this.applyAdmission(key, { type: "settle", attempt });
           if (delivered || !(this.options.isThreadActive?.(next) ?? false)) this.scheduleDrain(key);
         }
       }
@@ -1067,24 +1063,34 @@ export class ThreadTurnQueue {
     options?: { deferFailureEvent?: boolean },
   ): Promise<ThreadTurnQueueStartResult> {
     const key = this.keyFor(entry);
-    this.startingKeys.add(key);
-    const starting: StartingEntry = { terminalEvents: new Map() };
-    this.startingEntries.set(key, starting);
+    const attempt = Symbol("queue admission");
+    this.applyAdmission(key, { type: "begin", attempt });
     this.rememberAdmittedEntry({ entryId: entry.id });
     try {
       const result = await this.options.startTurn(entry);
-      const running = {
-        entry,
-        turnId: result.turnId,
-      };
-      this.runningEntries.set(key, running);
+      const admission = this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
+      if (admission.phase !== "acknowledged" || admission.attempt !== attempt) return result;
+      // Completion may precede the acknowledgement. Publish start then terminal,
+      // without resurrecting a running entry for the already completed turn.
+      if (!admission.terminal) this.runningEntries.set(key, { entry, turnId: result.turnId });
       this.rememberAdmittedEntry({
         entryId: entry.id,
         turnId: result.turnId,
       });
       await this.emit({ type: "started", entry, turnId: result.turnId });
-      const terminal = starting.terminalEvents.get(result.turnId);
-      if (terminal) await this.settleRelease(key, terminal);
+      const completedAdmission = this.admissions.get(key);
+      const terminal = completedAdmission?.phase === "acknowledged" && completedAdmission.attempt === attempt
+        ? completedAdmission.terminal : undefined;
+      if (terminal) {
+        if (admission.terminal) {
+          await this.emit({ type: "terminal", entry, turnId: terminal.turnId, status: terminal.status });
+          if (terminal.status === "turn/failed") {
+            await this.holdAfterTurnFailure(key, terminal.errorMessage);
+          }
+        } else {
+          await this.settleRelease(key, { backend: entry.backend, threadId: entry.threadId, ...terminal });
+        }
+      }
       return result;
     } catch (error) {
       this.recentlyAdmittedEntries.delete(entry.id);
@@ -1092,19 +1098,28 @@ export class ThreadTurnQueue {
       if (!options?.deferFailureEvent) {
         // A rejected direct admission has no acknowledgement to match. Keep
         // its terminal failure holds; startNext owns holds for queued starts.
-        for (const terminal of starting.terminalEvents.values()) {
-          if (terminal.status === "turn/failed") {
-            await this.settleRelease(key, terminal);
+        const admission = this.admissions.get(key);
+        if (admission && admission.phase !== "idle" && admission.attempt === attempt) {
+          for (const terminal of admission.terminals.values()) {
+            if (terminal.status === "turn/failed") {
+              await this.holdAfterTurnFailure(key, terminal.errorMessage);
+            }
           }
         }
         await this.emit({ type: "failed", entry, error: normalized });
       }
       throw normalized;
     } finally {
-      this.startingEntries.delete(key);
-      this.startingKeys.delete(key);
+      this.applyAdmission(key, { type: "settle", attempt });
       this.scheduleDrain(key);
     }
+  }
+
+  private applyAdmission(key: string, event: QueueAdmissionEvent): QueueAdmission {
+    const next = transitionQueueAdmission(this.admissions.get(key) ?? { phase: "idle" }, event);
+    if (next.phase === "idle") this.admissions.delete(key);
+    else this.admissions.set(key, next);
+    return next;
   }
 
   private queueFor(key: string): ThreadTurnQueueEntry[] {
@@ -1128,6 +1143,17 @@ export class ThreadTurnQueue {
       }
     }
     return undefined;
+  }
+
+  private async holdAfterTurnFailure(
+    key: string,
+    errorMessage?: string,
+  ): Promise<void> {
+    const reason = errorMessage
+      ?? "The previous turn failed. Review the error before retrying queued messages.";
+    // An immediate start's release may already have applied this hold.
+    if (this.heldQueues.get(key) === reason) return;
+    await this.holdQueue(key, reason);
   }
 
   private async holdQueue(key: string, reason: string): Promise<void> {

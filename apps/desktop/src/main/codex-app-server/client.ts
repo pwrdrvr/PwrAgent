@@ -7762,6 +7762,9 @@ export class CodexAppServerClient {
   private readonly modelProviderTranslator?: CodexModelProviderTranslator;
   private lifecycleBarrier: Promise<void> | null = null;
   private readonly activeRequests = new Set<Promise<unknown>>();
+  // closeGeneration invalidates admitted work across close; serverGeneration
+  // identifies one transport incarnation, including exits during initialization.
+  // Neither replaces the lifecycle barrier or draining active requests.
   private closeGeneration = 0;
   private pendingCloses = 0;
   private serverGeneration = 0;
@@ -12245,6 +12248,7 @@ export class CodexAppServerClient {
           },
         };
         const result = await this.rawConnection.request("initialize", initializeParams);
+        assertNotClosed();
         this.initializeResult = parseInitializeResponse(result);
         this.tokenMiserActivationNegotiated = Boolean(activationNonce);
       } catch (error) {
