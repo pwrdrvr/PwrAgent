@@ -1590,6 +1590,9 @@ export class AcpBackendAdapter {
       return "Archived ACP session cannot reload its original identity through session/load; the checkout was kept.";
     }
     const owner = this.findSessionOwner(backend, sessionId);
+    if (owner?.client.supportsArchivedSessionRestore?.() === false) {
+      return "The running ACP provider does not advertise session/load; the checkout was kept.";
+    }
     if (owner?.client.hasActiveTurns?.() || owner?.client.hasActiveOperations?.()) {
       return "An ACP operation is still active on the owning process; the checkout was kept.";
     }

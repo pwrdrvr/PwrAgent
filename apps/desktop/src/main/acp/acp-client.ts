@@ -273,6 +273,7 @@ export class AcpAgentClient {
   private unsubscribe?: () => void;
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+  private archiveRestoreSupported = false;
   private readonly surfaceThoughtsAsMessages: boolean;
   private activeOperations = 0;
 
@@ -339,6 +340,11 @@ export class AcpAgentClient {
         version: "0.0.0",
       },
     });
+    // Destructive archive eligibility must use this process's advertisement,
+    // rather than inheriting a cached capability from an older executable.
+    this.archiveRestoreSupported = normalizeAcpRuntimeCapabilities({
+      value: result, now: this.now(), source: "initialize",
+    })?.agentCapabilities?.loadSession === true;
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "initialize",
       result,
@@ -369,7 +375,7 @@ export class AcpAgentClient {
   }
 
   supportsArchivedSessionRestore(): boolean {
-    return this.runtimeCapabilities?.agentCapabilities?.loadSession === true;
+    return this.archiveRestoreSupported;
   }
 
   /** Release just this session; never cancel another session on the process. */

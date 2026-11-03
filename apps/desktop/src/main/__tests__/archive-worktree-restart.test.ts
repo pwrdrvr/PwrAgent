@@ -184,6 +184,42 @@ describe("ACP snapshot archive and restoration", () => {
     expect(await readFile(path.join(local, "keep.txt"), "utf8")).toBe("keep local repository\n");
   });
 
+  it("resumes queued ACP cleanup after restart without re-archiving the session", async () => {
+    const fixture = await createFixture("claude");
+    const first = fixture.reopen(fixture.directory, true);
+    seedAcpOwner(first, fixture.worktree);
+    await writeFile(path.join(fixture.worktree, "file.txt"), "queued ACP edit\n");
+    expect(await first.registry.archiveThread({ ...acpOwner, backgroundCleanup: true })).toMatchObject({ cleanupPending: true });
+    const archivedAt = first.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt;
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const second = fixture.reopen(fixture.directory, true, () => new ArchiveAcpTransport());
+    await second.registry.resumeArchiveCleanupsAtStartup();
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(second.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBe(archivedAt);
+    await second.registry.restoreThread(acpOwner);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("queued ACP edit\n");
+  });
+
+  it("rejects a replacement checkout after the provider failed to load the restored session", async () => {
+    const fixture = await createFixture("claude");
+    const instance = fixture.reopen(fixture.directory, false, () => {
+      const transport = new ArchiveAcpTransport();
+      transport.onLoad = async () => { throw new Error("Saved session unavailable"); };
+      return transport;
+    });
+    seedAcpOwner(instance, fixture.worktree);
+    await instance.registry.archiveThread(acpOwner);
+    await expect(instance.registry.restoreThread(acpOwner)).rejects.toThrow("thread remains archived");
+    await fixture.git(fixture.repo, ["worktree", "move", fixture.worktree, path.join(fixture.root, "moved-checkout")]);
+    await fixture.git(fixture.repo, ["worktree", "add", "--detach", fixture.worktree, "HEAD"]);
+    await writeFile(path.join(fixture.worktree, "keep.txt"), "replacement checkout");
+    await expect(instance.registry.restoreThread(acpOwner)).rejects.toThrow("restored ACP checkout was replaced");
+    expect(instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+    expect(await readFile(path.join(fixture.worktree, "keep.txt"), "utf8")).toBe("replacement checkout");
+  });
+
   it.each(["close", "dispose", "other live session", "close failure"])("releases a loaded session safely before removal (%s)", async (scenario) => {
     const fixture = await createFixture("claude");
     const transport = new ArchiveAcpTransport(scenario === "close" || scenario === "close failure");
@@ -242,15 +278,15 @@ describe("ACP snapshot archive and restoration", () => {
     expect((await instance.store.getThreadOverlayState(acpOwner))?.worktreeSnapshots ?? []).toHaveLength(0);
   });
 
-  it.each(["checkout", "load", "unsupported", "partial"])("keeps the session archived and recovery available on %s failure", async (failure) => {
+  it.each(["checkout", "load", "unsupported", "unadvertised", "partial"])("keeps the session archived and recovery available on %s failure", async (failure) => {
     const fixture = await createFixture("claude");
     const transports: ArchiveAcpTransport[] = [];
     let rejectLoad = failure === "load";
     const first = fixture.reopen(fixture.directory, false, () => {
       const transport = new ArchiveAcpTransport();
       transport.onLoad = async () => { if (rejectLoad) throw new Error("Provider rejected saved session"); };
-      if (failure === "unsupported") transport.request = async (method) => method === "initialize"
-        ? { protocolVersion: 1, agentCapabilities: { loadSession: false } } : {};
+      if (failure === "unsupported" || failure === "unadvertised") transport.request = async (method) => method === "initialize"
+        ? { protocolVersion: 1, agentCapabilities: failure === "unsupported" ? { loadSession: false } : {} } : {};
       transports.push(transport);
       return transport;
     });
