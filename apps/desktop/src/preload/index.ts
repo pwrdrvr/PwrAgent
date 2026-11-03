@@ -1258,6 +1258,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke("thread:dependencies", request),
   manageThreadPrWatches: async (request: import("@pwragent/shared").ThreadPrWatchesRequest): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> =>
     await ipcRenderer.invoke("thread:prWatches", request),
+  manageThreadPendingWakes: async (request: import("@pwragent/shared").ThreadPendingWakesRequest): Promise<import("@pwragent/shared").ThreadPendingWakesResponse> =>
+    await ipcRenderer.invoke("thread:pendingWakes", request),
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
   stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
@@ -3358,6 +3360,7 @@ const desktopApi = Object.freeze({
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
+      calmMotion: boolean;
     }) => void,
   ): (() => void) => {
     const listener = (
@@ -3369,6 +3372,7 @@ const desktopApi = Object.freeze({
         density: DesktopAppearanceDensity;
         sidebarTextSize: DesktopTextSize;
         transcriptTextSize: DesktopTextSize;
+        calmMotion: boolean;
       },
     ) => callback(payload);
     ipcRenderer.on(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
@@ -3579,6 +3583,7 @@ function readBootstrapAppearance(): {
   density: DesktopAppearanceDensity;
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
+  calmMotion: boolean;
 } {
   for (const arg of process.argv) {
     if (!arg.startsWith(APPEARANCE_ARG_PREFIX)) continue;
@@ -3616,6 +3621,7 @@ function readBootstrapAppearance(): {
           && isDesktopTextSize(raw.transcriptTextSize)
           ? raw.transcriptTextSize
           : DESKTOP_TEXT_SIZE_DEFAULT;
+      const calmMotion = raw?.calmMotion === true;
       return {
         theme,
         darkTheme,
@@ -3623,6 +3629,7 @@ function readBootstrapAppearance(): {
         density,
         sidebarTextSize,
         transcriptTextSize,
+        calmMotion,
       };
     } catch {
       break;
@@ -3635,6 +3642,7 @@ function readBootstrapAppearance(): {
     density: "mission-control",
     sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
     transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
+    calmMotion: false,
   };
 }
 const bootstrapAppearance = readBootstrapAppearance();

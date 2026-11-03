@@ -7,7 +7,7 @@ import {
   MCP_DISCOVERY_RESPONSE_GRACE_MS,
   progressExtendedTimeout,
 } from "./mcp-connection-timeouts.js";
-import { ELICITATION_WIRE_OPT_IN, type ElicitationRoute } from "./mcp-elicitation-relay.js";
+import { ELICITATION_WIRE_OPT_IN, URL_ELICITATION_WIRE_OPT_IN, type ElicitationRoute } from "./mcp-elicitation-relay.js";
 
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 type RpcResponse =
@@ -107,7 +107,8 @@ export class ConnectionRpcClient {
    * request runs, and each is answered here. Without it the owner refuses
    * every form for this request. `onProgress` asks the owner for the
    * server's progress reports. Each one also pushes this request's timeout
-   * back, up to `MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS`.
+   * back, up to `MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS`. With
+   * `urlElicitation`, `onElicit` is also handed the server's links.
    */
   request(
     operation: string,
@@ -118,6 +119,7 @@ export class ConnectionRpcClient {
     rpcTimeoutMs?: number,
     onElicit?: ElicitationRoute,
     onProgress?: (progress: McpBridgeProgress) => void,
+    options?: { urlElicitation?: boolean },
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const socket: Socket = connect(this.socketPath);
@@ -229,6 +231,7 @@ export class ConnectionRpcClient {
           ...(deadlineAt === undefined ? {} : { deadlineAt }),
           ...(discoveryId === undefined ? {} : { discoveryId }),
           ...(onElicit ? { elicitation: ELICITATION_WIRE_OPT_IN } : {}),
+          ...(onElicit && options?.urlElicitation ? { urlElicitation: URL_ELICITATION_WIRE_OPT_IN } : {}),
           ...(onProgress ? { progress: PROGRESS_WIRE_OPT_IN } : {}),
           ...(params === undefined ? {} : { params }),
         })}\n`);

@@ -14,18 +14,27 @@ export type ThreadRowPointerDragPreview = {
   setDropLabel: (label: string | undefined) => void;
 };
 
+export type PointerDragPreviewOptions = {
+  /** Keeps the clone's compact geometry (a project header). */
+  compact?: boolean;
+  /** What to clone inside the source. Default: its `.thread-row`. */
+  rowSelector?: string;
+  /** The held card's class. Default: `thread-row--drag-image`. */
+  className?: string;
+};
+
 function buildThreadRowDragPreview(
   source: HTMLElement,
-  options: { compact?: boolean } = {},
+  options: PointerDragPreviewOptions = {},
 ): { element: HTMLElement; rect: DOMRect } | undefined {
-  const row = source.querySelector(".thread-row");
+  const row = source.querySelector(options.rowSelector ?? ".thread-row");
   if (!(row instanceof HTMLElement)) {
     return undefined;
   }
 
   const rect = row.getBoundingClientRect();
   const clone = row.cloneNode(true) as HTMLElement;
-  clone.classList.add("thread-row--drag-image");
+  clone.classList.add(options.className ?? "thread-row--drag-image");
   // A project header is a compact row by design; a thread row's held card
   // shows its full chips.
   if (!options.compact) clone.classList.remove("thread-row--compact");
@@ -44,7 +53,7 @@ function buildThreadRowDragPreview(
 export function createThreadRowPointerDragPreview(
   source: HTMLElement,
   point: Point,
-  options: { compact?: boolean } = {},
+  options: PointerDragPreviewOptions = {},
 ): ThreadRowPointerDragPreview | undefined {
   const preview = buildThreadRowDragPreview(source, options);
   if (!preview) return undefined;

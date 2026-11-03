@@ -1,6 +1,6 @@
 export type TokenUsagePricingServiceTier = "standard" | "priority";
 
-export type TokenUsagePricingProvider = "openai" | "qwen" | "xai";
+export type TokenUsagePricingProvider = "anthropic" | "openai" | "qwen" | "xai";
 
 export type TokenUsagePricingInputScope = "aggregate" | "request";
 
@@ -953,7 +953,49 @@ const QWEN_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   },
 ];
 
+// https://platform.claude.com/docs/en/models/haiku-5-5/overview
+// The prompt length includes cache reads and writes. Cache writes below use
+// the default 5-minute TTL; provider-reported costs retain the actual TTL.
+const ANTHROPIC_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  {
+    catalogId: "anthropic-api",
+    catalogVersion: "2026-10-07",
+    model: "claude-haiku-5-5",
+    displayModel: "Claude Haiku 5.5",
+    displayTier: "Standard (<=100K input)",
+    effectiveFrom: Date.UTC(2026, 9, 7),
+    provider: "anthropic",
+    serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 0.125,
+    inputUsdPerMillion: 0.1,
+    cachedInputUsdPerMillion: 0.01,
+    outputUsdPerMillion: 0.5,
+    outputTokensIncludeReasoning: true,
+    maximumInputTokens: 100_000,
+    rateBandId: "input-lte-100k",
+  },
+  {
+    catalogId: "anthropic-api",
+    catalogVersion: "2026-10-07",
+    model: "claude-haiku-5-5",
+    displayModel: "Claude Haiku 5.5",
+    displayTier: "Standard (>100K input)",
+    effectiveFrom: Date.UTC(2026, 9, 7),
+    provider: "anthropic",
+    serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 0.625,
+    inputUsdPerMillion: 0.5,
+    cachedInputUsdPerMillion: 0.05,
+    outputUsdPerMillion: 2.5,
+    outputTokensIncludeReasoning: true,
+    minimumInputTokens: 100_001,
+    rateBandId: "input-gt-100k",
+    requiresRequestInputTokens: true,
+  },
+];
+
 const TOKEN_USAGE_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  ...ANTHROPIC_PRICING_CATALOG,
   ...OPENAI_PRICING_CATALOG,
   ...XAI_PRICING_CATALOG,
   ...QWEN_PRICING_CATALOG,
@@ -1196,7 +1238,7 @@ function estimateTokenUsageCostFromCatalog(
   );
   const provider = matchingEntries[0]?.provider;
   const serviceTier =
-    provider === "xai" || provider === "qwen"
+    provider === "xai" || provider === "qwen" || provider === "anthropic"
       ? resolveStandardOnlyPricingServiceTier(params.serviceTier)
       : resolveOpenAiPricingServiceTier({
           fastMode: params.fastMode,
@@ -1431,7 +1473,7 @@ export function resolveTokenUsagePriceUnavailableReason(params: {
   );
   const provider = matchingEntries[0]?.provider;
   const serviceTier =
-    provider === "xai" || provider === "qwen"
+    provider === "xai" || provider === "qwen" || provider === "anthropic"
       ? resolveStandardOnlyPricingServiceTier(params.serviceTier)
       : resolveOpenAiPricingServiceTier({
           fastMode: params.fastMode,

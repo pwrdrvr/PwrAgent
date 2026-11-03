@@ -18,6 +18,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import type {
   AppServerBackendKind,
   MessagingThreadBindingSummary,
@@ -37,6 +38,7 @@ import {
   ChevronDownIcon,
   NewThreadIcon,
   PauseIcon,
+  PinIcon,
   UnlinkedDotIcon,
 } from "../../icons";
 import { useEventCallback } from "../../lib/useEventCallback";
@@ -45,6 +47,12 @@ import {
   matchMoveHotkey,
   type RenamingThreadRow,
 } from "./thread-action-hotkeys";
+import {
+  applyDirectoryDrop,
+  resolveDirectoryDrop,
+  type DirectoryDrop,
+  type DirectoryDropBox,
+} from "./directory-pin-drop";
 import { useDropIndicatorController } from "./drag-drop";
 import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "./pointer-reorder-drag";
 import type { NestThreadHandler } from "./thread-nest-drop";
@@ -269,11 +277,6 @@ type DirectoriesListProps = {
   ) => Promise<void>;
 };
 
-/** What releasing a held project header does. */
-type DirectoryDrop =
-  | { kind: "move"; anchorKey: string; placement: "before" | "after" }
-  | { kind: "unpin" };
-
 /** The selection key of a project's launchpad. */
 export function buildLaunchpadSelectionKey(directoryKey: string): string {
   return `launchpad:${directoryKey}`;
@@ -305,7 +308,7 @@ const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
  * the IPC guard, snapshot builder, and renderer guards can't drift
  * apart. See plan 2026-05-09-002 Unit K.
  */
-function isPinnableDirectoryKind(
+export function isPinnableDirectoryKind(
   directory: Pick<NavigationDirectorySummary, "kind" | "localAvailability">,
 ): boolean {
   return directory.localAvailability !== "unconfigured"
@@ -441,6 +444,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const directoryListRef = useRef<HTMLDivElement>(null);
   const directoryDividerRef = useRef<HTMLDivElement>(null);
   const directoryDragDisposeRef = useRef<(() => void) | undefined>(undefined);
+  // The ghost Pin slot a folder drag opens while nothing is pinned.
+  const directoryPinSlotRef = useRef<HTMLDivElement>(null);
+  const [directoryPinSlotOpen, setDirectoryPinSlotOpen] = useState(false);
   useEffect(() => () => directoryDragDisposeRef.current?.(), []);
   // The Directory threads disclosure is also a thread-pin drop target.
   // Suppress the click browsers synthesize immediately after a drop so
@@ -702,7 +708,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
   /**
    * Drag a project header to reorder the pinned projects, pin one, or unpin
-   * one. While the card is held the lens folds to one line per project
+   * one. With nothing pinned, the held header opens a ghost Pin slot above
+   * the projects, as a pin drag opens Keep at top, and only a drop inside
+   * that slot pins. While the card is held the lens folds to one line per project
    * (`.is-folding-directories`), so the drop is a choice between folders, not
    * a scroll past every expanded thread list. The fold is a class on the list,
    * not a disclosure change: each project's open state, pages and React tree
@@ -720,6 +728,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const scrollElement = header.closest<HTMLElement>(".sidebar-list--dense") ?? undefined;
     const sourcePinned = pinnedDirectoryKeys.includes(directory.key);
     const orderBeforeDrag = pinnedDirectoryKeys;
+    const offersPinSlot = !sourcePinned && orderBeforeDrag.length === 0;
     let scrollTopBeforeLift: number | undefined;
 
     const resolveTarget = (point: Point): PointerReorderTarget<DirectoryDrop> | undefined => {
@@ -727,37 +736,41 @@ export function DirectoriesList(props: DirectoriesListProps) {
       if (point.x < bounds.left || point.x > bounds.right || point.y < bounds.top || point.y > bounds.bottom) {
         return undefined;
       }
-      const pinnedRows = Array.from(
-        list.querySelectorAll<HTMLElement>(".directory-row[data-directory-pinned=\"true\"]"),
-      );
-      const keys = pinnedRows.map((row) => row.dataset.directoryKey ?? "");
-      const divider = directoryDividerRef.current;
-      const dividerBounds = divider?.getBoundingClientRect();
-      if (divider && dividerBounds && point.y >= dividerBounds.top) {
-        // Below the pins: the unpinned group has no manual order, so the drop
-        // goes to the group. A pinned folder leaves the pins; an unpinned one
-        // over the divider itself joins them at the end.
-        if (sourcePinned) {
-          return { element: divider, key: "directories:unpin", label: "Unpin", value: { kind: "unpin" } };
-        }
-        if (point.y > dividerBounds.bottom || keys.length === 0) return undefined;
-        return { element: pinnedRows[pinnedRows.length - 1], key: `directory:${keys[keys.length - 1]}`,
-          position: "after", label: "Pin",
-          value: { kind: "move", anchorKey: keys[keys.length - 1], placement: "after" } };
-      }
-      if (keys.length === 0) return undefined;
-      const before = pinnedRows.findIndex((row) => {
+      const rows = new Map<string, HTMLElement>();
+      const items: DirectoryDropBox[] = [];
+      for (const row of list.querySelectorAll<HTMLElement>(".directory-row[data-directory-pinned=\"true\"]")) {
+        const key = row.dataset.directoryKey ?? "";
         const rect = row.getBoundingClientRect();
-        return point.y < rect.top + rect.height / 2;
+        rows.set(key, row);
+        items.push({ key, top: rect.top, bottom: rect.bottom, pinned: true });
+      }
+      const divider = directoryDividerRef.current;
+      const slot = offersPinSlot ? directoryPinSlotRef.current : null;
+      const dividerRect = divider?.getBoundingClientRect();
+      const slotRect = slot?.getBoundingClientRect();
+      // The rules the project index uses too (`resolveDirectoryDrop`).
+      const hit = resolveDirectoryDrop({
+        y: point.y,
+        source: { key: directory.key, pinned: sourcePinned },
+        items,
+        ...(dividerRect ? { seam: { top: dividerRect.top, bottom: dividerRect.bottom } } : {}),
+        ...(slotRect ? { pinSlot: { top: slotRect.top, bottom: slotRect.bottom } } : {}),
       });
-      const insertAt = before < 0 ? keys.length : before;
-      const sourceIndex = keys.indexOf(directory.key);
-      if (sourceIndex >= 0 && (insertAt === sourceIndex || insertAt === sourceIndex + 1)) return undefined;
-      const index = before < 0 ? keys.length - 1 : before;
-      const placement = before < 0 ? "after" : "before";
-      return { element: pinnedRows[index], key: `directory:${keys[index]}`, position: placement,
-        label: sourcePinned ? undefined : "Pin",
-        value: { kind: "move", anchorKey: keys[index], placement } };
+      if (hit === undefined) return undefined;
+      if (hit.kind === "line") {
+        const anchor = rows.get(hit.anchorKey);
+        if (anchor === undefined) return undefined;
+        return {
+          element: anchor,
+          key: `directory:${hit.anchorKey}`,
+          position: hit.position,
+          ...(hit.label ? { label: hit.label } : {}),
+          value: hit.drop,
+        };
+      }
+      const element = hit.kind === "seam" ? divider : slot;
+      if (!element) return undefined;
+      return { element, key: hit.kind === "seam" ? "directories:unpin" : "directories:pin", label: hit.label, value: hit.drop };
     };
 
     directoryDragDisposeRef.current = beginPointerReorderDrag({
@@ -776,6 +789,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
         scrollTopBeforeLift = scrollElement?.scrollTop;
         list.classList.add("is-folding-directories");
         if (scrollElement) scrollElement.scrollTop += header.getBoundingClientRect().top - before;
+        // After the fold, so its scroll correction cannot push the slot out
+        // of view. The slot must be in the DOM before the first hit test.
+        if (offersPinSlot) flushSync(() => setDirectoryPinSlotOpen(true));
       },
       onSettle: (dropped) => {
         // A drop keeps the folder it landed beside where it was on screen; a
@@ -783,6 +799,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         const anchor = dropped?.element;
         const anchorTop = anchor?.getBoundingClientRect().top;
         list.classList.remove("is-folding-directories");
+        if (offersPinSlot) setDirectoryPinSlotOpen(false);
         if (!scrollElement) return;
         if (anchor && anchorTop !== undefined) {
           scrollElement.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
@@ -791,19 +808,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
         }
       },
       onDrop: ({ value }) => {
-        if (value.kind === "unpin") {
-          void props.onSetDirectoryPin?.(directory, false);
-          return;
-        }
-        const move = { key: directory.key, anchorKey: value.anchorKey, placement: value.placement };
-        if (sourcePinned) {
-          reorderDirectoryPins(moveDirectoryKey(orderBeforeDrag, directory.key, value.anchorKey, value.placement), move);
-          return;
-        }
-        void (async () => {
-          await props.onSetDirectoryPin?.(directory, true);
-          await props.onReorderDirectoryPins?.([], move);
-        })();
+        void applyDirectoryDrop({
+          directory,
+          drop: value,
+          pinnedKeys: orderBeforeDrag,
+          setPin: props.onSetDirectoryPin,
+          reorderPins: props.onReorderDirectoryPins,
+        });
       },
     });
   };
@@ -1077,13 +1088,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ? "This project isn't set up on this machine. Use + to start a thread on a machine that has it, or Add Directory to connect it here."
       : "This project directory isn't configured on this instance. Use Add Directory to connect it.";
     const directoryPinned = isPinnedDirectory(directory);
+    // With no pins, a held folder offers the ghost Pin slot.
     const directoryDraggable =
-      directoryDragEnabled &&
-      isPinnableDirectoryKind(directory) &&
-      // Unpinned directories only become draggable when at least one
-      // directory is already pinned (matches the thread-pin pattern:
-      // first pin lives via context menu, drag is reordering).
-      (directoryPinned || pinnedDirectories.length > 0);
+      directoryDragEnabled && isPinnableDirectoryKind(directory);
     const selectedLaunchpad =
       props.selectedItemKey === buildLaunchpadSelectionKey(directory.key);
     const selectedDirectory = selectedLaunchpad || Boolean(
@@ -1907,6 +1914,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
               onSelect={props.onSelectStartingThread}
             />
           ))}
+        </div>
+      ) : null}
+      {directoryPinSlotOpen ? (
+        <div ref={directoryPinSlotRef} className="directories-pin-slot" aria-hidden="true">
+          <PinIcon size={12} />
+          Pin
         </div>
       ) : null}
       {pinnedDirectories.map(renderDirectoryRow)}

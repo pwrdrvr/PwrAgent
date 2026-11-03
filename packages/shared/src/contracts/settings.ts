@@ -824,6 +824,10 @@ export type DesktopAppearanceSnapshot = {
    *  background (xterm's `minimumContrastRatio`). Off by default, so each
    *  theme's own ANSI colors render as published. */
   terminalMinimumContrast: DesktopSettingsValue<boolean>;
+  /** Looping status animations (the thinking scanner, spinners,
+   *  indeterminate sweeps, status-dot pulses) run twice, then hold still.
+   *  Sets `<html data-motion="calm">`. Off by default. */
+  calmMotion: DesktopSettingsValue<boolean>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
@@ -1675,6 +1679,7 @@ export type DesktopSettingsConfigPatch = {
       lightTheme?: DesktopLightTheme;
       themedDockIcon?: boolean;
       terminalMinimumContrast?: boolean;
+      calmMotion?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -1985,6 +1990,7 @@ export type DesktopConfigBootstrapSnapshot = {
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
+    calmMotion: boolean;
   };
   onboarding: {
     completed: boolean;

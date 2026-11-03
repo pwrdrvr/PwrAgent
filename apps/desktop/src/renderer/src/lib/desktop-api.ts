@@ -1022,6 +1022,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   manageThreadPrWatches?: (
     request: import("@pwragent/shared").ThreadPrWatchesRequest,
   ) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
+  /** List or stop what will wake a thread later, on the instance that owns it. */
+  manageThreadPendingWakes?: (
+    request: import("@pwragent/shared").ThreadPendingWakesRequest,
+  ) => Promise<import("@pwragent/shared").ThreadPendingWakesResponse>;
   readUsageActivity?: (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
   /** Stored totals for a local thread and every sub-thread under it. */
   readThreadFamilyPricing?: (request: ReadThreadFamilyPricingRequest) => Promise<ReadThreadFamilyPricingResponse>;
@@ -1811,6 +1815,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
+      calmMotion: boolean;
     }) => void,
   ) => () => void;
   onSettingsRuntimeChanged?: (

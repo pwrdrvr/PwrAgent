@@ -104,6 +104,7 @@ async function createThreadTitleRevealFixture(): Promise<{
             id: "thread-read-anchor",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-anchor",
             result: {
               entries: [
                 {
@@ -131,6 +132,7 @@ async function createThreadTitleRevealFixture(): Promise<{
             id: "thread-read-parent",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-parent",
             result: {
               entries: [
                 {
@@ -158,6 +160,7 @@ async function createThreadTitleRevealFixture(): Promise<{
             id: "thread-read-child",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-child",
             result: {
               entries: [
                 {

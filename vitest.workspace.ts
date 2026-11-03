@@ -230,6 +230,9 @@ export default defineConfig({
             // PDF.js's 1 MB first read: 3,943ms in the first process on a
             // Windows runner against 111ms in every process after it.
             "apps/desktop/src/test-setup/pdf-runtime-prewarm.ts",
+            // The native typed-lint binaries' first execution, paid by every
+            // macOS job because each starts with a fresh node_modules.
+            "scripts/native-typed-lint-prewarm.mjs",
             // Owns the directory of migrated databases used below.
             "apps/desktop/src/test-setup/state-db-template-dir.ts",
           ],

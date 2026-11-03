@@ -5,12 +5,17 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
-import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
+import {
+  CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
+  type ClaudeBackendOptions,
+} from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import {
-  CLAUDE_MCP_GATEWAY_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode, threadExecutionModeForClaudePermission,
+  CLAUDE_FORGE_TOOLS, CLAUDE_MCP_GATEWAY_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
+  threadExecutionModeForClaudePermission,
 } from "../claude/claude-permissions";
 import { createClaudeElicitationHandler } from "../claude/claude-elicitation";
+import { buildForgeToolDefinitions } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
@@ -110,7 +115,7 @@ describe("Claude SDK backend", () => {
     await f.backend.close();
   });
 
-  it("lets PwrAgent's gateway ask for its own calls when PwrAgent's server is attached", async () => {
+  it("lets PwrAgent's gateway and forge policy ask for their own calls when PwrAgent's server is attached", async () => {
     const f = await fixture();
     const pwragent = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
     const withGateway = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
@@ -119,7 +124,7 @@ describe("Claude SDK backend", () => {
     const without = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     await f.backend.startTurn({ threadId: without.threadId, input: [{ type: "text", text: "Hi" }], mcpServers: { crm: pwragent } });
     await f.waitForTurn();
-    expect(f.queries[0].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL]);
+    expect(f.queries[0].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL, ...CLAUDE_FORGE_TOOLS]);
     expect(CLAUDE_MCP_GATEWAY_TOOL).toBe("mcp__pwragent__call_mcp_tool");
     expect(f.queries[1]).not.toHaveProperty("allowedTools");
     await f.backend.close();
@@ -154,7 +159,7 @@ describe("Claude SDK backend", () => {
         expect(controls.setMcpServers).toHaveBeenCalledWith({ pwragent });
       } else {
         expect(f.run).toHaveBeenCalledTimes(2);
-        expect(f.queries[1].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL]);
+        expect(f.queries[1].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL, ...CLAUDE_FORGE_TOOLS]);
       }
       await f.backend.close();
     }
@@ -1511,7 +1516,7 @@ describe("Claude SDK backend", () => {
     await backend.startThread({ cwd: f.root, executionMode: "default" });
     expect(discoverModels).not.toHaveBeenCalled();
     await backend.discover();
-    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: {
+    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", signal: expect.any(AbortSignal), env: {
       PATH: "/fixture", CLAUDE_CODE_REPORT_FINDINGS: "1", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
       CLAUDE_CODE_ARTIFACT: "1", CLAUDE_CODE_ARTIFACT_AUTO_OPEN: "0",
     } });
@@ -1522,6 +1527,50 @@ describe("Claude SDK backend", () => {
     discoverModels.mockRejectedValueOnce(new Error("Discovery failed"));
     await expect(backend.discover()).rejects.toThrow("Discovery failed");
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
+  });
+
+  it.each(["installation", "models"])("drains pending %s discovery before close", async (phase) => {
+    const f = await fixture();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const inspection = vi.fn(async (_options?: Parameters<typeof import("../claude/claude-executable").inspectClaudeInstallation>[0]) => {
+      if (phase === "installation") { entered.resolve(); await release.promise; }
+      return { executable: "/fixture/claude", authStatus: "signed-in" as const };
+    });
+    const models = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      return [{ id: "fable", label: "Fable 5.1" }];
+    });
+    const backend = f.openBackend({ ...f.backendOptions, inspectInstallation: inspection, discoverModels: models });
+    const discovery = backend.discover();
+    await entered.promise;
+    let closed = false;
+    const close = backend.close().then(() => { closed = true; });
+    try {
+      // The old close resolves while this CLI operation still owns its child.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      await backend.discover();
+      expect(inspection).toHaveBeenCalledOnce();
+      expect(inspection.mock.calls[0]?.[0]).toMatchObject({ signal: expect.objectContaining({ aborted: true }) });
+    } finally {
+      release.resolve();
+      await Promise.all([discovery, close]);
+    }
+    if (phase === "installation") expect(models).not.toHaveBeenCalled();
+    expect(f.events).toEqual([]);
+  });
+
+  it("does not start discovery after a pending environment read resumes during close", async () => {
+    const f = await fixture();
+    const env = Promise.withResolvers<NodeJS.ProcessEnv>();
+    const backend = f.openBackend({ ...f.backendOptions, resolveEnv: () => env.promise });
+    const discovery = backend.discover();
+    await backend.close();
+    env.resolve({ PATH: "/fixture" });
+    await discovery;
+    expect(f.backendOptions.inspectInstallation).not.toHaveBeenCalled();
   });
 
   it("shares pending global discovery across differently configured projects without publishing either session catalog", async () => {
@@ -1774,7 +1823,9 @@ describe("Claude SDK backend", () => {
     });
     expect(f.queries[0].env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(f.queries[0].env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
-    expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({ env: f.queries[0].env });
+    expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({
+      env: f.queries[0].env, signal: expect.any(AbortSignal),
+    });
     expect(f.queries[0].env?.PATH).toBe("/fixture");
     expect(f.queries[0].env?.CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
     expect(f.queries[0].env?.CLAUDE_CODE_ARTIFACT).toBe("1");
@@ -1843,6 +1894,86 @@ describe("Claude SDK backend", () => {
     expect(replay.entries?.find((entry) => entry.type === "message")?.turn?.status).toBe("failed");
     expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
     expect(f.close).toHaveBeenCalledOnce();
+  });
+
+  describe("a Claude session that Claude Code deleted", () => {
+    const SDK_SESSION = "5a85c1ad-85c1-4930-ae19-50f721ad13dd";
+    /** What Claude Code 2.1.305 answers a resume of a missing session, before any init. */
+    function missing(sessionId: string): SDKMessage {
+      return { type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0,
+        errors: [`No conversation found with session ID: ${sessionId}`] } as unknown as SDKMessage;
+    }
+
+    it("says Claude no longer has the conversation, on every send, and keeps the thread's own copy", async () => {
+      const f = await fixture(async function* (options, prompt) {
+        await prompt[Symbol.asyncIterator]().next();
+        if (options.resume) {
+          yield missing(options.resume);
+          return;
+        }
+        yield { type: "system", subtype: "init", session_id: SDK_SESSION } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "answer", content: [{ type: "text", text: "Hello world" }],
+        } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "Hello world" } as SDKMessage;
+      });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
+      await f.waitForTurn();
+
+      for (const text of ["Hello again", "Still there?"]) {
+        await f.backend.startTurn({ threadId, input: [{ type: "text", text }] });
+        await f.waitForTurn();
+        expect(f.events.at(-1)?.notification).toMatchObject({
+          method: "turn/failed", params: { turn: { error: { message: CLAUDE_SESSION_GONE_MESSAGE } } },
+        });
+      }
+      expect(f.queries.slice(1).map((options) => options.resume)).toEqual([SDK_SESSION, SDK_SESSION]);
+      // The thread still names the session, so nothing is lost if it returns.
+      expect((await f.store.read(threadId)).sdkSessionId).toBe(SDK_SESSION);
+      expect((await f.backend.readThread(threadId)).messages.map((message) => message.text))
+        .toEqual(["Hello", "Hello world", "Hello again", "Still there?"]);
+    });
+
+    it("says a fork's source conversation is gone", async () => {
+      const f = await fixture(async function* (options, prompt) {
+        await prompt[Symbol.asyncIterator]().next();
+        yield missing(options.resume!);
+      });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      const stored = await f.store.read(threadId);
+      await f.store.save({ ...stored, forkFromSdkSessionId: SDK_SESSION });
+
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue the fork" }] });
+      await f.waitForTurn();
+      expect(f.queries[0]).toMatchObject({ resume: SDK_SESSION, forkSession: true });
+      expect(f.events.at(-1)?.notification).toMatchObject({
+        method: "turn/failed", params: { turn: { error: { message: CLAUDE_FORK_SOURCE_GONE_MESSAGE } } },
+      });
+    });
+
+    it("keeps Claude's own message when the error names another session or nothing was resumed", async () => {
+      const other = "0d5b9b4e-1f1c-4a52-9b8a-3c0a3f3b2f11";
+      const f = await fixture(async function* (_options, prompt) {
+        await prompt[Symbol.asyncIterator]().next();
+        yield missing(other);
+      });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Fresh session" }] });
+      await f.waitForTurn();
+      expect(f.events.at(-1)?.notification).toMatchObject({
+        method: "turn/failed", params: { turn: { error: { message: `No conversation found with session ID: ${other}` } } },
+      });
+
+      const stored = await f.store.read(threadId);
+      await f.store.save({ ...stored, sdkSessionId: SDK_SESSION });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Resumed session" }] });
+      await f.waitForTurn();
+      expect(f.queries.at(-1)?.resume).toBe(SDK_SESSION);
+      expect(f.events.at(-1)?.notification).toMatchObject({
+        method: "turn/failed", params: { turn: { error: { message: `No conversation found with session ID: ${other}` } } },
+      });
+    });
   });
 
   it("fails a silent empty success instead of presenting an unanswered send as complete", async () => {
@@ -2080,6 +2211,7 @@ describe("Claude SDK backend", () => {
     expect(f.backend.backgroundTaskThreadIds()).toEqual([threadId]);
     expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
       itemId: "tool-bash", processId: "task-1", command: "pnpm dev", cwd: f.root,
+      background: true, startedAt: expect.any(Number),
     }]);
     const between = await f.backend.readThread(threadId);
     expect(between.threadStatus).toBe("idle");
@@ -2643,6 +2775,16 @@ describe("Claude SDK backend", () => {
       expect(f.close).toHaveBeenCalled();
       expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
       expect(f.backend.liveSessionThreadIds()).toEqual([]);
+      // The session closed the running row in memory after its last save; the
+      // turn's end must save that change, or a restart shows it running.
+      const lines = (await readFile(path.join(f.root, `${f.threadId}.jsonl`), "utf8")).trim().split("\n")
+        .map((line) => JSON.parse(line) as { id?: string; type?: string; status?: string });
+      const rows = lines.filter((line) => line.id === "tool-bash");
+      expect(rows.at(-1)).toMatchObject({ status: "cancelled" });
+      expect(lines.indexOf(rows.at(-1)!)).toBeLessThan(lines.findIndex((line) => line.type === "pwragent_turn_end"));
+      expect((await f.store.entries(f.threadId)).find((entry) => entry.id === "tool-bash")).toMatchObject({
+        status: "cancelled", turn: { id: f.turn.turnId, status: "cancelled" },
+      });
     });
   });
 
@@ -2717,6 +2859,7 @@ describe("Claude SDK backend", () => {
     await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
       itemId: "tool-agent", processId: "agent-1", command: "Audit the SDK", cwd: f.root,
       kind: "agent", agentType: "Explore", progress: "3 tool uses · last Grep",
+      background: true, startedAt: expect.any(Number),
     }]));
     expect(f.events.filter((event) => event.notification.method === "turn/started")).toHaveLength(1);
     agentDone.resolve();
@@ -2823,13 +2966,33 @@ describe("Claude permission bridge", () => {
       .toEqual(["default", "auto", "bypassPermissions"]);
   });
 
-  it("pre-allows only the gateway's invocation tool, and only on PwrAgent's own server", () => {
+  it("pre-allows only the gateway's invocation tool and the forge tools, and only on PwrAgent's own server", () => {
     const server = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
-    expect(claudeAllowedTools({ pwragent: server, crm: server })).toEqual(["mcp__pwragent__call_mcp_tool"]);
+    const allowed = claudeAllowedTools({ pwragent: server, crm: server });
+    expect(allowed).toEqual(["mcp__pwragent__call_mcp_tool", ...CLAUDE_FORGE_TOOLS]);
+    expect(allowed).toEqual(expect.arrayContaining([
+      "mcp__pwragent__get_forge_status",
+      "mcp__pwragent__get_pull_request",
+      "mcp__pwragent__create_pull_request",
+      "mcp__pwragent__submit_pull_request_review",
+      "mcp__pwragent__merge_pull_request",
+    ]));
+    // Tools the forge policy does not govern keep Claude's own card.
+    for (const tool of ["search_mcp_tools", "mutate_thread", "send_message_to_thread", "watch_thread_pull_request"]) {
+      expect(allowed).not.toContain(`mcp__pwragent__${tool}`);
+    }
     // A connection server is named pwragent_<name>_<hash>, never pwragent itself.
     expect(claudeAllowedTools({ pwragent_crm: server })).toEqual([]);
     expect(claudeAllowedTools({})).toEqual([]);
     expect(claudeAllowedTools(undefined)).toEqual([]);
+  });
+
+  // The policy gate owns every tool in the forge family, so a new forge tool
+  // must not ship with Claude asking before the gate does.
+  it("pre-allows exactly the forge family that PwrAgent's server advertises", () => {
+    const forge = buildForgeToolDefinitions({}).map((definition) => `mcp__${definition.namespace}__${definition.name}`);
+    expect(new Set(forge).size).toBe(forge.length);
+    expect([...CLAUDE_FORGE_TOOLS].sort()).toEqual(forge.sort());
   });
 
   it("counts only bypass permissions and Auto as relaxed approval modes", () => {
@@ -3742,6 +3905,8 @@ describe("Claude thread rewind", () => {
     const f = await fixture(promptRecorder(prompts));
     // A prompt sent before PwrAgent supplied UUIDs, or one compacted away.
     Object.assign(f.backendOptions, { getSessionMessages: vi.fn(async () => []) });
+    // The session itself still exists.
+    f.backendOptions.getSessionInfo.mockResolvedValue({ sessionId: SDK_SESSION });
     const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
     const target = { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] };
 
@@ -3767,6 +3932,32 @@ describe("Claude thread rewind", () => {
       answered.resolve();
       await busy.waitForTurn();
     }
+  });
+
+  it("says Claude no longer has the conversation when Claude Code deleted its session", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const rewindFiles = vi.fn();
+    const f = await fixture(promptRecorder(prompts), { rewindFiles });
+    // A deleted session reads as empty, in its folder and in every other.
+    const getSessionMessages = vi.fn(async () => []);
+    Object.assign(f.backendOptions, { getSessionMessages });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+    const target = { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] };
+
+    expect(await f.backend.previewRewind(threadId, target))
+      .toEqual({ unavailableReason: CLAUDE_SESSION_GONE_REWIND_MESSAGE });
+    for (const mode of ["conversation", "conversation-and-files"] as const) {
+      await expect(f.backend.rewindThread({ threadId, target, mode })).rejects.toThrow(CLAUDE_SESSION_GONE_REWIND_MESSAGE);
+    }
+    // Claude was asked whether the session exists anywhere, not in one folder.
+    expect(f.backendOptions.getSessionInfo).toHaveBeenCalledWith(SDK_SESSION);
+    expect(getSessionMessages).toHaveBeenCalledWith(SDK_SESSION);
+    // No control query started, and the thread is as it was.
+    expect(f.run).toHaveBeenCalledOnce();
+    expect(rewindFiles).not.toHaveBeenCalled();
+    const stored = await f.store.read(threadId);
+    expect(stored).toMatchObject({ sdkSessionId: SDK_SESSION });
+    expect(stored.rewinds).toBeUndefined();
   });
 
   it("starts a turn only after a file preview's control query closes", async () => {
@@ -3936,5 +4127,123 @@ describe("Claude thread rewind", () => {
       .rejects.toBeInstanceOf(ClaudeTurnActiveError);
     reading.resolve();
     await rewind;
+  });
+});
+
+describe("Claude history turn ends", () => {
+  type HistoryLine = { type?: string; id?: string; turnId?: string; status?: string; text?: string };
+  async function historyLines(root: string, threadId: string): Promise<HistoryLine[]> {
+    return (await readFile(path.join(root, `${threadId}.jsonl`), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as HistoryLine);
+  }
+  function linesPerEntry(lines: HistoryLine[]): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const line of lines) if (line.type !== "pwragent_turn_end" && line.id) counts[line.id] = (counts[line.id] ?? 0) + 1;
+    return counts;
+  }
+  async function* toolTurn(options: Options): AsyncGenerator<SDKMessage> {
+    yield { type: "system", subtype: "init", session_id: options.sessionId } as SDKMessage;
+    for (const [index, command] of ["ls", "git status", "pnpm test"].entries()) {
+      const id = `tool-${index}`;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: `call-${index}`, content: [{ type: "tool_use", id, name: "Bash", input: { command } }],
+      } } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, message: {
+        content: [{ type: "tool_result", tool_use_id: id, content: `${command} output\n`.repeat(20) }],
+      } } as SDKMessage;
+    }
+    yield { type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { id: "answer" } } } as SDKMessage;
+    yield { type: "stream_event", parent_tool_use_id: null, event: {
+      type: "content_block_delta", delta: { type: "text_delta", text: "All three ran." },
+    } } as SDKMessage;
+    yield { type: "assistant", parent_tool_use_id: null, message: { id: "answer", content: [{ type: "text", text: "All three ran." }] } } as SDKMessage;
+    yield { type: "result", subtype: "success", is_error: false, result: "All three ran." } as SDKMessage;
+  }
+
+  it("ends a completed turn with one record instead of saving its entries again", async () => {
+    const f = await fixture(toolTurn);
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access" });
+    const { turnId } = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Run the checks" }] });
+    await f.waitForTurn();
+
+    const lines = await historyLines(f.root, threadId);
+    // A tool row is saved when it starts and when its output arrives; nothing is saved twice for its status.
+    expect(linesPerEntry(lines)).toEqual({ [`user:${turnId}`]: 1, "tool-0": 2, "tool-1": 2, "tool-2": 2, answer: 1 });
+    expect(lines.at(-1)).toMatchObject({ type: "pwragent_turn_end", turnId, status: "completed" });
+    expect(lines.filter((line) => line.type === "pwragent_turn_end")).toHaveLength(1);
+    const entries = await f.store.entries(threadId);
+    expect(entries).toHaveLength(5);
+    for (const entry of entries) {
+      expect(entry.turn).toEqual({ id: turnId, status: "completed", startedAt: expect.any(Number), completedAt: expect.any(Number) });
+    }
+  });
+
+  it("keeps a partly streamed answer when the turn is cancelled", async () => {
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: options.sessionId } as SDKMessage;
+      yield { type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { id: "partial" } } } as SDKMessage;
+      yield { type: "stream_event", parent_tool_use_id: null, event: {
+        type: "content_block_delta", delta: { type: "text_delta", text: "Half an ans" },
+      } } as SDKMessage;
+      await new Promise<void>((resolve) => {
+        options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+        if (options.abortController!.signal.aborted) resolve();
+      });
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Explain" }] });
+    await vi.waitFor(() => expect(f.events.some((event) => event.notification.method === "item/agentMessage/delta")).toBe(true));
+    await f.backend.interruptTurn(turn);
+    await f.waitForTurn();
+
+    const lines = await historyLines(f.root, threadId);
+    expect(linesPerEntry(lines)).toEqual({ [`user:${turn.turnId}`]: 1, partial: 1 });
+    expect(lines.at(-1)).toMatchObject({ type: "pwragent_turn_end", turnId: turn.turnId, status: "cancelled" });
+    expect((await f.store.entries(threadId)).find((entry) => entry.id === "partial")).toMatchObject({
+      type: "message", text: "Half an ans", turn: { id: turn.turnId, status: "cancelled" },
+    });
+  });
+
+  it("records a failed turn's status", async () => {
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: options.sessionId } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "said", content: [{ type: "text", text: "Starting." }] } } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const { turnId } = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Go" }] });
+    await f.waitForTurn();
+
+    expect(f.events.at(-1)?.notification.method).toBe("turn/failed");
+    const lines = await historyLines(f.root, threadId);
+    expect(linesPerEntry(lines)).toEqual({ [`user:${turnId}`]: 1, said: 1 });
+    expect(lines.at(-1)).toMatchObject({ type: "pwragent_turn_end", turnId, status: "failed" });
+    expect((await f.store.entries(threadId)).map((entry) => entry.turn?.status)).toEqual(["failed", "failed"]);
+  });
+
+  it("records a turn that failed before Claude started", async () => {
+    const f = await fixture();
+    f.run.mockImplementationOnce(() => { throw new Error("spawn failed"); });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await expect(f.backend.startTurn({ threadId, input: [{ type: "text", text: "Go" }] })).rejects.toThrow("spawn failed");
+
+    const lines = await historyLines(f.root, threadId);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatchObject({ type: "pwragent_turn_end", status: "failed" });
+    expect((await f.store.entries(threadId))[0]).toMatchObject({
+      role: "user", text: "Go", turn: { id: lines[1].turnId, status: "failed" },
+    });
+  });
+
+  it("forks a thread with each entry's final turn status", async () => {
+    const f = await fixture(toolTurn);
+    const { threadId: sourceId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access" });
+    const { turnId } = await f.backend.startTurn({ threadId: sourceId, input: [{ type: "text", text: "Run the checks" }] });
+    await f.waitForTurn();
+
+    const { threadId } = await f.backend.forkThread({ sourceThreadId: sourceId, cwd: f.root, executionMode: "default" });
+    const forked = await f.store.entries(threadId);
+    expect(forked.map((entry) => entry.id)).toEqual((await f.store.entries(sourceId)).map((entry) => entry.id));
+    for (const entry of forked) expect(entry.turn).toMatchObject({ id: turnId, status: "completed" });
+    // The fork's copy is self-contained: each entry carries the stamp.
+    expect((await historyLines(f.root, threadId)).every((line) => line.type !== "pwragent_turn_end")).toBe(true);
   });
 });

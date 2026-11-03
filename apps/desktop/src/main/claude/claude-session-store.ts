@@ -2,7 +2,9 @@ import type { ClaudeUsageTotals } from "./claude-usage";
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AppServerThreadEntry, AppServerThreadSummary, BackendRateLimitSummary } from "@pwragent/shared";
+import type {
+  AppServerThreadEntry, AppServerThreadSummary, AppServerThreadTurnMetadata, BackendRateLimitSummary,
+} from "@pwragent/shared";
 import { persistTranscriptEntryImages } from "../transcript-image-protocol";
 
 /** Not a thread id, so list() never reads it as session metadata. */
@@ -87,7 +89,63 @@ type ClaudeTruncationUndoRecord = {
   createdAt: number;
 };
 
-type ClaudeHistoryLine = AppServerThreadEntry | ClaudeTruncationRecord | ClaudeTruncationUndoRecord;
+/**
+ * A history line that ends a turn. Every entry of the turn takes its status
+ * and times, so an entry saved while the turn ran is not written again just
+ * to change its status. Files written before this record existed stamp each
+ * entry instead, and read the same.
+ */
+export type ClaudeTurnEndRecord = {
+  type: "pwragent_turn_end";
+  turnId: string;
+  status: NonNullable<AppServerThreadTurnMetadata["status"]>;
+  startedAt?: number;
+  completedAt?: number;
+  createdAt: number;
+};
+
+type ClaudeHistoryLine = AppServerThreadEntry | ClaudeTruncationRecord | ClaudeTruncationUndoRecord | ClaudeTurnEndRecord;
+
+/** The transcript a history describes: latest revisions, truncations and turn ends applied. */
+function historyEntries(lines: readonly ClaudeHistoryLine[]): AppServerThreadEntry[] {
+  const undone = new Set(lines.flatMap((line) =>
+    line.type === "pwragent_truncation_undo" ? [line.truncationId] : []));
+  const turnEnds = new Map<string, ClaudeTurnEndRecord>();
+  // Revisions of a tool entry append rather than rewriting history.
+  const entries = new Map<string, AppServerThreadEntry>();
+  for (const entry of lines) {
+    if (entry.type === "pwragent_truncation_undo") continue;
+    if (entry.type === "pwragent_turn_end") {
+      turnEnds.set(entry.turnId, entry);
+      continue;
+    }
+    if (entry.type === "pwragent_truncation") {
+      if (undone.has(entry.id)) continue;
+      // Map keys keep the order entries were first recorded in.
+      let removing = false;
+      for (const key of entries.keys()) {
+        if (key === entry.beforeEntryId) removing = true;
+        if (removing) entries.delete(key);
+      }
+      continue;
+    }
+    entries.set(entry.id, entry);
+  }
+  // A turn's end covers every entry of the turn, including a revision saved
+  // after it, such as a task row the turn's task settled later.
+  return [...entries.values()].map((entry) => {
+    const end = entry.turn ? turnEnds.get(entry.turn.id) : undefined;
+    if (!end) return entry;
+    return {
+      ...entry,
+      turn: {
+        id: end.turnId, status: end.status,
+        ...(end.startedAt !== undefined ? { startedAt: end.startedAt } : {}),
+        ...(end.completedAt !== undefined ? { completedAt: end.completedAt } : {}),
+      },
+    };
+  });
+}
 
 export type ClaudeRateLimitsRecord = {
   limits: BackendRateLimitSummary[];
@@ -105,7 +163,7 @@ export type ClaudeRateLimitsRecord = {
  */
 export class ClaudeSessionStore {
   /** Ephemeral sessions and their entries, by thread id. */
-  private readonly memory = new Map<string, { session: string; entries: AppServerThreadEntry[] }>();
+  private readonly memory = new Map<string, { session: string; lines: ClaudeHistoryLine[] }>();
   /** Ended ephemeral threads. A late write for one must not create a file. */
   private readonly forgotten = new Set<string>();
 
@@ -116,7 +174,7 @@ export class ClaudeSessionStore {
 
   /** Starts holding an ephemeral session in memory. */
   holdEphemeral(session: ClaudeSession): void {
-    this.memory.set(session.thread.id, { session: JSON.stringify({ ...session, ephemeral: true }), entries: [] });
+    this.memory.set(session.thread.id, { session: JSON.stringify({ ...session, ephemeral: true }), lines: [] });
   }
 
   /** Drops an ephemeral session. A later save or append for it does nothing. */
@@ -241,11 +299,19 @@ export class ClaudeSessionStore {
     return sessions.flatMap((session) => session.status === "fulfilled" ? [session.value] : []);
   }
 
-  async append(id: string, entries: AppServerThreadEntry[]): Promise<void> {
-    if (entries.length === 0 || this.forgotten.has(id)) return;
+  /**
+   * Append entries, then `turnEnd` when given, in one write. A turn end
+   * gives every entry of its turn the turn's final status.
+   */
+  async append(
+    id: string, entries: AppServerThreadEntry[],
+    turnEnd?: Omit<ClaudeTurnEndRecord, "type" | "createdAt">,
+  ): Promise<void> {
+    if ((entries.length === 0 && !turnEnd) || this.forgotten.has(id)) return;
+    const record: ClaudeTurnEndRecord[] = turnEnd ? [{ type: "pwragent_turn_end", ...turnEnd, createdAt: Date.now() }] : [];
     const held = this.memory.get(id);
     if (held) {
-      held.entries.push(...entries.map((entry) => JSON.parse(JSON.stringify(entry)) as AppServerThreadEntry));
+      held.lines.push(...[...entries, ...record].map((line) => JSON.parse(JSON.stringify(line)) as ClaudeHistoryLine));
       return;
     }
     const destination = this.file(id, "jsonl");
@@ -253,7 +319,7 @@ export class ClaudeSessionStore {
       entries, path.join(this.imageRoot, id),
     );
     await mkdir(this.root, { recursive: true, mode: 0o700 });
-    await appendFile(destination, retained.map((entry) => JSON.stringify(entry)).join("\n") + "\n", { mode: 0o600 });
+    await appendFile(destination, [...retained, ...record].map((line) => JSON.stringify(line)).join("\n") + "\n", { mode: 0o600 });
   }
 
   /** Drop `beforeEntryId` and every entry recorded after it; returns the truncation's id. */
@@ -277,6 +343,9 @@ export class ClaudeSessionStore {
     for (const line of await this.lines(id)) {
       if (line.type === "pwragent_truncation_undo") {
         undone.add(line.truncationId);
+      } else if (line.type === "pwragent_turn_end") {
+        // Ends a turn recorded before the truncation; it adds no entry.
+        continue;
       } else if (line.type === "pwragent_truncation") {
         if (line.id === truncationId) found = true;
       } else if (found) {
@@ -323,27 +392,6 @@ export class ClaudeSessionStore {
 
   async entries(id: string): Promise<AppServerThreadEntry[]> {
     const held = this.memory.get(id);
-    // Revisions of a tool entry append; the latest revision keeps its first place.
-    if (held) return [...new Map(held.entries.map((entry) => [entry.id, entry])).values()];
-    const lines = await this.lines(id);
-    const undone = new Set(lines.flatMap((line) =>
-      line.type === "pwragent_truncation_undo" ? [line.truncationId] : []));
-    // Revisions of a tool entry append rather than rewriting history.
-    const entries = new Map<string, AppServerThreadEntry>();
-    for (const entry of lines) {
-      if (entry.type === "pwragent_truncation_undo") continue;
-      if (entry.type === "pwragent_truncation") {
-        if (undone.has(entry.id)) continue;
-        // Map keys keep the order entries were first recorded in.
-        let removing = false;
-        for (const key of entries.keys()) {
-          if (key === entry.beforeEntryId) removing = true;
-          if (removing) entries.delete(key);
-        }
-        continue;
-      }
-      entries.set(entry.id, entry);
-    }
-    return [...entries.values()];
+    return historyEntries(held ? held.lines : await this.lines(id));
   }
 }

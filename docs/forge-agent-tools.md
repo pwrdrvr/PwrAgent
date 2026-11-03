@@ -43,6 +43,19 @@ Agent forge tools**:
   and issues also offer a conversation grant, kept in memory until PwrAgent
   restarts or that group's level changes. Opening, editing, approving and
   merging, and rerunning CI jobs are granted one call at a time.
+- This policy is the only prompt for a forge tool, whichever backend runs the
+  thread. Codex does not review PwrAgent's dynamic tools. A Claude query
+  pre-allows every forge tool through `allowedTools` when PwrAgent's own MCP
+  server is attached, so Claude does not ask through `canUseTool` first.
+  Before that, a Claude Default turn showed Claude's generic card for an
+  `ask` write and then this card, and an `allow` group still got Claude's
+  card. In Claude's Auto mode the classifier no longer reviews these calls;
+  `auto` groups run as they do in a Codex Auto turn. `approve_merge` keeps
+  this card in every mode but Full Access. The list covers the whole family,
+  not the levels in effect at launch, so a Settings change applies to the
+  next call without relaunching Claude, and `off` tools stay unadvertised.
+  Claude's `plan` mode and the operator's own Claude `ask` and `deny` rules
+  still apply. See [Claude provider](claude-provider.md).
 - Automations cannot answer a prompt. An `auto` or `ask` write in an
   automation fails with `approval_required` unless the automation runs in
   Full Access and the level is `auto`.

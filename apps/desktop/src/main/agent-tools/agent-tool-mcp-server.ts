@@ -52,10 +52,17 @@ const GetSkillRequestSchema = RequestSchema.extend({
 export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): string {
   const has = (name: string) => toolNames.includes(name);
   return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
-    + (has("watch_thread_pull_request") && has("create_monitor_delegation")
-      ? " For CI follow prAutomation.guidance and call watch_thread_pull_request and end the turn."
-        + " Other waits: create_monitor_delegation."
-        + " Do not wait in sleep loops, background shells, or Monitor."
+    + (has("watch_thread_pull_request")
+      ? " For own PR CI/merge, follow prAutomation.guidance; use watch_thread_pull_request and end the turn."
+      : "")
+    + (has("manage_thread_dependencies")
+      ? " Other local threads/PRs: manage_thread_dependencies (Continue After), mode all for multiple PRs."
+      : "")
+    + (has("create_monitor_delegation")
+      ? " Other long jobs: create_monitor_delegation."
+      : "")
+    + (has("watch_thread_pull_request") || has("manage_thread_dependencies") || has("create_monitor_delegation")
+      ? " Register the wait and end the turn; do not poll PRs in monitors, shells, or sleep loops."
       : "")
     + (has("read_tool_guide")
       ? " Read skill://waiting-on-work/SKILL.md for waits; skill://tool-guide/SKILL.md for tools."

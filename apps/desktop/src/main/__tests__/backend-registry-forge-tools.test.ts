@@ -428,6 +428,37 @@ describe("backend forge tool dispatch", () => {
       expect(github).not.toHaveBeenCalled();
     });
 
+    // Claude launches with the forge tools pre-allowed (`claudeAllowedTools`),
+    // so this gate is the only one: Allow must run, and Ask must card.
+    it("runs reads and Allow groups without a card in a Default Access turn", async () => {
+      live = "default";
+      policy.access.comments = "allow";
+      await claudeCall("get_pull_request", { number: 9 });
+      await claudeCall("add_issue_comment", { number: 9, body: "Fixed." });
+      expect(prompts).not.toHaveBeenCalled();
+      expect(github).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(["default", "auto"] as const)("keeps approve and merge on its card in a %s turn", async (mode) => {
+      live = mode;
+      policy.access.comments = "allow";
+      policy.access.approve_merge = "auto";
+      await decline(merge(), nextApproval());
+      await decline(claudeCall("submit_pull_request_review", { number: 9, event: "APPROVE" }), nextApproval());
+      expect(prompts).toHaveBeenCalledTimes(2);
+      expect(github).not.toHaveBeenCalled();
+    });
+
+    it("refuses an Off group's tool by name without a card", async () => {
+      live = "default";
+      policy.access.issues = "off";
+      policy.access.read = "off";
+      await expect(claudeCall("create_issue", { title: "Flaky test" })).rejects.toMatchObject({ code: "tools_disabled" });
+      await expect(claudeCall("get_issue", { number: 3 })).rejects.toMatchObject({ code: "tools_disabled" });
+      expect(prompts).not.toHaveBeenCalled();
+      expect(github).not.toHaveBeenCalled();
+    });
+
     it("follows the open process over the saved mode, and the saved mode with no process", async () => {
       saved = "full-access";
       live = "default";

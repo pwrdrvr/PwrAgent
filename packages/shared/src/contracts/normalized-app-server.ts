@@ -355,6 +355,8 @@ export type WorktreeSnapshotSummary = {
   createdAt: number;
   archivedAt?: number;
   restoredAt?: number;
+  /** Physical checkout successfully recreated by restore, for shared-owner reuse. */
+  restoredCheckoutIdentity?: { device: string; inode: string; birthtimeNs: string; gitDirectory: string };
   state: WorktreeSnapshotState;
   ignoredFilesExcluded: boolean;
   unavailableReason?: string;
@@ -546,6 +548,13 @@ export type AppServerBackgroundTask = {
   agentType?: string;
   /** The task's latest progress line, as its backend reported it. */
   progress?: string;
+  /**
+   * Claude only: the task runs after the call that started it, and Claude
+   * continues the thread when it ends. A foreground task ends with its turn.
+   */
+  background?: boolean;
+  /** When this process first saw the task. */
+  startedAt?: number;
 };
 
 /** Provider provenance carried by a native Codex `spawn_agent` thread. */

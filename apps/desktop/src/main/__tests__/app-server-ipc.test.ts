@@ -185,6 +185,8 @@ const federationMock = vi.hoisted(() => {
       remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
       remoteNavigationQueryPage: vi.fn(),
+      remoteMarkNavigationDirectorySeen: vi.fn(),
+      navigationActionOwnerLabel: vi.fn(),
       stampRemoteNavigationQueryPage: vi.fn((_target: FederationRemoteTarget, page: NavigationQueryPage) => page),
       remoteNavigationSelectedDetail: vi.fn(),
       remoteNavigationQueueProjection: vi.fn(),
@@ -1360,6 +1362,17 @@ const {
 } = await import("../ipc/app-server");
 
 describe("app server ipc", () => {
+  it("keeps the selected owner and original cause in remote directory mark-read failures", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const target = { scope: "remote" as const, instanceId: "pwr_laptop" };
+    const cause = "Owner state changed during the directory check (codex, thread/status/changed, thread busy-thread).";
+    federationMock.runtime.remoteMarkNavigationDirectorySeen.mockRejectedValueOnce(new Error(cause));
+    federationMock.runtime.navigationActionOwnerLabel.mockReturnValueOnce("Fixture Laptop (pwr_laptop)");
+    await expect(appServerService.markNavigationDirectorySeen({ directoryKey: "workspace:/scratch", federationTarget: target }))
+      .rejects.toThrow(`Could not mark workspace:/scratch read on Fixture Laptop (pwr_laptop): ${cause}`);
+    expect(federationMock.runtime.navigationActionOwnerLabel).toHaveBeenLastCalledWith(target);
+  });
+
   it("reads exact persisted peer membership without repinning or listing navigation rows", async () => {
     const { NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
     registerAppServerIpcHandlers();
@@ -1890,6 +1903,7 @@ describe("app server ipc", () => {
       preferenceChanged: expect.any(Function),
       preferencesChanged: expect.any(Function),
       cancelPending: expect.any(Function),
+      lockChanged: expect.any(Function),
       sendPendingNow: expect.any(Function),
       inspect: expect.any(Function),
     });
@@ -2452,6 +2466,67 @@ describe("app server ipc", () => {
     expect(publishLocalEvent).not.toHaveBeenCalledWith(expect.objectContaining({
       notification: expect.objectContaining({ method: "thread/prWatches/updated" }),
     }));
+  });
+
+  it("hands a locked thread's PR to the next Auto-fix candidate at once", async () => {
+    // A lock parks the thread for another agent. Before this, the locked
+    // thread kept winning the election and its repair was dropped as locked,
+    // so the agent working the PR heard nothing until the PR was detached.
+    const pr = githubPr({
+      number: 3118, org: "pwrdrvr", repo: "PwrAgent", title: "Locked owner",
+      state: "failing", headSha: "b".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3118",
+    });
+    const prKey = buildPullRequestStatusKey(pr);
+    registerAppServerIpcHandlers();
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      backgroundPrPollingEnabled: boolean;
+      prAutoDispatchAllowed: boolean;
+    };
+    // Owner startup reads both gates from settings; this test skips startup.
+    const gates = { polling: service.backgroundPrPollingEnabled, allowed: service.prAutoDispatchAllowed };
+    service.backgroundPrPollingEnabled = true;
+    service.prAutoDispatchAllowed = true;
+    onTestFinished(() => {
+      service.backgroundPrPollingEnabled = gates.polling;
+      service.prAutoDispatchAllowed = gates.allowed;
+    });
+    service.setThreadPrAttachment("codex:parent", {
+      backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [pr],
+    });
+    service.rememberPrStatuses([pr], Date.now(), "test");
+    const handler = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "child" } as never);
+    syncThreadPrAutoDispatchCandidates.mockClear();
+    syncThreadPrAutoDispatchCandidates.mockResolvedValueOnce([{ backend: "codex", threadId: "parent", prKey }]);
+    getThreadPrAutoDispatchPending.mockClear();
+    scheduleThreadPrAutoDispatch.mockClear();
+
+    await handler.lockChanged({ backend: "codex", threadId: "parent", locked: true });
+
+    expect(getThreadPrAutoDispatchPending).toHaveBeenCalledWith({ backend: "codex", threadId: "parent" });
+    expect(syncThreadPrAutoDispatchCandidates).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex", threadId: "parent", prKeys: [prKey],
+    }));
+    expect(getPrAutoDispatchCandidateWinner).toHaveBeenCalledWith({ prKey });
+    expect(scheduleThreadPrAutoDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex", threadId: "child", allowCancelledRearm: false,
+    }));
+
+    // A lock that leaves the candidacy as it was, such as a note edit, does
+    // not run the election again.
+    scheduleThreadPrAutoDispatch.mockClear();
+    syncThreadPrAutoDispatchCandidates.mockResolvedValueOnce([]);
+    await handler.lockChanged({ backend: "codex", threadId: "parent", locked: true });
+    expect(scheduleThreadPrAutoDispatch).not.toHaveBeenCalled();
+
+    // The lock has already landed, so a failed election is logged, not thrown.
+    syncThreadPrAutoDispatchCandidates.mockRejectedValueOnce(new Error("disk full"));
+    await expect(handler.lockChanged({ backend: "codex", threadId: "parent", locked: false }))
+      .resolves.toBeUndefined();
   });
 
   it("does not advertise Auto-fix as active without a primary Git repository", async () => {

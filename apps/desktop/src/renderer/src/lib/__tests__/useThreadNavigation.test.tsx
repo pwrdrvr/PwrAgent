@@ -32,6 +32,7 @@ import {
   endNativeDragInteraction,
 } from "../native-drag-interaction";
 import { useThreadNavigation as useRealThreadNavigation } from "../useThreadNavigation";
+import { useThreadQueuedMessageIndicators } from "../useThreadQueuedMessageIndicators";
 import type { ThreadActionErrorKind } from "../../features/notifications/thread-action-error-notice";
 function useThreadNavigation(api?: DesktopApi, options?: Parameters<typeof useRealThreadNavigation>[1]) {
   const localStore = useComposerDraftStore();
@@ -5291,11 +5292,18 @@ describe("useThreadNavigation", () => {
     expect(titlesByOwner()).toEqual({ "first-owner": "Later owner name", "second-owner": "Second owner title" });
   });
 
-  it("keeps an eager generated name that arrives while a scheduled thread materializes", async () => {
-    const federationTarget = {
+  it.each([
+    ["local", "started"],
+    ["remote", "started"],
+    ["local", "cancelled"],
+    ["remote", "cancelled"],
+    ["local", "failed"],
+    ["remote", "failed"],
+  ] as const)("keeps an eager generated name and reconciles a %s scheduled start after it is %s", async (scope, outcome) => {
+    const federationTarget = scope === "remote" ? {
       scope: "remote" as const,
       instanceId: "scheduled-thread-owner",
-    };
+    } : undefined;
     (window as unknown as {
       __pwragentFederationTarget?: unknown;
     }).__pwragentFederationTarget = federationTarget;
@@ -5350,14 +5358,14 @@ describe("useThreadNavigation", () => {
           source: "codex",
           linkedDirectories: [],
           inbox: { inInbox: true, reason: "new-thread" },
-          federation: {
+          federation: federationTarget ? {
             ref: {
               backend: "codex",
               target: federationTarget,
               threadId: "thread-scheduled",
             },
             instanceLabel: "Scheduled Thread Owner",
-          },
+          } : undefined,
           scheduledStart: {
             actionId: "scheduled-action:1",
             scheduledFor,
@@ -5374,10 +5382,9 @@ describe("useThreadNavigation", () => {
         },
       ],
     };
-    const readPopulation = vi
-      .fn()
-      .mockResolvedValueOnce(initialSnapshot)
-      .mockResolvedValue(staleHydratedSnapshot);
+    let ownerSnapshot = staleHydratedSnapshot;
+    const readPopulation = vi.fn(async () => ownerSnapshot)
+      .mockResolvedValueOnce(initialSnapshot);
     const materializeDirectoryLaunchpad: NonNullable<
       DesktopApi["materializeDirectoryLaunchpad"]
     > = vi.fn(async () => {
@@ -5419,7 +5426,15 @@ describe("useThreadNavigation", () => {
         return () => undefined;
       },
     };
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const { result } = renderHook(() => {
+      const composerDraftStore = useComposerDraftStore();
+      const navigation = useThreadNavigation(desktopApi, { composerDraftStore });
+      const indicators = useThreadQueuedMessageIndicators({
+        composerDraftStore,
+        threads: navigation.threads,
+      });
+      return { ...navigation, indicators };
+    });
 
     await waitFor(() => {
       expect(result.current.selectedLaunchpad?.directoryKey).toBe(directoryKey);
@@ -5446,6 +5461,51 @@ describe("useThreadNavigation", () => {
         state: "scheduled",
       },
     });
+    const scheduledThread = staleHydratedSnapshot.threads[0]!;
+    const threadKey = threadSummaryIdentityKey(scheduledThread);
+    expect(result.current.threads.find((thread) => threadSummaryIdentityKey(thread) === threadKey)?.scheduledStart)
+      .toEqual(scheduledThread.scheduledStart);
+    expect(result.current.indicators).toEqual({ [threadKey]: "scheduled" });
+
+    const terminalStart = outcome === "started" ? undefined : {
+      ...scheduledThread.scheduledStart!,
+      state: outcome,
+    };
+    ownerSnapshot = {
+      ...staleHydratedSnapshot,
+      fetchedAt: 3_000,
+      threads: [{
+        ...scheduledThread,
+        scheduledStart: terminalStart,
+        threadStatus: outcome === "started" ? "active" : "idle",
+        updatedAt: 3_000,
+      }],
+    };
+    // No lifecycle event: a fresh owner read must retire the optimistic flag.
+    await act(() => result.current.refresh());
+    await waitFor(() => {
+      expect(result.current.threads.find((thread) => threadSummaryIdentityKey(thread) === threadKey)?.scheduledStart)
+        .toEqual(terminalStart);
+      expect(result.current.selectedThread?.scheduledStart).toEqual(terminalStart);
+      expect(result.current.selectedThread?.title).toBe("Update Tart VMs to macOS 26.6.1");
+      expect(result.current.indicators).toEqual({});
+    });
+
+    if (outcome === "started") {
+      ownerSnapshot = {
+        ...ownerSnapshot,
+        fetchedAt: 4_000,
+        threads: [{ ...ownerSnapshot.threads[0]!, threadStatus: "idle", updatedAt: 4_000 }],
+      };
+      await act(() => result.current.refresh());
+      await waitFor(() => {
+        expect(result.current.selectedThread?.threadStatus).toBe("idle");
+        expect(result.current.selectedThread?.scheduledStart).toBeUndefined();
+        expect(result.current.threads.find((thread) => threadSummaryIdentityKey(thread) === threadKey)?.scheduledStart)
+          .toBeUndefined();
+        expect(result.current.indicators).toEqual({});
+      });
+    }
   });
 
   it("clears submitted remote input while preserving the viewer environment", async () => {

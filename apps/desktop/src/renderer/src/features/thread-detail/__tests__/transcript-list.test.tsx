@@ -3030,6 +3030,61 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.getByText("Third commentary.")).toBeVisible();
   });
 
+  it("keeps clickable image previews when a running turn completes and its work folds", () => {
+    const image = { type: "image" as const, url: "https://example.com/after.png", alt: "After screenshot" };
+    const messageImage = { type: "image" as const, url: "https://example.com/before.png", alt: "Before screenshot" };
+    const turn = { id: "image-turn", status: "in_progress" as const, startedAt: Date.now() };
+    const entries: AppServerThreadEntry[] = [
+      {
+        type: "activity",
+        id: "image-tool",
+        summary: "Inspected screenshots",
+        details: [
+          { id: "image-detail", kind: "read", label: "Read screenshot", images: [image, image] },
+        ],
+        turn,
+      },
+      {
+        type: "message",
+        id: "image-commentary",
+        role: "assistant",
+        phase: "commentary",
+        text: "Comparing the screenshots.",
+        parts: [messageImage],
+        turn,
+      },
+    ];
+    const onOpenImage = vi.fn();
+    const props = { loading: false, loadingMore: false, onLoadOlder: async () => undefined, onOpenImage };
+    const view = render(<TranscriptList {...props} entries={entries} activeTurnId={turn.id} />);
+    expect(screen.getAllByRole("img", { name: "After screenshot" })).toHaveLength(2);
+
+    const completedTurn = { ...turn, status: "completed" as const, durationMs: 90_000 };
+    const completedEntries: AppServerThreadEntry[] = [
+      ...entries.map((entry) => ({ ...entry, turn: completedTurn })),
+      { type: "message", id: "image-final", role: "assistant", phase: "final", text: "The screenshots look right.", turn: completedTurn },
+    ];
+    view.rerender(<TranscriptList {...props} entries={completedEntries} />);
+
+    const toggle = screen.getByRole("button", { name: /Worked for 1m 30s/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Inspected screenshots")).not.toBeInTheDocument();
+    expect(screen.getByText("The screenshots look right.")).toBeVisible();
+    const previews = screen.getByRole("group", { name: "Images from previous work" });
+    expect(within(previews).getAllByRole("img")).toHaveLength(2);
+    fireEvent.click(within(previews).getByRole("button", { name: "Expand transcript image 1" }));
+    expect(onOpenImage).toHaveBeenCalledWith(image);
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("group", { name: "Images from previous work" })).not.toBeInTheDocument();
+    expect(screen.getByText("Inspected screenshots")).toBeVisible();
+
+    fireEvent.click(toggle);
+    expect(screen.getAllByRole("img", { name: "After screenshot" })).toHaveLength(1);
+    expect(screen.getByRole("img", { name: "Before screenshot" })).toBeVisible();
+  });
+
   it("keeps a stopped turn's work open until the operator folds it", () => {
     const turn = { id: "stopped-turn", status: "cancelled" as const, durationMs: 430_000 };
     const entries: AppServerThreadEntry[] = [

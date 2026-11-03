@@ -116,17 +116,23 @@ and runs `auto` forge groups without one, as it does for Codex. A forge group
 set to `ask` still asks. See [MCP gateway tools](mcp-gateway-tools.md) and
 [forge agent tools](forge-agent-tools.md).
 
-A gateway call has one prompt, the gateway's own. When PwrAgent's own MCP
-server is attached, the query passes
-`allowedTools: ["mcp__pwragent__call_mcp_tool"]`, so Default and Auto do not
-reach `canUseTool` for it. Without the rule, Claude showed a generic card
-for `call_mcp_tool`, and accepting it led to the gateway card for the same
-call. The gateway card names the upstream tool and follows the connection's
-Tool approval setting, conversation approvals and automation allowlists.
-Claude still decides the tool in `plan` mode and applies the operator's own
-`ask` and `deny` rules for it. The rule is fixed when the process starts. A
-live session that lacks it relaunches for it, or keeps asking until its
-next launch while a task runs. Other PwrAgent tools still ask through
+A gateway call has one prompt, the gateway's own, and so does a forge tool.
+When PwrAgent's own MCP server is attached, the query's `allowedTools` lists
+`mcp__pwragent__call_mcp_tool` and every forge tool (`CLAUDE_FORGE_TOOLS`:
+the CI reads, the pull request and issue reads, and every write, merging
+included), so Default and Auto do not reach `canUseTool` for them. Without
+the rules, Claude showed a generic card that named only the tool. Accepting
+it led to the gateway card for the same call, or to the forge card for an
+`ask` write, and an `allow` forge group still asked. The gateway card names
+the upstream tool and follows the connection's Tool approval setting,
+conversation approvals and automation allowlists. The forge card follows
+`[git.agent_tools]`, its project rules and the turn's mode, and keeps
+`approve_merge` asking in every mode but Full Access. Claude still decides
+these tools in `plan` mode and applies the operator's own `ask` and `deny`
+rules for them. The rules are fixed when the process starts and do not
+depend on the forge levels, so a Settings change never relaunches Claude.
+A live session that lacks them relaunches for them, or keeps asking until
+its next launch while a task runs. Other PwrAgent tools still ask through
 `canUseTool`.
 
 The composer's **Plan** toggle runs one turn in Claude's `plan` permission
@@ -359,7 +365,8 @@ reports that inventory is unavailable instead of querying Codex. The CLI's own
 MCP configuration remains enabled. Auto is Claude's native `auto` mode on both
 query creation and live permission changes; a callback that reaches PwrAgent
 still requires explicit approval. Host gateway connection policies also apply,
-and the gateway's `call_mcp_tool` is pre-allowed so its card is the only one.
+and the gateway's `call_mcp_tool` and the forge tools are pre-allowed so
+PwrAgent's own card is the only one.
 
 The additional SQLite budget is one commit for a result usage observation and
 ledger flush, independent of 100 context updates: measured 65,920 WAL bytes.

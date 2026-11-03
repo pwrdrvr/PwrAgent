@@ -5596,6 +5596,126 @@ textarea,
   color: var(--text-muted);
 }
 
+/* Names drag to reorder the pins (`ProjectIndex`), with the folder drag's
+   parts: the source dims in place, a 3px accent line on the edge between two
+   names, and a tilted clone of the name. The values are the folder drag's
+   (`.directory-row.is-drop-target-*`, `.thread-row--drag-image`). */
+.project-index__list > li {
+  position: relative;
+}
+
+.project-index__list > li.is-pointer-dragging > .project-index__item {
+  opacity: 0.38;
+  cursor: grabbing;
+}
+
+.project-index__list > li.is-drop-target-before::before,
+.project-index__list > li.is-drop-target-after::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  left: 6px;
+  z-index: 6;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--row-active-tint-strong),
+    0 0 14px var(--accent-shadow);
+  pointer-events: none;
+}
+
+.project-index__list > li.is-drop-target-before::before {
+  top: -2px;
+}
+
+.project-index__list > li.is-drop-target-after::after {
+  bottom: -2px;
+}
+
+/* Where the pins end: the Directories divider without its label, which a
+   7-character column has no room for. A held pin anywhere at or below it
+   unpins, and it lights like the divider does. */
+.project-index__seam {
+  position: relative;
+  height: 9px;
+}
+
+.project-index__seam::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  left: 11px;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.project-index__seam.is-drop-target::after {
+  top: 3px;
+  right: 4px;
+  left: 6px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--row-active-tint-strong),
+    0 0 14px var(--accent-shadow);
+}
+
+/* Stuck to the top, so a scrolled index still shows its only target. */
+.project-index__list > li.project-index__pin-slot-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 2px 4px 4px 6px;
+  background: var(--bg-sidebar);
+}
+
+/* The held name. It is appended to <body>, so it carries the column's type
+   itself. Listed after the item's state rules so a selected or current
+   name's tint and rail do not ride along. */
+.project-index__item.project-index__drag-image {
+  --thread-row-drag-tilt: -1.2deg;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  box-shadow:
+    0 0 0 1px var(--surface-border-faint),
+    0 18px 44px var(--shadow-tint-strong);
+  font: 500 calc(var(--sidebar-title-size) - 1px) / 1.25 var(--font-sans);
+  pointer-events: none;
+}
+
+.project-index__item.project-index__drag-image::before {
+  content: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-index__item.project-index__drag-image {
+    --thread-row-drag-tilt: 0deg;
+  }
+}
+
+/* A dropped name keeps the list reveal's fading outline for a moment. */
+.project-index__item.is-revealed {
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  animation: directory-row-revealed 1200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-index__item.is-revealed {
+    animation: none;
+    outline-color: var(--accent);
+  }
+}
+
 /* The seam between the index and the list, drawn like the sidebar's own:
    an 11px hit area centred on the border, lit 1px on hover or focus. */
 .project-index__grip {
@@ -8378,21 +8498,40 @@ a.button {
 }
 
 .pr-status-card__row-label {
+  flex: none;
   color: var(--text-secondary);
   font-size: 12px;
 }
 
 .pr-status-card__row-value {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* Auto-fix is a standing setting, not a pending wait. */
 .pr-status-card__row-value--muted {
   color: var(--text-muted);
+}
+
+/* Prose under a wake row, such as the thread that handles Auto-fix. Two
+   lines at most, so a long title cannot grow the card. The card takes no
+   pointer events, so nothing can reveal the clipped rest; the side panel's
+   watch list shows the full title. */
+.pr-status-card__row-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .pr-detach-warning-modal {
@@ -8662,6 +8801,59 @@ a.button {
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--bg-row-active) 72%, transparent),
     0 0 14px var(--accent-shadow);
+}
+
+/* The ghost Pin slot a project drag opens while nothing is pinned, in the
+   Directories list and the project index. It is the Keep at top slot
+   (`.directory-row__keep-top-slot`) with its own label: mounted only while
+   a project is held, and only a drop inside its own box pins. It is the
+   only target while it is open, so it sticks to the top of a scrolled list
+   (above the folded headers) instead of opening out of view. */
+.directories-pin-slot,
+.project-index__pin-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-muted);
+  cursor: grabbing;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.directories-pin-slot {
+  position: sticky;
+  top: 2px;
+  z-index: 6;
+  flex: none;
+  height: 34px;
+  margin: 2px 2px 6px;
+  border-radius: 8px;
+  background: var(--bg-sidebar);
+}
+
+.project-index__pin-slot {
+  gap: 5px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.directories-pin-slot path,
+.project-index__pin-slot path {
+  fill: currentColor;
+}
+
+.directories-pin-slot.is-drop-target,
+.project-index__pin-slot.is-drop-target {
+  border-style: solid;
+  border-color: var(--accent);
+  /* The tint over the sidebar, opaque: the stuck slot covers rows. */
+  background:
+    linear-gradient(color-mix(in srgb, var(--accent) 9%, transparent) 0 0),
+    var(--bg-sidebar);
+  color: var(--text-primary);
 }
 
 .directory-row__summary {
@@ -27263,6 +27455,23 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   display: contents;
 }
 
+.transcript-work-phase-group__images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(100%, 760px);
+}
+
+.transcript-work-phase-group__images .transcript-message__image-button {
+  max-width: min(100%, 180px);
+  padding: 4px;
+}
+
+.transcript-work-phase-group__images .transcript-message__image-preview {
+  max-height: 120px;
+}
+
 .transcript-message__header {
   display: flex;
   align-items: baseline;
@@ -38505,6 +38714,283 @@ div.composer-error-row__toggle {
   white-space: nowrap;
 }
 
+/* The Waiting for tab: every pending wake on the thread, in the Pull
+   requests card's watch-list rows. Neutral throughout; a wake is not a
+   status, so nothing here carries tone. */
+.waiting-for-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.waiting-for-panel__count {
+  min-width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.waiting-for-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.waiting-for-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.waiting-for-panel__group + .waiting-for-panel__group {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.waiting-for-panel__eyebrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The PR number beside a group label reads as data, not a label. */
+.waiting-for-panel__eyebrow-aside {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.waiting-for-panel__row.is-open {
+  margin: 0 -8px;
+  padding: 7px 8px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.waiting-for-panel__title-button {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.waiting-for-panel__title-button:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+
+.waiting-for-panel__title-button:focus-visible,
+.waiting-for-panel__link:focus-visible,
+.waiting-for-panel__ended-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.waiting-for-panel__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.waiting-for-panel__when,
+.waiting-for-panel__mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.waiting-for-panel__when {
+  color: var(--accent-bright);
+}
+
+.waiting-for-panel__quote {
+  color: var(--text-secondary);
+}
+
+.waiting-for-panel__detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.waiting-for-panel__cond {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.waiting-for-panel__cond-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-suspended);
+}
+
+.waiting-for-panel__cond.is-met {
+  color: var(--text-muted);
+}
+
+.waiting-for-panel__cond.is-met .waiting-for-panel__cond-dot {
+  background: var(--status-ok);
+}
+
+.waiting-for-panel__cond.is-failed .waiting-for-panel__cond-dot {
+  background: var(--status-error);
+}
+
+.waiting-for-panel__prompt {
+  padding: 4px 8px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.waiting-for-panel__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 8px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.waiting-for-panel__facts dt {
+  color: var(--text-muted);
+}
+
+.waiting-for-panel__facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.waiting-for-panel__link {
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.waiting-for-panel__link:hover {
+  text-decoration: underline;
+}
+
+.waiting-for-panel__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+}
+
+.waiting-for-panel__empty-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.waiting-for-panel__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* What holds the thread's wakes: the lock card's accent edge, at rail size. */
+.waiting-for-panel__hold {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel-elevated));
+}
+
+.waiting-for-panel__hold-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.waiting-for-panel__hold-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.waiting-for-panel__hold-title {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.waiting-for-panel__held {
+  color: var(--text-secondary);
+}
+
+.waiting-for-panel__ended {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.waiting-for-panel__ended-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.waiting-for-panel__ended-toggle svg {
+  transition: transform 120ms ease;
+}
+
+.waiting-for-panel__ended-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.waiting-for-panel__ended-detail {
+  color: var(--text-muted);
+}
+
 .rail-card__message,
 .rail-card__usage {
   margin: 0;
@@ -46935,13 +47421,14 @@ button.composer__subthread-source-parent:hover {
    `.composer__action-button-spinner` so the composer, Settings, and every
    later surface share a single definition instead of copying the ring.
    The ring reads --border-subtle and the moving arc reads --accent, per
-   docs/UI-THEME.md.
+   docs/UI-THEME.md. Render it through `components/PendingSpinner`, never as a
+   raw class; `reduced-motion-contract.test.ts` fails on one.
 
-   Always decorative — `aria-hidden` it and give the busy state to something
-   a screen reader can read: adjacent text naming the work (`.settings-pending`
-   does) or `aria-busy` on the control. A bare ring is not an accessible
-   status. Whether a ring stands alone also decides its reduced-motion
-   behavior; see the media query below. */
+   Always decorative — the component renders it `aria-hidden`. Give the busy
+   state to something a screen reader can read: adjacent text naming the work
+   (`.settings-pending` does) or `aria-busy` on the control. A bare ring is not
+   an accessible status. Whether a ring stands alone also decides its
+   reduced-motion behavior; see the media query below. */
 
 .pending-spinner {
   flex: 0 0 auto;
@@ -46976,15 +47463,15 @@ button.composer__subthread-source-parent:hover {
    paired ring goes uniformly accent-tinted and "Saving…" carries the state on
    its own.
 
-   A ring opts in itself: give it `.pending-spinner--paired` wherever it
-   renders beside visible text such as "Saving…", "Sending…" or a provider
-   row's current step. The rule is keyed to the ring rather than to each
-   surface, so a new surface cannot miss it by not knowing to add its
-   context here.
+   A ring opts in itself: `<PendingSpinner pairing="paired">` adds
+   `.pending-spinner--paired` wherever it renders beside visible text such as
+   "Saving…", "Sending…" or a provider row's current step. The rule is keyed
+   to the ring rather than to each surface, and `pairing` is a required prop,
+   so a new surface cannot miss it by not knowing to add its context here.
 
    A ring that is the only signal its surface has — the composer's Run button
    swaps the play glyph for a bare, aria-hidden ring — keeps spinning, and
-   stays unmarked. The preference asks for non-essential motion to stop, and
+   renders as `pairing="standalone"` with a `standaloneReason`. The preference asks for non-essential motion to stop, and
    motion that is the sole indication of progress is not that. `aria-busy`
    alone does not pair a ring: it tells a screen reader, not someone looking
    at a still arc. */
@@ -46992,6 +47479,67 @@ button.composer__subthread-source-parent:hover {
   .pending-spinner--paired {
     border-color: var(--accent);
     animation: none;
+  }
+}
+
+/* Calm motion (Settings → General → Appearance) sets `data-motion="calm"` on
+   `<html>`. Each looping status animation runs twice from when it starts, then
+   rests, so it still says "this just started" without moving for as long as
+   the work lasts. A running animation wakes the compositor on every display
+   refresh, even where its output does not change; a finished one costs
+   nothing. Status dots are paced from script instead: `lib/status-pulse.ts`
+   gives each dot two dips.
+
+   Reduce Motion is a different request, for no motion at all, so every rule
+   here sits under `no-preference` and the reduce rules above keep winning.
+
+   Each rest pose is the reduced-motion one, set with a zero-length animation
+   that starts as the second run ends and holds its end state (`forwards`):
+   - the thinking beam rests centred and lit, as under Reduce Motion. Its
+     sweep animates both properties, so the pose only shows once it ends;
+   - an indeterminate progress bar rests full width at half strength;
+   - a paired spinner rests as an even accent ring, which reads as busy where
+     a stopped arc reads as stalled.
+   A standalone spinner is the only sign its control is busy, so it keeps
+   spinning, as it does under Reduce Motion. The scan line, the Star Map
+   intake pulse and the keyboard example rest as they start. */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-motion="calm"] .thinking-scanner__beam {
+    animation-iteration-count: 2;
+    opacity: 1;
+    transform: translateX(calc(var(--thinking-scanner-travel) / 2));
+  }
+
+  :root[data-motion="calm"] .app-update-banner__track--indeterminate i,
+  :root[data-motion="calm"] .managed-progress__track--indeterminate i {
+    animation:
+      app-update-banner-sweep 1.1s ease-in-out 2,
+      calm-motion-progress-rest 0s 2.2s forwards;
+  }
+
+  :root[data-motion="calm"] .pending-spinner--paired {
+    animation:
+      pending-spinner-spin 0.8s linear 2,
+      calm-motion-spinner-rest 0s 1.6s forwards;
+  }
+
+  :root[data-motion="calm"] .missing-worktree-card--busy::before,
+  :root[data-motion="calm"] .star-map-intake__status.is-busy,
+  :root[data-motion="calm"] .settings-keyboard__cap.is-example > span {
+    animation-iteration-count: 2;
+  }
+}
+
+@keyframes calm-motion-progress-rest {
+  to {
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+@keyframes calm-motion-spinner-rest {
+  to {
+    border-color: var(--accent);
   }
 }
 

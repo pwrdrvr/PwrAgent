@@ -113,6 +113,35 @@ function claudeResultFailure(message: SDKResultMessage): string | undefined {
   }
 }
 
+/**
+ * Claude Code deletes a session after `cleanupPeriodDays` (30 by default),
+ * but a PwrAgent thread keeps its own transcript with no age limit. Never
+ * change that setting here: it governs every session on the machine.
+ */
+const CLAUDE_SESSION_CLEANUP_NOTE = "Claude Code deletes sessions that have been idle longer than its "
+  + "cleanupPeriodDays setting (30 days by default). This thread's transcript is still here.";
+
+export const CLAUDE_SESSION_GONE_MESSAGE = "Claude no longer has this conversation, so it cannot continue it. "
+  + `${CLAUDE_SESSION_CLEANUP_NOTE} Start a new thread to keep working.`;
+
+export const CLAUDE_FORK_SOURCE_GONE_MESSAGE = "Claude no longer has the conversation this thread was forked from, "
+  + `so it cannot continue it. ${CLAUDE_SESSION_CLEANUP_NOTE} Start a new thread to keep working.`;
+
+export const CLAUDE_SESSION_GONE_REWIND_MESSAGE = "Claude no longer has this conversation, so it cannot rewind it. "
+  + CLAUDE_SESSION_CLEANUP_NOTE;
+
+/**
+ * Resuming a deleted session fails before the session starts, with this
+ * error naming the session. Only that session's error matches: another
+ * resume failure keeps Claude's own message.
+ */
+function claudeResumedSessionGone(message: SDKResultMessage, resumed: LiveSession["resumed"]): string | undefined {
+  if (!resumed || message.subtype !== "error_during_execution") return undefined;
+  const expected = `No conversation found with session ID: ${resumed.sdkSessionId}`;
+  if (!message.errors.some((error) => error.trim() === expected)) return undefined;
+  return resumed.fork ? CLAUDE_FORK_SOURCE_GONE_MESSAGE : CLAUDE_SESSION_GONE_MESSAGE;
+}
+
 function claudeExceptionMessage(error: unknown, stderr: string): string {
   return (error instanceof Error ? error.message : String(error)).trim()
     || stderr.trim()
@@ -215,6 +244,11 @@ type RunningTurn = {
   /** Claude turn ids are UUIDv4 and carry no time, so report the start. */
   startedAt: number;
   entries: Map<string, AppServerThreadEntry>;
+  /**
+   * A hash of each entry as it was last saved. The turn's end saves only the
+   * entries that changed since, then one record of the turn's status.
+   */
+  savedEntries: Map<string, string>;
   started?: boolean;
   /** Claude began this turn itself, answering a settled task. */
   followUp?: boolean;
@@ -320,6 +354,8 @@ type LiveSession = {
   toolRows: Map<string, { entry: AppServerThreadActivityEntry; turnId: string }>;
   /** Tool calls answered with a background placeholder and not yet settled. */
   launchedToolUseIds: Set<string>;
+  /** The Claude session this process resumed; a fork resumes its source's. */
+  resumed?: { sdkSessionId: string; fork: boolean };
   /** Set at the first native init; a follow-up turn's init repeats it. */
   initialized?: boolean;
   /** Settles once the first init has confirmed the signed-in account, or the session closed. */
@@ -402,11 +438,16 @@ function claudePromptUuid(turn: RunningTurn): NonNullable<SDKUserMessage["uuid"]
   return turn.turnId as NonNullable<SDKUserMessage["uuid"]>;
 }
 
+/** An entry's saved content, apart from the status its turn's end record supplies. */
+function claudeSavedEntryHash(entry: AppServerThreadEntry): string {
+  return createHash("sha256").update(JSON.stringify({ ...entry, turn: entry.turn?.id })).digest("base64");
+}
+
 /** A session read before the turn has no baseline yet; the caller sets it. */
 function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
   return {
     ended: claudeDeferred(),
-    turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
+    turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), savedEntries: new Map(), pendingSteers: new Set(),
     completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [],
     artifactCalls: new Map(), lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
@@ -469,6 +510,8 @@ export class ClaudeBackend {
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   private discovery?: { models: boolean; promise: Promise<void> };
   private modelDiscovery?: Promise<void>;
+  private readonly discoveryOperations = new Set<Promise<unknown>>();
+  private readonly discoveryController = new AbortController();
   private nextModelRefreshAt = 0;
   private models?: BackendModelOption[];
   // Account-wide, so one thread's turn must never clear another's view. The
@@ -505,16 +548,22 @@ export class ClaudeBackend {
   }
 
   async discover(options: { models?: boolean } = {}): Promise<void> {
+    if (this.closing) return;
     const models = options.models !== false;
     const inFlight = this.discovery;
     // An installation-only check cannot answer a request for the model catalog.
     if (inFlight && (inFlight.models || !models)) return await inFlight.promise;
     if (inFlight) await inFlight.promise.catch(() => {});
+    if (this.closing) return;
     const discovery = {
       models,
       promise: (async () => {
         const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-        this.installation = await (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env });
+        if (this.closing) return;
+        this.installation = await this.ownDiscoveryOperation(
+          (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env, signal: this.discoveryController.signal }),
+        );
+        if (this.closing) return;
         if (models && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
           await this.refreshModelCatalog(env);
         }
@@ -868,12 +917,14 @@ export class ClaudeBackend {
       // taken, so the next session gets its own.
       // An ephemeral session has no file to resume, so each launch starts fresh.
       const freshSdkSessionId = session.rewinds?.length || session.ephemeral ? randomUUID() : threadId;
+      const resumedSdkSessionId = session.ephemeral ? undefined : session.sdkSessionId ?? session.forkFromSdkSessionId;
+      if (resumedSdkSessionId) current.resumed = { sdkSessionId: resumedSdkSessionId, fork: !session.sdkSessionId };
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
         cwd: session.cwd,
-        ...(!session.ephemeral && (session.sdkSessionId ?? session.forkFromSdkSessionId)
+        ...(resumedSdkSessionId
           ? {
-            resume: session.sdkSessionId ?? session.forkFromSdkSessionId,
+            resume: resumedSdkSessionId,
             ...(session.resumeSessionAt ? { resumeSessionAt: session.resumeSessionAt } : {}),
             // A fork continues the source's conversation in a session of its own.
             ...(session.sdkSessionId ? {} : { forkSession: true }),
@@ -895,7 +946,8 @@ export class ClaudeBackend {
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
         mcpServers: config.mcpServers,
         ...(config.strictMcpConfig ? { strictMcpConfig: true } : {}),
-        // PwrAgent's gateway asks for its own calls, so Claude does not ask first.
+        // PwrAgent's gateway and forge policy ask for their own calls, so Claude
+        // does not ask first.
         ...(config.allowedTools.length ? { allowedTools: config.allowedTools } : {}),
         ...(config.additionalDirectories.length ? { additionalDirectories: config.additionalDirectories } : {}),
         canUseTool: createClaudePermissionHandler({
@@ -1051,8 +1103,8 @@ export class ClaudeBackend {
         threadId: live.session.thread.id, taskCount: live.tasks.active().length,
       });
     }
-    // Without the rule Claude asks before PwrAgent's gateway does, which is
-    // safe, so running tasks keep the process until it relaunches.
+    // Without the rules Claude asks before PwrAgent's gateway or forge policy
+    // does, which is safe, so running tasks keep the process until it relaunches.
     if (config.allowedTools.join("\n") !== live.config.allowedTools.join("\n")) {
       if (!keepTasks) return false;
       claudeBackendLog.info("Deferring new Claude tool permissions until the session relaunches", {
@@ -1118,7 +1170,7 @@ export class ClaudeBackend {
       } });
     }
     turn.entries.set(user.id, user);
-    await this.store.append(threadId, [user]);
+    await this.appendTurnEntries(threadId, turn, [user]);
     turn.started = true;
     await this.emit({ method: "turn/started", params: {
       threadId, turn: { id: turn.turnId, status: "in_progress", startedAt: turn.startedAt },
@@ -1132,11 +1184,12 @@ export class ClaudeBackend {
   /** Fail a turn that never reached its query. */
   private async failTurn(threadId: string, turn: RunningTurn, failure: string): Promise<void> {
     this.sessions.get(threadId)?.accountChecked.resolve();
+    const end = { turnId: turn.turnId, status: "failed" as const, startedAt: turn.startedAt };
     for (const entry of turn.entries.values()) {
       entry.turn = { id: turn.turnId, status: "failed", startedAt: turn.startedAt };
     }
     try {
-      await this.store.append(threadId, [...turn.entries.values()]);
+      await this.store.append(threadId, this.unsavedTurnEntries(turn), end);
       await this.emit({ method: "turn/failed", params: {
         threadId, turnId: turn.turnId,
         turn: { id: turn.turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure } },
@@ -1144,6 +1197,22 @@ export class ClaudeBackend {
     } finally {
       turn.ended.resolve();
     }
+  }
+
+  /** Save entries of the open turn, and remember what was saved. */
+  private async appendTurnEntries(threadId: string, turn: RunningTurn, entries: AppServerThreadEntry[]): Promise<void> {
+    // Hash before the write: a change made while it runs is saved again at the turn's end.
+    const hashes = entries.map((entry) => [entry.id, claudeSavedEntryHash(entry)] as const);
+    await this.store.append(threadId, entries);
+    for (const [id, hash] of hashes) turn.savedEntries.set(id, hash);
+  }
+
+  /**
+   * The turn's entries whose latest content was never saved: a message still
+   * streaming when the turn ended, or an entry changed after its last save.
+   */
+  private unsavedTurnEntries(turn: RunningTurn): AppServerThreadEntry[] {
+    return [...turn.entries.values()].filter((entry) => turn.savedEntries.get(entry.id) !== claudeSavedEntryHash(entry));
   }
 
   private async emit(notification: AgentEvent["notification"]): Promise<void> {
@@ -1158,13 +1227,17 @@ export class ClaudeBackend {
   }
 
   private refreshModelCatalog(env: NodeJS.ProcessEnv): Promise<void> {
+    if (this.closing) return Promise.resolve();
     if (this.modelDiscovery) return this.modelDiscovery;
     const { executable, version } = this.installation;
     if (!executable) return Promise.resolve();
     this.modelDiscovery = (async () => {
-      const models = await (this.options.discoverModels ?? discoverClaudeModels)({
-        executable, env, ...(version ? { cliVersion: version } : {}),
-      });
+      const models = await this.ownDiscoveryOperation(
+        (this.options.discoverModels ?? discoverClaudeModels)({
+          executable, env, signal: this.discoveryController.signal, ...(version ? { cliVersion: version } : {}),
+        }),
+      );
+      if (this.closing) return;
       this.nextModelRefreshAt = Date.now() + 60_000;
       await this.publishModels(models);
     })().finally(() => { this.modelDiscovery = undefined; });
@@ -1172,12 +1245,19 @@ export class ClaudeBackend {
   }
 
   private async refreshGlobalModels(): Promise<void> {
+    if (this.closing) return;
     if (Date.now() < this.nextModelRefreshAt) return;
     // A new turn can recover missing/stale metadata, but never spawns more
     // than one global probe per minute or waits for it to consume the stream.
     this.nextModelRefreshAt = Date.now() + 60_000;
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
     await this.refreshModelCatalog(env);
+  }
+
+  private ownDiscoveryOperation<T>(operation: Promise<T>): Promise<T> {
+    this.discoveryOperations.add(operation);
+    void operation.finally(() => this.discoveryOperations.delete(operation)).catch(() => {});
+    return operation;
   }
 
   private async consume(live: LiveSession): Promise<void> {
@@ -1318,7 +1398,13 @@ export class ClaudeBackend {
             await this.settleInputWrites(live);
             for (const id of message.user_message_uuids ?? []) turn.pendingSteers.delete(id);
             if (message.user_message_uuid) turn.pendingSteers.delete(message.user_message_uuid);
-            turn.resultFailure ??= claudeResultFailure(message);
+            const sessionGone = claudeResumedSessionGone(message, live.resumed);
+            if (sessionGone && !turn.resultFailure) {
+              claudeBackendLog.warn("Claude no longer has the session this thread resumes", {
+                threadId, sdkSessionId: live.resumed?.sdkSessionId, fork: live.resumed?.fork,
+              });
+            }
+            turn.resultFailure ??= sessionGone ?? claudeResultFailure(message);
             // The totals are cumulative. A turn stopped after this result must
             // not bill its spend to the next turn.
             if (claudeHasModelUsage(message.modelUsage)) session.modelUsage = message.modelUsage;
@@ -1514,11 +1600,14 @@ export class ClaudeBackend {
     const cancelled = outcome.cancelled || turn.interrupted === true;
     let { failure } = outcome;
     const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
+    const end = { turnId, status, startedAt: turn.startedAt, completedAt: Date.now() } as const;
+    // A live read and a task row that outlives the turn use these stamps.
     for (const entry of turn.entries.values()) {
-      entry.turn = { id: turnId, status, startedAt: turn.startedAt, completedAt: Date.now() };
+      entry.turn = { id: turnId, status, startedAt: end.startedAt, completedAt: end.completedAt };
     }
     try {
-      await this.store.append(threadId, [...turn.entries.values()]);
+      // One record carries the status; only content never saved is written again.
+      await this.store.append(threadId, this.unsavedTurnEntries(turn), end);
       await this.saveSessionMetadata(live);
     } catch (error) {
       failure = `Could not save Claude history: ${error instanceof Error ? error.message : String(error)}`;
@@ -1682,8 +1771,12 @@ export class ClaudeBackend {
         id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
       }];
     }
-    if (row.turnId !== live.turn?.turnId) live.toolRows.delete(entry.id);
-    await this.store.append(threadId, [entry]);
+    if (live.turn && row.turnId === live.turn.turnId) {
+      await this.appendTurnEntries(threadId, live.turn, [entry]);
+    } else {
+      live.toolRows.delete(entry.id);
+      await this.store.append(threadId, [entry]);
+    }
     await this.emit({ method: "item/completed", params: { threadId, turnId: row.turnId, item: claudeActivityItem(entry, output) } });
   }
 
@@ -2100,7 +2193,7 @@ export class ClaudeBackend {
         type: "message", id: message.uuid, role: "assistant", text: message.content, turn: { id: turnId },
       };
       turn.entries.set(entry.id, entry);
-      await this.store.append(threadId, [entry]);
+      await this.appendTurnEntries(threadId, turn, [entry]);
       await this.emit({ method: "item/completed", params: {
         threadId, turnId, item: { id: entry.id, type: "agentMessage", text: entry.text },
       } });
@@ -2117,7 +2210,7 @@ export class ClaudeBackend {
         turn.completedMessageText.set(message.message.id, prior + text);
         const entry: AppServerThreadMessageEntry = { type: "message", id: message.message.id, role: "assistant", text: prior + text, turn: { id: turnId } };
         turn.entries.set(entry.id, entry);
-        await this.store.append(threadId, [entry]);
+        await this.appendTurnEntries(threadId, turn, [entry]);
         await this.emit({ method: "item/completed", params: { threadId, turnId, item: { id: entry.id, type: "agentMessage", text: entry.text } } });
       }
       for (const block of message.message.content) {
@@ -2157,7 +2250,7 @@ export class ClaudeBackend {
         if (CLAUDE_ARTIFACT_TOOLS.has(block.name)) turn.artifactCalls.set(block.id, claudeArtifactAction(block.name, input));
         // A task this call starts can outlive the turn.
         live.toolRows.set(block.id, { entry: activity, turnId });
-        await this.store.append(threadId, [activity]);
+        await this.appendTurnEntries(threadId, turn, [activity]);
         const item = {
           id: block.id, status: "in_progress",
           ...(command !== undefined ? { type: "commandExecution", command }
@@ -2242,7 +2335,7 @@ export class ClaudeBackend {
             status: entry.status,
           }];
         }
-        await this.store.append(threadId, [entry]);
+        await this.appendTurnEntries(threadId, turn, [entry]);
         turn.hasCompletedToolActivity = true;
         if (launchedTask) continue;
         await this.emit({ method: "item/completed", params: { threadId, turnId, item: claudeActivityItem(entry, output, images) } });
@@ -2259,7 +2352,7 @@ export class ClaudeBackend {
       type: "plan", id, createdAt: previous?.createdAt ?? Date.now(), steps, turn: { id: turn.turnId },
     };
     turn.entries.set(id, entry);
-    await this.store.append(threadId, [entry]);
+    await this.appendTurnEntries(threadId, turn, [entry]);
     await this.emit({ method: "turn/plan/updated", params: { threadId, turnId: turn.turnId, plan: { steps } } });
   }
 
@@ -2270,7 +2363,7 @@ export class ClaudeBackend {
       type: "plan", id, createdAt: Date.now(), markdown, steps: [], turn: { id: turn.turnId },
     };
     turn.entries.set(id, entry);
-    await this.store.append(threadId, [entry]);
+    await this.appendTurnEntries(threadId, turn, [entry]);
     await this.emit({ method: "item/completed", params: {
       threadId, turnId: turn.turnId, item: { id, type: "plan", text: markdown },
     } });
@@ -2296,7 +2389,7 @@ export class ClaudeBackend {
         createdAt: turn.entries.get(id)?.createdAt ?? Date.now(), turn: { id: turn.turnId },
       };
       turn.entries.set(id, entry);
-      await this.store.append(threadId, [entry]);
+      await this.appendTurnEntries(threadId, turn, [entry]);
     };
     if (message.type === "assistant" || message.type === "stream_event") {
       // An intermediate response limit can trigger the CLI's automatic
@@ -2422,7 +2515,7 @@ export class ClaudeBackend {
       turn: { id: turnId },
     };
     turn.entries.set(entry.id, entry);
-    await this.store.append(threadId, [entry]);
+    await this.appendTurnEntries(threadId, turn, [entry]);
     await this.emit({ method: "item/completed", params: { threadId, turnId, item: {
       id: entry.id, type: "exitedReviewMode", review: entry.review, createdAt: entry.createdAt,
       data: { reviewOutput: output, reviewer, ...(context ? { context } : {}) },
@@ -2649,6 +2742,11 @@ export class ClaudeBackend {
       ? messages.findIndex((message) => message.uuid === session.resumeSessionAt)
       : messages.length;
     if (!promptUuid || index < 0 || (resumeIndex >= 0 && index > resumeIndex)) {
+      // A deleted session reads as empty. Search every project folder before
+      // saying so, since an empty read alone also fits an unreadable file.
+      if (messages.length === 0 && await this.claudeSessionGone(session.sdkSessionId)) {
+        throw new Error(CLAUDE_SESSION_GONE_REWIND_MESSAGE);
+      }
       throw new Error("Claude's conversation does not have this prompt, so it cannot rewind to before it. "
         + "Prompts sent before rewind support, or before Claude compacted the conversation, cannot be rewound.");
     }
@@ -2658,6 +2756,15 @@ export class ClaudeBackend {
       // A pending rewind already ends the conversation at its point.
       leafUuid: session.resumeSessionAt ?? messages.at(-1)?.uuid,
     };
+  }
+
+  /** True only when Claude has no file for the session in any project folder. */
+  private async claudeSessionGone(sdkSessionId: string): Promise<boolean> {
+    try {
+      return await (this.options.getSessionInfo ?? getSessionInfo)(sdkSessionId) === undefined;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -2818,7 +2925,7 @@ export class ClaudeBackend {
         message: { role: "user", content } });
       // The message is already sent; turn completion persists every entry,
       // so an early-write failure must not report the steer as rejected.
-      await this.store.append(params.threadId, [entry]).catch(() => {});
+      await this.appendTurnEntries(params.threadId, turn, [entry]).catch(() => {});
       await this.emit({ method: "item/completed", params: {
         threadId: params.threadId, turnId: turn.turnId,
         item: {
@@ -2847,12 +2954,16 @@ export class ClaudeBackend {
 
   private async closeResources(): Promise<void> {
     this.closing = true;
+    this.discoveryController.abort();
     this.unsubscribePlanLimits();
     if (this.ownsPlanLimits) this.planLimits.close();
     for (const controller of this.starting.values()) controller.abort();
     // A start may still be reading session metadata before it appears in
     // sessions. Close both groups before callers can remove the store root.
     await Promise.all([
+      // Discovery has no live session entry. Drain its CLI work too, without
+      // joining notification delivery that can itself request backend close.
+      Promise.allSettled([...this.discoveryOperations]),
       Promise.allSettled([...this.turnStarts]),
       Promise.all([...this.sessions.values()].map((live) => this.closeSession(live))),
     ]);

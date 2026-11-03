@@ -132,7 +132,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
       if (event.notification.method === "thread/archiveCleanup/completed") resolve(event);
     });
   });
-  return { registry, client, counts, events, overlays, store, archiveWorktree, completion };
+  return { registry, client, counts, events, overlays, store, claudeStore, archiveWorktree, completion };
 }
 
 function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerThreadSummary[], history: AppServerThreadSummary[] = []) {
@@ -162,6 +162,93 @@ function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerT
 }
 
 describe("archive cleanup pipeline", () => {
+  it.each(["provider", "overlay"] as const)("snapshots and removes Claude worktrees from %s metadata, excluding an additional local directory", async (source) => {
+    vi.useFakeTimers();
+    const fixture = build([]);
+    const worktree = { id: "repo", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktrees/example/repo" };
+    const local = { id: "local", kind: "local" as const, label: "local", path: "/contrived/local" };
+    const session = { cwd: worktree.worktreePath, thread: {
+      ...codexThread({ id: "claude-target" }), source: "claude" as const,
+      linkedDirectories: source === "provider" ? [worktree] : [],
+    } };
+    vi.spyOn(fixture.claudeStore, "read").mockResolvedValue(session);
+    vi.spyOn(fixture.claudeStore, "save").mockResolvedValue(undefined);
+    vi.mocked(fixture.claudeStore.list).mockResolvedValue([session]);
+    fixture.overlays.set(session.thread.id, { backend: "claude", threadId: session.thread.id,
+      extraLinkedDirectories: [worktree, local] });
+
+    const response = await fixture.registry.archiveThread({ backend: "claude", threadId: session.thread.id, backgroundCleanup: true });
+    expect(response).toMatchObject({ cleanup: [], cleanupPending: true });
+    const event = await drivePacer(fixture.registry, fixture.completion);
+    expect(event.notification.params).toMatchObject({ cleanup: [{
+      worktreePath: worktree.worktreePath, removedWorktree: true, deletedBranch: false,
+    }] });
+    expect(registryLog.info).toHaveBeenCalledWith("archive cleanup worktree outcome", expect.objectContaining({
+      backend: "claude", worktreePath: worktree.worktreePath, removedWorktree: true,
+    }));
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+    expect(fixture.archiveWorktree).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", threadId: session.thread.id, worktreePath: worktree.worktreePath,
+      repositoryPath: worktree.path, beforeRemove: expect.any(Function),
+    }));
+  });
+
+  it.each(["shared", "external", "snapshot failure"] as const)("keeps Claude worktrees on %s and publishes the cleanup outcome", async (reason) => {
+    vi.useFakeTimers();
+    const directory = { id: "repo", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const fixture = build(reason === "shared" ? [codexThread({ id: "active-owner", linkedDirectories: [directory] })] : []);
+    const session = { cwd: directory.worktreePath, thread: {
+      ...codexThread({ id: "claude-target", linkedDirectories: [directory] }), source: "claude" as const,
+    } };
+    vi.spyOn(fixture.claudeStore, "read").mockResolvedValue(session);
+    vi.spyOn(fixture.claudeStore, "save").mockResolvedValue(undefined);
+    vi.mocked(fixture.claudeStore.list).mockResolvedValue([session]);
+    if (reason === "external") fixture.overlays.set(session.thread.id, { backend: "claude", threadId: session.thread.id,
+      extraLinkedDirectories: [{ ...directory, worktreeOwnership: "external" }] });
+    if (reason === "snapshot failure") fixture.archiveWorktree.mockRejectedValue(new Error("Snapshot preparation failed"));
+    await fixture.registry.archiveThread({ backend: "claude", threadId: session.thread.id, backgroundCleanup: true });
+    const event = await drivePacer(fixture.registry, fixture.completion);
+    expect(event.notification.params).toMatchObject({ cleanup: [expect.objectContaining({
+      removedWorktree: false,
+      ...(reason === "snapshot failure" ? { error: "Snapshot preparation failed" }
+        : { skippedReason: expect.stringContaining(reason === "shared" ? "active-owner" : "Externally managed") }),
+    })] });
+    if (reason !== "snapshot failure") expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+  });
+
+  it("reports Claude archive metadata failure instead of an empty successful cleanup", async () => {
+    vi.useFakeTimers();
+    const fixture = build([]);
+    const session = { cwd: "/contrived/local", thread: { ...codexThread({ id: "claude-target" }), source: "claude" as const } };
+    vi.spyOn(fixture.claudeStore, "read").mockResolvedValue(session);
+    vi.spyOn(fixture.claudeStore, "save").mockResolvedValue(undefined);
+    vi.mocked(fixture.claudeStore.list).mockRejectedValue(new Error("Session metadata unavailable"));
+
+    await fixture.registry.archiveThread({ backend: "claude", threadId: session.thread.id, backgroundCleanup: true });
+    const event = await drivePacer(fixture.registry, fixture.completion);
+    expect(event.notification.params).toMatchObject({ cleanup: [{
+      removedWorktree: false, deletedBranch: false,
+      skippedReason: expect.stringContaining("Session metadata unavailable"),
+    }] });
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+  });
+
+  it("keeps Claude local-only archive receipts empty", async () => {
+    vi.useFakeTimers();
+    const fixture = build([]);
+    const session = { cwd: "/contrived/local", thread: {
+      ...codexThread({ id: "claude-target", linkedDirectories: [{ id: "local", kind: "local", label: "local", path: "/contrived/local" }] }),
+      source: "claude" as const,
+    } };
+    vi.spyOn(fixture.claudeStore, "read").mockResolvedValue(session);
+    vi.spyOn(fixture.claudeStore, "save").mockResolvedValue(undefined);
+    vi.mocked(fixture.claudeStore.list).mockResolvedValue([session]);
+
+    const result = fixture.registry.archiveThread({ backend: "claude", threadId: session.thread.id });
+    expect((await drivePacer(fixture.registry, result)).cleanup).toEqual([]);
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+  });
+
   it("does not reread 30 archived targets already present in the current batch inventory", async () => {
     vi.useFakeTimers();
     const directory = { id: "shared", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/shared" };

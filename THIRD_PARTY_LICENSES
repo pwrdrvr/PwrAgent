@@ -968,7 +968,7 @@ MIT
 - fastdom@1.0.12 | https://github.com/wilsonpage/fastdom
 - fflate@0.8.3 | https://github.com/101arrowz/fflate
 - finalhandler@2.1.1 | pillarjs/finalhandler
-- follow-redirects@1.16.0 | https://github.com/follow-redirects/follow-redirects
+- follow-redirects@1.16.2 | https://github.com/follow-redirects/follow-redirects
 - form-data@4.0.6 | https://github.com/form-data/form-data
 - forwarded@0.2.0 | jshttp/forwarded
 - fresh@2.0.0 | jshttp/fresh
@@ -8357,13 +8357,13 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-follow-redirects@1.16.0 (MIT)
+follow-redirects@1.16.2 (MIT)
 -----------------------------
 
 Applies to:
-- follow-redirects@1.16.0 (MIT)
+- follow-redirects@1.16.2 (MIT)
 
-Representative file: follow-redirects@1.16.0/LICENSE
+Representative file: follow-redirects@1.16.2/LICENSE
 
 Copyright 2014–present Olivier Lalonde <olalonde@gmail.com>, James Talmage <james@talmage.io>, Ruben Verborgh
 

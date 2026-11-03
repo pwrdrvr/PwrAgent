@@ -2617,6 +2617,7 @@ describe("App", () => {
           lightTheme: { value: "tangerine-light", source: "default" },
           themedDockIcon: { value: true, source: "default" },
           terminalMinimumContrast: { value: false, source: "default" },
+          calmMotion: { value: false, source: "default" },
           density: { value: "mission-control", source: "default" },
           sidebarTextSize: { value: "md", source: "default" },
           transcriptTextSize: { value: "md", source: "default" },
@@ -2957,6 +2958,7 @@ describe("App", () => {
               density: "mission-control" as const,
               sidebarTextSize: "md" as const,
               transcriptTextSize: "md" as const,
+              calmMotion: false,
             },
             onboarding: {
               completed: true,
@@ -2989,6 +2991,7 @@ describe("App", () => {
               lightTheme: { value: "tangerine-light", source: "default" },
               themedDockIcon: { value: true, source: "default" },
               terminalMinimumContrast: { value: false, source: "default" },
+              calmMotion: { value: false, source: "default" },
               density: { value: "mission-control", source: "default" },
               sidebarTextSize: { value: "md", source: "default" },
               transcriptTextSize: { value: "md", source: "default" },
@@ -3047,6 +3050,7 @@ describe("App", () => {
               density: "mission-control" as const,
               sidebarTextSize: "md" as const,
               transcriptTextSize: "md" as const,
+              calmMotion: false,
             },
             onboarding: {
               completed: true,
@@ -3095,6 +3099,7 @@ describe("App", () => {
               lightTheme: { value: "tangerine-light", source: "default" },
               themedDockIcon: { value: true, source: "default" },
               terminalMinimumContrast: { value: false, source: "default" },
+              calmMotion: { value: false, source: "default" },
               density: { value: "mission-control", source: "default" },
               sidebarTextSize: { value: "md", source: "default" },
               transcriptTextSize: { value: "md", source: "default" },
@@ -4118,6 +4123,7 @@ describe("App", () => {
                 lightTheme: { value: "tangerine-light", source: "default" },
                 themedDockIcon: { value: true, source: "default" },
                 terminalMinimumContrast: { value: false, source: "default" },
+                calmMotion: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4267,6 +4273,7 @@ describe("App", () => {
                 lightTheme: { value: "tangerine-light", source: "default" },
                 themedDockIcon: { value: true, source: "default" },
                 terminalMinimumContrast: { value: false, source: "default" },
+                calmMotion: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4505,6 +4512,7 @@ describe("App", () => {
                 lightTheme: { value: "tangerine-light", source: "default" },
                 themedDockIcon: { value: true, source: "default" },
                 terminalMinimumContrast: { value: false, source: "default" },
+                calmMotion: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4617,6 +4625,7 @@ describe("App", () => {
                 lightTheme: { value: "tangerine-light", source: "default" },
                 themedDockIcon: { value: true, source: "default" },
                 terminalMinimumContrast: { value: false, source: "default" },
+                calmMotion: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4719,6 +4728,7 @@ describe("App", () => {
                 lightTheme: { value: "tangerine-light", source: "default" },
                 themedDockIcon: { value: true, source: "default" },
                 terminalMinimumContrast: { value: false, source: "default" },
+                calmMotion: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4819,6 +4829,7 @@ describe("App", () => {
                 lightTheme: { value: "tangerine-light", source: "default" },
                 themedDockIcon: { value: true, source: "default" },
                 terminalMinimumContrast: { value: false, source: "default" },
+                calmMotion: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -5088,6 +5099,7 @@ describe("App", () => {
                 lightTheme: { value: "tangerine-light", source: "default" },
                 themedDockIcon: { value: true, source: "default" },
                 terminalMinimumContrast: { value: false, source: "default" },
+                calmMotion: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -7038,6 +7050,68 @@ describe("App", () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
     expect(row).toHaveFocus();
+  });
+
+  it.each(["ready", "pending"])("skips the archived thread after automatic fallback with %s selected detail", async (detailState) => {
+    const bDetail = createDeferred<void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const threads = ["c", "a", "b"].map((id, index) => ({
+      id, title: `History fixture ${id.toUpperCase()}`, titleSource: "explicit" as const,
+      source: "codex" as const, linkedDirectories: [], inbox: { inInbox: true }, updatedAt: 3000 - index,
+    }));
+    const readThread = vi.fn(async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => ({
+      backend, threadId, fetchedAt: 1,
+      replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+    }));
+    const api = ownerApi({
+      getNavigationSnapshot: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`), threads, directories: [],
+      }),
+      onAgentEvent: (listener: (event: AgentEvent) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      readThread,
+    });
+    const readSelectedDetail = api.getNavigationSelectedDetail!;
+    const selectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (...args) => {
+      // Deliberately ignore cancellation: a late provider reply must not
+      // select B again or put it back in history after the archive fallback.
+      if (detailState === "pending" && args[0].ref.threadId === "b") await bDetail.promise;
+      return readSelectedDetail(...args);
+    });
+    api.getNavigationSelectedDetail = selectedDetail;
+    Object.defineProperty(window, "pwragent", { configurable: true, value: api });
+    await renderThreadApp();
+    const content = within(screen.getByRole("main"));
+    const sidebar = within(screen.getByRole("complementary", { name: "Threads" }));
+    await content.findByRole("heading", { level: 2, name: "History fixture C" });
+    for (const id of ["A", "B"]) {
+      fireEvent.click(sidebar.getByRole("button", { name: `History fixture ${id}` }));
+      await content.findByRole("heading", { level: 2, name: `History fixture ${id}` });
+    }
+    await waitFor(() => expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+      "aria-description", "History fixture A",
+    ));
+    act(() => {
+      for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: "thread/archived", params: { threadId: "b" },
+      } });
+    });
+    await content.findByRole("heading", { level: 2, name: "History fixture C" });
+    act(() => bDetail.resolve());
+    // The fallback has committed before Back is pressed. It must skip B
+    // without starting a stale provider/detail lookup or showing no selection.
+    await flushReactUpdates();
+    selectedDetail.mockClear();
+    readThread.mockClear();
+    fireEvent.click(screen.getByTestId("history-nav-back"));
+    await content.findByRole("heading", { level: 2, name: "History fixture A" });
+    expect(selectedDetail.mock.calls.some(([request]) => request.ref.threadId === "b")).toBe(false);
+    expect(readThread.mock.calls.some(([request]) => request.threadId === "b")).toBe(false);
+    expect(content.queryByText("Select a thread")).toBeNull();
+    fireEvent.click(screen.getByTestId("history-nav-forward"));
+    await content.findByRole("heading", { level: 2, name: "History fixture C" });
   });
 
   it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {

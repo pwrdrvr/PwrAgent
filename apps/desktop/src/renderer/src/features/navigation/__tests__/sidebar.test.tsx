@@ -9513,6 +9513,38 @@ describe("Sidebar directory pinning", () => {
     expect(onReorderDirectoryPins).not.toHaveBeenCalled();
   });
 
+  it("offers a ghost Pin slot to a held folder while nothing is pinned", async () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+    const onReorderDirectoryPins = vi.fn(async () => undefined);
+    renderSidebar([projectADirectory, projectBDirectory], { onSetDirectoryPin, onReorderDirectoryPins });
+    layoutDirectoryHeaders([[/ProjectA/i, 40], [/ProjectB/i, 70]]);
+    const list = document.querySelector(".directory-list")!;
+    expect(directoryHeader(/ProjectB/i)).toHaveClass("is-draggable");
+    expect(list.querySelector(".directories-pin-slot")).toBeNull();
+
+    startThreadPinPointerDrag(directoryHeader(/ProjectB/i), { x: 50, y: 80 });
+    moveThreadPinPointer({ x: 50, y: 74 });
+    const slot = list.querySelector<HTMLElement>(".directories-pin-slot")!;
+    expect(slot).toHaveTextContent("Pin");
+    mockElementRect(slot, 0, 34);
+    // Over a project header there is nothing to drop on.
+    moveThreadPinPointer({ x: 50, y: 50 });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(slot).not.toHaveClass("is-drop-target");
+    moveThreadPinPointer({ x: 50, y: 12 });
+    await waitFor(() => expect(slot).toHaveClass("is-drop-target"));
+    expect(document.querySelector(".thread-row__drop-label")).toHaveTextContent("Pin");
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 12 });
+    });
+
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
+    expect(onReorderDirectoryPins).not.toHaveBeenCalled();
+    expect(list.querySelector(".directories-pin-slot")).toBeNull();
+  });
+
   it("keeps the directory launchpad button a single click and puts machines behind the chevron", async () => {
     const onOpenLaunchpad = vi.fn(async () => undefined);
     const onCreateThreadOnFederationTarget = vi.fn(async () => undefined);

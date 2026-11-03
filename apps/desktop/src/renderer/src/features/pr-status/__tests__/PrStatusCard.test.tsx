@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
+import type { PrAutoFixBlock } from "../../pr-watches/useThreadPrWatchIndicators";
 import type { PrBranchDrift } from "../pr-branch-drift";
 import { PrStatusCard } from "../PrStatusCard";
 
@@ -72,6 +73,33 @@ describe("PrStatusCard", () => {
     ]);
     expect(section.querySelector(".pr-status-card__row-value--muted")?.textContent).toBe("on");
     expect(section.textContent).toContain("Right-click the chip to stop a watch.");
+  });
+
+  it("puts the thread that handles Auto-fix on its own line, not in the row's value", () => {
+    // The value never wraps, so a thread title there ran out of the card.
+    const longTitle = "git: reflink checkout using existing unchanged-file checks";
+    const renderBlocked = (autoFixBlocked: PrAutoFixBlock) => {
+      cleanup();
+      const { container } = render(
+        <div className="pr-status-card">
+          <PrStatusCard pr={basePr()} now={NOW} watch={{ autoFixBlocked }} />
+        </div>,
+      );
+      return container;
+    };
+
+    let container = renderBlocked({ reason: "handled_by_other_thread", threadTitle: longTitle });
+    expect(text(container, ".pr-status-card__row-value")).toBe("handled elsewhere");
+    const detail = container.querySelector(".pr-status-card__row-detail");
+    expect(detail?.textContent).toBe(`By ${longTitle}`);
+
+    container = renderBlocked({ reason: "handled_by_other_thread" });
+    expect(text(container, ".pr-status-card__row-value")).toBe("handled elsewhere");
+    expect(container.querySelector(".pr-status-card__row-detail")).toBeNull();
+
+    container = renderBlocked({ reason: "paused" });
+    expect(text(container, ".pr-status-card__row-value")).toBe("paused");
+    expect(container.querySelector(".pr-status-card__row-detail")).toBeNull();
   });
 
   it("names the outcomes a CI watch waits for when no attempt is known", () => {

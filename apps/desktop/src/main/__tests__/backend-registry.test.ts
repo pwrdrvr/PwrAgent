@@ -3497,7 +3497,7 @@ describe("DesktopBackendRegistry", () => {
         expect(registry.getInProgressThreadSnapshotForQuit()).toMatchObject({ count: 1, threadIds: [`claude:${threadId}`] });
         expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toMatchObject({ turnId: started.turnId });
         expect(optionsSeen[turn].permissionMode).toBe("auto");
-        expect(registerBridge).toHaveBeenCalledWith("fixture-connection", threadId);
+        expect(registerBridge).toHaveBeenCalledWith("fixture-connection", threadId, undefined, "claude");
         expect(Object.values(optionsSeen[turn].mcpServers ?? {})).toContainEqual(expect.objectContaining({ type: "stdio", command: "/fixture/bridge" }));
         const server = optionsSeen[turn].mcpServers!.pwragent;
         if (!("url" in server)) throw new Error("Expected HTTP MCP server");
@@ -4523,6 +4523,14 @@ describe("DesktopBackendRegistry", () => {
       if (event.notification.method === "thread/lock/updated") events.push(event);
     });
     onTestFinished(unsubscribe);
+    // Each change also moves the thread out of or back into the Auto-fix election.
+    const lockChanged = vi.fn(async () => {});
+    registry.setThreadPrAutoDispatchHandler({
+      preferenceChanged: vi.fn(),
+      cancelPending: vi.fn(),
+      sendPendingNow: vi.fn(),
+      lockChanged,
+    });
     const thread = { backend: "codex" as const, threadId: "parked" };
 
     const locked = await registry.setThreadLock({ ...thread, locked: true }, { source: "agent_tool" });
@@ -4539,6 +4547,11 @@ describe("DesktopBackendRegistry", () => {
       locked.lock,
       renoted.lock,
       undefined,
+    ]);
+    expect(lockChanged.mock.calls).toEqual([
+      [{ ...thread, locked: true }],
+      [{ ...thread, locked: true }],
+      [{ ...thread, locked: false }],
     ]);
     expect(await overlayStore.getThreadOverlayState(thread)).not.toHaveProperty("lock");
   });
@@ -18118,7 +18131,7 @@ script = "echo setup"
       mcpConnectionIds: [PWRSNAP_MCP_CONNECTION_ID],
     });
 
-    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined);
+    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined, undefined, "codex");
     expect(bindThread).toHaveBeenCalledWith("thread-1");
     const mcpServers = (
       codexClient.lastStartThreadParams!.config as {
@@ -18142,7 +18155,7 @@ script = "echo setup"
         PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
       },
       startup_timeout_sec: 75,
-      tool_timeout_sec: 720,
+      tool_timeout_sec: 3660,
     });
     await expect(overlayStore.getThreadOverlayState({
       backend: "codex",
@@ -18232,7 +18245,7 @@ script = "echo setup"
       }),
     ).rejects.toThrow("Codex thread creation failed");
 
-    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined);
+    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined, undefined, "codex");
     expect(revoke).toHaveBeenCalledTimes(1);
     await registry.close();
   });
@@ -18384,7 +18397,7 @@ script = "echo setup"
       mcpConnectionIds: [PWRGIT_MCP_CONNECTION_ID],
     });
 
-    expect(registerBridge).toHaveBeenCalledWith("pwrgit", undefined);
+    expect(registerBridge).toHaveBeenCalledWith("pwrgit", undefined, undefined, "codex");
     const servers = (codexClient.lastStartThreadParams!.config as { mcp_servers: Record<string, unknown> }).mcp_servers;
     expect(Object.keys(servers)[0]).toMatch(/^pwragent_pwrgit_/u);
     expect(Object.values(servers)).toMatchObject([{ command: process.execPath }]);
@@ -36165,6 +36178,61 @@ command = "pnpm dev"
       vi.useRealTimers();
     }
   });
+
+  it.each([0.007023, 0, undefined, -1, Number.NaN])(
+    "retains Claude monitor provider costs (%s) across usage normalization", async (reportedCost) => {
+      const overlayStore = createOverlayStoreMock();
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/read"] } }),
+        overlayStore,
+      });
+      const internals = registry as unknown as {
+        completedTaskMonitorsByThread: Map<string, Record<string, unknown>>;
+        recordTaskMonitorUsage: (event: AgentEvent) => Promise<void>;
+      };
+      internals.completedTaskMonitorsByThread.set("claude:haiku-monitor", {
+        backend: "claude", parentBackend: "claude", parentThreadId: "parent-thread",
+        monitorId: "monitor-1", monitorThreadId: "haiku-monitor", monitorTurnId: "monitor-turn",
+        createdAt: Date.now(), task: "Check the build", preferredModel: "claude-haiku-5-5",
+      });
+      try {
+        await internals.recordTaskMonitorUsage({
+          backend: "claude",
+          notification: {
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId: "haiku-monitor", turnId: "monitor-turn", model: "claude-haiku-5-5",
+              tokenUsage: {
+                claudeCostUSD: reportedCost,
+                last: { inputTokens: 121_054, cachedInputTokens: 120_220, outputTokens: 238, totalTokens: 121_292 },
+              },
+            },
+          },
+        });
+        const pricing = await overlayStore.readThreadPricing({ backend: "claude", threadId: "parent-thread" });
+        expect(pricing.lines).toHaveLength(1);
+        const valid = reportedCost !== undefined && Number.isFinite(reportedCost) && reportedCost >= 0;
+        expect(pricing.lines[0]).toMatchObject({
+          scope: "monitor", model: "claude-haiku-5-5", provider: "anthropic",
+          inputTokens: 121_054, cachedInputTokens: 120_220, outputTokens: 238,
+          priceStatus: valid ? "priced" : "unpriced",
+          totalCostMicros: valid ? Math.round(reportedCost! * 1_000_000) : 0,
+          cachedInputCostMicros: 0, uncachedInputCostMicros: 0, outputCostMicros: 0,
+        });
+        expect(pricing.lines[0]?.pricingBasis).toBe(valid ? "provider-reported" : undefined);
+        expect(pricing.lines[0]?.priceUnavailableReason).toBe(valid ? undefined : "insufficient-token-breakdown");
+        expect(pricing.lines[0]?.pricingRateId).toBeUndefined();
+        if (valid) {
+          const card = await overlayStore.getThreadSubAgent({ backend: "claude", threadId: "parent-thread", monitorId: "monitor-1" });
+          expect(card?.monitorUsage?.summary).toContain("provider estimate");
+          expect(card?.monitorUsage?.cost).toMatchObject({ pricingBasis: "provider-reported", totalUsd: reportedCost });
+        }
+      } finally {
+        internals.completedTaskMonitorsByThread.clear();
+        await registry.close();
+      }
+    },
+  );
 
   it("persists live thread pricing from turn usage, not cumulative thread totals", async () => {
     const codexClient = new MockBackendClient({
@@ -63935,7 +64003,9 @@ script = "printf setup"
       bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
     });
     const registryRef: { current?: DesktopBackendRegistry } = {};
-    let nestedNavigationResolved = false;
+    const nestedNavigation = createDeferred<AppServerThreadSummary[]>();
+    const releaseRevocation = createDeferred<void>();
+    const revocationCompleted = createDeferred<void>();
     const messagingArchiveCleaner = {
       requests: [] as Array<{
         backend: AppServerBackendKind;
@@ -63948,8 +64018,9 @@ script = "printf setup"
         origin: "thread-archive";
       }) {
         messagingArchiveCleaner.requests.push(request);
-        await registryRef.current!.listThreads();
-        nestedNavigationResolved = true;
+        nestedNavigation.resolve(await registryRef.current!.listThreads());
+        await releaseRevocation.promise;
+        revocationCompleted.resolve();
         return { notifiedCount: 1, revokedCount: 1 };
       },
     };
@@ -63961,22 +64032,26 @@ script = "printf setup"
     });
     registryRef.current = registry;
 
-    const timeout = new Promise<"timeout">((resolve) => {
-      setTimeout(() => resolve("timeout"), 100);
-    });
+    try {
+      const refresh = registry.listThreads();
+      // The recursive navigation and outer refresh must both resolve while
+      // revocation is held open. Awaiting cleanup from the listing would form
+      // a wait cycle here; the normal test watchdog still detects that bug.
+      await expect(nestedNavigation.promise).resolves.toEqual([]);
+      await expect(refresh).resolves.toEqual([]);
 
-    await expect(Promise.race([registry.listThreads(), timeout])).resolves.toEqual([]);
-    await waitForCondition(() => nestedNavigationResolved);
-
-    expect(messagingArchiveCleaner.requests).toEqual([
-      {
-        backend: "codex",
-        threadId: "thread-1",
-        origin: "thread-archive",
-      },
-    ]);
-
-    await registry.close();
+      expect(messagingArchiveCleaner.requests).toEqual([
+        {
+          backend: "codex",
+          threadId: "thread-1",
+          origin: "thread-archive",
+        },
+      ]);
+    } finally {
+      releaseRevocation.resolve();
+      await revocationCompleted.promise;
+      await registry.close();
+    }
   });
 
   it("cleans messaging state when an active thread refresh transitions to archived", async () => {

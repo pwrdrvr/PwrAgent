@@ -332,7 +332,7 @@ function describeEnded(
 }
 
 /** A clock time today; with the date before today. */
-function formatWatchTime(timestamp: number, now: number): string {
+export function formatWatchTime(timestamp: number, now: number): string {
   const sameDay = new Date(timestamp).toDateString() === new Date(now).toDateString();
   return new Intl.DateTimeFormat(undefined, sameDay
     ? { hour: "numeric", minute: "2-digit" }

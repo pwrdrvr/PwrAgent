@@ -546,8 +546,11 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
           } : request.method === "tools/list" ? { tools: catalog }
             : { content: [{ type: "text", text: "removed fixture" }] };
           peer.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
-          // Thread sessions offer forms only; URL mode stays unsupported.
-          if (request.method === "initialize") expect(request.params.capabilities.elicitation).toEqual({ form: {} });
+          // Thread sessions offer forms and links, and a local command its roots.
+          if (request.method === "initialize") {
+            expect(request.params.capabilities.elicitation).toEqual({ form: {}, url: {} });
+            expect(request.params.capabilities.roots).toEqual({ listChanged: true });
+          }
         }
       });
     });
