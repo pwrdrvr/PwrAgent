@@ -319,13 +319,14 @@ export class WorktreeArchiveService {
     }
     await this.runGit(repositoryPath, sourceBranch
       ? ["worktree", "add", worktreePath, sourceBranch]
-      : ["worktree", "add", "--detach", worktreePath, sourceHead ?? restoreCommit]);
+      : ["worktree", "add", "--detach", worktreePath, sourceHead ?? restoreCommit],
+    { ownProcessTree: params.restoreSourceCheckout });
     if (sourceHead && sourceHead !== restoreCommit) {
       // Populate the saved file tree, then return the index to the original
       // HEAD. Dirty and non-ignored untracked files remain working-tree edits;
       // the source branch and its unpublished commits are never advanced.
-      await this.runGit(worktreePath, ["read-tree", "--reset", "-u", restoreCommit]);
-      await this.runGit(worktreePath, ["read-tree", sourceHead]);
+      await this.runGit(worktreePath, ["read-tree", "--reset", "-u", restoreCommit], { ownProcessTree: true });
+      await this.runGit(worktreePath, ["read-tree", sourceHead], { ownProcessTree: true });
     }
 
     const restoredAt = params.now ?? Date.now();
