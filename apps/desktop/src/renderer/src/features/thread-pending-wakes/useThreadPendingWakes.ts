@@ -137,7 +137,7 @@ export function useThreadPendingWakes(
         const projected = thread?.pendingWakes;
         setPeerStopped((current) => ({
           wakes: projected,
-          keys: new Set(current?.wakes === projected ? [...current.keys, key] : [key]),
+          keys: new Set(current && current.wakes === projected ? [...current.keys, key] : [key]),
         }));
       }
       return response;
