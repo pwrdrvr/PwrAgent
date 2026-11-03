@@ -21,6 +21,55 @@ function buildEntry(
 }
 
 describe("ThreadTurnQueue", () => {
+  it("drains after completion before start acknowledgement and ignores duplicate terminals", async () => {
+    let acknowledge!: () => void;
+    const pending = new Promise<void>((resolve) => { acknowledge = resolve; });
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const startTurn = vi.fn(async (entry: ThreadTurnQueueEntry) => {
+      if (entry.id === "entry-1") await pending;
+      return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+    });
+    const queue = new ThreadTurnQueue({ startTurn, onLifecycle: (event) => { events.push(event); } });
+    try {
+      const first = queue.submit(buildEntry());
+      await queue.submit(buildEntry({ id: "entry-2" }));
+      const terminal = { backend: "codex" as const, threadId: "thread-1", turnId: "turn-entry-1", status: "turn/completed" };
+      await queue.releaseThread(terminal);
+      await queue.releaseThread(terminal);
+      expect(startTurn).toHaveBeenCalledTimes(1);
+      acknowledge();
+      await first;
+      await vi.waitFor(() => expect(startTurn).toHaveBeenCalledTimes(2));
+      await queue.releaseThread(terminal);
+      expect(events.filter((event) => event.entry.id === "entry-1").map((event) => event.type))
+        .toEqual(["started", "terminal"]);
+      expect(queue.canStartImmediately({ backend: "codex", threadId: "thread-1" })).toBe(false);
+      await queue.releaseThread({ ...terminal, turnId: "turn-entry-2" });
+      expect(queue.canStartImmediately({ backend: "codex", threadId: "thread-1" })).toBe(true);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it("reports a held retry as started even when it completes before acknowledgement", async () => {
+    let queue!: ThreadTurnQueue;
+    queue = new ThreadTurnQueue({
+      startTurn: async (entry) => {
+        await queue.releaseThread({ backend: entry.backend, threadId: entry.threadId, turnId: "early", status: "turn/completed" });
+        return { backend: entry.backend, threadId: entry.threadId, turnId: "early" };
+      },
+    });
+    try {
+      await queue.submitHeld(buildEntry(), "Review before retrying");
+      await expect(queue.releaseEntryWithDisposition("entry-1")).resolves.toEqual({
+        disposition: "started", entryId: "entry-1", turnId: "early",
+      });
+      expect(queue.canStartImmediately({ backend: "codex", threadId: "thread-1" })).toBe(true);
+    } finally {
+      queue.close();
+    }
+  });
+
   it("keeps a display title on a queued entry until its input changes", async () => {
     const queue = new ThreadTurnQueue({
       isThreadActive: () => true,
