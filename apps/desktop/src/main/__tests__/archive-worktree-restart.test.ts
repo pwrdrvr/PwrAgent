@@ -625,7 +625,7 @@ describe("archive worktrees across a desktop restart", () => {
       ? { method: "turn/failed" as const, params: { ...params, turn: { id: params.turnId, status: "failed" as const, error: { message: "Contrived review failure" } } } }
       : terminal === "cancelled"
         ? { method: "turn/cancelled" as const, params: { ...params, turn: { id: params.turnId, status: "cancelled" as const } } }
-        : { method: "turn/completed" as const, params: { ...params, turn: { id: params.turnId, status: "completed" as const } } };
+        : { method: "turn/completed" as const, params: { ...params, turn: { id: params.turnId, status: "completed" as const, output: [] } } };
     ArchiveWorktreeTransport.onReviewStart = (_params, connection) => {
       transport = connection;
       const result = { reviewThreadId: child.id, turn: { id: "native-review-turn", status: "inProgress" } };
