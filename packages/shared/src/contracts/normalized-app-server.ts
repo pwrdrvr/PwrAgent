@@ -334,6 +334,17 @@ export type LinkedDirectorySummary = {
   /** Best-effort branch observed for this linked directory/worktree. */
   gitBranch?: string;
   kind: "local" | "worktree";
+  /**
+   * The checkout's origin as `host/owner/repo`, stamped by the owning
+   * instance's navigation projection from its directory Git status. Paths
+   * name a checkout on one machine only; this is how a viewer with no
+   * checkout of its own still knows which repository a peer's thread is in.
+   * Absent when the owner has no cached status for the path, or is too old
+   * to send one.
+   */
+  repositoryKey?: string;
+  /** The checkout's configured fetch remotes, in the same form. */
+  repositoryKeys?: string[];
 };
 
 export type WorktreeSnapshotState =

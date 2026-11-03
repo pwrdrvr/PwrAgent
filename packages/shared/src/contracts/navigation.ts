@@ -1354,6 +1354,13 @@ export type NavigationDirectorySummary = {
    * the next snapshot.
    */
   localAvailability?: "unconfigured";
+  /**
+   * Placeholder rows only: the repository of the peer checkout the row
+   * stands for, from the remote thread's linked directory. A local checkout
+   * reports its own through `gitStatus` instead.
+   */
+  repositoryKey?: string;
+  repositoryKeys?: string[];
   threadKeys: string[];
   needsAttentionCount: number;
   latestUpdatedAt?: number;

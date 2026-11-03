@@ -26,6 +26,7 @@ import {
   type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
+import { findPeerCounterpartDirectory } from "../../../lib/federation-project-match";
 import type {
   CheckFederationTargetProject,
   FederationProjectDirectory,
@@ -9665,8 +9666,8 @@ describe("Sidebar directory pinning", () => {
     expect(summary).toHaveFocus();
   });
 
-  // What main hands the renderer for a project only a peer has checked out:
-  // a label and nothing else (`remoteDirectoryPlaceholder`).
+  // What main hands the renderer for a project only a peer has checked out,
+  // when the owner sent no repository identity (`remoteDirectoryPlaceholder`).
   const remoteOnlyDirectory: NavigationDirectorySummary = {
     key: "unconfigured-directory:projecta",
     kind: "directory",
@@ -9738,6 +9739,59 @@ describe("Sidebar directory pinning", () => {
       label: "ProjectA",
     });
     expect(onOpenLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("matches a remote-only project by its repository, not its folder name", async () => {
+    // Main's placeholder now carries the owner's origin. Each machine below
+    // has a checkout named ProjectA; only one is the same repository.
+    const placeholder: NavigationDirectorySummary = {
+      ...remoteOnlyDirectory,
+      repositoryKey: "github.com/fixture-org/projecta",
+      repositoryKeys: ["github.com/fixture-org/projecta"],
+    };
+    const checkout = (instanceId: string, repositoryKey: string): NavigationDirectorySummary => ({
+      key: `directory:/${instanceId}/ProjectA`, kind: "directory", label: "ProjectA",
+      path: `/${instanceId}/ProjectA`, repositoryKey, threadKeys: [], needsAttentionCount: 0,
+    });
+    const peerDirectories: Record<string, NavigationDirectorySummary[]> = {
+      "studio-work": [checkout("studio-work", "github.com/fixture-other/projecta")],
+      "laptop-home": [checkout("laptop-home", "github.com/fixture-org/projecta")],
+    };
+    // The real matcher the window's check runs against each peer's index.
+    const checkFederationTargetProject = vi.fn<CheckFederationTargetProject>(
+      async (instanceId, directory) =>
+        Boolean(findPeerCounterpartDirectory(directory, peerDirectories[instanceId] ?? [])),
+    );
+    const onCreateThreadOnFederationTarget = vi.fn(async () => undefined);
+    renderSidebar([placeholder], {
+      onCreateThreadOnFederationTarget,
+      checkFederationTargetProject,
+      newThreadFederationTargets: [
+        { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+        { availability: "available", instanceId: "laptop-home", label: "Laptop / home" },
+      ],
+    });
+
+    await clickElement(screen.getByRole("button", {
+      name: "Start a new thread in ProjectA on another machine",
+    }));
+    const identity = {
+      kind: "directory",
+      label: "ProjectA",
+      repositoryKey: "github.com/fixture-org/projecta",
+      repositoryKeys: ["github.com/fixture-org/projecta"],
+    };
+    expect(checkFederationTargetProject).toHaveBeenCalledWith("studio-work", identity);
+    const studio = await screen.findByRole("menuitem", { name: /Studio Mac \/ work/ });
+    // Same folder name, different repository: no project there.
+    await waitFor(() => expect(studio).toHaveAttribute("aria-disabled", "true"));
+    expect(studio).toHaveTextContent("No project");
+    const laptop = screen.getByRole("menuitem", { name: /Laptop \/ home/ });
+    await waitFor(() => expect(laptop).not.toHaveAttribute("aria-disabled", "true"));
+    expect(laptop).not.toHaveTextContent("No project");
+
+    await clickElement(laptop);
+    expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("laptop-home", identity);
   });
 
   it("points the remote-only tooltip at the + when machines can take the thread", async () => {
