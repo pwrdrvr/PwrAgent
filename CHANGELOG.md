@@ -1,16 +1,25 @@
 # Changelog
 
-## v1.3.10 - 2026-11-02
+## v1.3.10 - 2026-11-03
 
+- Calm Motion - Add an appearance option that lets spinners, thinking indicators, and status pulses animate briefly, then hold still. The system's Reduce Motion setting still stops them entirely.
+- Waiting For - See the monitors, PR watches, scheduled actions, background tasks, and dependencies that can wake a thread in one panel. See what a thread lock or paused project is holding, with controls to stop or release supported work.
+- Project Ordering - Drag projects to pin, unpin, or reorder them directly in the project index. Back and Forward navigation skips archived threads.
 - Managed MCP Connections - Forward tool progress and cancellation, support browser-link requests with explicit consent, and provide thread directory roots to local-command servers. Codex MCP calls can report progress too.
+- Codex Resource Management - Unload unused threads and stop their MCP servers instead of leaving idle processes behind. Recycle long-lived app servers only while idle, with active work and outstanding requests protected.
 - Plan Limits - Keep quota readings in one forward-only store across providers so stale updates do not roll usage backward.
+- Usage and Cost - Price Haiku usage and retain task-monitor cost estimates instead of losing them during refreshes.
 - Claude Session Recovery - Explain when Claude Code has deleted a conversation needed for resume, fork, or rewind. Preserve the PwrAgent transcript and distinguish this from other session errors.
+- Worktree Recovery - Snapshot and restore archived Claude and ACP worktrees, and retire completed review threads before cleaning up their worktrees.
+- To-do Routing - Queue requests sent to the current thread, match remote-only projects by repository rather than name, and start peer To-do worktrees from the default branch.
 - Forge Automation - Release a locked thread's Auto-fix ownership, honor configured Claude forge-tool approvals without duplicate prompts, and show Forge Automation on peer-only project rows.
 - Thread Navigation - Keep starting-thread titles and pins stable, clear scheduled badges after startup, and allow marking a directory read while its threads are active.
 - CI Downloads - Store downloaded CI artifacts with their owning thread and replace repeat downloads safely. Older unowned CI downloads are cleared and can be downloaded again.
 - Outpost Versions and Sync - Show CLI and running-daemon versions, identify when an update requires a daemon restart, and align remote titles, read marks, and refreshes with desktop behavior.
-- UI and Messaging - Make busy indicators consistently respect reduced motion, avoid unnecessary messaging-settings refreshes, and order current and superseded models consistently.
-- Minor - Dependency updates and test-infrastructure improvements.
+- Shutdown and Startup - Wait for Settings and Claude command discovery to finish before quitting, and retain terminal events that arrive while a turn is starting.
+- UI and Messaging - Keep image previews visible when work is collapsed, make busy indicators consistently respect reduced motion, avoid unnecessary messaging-settings refreshes, and order current and superseded models consistently.
+- Windows Packaging - Match the updated bundled Git layout so Git LFS verification no longer blocks Windows installer creation.
+- Minor - Security and dependency updates, more reliable automation status transitions, and test-infrastructure improvements.
 
 ## v1.3.9 - 2026-11-02
 
