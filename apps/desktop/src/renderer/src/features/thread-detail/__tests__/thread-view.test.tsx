@@ -599,7 +599,7 @@ describe("ThreadView", () => {
         selectedLaunchpad={{
           backend: "claude", directoryKey: "directory:/repo", directoryKind: "directory",
           directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
-          workMode: "local", createdAt: 1, updatedAt: 1,
+          prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
         }}
       />);
       expect(screen.getByRole("textbox", { name: "New thread" })).toBeInTheDocument();
