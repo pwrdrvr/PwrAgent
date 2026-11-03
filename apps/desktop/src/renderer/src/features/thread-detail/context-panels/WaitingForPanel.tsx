@@ -5,6 +5,7 @@ import {
   buildPullRequestStatusKey,
   type NavigationThreadSummary,
   type ThreadPendingWake,
+  type ThreadPendingWakeHold,
   type ThreadPendingWakeKind,
 } from "@pwragent/shared";
 import {
@@ -12,7 +13,9 @@ import {
   ClockIcon,
   ContinueAfterIcon,
   EyeIcon,
+  LockIcon,
   MergeIcon,
+  PauseIcon,
   PullRequestIcon,
   RadarIcon,
   TerminalIcon,
@@ -30,6 +33,10 @@ type WaitingForPanelProps = {
   ownerLabel?: string;
   onTurnOffAutoFix?: () => Promise<void>;
   onSendScheduledNow?: (actionId: string) => Promise<void>;
+  /** Sends a wake-up a paused project holds, through the project's own release. */
+  onSendHeldNow?: (wake: HeldMessageWake) => Promise<void>;
+  /** Unlocks the thread, which sends what the lock held. */
+  onUnlockThread?: () => Promise<void>;
   /** Opens the rail tab that owns a row, for more than this list shows. */
   onShowTab?: (tab: ContextTabId) => void;
   /** Opens Continue After for this thread. */
@@ -39,6 +46,8 @@ type WaitingForPanelProps = {
 };
 
 type Group = { id: string; label: string; aside?: string; wakes: ThreadPendingWake[] };
+
+export type HeldMessageWake = Extract<ThreadPendingWake, { kind: "held_message" }>;
 
 /** Ended rows one list shows. */
 const ENDED_ROWS = 8;
@@ -57,6 +66,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   const now = props.now ?? Date.now();
   const capabilities = props.thread.federation?.capabilities ?? [];
   const peer = state.status === "ready" && state.peer;
+  const [unlocking, setUnlocking] = useState(false);
 
   if (state.status !== "ready") {
     return (
@@ -102,23 +112,59 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
         return capabilities.includes("scheduled_actions");
       case "monitor":
       case "backend_task":
+      case "held_message":
         return capabilities.includes("turn_control");
       default:
         return false;
     }
   };
 
-  const groups = groupWakes(state.wakes, props.thread);
-  const readOnlyOnPeer = peer && state.wakes.some((wake) => wake.stop && !canStop(wake));
+  // An owner newer than this window can list kinds it cannot draw.
+  const wakes = state.wakes.filter((wake) => KNOWN_KINDS.has(wake.kind));
+  const groups = groupWakes(wakes, props.thread);
+  const readOnlyOnPeer = peer && wakes.some((wake) => wake.stop && !canStop(wake));
   const endedRows = state.ended.slice(0, ENDED_ROWS);
+  const notice = readHoldNotice(props.thread, wakes);
+  // A peer sends a held wake-up only through its project's release.
+  const canSendHeld = (wake: ThreadPendingWake): boolean => wake.held?.kind === "project_paused"
+    && Boolean(props.onSendHeldNow)
+    && (!peer || (capabilities.includes("project_forge_automation") && capabilities.includes("turn_control")));
+  const unlock = props.onUnlockThread;
 
   return (
     <section className="context-panel__section waiting-for-panel">
       <header className="waiting-for-panel__header">
         <h3>Waiting for</h3>
-        {state.wakes.length > 0 ? <span className="waiting-for-panel__count">{state.wakes.length}</span> : null}
+        {wakes.length > 0 ? <span className="waiting-for-panel__count">{wakes.length}</span> : null}
       </header>
       <div className="waiting-for-panel__body">
+        {notice ? (
+          <div className="waiting-for-panel__hold" role="note">
+            <span className="waiting-for-panel__hold-icon" aria-hidden="true">
+              {notice.kind === "thread_locked" ? <LockIcon size={12} /> : <PauseIcon size={12} />}
+            </span>
+            <span className="waiting-for-panel__hold-text">
+              <span className="waiting-for-panel__hold-title">{describeHoldTitle(notice)}</span>
+              <span className="pr-watch-list__sub">{describeHoldRelease(notice, Boolean(unlock), props.ownerLabel)}</span>
+            </span>
+            {notice.kind === "thread_locked" && unlock ? (
+              <button
+                type="button"
+                className="pr-watch-list__action"
+                disabled={unlocking}
+                onClick={() => {
+                  setUnlocking(true);
+                  setError(undefined);
+                  void unlock()
+                    .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
+                    .finally(() => setUnlocking(false));
+                }}
+              >
+                Unlock
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {groups.length === 0 ? (
           <div className="waiting-for-panel__empty">
             <p className="waiting-for-panel__empty-title">{state.incomplete ? "Could not confirm everything this thread is waiting for." : "Nothing will wake this thread."}</p>
@@ -134,7 +180,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
               {group.aside ? <span className="waiting-for-panel__eyebrow-aside">{group.aside}</span> : null}
             </p>
             {group.wakes.map((wake) => {
-              const view = describeWake(wake, props.thread, now, props.ownerLabel);
+              const view = describeWake(wake, props.thread, now, props.ownerLabel, canSendHeld(wake));
               const open = openKey === wake.key;
               const detail = open ? renderDetail(wake, props, now) : null;
               return (
@@ -153,6 +199,20 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
                     {detail}
                   </span>
                   <span className="waiting-for-panel__actions">
+                    {wake.kind === "held_message" && canSendHeld(wake) ? (
+                      <button
+                        type="button"
+                        className="pr-watch-list__action"
+                        aria-label={`Send Now: ${view.plainTitle}`}
+                        disabled={busy.has(wake.key)}
+                        onClick={() => run(wake.key, async () => {
+                          await props.onSendHeldNow!(wake);
+                          props.controller.ended(wake.key);
+                        })}
+                      >
+                        Send Now
+                      </button>
+                    ) : null}
                     {wake.kind === "scheduled_action" && wake.status === "scheduled" && !peer && props.onSendScheduledNow ? (
                       <button
                         type="button"
@@ -223,11 +283,70 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
 });
 
 const GROUP_ORDER: Array<{ id: string; label: string; kinds: ThreadPendingWakeKind[] }> = [
+  { id: "held", label: "Held", kinds: ["held_message"] },
   { id: "scheduled", label: "Scheduled", kinds: ["scheduled_action"] },
   { id: "prs", label: "Pull requests", kinds: ["pr_watch", "pr_auto_fix"] },
   { id: "threads", label: "Other threads", kinds: ["dependency"] },
   { id: "running", label: "Running", kinds: ["monitor", "backend_task"] },
 ];
+
+const KNOWN_KINDS = new Set<ThreadPendingWakeKind>(GROUP_ORDER.flatMap((group) => group.kinds));
+
+/**
+ * The hold over the whole thread, for the notice above the list: its lock,
+ * which the thread row also carries, else the paused project a wake names.
+ */
+function readHoldNotice(
+  thread: NavigationThreadSummary,
+  wakes: readonly ThreadPendingWake[],
+): Exclude<ThreadPendingWakeHold, { kind: "queue_held" }> | undefined {
+  if (thread.lock) return { kind: "thread_locked", ...(thread.lock.note ? { note: thread.lock.note } : {}) };
+  for (const wake of wakes) {
+    if (wake.held?.kind === "thread_locked" || wake.held?.kind === "project_paused") return wake.held;
+  }
+  return undefined;
+}
+
+function describeHoldTitle(hold: Exclude<ThreadPendingWakeHold, { kind: "queue_held" }>): string {
+  if (hold.kind === "thread_locked") {
+    return hold.note ? `This thread is locked: ${clipText(hold.note, 120)}` : "This thread is locked.";
+  }
+  return `${hold.projectLabel} is paused.`;
+}
+
+function describeHoldRelease(
+  hold: Exclude<ThreadPendingWakeHold, { kind: "queue_held" }>,
+  canUnlock: boolean,
+  ownerLabel: string | undefined,
+): string {
+  if (hold.kind === "thread_locked") {
+    return canUnlock
+      ? "Nothing starts a turn until it is unlocked. Unlocking sends what it held, in order."
+      : `Nothing starts a turn until it is unlocked${ownerLabel ? ` on ${ownerLabel}` : ""}.`;
+  }
+  return hold.discardsWakeups
+    ? "Its PR checks stop, and monitor and Continue After results are dropped. Resume it from the project's menu in Directories."
+    : "Its PR checks stop, and monitor and Continue After results are held. Resume it from the project's menu in Directories.";
+}
+
+/** One line on a row the hold keeps from starting: what holds it, and when it goes. */
+function describeRowHold(wake: ThreadPendingWake, canSend: boolean): string | undefined {
+  const hold = wake.held;
+  if (!hold) return undefined;
+  if (hold.kind === "thread_locked") {
+    return wake.kind === "held_message" ? "Held while this thread is locked; unlocking sends it." : "Held while this thread is locked.";
+  }
+  if (hold.kind === "queue_held") return `Held: ${clipText(hold.reason, 160)} Send it again from the queue above the composer.`;
+  if (wake.kind === "held_message") {
+    return canSend
+      ? `Held while ${hold.projectLabel} is paused. Send it now, or resume the project.`
+      : `Held while ${hold.projectLabel} is paused. Resuming the project sends it.`;
+  }
+  if (wake.kind === "pr_watch") return `Waits while ${hold.projectLabel} is paused.`;
+  return hold.discardsWakeups
+    ? `Dropped if it ends while ${hold.projectLabel} is paused.`
+    : `Held if it ends while ${hold.projectLabel} is paused.`;
+}
 
 /** Main sends the wakes soonest first; groups keep that order. */
 function groupWakes(wakes: readonly ThreadPendingWake[], thread: NavigationThreadSummary): Group[] {
@@ -278,13 +397,32 @@ function describeWake(
   thread: NavigationThreadSummary,
   now: number,
   ownerLabel: string | undefined,
+  canSendHeld = false,
 ): WakeView {
-  const transient = wake.durable ? null : (
-    <span className="waiting-for-panel__transient">
-      {` Ends if ${ownerLabel ?? "PwrAgent"} quits.`}
-    </span>
+  const rowHold = describeRowHold(wake, canSendHeld);
+  const transient = (
+    <>
+      {rowHold ? <span className="waiting-for-panel__held">{` ${rowHold}`}</span> : null}
+      {wake.durable ? null : (
+        <span className="waiting-for-panel__transient">
+          {` Ends if ${ownerLabel ?? "PwrAgent"} quits.`}
+        </span>
+      )}
+    </>
   );
   switch (wake.kind) {
+    case "held_message": {
+      const title = HELD_SOURCE_TITLES[wake.source];
+      // The label names the message, so two held rows' buttons differ.
+      const plainTitle = wake.displayText ? `${title}: ${clipText(wake.displayText, 60)}` : title;
+      const quote = wake.displayText ? <span className="waiting-for-panel__quote">{`“${clipText(wake.displayText, 90)}”`}</span> : null;
+      return {
+        icon: wake.held?.kind === "thread_locked" ? <LockIcon size={12} /> : <PauseIcon size={12} />,
+        title,
+        plainTitle,
+        sub: <>{quote}{transient}</>,
+      };
+    }
     case "scheduled_action": {
       const noun = wake.actionKind === "review" ? "Review" : "Message";
       const plainTitle = wake.status === "held"
@@ -300,7 +438,7 @@ function describeWake(
         icon: <ClockIcon size={12} />,
         title,
         plainTitle,
-        sub: <>{quote}{wake.status === "held" ? "Waits for you to release it." : `${creatorLabel(wake.createdBy, ownerLabel)}, ${formatWatchTime(wake.createdAt ?? now, now)}.`}</>,
+        sub: <>{quote}{wake.status === "held" ? "Waits for you to release it." : `${creatorLabel(wake.createdBy, ownerLabel)}, ${formatWatchTime(wake.createdAt ?? now, now)}.`}{transient}</>,
       };
     }
     case "pr_watch": {
@@ -312,14 +450,14 @@ function describeWake(
           icon: <EyeIcon size={12} />,
           title: plainTitle,
           plainTitle,
-          sub: `On ${describeCiOutcomes(watch.notifyOn)}. ${creatorLabel(wake.createdBy, ownerLabel)}, ${formatWatchTime(watch.createdAt, now)}.`,
+          sub: <>{`On ${describeCiOutcomes(watch.notifyOn)}. ${creatorLabel(wake.createdBy, ownerLabel)}, ${formatWatchTime(watch.createdAt, now)}.`}{transient}</>,
         };
       }
       return {
         icon: <MergeIcon size={12} />,
         title: "Waiting for merge or close",
         plainTitle: "Waiting for merge or close",
-        sub: `${creatorLabel(wake.createdBy, ownerLabel)}, ${formatWatchTime(watch.createdAt, now)}.`,
+        sub: <>{`${creatorLabel(wake.createdBy, ownerLabel)}, ${formatWatchTime(watch.createdAt, now)}.`}{transient}</>,
       };
     }
     case "pr_auto_fix": {
@@ -342,9 +480,11 @@ function describeWake(
         icon: <ContinueAfterIcon size={12} />,
         title: plainTitle,
         plainTitle,
-        sub: ready
+        sub: <>{ready && !wake.held
           ? "Met. Waits for this thread to be free."
-          : `Since ${formatWatchTime(wake.createdAt ?? now, now)}.${wake.dependency.conditions.length > 1 ? wake.dependency.mode === "any" ? " Waits for any of them." : " Waits for all of them." : ""}`,
+          : ready
+            ? "Met."
+            : `Since ${formatWatchTime(wake.createdAt ?? now, now)}.${wake.dependency.conditions.length > 1 ? wake.dependency.mode === "any" ? " Waits for any of them." : " Waits for all of them." : ""}`}{transient}</>,
       };
     }
     case "monitor": {
@@ -456,12 +596,31 @@ function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now:
           {showTab("prs", "Show in Pull requests")}
         </span>
       );
+    case "held_message":
+      return (
+        <span className="waiting-for-panel__detail">
+          <span className="waiting-for-panel__prompt">{wake.displayText || "No text."}</span>
+          {wake.createdAt !== undefined ? <span className="pr-watch-list__sub">{`Held since ${formatWatchTime(wake.createdAt, now)}.`}</span> : null}
+        </span>
+      );
   }
 }
 
 function stopLabel(wake: ThreadPendingWake): string {
-  return wake.stop === "turn_off" ? "Turn Off" : wake.stop === "cancel" ? "Cancel" : "Stop";
+  return wake.stop === "turn_off" ? "Turn Off"
+    : wake.stop === "cancel" ? "Cancel"
+    : wake.stop === "discard" ? "Discard"
+    : "Stop";
 }
+
+const HELD_SOURCE_TITLES: Record<HeldMessageWake["source"], string> = {
+  monitor: "Monitor result",
+  dependency: "Continue After result",
+  operator: "Your queued message",
+  automation: "Automation message",
+  messaging: "Message from messaging",
+  other: "Queued message",
+};
 
 /** Absent means an agent: older PR watch rows predate the field. */
 function creatorLabel(createdBy: ThreadPendingWake["createdBy"], ownerLabel: string | undefined): string {

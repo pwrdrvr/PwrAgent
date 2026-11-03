@@ -107,7 +107,10 @@ describe("PwrAgent task monitor agent tools", () => {
       "Never pass the parent's own model or effort",
     );
     expect(createMonitorTool?.description).toContain(
-      "Do not use this for an attached PR",
+      "Do not create a polling monitor for these waits",
+    );
+    expect(createMonitorTool?.description).toContain(
+      "manage_thread_dependencies (Continue After)",
     );
     expect(createMonitorTool?.description).toContain(
       "A successful response means the monitor thread and turn have started",

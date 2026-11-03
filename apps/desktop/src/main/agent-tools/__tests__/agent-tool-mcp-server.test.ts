@@ -100,7 +100,9 @@ describe("AgentToolMcpServer", () => {
       expect(client.getInstructions()).toBe(buildPwrAgentMcpInstructions(tools.map((tool) => tool.name)));
       expect(client.getInstructions()).toContain("skill://waiting-on-work/SKILL.md");
       expect(client.getInstructions()).toContain("watch_thread_pull_request and end the turn");
-      expect(client.getInstructions()!.length).toBeLessThan(700);
+      expect(client.getInstructions()).toContain("manage_thread_dependencies (Continue After), mode all");
+      // Include the prerequisite route without turning the bootstrap into a guide.
+      expect(client.getInstructions()!.length).toBeLessThan(900);
       expect(PWRAGENT_TOOL_GUIDE).toContain("Use list_ci_artifacts and download_ci_artifact");
       // Native dynamic-tool discovery reaches the same definition as MCP tools/list.
       expect(searchPwrAgentTools(catalogs.flatMap((catalog) => catalog.dynamicTools), "PwrAgent tool guide")[0]?.name).toBe("read_tool_guide");

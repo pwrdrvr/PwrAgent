@@ -23,6 +23,7 @@ function fixture() {
     interruptTurn: vi.fn(async () => undefined),
     steerTurn: vi.fn(async () => ({ threadId: "new-thread", turnId: "turn" })),
     terminateBackgroundTerminal: vi.fn(async () => true),
+    retireReviewThread: vi.fn(async () => true),
     startRealtime: vi.fn(async () => undefined),
     readThreadSummary: vi.fn(async () => ({ id: "persisted" })),
     readThread: vi.fn(async () => ({ entries: [] })),
@@ -78,6 +79,15 @@ describe("provider-specific Codex runtimes", () => {
     expect(local.raw.interruptTurn).toHaveBeenCalledOnce();
     expect(primary.raw.startTurn).not.toHaveBeenCalled();
     expect(create).toHaveBeenCalledExactlyOnceWith(bonsai);
+  });
+
+  it("retires a review through its owning provider runtime", async () => {
+    const { primary, local, client } = setup();
+    primary.providers.set("review-child", "bonsai");
+    const params = { threadId: "review-child", parentThreadId: "review-parent" };
+    expect(await client.retireReviewThread(params)).toBe(true);
+    expect(local.raw.retireReviewThread).toHaveBeenCalledExactlyOnceWith(params);
+    expect(primary.raw.retireReviewThread).not.toHaveBeenCalled();
   });
 
   it("resolves persisted thread ownership through App Server before a turn, including plain model IDs", async () => {

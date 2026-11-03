@@ -123,6 +123,7 @@ import {
   projectRefusesThreadMessages,
   type ProjectHeldWakeup,
   type ProjectHeldWakeupSource,
+  type ThreadPendingWakeHold,
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
   type ListProjectHeldWakeupsRequest,
@@ -1123,6 +1124,7 @@ type BackendClient = {
   ): Promise<AppServerThreadSummary[]>;
   deleteThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
+  retireReviewThread?: CodexAppServerClient["retireReviewThread"];
   restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
   updateThreadMetadata?(params: {
@@ -16479,17 +16481,19 @@ export class DesktopBackendRegistry {
         backend, threadId: request.threadId, runtimeInstanceId: this.runtimeInstanceId, archivedAt,
       });
       // Same bookkeeping as ACP: preserve the tray and record the archive
-      // before publishing its removal. Like ACP, Claude keeps its worktrees.
+      // before publishing its removal. Cleanup snapshots the checkout afterward.
       await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: request.threadId }], archivedAt, { promoteSubthreads: true });
+      this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, request.threadId));
       this.invalidateThreadListCache(backend);
+      this.invalidateArchiveCleanupReads(backend);
       await this.emit({ backend, notification: { method: "thread/archived", params: { threadId: request.threadId } } });
-      await this.cleanupMessagingForArchivedThread({
+      const messagingCleanup = await this.cleanupMessagingForArchivedThread({
         backend,
         threadId: request.threadId,
         origin: "thread-archive",
       });
       const completion = this.enqueueArchiveCleanup({ backend, threadId: request.threadId, archivedAt, codexRolloutMissing: false,
-        preserveWorktrees: true, messagingCleanup: {} });
+        preserveWorktrees: request.preserveWorktrees, messagingCleanup });
       finishMutation?.();
       return await this.observeArchiveCleanupCompletion(completion, {
         backend, threadId: request.threadId, archivedAt, backgroundCleanup: request.backgroundCleanup,
@@ -16498,7 +16502,7 @@ export class DesktopBackendRegistry {
     if (isAcpBackendId(backend)) {
       return await this.archiveAcpThread({
         backend,
-        threadId: request.threadId, backgroundCleanup: request.backgroundCleanup,
+        threadId: request.threadId, backgroundCleanup: request.backgroundCleanup, preserveWorktrees: request.preserveWorktrees,
       }, beforeMutation, finishMutation);
     }
     let result: { threadId: string };
@@ -16736,12 +16740,6 @@ export class DesktopBackendRegistry {
         const canReuseTarget = cached?.includesArchived && cached.revision === this.archiveWorkspaceRevision;
         if (!canReuseTarget && !params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
           targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
-          const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
-          await context.checkpoint();
-          const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
-          targetThread = { ...targetThread, linkedDirectories: withRetainedWorktrees(mergeThreadLinkedDirectories([
-            ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
-          ]), overlays[result.threadId]) };
         } else if (isAcpBackendId(backend)) {
           const session = this.acpBackend.getSession(backend, result.threadId);
           if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
@@ -16749,7 +16747,15 @@ export class DesktopBackendRegistry {
           targetThread = (await this.claudeBackend.listThreads({ archived: true }))
             .find((thread) => thread.id === result.threadId);
         }
-        const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
+        if (targetThread) {
+          const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+          await context.checkpoint();
+          const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
+          targetThread = { ...targetThread, linkedDirectories: withRetainedWorktrees(mergeThreadLinkedDirectories([
+            ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
+          ]), overlays[result.threadId]) };
+        }
+        const needsWorktreeOwnership = !params.preserveWorktrees && (isAcpBackendId(backend) || !targetThread
           || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));
         return await this.findThreadForArchiveCleanup({
           backend, threadId: result.threadId, context, codexRolloutMissing,
@@ -16901,13 +16907,22 @@ export class DesktopBackendRegistry {
   private async restoreThreadWithoutLifecycleLock(request: RestoreThreadRequest): Promise<RestoreThreadResponse> {
     const backend = request.backend ?? "codex";
     if (backend === "claude") {
+      const archivedThread = (await this.claudeBackend.listThreads({ archived: true })).find((thread) => thread.id === request.threadId);
+      if (!archivedThread) throw new Error("Archived Claude thread metadata was not found.");
+      const worktrees = await this.restoreThreadWorktrees({ backend, threadId: request.threadId, thread: archivedThread });
+      const failures = worktrees.filter((worktree) => worktree.error
+        || (!worktree.restored && worktree.skippedReason !== "Worktree path already exists."));
+      if (failures.length) {
+        throw new Error(`Claude worktree restoration failed; the thread remains archived: ${failures.map((worktree) =>
+          `${worktree.worktreePath}: ${worktree.error ?? worktree.skippedReason}`).join("; ")}`);
+      }
       await this.claudeBackend.setArchived(request.threadId, false);
       const restoredAt = Date.now();
       await this.overlayStore.setThreadArchiveTombstone({ backend, threadId: request.threadId, restoredAt });
       this.clearArchivedMessagingCleanupCache({ backend, threadId: request.threadId });
       this.invalidateThreadListCache(backend);
       await this.emit({ backend, notification: { method: "thread/unarchived", params: { threadId: request.threadId } } });
-      return { backend, threadId: request.threadId, restoredAt };
+      return { backend, threadId: request.threadId, restoredAt, worktrees };
     }
     if (isAcpBackendId(backend)) {
       return await this.restoreAcpThread({
@@ -16955,6 +16970,7 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
     backgroundCleanup?: boolean;
+    preserveWorktrees?: boolean;
   }, beforeMutation?: () => Promise<() => void>, finishMutation?: () => void): Promise<ArchiveThreadResponse> {
     let session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
@@ -16997,7 +17013,7 @@ export class DesktopBackendRegistry {
       origin: "thread-archive",
     });
     const completion = this.enqueueArchiveCleanup({ backend: params.backend, threadId: params.threadId, archivedAt, codexRolloutMissing: false,
-      preserveWorktrees: true, messagingCleanup: {} });
+      preserveWorktrees: params.preserveWorktrees, messagingCleanup: {} });
     finishMutation?.();
     return await this.observeArchiveCleanupCompletion(completion, { ...params, archivedAt });
   }
@@ -17007,15 +17023,29 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<RestoreThreadResponse> {
     const session = this.acpBackend.getSession(params.backend, params.threadId);
-    if (!session) {
-      throw new Error(`ACP thread not found: ${params.threadId}`);
+    if (!session?.archivedAt) {
+      throw new Error(`Archived ACP thread not found: ${params.threadId}`);
+    }
+    const thread = this.acpBackend.sessionToThreadSummary(session);
+    const worktrees = await this.restoreThreadWorktrees({ ...params, thread });
+    const failures = worktrees.filter((worktree) => worktree.error
+      || (!worktree.restored && worktree.skippedReason !== "Worktree path already exists."));
+    if (failures.length) throw new Error(`ACP worktree restoration failed; the thread remains archived: ${failures.map((worktree) =>
+      `${worktree.worktreePath}: ${worktree.error ?? worktree.skippedReason}`).join("; ")}`);
+    // Even a previous failed provider load may have recreated the checkout.
+    // Keep the archive marker until both checkout validation and protocol load
+    // succeed, and preserve runtime metadata reported during that load.
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    if (overlay?.worktreeSnapshots?.some((snapshot) => snapshot.state === "restored")) {
+      try { await this.acpBackend.restoreWorktreeSession(params.backend, params.threadId); }
+      catch (error) { throw new Error(`ACP session restoration failed; the thread remains archived: ${error instanceof Error ? error.message : String(error)}`); }
     }
     const restoredAt = Date.now();
-    const restoredSession = { ...session };
+    const restoredSession = { ...this.acpBackend.getSession(params.backend, params.threadId) ?? session };
     delete restoredSession.archivedAt;
     this.acpBackend.upsertSession({
       ...restoredSession,
-      updatedAt: Math.max(session.updatedAt, restoredAt),
+      updatedAt: Math.max(restoredSession.updatedAt, restoredAt),
     });
     await this.overlayStore.setThreadArchiveTombstone({ ...params, restoredAt });
     this.invalidateThreadListCache(params.backend, true);
@@ -17037,7 +17067,7 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
       restoredAt,
-      worktrees: [],
+      worktrees,
     };
   }
 
@@ -20381,6 +20411,66 @@ export class DesktopBackendRegistry {
   /** Whether the operator locked the thread; a lock outranks a project pause. */
   async isThreadLocked(params: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
     return Boolean(await this.readThreadLock(params.backend, params.threadId));
+  }
+
+  /**
+   * What keeps the thread's wakes from starting a turn now, for its Waiting
+   * for list. A lock outranks a paused project, as it does at admission.
+   */
+  async readThreadWakeHold(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadPendingWakeHold | undefined> {
+    const lock = await this.readThreadLock(params.backend, params.threadId);
+    if (lock) return { kind: "thread_locked", ...(lock.note ? { note: lock.note } : {}) };
+    const project = this.resolvePausedThreadProject(params);
+    if (!project) return undefined;
+    return {
+      kind: "project_paused",
+      projectLabel: project.label,
+      directoryKey: project.directoryKey,
+      ...(project.automation.wakeupPolicy === "discard" ? { discardsWakeups: true as const } : {}),
+    };
+  }
+
+  /**
+   * The thread's queue entries that wait for a release rather than for the
+   * thread to be free: a project hold, a lock, or a failed turn. From memory.
+   */
+  listHeldThreadQueueEntries(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Array<{
+    entryId: string;
+    origin: ThreadTurnQueueOrigin;
+    createdAt: number;
+    holdReason?: string;
+    projectHold?: { directoryKey: string; projectLabel: string; source: ProjectHeldWakeupSource; summary: string };
+    text: string;
+  }> {
+    const held: ReturnType<DesktopBackendRegistry["listHeldThreadQueueEntries"]> = [];
+    for (const entry of this.threadTurnQueue.iterateQueuedEntries(params)) {
+      if (!entry.projectHold && !entry.manualReleaseRequired) continue;
+      const text = entry.title
+        || entry.input.find((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")?.text
+        || "";
+      held.push({
+        entryId: entry.id,
+        origin: entry.origin,
+        createdAt: entry.createdAt,
+        ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+        ...(entry.projectHold
+          ? {
+              projectHold: {
+                ...entry.projectHold,
+                projectLabel: getProjectForgeAutomationIndex().label(entry.projectHold.directoryKey),
+              },
+            }
+          : {}),
+        text,
+      });
+    }
+    return held;
   }
 
   private async readThreadLock(backend: AppServerBackendKind, threadId: string): Promise<ThreadLock | undefined> {
@@ -36382,6 +36472,23 @@ export class DesktopBackendRegistry {
       status: terminal.method,
       ...(terminal.errorMessage ? { errorMessage: terminal.errorMessage } : {}),
     });
+    if (record.mode === "native" && record.backend === "codex" && record.parentBackend === "codex"
+      && record.reviewThreadId !== record.parentThreadId) {
+      try {
+        const retired = await this.withCodexThreadClient(record.reviewThreadId, async (client) =>
+          await client.retireReviewThread?.({ threadId: record.reviewThreadId, parentThreadId: record.parentThreadId }));
+        backendRegistryLog.info("native review thread retirement completed", {
+          parentThreadId: record.parentThreadId, reviewThreadId: record.reviewThreadId, retired: retired === true,
+        });
+      } catch (error) {
+        // Findings and the parent's terminal state have already been retained.
+        // A cleanup failure must not fail the review or its parent's queue.
+        backendRegistryLog.warn("native review thread retirement failed", {
+          parentThreadId: record.parentThreadId, reviewThreadId: record.reviewThreadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   private findReviewForParentTurn(params: {
@@ -37831,7 +37938,7 @@ export class DesktopBackendRegistry {
     for (const thread of inventory.archivedThreads) {
       // A removed checkout may no longer enrich to a linked directory. Its
       // archived provider cwd still proves association with a managed id.
-      if (thread.source !== "codex") continue;
+      if (thread.source !== "codex" && thread.source !== "claude" && !isAcpBackendId(thread.source)) continue;
       if (thread.projectKey && await this.worktreeContainerService.containerPath(thread.projectKey)) {
         ownersByPath.set(normalizeWorktreePathForComparison(thread.projectKey), thread);
       }
@@ -37864,10 +37971,11 @@ export class DesktopBackendRegistry {
         }
         continue;
       }
-      if (this.hasArchivedAcpWorktreeOwner(worktreePath, inventory)) {
+      const acpBlocker = this.archivedAcpWorktreeBlocker(worktreePath, inventory);
+      if (acpBlocker) {
         report.protectedWorktrees += 1;
         report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
-          skippedReason: "Archived ACP session owns this worktree; ACP restore does not recreate snapshots." });
+          skippedReason: acpBlocker });
         continue;
       }
       if (inventory.worktreeEvidence?.externalPaths.has(worktreePath)
@@ -37898,7 +38006,6 @@ export class DesktopBackendRegistry {
           backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(),
           cleanup: await this.archiveThreadWorktrees({
             ...current, backend: candidate.backend, thread, context,
-            preserveArchivedAcpWorktrees: true,
           }),
         };
       });
@@ -37975,11 +38082,20 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private hasArchivedAcpWorktreeOwner(worktreePath: string, inventory: Pick<ArchiveCleanupMetadata, "worktreeEvidence">): boolean {
-    return this.worktreeContainerService.worktreeComparisonPaths(worktreePath).some((value) =>
+  private archivedAcpWorktreeOwners(worktreePath: string, inventory: Pick<ArchiveCleanupMetadata, "worktreeEvidence">): AppServerThreadSummary[] {
+    return this.worktreeContainerService.worktreeComparisonPaths(worktreePath).flatMap((value) =>
       (inventory.worktreeEvidence?.archivedByPath.get(normalizeWorktreePathForComparison(value)) ?? [])
-        .some((thread) => thread.source !== "codex"),
+        .filter((thread) => isAcpBackendId(thread.source)),
     );
+  }
+
+  private archivedAcpWorktreeBlocker(worktreePath: string, inventory: Pick<ArchiveCleanupMetadata, "worktreeEvidence">): string | undefined {
+    for (const owner of this.archivedAcpWorktreeOwners(worktreePath, inventory)) {
+      if (!isAcpBackendId(owner.source)) continue;
+      const reason = this.acpBackend.worktreeArchiveBlockedReason(owner.source, owner.id);
+      if (reason) return reason;
+    }
+    return undefined;
   }
 
   private async readPacedArchiveCleanupMetadata(params: ArchiveCleanupDiscoveryRequest): Promise<ArchiveCleanupMetadata> {
@@ -38387,7 +38503,6 @@ export class DesktopBackendRegistry {
     context?: ArchiveCleanupContext;
     codexRolloutMissing?: boolean;
     worktreeEvidence?: ArchiveCleanupMetadata["worktreeEvidence"];
-    preserveArchivedAcpWorktrees?: boolean;
   }): Promise<ArchiveThreadCleanupResult[]> {
     // Ownership may live on another (even archived) thread using the same
     // checkout. A provider alias without the marker must not authorize removal.
@@ -38436,9 +38551,10 @@ export class DesktopBackendRegistry {
     const cleanupCandidate = async (candidate: WorktreeArchiveCandidate): Promise<ArchiveThreadCleanupResult> => {
       await params.context?.checkpoint();
       try {
-        if (params.preserveArchivedAcpWorktrees && this.hasArchivedAcpWorktreeOwner(candidate.worktreePath, params)) {
+        const acpBlocker = this.archivedAcpWorktreeBlocker(candidate.worktreePath, params);
+        if (acpBlocker) {
           return { worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
-            skippedReason: "Archived ACP session owns this worktree; ACP restore does not recreate snapshots." };
+            skippedReason: acpBlocker };
         }
         if (externalWorktreePaths.has(normalizeWorktreePathForComparison(candidate.worktreePath))) {
           return {
@@ -38477,6 +38593,9 @@ export class DesktopBackendRegistry {
           };
         }
 
+        for (const owner of this.archivedAcpWorktreeOwners(candidate.worktreePath, params)) {
+          if (isAcpBackendId(owner.source)) await this.acpBackend.prepareWorktreeArchive(owner.source, owner.id);
+        }
         let removalMetadata: ArchiveCleanupMetadata | undefined;
         let removalRevision = this.archiveWorkspaceRevision;
         const admission = {
@@ -38508,8 +38627,8 @@ export class DesktopBackendRegistry {
               throw new Error("Another thread lifecycle mutation is still in flight; the worktree was kept. Retry archive after it settles.");
             }
               const key = normalizeWorktreePathForComparison(candidate.worktreePath);
-              if (params.preserveArchivedAcpWorktrees && this.hasArchivedAcpWorktreeOwner(key, current)) {
-                throw new Error("Archived ACP session owns this worktree; the checkout was kept.");
+              for (const owner of this.archivedAcpWorktreeOwners(key, current)) {
+                if (isAcpBackendId(owner.source)) this.acpBackend.assertWorktreeArchiveReleased(owner.source, owner.id);
               }
               if (!current.thread.linkedDirectories.some((directory) => {
                 const worktreePath = linkedDirectoryWorktreePath(directory);
@@ -38662,10 +38781,11 @@ export class DesktopBackendRegistry {
   }): Promise<void> {
     const archivedWorktreePath = normalizeWorktreePathForComparison(params.worktreePath);
     const siblingThreads = params.archivedThreads.filter((thread) => {
-      if (thread.source !== params.backend || thread.id === params.archivedThreadId) {
+      if (thread.source === params.backend && thread.id === params.archivedThreadId) {
         return false;
       }
 
+      if (thread.projectKey && normalizeWorktreePathForComparison(thread.projectKey) === archivedWorktreePath) return true;
       return thread.linkedDirectories.some((directory) => {
         const candidatePath = linkedDirectoryWorktreePath(directory);
         return (
@@ -38682,10 +38802,11 @@ export class DesktopBackendRegistry {
     for (const thread of siblingThreads) {
       await params.context?.settleCheckpoint();
       await this.overlayStore.upsertWorktreeSnapshot({
-          backend: params.backend,
+          backend: thread.source,
           threadId: thread.id,
           snapshot: {
             ...params.snapshot,
+            backend: thread.source,
             threadId: thread.id,
           },
       });
@@ -38778,6 +38899,20 @@ export class DesktopBackendRegistry {
         async (candidate): Promise<RestoreThreadWorktreeResult> => {
           try {
             if (await pathExists(candidate.worktreePath)) {
+              if (candidate.snapshot?.state === "archived") {
+                const sharedRestore = await this.findSharedWorktreeRestore(candidate.snapshot);
+                if (sharedRestore) {
+                  await this.overlayStore.upsertWorktreeSnapshot({ backend: params.backend, threadId: params.threadId,
+                    snapshot: { ...candidate.snapshot, state: "restored", restoredAt: sharedRestore.restoredAt,
+                      restoredCheckoutIdentity: sharedRestore.restoredCheckoutIdentity } });
+                } else if (params.backend === "claude" || isAcpBackendId(params.backend)) {
+                  throw new Error("An unexpected or incomplete checkout already exists at the archived worktree path; it was kept without modification.");
+                }
+              }
+              if (isAcpBackendId(params.backend) && candidate.snapshot?.state === "restored"
+                && !await this.worktreeArchiveService.isRestoredCheckout(candidate.snapshot)) {
+                throw new Error("The restored ACP checkout was replaced; it was kept without modification.");
+              }
               return {
                 worktreePath: candidate.worktreePath,
                 repositoryPath: candidate.repositoryPath,
@@ -38797,6 +38932,9 @@ export class DesktopBackendRegistry {
               };
             }
 
+            if (isAcpBackendId(params.backend) && !candidate.snapshot) {
+              throw new Error("No recovery snapshot is available for the missing ACP checkout.");
+            }
             const restoredSnapshot = candidate.snapshot
               ? await this.worktreeArchiveService.restore({
                   backend: params.backend,
@@ -38806,7 +38944,8 @@ export class DesktopBackendRegistry {
                   snapshotRef: candidate.snapshot.snapshotRef,
                   snapshotCommit: candidate.snapshot.snapshotCommit,
                   snapshot: candidate.snapshot,
-                  allowDetachedFallback: true,
+                  allowDetachedFallback: params.backend !== "claude" && !isAcpBackendId(params.backend),
+                  ...(params.backend === "claude" || isAcpBackendId(params.backend) ? { restoreSourceCheckout: true } : {}),
                 })
               : await this.worktreeArchiveService.restoreDetached({
                   backend: params.backend,
@@ -38848,6 +38987,19 @@ export class DesktopBackendRegistry {
         },
       ),
     );
+  }
+
+  private async findSharedWorktreeRestore(snapshot: WorktreeSnapshotSummary): Promise<WorktreeSnapshotSummary | undefined> {
+    const owners = await this.overlayStore.listThreadArchiveStates?.() ?? [];
+    for (const owner of owners) {
+      if (owner.backend === snapshot.backend && owner.threadId === snapshot.threadId) continue;
+      const restored = owner.worktreeSnapshots?.find((candidate) => candidate.state === "restored"
+        && candidate.snapshotRef === snapshot.snapshotRef && candidate.snapshotCommit === snapshot.snapshotCommit
+        && candidate.archivedAt === snapshot.archivedAt
+        && normalizeWorktreePathForComparison(candidate.worktreePath) === normalizeWorktreePathForComparison(snapshot.worktreePath));
+      if (restored && await this.worktreeArchiveService.isRestoredCheckout(restored)) return restored;
+    }
+    return undefined;
   }
 
   private async buildRestoreThreadWorktreeCandidates(params: {
@@ -50372,7 +50524,7 @@ export class DesktopBackendRegistry {
         || notification.method === "turn/started"
         || notification.method === "navigation/threadDirectories/updated"
         // Idle/notLoaded cannot add a checkout user. Active or uncertain
-        // status can reactivate a Guardian excluded by the safety inventory.
+        // status can reactivate a review helper excluded by the safety inventory.
         || (notification.method === "thread/status/changed"
           && !["idle", "notLoaded"].includes(readStatusType(notification.params.status) ?? "")))
       && !this.archiveCleanupNotifications.has(notification)

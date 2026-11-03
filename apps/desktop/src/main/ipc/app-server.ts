@@ -5287,6 +5287,8 @@ class DesktopAppServerService {
       backendTasks: async (thread) => thread.backend === "claude"
         ? (await registry.listBackgroundTerminals(thread)).terminals
         : [],
+      hold: async (thread) => await registry.readThreadWakeHold(thread),
+      heldEntries: (thread) => registry.listHeldThreadQueueEntries(thread),
     };
   }
 
@@ -5351,6 +5353,14 @@ class DesktopAppServerService {
       stopBackendTask: async (owner, processId) => {
         const { terminated } = await registry.terminateBackgroundTerminal({ ...owner, processId });
         if (!terminated) throw new Error("The task has already ended.");
+      },
+      discardHeldMessage: async (owner, entryId) => {
+        // The queue cancels by bare id; a stop names this thread's entry only.
+        // Cancelling a project-held entry also drops its stored copy.
+        if (!registry.listHeldThreadQueueEntries(owner).some((entry) => entry.entryId === entryId)
+          || !registry.cancelQueuedTurn(entryId, "Discarded from Waiting for.")) {
+          throw new Error("That message is no longer held on this thread.");
+        }
       },
     }, thread, request.key);
   }
@@ -10791,6 +10801,10 @@ export function registerAppServerIpcHandlers(): void {
         stopBackendTask: async (processId) => {
           const { terminated } = await runtime.remoteBackend(target).terminateBackgroundTerminal({ ...owner, processId });
           if (!terminated) throw new Error("The task has already ended.");
+        },
+        discardHeldMessage: async (entryId) => {
+          const { cancelled } = await runtime.remoteBackend(target).cancelQueuedTurn({ queueEntryId: entryId });
+          if (!cancelled) throw new Error("That message is no longer held.");
         },
       }, request.key);
     }

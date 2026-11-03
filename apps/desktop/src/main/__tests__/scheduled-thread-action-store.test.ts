@@ -50,6 +50,15 @@ describe("ScheduledThreadActionStore", () => {
     expect(incomplete.actions.every((action) => !("turn" in action))).toBe(true);
   });
 
+  it("retains a held action's queue identity in its compact wake summary", () => {
+    store.create({ id: "held-summary", backend: "codex", threadId: "selected", kind: "turn",
+      origin: "desktop", scheduledFor: 1, displayText: "Follow up", now: 1 });
+    store.claim("held-summary", claim(2));
+    store.markHeld("held-summary", "held-queue-entry", "Thread locked", 3, "instance-1");
+    expect(store.listPendingWakes({ backend: "codex", threadId: "selected", endedLimit: 0 }).actions)
+      .toEqual([expect.objectContaining({ id: "held-summary", status: "held", queueEntryId: "held-queue-entry" })]);
+  });
+
   it("caps active wake reads and marks omitted rows incomplete", () => {
     for (let i = 0; i < 105; i += 1) store.create({ id: `many-${i}`, backend: "codex", threadId: "many",
       kind: "turn", origin: "desktop", scheduledFor: i, displayText: "Scheduled", now: 1 });

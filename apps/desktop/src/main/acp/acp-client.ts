@@ -273,6 +273,7 @@ export class AcpAgentClient {
   private unsubscribe?: () => void;
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+  private archiveRestoreSupported = false;
   private readonly surfaceThoughtsAsMessages: boolean;
   private activeOperations = 0;
 
@@ -339,6 +340,11 @@ export class AcpAgentClient {
         version: "0.0.0",
       },
     });
+    // Destructive archive eligibility must use this process's advertisement,
+    // rather than inheriting a cached capability from an older executable.
+    this.archiveRestoreSupported = normalizeAcpRuntimeCapabilities({
+      value: result, now: this.now(), source: "initialize",
+    })?.agentCapabilities?.loadSession === true;
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "initialize",
       result,
@@ -366,6 +372,28 @@ export class AcpAgentClient {
 
   supportsSessionLoad(): boolean {
     return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
+  }
+
+  supportsArchivedSessionRestore(): boolean {
+    return this.archiveRestoreSupported;
+  }
+
+  /** Release just this session; never cancel another session on the process. */
+  async closeSessionForArchive(sessionId: string): Promise<boolean> {
+    if (this.activeTurns.has(sessionId) || this.hasActiveOperations()) {
+      throw new Error("An ACP operation is still active; the checkout was kept.");
+    }
+    if (!this.ownsSession(sessionId)) return true;
+    if (this.runtimeCapabilities?.agentCapabilities?.session?.close !== true) return false;
+    return await this.withOperation(async () => {
+      const protocolSessionId = this.protocolSessionIdFor(sessionId);
+      await this.options.transport.request("session/close", { sessionId: protocolSessionId });
+      this.loadedSessionCwds.delete(protocolSessionId);
+      this.agentSessionIdsByAppSessionId.delete(sessionId);
+      this.appSessionIdsByAgentSessionId.delete(protocolSessionId);
+      this.retainableSessionIds.delete(sessionId);
+      return true;
+    });
   }
 
   supportsTurnSteering(): boolean {

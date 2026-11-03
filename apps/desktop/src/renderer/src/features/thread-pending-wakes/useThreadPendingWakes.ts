@@ -32,6 +32,11 @@ export type ThreadPendingWakesController = {
   state: ThreadPendingWakesState;
   /** Resolves with the owner's answer; refreshes the list either way. */
   stop: (key: string) => Promise<ThreadPendingWakesResponse>;
+  /**
+   * Another control ended a wake, such as Send Now on a held one. A local
+   * list reads again; a peer's hides the row until its owner's next list.
+   */
+  ended: (key: string) => void;
 };
 
 type PendingWakesApi = Pick<DesktopApi, "manageThreadPendingWakes" | "onAgentEvent">;
@@ -134,6 +139,16 @@ export function useThreadPendingWakes(
     void refreshRef.current();
   }, [includeEnded]);
 
+  const projectedPeerWakes = thread?.pendingWakes;
+  const hidePeerWake = useCallback((key: string) => {
+    if (identityRef.current !== identity) return;
+    setPeerStopped((current) => ({
+      identity,
+      wakes: projectedPeerWakes,
+      keys: new Set(current && current.identity === identity && current.wakes === projectedPeerWakes ? [...current.keys, key] : [key]),
+    }));
+  }, [identity, projectedPeerWakes]);
+
   const stop = useCallback(async (key: string): Promise<ThreadPendingWakesResponse> => {
     if (!backend || !threadId || !desktopApi?.manageThreadPendingWakes) {
       return { ok: false, error: { code: "failed", message: "This window cannot stop wakes." } };
@@ -147,21 +162,20 @@ export function useThreadPendingWakes(
         ...(federationTarget ? { federationTarget } : {}),
         key,
       });
-      if (response.ok && federationTarget && identityRef.current === identity) {
-        const projected = thread?.pendingWakes;
-        setPeerStopped((current) => ({
-          identity,
-          wakes: projected,
-          keys: new Set(current && current.identity === identity && current.wakes === projected ? [...current.keys, key] : [key]),
-        }));
-      }
+      if (response.ok && federationTarget) hidePeerWake(key);
       return response;
     } catch (error) {
       return { ok: false, error: { code: "failed", message: error instanceof Error ? error.message : String(error) } };
     } finally {
       void refresh();
     }
-  }, [backend, desktopApi, federationTarget, thread?.pendingWakes, threadId, identity]);
+  }, [backend, desktopApi, federationTarget, hidePeerWake, threadId]);
+
+  const ended = useCallback((key: string) => {
+    if (identityRef.current !== identity) return;
+    if (federationTarget) hidePeerWake(key);
+    else void refreshRef.current();
+  }, [federationTarget, hidePeerWake, identity]);
 
   const peerWakes = thread?.pendingWakes;
   const peerIncomplete = thread?.pendingWakesIncomplete === true;
@@ -175,7 +189,7 @@ export function useThreadPendingWakes(
         peer: true,
       }
     : UNKNOWN, [hidden, peerIncomplete, peerWakes]);
-  return { state: peer ? peerState : local?.identity === identity ? local.state : { status: "loading" }, stop };
+  return { state: peer ? peerState : local?.identity === identity ? local.state : { status: "loading" }, stop, ended };
 }
 
 function readThreadFederationTarget(
@@ -187,9 +201,12 @@ function readThreadFederationTarget(
 
 /** The thread an event names: most carry `threadId`; scheduled actions nest it. */
 function isSourceEventFor(event: AgentEvent, backend: string, threadId: string): boolean {
-  if (event.federationTarget?.scope === "remote" || event.backend !== backend) return false;
+  if (event.federationTarget?.scope === "remote") return false;
   const { method } = event.notification;
   if (!isThreadPendingWakeInvalidation(method, event.notification.params)) return false;
+  // A project's change is stamped with whichever backend published it.
+  if (method === "directory/forgeAutomation/updated") return true;
+  if (event.backend !== backend) return false;
   const params = event.notification.params as { threadId?: unknown; action?: { threadId?: unknown } } | undefined;
   return params?.threadId === threadId || params?.action?.threadId === threadId;
 }

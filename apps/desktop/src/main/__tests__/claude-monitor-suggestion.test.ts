@@ -55,13 +55,15 @@ describe("Claude monitor suggestion hook", () => {
 });
 
 describe("PwrAgent MCP instructions", () => {
-  it("names the PR watch and monitors when both tools are offered", () => {
+  it("names PR watches, dependencies, and monitors when offered", () => {
     const text = buildPwrAgentMcpInstructions([
-      "read_tool_guide", "watch_thread_pull_request", "create_monitor_delegation",
+      "read_tool_guide", "watch_thread_pull_request", "manage_thread_dependencies", "create_monitor_delegation",
     ]);
     expect(text).toContain("Read read_tool_guide for the short tool guide.");
-    expect(text).toContain("call watch_thread_pull_request and end the turn");
-    expect(text).toContain("Do not wait in sleep loops, background shells, or Monitor.");
+    expect(text).toContain("use watch_thread_pull_request and end the turn");
+    expect(text).toContain("manage_thread_dependencies (Continue After), mode all for multiple PRs");
+    expect(text).toContain("Other long jobs: create_monitor_delegation.");
+    expect(text).toContain("do not poll PRs in monitors, shells, or sleep loops");
   });
 
   it("does not name a tool the catalog lacks", () => {

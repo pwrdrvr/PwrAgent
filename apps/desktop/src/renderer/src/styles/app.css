@@ -8498,21 +8498,40 @@ a.button {
 }
 
 .pr-status-card__row-label {
+  flex: none;
   color: var(--text-secondary);
   font-size: 12px;
 }
 
 .pr-status-card__row-value {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* Auto-fix is a standing setting, not a pending wait. */
 .pr-status-card__row-value--muted {
   color: var(--text-muted);
+}
+
+/* Prose under a wake row, such as the thread that handles Auto-fix. Two
+   lines at most, so a long title cannot grow the card. The card takes no
+   pointer events, so nothing can reveal the clipped rest; the side panel's
+   watch list shows the full title. */
+.pr-status-card__row-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .pr-detach-warning-modal {
@@ -27436,6 +27455,23 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   display: contents;
 }
 
+.transcript-work-phase-group__images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(100%, 760px);
+}
+
+.transcript-work-phase-group__images .transcript-message__image-button {
+  max-width: min(100%, 180px);
+  padding: 4px;
+}
+
+.transcript-work-phase-group__images .transcript-message__image-preview {
+  max-height: 120px;
+}
+
 .transcript-message__header {
   display: flex;
   align-items: baseline;
@@ -38892,6 +38928,43 @@ div.composer-error-row__toggle {
   color: var(--danger-text);
   font-size: 11px;
   line-height: 1.35;
+}
+
+/* What holds the thread's wakes: the lock card's accent edge, at rail size. */
+.waiting-for-panel__hold {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel-elevated));
+}
+
+.waiting-for-panel__hold-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.waiting-for-panel__hold-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.waiting-for-panel__hold-title {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.waiting-for-panel__held {
+  color: var(--text-secondary);
 }
 
 .waiting-for-panel__ended {

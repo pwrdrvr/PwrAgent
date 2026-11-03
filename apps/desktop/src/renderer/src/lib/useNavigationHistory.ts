@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useRecoverableState } from "./RendererRecoveryState";
 
 /**
@@ -130,6 +130,8 @@ export function useNavigationHistory(args: {
    * a transient blank list can't wipe the history.
    */
   liveThreadKeys?: ReadonlySet<string>;
+  /** Explicit archive identities; absence from a bounded page is not deletion. */
+  archivedThreadKeys?: ReadonlySet<string>;
   /**
    * Directory keys whose unsubmitted launchpads still exist. A successful
    * submission or discard removes the key and prunes that launchpad from
@@ -155,7 +157,10 @@ export function useNavigationHistory(args: {
     restoreRef.current = args.restore;
   });
 
-  const current = args.current;
+  const archivedThreadKeys = args.archivedThreadKeys;
+  const current = args.current?.view === "thread" && archivedThreadKeys?.has(args.current.threadKey)
+    ? undefined
+    : args.current;
   useEffect(() => {
     const observed = currentRef.current;
     currentRef.current = current;
@@ -201,15 +206,15 @@ export function useNavigationHistory(args: {
 
   const liveThreadKeys = args.liveThreadKeys;
   const liveLaunchpadKeys = args.liveLaunchpadKeys;
-  useEffect(() => {
-    if (liveThreadKeys === undefined && liveLaunchpadKeys === undefined) {
+  useLayoutEffect(() => {
+    if (liveThreadKeys === undefined && liveLaunchpadKeys === undefined && archivedThreadKeys === undefined) {
       return;
     }
     const prev = stacksRef.current;
     const isLive = (location: NavigationHistoryLocation): boolean => {
       if (location.view === "thread") {
-        return liveThreadKeys === undefined
-          || liveThreadKeys.has(location.threadKey);
+        return !archivedThreadKeys?.has(location.threadKey)
+          && (liveThreadKeys === undefined || liveThreadKeys.has(location.threadKey));
       }
       if (location.view === "launchpad") {
         // The live set lists this machine's launchpads; a peer's is not in it.
@@ -220,7 +225,7 @@ export function useNavigationHistory(args: {
       return true;
     };
     let back = pruneStack(prev.back, isLive);
-    const forward = pruneStack(prev.forward, isLive);
+    let forward = pruneStack(prev.forward, isLive);
     let cursor =
       prev.cursor !== undefined && isLive(prev.cursor)
         ? prev.cursor
@@ -236,6 +241,14 @@ export function useNavigationHistory(args: {
       cursor = back[back.length - 1];
       back = back.slice(0, -1);
     }
+    // Removing the middle visit in A → archived B → A must not leave an
+    // enabled Back button targeting the location already showing.
+    while (cursor && back.length && sameLocation(back[back.length - 1], cursor)) {
+      back = back.slice(0, -1);
+    }
+    while (cursor && forward.length && sameLocation(forward[0], cursor)) {
+      forward = forward.slice(1);
+    }
     if (
       back === prev.back
       && cursor === prev.cursor
@@ -249,7 +262,7 @@ export function useNavigationHistory(args: {
     const next: HistoryStacks = { back, cursor, forward };
     stacksRef.current = next;
     setStacks(next);
-  }, [liveLaunchpadKeys, liveThreadKeys]);
+  }, [archivedThreadKeys, current, liveLaunchpadKeys, liveThreadKeys]);
 
   const goBack = useCallback((): void => {
     const prev = stacksRef.current;

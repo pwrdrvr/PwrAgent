@@ -15,6 +15,10 @@ import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoi
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { AcpAgentStore } from "../acp/acp-agent-store";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
+import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
+import type { AcpTransportFactory } from "../app-server/acp-backend-adapter";
 import { AcpSessionStore } from "../acp/acp-session-store";
 import { ArchiveWorktreeTransport, type ArchiveWorktreeThread } from "./fixtures/archive-worktree-transport";
 
@@ -36,15 +40,18 @@ afterEach(async () => {
   ArchiveWorktreeTransport.requests = [];
   ArchiveWorktreeTransport.onList = undefined;
   ArchiveWorktreeTransport.rejectSafetySources = false;
+  ArchiveWorktreeTransport.emitArchiveNotifications = false;
+  ArchiveWorktreeTransport.onReviewStart = undefined;
 });
 
-async function createFixture(managed = false) {
+async function createFixture(managed: boolean | "claude" = false) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-restart-")));
   roots.push(root);
   const repo = path.join(root, "repo");
   const codexHome = path.join(root, "selected-codex");
-  const worktree = managed ? path.join(codexHome, "worktrees", "id", "repo") : path.join(root, "worktree");
-  if (managed) {
+  const worktree = managed === "claude" ? path.join(root, ".pwragent", "worktrees", "id", "repo")
+    : managed ? path.join(codexHome, "worktrees", "id", "repo") : path.join(root, "worktree");
+  if (managed === true) {
     vi.stubEnv("CODEX_HOME", codexHome);
     await mkdir(path.dirname(worktree), { recursive: true });
   }
@@ -60,7 +67,8 @@ async function createFixture(managed = false) {
   const directory = { id: "owned", kind: "worktree" as const, label: "repo", path: repo, worktreePath: worktree };
   const { dbPath, tempDir } = createTempStateDb("pwragent-archive-restart-db-");
   roots.push(tempDir);
-  const reopen = (workspace = directory, checkpoint = false) => {
+  const claudeStore = new ClaudeSessionStore(path.join(root, "claude"));
+  const reopen = (workspace = directory, checkpoint = false, createAcpTransport?: AcpTransportFactory) => {
     const db = StateDb.open(dbPath);
     databases.push(db);
     const store = new SqliteOverlayStore(db);
@@ -70,15 +78,439 @@ async function createFixture(managed = false) {
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null, threadTitleGenerationService: null,
       runtimeInstanceId: `restart-${registries.length}`, resolveLiveProfileRuntimeInstanceIds: () => [],
       archiveCleanupCheckpointStore: checkpoint ? new ArchiveCleanupCheckpointStore(db.raw, { processAlive: () => false }) : null,
-      acpAgentStore, acpSessionStore, discoverLocalAcpAgents: async () => [],
+      claudeBackendOptions: { store: claudeStore },
+      acpAgentStore, acpSessionStore, createAcpTransport, discoverLocalAcpAgents: async () => [],
       acpWorktreeRepositoryResolver: async (cwd) => cwd === worktree ? directory : undefined });
     registries.push(registry);
     return { db, store, client, registry, acpAgentStore, acpSessionStore };
   };
-  return { repo, worktree, directory, git, reopen, codexHome, container: path.dirname(worktree) };
+  return { root, claudeStore, repo, worktree, directory, git, reopen, codexHome, container: path.dirname(worktree) };
 }
 
+async function createSharedArchiveFixture(otherBackend: "claude" | "codex", archived: boolean) {
+  const fixture = await createFixture("claude");
+  const owners = [{ backend: "claude" as const, threadId: "11111111-1111-4111-8111-111111111111" },
+    { backend: otherBackend, threadId: otherBackend === "codex"
+      ? "11111111-1111-4111-8111-111111111111" : "22222222-2222-4222-8222-222222222222" }];
+  for (const owner of owners) {
+    if (owner.backend === "claude") await fixture.claudeStore.save({ cwd: fixture.worktree, thread: {
+      id: owner.threadId, source: "claude", title: "Shared archive fixture", titleSource: "explicit",
+      linkedDirectories: [fixture.directory], archivedAt: archived ? 1 : undefined,
+    } });
+    else ArchiveWorktreeTransport.threads = [{ id: owner.threadId, source: "cli", cwd: fixture.worktree, archived }];
+  }
+  await writeFile(path.join(fixture.worktree, "file.txt"), "shared dirty edit\n");
+  await writeFile(path.join(fixture.worktree, "notes.txt"), "shared untracked file\n");
+  return { ...fixture, owners };
+}
+
+const acpOwner = { backend: "acp:fixture" as const, threadId: "stable-thread-id" };
+
+function seedAcpOwner(instance: ReturnType<Awaited<ReturnType<typeof createFixture>>["reopen"]>, cwd: string, archived = false) {
+  instance.acpAgentStore.upsertInstalledAgent({ backendId: acpOwner.backend, registryId: "fixture", name: "Fixture ACP",
+    distributionKind: "local", distributionSource: "fixture", installStatus: "installed", authStatus: "not-required",
+    verificationStatus: "not-applicable", allowlistRuleId: "fixture", installedAt: 1, updatedAt: 1,
+    launchDescriptor: { backendId: acpOwner.backend, registryId: "fixture", distributionKind: "local", command: process.execPath, args: [], env: {}, cwd },
+    runtimeCapabilities: { schemaVersion: 1, status: "discovered", checkedAt: 1, agentCapabilities: { loadSession: true } } });
+  instance.acpSessionStore.upsertSession({ backendId: acpOwner.backend, sessionId: acpOwner.threadId,
+    agentSessionId: "immutable-provider-id", cwd, title: "Archive ACP fixture", titleSource: "explicit",
+    createdAt: 1, updatedAt: 1, executionMode: "default", status: "idle", hasConversationHistory: true,
+    ...(archived ? { archivedAt: 1 } : {}) });
+}
+
+class ArchiveAcpTransport extends FakeAcpAgentTransport {
+  onLoad?: (params: Record<string, unknown>) => Promise<void>;
+  onClose?: () => Promise<void>;
+  constructor(close = true) {
+    super({ initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true,
+      ...(close ? { sessionCapabilities: { close: {} } } : {}) } } });
+  }
+  override async request(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    const result = await super.request(method, params);
+    if (method === "session/load") await this.onLoad?.(params!);
+    if (method === "session/close") await this.onClose?.();
+    return result;
+  }
+}
+
+describe("ACP snapshot archive and restoration", () => {
+  it.each([false, true])("restores dirty files, unpublished commits and original protocol identity across restart (repair=%s)", async (repair) => {
+    vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+    const fixture = await createFixture("claude");
+    const first = fixture.reopen();
+    seedAcpOwner(first, fixture.worktree, repair);
+    const local = path.join(fixture.root, "other-repository");
+    await mkdir(local);
+    await writeFile(path.join(local, "keep.txt"), "keep local repository\n");
+    await first.store.addLinkedDirectory({ ...acpOwner, directory: { id: local, kind: "local", label: "local", path: local } });
+    await writeFile(path.join(fixture.worktree, "unpublished.txt"), "unpublished commit\n");
+    await fixture.git(fixture.worktree, ["add", "."]);
+    await fixture.git(fixture.worktree, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "unpublished"]);
+    const head = (await fixture.git(fixture.worktree, ["rev-parse", "HEAD"])).trim();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "dirty tracked edit\n");
+    await writeFile(path.join(fixture.worktree, "notes.txt"), "untracked notes\n");
+    await writeFile(path.join(fixture.worktree, ".gitignore"), "target/\n");
+    await mkdir(path.join(fixture.worktree, "target"));
+    await writeFile(path.join(fixture.worktree, "target", "ignored"), "build output");
+    const { writes: archiveWrites } = await measureSqliteWrites(async () => {
+      const result = repair ? await first.registry.repairArchivedThreadWorktrees() : await first.registry.archiveThread(acpOwner);
+      expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+    });
+    expectSqliteWriteBudget({ scenario: repair ? "acp-worktree-repair" : "acp-worktree-archive",
+      note: "One ACP checkout snapshotted and removed at an archive boundary; no idle or timer writes.", writes: archiveWrites });
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const transport = new ArchiveAcpTransport();
+    const second = fixture.reopen(fixture.directory, false, () => transport);
+    transport.onLoad = async (params) => {
+      expect(params).toMatchObject({ cwd: fixture.worktree, sessionId: "immutable-provider-id" });
+      expect(second.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+      expect((await fixture.git(fixture.worktree, ["rev-parse", "HEAD"])).trim()).toBe(head);
+      expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("dirty tracked edit\n");
+      expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("untracked notes\n");
+    };
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(await second.registry.restoreThread(acpOwner)).toMatchObject({ worktrees: [expect.objectContaining({ restored: true })] });
+    });
+    expectSqliteWriteBudget({ scenario: "acp-worktree-restore", note: "Recreate one saved ACP checkout and load the original provider session before unarchiving; boundary writes only.", writes });
+    expect(transport.requests.filter((request) => request.method === "session/load")).toHaveLength(1);
+    expect(transport.requests.some((request) => request.method === "session/new")).toBe(false);
+    expect(second.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)).toMatchObject({ agentSessionId: "immutable-provider-id", cwd: fixture.worktree });
+    expect(second.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeUndefined();
+    expect((await fixture.git(fixture.worktree, ["branch", "--show-current"])).trim()).toBe("owned");
+    expect(await fixture.git(fixture.worktree, ["status", "--short"])).toContain(" M file.txt");
+    expect(await fixture.git(fixture.worktree, ["status", "--short"])).toContain("?? notes.txt");
+    await expect(stat(path.join(fixture.worktree, "target"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(local, "keep.txt"), "utf8")).toBe("keep local repository\n");
+  });
+
+  it("resumes queued ACP cleanup after restart without re-archiving the session", async () => {
+    const fixture = await createFixture("claude");
+    const first = fixture.reopen(fixture.directory, true);
+    seedAcpOwner(first, fixture.worktree);
+    await writeFile(path.join(fixture.worktree, "file.txt"), "queued ACP edit\n");
+    expect(await first.registry.archiveThread({ ...acpOwner, backgroundCleanup: true })).toMatchObject({ cleanupPending: true });
+    const archivedAt = first.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt;
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const second = fixture.reopen(fixture.directory, true, () => new ArchiveAcpTransport());
+    await second.registry.resumeArchiveCleanupsAtStartup();
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(second.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBe(archivedAt);
+    await second.registry.restoreThread(acpOwner);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("queued ACP edit\n");
+  });
+
+  it("rejects a replacement checkout after the provider failed to load the restored session", async () => {
+    const fixture = await createFixture("claude");
+    const instance = fixture.reopen(fixture.directory, false, () => {
+      const transport = new ArchiveAcpTransport();
+      transport.onLoad = async () => { throw new Error("Saved session unavailable"); };
+      return transport;
+    });
+    seedAcpOwner(instance, fixture.worktree);
+    await instance.registry.archiveThread(acpOwner);
+    await expect(instance.registry.restoreThread(acpOwner)).rejects.toThrow("thread remains archived");
+    await fixture.git(fixture.repo, ["worktree", "move", fixture.worktree, path.join(fixture.root, "moved-checkout")]);
+    await fixture.git(fixture.repo, ["worktree", "add", "--detach", fixture.worktree, "HEAD"]);
+    await writeFile(path.join(fixture.worktree, "keep.txt"), "replacement checkout");
+    await expect(instance.registry.restoreThread(acpOwner)).rejects.toThrow("restored ACP checkout was replaced");
+    expect(instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+    expect(await readFile(path.join(fixture.worktree, "keep.txt"), "utf8")).toBe("replacement checkout");
+  });
+
+  it.each(["close", "dispose", "other live session", "close failure"])("releases a loaded session safely before removal (%s)", async (scenario) => {
+    const fixture = await createFixture("claude");
+    const transport = new ArchiveAcpTransport(scenario === "close" || scenario === "close failure");
+    const instance = fixture.reopen(fixture.directory, false, () => transport);
+    seedAcpOwner(instance, fixture.worktree);
+    if (scenario === "other live session" || scenario === "close") {
+      instance.acpSessionStore.upsertSession({ ...instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)!,
+        sessionId: "other-session", agentSessionId: "other-provider-id", cwd: fixture.repo });
+      await instance.registry.readThread({ backend: acpOwner.backend, threadId: "other-session" });
+    }
+    await instance.registry.readThread(acpOwner);
+    expect(transport.requests.some((request) => request.method === "session/load" && request.params?.sessionId === "immutable-provider-id")).toBe(true);
+    transport.onClose = async () => {
+      expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+      if (scenario === "close failure") throw new Error("Provider close failed");
+    };
+    const completed = new Promise<Record<string, unknown>>((resolve) => instance.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed") resolve(event.notification.params);
+    }));
+    expect(await instance.registry.archiveThread({ ...acpOwner, backgroundCleanup: true })).toMatchObject({ cleanupPending: true });
+    const result = await completed;
+    const kept = scenario === "other live session" || scenario === "close failure";
+    expect(result).toMatchObject({ cleanup: [expect.objectContaining({ removedWorktree: !kept,
+      ...(kept ? { error: expect.stringContaining(scenario === "close failure" ? "Provider close failed" : "another live session") } : {}) })] });
+    expect(transport.closeCount).toBe(scenario === "dispose" ? 1 : 0);
+    if (kept) expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+    else await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    if (scenario === "close") {
+      expect(transport.requests.filter((request) => request.method === "session/close")).toEqual([
+        expect.objectContaining({ params: { sessionId: "immutable-provider-id" } }),
+      ]);
+      expect(instance.acpSessionStore.getSession(acpOwner.backend, "other-session")?.archivedAt).toBeUndefined();
+    }
+    const loadCount = transport.requests.filter((request) => request.method === "session/load").length;
+    await instance.registry.readThread(acpOwner);
+    expect(transport.requests.filter((request) => request.method === "session/load")).toHaveLength(loadCount);
+  });
+
+  it.each(["primary", "external", "active owner", "unknown capability", "no load", "rebind"])("retains protected ACP checkouts (%s)", async (scenario) => {
+    const fixture = await createFixture("claude");
+    const instance = fixture.reopen();
+    const cwd = scenario === "primary" ? fixture.repo : fixture.worktree;
+    seedAcpOwner(instance, cwd);
+    if (scenario === "external") await instance.store.addLinkedDirectory({ ...acpOwner,
+      directory: { ...fixture.directory, worktreeOwnership: "external" } });
+    if (scenario === "active owner") ArchiveWorktreeTransport.threads = [{ id: "active-owner", cwd: fixture.worktree, source: "cli", archived: false }];
+    if (scenario === "unknown capability" || scenario === "no load") {
+      const agent = instance.acpAgentStore.getInstalledAgent(acpOwner.backend)!;
+      instance.acpAgentStore.upsertInstalledAgent({ ...agent, runtimeCapabilities: { ...agent.runtimeCapabilities!,
+        agentCapabilities: scenario === "no load" ? { loadSession: false } : {} } });
+    }
+    if (scenario === "rebind") instance.acpSessionStore.upsertSession({ ...instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)!, requiresAgentSessionRebind: true });
+    const result = await instance.registry.archiveThread(acpOwner);
+    expect(result.cleanup.every((item) => !item.removedWorktree)).toBe(true);
+    expect((await stat(cwd)).isDirectory()).toBe(true);
+    expect((await instance.store.getThreadOverlayState(acpOwner))?.worktreeSnapshots ?? []).toHaveLength(0);
+  });
+
+  it.each(["checkout", "load", "unsupported", "unadvertised", "partial"])("keeps the session archived and recovery available on %s failure", async (failure) => {
+    const fixture = await createFixture("claude");
+    const transports: ArchiveAcpTransport[] = [];
+    let rejectLoad = failure === "load";
+    const first = fixture.reopen(fixture.directory, false, () => {
+      const transport = new ArchiveAcpTransport();
+      transport.onLoad = async () => { if (rejectLoad) throw new Error("Provider rejected saved session"); };
+      if (failure === "unsupported" || failure === "unadvertised") transport.request = async (method) => method === "initialize"
+        ? { protocolVersion: 1, agentCapabilities: failure === "unsupported" ? { loadSession: false } : {} } : {};
+      transports.push(transport);
+      return transport;
+    });
+    seedAcpOwner(first, fixture.worktree);
+    await first.registry.archiveThread(acpOwner);
+    const spy = failure === "checkout" ? vi.spyOn(WorktreeArchiveService.prototype, "restore").mockRejectedValueOnce(new Error("Snapshot unavailable")) : undefined;
+    if (failure === "partial") {
+      await mkdir(fixture.worktree);
+      await writeFile(path.join(fixture.worktree, "keep.txt"), "partial checkout");
+    }
+    try { await expect(first.registry.restoreThread(acpOwner)).rejects.toThrow("thread remains archived"); }
+    finally { spy?.mockRestore(); }
+    expect(first.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+    expect((await first.store.getThreadOverlayState(acpOwner))?.worktreeSnapshots).toHaveLength(1);
+    expect(transports.some((transport) => transport.requests.some((request) => request.method === "session/new"))).toBe(false);
+    if (failure === "partial") expect(await readFile(path.join(fixture.worktree, "keep.txt"), "utf8")).toBe("partial checkout");
+    if (failure === "load") {
+      // A failed load leaves a validated checkout. A retry uses it without
+      // overwriting edits made since the first restoration attempt.
+      await writeFile(path.join(fixture.worktree, "after.txt"), "keep later edit");
+      rejectLoad = false;
+      await first.registry.restoreThread(acpOwner);
+      expect(await readFile(path.join(fixture.worktree, "after.txt"), "utf8")).toBe("keep later edit");
+    }
+  });
+
+  it.each([
+    ["claude", false], ["claude", true], ["codex", false], ["codex", true], ["acp:fixture", false], ["acp:fixture", true],
+  ] as const)("preserves snapshots for both shared owners (%s, ACP first=%s)", async (otherBackend, acpFirst) => {
+    vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+    const fixture = await createFixture("claude");
+    const transport = new ArchiveAcpTransport();
+    const first = fixture.reopen(fixture.directory, false, () => transport);
+    seedAcpOwner(first, fixture.worktree);
+    const other = { backend: otherBackend, threadId: "22222222-2222-4222-8222-222222222222" };
+    if (otherBackend === "claude") await fixture.claudeStore.save({ cwd: fixture.worktree, thread: { id: other.threadId,
+      source: "claude", title: "Shared owner", titleSource: "explicit", linkedDirectories: [fixture.directory] } });
+    else if (otherBackend === "codex") ArchiveWorktreeTransport.threads = [{ id: other.threadId, cwd: fixture.worktree, source: "cli", archived: false }];
+    else first.acpSessionStore.upsertSession({ ...first.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)!,
+      sessionId: other.threadId, agentSessionId: "other-provider-id" });
+    await writeFile(path.join(fixture.worktree, "file.txt"), "shared dirty edit\n");
+    const { writes: archiveWrites } = await measureSqliteWrites(async () => {
+      expect((await first.registry.archiveThread(acpOwner)).cleanup).toEqual([expect.objectContaining({ removedWorktree: false })]);
+      expect((await first.registry.archiveThread(other)).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+    });
+    if (otherBackend === "acp:fixture" && acpFirst) expectSqliteWriteBudget({ scenario: "acp-shared-worktree-archive",
+      note: "Archive two ACP owners, retain the active checkout until both archive, then save both recovery snapshots; boundary writes only.", writes: archiveWrites });
+    for (const owner of [acpOwner, other]) expect((await first.store.getThreadOverlayState(owner))?.worktreeSnapshots).toHaveLength(1);
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const second = fixture.reopen(fixture.directory, false, () => new ArchiveAcpTransport());
+    const owners = acpFirst ? [acpOwner, other] : [other, acpOwner];
+    const { writes } = await measureSqliteWrites(async () => {
+      await second.registry.restoreThread(owners[0]!);
+      await writeFile(path.join(fixture.worktree, "later.txt"), "later shared edit");
+      await second.registry.restoreThread(owners[1]!);
+    });
+    if (otherBackend === "acp:fixture" && acpFirst) expectSqliteWriteBudget({ scenario: "acp-shared-worktree-restore",
+      note: "Restore two ACP owners through protocol session/load, recreating a shared checkout once and preserving later edits; boundary writes only.", writes });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("shared dirty edit\n");
+    expect(await readFile(path.join(fixture.worktree, "later.txt"), "utf8")).toBe("later shared edit");
+  });
+});
+
 describe("archive worktrees across a desktop restart", () => {
+  it.each([
+    ["claude", "archive", "claude"], ["claude", "repair", "claude"],
+    ["codex", "archive", "claude"], ["codex", "archive", "codex"],
+    ["codex", "repair", "claude"], ["codex", "repair", "codex"],
+  ] as const)("retains every shared owner's snapshot and restores both across restart (%s, %s, %s first)", async (otherBackend, operation, restoreFirst) => {
+    vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+    const fixture = await createSharedArchiveFixture(otherBackend, operation === "repair");
+    const first = fixture.reopen();
+    const { writes: archiveWrites } = await measureSqliteWrites(async () => {
+      if (operation === "repair") {
+        expect((await first.registry.repairArchivedThreadWorktrees()).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      } else {
+        expect((await first.registry.archiveThread(fixture.owners[0]!)).cleanup).toEqual([expect.objectContaining({ removedWorktree: false })]);
+        expect((await first.registry.archiveThread(fixture.owners[1]!)).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      }
+    });
+    if (otherBackend === "codex" && restoreFirst === "codex") expectSqliteWriteBudget({
+      scenario: `mixed-provider-worktree-${operation}`, note: "One checkout archived for one Claude and one Codex owner, including each owner's recovery snapshot; boundary writes only.", writes: archiveWrites,
+    });
+    const snapshots = await Promise.all(fixture.owners.map(async (owner) => {
+      const snapshots = (await first.store.getThreadOverlayState(owner))?.worktreeSnapshots ?? [];
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]).toMatchObject({ backend: owner.backend, threadId: owner.threadId });
+      return snapshots[0]!;
+    }));
+    expect(snapshots[0]!.snapshotCommit).toBe(snapshots[1]!.snapshotCommit);
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const restarted = fixture.reopen();
+    const ordered = restoreFirst === "codex" ? [...fixture.owners].reverse() : fixture.owners;
+    const { writes: restoreWrites } = await measureSqliteWrites(async () => {
+      expect((await restarted.registry.restoreThread(ordered[0]!)).worktrees).toEqual([expect.objectContaining({ restored: true })]);
+      const identity = await stat(fixture.worktree);
+      await writeFile(path.join(fixture.worktree, "after-restore.txt"), "new shared work\n");
+      expect((await restarted.registry.restoreThread(ordered[1]!)).worktrees).toEqual([expect.objectContaining({ restored: false, skippedReason: "Worktree path already exists." })]);
+      const after = await stat(fixture.worktree);
+      expect([after.dev, after.ino]).toEqual([identity.dev, identity.ino]);
+    });
+    if (otherBackend === "claude" && operation === "archive") expectSqliteWriteBudget({
+      scenario: "shared-claude-worktree-restore", note: "Restore two Claude owners of one snapshot: recreate the checkout once, then validate and reuse it without overwriting subsequent edits.", writes: restoreWrites,
+    });
+    for (const owner of fixture.owners) {
+      const snapshot = (await restarted.store.getThreadOverlayState(owner))?.worktreeSnapshots?.[0];
+      expect(snapshot?.state).toBe("restored");
+      expect(snapshot?.restoredCheckoutIdentity).toBeDefined();
+      if (owner.backend === "claude") expect((await fixture.claudeStore.read(owner.threadId)).thread.archivedAt).toBeUndefined();
+    }
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("shared dirty edit\n");
+    expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("shared untracked file\n");
+    expect(await readFile(path.join(fixture.worktree, "after-restore.txt"), "utf8")).toBe("new shared work\n");
+  });
+
+  it("rejects a replacement Git checkout even when another owner's saved restore metadata remains", async () => {
+    const fixture = await createSharedArchiveFixture("claude", true);
+    const instance = fixture.reopen();
+    await instance.registry.repairArchivedThreadWorktrees();
+    await instance.registry.restoreThread(fixture.owners[0]!);
+    await fixture.git(fixture.repo, ["worktree", "move", fixture.worktree, path.join(fixture.root, "moved-checkout")]);
+    await fixture.git(fixture.repo, ["worktree", "add", "--detach", fixture.worktree, "HEAD"]);
+    await writeFile(path.join(fixture.worktree, "keep.txt"), "replacement checkout\n");
+    await expect(instance.registry.restoreThread(fixture.owners[1]!)).rejects.toThrow("unexpected or incomplete checkout");
+    expect((await fixture.claudeStore.read(fixture.owners[1]!.threadId)).thread.archivedAt).toBeDefined();
+    expect(await readFile(path.join(fixture.worktree, "keep.txt"), "utf8")).toBe("replacement checkout\n");
+  });
+
+  it.each([false, true])("snapshots archived Claude worktrees and restores their branch and edits after restart (historical repair=%s)", async (historical) => {
+    vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+    const fixture = await createFixture("claude");
+    const threadId = "11111111-1111-4111-8111-111111111111";
+    const localPath = path.join(fixture.root, "linked-local");
+    await mkdir(localPath);
+    await writeFile(path.join(localPath, "keep.txt"), "keep local directory\n");
+    await writeFile(path.join(fixture.worktree, "unpublished.txt"), "unpublished commit\n");
+    await fixture.git(fixture.worktree, ["add", "."]);
+    await fixture.git(fixture.worktree, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "unpublished"]);
+    const head = (await fixture.git(fixture.worktree, ["rev-parse", "HEAD"])).trim();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "unsaved tracked edit\n");
+    await writeFile(path.join(fixture.worktree, "notes.txt"), "non-ignored untracked file\n");
+    await writeFile(path.join(fixture.worktree, ".gitignore"), "target/\n");
+    await mkdir(path.join(fixture.worktree, "target"));
+    await writeFile(path.join(fixture.worktree, "target", "cache"), "ignored build cache\n");
+    await fixture.claudeStore.save({ cwd: fixture.worktree, sdkSessionId: "retained-sdk-session", thread: {
+      id: threadId, source: "claude", title: "Contrived Claude archive", titleSource: "explicit",
+      archivedAt: historical ? 1 : undefined, linkedDirectories: [fixture.directory],
+    } });
+    const first = fixture.reopen();
+    await first.store.addLinkedDirectory({ backend: "claude", threadId, directory: fixture.directory });
+    await first.store.addLinkedDirectory({ backend: "claude", threadId,
+      directory: { id: localPath, kind: "local", label: "local", path: localPath } });
+    if (historical) {
+      const result = await first.registry.repairArchivedThreadWorktrees();
+      expect(result.cleanup).toEqual([expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true })]);
+    } else {
+      const completed = new Promise<unknown>((resolve) => first.registry.onEvent((event) => {
+        if (event.notification.method === "thread/archiveCleanup/completed") resolve(event.notification.params);
+      }));
+      const { writes } = await measureSqliteWrites(async () => {
+        expect(await first.registry.archiveThread({ backend: "claude", threadId, backgroundCleanup: true })).toMatchObject({ cleanupPending: true });
+        expect(await completed).toMatchObject({ cleanup: [expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true })] });
+      });
+      expectSqliteWriteBudget({ scenario: "claude-worktree-archive", note: "One explicit archive with one managed worktree: snapshot and lifecycle boundary writes only; no idle or timer writes.", writes });
+    }
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"])).not.toContain(fixture.worktree.replaceAll(path.sep, "/"));
+    expect(await fixture.git(fixture.repo, ["rev-parse", "owned"])).toContain(head);
+    expect((await first.store.getThreadOverlayState({ backend: "claude", threadId }))?.worktreeSnapshots).toHaveLength(1);
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const second = fixture.reopen();
+    const failedRestore = vi.spyOn(WorktreeArchiveService.prototype, "restore").mockRejectedValueOnce(new Error("Contrived restore failure"));
+    try {
+      await expect(second.registry.restoreThread({ backend: "claude", threadId })).rejects.toThrow("thread remains archived");
+      expect((await fixture.claudeStore.read(threadId)).thread.archivedAt).toBeDefined();
+    } finally { failedRestore.mockRestore(); }
+    await mkdir(fixture.worktree);
+    await writeFile(path.join(fixture.worktree, "partial.txt"), "keep unexpected files\n");
+    await expect(second.registry.restoreThread({ backend: "claude", threadId })).rejects.toThrow("incomplete checkout already exists");
+    expect((await fixture.claudeStore.read(threadId)).thread.archivedAt).toBeDefined();
+    expect(await readFile(path.join(fixture.worktree, "partial.txt"), "utf8")).toBe("keep unexpected files\n");
+    await rm(fixture.worktree, { recursive: true });
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(await second.registry.restoreThread({ backend: "claude", threadId })).toMatchObject({ worktrees: [expect.objectContaining({ restored: true })] });
+    });
+    expectSqliteWriteBudget({ scenario: historical ? "claude-worktree-repair-restore" : "claude-worktree-restore", note: "One explicit restore recreates a saved checkout before unarchiving the Claude session; no idle or timer writes.", writes });
+    expect((await fixture.claudeStore.read(threadId)).thread.archivedAt).toBeUndefined();
+    expect((await fixture.claudeStore.read(threadId)).sdkSessionId).toBe("retained-sdk-session");
+    expect((await fixture.git(fixture.worktree, ["branch", "--show-current"])).trim()).toBe("owned");
+    expect((await fixture.git(fixture.worktree, ["rev-parse", "HEAD"])).trim()).toBe(head);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("unsaved tracked edit\n");
+    expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("non-ignored untracked file\n");
+    expect(await fixture.git(fixture.worktree, ["status", "--short"])).toContain(" M file.txt");
+    expect(await fixture.git(fixture.worktree, ["status", "--short"])).toContain("?? notes.txt");
+    await expect(stat(path.join(fixture.worktree, "target"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(localPath, "keep.txt"), "utf8")).toBe("keep local directory\n");
+  });
+
+  it("keeps a Claude checkout also owned by an archived ACP session that cannot restore snapshots", async () => {
+    const fixture = await createFixture("claude");
+    const threadId = "11111111-1111-4111-8111-111111111111";
+    await fixture.claudeStore.save({ cwd: fixture.worktree, thread: { id: threadId, source: "claude",
+      title: "Claude shared checkout", titleSource: "explicit", linkedDirectories: [fixture.directory] } });
+    const instance = fixture.reopen();
+    instance.acpAgentStore.upsertInstalledAgent({ backendId: "acp:grok", registryId: "grok", name: "Grok",
+      distributionKind: "local", distributionSource: "grok --acp", installStatus: "installed", authStatus: "not-required",
+      verificationStatus: "not-applicable", allowlistRuleId: "fixture-grok", installedAt: 1, updatedAt: 1 });
+    instance.acpSessionStore.upsertSession({ backendId: "acp:grok", sessionId: "acp-owner", title: "Archived ACP owner",
+      cwd: fixture.worktree, createdAt: 1, updatedAt: 1, executionMode: "default", status: "idle", archivedAt: 1 });
+    const result = await instance.registry.archiveThread({ backend: "claude", threadId });
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: false,
+      skippedReason: expect.stringContaining("Archived ACP session") })]);
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+  });
+
   it("checkpoints a queued cleanup on quit and resumes it without archiving the provider again", async () => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads = [{ id: "queued", cwd: fixture.worktree, source: "cli", archived: false }];
@@ -127,7 +559,7 @@ describe("archive worktrees across a desktop restart", () => {
     expect(await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"])).toContain(fixture.worktree.split(path.sep).join("/"));
     if (scenario !== "late ACP owner") expect(await fixture.git(fixture.repo, ["for-each-ref", "refs/codex/snapshots/"])).toBe("");
     expect(instance.acpSessionStore.getSession("acp:grok", "acp-owner")?.archivedAt).toBe(1);
-    // Restore only changes ACP metadata: its original checkout must survive.
+    // Non-reloadable ACP sessions keep their original checkout.
     await instance.registry.restoreThread({ backend: "acp:grok", threadId: "acp-owner" });
     expect(instance.acpSessionStore.getSession("acp:grok", "acp-owner")?.archivedAt).toBeUndefined();
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("preserve ACP edits\n");
@@ -427,6 +859,120 @@ describe("archive worktrees across a desktop restart", () => {
     expect(result.cleanup[0]?.skippedReason).toContain("another active thread: hidden-user");
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
     expect((await instance.store.getThreadOverlayState({ backend: "codex", threadId: "old-target" }))?.worktreeSnapshots ?? []).toEqual([]);
+  });
+
+  it.each(["completed", "cancelled", "failed", "early", "new work", "archive failure"])("retires a distinct native review child after its result is retained (%s)", async (terminal) => {
+    vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+    const fixture = await createFixture();
+    const parent: ArchiveWorktreeThread = { id: "reviewed-parent", cwd: fixture.worktree, source: "cli" };
+    const child: ArchiveWorktreeThread = { id: "native-review", cwd: fixture.worktree, source: "subAgentReview",
+      wireSource: { subAgent: "review" }, threadSource: "subagent", parentThreadId: parent.id, status: { type: "notLoaded" } };
+    ArchiveWorktreeTransport.threads = [parent, child];
+    ArchiveWorktreeTransport.emitArchiveNotifications = true;
+    const instance = fixture.reopen();
+    await instance.registry.listBackends({ includeUnavailable: true });
+    let transport!: ArchiveWorktreeTransport;
+    const params = { threadId: child.id, turnId: "native-review-turn" };
+    const notification = terminal === "failed"
+      ? { method: "turn/failed" as const, params: { ...params, turn: { id: params.turnId, status: "failed" as const, error: { message: "Contrived review failure" } } } }
+      : terminal === "cancelled"
+        ? { method: "turn/cancelled" as const, params: { ...params, turn: { id: params.turnId, status: "cancelled" as const } } }
+        : { method: "turn/completed" as const, params: { ...params, turn: { id: params.turnId, status: "completed" as const, output: [] } } };
+    ArchiveWorktreeTransport.onReviewStart = (_params, connection) => {
+      transport = connection;
+      const result = { reviewThreadId: child.id, turn: { id: "native-review-turn", status: "inProgress" } };
+      if (terminal === "early") {
+        const completed = new Promise<void>((resolve) => instance.registry.onEvent((event) => {
+          if (event.notification.method === notification.method && event.notification.params.turnId === "native-review-turn") resolve();
+        }));
+        transport.emitNotification(notification);
+        return completed.then(() => result);
+      }
+      return result;
+    };
+    const archive = terminal === "archive failure" ? vi.spyOn(instance.client, "archiveThread").mockRejectedValueOnce(new Error("Provider archive rejected")) : undefined;
+    const { writes } = await measureSqliteWrites(async () => {
+      await instance.registry.startReview({ backend: "codex", threadId: parent.id, target: { type: "uncommittedChanges" } });
+      if (terminal !== "early") {
+        if (terminal === "new work") child.status = { type: "active", activeFlags: [] };
+        const completed = new Promise<void>((resolve) => instance.registry.onEvent((event) => {
+          if (event.notification.method === notification.method && event.notification.params.turnId === "native-review-turn") resolve();
+        }));
+        transport.emitNotification(notification);
+        await completed;
+      }
+    });
+    archive?.mockRestore();
+    if (terminal === "completed") expectSqliteWriteBudget({ scenario: "native-review-retirement",
+      note: "One native review start and terminal completion, retaining its parent result and archiving only the review helper; no timer or idle writes.", writes });
+    const kept = terminal === "new work" || terminal === "archive failure";
+    expect(child.archived === true).toBe(!kept);
+    expect(parent.archived).toBeUndefined();
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/unsubscribe" && request.params.threadId === child.id)).toHaveLength(kept ? 0 : 1);
+    const subAgent = await instance.store.getThreadSubAgent({ backend: "codex", threadId: parent.id, monitorId: "review:native-review-turn" });
+    expect(subAgent?.monitorThreadId).toBe(child.id);
+    expect(["success", "cancelled", "failed"]).toContain(subAgent?.status);
+  });
+
+  it.each(["parent", "ordinary", "wrong parent", "unknown"])("does not retire a live or unrelated checkout owner (%s)", async (kind) => {
+    const fixture = await createFixture();
+    const child: ArchiveWorktreeThread = { id: "review-child", cwd: fixture.worktree, source: kind === "ordinary" ? "cli" : "subAgentReview",
+      ...(kind === "ordinary" ? {} : { wireSource: { subAgent: "review" as const }, threadSource: "subagent" as const }),
+      parentThreadId: "actual-parent", status: kind === "unknown" ? { type: "systemError" } : { type: "notLoaded" } };
+    ArchiveWorktreeTransport.threads = [child];
+    const instance = fixture.reopen();
+    expect(await instance.client.retireReviewThread({ threadId: child.id,
+      parentThreadId: kind === "parent" ? child.id : kind === "wrong parent" ? "other-parent" : "actual-parent" })).toBe(false);
+    expect(ArchiveWorktreeTransport.requests.some((request) => request.method === "thread/archive" || request.method === "thread/unsubscribe")).toBe(false);
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+  });
+
+  it.each(["active", "unknown", "ordinary", "late-active"])("preserves a checkout with a real or uncertain review owner (%s)", async (kind) => {
+    const fixture = await createFixture();
+    const child: ArchiveWorktreeThread = { id: "review-child", cwd: fixture.worktree, source: kind === "ordinary" ? "cli" : "subAgentReview",
+      ...(kind === "ordinary" ? {} : { wireSource: { subAgent: "review" as const }, threadSource: "subagent" as const }),
+      status: kind === "active" ? { type: "active", activeFlags: [] } : kind === "unknown" ? undefined : { type: "notLoaded" } };
+    ArchiveWorktreeTransport.threads = [{ id: "reviewed-parent", cwd: fixture.worktree, source: "cli" }, child];
+    if (kind === "late-active") {
+      let activeReads = 0;
+      ArchiveWorktreeTransport.onList = (params) => {
+        if (!params.archived && ++activeReads === 2) child.status = { type: "active", activeFlags: [] };
+      };
+    }
+    const instance = fixture.reopen();
+    const result = await instance.registry.archiveThread({ backend: "codex", threadId: "reviewed-parent" });
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: false })]);
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+  });
+
+  it.each([false, true])("does not retain a checkout for six completed native review children after restart (repair=%s)", async (repair) => {
+    const fixture = await createFixture(true);
+    ArchiveWorktreeTransport.threads = [
+      { id: "reviewed-parent", cwd: fixture.worktree, source: "cli", archived: repair },
+      ...Array.from({ length: 6 }, (_, index): ArchiveWorktreeThread => ({
+        id: `completed-review-${index}`, cwd: fixture.worktree, source: "subAgentReview",
+        wireSource: { subAgent: "review" }, threadSource: "subagent", parentThreadId: "reviewed-parent", archived: index >= 3,
+        status: { type: index % 2 ? "idle" : "notLoaded" },
+      })),
+    ];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "dirty parent edit\n");
+    await writeFile(path.join(fixture.worktree, "notes.txt"), "untracked parent notes\n");
+    const first = fixture.reopen();
+    const result = repair ? await first.registry.repairArchivedThreadWorktrees()
+      : await first.registry.archiveThread({ backend: "codex", threadId: "reviewed-parent" });
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    for (let index = 0; index < 6; index += 1) {
+      expect((await first.store.getThreadOverlayState({ backend: "codex", threadId: `completed-review-${index}` }))?.worktreeSnapshots ?? []).toEqual([]);
+    }
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const second = fixture.reopen();
+    await second.registry.restoreThread({ backend: "codex", threadId: "reviewed-parent" });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("dirty parent edit\n");
+    expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("untracked parent notes\n");
   });
 
   it.each([

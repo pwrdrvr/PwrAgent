@@ -1516,7 +1516,7 @@ describe("Claude SDK backend", () => {
     await backend.startThread({ cwd: f.root, executionMode: "default" });
     expect(discoverModels).not.toHaveBeenCalled();
     await backend.discover();
-    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: {
+    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", signal: expect.any(AbortSignal), env: {
       PATH: "/fixture", CLAUDE_CODE_REPORT_FINDINGS: "1", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
       CLAUDE_CODE_ARTIFACT: "1", CLAUDE_CODE_ARTIFACT_AUTO_OPEN: "0",
     } });
@@ -1527,6 +1527,50 @@ describe("Claude SDK backend", () => {
     discoverModels.mockRejectedValueOnce(new Error("Discovery failed"));
     await expect(backend.discover()).rejects.toThrow("Discovery failed");
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
+  });
+
+  it.each(["installation", "models"])("drains pending %s discovery before close", async (phase) => {
+    const f = await fixture();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const inspection = vi.fn(async (_options?: Parameters<typeof import("../claude/claude-executable").inspectClaudeInstallation>[0]) => {
+      if (phase === "installation") { entered.resolve(); await release.promise; }
+      return { executable: "/fixture/claude", authStatus: "signed-in" as const };
+    });
+    const models = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      return [{ id: "fable", label: "Fable 5.1" }];
+    });
+    const backend = f.openBackend({ ...f.backendOptions, inspectInstallation: inspection, discoverModels: models });
+    const discovery = backend.discover();
+    await entered.promise;
+    let closed = false;
+    const close = backend.close().then(() => { closed = true; });
+    try {
+      // The old close resolves while this CLI operation still owns its child.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      await backend.discover();
+      expect(inspection).toHaveBeenCalledOnce();
+      expect(inspection.mock.calls[0]?.[0]).toMatchObject({ signal: expect.objectContaining({ aborted: true }) });
+    } finally {
+      release.resolve();
+      await Promise.all([discovery, close]);
+    }
+    if (phase === "installation") expect(models).not.toHaveBeenCalled();
+    expect(f.events).toEqual([]);
+  });
+
+  it("does not start discovery after a pending environment read resumes during close", async () => {
+    const f = await fixture();
+    const env = Promise.withResolvers<NodeJS.ProcessEnv>();
+    const backend = f.openBackend({ ...f.backendOptions, resolveEnv: () => env.promise });
+    const discovery = backend.discover();
+    await backend.close();
+    env.resolve({ PATH: "/fixture" });
+    await discovery;
+    expect(f.backendOptions.inspectInstallation).not.toHaveBeenCalled();
   });
 
   it("shares pending global discovery across differently configured projects without publishing either session catalog", async () => {
@@ -1779,7 +1823,9 @@ describe("Claude SDK backend", () => {
     });
     expect(f.queries[0].env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(f.queries[0].env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
-    expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({ env: f.queries[0].env });
+    expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({
+      env: f.queries[0].env, signal: expect.any(AbortSignal),
+    });
     expect(f.queries[0].env?.PATH).toBe("/fixture");
     expect(f.queries[0].env?.CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
     expect(f.queries[0].env?.CLAUDE_CODE_ARTIFACT).toBe("1");

@@ -170,6 +170,7 @@ export type AcpRuntimeClient = Pick<
   Partial<
     Pick<
       AcpAgentClient,
+      | "closeSessionForArchive"
       | "didSessionLoadReplayHistory"
       | "configureWorkflowBudget"
       | "hasActiveOperations"
@@ -182,6 +183,7 @@ export type AcpRuntimeClient = Pick<
       | "sendControlPrompt"
       | "setRuntimeOption"
       | "steerSession"
+      | "supportsArchivedSessionRestore"
       | "supportsSessionLoad"
       | "supportsTurnSteering"
       | "rewindSession"
@@ -1580,6 +1582,90 @@ export class AcpBackendAdapter {
     this.acpSessionStore?.upsertSession?.(session);
   }
 
+  worktreeArchiveBlockedReason(backend: AcpBackendId, sessionId: string): string | undefined {
+    const session = this.getSession(backend, sessionId);
+    if (!session?.archivedAt || (session.status !== "idle" && session.status !== "failed")) return "ACP session is live; the checkout was kept.";
+    if (session.requiresAgentSessionRebind
+      || this.getInstalledAgent(backend)?.runtimeCapabilities?.agentCapabilities?.loadSession !== true) {
+      return "Archived ACP session cannot reload its original identity through session/load; the checkout was kept.";
+    }
+    const owner = this.findSessionOwner(backend, sessionId);
+    if (owner?.client.supportsArchivedSessionRestore?.() === false) {
+      return "The running ACP provider does not advertise session/load; the checkout was kept.";
+    }
+    if (owner?.client.hasActiveTurns?.() || owner?.client.hasActiveOperations?.()) {
+      return "An ACP operation is still active on the owning process; the checkout was kept.";
+    }
+    return undefined;
+  }
+
+  assertWorktreeArchiveReleased(backend: AcpBackendId, sessionId: string): void {
+    const blocked = this.worktreeArchiveBlockedReason(backend, sessionId);
+    if (blocked) throw new Error(blocked);
+    const owner = this.findSessionOwner(backend, sessionId);
+    if (owner && owner.client.ownsSession?.(sessionId) !== false) {
+      throw new Error("ACP session still owns this checkout; the checkout was kept.");
+    }
+  }
+
+  async prepareWorktreeArchive(backend: AcpBackendId, sessionId: string): Promise<void> {
+    const blocked = this.worktreeArchiveBlockedReason(backend, sessionId);
+    if (blocked) throw new Error(blocked);
+    const owner = this.findSessionOwner(backend, sessionId);
+    if (!owner) return;
+    if (await owner.client.closeSessionForArchive?.(sessionId)) return;
+    // Older ACP agents have no session/close. Stop their process only when it
+    // owns no unarchived sessions, including hidden helpers. Otherwise retain
+    // the checkout until a later startup can recover the archived session.
+    const live = this.acpSessionStore?.listSessions(backend, { includeHidden: true }) ?? [];
+    if (live.some((session) => owner.client.ownsSession?.(session.sessionId) !== false)) {
+      throw new Error("ACP session/close is unavailable and the process owns another live session; the checkout was kept.");
+    }
+    // Remove routing before yielding to process shutdown, so a new session
+    // cannot acquire a client whose transport is being closed.
+    if (this.acpClients.get(backend) === owner) this.acpClients.delete(backend);
+    this.retainedAcpClients.get(backend)?.delete(owner);
+    for (const [key, value] of this.environmentClients) {
+      if (value.entry === owner) this.environmentClients.delete(key);
+    }
+    await this.disposeAcpClient(owner);
+  }
+
+  /** A new process avoids retaining an OS cwd handle to the deleted checkout.
+   * Load the original protocol id at the original cwd; never create a blank
+   * replacement session or edit a provider-owned session file. */
+  async restoreWorktreeSession(backend: AcpBackendId, sessionId: string): Promise<void> {
+    await this.environmentClientLocks.run(JSON.stringify([backend, sessionId]),
+      async () => await this.restoreWorktreeSessionLocked(backend, sessionId));
+  }
+
+  private async restoreWorktreeSessionLocked(backend: AcpBackendId, sessionId: string): Promise<void> {
+    const session = this.getSession(backend, sessionId);
+    if (!session?.archivedAt) throw new Error("Archived ACP session metadata was not found.");
+    if (session.requiresAgentSessionRebind) throw new Error("The original ACP session identity is unavailable.");
+    const key = JSON.stringify([backend, sessionId]);
+    const previous = this.environmentClients.get(key);
+    const agent = await this.resolveInstalledAgent(backend);
+    if (!agent.launchDescriptor) throw new Error(`ACP backend ${backend} has no launch descriptor`);
+    const configuredAgent = { ...agent, launchDescriptor: { ...agent.launchDescriptor,
+      env: { ...agent.launchDescriptor.env, ...previous?.shellEnvironment } } };
+    const client = this.createAcpClient(configuredAgent);
+    const entry: AcpClientEntry = { client, launchIdentity: acpAgentLaunchIdentity(configuredAgent),
+      promise: Promise.resolve(client), supportsSessionLoad: true };
+    try {
+      await client.initialize();
+      if (client.supportsArchivedSessionRestore?.() !== true) throw new Error("This ACP provider cannot reload the archived session.");
+      await client.ensureSession(session);
+      if (this.closed) throw new Error("ACP backend adapter is closed");
+      this.environmentClients.set(key, { backend, environmentKey: previous?.environmentKey ?? "[]",
+        shellEnvironment: previous?.shellEnvironment, entry });
+    } catch (error) {
+      await this.disposeAcpClient(entry);
+      throw error;
+    }
+    if (previous) await this.disposeAcpClient(previous.entry);
+  }
+
   persistSyntheticAssistantMessage(params: {
     backend: AcpBackendId;
     messageId: string;
@@ -1654,6 +1740,11 @@ export class AcpBackendAdapter {
       this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend)
     )
       ?.promise.catch(() => undefined);
+    if (session?.archivedAt) {
+      const replay = cachedClient?.readReplay(sessionId);
+      return replay?.entries.length ? this.mergeReplayWithSyntheticHistory(session, replay)
+        : this.readRolloutReplay(session, "archived-rollout");
+    }
     if (cachedClient) {
       const replay = cachedClient.readReplay(sessionId);
       if (

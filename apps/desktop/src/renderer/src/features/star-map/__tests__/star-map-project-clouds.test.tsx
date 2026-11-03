@@ -225,12 +225,16 @@ describe("star map projects lens clouds", () => {
       }),
     ]);
 
-    await waitFor(() => {
-      expect(projectSystems(container)[0]?.cards).toHaveLength(4);
+    const cards = await waitFor(() => {
+      const snapshot = new Map(
+        (projectSystems(container)[0]?.cards ?? []).map((card) => [card.key, card]),
+      );
+      // The owner starts as "local" until federation health resolves.
+      for (const id of ["loose", "p1", "c1", "c2"]) {
+        expect(snapshot.has(`pwr_local::codex:${id}`)).toBe(true);
+      }
+      return snapshot;
     });
-    const cards = new Map(
-      projectSystems(container)[0].cards.map((card) => [card.key, card]),
-    );
     const parent = cards.get("pwr_local::codex:p1")!;
     const children = ["c1", "c2"].map(
       (id) => cards.get(`pwr_local::codex:${id}`)!,

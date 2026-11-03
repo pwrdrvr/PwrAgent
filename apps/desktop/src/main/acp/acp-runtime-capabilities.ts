@@ -398,7 +398,7 @@ function readAgentCapabilities(
   sessionCapabilitiesValue?: unknown,
 ): BackendAcpRuntimeCapabilities["agentCapabilities"] {
   const record = asRecord(value);
-  const sessionCapabilities = asRecord(sessionCapabilitiesValue);
+  const sessionCapabilities = asRecord(sessionCapabilitiesValue) ?? asRecord(record?.sessionCapabilities);
   const sessionMeta = asRecord(sessionCapabilities?._meta);
   const kimiMeta = asRecord(sessionMeta?.kimi);
   if (!record && !sessionCapabilities) {
@@ -408,7 +408,7 @@ function readAgentCapabilities(
     readBoolean(record, "loadSession") ??
     readBoolean(record, "load_session") ??
     readBoolean(asRecord(record?.session), "load");
-  const close = readBoolean(asRecord(record?.session), "close");
+  const close = asRecord(sessionCapabilities?.close) ? true : readBoolean(asRecord(record?.session), "close");
   const cancel = readBoolean(asRecord(record?.session), "cancel");
   const sessionHistoryReplay =
     readBoolean(kimiMeta, "sessionHistoryReplay") ??

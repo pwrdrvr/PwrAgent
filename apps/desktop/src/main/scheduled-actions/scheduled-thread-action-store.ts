@@ -195,7 +195,7 @@ export class ScheduledThreadActionStore {
         incomplete = true;
       }
       return { id: row.action_id, kind: row.kind, origin: row.origin, status: row.status,
-        scheduledFor: row.scheduled_for, displayText, createdAt: row.created_at, updatedAt: row.updated_at };
+        scheduledFor: row.scheduled_for, queueEntryId: row.queue_entry_id ?? undefined, displayText, createdAt: row.created_at, updatedAt: row.updated_at };
     });
     return { actions, ...(incomplete ? { incomplete: true as const } : {}) };
   }

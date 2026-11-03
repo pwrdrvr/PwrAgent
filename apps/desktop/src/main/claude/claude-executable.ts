@@ -118,14 +118,21 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-async function runClaude(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+async function runClaude(command: string, args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const isScript = /\.(c?js|mjs)$/i.test(command);
-  const { stdout } = await runFile(isScript ? process.execPath : command,
+  const operation = runFile(isScript ? process.execPath : command,
     [...(isScript ? [command] : []), ...args], {
       env: isScript ? { ...env, ELECTRON_RUN_AS_NODE: "1" } : env,
-      timeout: 10_000, maxBuffer: 64 * 1024, windowsHide: true,
+      timeout: 10_000, maxBuffer: 64 * 1024, windowsHide: true, signal,
     });
-  return stdout;
+  const closed = new Promise<void>((resolve) => operation.child.once("close", () => resolve()));
+  try {
+    return (await operation).stdout;
+  } finally {
+    // execFile abort rejects before process/stdio close on Windows.
+    await closed;
+  }
 }
 
 export async function selectClaudeExecutable(options: {
@@ -155,26 +162,30 @@ export function claudeLoginCommand(executable: string, platform: NodeJS.Platform
 
 export async function inspectClaudeInstallation(options: {
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
   resolveExecutable?: () => Promise<string | undefined>;
   resolveBundledExecutable?: () => Promise<string | undefined>;
   readVersion?: (executable: string, env: NodeJS.ProcessEnv) => Promise<string>;
   readAuthStatus?: (executable: string, env: NodeJS.ProcessEnv) => Promise<string>;
 } = {}): Promise<ClaudeInstallation> {
+  options.signal?.throwIfAborted();
   const env = claudeEnvironment(options.env ?? process.env);
   const [system, bundled] = await Promise.all([
     (options.resolveExecutable ?? (() => resolveClaudeExecutable({ env })))(),
     (options.resolveBundledExecutable ?? resolveBundledClaudeExecutable)(),
   ]);
+  options.signal?.throwIfAborted();
   const selected = await selectClaudeExecutable({ system, bundled,
-    readVersion: (executable) => (options.readVersion ?? ((file, launchEnv) => runClaude(file, ["--version"], launchEnv)))(executable, env),
+    readVersion: (executable) => (options.readVersion ?? ((file, launchEnv) => runClaude(file, ["--version"], launchEnv, options.signal)))(executable, env),
   });
+  options.signal?.throwIfAborted();
   const executable = selected.executable;
   if (!executable) return { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   const loginCommand = selected.source === "bundled" ? claudeLoginCommand(executable) : "claude auth login";
   const installation = { ...selected, loginCommand };
   try {
     const readAuthStatus = options.readAuthStatus ?? (async (command, launchEnv) => {
-      return await runClaude(command, ["auth", "status", "--json"], launchEnv).catch((error: unknown) => {
+      return await runClaude(command, ["auth", "status", "--json"], launchEnv, options.signal).catch((error: unknown) => {
         // Logged-out status may exit nonzero with valid JSON. Retain only the
         // status fields below, never raw output, account identifiers, or credentials.
         if (error && typeof error === "object" && "stdout" in error
@@ -203,6 +214,7 @@ export async function inspectClaudeInstallation(options: {
   } catch {
     // Older CLI versions may not implement auth status. Do not claim login.
   }
+  options.signal?.throwIfAborted();
   return { ...installation, authStatus: "unknown",
     message: CLAUDE_SIGN_IN_UNVERIFIED,
   };

@@ -79,24 +79,60 @@ holds `Local Storage/leveldb/LOCK`; the Electron main process then keeps the
 launcher alive after `quit`. The fixture removes the Chromium directories only
 after closing the app and cleaning up its profile helpers.
 
-On Windows, fixture close also drains each live Electron session before asking
-Playwright to quit: it closes connections, awaits the cookie store flush, and
+On Windows, fixture close also drains each live Electron session during
+graceful close: it closes connections, awaits the cookie store flush, and
 disposes the fixture session cache with `clearData({ dataTypes: ["cache"] })`.
 This preparation shares the existing six-second graceful-close deadline.
+An app-owned `before-quit` barrier retains Chromium's contexts until every
+session callback finishes, including after Playwright detaches its inspector.
+Application resource disposal and session preparation run concurrently inside
+that deadline. Holding `will-quit` instead allowed session cleanup to race
+Chromium's native context shutdown. In CI run
+41482286163, the stalled-close snapshot verified that Electron main PID 7876
+still held all four launcher pipe names while cache cleanup was pending; its
+two observed Chromium children held none of them. An unfinished drain still
+fails under the same deadline and is cleaned up by the owning test.
 Chromium's native `BrowserProcessIOThread::ProcessHostCleanUp` otherwise waits
 for the network service to flush cookies and cache after JavaScript quit has
 finished. That service can retain the launcher's pipes while native storage
-work is still pending. The fixture must await that work while the sessions
-are still reachable over RPC; storage isolation alone does not drain it.
+work is still pending. The fixture must await that work while the session
+contexts remain alive; storage isolation alone does not drain it.
 
 The cache operation also waits for Chromium's network-history completion.
 Unlike `clearCache()`, this reaches `HttpServerProperties::Clear` and the
 `Network/Network Persistent State` preference write. A matching Electron native
 snapshot retained that write and its initial preference read as queued
 `BLOCK_SHUTDOWN` work after the network service entered shutdown. Awaiting the
-cache completion keeps its RPC owner alive until the write finishes. Cache
+cache completion keeps its main-process owner alive until the write finishes. Cache
 disposal applies only to the Playwright-owned fixture sessions. A failed or
 stalled completion still fails teardown under the existing close deadline.
+
+The three full Windows samples in CI run 41491462986 passed their jobs but
+retained two forced closes through test retries. Both roots reached `quit`;
+native exit and pipe close then occurred together, with no surviving-pipe gap.
+The barrier alone therefore does not establish complete ownership of native
+shutdown. For further attribution, the controller samples a root still alive
+five seconds into close using CDB's noninvasive, non-suspending `-pvr` mode.
+It omits `-pd`: the controlled Windows probe found that combining it with
+`-pvr` exits before readiness with "The system does not support detach on exit".
+Frames are attributed only when live native creation FILETIMEs match the
+original launch before and after capture, and every debugger thread's process
+ID matches that root. A changed or exited identity omits the frames. Capture
+start/end and result are recorded. A running target can change during unwind;
+these stacks are best-effort observations, not atomic snapshots or unbiased
+shutdown-rate measurements.
+
+Opt-in CI verifies the installed Microsoft CDB signature. Live capture uses an
+empty local symbol directory with network symbols disabled. It retains bounded
+module-relative code offsets and the Electron image SHA-256 for separate offline
+symbolization against the matching image and PDB. CI does not download PDBs or
+perform post-test symbolization. A controlled child probe must produce frames and keep its
+heartbeat advancing while attached and after debugger cancellation before
+sampling is enabled. The controller never creates minidumps or clones the
+target. Artifacts retain only bounded thread IDs and parsed call-site offsets,
+plus explicit missing-symbol/capture status. Raw debugger output, arguments,
+memory and environment are never uploaded. At most four roots are
+sampled per lane; the owning close's deadline remains unchanged.
 
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
@@ -246,11 +282,20 @@ to approximately twenty launches; pending launches remain tracked.
 Set `PWRAGENT_E2E_WORKER_DIAGNOSTICS=0` only to compare instrumentation overhead.
 Failure semantics stay unchanged when capture is disabled.
 
-## Regular hosted Windows pipe evidence
+## Opt-in hosted Windows pipe evidence
 
-The Windows E2E job uses `pnpm test:desktop-e2e:windows-diagnostics`. It forwards
-the same desktop build, test arguments, shards, workers, retries and deadlines.
-No Electron close promise or cleanup phase waits for this recorder.
+By default, Windows CI runs `pnpm test:desktop-e2e` once across four lanes.
+The ordinary shutdown reports remain available without native observation.
+For an ownership investigation, add `ci:windows-shutdown-diagnostics` before
+opening the PR, pushing a commit, or rerunning CI. Adding the label alone does
+not start CI. The label runs three complete samples across the usual four lanes
+(12 jobs) using `pnpm test:desktop-e2e:windows-diagnostics`. It prepares signed
+Handle/CDB tools and enables the external controller described below. Removing
+the label restores the default on the next CI run.
+
+The diagnostic entry point forwards the same desktop build, test arguments,
+shards, workers, retries and deadlines. No Electron close promise or cleanup
+phase waits for this recorder. PDBs are not downloaded in either mode.
 
 An external controller starts native process observation before starting pnpm,
 before Electron launcher pipes exist. Native x64 process snapshots are sampled
