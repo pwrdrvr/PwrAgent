@@ -6,6 +6,7 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitRuntimeEnvironment, resolveRuntimeGitExecutable } from "../git-runtime";
 import { startWindowsJobReadyPoll, wrapCommandInWindowsJob } from "../windows-job-wrapper";
 import { collectProcessTreeIds, isProcessIdAlive, terminateOwnedProcessTree } from "../process-tree";
+import { gitSubprocessDiagnostics, type GitSubprocessPurpose } from "../diagnostics/git-subprocess-diagnostics";
 
 const execFile = promisify(execFileCallback);
 
@@ -32,6 +33,7 @@ export async function runGitCommand(
     signal?: AbortSignal;
     input?: string;
     beforeSpawn?: () => void;
+    purpose?: GitSubprocessPurpose;
   } = {},
 ): Promise<{
   stdout: string;
@@ -59,15 +61,19 @@ export async function runGitCommand(
     env,
   };
 
+  const finishDiagnostic = gitSubprocessDiagnostics.startGit(cwd, args, options.purpose);
+  let failed = true;
   try {
     if (options.ownProcessTree) {
-      return await runOwnedGitProcess({
+      const result = await runOwnedGitProcess({
         launch,
         input: options.input,
         maxBuffer: options.maxBuffer ?? 1024 * 1024 * 10,
         signal: options.signal,
         timeout: options.timeout ?? 120_000,
       });
+      failed = false;
+      return result;
     }
     const execution = execFile(launch.command, launch.args, {
       encoding: "utf8",
@@ -83,11 +89,13 @@ export async function runGitCommand(
     execution.child?.stdin?.on("error", () => undefined);
     execution.child?.stdin?.end(options.input);
     const { stdout, stderr } = await execution;
+    failed = false;
     return {
       stdout,
       stderr: stderr ?? "",
     };
   } finally {
+    finishDiagnostic(failed);
     windowsJobLaunch?.cleanup();
     // After the command: a checkout installs the Git LFS hooks it warns about.
     noteBundledGitCommand(cwd, args, options.env ?? process.env);
@@ -228,6 +236,8 @@ export async function runGitCommandBinary(
 ): Promise<Buffer> {
   const env = gitEnvironment(options.env ?? process.env);
   const git = await resolveGitExecutable(options.env ?? process.env);
+  const finishDiagnostic = gitSubprocessDiagnostics.startGit(cwd, args);
+  let failed = true;
   try {
     const { stdout } = await execFile(git, ["-C", cwd, ...args], {
       encoding: "buffer",
@@ -237,8 +247,10 @@ export async function runGitCommandBinary(
       timeout: options.timeout ?? 120_000,
       maxBuffer: options.maxBuffer ?? 1024 * 1024 * 10,
     });
+    failed = false;
     return stdout;
   } finally {
+    finishDiagnostic(failed);
     noteBundledGitCommand(cwd, args, options.env ?? process.env);
   }
 }
@@ -260,8 +272,10 @@ export async function streamGitCommand(
   const job = process.platform === "win32"
     ? wrapCommandInWindowsJob({ command, args: gitArgs, env, cwd: os.tmpdir() })
     : undefined;
+  const finishDiagnostic = gitSubprocessDiagnostics.startGit(cwd, args);
+  let failed = true;
   try {
-    return await new Promise((resolve, reject) => {
+    const result = await new Promise<{ stopped: boolean }>((resolve, reject) => {
       const child = spawn(job?.command ?? command, job?.args ?? gitArgs, {
         env: job?.env ?? env,
         cwd: os.tmpdir(),
@@ -319,7 +333,10 @@ export async function streamGitCommand(
         })().catch(reject);
       });
     });
+    failed = false;
+    return result;
   } finally {
+    finishDiagnostic(failed);
     job?.cleanup();
     noteBundledGitCommand(cwd, args, options.env ?? process.env);
   }

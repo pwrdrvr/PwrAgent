@@ -1,11 +1,15 @@
+import { ChildProcess, execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import * as git from "../app-server/git-executable";
 import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
 import { clearGitHubRemoteCache, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
+
+const execFileAsync = promisify(execFile);
 
 describe("PR metadata launch budgets", () => {
   let root: string;
@@ -30,22 +34,26 @@ describe("PR metadata launch budgets", () => {
     if (kind !== "missing") await mkdir(cwd);
     if (kind === "local-only") await git.runGitCommand(cwd, ["init", "-b", "main"]);
     const runner = vi.spyOn(git, "runGitCommand");
+    const launches = vi.spyOn(ChildProcess.prototype, "spawn");
     const pr = attachment(cwd);
     for (let round = 0; round < 5; round++) {
       expect(await filterStoredDiscoveredPullRequests([pr])).toEqual([pr]);
     }
     expect(runner.mock.calls.map(([, args]) => args)).toEqual([["remote"]]);
+    expect(launches).toHaveBeenCalledTimes(1);
   });
 
   it("uses one fallback-ref lookup for concurrent and unchanged consumers of a checkout", async () => {
     await git.runGitCommand(root, ["init", "-b", "feature"]);
     await git.runGitCommand(root, ["remote", "add", "origin", "https://github.com/fixture/project.git"]);
     const runner = vi.spyOn(git, "runGitCommand");
+    const launches = vi.spyOn(ChildProcess.prototype, "spawn");
     const pr = attachment(root);
     await Promise.all(Array.from({ length: 12 }, () => filterStoredDiscoveredPullRequests([pr])));
     for (let round = 0; round < 5; round++) await filterStoredDiscoveredPullRequests([pr]);
     // remote list + all URLs + remote HEAD + one fallback-ref query.
     expect(runner).toHaveBeenCalledTimes(4);
+    expect(launches).toHaveBeenCalledTimes(4);
     expect(runner.mock.calls.filter(([, args]) => args[0] === "for-each-ref")).toHaveLength(1);
   });
 
@@ -67,20 +75,52 @@ describe("PR metadata launch budgets", () => {
     expect(resolveSshHostname).toHaveBeenCalledTimes(2);
   });
 
-  it("observes a changed SSH Include on the existing remote-cache expiry boundary", async () => {
+  it.skipIf(process.platform === "win32")("observes a changed SSH Include on expiry without retaining a hostname cache", async () => {
     let now = 0;
+    const mainConfig = path.join(root, "ssh-config");
     const config = path.join(root, "included-ssh-config");
-    await writeFile(config, "github.com");
-    const { readFile } = await import("node:fs/promises");
-    const resolveSshHostname = vi.fn(async () => (await readFile(config, "utf8")).trim());
+    await writeFile(mainConfig, `Include "${config}"\n`);
+    await writeFile(config, "Host fixture-host\n  HostName github.com\n");
+    const resolveSshHostname = vi.fn(async (host: string) => {
+      const { stdout } = await execFileAsync("ssh", ["-G", "-F", mainConfig, "-o", "CanonicalizeHostname=no", host]);
+      return stdout.match(/^hostname (.+)$/m)?.[1];
+    });
     const options = {
       readRemotes: async () => [{ name: "origin", url: "fixture-host:fixture/project.git" }],
       resolveSshHostname, now: () => now,
     };
+    const launches = vi.spyOn(ChildProcess.prototype, "spawn");
+    const reads = await Promise.all([root, path.join(root, "second")].map((cwd) => resolveGitHubRepoForDirectory(cwd, options)));
+    expect(reads.map((repo) => repo?.host)).toEqual(["github.com", "github.com"]);
+    expect(launches).toHaveBeenCalledTimes(1);
     expect(await resolveGitHubRepoForDirectory(root, options)).toMatchObject({ host: "github.com" });
-    await writeFile(config, "gitlab.com");
+    expect(launches).toHaveBeenCalledTimes(1);
+    await writeFile(config, "Host fixture-host\n  HostName gitlab.com\n");
     now = 5 * 60_000;
     expect(await resolveGitHubRepoForDirectory(root, options)).toMatchObject({ host: "gitlab.com" });
     expect(resolveSshHostname).toHaveBeenCalledTimes(2);
+    expect(launches).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes changed remotes and default refs at their existing freshness boundaries", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await git.runGitCommand(root, ["init", "-b", "feature"]);
+    await git.runGitCommand(root, ["remote", "add", "origin", "https://github.com/fixture/project.git"]);
+    await git.runGitCommand(root, ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture"]);
+    const pr = attachment(root);
+    expect(await filterStoredDiscoveredPullRequests([pr])).toEqual([pr]);
+    await git.runGitCommand(root, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/feature"]);
+    now += 60_001;
+    // Preserve symbolic-ref semantics even when its target was not fetched.
+    expect(await filterStoredDiscoveredPullRequests([pr])).toEqual([]);
+    await git.runGitCommand(root, ["remote", "set-url", "origin", "https://github.com/other/project.git"]);
+    await git.runGitCommand(root, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    now += 5 * 60_000;
+    expect(await filterStoredDiscoveredPullRequests([pr])).toEqual([]);
+    expect(await resolveGitHubRepoForDirectory(root)).toMatchObject({ owner: "other" });
+    await git.runGitCommand(root, ["remote", "set-url", "origin", "https://github.com/fixture/project.git"]);
+    clearGitHubRemoteCache();
+    expect(await resolveGitHubRepoForDirectory(root)).toMatchObject({ owner: "fixture" });
   });
 });

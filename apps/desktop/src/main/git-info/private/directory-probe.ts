@@ -48,6 +48,7 @@ export async function runGit(
   const finish = directoryEnrichmentDiagnostics.startGit(context, args);
   try {
     const result = await runGitCommand(projectKey, args, {
+      purpose: "directory-enrichment",
       env: buildPwrAgentChildProcessEnv(process.env),
       maxBuffer: GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES,
       timeout: GIT_DIRECTORY_PROBE_TIMEOUT_MS,

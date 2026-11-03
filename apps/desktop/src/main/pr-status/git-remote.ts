@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "../app-server/git-executable";
+import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
@@ -107,11 +108,17 @@ type RemoteCacheEntry = {
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
 const remoteLookups = new Map<string, Promise<ParsedGitRemote[]>>();
+type SshResolver = (host: string) => Promise<string | undefined>;
+// Share only running OpenSSH evaluations. A completed evaluation belongs to
+// its directory's existing TTL; a new probe must evaluate Include/Match again.
+let sshLookups = new WeakMap<SshResolver, Map<string, Promise<string | undefined>>>();
+const MAX_SSH_LOOKUPS = 128;
 
 export function clearGitHubRemoteCache(): void {
   remoteCache.clear();
   // Existing callers may finish, but cannot publish into the new cache.
   remoteLookups.clear();
+  sshLookups = new WeakMap();
 }
 
 export type ResolveGitHubRepoOptions = {
@@ -228,9 +235,8 @@ async function loadParsedGitRemotes(
   const readRemotes = options.readRemotes ?? defaultReadRemotes;
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
-  // Share exact host inputs across this probe's remotes. Keeping this local
-  // preserves SSH config freshness on expiry/invalidation and alias identity.
-  const sshLookups = new Map<string, Promise<string | undefined>>();
+  // Also retain resolved values within this probe, including negative answers.
+  const localSshLookups = new Map<string, Promise<string | undefined>>();
   try {
     return await Promise.all(
       (await readRemotes(cwd)).map(async (remote) => {
@@ -238,10 +244,10 @@ async function loadParsedGitRemotes(
         const sshHost = readSshHost(remote.url);
         let hostname: Promise<string | undefined> | undefined;
         if (sshHost) {
-          hostname = sshLookups.get(sshHost);
+          hostname = localSshLookups.get(sshHost);
           if (!hostname) {
-            hostname = Promise.resolve().then(() => resolveSshHostname(sshHost));
-            sshLookups.set(sshHost, hostname);
+            hostname = resolveSshHostInFlight(sshHost, resolveSshHostname);
+            localSshLookups.set(sshHost, hostname);
           }
         }
         const resolvedHost = await hostname;
@@ -259,9 +265,27 @@ async function loadParsedGitRemotes(
   }
 }
 
+function resolveSshHostInFlight(host: string, resolve: SshResolver): Promise<string | undefined> {
+  let lookups = sshLookups.get(resolve);
+  if (!lookups) {
+    lookups = new Map();
+    sshLookups.set(resolve, lookups);
+  }
+  const existing = lookups.get(host);
+  if (existing) return existing;
+  const pending = Promise.resolve().then(() => resolve(host)).finally(() => {
+    if (lookups.get(host) === pending) lookups.delete(host);
+  });
+  // Overflow starts independently; it never waits in a process queue or
+  // evicts a running owner's entry and starts a second owner for that key.
+  if (lookups.size < MAX_SSH_LOOKUPS) lookups.set(host, pending);
+  return pending;
+}
+
 async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const { stdout } = await runGitCommand(cwd, ["remote"], {
+    purpose: "pr-remotes",
     env: childEnv,
     maxBuffer: 64 * 1024,
     timeout: GIT_REMOTE_TIMEOUT_MS,
@@ -274,6 +298,7 @@ async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
           cwd,
           ["remote", "get-url", "--all", name],
           {
+            purpose: "pr-remotes",
             env: childEnv,
             maxBuffer: 64 * 1024,
             timeout: GIT_REMOTE_TIMEOUT_MS,
@@ -317,6 +342,8 @@ function readSshHost(remoteUrl: string): string | undefined {
 async function defaultResolveSshHostname(
   host: string,
 ): Promise<string | undefined> {
+  const finish = gitSubprocessDiagnostics.start("ssh-config", "pr-remotes", { sshHost: host });
+  let failed = true;
   try {
     // `ssh -G` evaluates and prints the effective OpenSSH configuration, then
     // exits without connecting. Disabling hostname canonicalization prevents a
@@ -330,6 +357,7 @@ async function defaultResolveSshHostname(
         timeout: GIT_REMOTE_TIMEOUT_MS,
       },
     );
+    failed = false;
     for (const line of stdout.split(/\r?\n/)) {
       const match = line.match(/^hostname\s+(.+)$/i);
       if (match?.[1]) {
@@ -339,6 +367,8 @@ async function defaultResolveSshHostname(
     return undefined;
   } catch {
     return undefined;
+  } finally {
+    finish(failed);
   }
 }
 

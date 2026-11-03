@@ -17,7 +17,7 @@ export async function readLocalHeadPastPrHead(params: {
   headRefName?: string;
   timeoutMs?: number;
 }): Promise<string | undefined> {
-  const options = { timeout: params.timeoutMs ?? 5_000 };
+  const options = { timeout: params.timeoutMs ?? 5_000, purpose: "pr-local-head" as const };
   const cachedHeadSha = params.cachedHeadSha.trim().toLowerCase();
   if (!GIT_OBJECT_ID.test(cachedHeadSha)) return undefined;
   for (const cwd of params.directories) {
