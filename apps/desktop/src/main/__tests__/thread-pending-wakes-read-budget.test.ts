@@ -60,20 +60,22 @@ it.each([0, 160])("budgets owner projection reads under repeated local and peer 
     vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       if (!sql.trimStart().startsWith("SELECT")) return statement;
+      // The uncached workload prepares over 10,000 statements. Plain wrappers
+      // collect the budget without retaining three Vitest mocks per statement.
       for (const method of ["get", "all"] as const) {
         const execute = statement[method].bind(statement);
-        vi.spyOn(statement, method).mockImplementation((...args: unknown[]) => {
+        statement[method] = (...args: unknown[]) => {
           recordQuery(sql, args);
           const result = execute(...args);
           for (const row of Array.isArray(result) ? result : [result]) record(row);
           return result;
-        });
+        };
       }
       const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "iterate").mockImplementation(function* (...args: unknown[]) {
+      statement.iterate = function* (...args: unknown[]) {
         recordQuery(sql, args);
         for (const row of iterate(...args)) { record(row); yield row; }
-      });
+      };
       return statement;
     });
     const readPayload = payloads.read.bind(payloads);
