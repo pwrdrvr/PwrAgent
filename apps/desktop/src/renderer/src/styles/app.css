@@ -27455,6 +27455,23 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   display: contents;
 }
 
+.transcript-work-phase-group__images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(100%, 760px);
+}
+
+.transcript-work-phase-group__images .transcript-message__image-button {
+  max-width: min(100%, 180px);
+  padding: 4px;
+}
+
+.transcript-work-phase-group__images .transcript-message__image-preview {
+  max-height: 120px;
+}
+
 .transcript-message__header {
   display: flex;
   align-items: baseline;
