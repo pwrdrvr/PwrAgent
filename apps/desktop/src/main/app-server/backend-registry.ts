@@ -11,6 +11,7 @@ import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadReq
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
+import { archiveCleanupWorkspaceFilter } from "./archive-cleanup-workspace-scope";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
 import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "./git-head-branch";
 import {
@@ -2348,6 +2349,8 @@ type ArchiveCleanupDiscoveryRequest = {
   targetThread?: AppServerThreadSummary;
   codexRolloutMissing?: boolean;
   reuseInventory?: boolean;
+  /** Fresh global membership/overlays, with Git probes limited to this scope. */
+  ownershipScope?: string;
 };
 
 type ArchiveCleanupInventory = Pick<ArchiveCleanupMetadata,
@@ -16605,6 +16608,9 @@ export class DesktopBackendRegistry {
     const finishMutation = () => {
       if (mutationFinished) return;
       mutationFinished = true;
+      // An admission can start while this mutation is already pending and
+      // read its old provider row. Settling must fence that observation too.
+      this.archiveWorkspaceRevision += 1;
       const remaining = (this.threadLifecycleMutationCounts.get(key) ?? 1) - 1;
       if (remaining) this.threadLifecycleMutationCounts.set(key, remaining);
       else this.threadLifecycleMutationCounts.delete(key);
@@ -38214,6 +38220,7 @@ export class DesktopBackendRegistry {
     targetThread?: AppServerThreadSummary;
     codexRolloutMissing?: boolean;
     reuseInventory?: boolean;
+    ownershipScope?: string;
   }): Promise<ArchiveCleanupMetadata> {
     if (this.codexClient.listArchiveCleanupThreadsPage) {
       return await this.readPacedArchiveCleanupMetadata(params);
@@ -38434,7 +38441,7 @@ export class DesktopBackendRegistry {
         this.archiveWorktreeRemovalAdmissions.add(admission);
         try {
           const revision = this.archiveWorkspaceRevision;
-          const current = await this.findThreadForArchiveCleanup({ ...candidate, context });
+          const current = await this.findThreadForArchiveCleanup({ ...candidate, context, ownershipScope: containerPath });
           const ownedPaths = [current.thread.projectKey, ...current.thread.linkedDirectories.map(linkedDirectoryWorktreePath)];
           if (!ownedPaths.some((value) => value && normalizeWorktreePathForComparison(value) === candidate.worktreePath)) {
             throw new Error("Archived thread no longer owns the container; it was kept.");
@@ -38554,6 +38561,12 @@ export class DesktopBackendRegistry {
     const agents = await this.acpBackend.listAvailableAgents();
     const directoryObservations = new Map<string, Promise<ThreadDirectoryEnrichment>>();
     const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
+    // Admission never uses the preliminary inventory. Larger metadata pages
+    // amortize RPC cost while overlay/CPU slices remain bounded at 25 rows.
+    // Scope only filesystem/Git enrichment, including aliases and descendants;
+    // every provider identity and its current overlay still participates.
+    const directoryFilter = params.ownershipScope ? archiveCleanupWorkspaceFilter(params.ownershipScope) : undefined;
+    const providerPageSize = directoryFilter ? 250 : ARCHIVE_CLEANUP_SLICE_SIZE;
     const scanStartedAt = Date.now();
     let providerPages = 0;
     const appendPage = async (backend: AppServerBackendKind, rows: AppServerThreadSummary[], archived: boolean, resolveCwd = isAcpBackendId(backend)) => {
@@ -38572,7 +38585,7 @@ export class DesktopBackendRegistry {
             const cwd = resolveThreadWorkspaceCwd(row, overlay?.extraLinkedDirectories ?? []);
             // Discovery is read-only here. Do not turn a cleanup safety scan
             // into per-thread durable cache writes or trust a stale cache.
-            if (cwd) {
+            if (cwd && (!directoryFilter || await directoryFilter(cwd))) {
               let observation = workspaceObservations.get(cwd);
               if (!observation) {
                 await context?.checkpoint();
@@ -38628,9 +38641,10 @@ export class DesktopBackendRegistry {
         do {
           await context?.checkpoint();
           const page = await this.codexClient.listArchiveCleanupThreadsPage!({
-            archived, cursor, limit: ARCHIVE_CLEANUP_SLICE_SIZE,
+            archived, cursor, limit: providerPageSize,
             checkpoint: async () => { await context?.checkpoint(); },
             directoryObservations,
+            directoryFilter,
           });
           providerPages += 1;
           await appendPage("codex", page.threads, archived);
@@ -38668,6 +38682,7 @@ export class DesktopBackendRegistry {
       backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId,
       durationMs: Date.now() - scanStartedAt, providerPages, activeThreads: activeThreads.length, archivedThreads: archivedThreads.length,
       directoryObservations: directoryObservations.size, workspaceObservations: workspaceObservations.size,
+      ownershipScope: params.ownershipScope, providerPageSize,
     });
     if (batch && revision === this.archiveWorkspaceRevision && inventories === this.archiveCleanupInventories) {
       inventories.set(batch, { revision, includesArchived: !params.targetThread,
@@ -39025,6 +39040,7 @@ export class DesktopBackendRegistry {
             const current = await this.findThreadForArchiveCleanup({
               backend: params.backend, threadId: params.thread.id, context: params.context,
               codexRolloutMissing: params.codexRolloutMissing,
+              ownershipScope: managedContainerPath ?? candidate.worktreePath,
             });
             removalMetadata = current;
           const check = () => {
