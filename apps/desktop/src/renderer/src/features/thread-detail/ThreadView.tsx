@@ -4860,6 +4860,9 @@ export function ThreadView(props: ThreadViewProps) {
           onStopEnvActionRun: stopEnvActionRun,
           onRefreshNavigation: props.onRefreshNavigation,
           onSetThreadPrAutoDispatch: props.onSetThreadPrAutoDispatch,
+          onUnlockThread: props.onSetThreadLock
+            ? async () => await props.onSetThreadLock?.(false)
+            : undefined,
           platform: props.platform,
           thread: selectedThread,
           pricing: props.pricing,

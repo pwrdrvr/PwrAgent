@@ -11,6 +11,7 @@ import {
   buildThreadPendingWakes,
   stopRemoteThreadPendingWake,
   stopThreadPendingWake,
+  type PendingHeldQueueEntry,
   type ThreadPendingWakeReaders,
   type ThreadPendingWakeStoppers,
 } from "../app-server/thread-pending-wakes";
@@ -94,9 +95,25 @@ function readers(overrides: Partial<ThreadPendingWakeReaders> = {}): ThreadPendi
     monitors: () => [],
     recentSubAgents: async () => [],
     backendTasks: async () => [],
+    hold: async () => undefined,
+    heldEntries: () => [],
     ...overrides,
   };
 }
+
+function heldEntry(overrides: Partial<PendingHeldQueueEntry> = {}): PendingHeldQueueEntry {
+  return {
+    entryId: "thread-turn:1",
+    origin: "manual",
+    createdAt: 2_000,
+    holdReason: "This thread is locked: Parked. Unlock it before starting a turn.",
+    text: "Rebase on main.",
+    ...overrides,
+  };
+}
+
+const LOCKED = { kind: "thread_locked" as const, note: "Parked" };
+const PAUSED = { kind: "project_paused" as const, projectLabel: "widgets", directoryKey: "directory:/repo/widgets" };
 
 describe("buildThreadPendingWakes", () => {
   it("lists every source's pending wakes, soonest first", async () => {
@@ -208,6 +225,102 @@ describe("buildThreadPendingWakes", () => {
   });
 });
 
+describe("held wakes", () => {
+  it("lists what a lock holds first, and marks every wake the lock keeps from starting", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      hold: async () => LOCKED,
+      heldEntries: () => [
+        heldEntry({ entryId: "task-monitor:monitor-9", origin: "manual", createdAt: 3_000, text: "Monitor finished." }),
+        heldEntry(),
+        // A held scheduled action is listed as itself, once.
+        heldEntry({ entryId: "scheduled-entry", origin: "scheduled", text: "Ping CI." }),
+      ],
+      scheduledActions: () => [
+        scheduled({ id: "scheduled-1", status: "held", queueEntryId: "scheduled-entry" }),
+        scheduled({ id: "scheduled-2", scheduledFor: 9_000 }),
+      ],
+      prWatches: async () => [prWatch()],
+      autoFix: async () => [{ backend: "claude", threadId: "waiting", prKey: "github/acme/widgets#3174", state: "active" }],
+      dependencies: async () => [dependency({ status: "ready" })],
+      backendTasks: async () => [task()],
+    }), THREAD);
+
+    expect(list.wakes.map((wake) => wake.key)).toEqual([
+      "held_message:thread-turn:1",
+      "held_message:task-monitor:monitor-9",
+      "scheduled_action:scheduled-2",
+      "scheduled_action:scheduled-1",
+      "pr_watch:watch-ci",
+      "pr_auto_fix:github/acme/widgets#3174",
+      "dependency:dep-1",
+      "backend_task:task-1",
+    ]);
+    const held = Object.fromEntries(list.wakes.map((wake) => [wake.key, wake.held]));
+    expect(held["held_message:thread-turn:1"]).toEqual(LOCKED);
+    expect(held["scheduled_action:scheduled-2"]).toEqual(LOCKED);
+    expect(held["pr_watch:watch-ci"]).toEqual(LOCKED);
+    expect(held["dependency:dep-1"]).toEqual(LOCKED);
+    // Auto-fix is off while locked, and a backend continues its own task.
+    expect(held["pr_auto_fix:github/acme/widgets#3174"]).toBeUndefined();
+    expect(held["backend_task:task-1"]).toBeUndefined();
+    expect(list.wakes[0]).toMatchObject({
+      kind: "held_message", entryId: "thread-turn:1", source: "operator", displayText: "Rebase on main.",
+      createdBy: "operator", durable: false, stop: "discard",
+    });
+    expect(list.wakes[1]).toMatchObject({ source: "monitor", createdBy: "agent" });
+  });
+
+  it("names a paused project's hold, and leaves scheduled actions alone", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      hold: async () => ({ ...PAUSED, discardsWakeups: true }),
+      heldEntries: () => [heldEntry({
+        entryId: "dependency:dep-7",
+        origin: "automation",
+        holdReason: "Held because forge activity in widgets is paused.",
+        projectHold: { ...PAUSED, source: "dependency", summary: "Continue After: Lease cleanup finished" },
+      })],
+      scheduledActions: () => [scheduled()],
+      prWatches: async () => [prWatch()],
+      dependencies: async () => [dependency()],
+    }), THREAD);
+
+    expect(list.wakes[0]).toMatchObject({
+      kind: "held_message", source: "dependency", displayText: "Continue After: Lease cleanup finished",
+      durable: true, held: PAUSED,
+    });
+    const held = Object.fromEntries(list.wakes.map((wake) => [wake.kind, wake.held]));
+    expect(held.scheduled_action).toBeUndefined();
+    expect(held.pr_watch).toEqual({ ...PAUSED, discardsWakeups: true });
+    expect(held.dependency).toEqual({ ...PAUSED, discardsWakeups: true });
+  });
+
+  it("says why a queue waits after a failed turn", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      heldEntries: () => [heldEntry({ origin: "messaging", holdReason: "The previous turn failed." })],
+    }), THREAD);
+    expect(list.wakes).toEqual([expect.objectContaining({
+      source: "messaging", held: { kind: "queue_held", reason: "The previous turn failed." },
+    })]);
+  });
+
+  it("keeps a failed turn's hold when the thread is also locked, since unlocking does not release it", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      hold: async () => LOCKED,
+      heldEntries: () => [heldEntry({ holdReason: "The previous turn failed." })],
+    }), THREAD);
+    expect(list.wakes[0]?.held).toEqual({ kind: "queue_held", reason: "The previous turn failed." });
+  });
+
+  it("marks the list incomplete when the hold cannot be read", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      hold: async () => { throw new Error("overlay unreadable"); },
+      prWatches: async () => [prWatch()],
+    }), THREAD);
+    expect(list.incomplete).toBe(true);
+    expect(list.wakes[0]?.held).toBeUndefined();
+  });
+});
+
 describe("stopThreadPendingWake", () => {
   const stoppers = (): ThreadPendingWakeStoppers & { calls: string[] } => {
     const calls: string[] = [];
@@ -218,6 +331,7 @@ describe("stopThreadPendingWake", () => {
       stopMonitor: async (_thread, id) => { calls.push(`monitor:${id}`); },
       cancelScheduledAction: async (_thread, id) => { calls.push(`scheduled:${id}`); },
       stopBackendTask: async (_thread, id) => { calls.push(`task:${id}`); },
+      discardHeldMessage: async (_thread, id) => { calls.push(`held:${id}`); },
     };
   };
 
@@ -225,13 +339,14 @@ describe("stopThreadPendingWake", () => {
     const owner = stoppers();
     for (const key of [
       "pr_watch:watch-ci", "dependency:dep-1", "monitor:monitor-1",
-      "scheduled_action:scheduled-action:1", "backend_task:task-1",
+      "scheduled_action:scheduled-action:1", "backend_task:task-1", "held_message:task-monitor:monitor-9",
     ]) {
       await expect(stopThreadPendingWake(owner, THREAD, key)).resolves.toEqual({ ok: true, stopped: true });
     }
     // The scheduled action id keeps its own colon.
     expect(owner.calls).toEqual([
       "pr:watch-ci", "dependency:dep-1", "monitor:monitor-1", "scheduled:scheduled-action:1", "task:task-1",
+      "held:task-monitor:monitor-9",
     ]);
   });
 
@@ -255,12 +370,15 @@ describe("stopThreadPendingWake", () => {
       cancelScheduledAction: vi.fn(async () => {}),
       stopMonitor: vi.fn(async () => {}),
       stopBackendTask: vi.fn(async () => {}),
+      discardHeldMessage: vi.fn(async () => {}),
     };
     await expect(stopRemoteThreadPendingWake(remote, "dependency:dep-1", "studio-mac")).resolves.toEqual({
       ok: false, error: { code: "federation_unsupported", message: "This runs on studio-mac. Stop it there." },
     });
     await expect(stopRemoteThreadPendingWake(remote, "backend_task:task-1")).resolves.toEqual({ ok: true, stopped: true });
     expect(remote.stopBackendTask).toHaveBeenCalledWith("task-1");
+    await expect(stopRemoteThreadPendingWake(remote, "held_message:thread-turn:1")).resolves.toEqual({ ok: true, stopped: true });
+    expect(remote.discardHeldMessage).toHaveBeenCalledWith("thread-turn:1");
   });
 });
 

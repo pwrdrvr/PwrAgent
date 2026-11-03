@@ -157,6 +157,8 @@ type ThreadContextPanelProps = {
   onRefreshNavigation?: () => Promise<void>;
   /** Backs Turn Off on the Pull requests tab's Auto-fix row. */
   onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** Unlocks the selected thread, as its lock card does. */
+  onUnlockThread?: () => Promise<void>;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
   /**
@@ -1023,6 +1025,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           ? thread.federation.instanceLabel
           : readRendererFederationTarget() ? "the thread's own machine" : undefined;
         const sendNow = props.desktopApi?.sendScheduledThreadActionNow;
+        const resolveHeld = props.desktopApi?.resolveProjectHeldWakeups;
         const turnOffAutoFix = props.onSetThreadPrAutoDispatch;
         const openContinueAfter = dependencyContext?.open;
         return (
@@ -1034,6 +1037,20 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onSendScheduledNow={sendNow ? async (id) => {
               await sendNow({ id, ...(federationTarget ? { federationTarget } : {}) });
             } : undefined}
+            onSendHeldNow={resolveHeld ? async (wake) => {
+              if (wake.held?.kind !== "project_paused") return;
+              // The project's own release, as its Resume dialog sends one.
+              const { results } = await resolveHeld({
+                directoryKey: wake.held.directoryKey,
+                resolutions: [{ entryId: wake.entryId, backend: thread.source, threadId: thread.id, action: "send" }],
+                ...(federationTarget ? { federationTarget } : {}),
+              });
+              const result = results.find((candidate) => candidate.entryId === wake.entryId);
+              if (result?.status !== "sent") {
+                throw new Error(result?.error ?? "That wake-up is no longer held.");
+              }
+            } : undefined}
+            onUnlockThread={props.onUnlockThread}
             onShowTab={selectTab}
             onOpenContinueAfter={openContinueAfter && !ownerLabel ? () => openContinueAfter(thread) : undefined}
           />
