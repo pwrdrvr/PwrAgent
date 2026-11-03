@@ -4987,15 +4987,16 @@ describe("DesktopBackendRegistry", () => {
       codexBackgroundTerminals: Map<string, unknown[]>;
     };
 
+    // A turn makes the owner's answer "not quiescent", so the client records
+    // a busy check instead of recycling.
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
-    await registry.checkCodexAppServerRecycle();
-    expect(recycle).not.toHaveBeenCalled();
-
-    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
     await registry.checkCodexAppServerRecycle();
     expect(recycle).toHaveBeenCalledOnce();
     const { settings: passed, isQuiescent } = recycle.mock.calls[0]![0];
     expect(passed).toEqual(settings);
+    expect(isQuiescent()).toBe(false);
+
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
     expect(isQuiescent()).toBe(true);
     // A command still running after its turn ended keeps the server.
     internals.codexBackgroundTerminals.set("thread-1", [{ processId: "p-1" }]);

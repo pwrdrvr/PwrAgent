@@ -16146,12 +16146,16 @@ export class DesktopBackendRegistry {
     this.codexAppServerRecycleTimer.unref?.();
   }
 
-  /** One recycle check. Never throws; the client logs what it did. */
+  /**
+   * One recycle check. Never throws; the client logs what it did. Registry
+   * work is passed in as `isQuiescent`, not checked here, so the client
+   * records a busy check in its status as it does any other.
+   */
   async checkCodexAppServerRecycle(): Promise<void> {
     if (this.closed || this.shutdownRequested || this.codexAppServerRecycleCheck) return;
     const settings = this.resolveCodexAppServerRecycleSettingsFn();
     const recycle = this.codexClient.maybeRecycleIdleAppServer?.bind(this.codexClient);
-    if (!settings.enabled || !recycle || this.hasCodexWorkBlockingRecycle()) return;
+    if (!settings.enabled || !recycle) return;
     const check = (async () => {
       await recycle({
         settings,
