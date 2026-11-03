@@ -4483,11 +4483,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
-  /** Only explicit hold changes write. The read/modify/write is profile-atomic. */
+  /**
+   * Only explicit hold changes write. The read/modify/write is profile-atomic.
+   * `remind` runs inside the same transaction when a wait is marked done, so
+   * the hold and its reminder card commit together or not at all.
+   */
   manageThreadMergeHolds(
     request: ManageThreadMergeHoldsRequest & { backend: ThreadOverlayState["backend"]; threadId: string },
     actor: string,
     now = Date.now(),
+    remind?: (hold: ThreadMergeHold, stillWaiting: number) => string | undefined,
   ): ThreadMergeHold[] {
     validateMergeHoldRequest(request);
     const initial = this.getThread(buildThreadIdentityKey(request.backend, request.threadId));
@@ -4503,7 +4508,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         executionMode: "default" as const, extraLinkedDirectories: [],
       };
       const previous = current.mergeHolds ?? [];
-      const holds = updateMergeHolds(previous, request, actor, now, (current.prs ?? []).flatMap((pr) => pr.url ? [pr.url] : []));
+      let holds = updateMergeHolds(previous, request, actor, now, (current.prs ?? []).flatMap((pr) => pr.url ? [pr.url] : []));
+      if (holds !== previous && request.action === "resolve" && remind) {
+        const resolved = holds.find((hold) => hold.id === request.holdId)!;
+        const reminderTodoId = remind(resolved, holds.filter((hold) => hold.status === "waiting").length);
+        if (reminderTodoId) holds = holds.map((hold) => hold === resolved ? { ...hold, reminderTodoId } : hold);
+      }
       if (holds !== previous) {
         if (request.action === "create" && this.listActiveThreadMergeHolds().length >= 512) throw new Error("There are already 512 active merge holds. Resolve or cancel one first.");
         this.putThread(threadKey, { ...current, mergeHolds: holds });

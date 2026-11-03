@@ -5,7 +5,9 @@ import type { AppServerThreadSummary, ManageThreadMergeHoldsRequest } from "@pwr
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
-import { appendMergeHoldDependents, assertNoMergeHolds, qualifyMergeHoldOwners, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
+import { appendMergeHoldDependents, assertNoMergeHolds, buildMergeHoldReminder, qualifyMergeHoldOwners, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
+import { ThreadTodoService } from "../thread-todos/thread-todo-service";
+import { ThreadTodoStore } from "../thread-todos/thread-todo-store";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, removeTempStateDbDir, openInMemoryStateDb } from "./sqlite-test-utils";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -91,14 +93,69 @@ describe("merge holds", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it("raises the operator's reminder with the hold in one commit when it is marked done, and only then", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-merge-hold-reminder-");
+    const measuredDb = StateDb.open(temp.dbPath);
+    try {
+      const measured = new SqliteOverlayStore(measuredDb);
+      const todos = new ThreadTodoService({ store: new ThreadTodoStore(measuredDb) });
+      const remind = (hold: Parameters<typeof buildMergeHoldReminder>[0], stillWaiting: number) =>
+        todos.raiseForDependency(buildMergeHoldReminder(hold, stillWaiting)).todo.id;
+      const [hold] = measured.manageThreadMergeHolds({ ...request, followUp: ["Rebase onto #3291", "Merge #17"], offerToSend: true }, "operator");
+      const [other] = measured.manageThreadMergeHolds({ ...request, reason: "Review" }, "operator");
+      const resolve = { ...waiting, action: "resolve" as const, holdId: hold!.id, note: "Validated on Windows." };
+      const { writes } = await measureSqliteWrites(async () => {
+        measured.manageThreadMergeHolds(resolve, "agent:codex:validation", 5, remind);
+        measured.manageThreadMergeHolds(resolve, "agent:codex:validation", 6, remind);
+      });
+      expect(writes.commits).toBe(1);
+      expectSqliteWriteBudget({ scenario: "thread-merge-hold-reminder", writes,
+        note: "Marking a wait done and raising its reminder card share one commit; a repeat writes nothing. Only an explicit Mark Done writes, never a timer, turn, or streamed event.",
+      });
+      const cards = todos.list({ backend: "codex", threadId: "waiting" });
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toMatchObject({
+        kind: "handoff", dependencyId: `merge-hold:${hold!.id}`,
+        title: "Windows investigation done: Rebase onto #3291 (+1 more)",
+        items: [{ text: "Rebase onto #3291", checked: false }, { text: "Merge #17", checked: false }],
+        action: { type: "send_message", target: { backend: "codex", threadId: "waiting" } },
+      });
+      expect(cards[0]!.detail).toBe("Waited for: Waiting for Windows validation\nDone: Validated on Windows.\nMarked done by Windows investigation.\nMerging still waits on one other wait.");
+      expect(measured.manageThreadMergeHolds({ ...waiting, action: "list" }, "operator").find((item) => item.id === hold!.id)?.reminderTodoId).toBe(cards[0]!.id);
+      measured.manageThreadMergeHolds({ ...waiting, action: "cancel", holdId: other!.id, note: "Not needed." }, "operator", 7, remind);
+      expect(todos.list({ backend: "codex", threadId: "waiting" })).toHaveLength(1);
+    } finally { measuredDb.close(); removeTempStateDbDir(temp.tempDir); }
+  });
+
+  it("rolls the hold back when its reminder cannot be raised", () => {
+    const [hold] = store.manageThreadMergeHolds(request, "operator");
+    expect(() => store.manageThreadMergeHolds({ ...waiting, action: "resolve", holdId: hold!.id, note: "Done" }, "operator", 2, () => { throw new Error("to-do store unavailable"); }))
+      .toThrow(/to-do store unavailable/);
+    expect(store.listActiveThreadMergeHolds().map((item) => item.id)).toEqual([hold!.id]);
+  });
+
+  it("builds a plain reminder without steps, and never offers to send without them", () => {
+    const resolved = { ...store.manageThreadMergeHolds({ ...request, dependency: undefined }, "operator")[0]!, status: "resolved" as const, resolution: { note: "Reviewed.", actor: "operator", at: 2 } };
+    const card = buildMergeHoldReminder(resolved, 0);
+    expect(card).toMatchObject({ title: "Waiting for Windows validation done", detail: "Waited for: Waiting for Windows validation\nDone: Reviewed.\nMarked done by you.\nMerging is no longer held." });
+    expect(card).not.toHaveProperty("items");
+    expect(card).not.toHaveProperty("action");
+    expect(buildMergeHoldReminder({ ...resolved, followUp: ["x".repeat(200)] }, 0).title.length).toBeLessThanOrEqual(120);
+    expect(() => validateMergeHoldRequest({ ...request, offerToSend: true })).toThrow(/followUp/);
+    expect(() => validateMergeHoldRequest({ ...request, followUp: Array.from({ length: 13 }, () => "step") })).toThrow(/at most 12/);
+    expect(() => validateMergeHoldRequest({ ...request, followUp: [" "] })).toThrow(/followUp\[0\]/);
+  });
+
   it("refuses self dependencies and malformed release actions", () => {
     expect(() => validateMergeHoldRequest({ ...request, dependency: { ...waiting, target: { scope: "local" } } })).toThrow(/itself/);
-    for (const patch of [{ releaseWhen: " " }, { reason: "x".repeat(2001) }, { dependency: { ...request.dependency, target: { scope: "remote" } } }]) {
+    expect(() => validateMergeHoldRequest({ ...request, releaseWhen: undefined })).not.toThrow();
+    for (const patch of [{ releaseWhen: " " }, { reason: " " }, { reason: "x".repeat(2001) }, { dependency: { ...request.dependency, target: { scope: "remote" } } }]) {
       expect(() => validateMergeHoldRequest({ ...request, ...patch } as ManageThreadMergeHoldsRequest)).toThrow();
     }
   });
 
-  it.each(["mark us waiting on another thread", "do not merge until the dependency finishes", "soft lock merge hold", "clear merge dependency"])("makes the tool discoverable for %s", (query) => {
+  it.each(["mark us waiting on another thread", "do not merge until the dependency finishes", "soft lock merge hold", "clear merge dependency", "when that thread is done remind me to"])("makes the tool discoverable for %s", (query) => {
     const dynamic = resolveAgentToolCatalogs({}).flatMap((catalog) => catalog.dynamicTools);
     expect(searchPwrAgentTools(dynamic, query).map((tool) => tool.name)).toContain("manage_thread_merge_holds");
   });

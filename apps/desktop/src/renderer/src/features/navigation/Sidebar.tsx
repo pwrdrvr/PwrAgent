@@ -4010,7 +4010,7 @@ export function Sidebar(props: SidebarProps) {
                   ) : null}
                   {openMergeHolds && !contextMenuIsBulk ? (
                     <button role="menuitem" type="button" onClick={() => { const target = contextMenu.thread; setContextMenu(undefined); openMergeHolds(target); }}>
-                      <span>Hold Merge…</span>
+                      <span>Wait Until Done…</span>
                       {contextMenu.thread.mergeHolds?.length ? <span className="thread-context-menu__aside">{contextMenu.thread.mergeHolds.length} waiting</span> : null}
                     </button>
                   ) : null}

@@ -449,10 +449,10 @@ export function ThreadMetaChips({
 
       {thread.mergeHolds?.length ? (
         <span className="thread-row__chip thread-row__chip--dependency thread-row__chip--persistent" role="button" tabIndex={0}
-          aria-label={`Merge held: ${thread.mergeHolds.map((hold) => hold.reason).join("; ")}`}
+          aria-label={`Waiting for ${thread.mergeHolds.map((hold) => hold.reason).join("; ")}. Merge held.`}
           onClick={(event) => { event.preventDefault(); event.stopPropagation(); openMergeHolds?.(thread); }}
           onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); openMergeHolds?.(thread); } }}>
-          <span className="thread-row__chip-label">Merge held{thread.mergeHolds.length > 1 ? ` (${thread.mergeHolds.length})` : ""}</span>
+          <span className="thread-row__chip-label">Waiting{thread.mergeHolds.length > 1 ? ` (${thread.mergeHolds.length})` : ""}</span>
         </span>
       ) : null}
 

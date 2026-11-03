@@ -9,7 +9,7 @@ import { ThreadTodoService } from "../src/main/thread-todos/thread-todo-service"
 import { ThreadTodoStore } from "../src/main/thread-todos/thread-todo-store";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
-test("holds merging while the composer stays available, then clears with findings", async ({ browserName: _browserName }, testInfo) => {
+test("waits until done with merging held and the composer available, then reminds the operator", async ({ browserName: _browserName }, testInfo) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-merge-holds-"));
   const fixturePath = path.join(root, "replay.fixture.json");
   await writeFile(fixturePath, JSON.stringify({
@@ -40,18 +40,19 @@ test("holds merging while the composer stays available, then clears with finding
     await expect(stack.getByRole("button", { name: "Squash merge", exact: true })).toBeVisible();
     await app.window.screenshot({ path: testInfo.outputPath("merge-hold-before.png") });
     await app.window.getByRole("button", { name: "Atlas: Windows MCP link", exact: true }).click({ button: "right" });
-    await app.window.getByRole("menuitem", { name: "Hold Merge…", exact: true }).click();
-    const dialog = app.window.getByRole("dialog", { name: "Merge holds" });
-    await dialog.getByRole("textbox", { name: "Hold merge because" }).fill("Waiting for Windows validation");
-    await dialog.getByRole("textbox", { name: "Release when" }).fill("Reconcile the investigation findings with PR #17");
+    await app.window.getByRole("menuitem", { name: "Wait Until Done…", exact: true }).click();
+    const dialog = app.window.getByRole("dialog", { name: "Wait Until Done" });
+    await dialog.getByRole("textbox", { name: "Waiting for", exact: true }).fill("Windows validation");
     await dialog.getByRole("textbox", { name: "Waiting on (optional thread link)" }).fill("pwragent://thread/atlas-validation?backend=codex");
-    await dialog.getByRole("button", { name: "Hold merge", exact: true }).click();
-    await expect(dialog.getByRole("button", { name: "Resolve hold…" })).toBeVisible();
+    await dialog.getByRole("textbox", { name: "When it’s done, remind me to" }).fill("Rebase onto the validation fix\nMerge PR #17");
+    await dialog.getByRole("button", { name: "Start Waiting", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "Mark Done…" })).toBeVisible();
+    await expect(dialog).toContainText("Rebase onto the validation fix");
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
-    await expect(app.window.locator(".thread-merge-holds__status")).toContainText("Merge held");
-    await expect(app.window.getByLabel("Merge held: Waiting for Windows validation", { exact: true })).toBeVisible();
+    await expect(app.window.locator(".thread-merge-holds__status")).toContainText("Waiting for Windows validation · Merge held · 2 steps");
+    await expect(app.window.getByLabel("Waiting for Windows validation. Merge held.", { exact: true })).toBeVisible();
     await expect(stack.getByRole("button", { name: "Squash merge", exact: true })).toHaveCount(0);
-    await expect(stack).toContainText("Merge held: Waiting for Windows validation");
+    await expect(stack).toContainText("Merge waits for Windows validation");
     const reply = app.window.getByRole("textbox", { name: "Reply", exact: true });
     await expect(reply).toBeEditable();
     await reply.fill("Rebase the branch and repair CI while validation continues.");
@@ -62,14 +63,19 @@ test("holds merging while the composer stays available, then clears with finding
     });
     expect(refusal).toContain("Merge held");
     await app.window.screenshot({ path: testInfo.outputPath("merge-hold-after.png") });
-    await app.window.getByRole("button", { name: "Manage holds", exact: true }).click();
-    await dialog.getByRole("button", { name: "Resolve hold…" }).click();
-    await dialog.getByRole("textbox", { name: "Findings or reason for clearing" }).fill("Windows validation passed and its findings are reconciled.");
+    await app.window.getByRole("button", { name: "Manage…", exact: true }).click();
+    await dialog.getByRole("button", { name: "Mark Done…" }).click();
+    await dialog.getByRole("textbox", { name: "What finished, or why you stopped waiting" }).fill("Windows validation passed on the fix.");
     await app.window.screenshot({ path: testInfo.outputPath("merge-hold-resolve.png") });
-    await dialog.getByRole("button", { name: "Resolve hold", exact: true }).click();
-    await expect(dialog.getByRole("button", { name: "Show history" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Mark Done", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "Show History" })).toBeVisible();
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
     await expect(app.window.locator(".thread-merge-holds__status")).toHaveCount(0);
-    await expect(stack.getByRole("button", { name: /Squash merge|Retry merge/ }).first()).toBeVisible();
+    // Marking it done reminds the operator of the steps; it starts no turn.
+    await expect(stack).toContainText(/done: Rebase onto the validation fix \(\+1 more\)/);
+    await expect(stack).toContainText(/Squash merge|Retry merge/);
+    await expect(stack).toContainText("Done: Windows validation passed on the fix.");
+    await expect(stack).toContainText("Merge PR #17");
+    await app.window.screenshot({ path: testInfo.outputPath("merge-hold-reminder.png") });
   } finally { await app.close(); await rm(root, { recursive: true, force: true }); }
 });

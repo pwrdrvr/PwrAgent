@@ -53149,3 +53149,36 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .thread-merge-holds__entry .thread-dependencies__field { width: 100%; }
 
 .thread-merge-holds .button { font-size: 12px; }
+
+.thread-merge-holds__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.thread-merge-holds__on {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.thread-merge-holds__then {
+  display: grid;
+  gap: 4px;
+}
+
+.thread-merge-holds__then > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.thread-merge-holds__steps {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.thread-merge-holds__steps li { overflow-wrap: anywhere; }
+
+.thread-merge-holds__status-aside { color: var(--text-muted); }

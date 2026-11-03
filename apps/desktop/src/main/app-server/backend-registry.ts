@@ -1,7 +1,7 @@
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
-import type { ManageThreadMergeHoldsRequest, ManageThreadMergeHoldsResponse } from "@pwragent/shared";
-import { blockingMergeHolds, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
+import type { ManageThreadMergeHoldsRequest, ManageThreadMergeHoldsResponse, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
+import { blockingMergeHolds, buildMergeHoldReminder, validateMergeHoldRequest, type MergeHoldReminderCard } from "../thread-merge-holds/thread-merge-holds";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
@@ -9233,6 +9233,13 @@ type CodexRetryableTurnStart = {
   turnId?: string;
 };
 
+/** The to-do service seen from a wait marked done. `raise` runs inside the hold's transaction. */
+export type MergeHoldReminderDelivery = {
+  prepare: (thread: { backend: AppServerBackendKind; threadId: string }) => Promise<{ cwd?: string; sourceProject?: ThreadTodoProject }>;
+  raise: (card: MergeHoldReminderCard, placement: { cwd?: string; sourceProject?: ThreadTodoProject }) => ThreadTodo;
+  publish: (todo: ThreadTodo) => void;
+};
+
 type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
@@ -13069,6 +13076,13 @@ export class DesktopBackendRegistry {
     this.threadMergeHoldToolHandler = handler;
   }
 
+  private mergeHoldReminders?: MergeHoldReminderDelivery;
+
+  /** Where a wait marked done raises the operator's reminder card. */
+  setMergeHoldReminderDelivery(delivery: MergeHoldReminderDelivery | undefined): void {
+    this.mergeHoldReminders = delivery;
+  }
+
   /** Local authority. This does not start, stop, or steer a turn. */
   async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, actor: string): Promise<ManageThreadMergeHoldsResponse> {
     if (!this.overlayStore.manageThreadMergeHolds || !this.overlayStore.listActiveThreadMergeHolds) throw new Error("Merge holds are unavailable on this instance.");
@@ -13077,7 +13091,16 @@ export class DesktopBackendRegistry {
     const all = this.overlayStore.listActiveThreadMergeHolds();
     if (request.action === "active") return { holds: all, dependents: [] };
     if (request.action === "create") await this.readThread({ backend: normalized.backend, threadId: normalized.threadId, includeTurns: false });
-    const holds = this.overlayStore.manageThreadMergeHolds(normalized, actor);
+    // Placement is async, so it is read before the transaction, as for a
+    // dependency's reminder. The card itself commits with the resolve.
+    const delivery = request.action === "resolve" ? this.mergeHoldReminders : undefined;
+    const placement = delivery ? await delivery.prepare(normalized).catch(() => ({})) : {};
+    let reminder: ThreadTodo | undefined;
+    const holds = this.overlayStore.manageThreadMergeHolds(normalized, actor, Date.now(), delivery ? (hold, stillWaiting) => {
+      reminder = delivery.raise(buildMergeHoldReminder(hold, stillWaiting), placement);
+      return reminder.id;
+    } : undefined);
+    if (reminder) delivery?.publish(reminder);
     if (request.action !== "list") {
       await this.emit({ backend: normalized.backend, notification: {
         method: "thread/mergeHolds/updated",

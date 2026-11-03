@@ -794,8 +794,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         );
       case "merge_pull_request": {
         if (mergeHeld || !mergeHolds.ready || mergeHolds.error) return <span role="status" className="thread-todo-card__hint">{mergeHeld
-          ? `Merge held: ${blockingMergeHolds?.filter((hold) => hold.status === "waiting").map((hold) => hold.reason).join("; ")}`
-          : mergeHolds.error ? "Could not check merge holds. Reopen this card to try again." : "Checking merge holds…"}</span>;
+          ? `Merge waits for ${blockingMergeHolds?.filter((hold) => hold.status === "waiting").map((hold) => hold.reason).join("; ")}`
+          : mergeHolds.error ? "Could not check what merging waits for. Reopen this card to try again." : "Checking what merging waits for…"}</span>;
         if (confirmingMerge) {
           return (
             <>
@@ -1068,7 +1068,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           ) : null}
           {todo.error && !(mergeHeld && todo.error.startsWith("Merge held:")) ? (
             <p className="thread-todo-card__error" role="alert">{todo.error.startsWith("Merge held:")
-              ? "The previous merge attempt was held. You can retry after the holds are resolved."
+              ? "The previous merge attempt was held. You can retry once the wait is marked done."
               : todo.error}</p>
           ) : null}
         </div>

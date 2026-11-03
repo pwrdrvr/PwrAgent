@@ -23,12 +23,18 @@ export function ThreadMergeHoldStatus({ thread, api }: { thread: NavigationThrea
     return () => { observer.disconnect(); parent.style.removeProperty("--thread-merge-hold-height"); };
   }, [visible]);
   if (!visible) return null;
+  const steps = holds.reduce((total, hold) => total + (hold.followUp?.length ?? 0), 0);
   return <div className="thread-merge-holds__status" ref={bannerRef} role="status">
     <div>
-      {holds.length ? <><strong>Merge held</strong><span> — {holds.map((hold) => hold.reason).join("; ")}</span></> : null}
-      {dependents.length ? <p>{dependents.length === 1 ? "Another thread is waiting on this work." : `${dependents.length} threads are waiting on this work.`}</p> : null}
-      {error ? <p>Could not refresh merge holds. {error}</p> : null}
+      {holds.length ? <p>
+        <strong>Waiting for</strong> {holds.map((hold) => hold.reason).join("; ")}
+        <span className="thread-merge-holds__status-aside"> · Merge held{steps ? ` · ${steps === 1 ? "1 step" : `${steps} steps`} to remind you of` : ""}</span>
+      </p> : null}
+      {dependents.length ? <p>{dependents.length === 1
+        ? `Another thread is waiting on this one for ${dependents[0]!.hold.reason}. Mark it done when that is finished.`
+        : `${dependents.length} threads are waiting on this one. Mark each done when its work is finished.`}</p> : null}
+      {error ? <p>Could not refresh waits. {error}</p> : null}
     </div>
-    {open ? <button className="button button--secondary" type="button" onClick={() => open(thread)}>Manage holds</button> : null}
+    {open ? <button className="button button--secondary" type="button" onClick={() => open(thread)}>{dependents.length && !holds.length ? "Mark Done…" : "Manage…"}</button> : null}
   </div>;
 }

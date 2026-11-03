@@ -10849,6 +10849,11 @@ export function registerAppServerIpcHandlers(): void {
     appServerService.isPullRequestLocallyMonitored(prKey)
   );
   getDesktopBackendRegistry().setThreadMergeHoldToolHandler(async (request, actor) => await appServerService.manageThreadMergeHolds(request, actor));
+  getDesktopBackendRegistry().setMergeHoldReminderDelivery({
+    prepare: (thread) => readThreadTodoPlacement(getDesktopBackendRegistry(), thread),
+    raise: (card, placement) => getThreadTodoService().raiseForDependency({ ...card, ...placement }).todo,
+    publish: (todo) => getThreadTodoService().publish(todo),
+  });
   ipcMain.removeHandler(THREAD_MERGE_HOLDS_CHANNEL);
   ipcMain.handle(THREAD_MERGE_HOLDS_CHANNEL, async (event, request: ManageThreadMergeHoldsRequest) => {
     const federationTarget = federationWindowTargetForWebContents(event.sender);
@@ -12356,6 +12361,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadDependencyToolHandler(undefined);
   registry?.setThreadMergeHoldToolHandler(undefined);
+  registry?.setMergeHoldReminderDelivery(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setPullRequestReferenceResolver(undefined);
