@@ -10,7 +10,7 @@ import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
   ThreadTitleGenerator,
-} from "./thread-title-generation-service";
+} from "@pwragent/owner-core/thread-title-generation-service";
 
 export type AcpThreadTitleGeneratorOptions = {
   backend: AcpBackendId;

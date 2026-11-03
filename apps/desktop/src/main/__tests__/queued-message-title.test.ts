@@ -9,7 +9,7 @@ import {
   queuedMessageTitleSource,
   type QueuedMessageTitlerOptions,
 } from "../app-server/queued-message-title";
-import type { ThreadTitleAdapterResult } from "../app-server/thread-title-generation-service";
+import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title-generation-service";
 
 const THREAD = { backend: "codex", threadId: "thread-1" } as const;
 const LONG_TEXT =

@@ -800,7 +800,7 @@ import {
   type ThreadTitleAdapterResult,
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
-} from "./thread-title-generation-service";
+} from "@pwragent/owner-core/thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { ensureAcpHelperWorkspace } from "../acp/acp-capability-probe";

@@ -4,7 +4,7 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { projectNavigationQuery } from "../app-server/navigation-query-projection";
+import { projectNavigationQuery } from "../navigation-query-projection";
 
 function thread(
   id: string,

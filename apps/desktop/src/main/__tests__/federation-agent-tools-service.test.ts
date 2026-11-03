@@ -21,7 +21,7 @@ import type {
   SearchFederationThreadsResult,
 } from "@pwragent/shared";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
-import { projectNavigationQuery } from "../app-server/navigation-query-projection";
+import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { claudeModelOptions } from "../claude/claude-models";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,

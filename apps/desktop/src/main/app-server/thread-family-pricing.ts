@@ -10,7 +10,7 @@ import {
   type ThreadFamilyPricingReferral,
   type ThreadPricingSummary,
 } from "@pwragent/shared";
-import { projectNavigationQuery, type NavigationQueryIndex } from "./navigation-query-projection";
+import { projectNavigationQuery, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 
 /** A family can span machines; past this many owner reads the rest is left out. */
 const MAX_FAMILY_ROOT_READS = 64;

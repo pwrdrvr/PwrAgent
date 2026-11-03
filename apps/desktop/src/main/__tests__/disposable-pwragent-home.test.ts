@@ -36,7 +36,7 @@ const GUARDED_PROJECTS = [
   "desktop-renderer",
   "desktop-renderer-node",
 ];
-const PATH_SANDBOXED_PROJECTS = ["messaging", "shared", ...GUARDED_PROJECTS];
+const PATH_SANDBOXED_PROJECTS = ["messaging", "owner-core", "shared", ...GUARDED_PROJECTS];
 const POSIX_SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 const GUARDED_ENV_VARS = [
