@@ -24,7 +24,6 @@ import {
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
-  collectProcessTreeIds,
   isProcessIdAlive,
 } from "../process-tree";
 import {
@@ -344,23 +343,10 @@ export async function waitForCodexEnvironmentDetachedCommandGone(
   };
 
   while (true) {
-    // Expand only while budget remains. A 5s CIM walk per live pid would
-    // otherwise ignore timeoutMs (including 0) and hang Windows CI when the
-    // tracked root is a busy process with many descendants.
-    if (remainingMs() > 0) {
-      for (const pid of [...tracked]) {
-        if (remainingMs() <= 0) {
-          break;
-        }
-        if (isProcessIdAlive(pid)) {
-          for (const childPid of collectProcessTreeIds(pid)) {
-            tracked.add(childPid);
-          }
-        }
-      }
-    }
-    // Blocking CIM walks stall the event loop, so a close handler queued
-    // during the walk cannot run until we yield.
+    // Admission has already closed and the owned group/Job has been stopped.
+    // Only the pre-stop snapshot can identify descendants after reparenting;
+    // walking those PIDs again can adopt unrelated processes after PID reuse.
+    // Keep the event loop free to deliver the child's actual stdio close.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });

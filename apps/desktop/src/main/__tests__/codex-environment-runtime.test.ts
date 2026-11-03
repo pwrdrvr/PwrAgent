@@ -21,6 +21,7 @@ import {
   wrapPowerShellCommand,
 } from "../app-server/codex-environment-runtime";
 import { collectProcessTreeIds, isProcessIdAlive } from "../process-tree";
+import * as processTree from "../process-tree";
 import { WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
@@ -187,6 +188,34 @@ describe("codex environment runtime", () => {
         timeoutMs: 0,
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("allows queued termination and stdio close without walking stopped process IDs", async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
+      stdio: "ignore",
+    });
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const collect = vi.spyOn(processTree, "collectProcessTreeIds").mockImplementation(() => {
+      throw new Error("A post-stop PID walk cannot establish ownership");
+    });
+    try {
+      expect(child.pid).toEqual(expect.any(Number));
+      // Native termination and pipe closure may already be queued while the
+      // caller enters the wait. The wait must let those callbacks run.
+      setImmediate(() => child.kill("SIGKILL"));
+      await waitForCodexEnvironmentDetachedCommandGone({
+        runId: "missing-run",
+        pid: child.pid,
+        knownPids: [child.pid!],
+        timeoutMs: 2_000,
+      });
+      await closed;
+      expect(collect).not.toHaveBeenCalled();
+    } finally {
+      collect.mockRestore();
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await closed;
+    }
   });
 
   it("throws at the timeout boundary only when a tracked pid is still alive", async () => {
