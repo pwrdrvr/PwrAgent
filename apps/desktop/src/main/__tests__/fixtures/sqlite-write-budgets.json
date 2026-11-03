@@ -1,4 +1,7 @@
 {
+  "mixed-provider-worktree-archive": {"commits": 4, "note": "One checkout archived for one Claude and one Codex owner, including each owner's recovery snapshot; boundary writes only.", "observedWalBytes": 57712, "rowsChanged": 4, "statements": 4},
+  "mixed-provider-worktree-repair": {"commits": 2, "note": "One checkout archived for one Claude and one Codex owner, including each owner's recovery snapshot; boundary writes only.", "observedWalBytes": 32992, "rowsChanged": 2, "statements": 2},
+  "shared-claude-worktree-restore": {"commits": 4, "note": "Restore two Claude owners of one snapshot: recreate the checkout once, then validate and reuse it without overwriting subsequent edits.", "observedWalBytes": 37080, "rowsChanged": 4, "statements": 4},
   "claude-worktree-archive": {"commits": 2, "note": "One explicit archive with one managed worktree: snapshot and lifecycle boundary writes only; no idle or timer writes.", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
   "claude-worktree-repair-restore": {"commits": 2, "note": "One explicit restore recreates a saved checkout before unarchiving the Claude session; no idle or timer writes.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "claude-worktree-restore": {"commits": 2, "note": "One explicit restore recreates a saved checkout before unarchiving the Claude session; no idle or timer writes.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
