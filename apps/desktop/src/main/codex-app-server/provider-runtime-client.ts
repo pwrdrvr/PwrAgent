@@ -14,6 +14,9 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   getAppServerRecycleStatus: "primary",
   // Each runtime owns a process; each decides from its own sample.
   maybeRecycleIdleAppServer: "all",
+  getSubscribedThreadCount: "primary",
+  // Each runtime keeps its own threads loaded and releases its own.
+  unsubscribeIdleThreads: "all",
   recoverInvalidPersistedResponseMessageIds: "thread",
   onRealtimeEvent: "subscribe",
   onRealtimeDisconnect: "subscribe",

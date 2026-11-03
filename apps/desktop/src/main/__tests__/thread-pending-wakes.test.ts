@@ -17,6 +17,7 @@ import {
 } from "../app-server/thread-pending-wakes";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -91,7 +92,7 @@ function readers(overrides: Partial<ThreadPendingWakeReaders> = {}): ThreadPendi
     prWatchHistory: async () => [],
     autoFix: async () => [],
     dependencies: async () => [],
-    scheduledActions: () => [],
+    scheduledActions: () => ({ actions: [] }),
     monitors: () => [],
     recentSubAgents: async () => [],
     backendTasks: async () => [],
@@ -116,6 +117,14 @@ const LOCKED = { kind: "thread_locked" as const, note: "Parked" };
 const PAUSED = { kind: "project_paused" as const, projectLabel: "widgets", directoryKey: "directory:/repo/widgets" };
 
 describe("buildThreadPendingWakes", () => {
+  it.each([{ activePrWatches: [] }, { activePrWatches: [prWatch()] }])("reuses selected detail's PR watches without another read (%j)", async ({ activePrWatches }) => {
+    const prWatches = vi.fn(async () => { throw new Error("duplicate PR watch read"); });
+    const list = await buildThreadPendingWakes(readers({ prWatches }), THREAD, { activePrWatches, endedLimit: 0 });
+    expect(list.wakes).toEqual(activePrWatches.map((watch) => expect.objectContaining({ kind: "pr_watch", watch })));
+    expect(list.incomplete).toBeUndefined();
+    expect(prWatches).not.toHaveBeenCalled();
+  });
+
   it("lists every source's pending wakes, soonest first", async () => {
     const list = await buildThreadPendingWakes(readers({
       prWatches: async () => [
@@ -128,11 +137,11 @@ describe("buildThreadPendingWakes", () => {
         { backend: "codex", threadId: "other", prKey: "github/acme/widgets#3174", state: "active" },
       ],
       dependencies: async () => [dependency(), dependency({ id: "dep-done", status: "delivered" })],
-      scheduledActions: () => [
+      scheduledActions: () => ({ actions: [
         scheduled({ id: "scheduled-action:held", status: "held", scheduledFor: 1 }),
         scheduled(),
         scheduled({ id: "scheduled-action:sent", status: "started" }),
-      ],
+      ] }),
       monitors: () => [{
         monitorId: "monitor-1", task: "Staging deploy reports healthy", backend: "claude",
         createdAt: 5_000, lastActivityAt: 6_000, pollIntervalSeconds: 120,
@@ -178,6 +187,16 @@ describe("buildThreadPendingWakes", () => {
     expect(wake.kind === "dependency" && wake.dependency.continuation?.length).toBe(600);
   });
 
+  it("bounds backend text and the total pending projection without losing an incomplete signal", async () => {
+    const list = await buildThreadPendingWakes(readers({ backendTasks: async () => Array.from({ length: 200 }, (_, index) =>
+      task({ processId: `task-${index}`, command: "é".repeat(20_000), progress: "x".repeat(20_000) })) }), THREAD);
+    expect(Buffer.byteLength(JSON.stringify(list.wakes))).toBeLessThanOrEqual(64 * 1024);
+    expect(list.wakes.length).toBeGreaterThan(0);
+    expect(list.wakes.length).toBeLessThan(200);
+    expect(list.incomplete).toBe(true);
+    expect(list.wakes[0]).toMatchObject({ kind: "backend_task", task: { processId: "task-0" } });
+  });
+
   it("lists ended wakes newest first, from the rows each source keeps", async () => {
     const history: ThreadPrWatchHistoryEntry[] = [
       { ...prWatch(), status: "dispatched", endedReason: "woke", wokeOn: "failure", updatedAt: 40 },
@@ -192,7 +211,7 @@ describe("buildThreadPendingWakes", () => {
     const list = await buildThreadPendingWakes(readers({
       prWatchHistory: async () => history,
       dependencies: async () => [dependency({ status: "cancelled", updatedAt: 20 })],
-      scheduledActions: () => [scheduled({ status: "started", updatedAt: 35 })],
+      scheduledActions: () => ({ actions: [scheduled({ status: "started", updatedAt: 35 })] }),
       recentSubAgents: async () => cards,
     }), THREAD, { endedLimit: 3 });
     expect(list.ended.map((entry) => [entry.summary, entry.detail])).toEqual([
@@ -203,14 +222,14 @@ describe("buildThreadPendingWakes", () => {
   });
 
   it("reads no ended rows for a list that shows none", async () => {
-    const scheduledActions = vi.fn(() => [] as ScheduledThreadAction[]);
+    const scheduledActions = vi.fn(() => ({ actions: [] as ScheduledThreadAction[] }));
     const prWatchHistory = vi.fn(async () => [] as ThreadPrWatchHistoryEntry[]);
     const recentSubAgents = vi.fn(async () => [] as ThreadSubAgentSummary[]);
     const list = await buildThreadPendingWakes(readers({ scheduledActions, prWatchHistory, recentSubAgents }), THREAD, { endedLimit: 0 });
     expect(list.ended).toEqual([]);
-    expect(scheduledActions).toHaveBeenCalledWith(THREAD, false);
-    expect(prWatchHistory).toHaveBeenCalledWith(THREAD, 0);
-    expect(recentSubAgents).toHaveBeenCalledWith(THREAD, 0);
+    expect(scheduledActions).toHaveBeenCalledWith(THREAD, 0);
+    expect(prWatchHistory).not.toHaveBeenCalled();
+    expect(recentSubAgents).not.toHaveBeenCalled();
   });
 
   it("leaves out a source it cannot read and says the list may be missing a wake", async () => {
@@ -235,10 +254,10 @@ describe("held wakes", () => {
         // A held scheduled action is listed as itself, once.
         heldEntry({ entryId: "scheduled-entry", origin: "scheduled", text: "Ping CI." }),
       ],
-      scheduledActions: () => [
+      scheduledActions: () => ({ actions: [
         scheduled({ id: "scheduled-1", status: "held", queueEntryId: "scheduled-entry" }),
         scheduled({ id: "scheduled-2", scheduledFor: 9_000 }),
-      ],
+      ] }),
       prWatches: async () => [prWatch()],
       autoFix: async () => [{ backend: "claude", threadId: "waiting", prKey: "github/acme/widgets#3174", state: "active" }],
       dependencies: async () => [dependency({ status: "ready" })],
@@ -279,7 +298,7 @@ describe("held wakes", () => {
         holdReason: "Held because forge activity in widgets is paused.",
         projectHold: { ...PAUSED, source: "dependency", summary: "Continue After: Lease cleanup finished" },
       })],
-      scheduledActions: () => [scheduled()],
+      scheduledActions: () => ({ actions: [scheduled()] }),
       prWatches: async () => [prWatch()],
       dependencies: async () => [dependency()],
     }), THREAD);
@@ -390,7 +409,7 @@ describe("pending wake list writes", () => {
     vi.unstubAllEnvs();
   });
 
-  it("reads the stores and writes nothing", async () => {
+  it.each([false, true])("reads the stores and writes nothing (reuse watches: %s)", async (reuseWatches) => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const fixture = createTempStateDb("pwragent-pending-wakes-");
     const stateDb = StateDb.open(fixture.dbPath);
@@ -401,14 +420,25 @@ describe("pending wake list writes", () => {
     const dependencies = new ThreadDependencyStore(stateDb.raw);
     dependencies.register(dependency());
     const scheduledStore = new ScheduledThreadActionStore(stateDb);
+    scheduledStore.create({ id: "scheduled-budget", ...THREAD, kind: "turn", origin: "desktop",
+      scheduledFor: 100, displayText: "Follow up", now: 1 });
+    const overlay = new SqliteOverlayStore(stateDb);
+    await overlay.registerThreadPrStatusWatch({ watch: prWatch(), now: 1 });
+    await overlay.setThreadPrAutoDispatchEnabled({ ...THREAD, enabled: true });
+    await overlay.syncThreadPrAutoDispatchCandidates({ ...THREAD, prKeys: [prWatch().prKey], now: 1 });
+    await overlay.upsertThreadSubAgent({ ...THREAD, subAgent: { monitorId: "monitor-ended", task: "Wait for CI",
+      status: "success", outcome: "success", createdAt: 1, completedAt: 2, updatedAt: 2 } });
     const { writes } = await measureSqliteWrites(async () => {
       for (let read = 0; read < 50; read += 1) {
         await buildThreadPendingWakes(readers({
-          dependencies: async (thread) => dependencies.list(thread.backend, thread.threadId),
-          scheduledActions: (thread, includeEnded) => scheduledStore.list({
-            ...thread, ...(includeEnded ? { terminalUpdatedAfter: 0 } : {}),
-          }),
-        }), THREAD);
+          prWatches: (thread) => overlay.listActiveThreadPrStatusWatches(thread),
+          prWatchHistory: (thread, limit) => overlay.listThreadPrStatusWatchHistory({ ...thread, limit }),
+          autoFix: async (thread) => (await overlay.listPrAutoDispatchCandidates(thread))
+            .map((candidate) => ({ backend: candidate.backend, threadId: candidate.threadId, prKey: candidate.prKey, state: "active" as const })),
+          dependencies: async (thread, endedLimit) => dependencies.listPendingWakes(thread.backend, thread.threadId, endedLimit),
+          scheduledActions: (thread, endedLimit) => scheduledStore.listPendingWakes({ ...thread, endedLimit }),
+          recentSubAgents: (thread, limit) => overlay.listEndedThreadTaskMonitors({ ...thread, limit }),
+        }), THREAD, reuseWatches ? { endedLimit: 0, activePrWatches: [prWatch()] } : {});
       }
     });
     expectSqliteWriteBudget({

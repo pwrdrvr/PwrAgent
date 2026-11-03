@@ -379,16 +379,23 @@ export class AutomationScheduler {
     const markerId = throttleMarkerId(automation.id, now);
     const existing = this.options.store.getRun(markerId);
     const droppedCount = (existing?.coalescedCount ?? 0) + 1;
-    if (!existing) {
-      const created = this.options.store.createRun({
-        id: markerId,
-        automationId: automation.id,
-        trigger: "inbound_message",
-        source,
+    if (existing) {
+      this.options.store.coalesceRateLimitedRun({
+        runId: markerId,
+        coalescedCount: droppedCount,
+        errorMessage: throttleSkipMessage(droppedCount),
         now,
       });
-      if (!created) return;
+      return;
     }
+    const created = this.options.store.createRun({
+      id: markerId,
+      automationId: automation.id,
+      trigger: "inbound_message",
+      source,
+      now,
+    });
+    if (!created) return;
     this.options.store.markRunTerminal({
       runId: markerId,
       status: "skipped",
@@ -504,7 +511,6 @@ export class AutomationScheduler {
         const skipped = this.options.store.createRun({
           automationId: automation.id,
           trigger: "scheduled",
-          status: "skipped",
           scheduledFor: windows[0]?.scheduledFor,
           scheduledWindows: windows.slice(0, 1),
           now,
@@ -658,6 +664,7 @@ export class AutomationScheduler {
           runId: params.runId,
           backendThreadId: result.backendThreadId,
           backendTurnId: result.turnId,
+          queueEntryId: result.entry.id,
           startedAt: params.now,
           now: params.now,
         });

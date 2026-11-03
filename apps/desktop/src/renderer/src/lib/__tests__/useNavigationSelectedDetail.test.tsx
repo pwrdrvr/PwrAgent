@@ -18,6 +18,31 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+it.each(["thread/dependencies/updated", "thread/scheduledAction/updated"])("refreshes a peer's wakes for %s without refreshing local detail", async (method) => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>().mockResolvedValue(detail("initial"));
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => undefined; } };
+  const target = { scope: "remote" as const, instanceId: "owner" };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref, federationTarget: target }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  const notify = (threadId: string) => listener!({ backend: "codex", federationTarget: target, notification: {
+    method, params: method === "thread/scheduledAction/updated" ? { action: { threadId } } : { threadId },
+  } } as AgentEvent);
+  act(() => notify("unrelated"));
+  expect(read).toHaveBeenCalledTimes(1);
+  act(() => notify(ref.threadId));
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  unmount();
+  read.mockClear();
+  const local = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(local.result.current.state?.readiness).toBe("ready"));
+  act(() => listener!({ backend: "codex", notification: { method,
+    params: method === "thread/scheduledAction/updated" ? { action: { threadId: ref.threadId } } : { threadId: ref.threadId },
+  } } as unknown as AgentEvent));
+  expect(read).toHaveBeenCalledTimes(1);
+  local.unmount();
+});
+
 it("keeps composer configuration ready while independent history pages load", async () => {
   const collection = deferred<NavigationSelectedDetailResponse>();
   const configured = { ...detail("config"), collections: [{ name: "subAgents" as const, count: 1, revision: "history" }] };
