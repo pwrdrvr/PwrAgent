@@ -25,7 +25,7 @@ import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
 import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { readMergedSubAgentPage } from "./thread-display";
-import { mapConcurrent } from "../../shared/map-concurrent";
+import { collectConcurrent } from "../../shared/concurrent-work";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 
 /** The most records one selected-collection page holds, before the byte budget. */
@@ -279,7 +279,7 @@ export class NavigationDetailService {
       getDesktopOverlayStore().listActiveThreadPrStatusWatches({ backend: summary.source, threadId: summary.id }),
       readPendingWakesForDetail({ backend: summary.source, threadId: summary.id }),
       request.includeWorkspaceConfiguration
-        ? mapConcurrent(thread.linkedDirectories, 4, async (directory) => ({
+        ? collectConcurrent(thread.linkedDirectories, 4, async (directory) => ({
             key: directory.id, label: directory.label, path: directory.path,
             gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined,
           }))

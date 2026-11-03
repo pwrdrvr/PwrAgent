@@ -85,7 +85,7 @@ import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-struc
 import type { PendingThreadApprovalSummary } from "@pwragent/shared";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
-import { joinConcurrent, mapConcurrent } from "../../shared/map-concurrent";
+import { joinConcurrent, collectConcurrent } from "../../shared/concurrent-work";
 import {
   buildMonitorJobHeuristicPrompt,
   MonitorJobHeuristicDetector,
@@ -18606,7 +18606,7 @@ export class DesktopBackendRegistry {
         if (!next) break;
         this.pendingTranscriptRepairReplays.delete(threadId);
         try {
-          await mapConcurrent([
+          await collectConcurrent([
             () => this.repairCodexThreadDirectoryRelationship({ reason: "selected-thread", threadId }),
             () => this.restoreCodexNativeSubAgentsFromReplay(threadId, next),
           ], 2, (repair) => repair());
@@ -22340,7 +22340,7 @@ export class DesktopBackendRegistry {
       // below does, and it needs a service to do it.
       throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
     }
-    const registered = await mapConcurrent(selected, 4, async (connectionId) => {
+    const registered = await collectConcurrent(selected, 4, async (connectionId) => {
       try {
         return await service.registerBridge(connectionId, threadId, undefined, backend);
       } catch (error) {

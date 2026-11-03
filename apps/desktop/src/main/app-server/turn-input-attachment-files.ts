@@ -25,7 +25,7 @@ import { imageInputFileRoot } from "./image-input-files";
 import { scheduleLegacyAttachmentCleanup } from "./legacy-attachment-cleanup";
 import { resolveReadableLocalFilePath } from "./local-file-input";
 import { isThreadAssetPath, isResolvedThreadAssetPath, storeThreadAsset, threadAssetRoot, withAssetDirectory, type ThreadAssetOwner } from "./thread-assets";
-import { createByteBudget, mapConcurrent } from "../../shared/map-concurrent";
+import { createByteBudget, collectConcurrent } from "../../shared/concurrent-work";
 
 type AttachmentReadBudget = ReturnType<typeof createByteBudget>;
 const withoutReadBudget: AttachmentReadBudget = async (_bytes, action) => await action();
@@ -302,7 +302,7 @@ export async function ownThreadInputAttachments(
   // Parallelize path validation and reads, while retaining the existing
   // single-attachment buffer ceiling and the store's per-owner mutation lock.
   const readBudget = createByteBudget(MAX_TURN_INPUT_ATTACHMENT_BYTES);
-  const retained = await mapConcurrent(input, 4, async (item) => {
+  const retained = await collectConcurrent(input, 4, async (item) => {
     if (item.type === "text" || (item.type === "localImage" || item.type === "localFile") && isThreadAssetPath(item.path, owner)) {
       return item;
     }

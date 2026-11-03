@@ -1,25 +1,36 @@
-/** Bounded admission with input-order results; drain admitted work on failure. */
-export async function mapConcurrent<T, R>(
+import { IterableMapper } from "@shutterstock/p-map-iterable";
+
+/** Collect streamed results in input order and drain admitted work on failure. */
+export async function collectConcurrent<T, R>(
   values: readonly T[],
   concurrency: number,
   operation: (value: T, index: number) => Promise<R>,
 ): Promise<R[]> {
-  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("Concurrency must be a positive integer.");
   const results = new Array<R>(values.length);
-  let next = 0;
   let failed = false;
   let failure: unknown;
-  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    while (!failed && next < values.length) {
-      const index = next++;
-      try {
-        results[index] = await operation(values[index]!, index);
-      } catch (error) {
-        if (!failed) failure = error;
-        failed = true;
-      }
+
+  function* remaining() {
+    for (const value of values) {
+      if (failed) return;
+      yield value;
     }
-  }));
+  }
+
+  // IterableMapper owns concurrency and backpressure. Catch inside the mapper
+  // so iteration drains active siblings instead of rejecting before they settle.
+  const mapped = new IterableMapper(remaining(), async (value, index) => {
+    try {
+      return { ok: true as const, index, value: await operation(value, index) };
+    } catch (error) {
+      if (!failed) failure = error;
+      failed = true;
+      return { ok: false as const };
+    }
+  }, { concurrency, maxUnread: concurrency });
+  for await (const result of mapped) {
+    if (result.ok) results[result.index] = result.value;
+  }
   if (failed) throw failure;
   return results;
 }
