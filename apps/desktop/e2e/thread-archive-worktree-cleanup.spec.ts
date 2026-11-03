@@ -211,7 +211,8 @@ test("archiving a replay-backed thread removes its real Git worktree", async () 
 });
 
 
-test("Claude archive explains retained worktrees and leaves an additional local directory intact", async ({}, testInfo) => {
+test("Claude archive explains retained worktrees and leaves an additional local directory intact", async () => {
+  const testInfo = test.info();
   const fixture = await createArchiveWorktreeFixture(".pwragent");
   const threadId = "11111111-1111-4111-8111-111111111111";
   const localPath = path.join(path.dirname(fixture.repoPath), "LinkedLocal");

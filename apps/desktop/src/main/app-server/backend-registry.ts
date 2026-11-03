@@ -16786,13 +16786,11 @@ export class DesktopBackendRegistry {
     }
     const cleanup = await this.traceArchiveCleanupStage(params, "worktrees", async () => cleanupMetadata
       ? params.preserveWorktrees
-        ? worktreeArchiveCandidates(cleanupMetadata.thread).map((candidate): ArchiveThreadCleanupResult => ({
+        ? backend === "codex" ? [] : worktreeArchiveCandidates(cleanupMetadata.thread).map((candidate): ArchiveThreadCleanupResult => ({
             worktreePath: candidate.worktreePath,
             removedWorktree: false,
             deletedBranch: false,
-            preservedReason: backend === "codex"
-              ? "This archive operation keeps its worktrees on disk."
-              : "Worktrees stay on disk so this backend can restore archived threads.",
+            preservedReason: "Worktrees stay on disk so this backend can restore archived threads.",
           }))
         : await this.archiveThreadWorktrees({
           backend, activeThreads: cleanupMetadata.activeThreads, archivedThreads: cleanupMetadata.archivedThreads,
