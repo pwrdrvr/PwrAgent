@@ -62,15 +62,14 @@ it.each([0, 160])("budgets owner projection reads under repeated local and peer 
       if (!sql.trimStart().startsWith("SELECT")) return statement;
       // The uncached workload prepares over 10,000 statements. Plain wrappers
       // collect the budget without retaining three Vitest mocks per statement.
-      for (const method of ["get", "all"] as const) {
-        const execute = statement[method].bind(statement);
-        statement[method] = (...args: unknown[]) => {
-          recordQuery(sql, args);
-          const result = execute(...args);
-          for (const row of Array.isArray(result) ? result : [result]) record(row);
-          return result;
-        };
-      }
+      const instrument = <T>(execute: (...args: unknown[]) => T) => (...args: unknown[]): T => {
+        recordQuery(sql, args);
+        const result = execute(...args);
+        for (const row of Array.isArray(result) ? result : [result]) record(row);
+        return result;
+      };
+      statement.get = instrument(statement.get.bind(statement));
+      statement.all = instrument(statement.all.bind(statement));
       const iterate = statement.iterate.bind(statement);
       statement.iterate = function* (...args: unknown[]) {
         recordQuery(sql, args);
