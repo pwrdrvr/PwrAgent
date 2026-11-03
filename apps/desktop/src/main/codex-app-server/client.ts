@@ -8266,7 +8266,7 @@ export class CodexAppServerClient {
         // No new RPC is admitted, so nothing can start on it from here on.
         if (!this.initialized || serverGeneration !== this.serverGeneration) break;
         if (!isIdle(threadId)) continue;
-        let thread: Record<string, unknown> | undefined;
+        let thread: Record<string, unknown> | null;
         try {
           thread = asRecord(asRecord(await this.rawConnection.request(
             "thread/read",
