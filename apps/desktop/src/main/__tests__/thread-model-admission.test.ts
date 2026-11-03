@@ -46,4 +46,9 @@ describe("thread model admission", () => {
     ], reasoningEfforts: ["default", "high", "max"] }, { model: "sonnet", reasoningEffort: "max" }))
       .toThrow('Available reasoning efforts: default, high');
   });
+
+  it("refuses a non-boolean Fast flag from an untyped request", () => {
+    expect(() => assertThreadModelSettingsAvailable("codex", options, { fastMode: "true" as never }, "gpt-6.1-terra"))
+      .toThrow("Pass true or false");
+  });
 });

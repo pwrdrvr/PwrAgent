@@ -13081,7 +13081,7 @@ export class DesktopBackendRegistry {
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const approvalPolicy = executionMode === "auto" ? "on-request" : "never";
     const sandbox = modeSettings.sandbox;
-    const modelSettings = await this.resolveModelSettings(params.backend, {
+    const modelSettings = await this.admitNewThreadModelSettings(params.backend, {
       model: params.model ?? overlay?.model,
       serviceTier: params.serviceTier ?? overlay?.serviceTier,
       reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
@@ -27535,9 +27535,6 @@ export class DesktopBackendRegistry {
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
     await this.assertRequestedThreadModelAvailable(params);
-    if (params.backend === "codex" && params.model) {
-      this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
-    }
     const modelSettingsManuallyUpdatedAt =
       "model" in params || "reasoningEffort" in params
         ? Date.now()
@@ -30655,12 +30652,16 @@ export class DesktopBackendRegistry {
 
   private async assertRequestedThreadModelAvailable(params: {
     backend: AppServerBackendKind;
+    threadId: string;
     model?: string;
   }): Promise<void> {
     if (params.model === undefined) return;
     assertThreadModelSettingsAvailable(params.backend,
       await this.getBackendLaunchpadOptions(params.backend, "model-override-admission"),
       { model: params.model });
+    if (params.backend === "codex") {
+      this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
+    }
   }
 
   private async admitNewThreadModelSettings(

@@ -101,7 +101,6 @@ import type {
   DesktopProviderThreadModelMigration,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
-  FederationInstanceId,
   MarkThreadSeenRequest,
   SetThreadParentRequest,
   SetThreadPinRequest,
@@ -28007,6 +28006,19 @@ command = "pnpm dev"
     }
   });
 
+  it("refuses invalid automation models before creating a headless thread", async () => {
+    const codexClient = new MockBackendClient({ models: [{ id: "gpt-6.1-terra" }] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await expect(registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "fixture", automationRunId: "fixture-run",
+        model: "opus", input: [{ type: "text", text: "Inspect" }] }))
+        .rejects.toThrow('model="opus" is not available');
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("refuses an invalid model carried only in ACP runtime settings", async () => {
     const { registry, acpClient, acpBackendId } = createKimiAcpRegistry();
     try {
@@ -28034,6 +28046,26 @@ command = "pnpm dev"
         await expect(result()).rejects.toThrow('model="gpt-6.1-terra" is not available for backend="claude"');
       }
       expect(save).not.toHaveBeenCalled();
+      expect(codexClient.lastStartTurnParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses an OpenAI model override on a Codex thread bound to another model provider", async () => {
+    const codexClient = Object.assign(new MockBackendClient({ models: [{ id: "gpt-6.1-terra" }] }), {
+      modelProviderForThread: () => "fixture-provider",
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const settings = { backend: "codex" as const, threadId: "fixture", model: "gpt-6.1-terra" };
+    try {
+      for (const result of [
+        () => registry.setThreadModelSettings(settings),
+        () => registry.startTurn({ ...settings, input: [{ type: "text", text: "Continue" }] }),
+        () => registry.submitTurn({ ...settings, input: [{ type: "text", text: "Continue" }] }),
+      ]) {
+        await expect(result()).rejects.toThrow("Hand the thread off to a new thread");
+      }
       expect(codexClient.lastStartTurnParams).toBeUndefined();
     } finally {
       await registry.close();
