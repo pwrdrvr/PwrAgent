@@ -62,6 +62,11 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
     vi.spyOn(internals, "emitThreadPricingUpdated").mockImplementation(async () => { await delay(40); });
     const connections = Array.from({ length: 6 }, (_, index) => `fixture-${index}`);
     try {
+      for (const threadId of ["background-a", "background-b"]) {
+        await internals.emit({ backend: "codex", notification: { method: "turn/started", params: {
+          threadId, turnId: `turn-${threadId}`, turn: { id: `turn-${threadId}`, status: "in_progress" },
+        } } } as AgentEvent);
+      }
       for (const temperature of ["cold", "warm", "warm", "warm"]) {
         let threadId = `selected-${samples.length}`;
         await store.setThreadMcpConnectionIds({ backend: "codex", threadId, connectionIds: connections });

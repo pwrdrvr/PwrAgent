@@ -57,7 +57,7 @@ describe("thread-owned attachments", () => {
       const item = retained[index + 1];
       if (item?.type !== "localFile" || retained[0]?.type !== "text") throw new Error("Expected retained files.");
       expect(item.name).toBe(`${name}.txt`);
-      expect(retained[0].text).toContain(item.path);
+      expect(decodeURIComponent(retained[0].text)).toContain(item.path);
       expect(await readFile(item.path, "utf8")).toBe(name.repeat((index + 1) * 1024));
     }
   });
