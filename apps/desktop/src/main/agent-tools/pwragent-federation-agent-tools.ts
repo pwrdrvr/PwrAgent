@@ -270,12 +270,8 @@ function inputSchemaForOperation(
             description:
               "Optional existing base branch/ref for workMode=worktree, for example `origin/main`. This is not a new feature branch name.",
           },
-          worktreeBase: {
-            type: "string",
-            enum: LAUNCHPAD_WORKTREE_BASES,
-            description:
-              "Worktree base when branchName is omitted.",
-          },
+          worktreeBase: { type: "string", enum: LAUNCHPAD_WORKTREE_BASES },
+          requiredWorkMode: { type: "string", enum: LAUNCHPAD_WORK_MODES },
           groupingMode: {
             type: "string",
             enum: INSTANCE_THREAD_GROUPING_MODES,
@@ -440,7 +436,7 @@ function invalidArgumentsMessageForOperation(
     case "list_instance_projects":
       return "list_instance_projects requires a non-empty instanceId string, an integer limit between 1 and 100, and an optional non-empty cursor.";
     case "create_instance_thread":
-      return "create_instance_thread requires non-empty instanceId and projectKey strings, and accepts only known backend, workMode, worktreeBase, and groupingMode values.";
+      return "create_instance_thread requires non-empty instanceId and projectKey strings, and accepts only known backend, workMode, worktreeBase, requiredWorkMode, and groupingMode values.";
     case "list_attention_threads":
       return "list_attention_threads accepts an optional non-empty instanceId and an integer limit between 1 and 100.";
     case "search_federation_threads":
@@ -548,6 +544,13 @@ function normalizeCreateInstanceThreadArgs(
   if (args.worktreeBase !== undefined && !worktreeBase) {
     return undefined;
   }
+  const requiredWorkMode =
+    args.requiredWorkMode === undefined
+      ? undefined
+      : readChoice(args.requiredWorkMode, LAUNCHPAD_WORK_MODES);
+  if (args.requiredWorkMode !== undefined && !requiredWorkMode) {
+    return undefined;
+  }
   const optionalStringFields = [
     "input",
     "backend",
@@ -595,6 +598,7 @@ function normalizeCreateInstanceThreadArgs(
     ...(workMode ? { workMode } : {}),
     ...(branchName ? { branchName } : {}),
     ...(worktreeBase ? { worktreeBase } : {}),
+    ...(requiredWorkMode ? { requiredWorkMode } : {}),
     ...(groupingMode ? { groupingMode } : {}),
     ...(environment ? { environment } : {}),
   };

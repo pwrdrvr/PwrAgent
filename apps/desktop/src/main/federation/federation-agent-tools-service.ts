@@ -686,6 +686,7 @@ async function createInstanceThread(
         ? { codexEnvironmentSelector: environment.selector }
         : {}),
       ...(args.worktreeBase ? { worktreeBase: args.worktreeBase } : {}),
+      ...(args.requiredWorkMode ? { requiredWorkMode: args.requiredWorkMode } : {}),
     },
     { messageOrigin },
   );

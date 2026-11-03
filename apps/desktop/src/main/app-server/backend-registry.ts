@@ -29570,6 +29570,20 @@ export class DesktopBackendRegistry {
     // Retain ownership before the next await/check: cancellation may have
     // overtaken preparation. Existing/local workspaces supply no rollback.
     if (operation) operation.workspaceRollback = preparedWorkspace.rollback;
+    if (request.requiredWorkMode && preparedWorkspace.workMode !== request.requiredWorkMode) {
+      // Refuse before a thread exists. A worktree request that falls back
+      // would otherwise share the project checkout.
+      if (operation) operation.workspaceRollback = undefined;
+      await preparedWorkspace.rollback?.().catch((error) => {
+        backendRegistryLog.warn("materialize workspace rollback failed", {
+          directoryKey: launchpad.directoryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      throw new Error(
+        `Requested ${request.requiredWorkMode} workspace, but workspace preparation resolved to ${preparedWorkspace.workMode}. Verify the project directory is a Git repository and branchName resolves to an existing branch or ref.`,
+      );
+    }
     const workspace =
       launchpad.directoryKind === "workspace" && !preparedWorkspace.cwd
         ? {
