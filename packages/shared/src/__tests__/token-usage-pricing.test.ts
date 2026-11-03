@@ -6,9 +6,62 @@ import {
   listOpenAiTokenUsagePricingRates,
   listTokenUsagePricingRates,
   resolveOpenAiPricingServiceTier,
+  resolveTokenUsagePriceUnavailableReason,
 } from "../token-usage-pricing";
 
 describe("token usage pricing", () => {
+  it.each([
+    { inputTokens: 100_000, inputRate: 0.1, cachedRate: 0.01, writeRate: 0.125, outputRate: 0.5, band: "input-lte-100k" },
+    { inputTokens: 100_001, inputRate: 0.5, cachedRate: 0.05, writeRate: 0.625, outputRate: 2.5, band: "input-gt-100k" },
+  ])("prices Haiku 5.5 at the $inputTokens-token request boundary", ({ inputTokens, inputRate, cachedRate, writeRate, outputRate, band }) => {
+    const cost = estimateTokenUsageCost({
+      cacheWriteInputTokens: 1_000,
+      cachedInputTokens: inputTokens - 2_000,
+      inputTokenScope: "request",
+      model: "claude-haiku-5-5",
+      outputTokens: 1_000,
+      reasoningOutputTokens: 500,
+      uncachedInputTokens: 2_000,
+    });
+    expect(cost).toMatchObject({
+      provider: "anthropic",
+      rateId: `anthropic:2026-10-07:claude-haiku-5-5:standard:${band}`,
+      uncachedInputCostMicros: 1_000 * inputRate,
+      cacheWriteInputCostMicros: 1_000 * writeRate,
+      cachedInputCostMicros: Math.round((inputTokens - 2_000) * cachedRate),
+      // Claude's output count already includes thinking tokens.
+      outputCostMicros: 1_000 * outputRate,
+    });
+    expect(cost?.totalCostMicros).toBe(
+      1_000 * (inputRate + writeRate + outputRate) + Math.round((inputTokens - 2_000) * cachedRate),
+    );
+  });
+
+  it("does not infer a Haiku long-context band from a multi-request aggregate", () => {
+    const params = {
+      cachedInputTokens: 120_220,
+      model: "claude-haiku-5-5",
+      outputTokens: 238,
+      uncachedInputTokens: 834,
+    };
+    expect(estimateTokenUsageCost(params)).toBeUndefined();
+    expect(resolveTokenUsagePriceUnavailableReason(params)).toBe("insufficient-token-breakdown");
+    expect(estimateTokenUsageCost({ ...params, inputTokenScope: "request" })?.totalCostMicros).toBe(7_023);
+    expect(estimateTokenUsageCost({ ...params, requestInputTokenCeiling: 100_000 })?.inputUsdPerMillion).toBe(0.1);
+    expect(estimateTokenUsageCost({ ...params, cachedInputTokens: 90_000 })?.inputUsdPerMillion).toBe(0.1);
+  });
+
+  it("keeps Haiku rates separate from unknown models, dates, tiers, and OpenAI pricing", () => {
+    const params = { cachedInputTokens: 0, model: "claude-haiku-5-5", outputTokens: 1_000, uncachedInputTokens: 1_000 };
+    expect(estimateTokenUsageCost({ ...params, at: Date.UTC(2026, 9, 6) })).toBeUndefined();
+    expect(estimateTokenUsageCost({ ...params, at: Date.UTC(2026, 9, 7) })?.totalCostMicros).toBe(600);
+    expect(estimateTokenUsageCost({ ...params, model: "claude-haiku-5-6" })).toBeUndefined();
+    expect(estimateTokenUsageCost({ ...params, serviceTier: "priority" })).toBeUndefined();
+    expect(resolveTokenUsagePriceUnavailableReason({ ...params, serviceTier: "priority" })).toBe("unsupported-service-tier");
+    expect(estimateOpenAiTokenUsageCost(params)).toBeUndefined();
+    expect(listTokenUsagePricingRates().filter((rate) => rate.provider === "anthropic")).toHaveLength(2);
+  });
+
   it("prices standard usage with persisted micro-unit cost components", () => {
     const cost = estimateOpenAiTokenUsageCost({
       cachedInputTokens: 1_000,

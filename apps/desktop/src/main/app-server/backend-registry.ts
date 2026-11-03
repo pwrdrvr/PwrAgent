@@ -4572,6 +4572,7 @@ export function foldObservedContextReplay(params: {
 function buildTaskMonitorUsageSnapshot(params: {
   fastMode?: boolean;
   model?: string;
+  providerCostUsd?: number;
   serviceTier?: string;
   tokenUsage: unknown;
 }): TaskMonitorUsageSnapshot | undefined {
@@ -4588,7 +4589,7 @@ function buildTaskMonitorUsageSnapshot(params: {
           tokenUsage.reasoningOutputTokens,
         )} reasoning)`
       : `${formatTaskMonitorTokenCount(tokenUsage.outputTokens)} out`,
-    cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
+    cost ? `${formatTokenUsageUsd(cost.totalUsd)} ${cost.pricingBasis === "provider-reported" ? "provider estimate" : "list price"}` : undefined,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -4618,6 +4619,7 @@ type TaskMonitorUsageTotals = Omit<TaskMonitorUsageSnapshot, "summary" | "tokenU
 function buildTaskMonitorUsageTotals(params: {
   fastMode?: boolean;
   model?: string;
+  providerCostUsd?: number;
   serviceTier?: string;
   tokenUsage: unknown;
 }): TaskMonitorUsageTotals | undefined {
@@ -4639,16 +4641,20 @@ function buildTaskMonitorUsageTotals(params: {
     0,
     tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
   );
-  const cost = estimateTaskMonitorUsageCost({
-    cacheWriteInputTokens,
-    cachedInputTokens,
-    fastMode: params.fastMode,
-    model: params.model,
-    outputTokens,
-    reasoningOutputTokens,
-    serviceTier: params.serviceTier,
-    uncachedInputTokens,
-  });
+  const cost: TaskMonitorUsageSnapshot["cost"] =
+    params.model && typeof params.providerCostUsd === "number"
+      && Number.isFinite(params.providerCostUsd) && params.providerCostUsd >= 0
+      ? { model: params.model, pricingBasis: "provider-reported", totalUsd: params.providerCostUsd }
+      : estimateTaskMonitorUsageCost({
+          cacheWriteInputTokens,
+          cachedInputTokens,
+          fastMode: params.fastMode,
+          model: params.model,
+          outputTokens,
+          reasoningOutputTokens,
+          serviceTier: params.serviceTier,
+          uncachedInputTokens,
+        });
 
   return {
     ...(cost ? { cost } : {}),
@@ -5282,7 +5288,10 @@ function buildTaskMonitorUsageLine(params: {
     tokenUsage.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
   );
   const model = params.model ?? params.usage.model ?? params.usage.cost?.model;
-  const cost = estimateTokenUsageCost({
+  const reportedCost = params.usage.cost?.pricingBasis === "provider-reported"
+    && Number.isFinite(params.usage.cost.totalUsd) && params.usage.cost.totalUsd >= 0
+      ? params.usage.cost.totalUsd : undefined;
+  const cost = reportedCost === undefined ? estimateTokenUsageCost({
     cacheWriteInputTokens,
     cachedInputTokens,
     fastMode: params.fastMode,
@@ -5291,9 +5300,9 @@ function buildTaskMonitorUsageLine(params: {
     reasoningOutputTokens,
     serviceTier: params.serviceTier,
     uncachedInputTokens,
-  });
+  }) : undefined;
   const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
-    cost
+    cost || reportedCost !== undefined
       ? undefined
       : resolveTokenUsagePriceUnavailableReason({
           cachedInputTokens,
@@ -5328,9 +5337,10 @@ function buildTaskMonitorUsageLine(params: {
     outputCostMicros: cost?.outputCostMicros ?? 0,
     outputTokens,
     parentThreadId: params.parentThreadId,
-    priceStatus: cost ? "priced" : "unpriced",
+    priceStatus: cost || reportedCost !== undefined ? "priced" : "unpriced",
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
-    provider: cost?.provider ?? fallbackUsageProvider(params.backend),
+    provider: reportedCost !== undefined ? "anthropic" : cost?.provider ?? fallbackUsageProvider(params.backend),
+    ...(reportedCost !== undefined ? { pricingBasis: "provider-reported" as const } : {}),
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
@@ -5346,7 +5356,7 @@ function buildTaskMonitorUsageLine(params: {
     sourceItemId: params.monitorId,
     status: "finalized",
     threadId: params.monitorThreadId,
-    totalCostMicros: cost?.totalCostMicros ?? 0,
+    totalCostMicros: reportedCost !== undefined ? Math.round(reportedCost * 1_000_000) : cost?.totalCostMicros ?? 0,
     totalTokens,
     ...(params.monitorTurnId ? { turnId: params.monitorTurnId } : {}),
     uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
@@ -34411,6 +34421,9 @@ export class DesktopBackendRegistry {
     return buildTaskMonitorUsageSnapshot({
       fastMode: params.fastMode,
       model: params.model,
+      providerCostUsd: params.backend === "claude"
+        ? readUsageNumber(params.tokenUsage, ["claudeCostUSD"])
+        : undefined,
       serviceTier: params.serviceTier,
       tokenUsage: derivedUsage.turnTokenUsage,
     });
