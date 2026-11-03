@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type {
+  AppServerThreadSummary,
   NavigationQueryRequest,
   NavigationSnapshot,
   NavigationThreadSummary,
+  ThreadOverlayState,
 } from "@pwragent/shared";
+import { materializeNavigationThreads } from "@pwragent/shared";
 import { projectNavigationQuery } from "../navigation-query-projection";
 
 function thread(
@@ -564,6 +567,42 @@ it.each([undefined, "199680"])("keeps a local handoff reachable when its remote 
   source.directories[0]!.threadKeys.push("remote:peer:codex:remote-root");
   expect(project({ kind: "directory", directoryKey: "directory:/repo" }).entries.map(({ row }) => row.id)).toEqual(["remote-root"]);
   expect(child.parentThreadInstanceId).toBeUndefined();
+});
+
+it.each([true, false])("nests a handoff from a local creator whose parent is on a peer (peer root mounted: %s)", (mounted) => {
+  // A peer's thread handed off to a local Claude thread, which the operator
+  // pinned. That thread then handed off a grouped sub-thread. The created
+  // thread must stay with its creator, never fall out as an unpinned root
+  // under a collapsed Directory threads.
+  const overlays: Record<string, ThreadOverlayState> = {
+    "claude:creator": { backend: "claude", threadId: "creator", executionMode: "auto", extraLinkedDirectories: [],
+      pinnedRank: "-79872", parentThreadId: "peer-root", parentThreadBackend: "codex", parentThreadInstanceId: "peer" },
+    "claude:handoff": { backend: "claude", threadId: "handoff", executionMode: "auto", extraLinkedDirectories: [],
+      parentThreadId: "creator", parentThreadBackend: "claude" },
+  };
+  const provider = (id: string): AppServerThreadSummary => ({ source: "claude", id, title: id, titleSource: "derived",
+    createdAt: 1, updatedAt: 1, linkedDirectories: [{ id: "repo", kind: "local", label: "repo", path: "/repo" }] });
+  const local = materializeNavigationThreads({ firstSnapshot: false, previousKnownThreadKeys: [], overlayByThreadKey: overlays,
+    threads: [provider("creator"), provider("handoff"), provider("other")] })
+    .map((row) => ({ ...row, pinnedRank: overlays[`claude:${row.id}`]?.pinnedRank }));
+  const peerRoot = thread("peer-root", { pinnedRank: "-80896", federation: {
+    ref: { backend: "codex", threadId: "peer-root", target: { scope: "remote", instanceId: "peer" } }, instanceLabel: "Peer",
+  } });
+  const source = snapshot(local);
+  if (mounted) {
+    source.threads.push(peerRoot);
+    source.directories[0]!.threadKeys.push("remote:peer:codex:peer-root");
+  }
+  const project = (query: NavigationQueryRequest["query"]) => projectNavigationQuery({ index: source,
+    request: { ...request(query), inventory: "viewer" } });
+  const unpinned = project({ kind: "directory", directoryKey: "directory:/repo", roots: "unpinned" });
+  expect(unpinned.entries.map(({ row }) => row.id)).toEqual(["other"]);
+  expect(project({ kind: "directory-index" }).directories?.[0]).toMatchObject({ unpinnedRootCount: 1 });
+  expect(project({ kind: "children", parent: { backend: "claude", threadId: "creator" } }).entries)
+    .toEqual([expect.objectContaining({
+      row: expect.objectContaining({ id: "handoff" }),
+      placement: { kind: "child", parent: { backend: "claude", threadId: "creator" } },
+    })]);
 });
 
 describe("Lens split by root pin", () => {

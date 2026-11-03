@@ -134,6 +134,90 @@ describe("materializeNavigationThreads", () => {
 
     expect(materialized?.monitorJobSuggestionsEnabled).toBe(true);
   });
+
+  it("keeps a local creator as the parent when the creator's own parent is on a peer", () => {
+    // A peer's thread handed off to a local Claude thread, which then handed
+    // off a sub-thread of its own. The peer's overlay is not local, so the
+    // chain cannot be followed past the creator.
+    const overlayByThreadKey: Record<string, ThreadOverlayState> = {
+      "claude:creator": {
+        backend: "claude",
+        threadId: "creator",
+        executionMode: "auto",
+        extraLinkedDirectories: [],
+        parentThreadId: "peer-root",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "peer",
+      },
+      "claude:handoff": {
+        backend: "claude",
+        threadId: "handoff",
+        executionMode: "auto",
+        extraLinkedDirectories: [],
+        parentThreadId: "creator",
+        parentThreadBackend: "claude",
+      },
+    };
+
+    const [creator, handoff] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey,
+      previousKnownThreadKeys: [],
+      threads: [
+        { ...appServerThread(), source: "claude", id: "creator" },
+        { ...appServerThread(), source: "claude", id: "handoff" },
+      ],
+    });
+
+    expect(creator).toMatchObject({
+      parentThreadId: "peer-root",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "peer",
+    });
+    // Flattening to the peer's thread without its owner names a local
+    // thread that does not exist, and the row falls out of every group.
+    expect(handoff).toMatchObject({
+      parentThreadId: "creator",
+      parentThreadBackend: "claude",
+    });
+    expect(handoff?.parentThreadInstanceId).toBeUndefined();
+  });
+
+  it("never reads a local overlay for a parent that lives on a peer", () => {
+    const overlayByThreadKey: Record<string, ThreadOverlayState> = {
+      "codex:child": {
+        backend: "codex",
+        threadId: "child",
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        parentThreadId: "shared-id",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "peer",
+      },
+      // A local thread that happens to share the peer parent's id.
+      "codex:shared-id": {
+        backend: "codex",
+        threadId: "shared-id",
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        parentThreadId: "local-root",
+        parentThreadBackend: "codex",
+      },
+    };
+
+    const [child] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey,
+      previousKnownThreadKeys: [],
+      threads: [{ ...appServerThread(), id: "child" }],
+    });
+
+    expect(child).toMatchObject({
+      parentThreadId: "shared-id",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "peer",
+    });
+  });
 });
 
 function buildHash(pr: PrSummary): string {
