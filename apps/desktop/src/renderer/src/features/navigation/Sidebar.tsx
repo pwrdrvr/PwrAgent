@@ -4109,23 +4109,37 @@ export function Sidebar(props: SidebarProps) {
               ) : null}
               {contextMenuHasBindings ? (
                 <div className="thread-context-menu__section">
-                  {(contextMenu.thread.messagingBindings ?? []).map((binding) => (
-                    <button
-                      key={binding.bindingId}
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        const target = contextMenu.thread;
-                        setContextMenu(undefined);
-                        void props.onUnbindMessagingBinding!(target, binding);
-                      }}
-                    >
-                      Unbind from {formatPlatformLabel(binding.platform)}
-                      {binding.conversationTitle
-                        ? ` (${binding.conversationTitle})`
-                        : ""}
-                    </button>
-                  ))}
+                  {(contextMenu.thread.messagingBindings ?? []).map((binding) => {
+                    const action = `Unbind from ${formatPlatformLabel(binding.platform)}`;
+                    const name = binding.conversationTitle
+                      ? `(${binding.conversationTitle})`
+                      : undefined;
+                    return (
+                      <button
+                        key={binding.bindingId}
+                        role="menuitem"
+                        type="button"
+                        title={name ? `${action} ${name}` : undefined}
+                        onClick={() => {
+                          const target = contextMenu.thread;
+                          setContextMenu(undefined);
+                          void props.onUnbindMessagingBinding!(target, binding);
+                        }}
+                      >
+                        <span className="thread-context-menu__binding-platform">
+                          {action}
+                        </span>
+                        {name ? (
+                          <>
+                            {" "}
+                            <span className="thread-context-menu__binding-name">
+                              {name}
+                            </span>
+                          </>
+                        ) : null}
+                      </button>
+                    );
+                  })}
                 </div>
               ) : null}
               {contextMenuHasTopActions || contextMenuHasBindings ? (

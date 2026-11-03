@@ -9848,6 +9848,25 @@ a.button {
   line-height: 14px;
 }
 
+/* Unbind from <platform> (<conversation>). The platform says what the item
+   does, so it never shrinks. The conversation name can be any length:
+   `contain: inline-size` keeps it out of the menu's intrinsic width, so the
+   menu sizes to its other rows and the name fills what is left. */
+.thread-context-menu__binding-platform {
+  flex: none;
+  white-space: nowrap;
+}
+
+.thread-context-menu__binding-name {
+  contain: inline-size;
+  flex: 1 1 0;
+  min-width: 12ch;
+  margin-left: 0.3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .thread-context-menu button:hover:not(:disabled) .thread-context-menu__item-detail,
 .thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__item-detail {
   color: var(--accent-bright);
