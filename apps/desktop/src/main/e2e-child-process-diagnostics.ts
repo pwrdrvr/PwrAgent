@@ -57,20 +57,22 @@ export function installE2eChildProcessDiagnostics(options: {
       // Observations must not interfere with the operation they describe.
     }
   };
-  const spawned = channel("tracing:child_process.spawn:end");
+  const spawned = channel("child_process");
   const onSpawn = (message: unknown) => {
     try {
       const child = (message as { process?: unknown })?.process;
       if (!(child instanceof ChildProcess)) return;
       if (sequence >= 128) { omitted++; return; }
       const childId = ++sequence;
-      const name = path.win32.basename(child.spawnfile).toLowerCase();
-      const executable = /^(gh|glab|git|git-lfs|powershell|pwsh|cmd|csc|conhost|node|electron|codex|claude)(\.exe)?$/.test(name)
-        ? name : "other";
-      // The synchronous channel runs before Node assigns child.pid. Capture
+      // The constructor channel runs before Node assigns child.pid. Capture
       // the caller now and join its ID to the subsequent spawn event's PID.
       const identity = () => ({ childId, pid: child.pid ?? null });
-      const onStarted = () => write("spawn", identity());
+      const onStarted = () => {
+        const name = path.win32.basename(child.spawnfile).toLowerCase();
+        const executable = /^(gh|glab|git|git-lfs|powershell|pwsh|cmd|csc|conhost|node|electron|codex|claude)(\.exe)?$/.test(name)
+          ? name : "other";
+        write("spawn", { ...identity(), executable });
+      };
       const onExit = () => write("exit", identity());
       const onClose = () => {
         write("close", identity());
@@ -84,7 +86,7 @@ export function installE2eChildProcessDiagnostics(options: {
       child.once("spawn", onStarted);
       child.once("exit", onExit);
       child.once("close", onClose);
-      write("launch", { childId, executable,
+      write("launch", { childId,
         callSites: childProcessCallSites(getCallSites(32)) });
     } catch {
       // The diagnostic channel must never throw into child_process.spawn().
