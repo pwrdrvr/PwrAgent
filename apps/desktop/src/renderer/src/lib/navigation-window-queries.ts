@@ -54,7 +54,15 @@ type Resource = {
   /** Explicit continuation demand survives a short final page and later growth. */
   expandedRows?: number;
   resumeExpansion?: boolean;
+  resumeBudget?: ResumeBudget;
 };
+/** One opening restores saved depth within one Load more click's bounds. Lists
+ * opened together share it; the clock starts at the first read. */
+type ResumeBudget = { reads: number; until?: number };
+
+function loadedRows(page: NavigationQueryPage | undefined): number {
+  return page?.modelGroups?.length || page?.directories?.length || page?.entries.length || 0;
+}
 
 /** Semantic demand ignores object insertion order and identity-set ordering. */
 export function navigationDemandKey(request: NavigationQueryRequest): string {
@@ -100,9 +108,6 @@ export class NavigationWindowQueries {
   private visible = true;
   private disposed = false;
   private activeReads = 0;
-  // Saved expansion shares one startup budget across every demanded list.
-  private resumeReadsRemaining = MAX_LOAD_MORE_READS;
-  private readonly resumeUntil = Date.now() + MAX_LOAD_MORE_MS;
   private readonly readWaiters = new Set<() => void>();
   private snapshot: NavigationWindowQueriesState = { resources: new Map() };
 
@@ -184,20 +189,25 @@ export class NavigationWindowQueries {
       }
     }
     const added: Resource[] = [];
+    let budget: ResumeBudget | undefined;
     for (const [id, { request, requestKey }] of admitted) {
       if (this.resources.has(id)) continue;
       const retainedKey = this.retainedKey(id, requestKey);
       const retained = this.retained.get(retainedKey);
       this.retained.delete(retainedKey);
-      const savedRows = retained || !this.resume.loadedRowsByQuery ? undefined
-        : this.resume.loadedRowsByQuery[navigationResumeQueryKey(request)];
+      // Saved depth is the operator's demand whenever the list opens, not
+      // only at startup: an evicted cache, a list first opened later, or an
+      // interrupted restore must not fall back to the first page.
+      const savedRows = this.savedDepth(request, Math.max(retained?.expandedRows ?? 0, loadedRows(retained?.state.page)));
+      if (savedRows !== undefined) budget ??= { reads: MAX_LOAD_MORE_READS };
       const resource: Resource = {
         requestKey, token: `${this.prefix}:${++this.nextResource}`,
         value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request),
           loading: false, restoredFromCache: Boolean(retained) },
         refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: retained?.anchor ?? request.anchor,
-        expandedRows: retained ? retained.expandedRows : savedRows,
+        expandedRows: savedRows ?? retained?.expandedRows,
         resumeExpansion: savedRows !== undefined,
+        resumeBudget: savedRows !== undefined ? budget : undefined,
       };
       this.resources.set(id, resource);
       added.push(resource);
@@ -216,6 +226,7 @@ export class NavigationWindowQueries {
   setVisible(visible: boolean): void {
     if (this.disposed || this.visible === visible) return;
     this.visible = visible;
+    let budget: ResumeBudget | undefined;
     for (const resource of this.resources.values()) {
       if (!visible) {
         this.release(resource);
@@ -224,6 +235,15 @@ export class NavigationWindowQueries {
         // Replace the lifetime rather than revive a released token or pending read.
         const next: Resource = { ...resource, token: `${this.prefix}:${++this.nextResource}`,
           released: false, pending: undefined, refreshAfterPending: false, invalidated: false };
+        // Hiding the window ends a restore early. Showing it is a new opening.
+        const savedRows = next.resumeExpansion ? undefined
+          : this.savedDepth(next.value.state.request, Math.max(next.expandedRows ?? 0, loadedRows(next.value.state.page)));
+        if (savedRows !== undefined) {
+          budget ??= { reads: MAX_LOAD_MORE_READS };
+          next.expandedRows = savedRows;
+          next.resumeExpansion = true;
+          next.resumeBudget = budget;
+        }
         this.resources.set(resource.value.id, next);
         next.diagnosticCause = "visibility";
         void this.read(next, false);
@@ -393,23 +413,26 @@ export class NavigationWindowQueries {
     this.readWaiters.clear();
   }
 
-  private canResumeExpansion(): boolean {
-    return this.resumeReadsRemaining > 0 && Date.now() < this.resumeUntil;
+  private canResumeExpansion(budget: ResumeBudget | undefined): boolean {
+    return Boolean(budget && budget.reads > 0 && Date.now() < (budget.until ?? Infinity));
+  }
+
+  /** The saved Load more depth when it exceeds what this list holds. */
+  private savedDepth(request: NavigationQueryRequest, loaded: number): number | undefined {
+    if (!this.resume.loadedRowsByQuery) return undefined;
+    const rows = this.resume.loadedRowsByQuery[navigationResumeQueryKey(request)];
+    return rows !== undefined && rows > loaded ? rows : undefined;
   }
 
   private finishResume(resource: Resource): void {
     if (!resource.resumeExpansion) return;
-    // Startup is a single attempt. Refresh only the range it actually
-    // delivered, rather than chasing saved demand on every later event.
-    const page = resource.value.state.page;
-    const rows = page?.modelGroups?.length || page?.directories?.length || page?.entries.length || 0;
+    // Each opening is a single attempt. Refresh only the range it actually
+    // delivered, rather than chasing saved demand on every later event. The
+    // saved depth itself stays: only the operator's Load more or reset
+    // changes it, so the next opening restores it again.
     resource.resumeExpansion = false;
-    resource.expandedRows = rows || undefined;
-    const key = navigationResumeQueryKey(resource.value.state.request);
-    const loadedRows = { ...this.resume.loadedRowsByQuery };
-    if (rows) loadedRows[key] = rows;
-    else delete loadedRows[key];
-    this.resume.loadedRowsByQuery = loadedRows;
+    resource.resumeBudget = undefined;
+    resource.expandedRows = loadedRows(resource.value.state.page) || undefined;
   }
 
   private async acquireReadSlot(resource: Resource): Promise<boolean> {
@@ -436,6 +459,8 @@ export class NavigationWindowQueries {
     const cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
     const resuming = resource.resumeExpansion === true;
+    const budget = resuming ? resource.resumeBudget : undefined;
+    if (budget) budget.until ??= Date.now() + MAX_LOAD_MORE_MS;
     const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
       cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",
       invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger };
@@ -463,7 +488,8 @@ export class NavigationWindowQueries {
           this.trimRetained(retainedBytes);
           if (retainedBytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
         };
-        const readPage = async (request: NavigationQueryRequest) => {
+        // Rows already on screen are restored outside the saved-depth budget.
+        const readPage = async (request: NavigationQueryRequest, restoringDisplayed = false) => {
           // An owner fills a page up to its own copy of this budget, and a
           // remote one is then stamped with federation metadata on every row
           // it served. A page of fat rows can therefore arrive here over a
@@ -473,14 +499,15 @@ export class NavigationWindowQueries {
           // operator a button that fails identically on every press.
           let rows = request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS;
           for (;;) {
-            if (resuming && request.cursor) {
-              if (!this.canResumeExpansion()) throw RESUME_BUDGET_REACHED;
-              this.resumeReadsRemaining -= 1;
+            const charged = resuming && Boolean(request.cursor) && !restoringDisplayed;
+            if (charged) {
+              if (!budget || !this.canResumeExpansion(budget)) throw RESUME_BUDGET_REACHED;
+              budget.reads -= 1;
             }
             diagnostic.attempt += 1;
             navigationListingDiagnostics.record({ ...this.diagnostic, phase: "dispatch", logical: diagnostic.logical, attempt: diagnostic.attempt, cause: diagnostic.cause });
             const page = await this.api.getNavigationQueryPage!({ ...request, pageSize: rows, diagnostic: { ...diagnostic },
-              ...(resuming && request.cursor ? { deadlineAt: Math.min(request.deadlineAt ?? Infinity, this.resumeUntil) } : {}),
+              ...(charged && budget?.until !== undefined ? { deadlineAt: Math.min(request.deadlineAt ?? Infinity, budget.until) } : {}),
               readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
             }, resource.token);
             if (new TextEncoder().encode(JSON.stringify(page)).byteLength <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return page;
@@ -569,8 +596,9 @@ export class NavigationWindowQueries {
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
         let next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor });
         assertRetained(next);
-        if (resuming) {
-          // Saved expansion must not withhold the ordinary first page.
+        if (resuming && size(next.page) >= restoring) {
+          // Saved expansion must not withhold the ordinary first page, nor
+          // replace a longer cached range with it.
           resource.value = { ...resource.value, state: next, restoredFromCache: false };
           this.publish();
         }
@@ -579,12 +607,12 @@ export class NavigationWindowQueries {
         // capacity from an earlier Load more admits new rows under those same
         // budgets; a short final page does not revoke the operator's demand.
         while (next.page?.nextCursor && size(next.page) < wanted
-          && (!resuming || this.canResumeExpansion())
-          && (size(next.page) < restoring || (extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
+          && (size(next.page) < restoring || ((!resuming || this.canResumeExpansion(budget))
+            && extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
           const nextCursor = next.page.nextCursor;
           const before = size(next.page);
           try {
-            const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) });
+            const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) }, before < restoring);
             if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
             const extended = applyNavigationPage({ state: next, sequence: started.pendingSequence, page: continuationPage, cursor: nextCursor });
             if (size(extended.page) <= before) throw new Error("Navigation range refresh did not advance.");
