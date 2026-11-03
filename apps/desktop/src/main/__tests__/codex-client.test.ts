@@ -17160,6 +17160,121 @@ describe("CodexAppServerClient", () => {
       await client.close();
     });
 
+    it.each([
+      { parentThreadId: "thread-parent" },
+      { source: { subAgent: { thread_spawn: { parent_thread_id: "thread-parent" } } } },
+    ])("keeps sub-agents without re-reading them on later sweeps: %j", async (metadata) => {
+      const { client, transport, sent, open, advance } = await idleFixture();
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, ...metadata },
+      });
+      await open("thread-idle");
+      advance(idleMs);
+      const sweep = () => client.unsubscribeIdleThreads({
+        idleMs, isThreadBusy: () => false, limit: 1,
+      });
+      const childReads = () => sent().filter((request) =>
+        request.method === "thread/read" && request.params?.threadId === "thread-child");
+      const readsBefore = childReads().length;
+
+      expect(await sweep()).toEqual([]);
+      expect(childReads()).toHaveLength(readsBefore + 1);
+      // A cached child does not consume the pass's candidate limit either.
+      expect(await sweep()).toEqual(["thread-idle"]);
+      for (let pass = 0; pass < 3; pass += 1) {
+        advance(idleMs);
+        expect(await sweep()).toEqual([]);
+      }
+      // Viewing the child again preserves its known parent relationship.
+      await open("thread-child");
+      advance(idleMs);
+      expect(await sweep()).toEqual([]);
+      expect(childReads()).toHaveLength(readsBefore + 1);
+      expect(transport.loadedThreads).toEqual(new Set(["thread-child"]));
+      expect(client.getSubscribedThreadCount()).toBe(1);
+      expect(sent().filter((request) =>
+        request.method === "thread/unsubscribe" && request.params?.threadId === "thread-child"))
+        .toEqual([]);
+      await client.close();
+    });
+
+    it("forgets a kept sub-agent when Codex closes it", async () => {
+      const { client, transport, sent, open, advance } = await idleFixture();
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, parentThreadId: "thread-parent" },
+      });
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false })).toEqual([]);
+
+      transport.emitInbound({ method: "thread/closed", params: { threadId: "thread-child" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(client.getSubscribedThreadCount()).toBe(0);
+      // A fresh subscription must classify the runtime from its new read.
+      await open("thread-child");
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-child"]);
+      expect(sent().filter((request) => request.method === "thread/read")).toHaveLength(2);
+      await client.close();
+    });
+
+    it("forgets kept sub-agents when the server resets", async () => {
+      const { client, open, advance } = await idleFixture();
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, parentThreadId: "thread-parent" },
+      });
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false })).toEqual([]);
+
+      await client.close();
+      await open("thread-child");
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-child"]);
+      await client.close();
+    });
+
+    it("does not cache a sub-agent closed while its sweep read is in flight", async () => {
+      const reading = deferred();
+      const finishRead = deferred();
+      let blockRead = false;
+      const { client, transport, open, advance } = await idleFixture({
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (blockRead && event.direction === "outbound" && event.envelope.method === "thread/read") {
+              blockRead = false;
+              reading.resolve();
+              await finishRead.promise;
+            }
+          },
+        },
+      });
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, parentThreadId: "thread-parent" },
+      });
+      advance(idleMs);
+      blockRead = true;
+      const sweep = client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false });
+      await reading.promise;
+      transport.emitInbound({ method: "thread/closed", params: { threadId: "thread-child" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      finishRead.resolve();
+      expect(await sweep).toEqual([]);
+      await open("thread-child");
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-child"]);
+      await client.close();
+    });
+
     it("keeps threads with a turn, a waiting approval, owner-tracked work, or Codex activity", async () => {
       const { client, transport, open, advance } = await idleFixture();
       for (const threadId of ["thread-turn", "thread-approval", "thread-owner", "thread-active", "thread-idle"]) {
