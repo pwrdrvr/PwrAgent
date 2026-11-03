@@ -51,9 +51,10 @@ describe("PR metadata launch budgets", () => {
     const pr = attachment(root);
     await Promise.all(Array.from({ length: 12 }, () => filterStoredDiscoveredPullRequests([pr])));
     for (let round = 0; round < 5; round++) await filterStoredDiscoveredPullRequests([pr]);
-    // remote list + all URLs + remote HEAD + one fallback-ref query.
-    expect(runner).toHaveBeenCalledTimes(4);
-    expect(launches).toHaveBeenCalledTimes(4);
+    // Identity's remote list + all URLs; defaults' remote list + remote HEAD
+    // + one fallback-ref query. Git still owns both metadata reads.
+    expect(runner).toHaveBeenCalledTimes(5);
+    expect(launches).toHaveBeenCalledTimes(5);
     expect(runner.mock.calls.filter(([, args]) => args[0] === "for-each-ref")).toHaveLength(1);
   });
 
@@ -122,5 +123,22 @@ describe("PR metadata launch budgets", () => {
     await git.runGitCommand(root, ["remote", "set-url", "origin", "https://github.com/fixture/project.git"]);
     clearGitHubRemoteCache();
     expect(await resolveGitHubRepoForDirectory(root)).toMatchObject({ owner: "fixture" });
+  });
+
+  it("keeps worktree-specific remote configuration separate within one common repository", async () => {
+    const sibling = path.join(root, "sibling");
+    await git.runGitCommand(root, ["init", "-b", "feature"]);
+    await git.runGitCommand(root, ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture"]);
+    await git.runGitCommand(root, ["remote", "add", "origin", "https://github.com/fixture/project.git"]);
+    await git.runGitCommand(root, ["worktree", "add", "-b", "sibling", sibling]);
+    await git.runGitCommand(root, ["config", "extensions.worktreeConfig", "true"]);
+    await git.runGitCommand(sibling, ["config", "--worktree", "remote.origin.url", "https://github.com/other/project.git"]);
+    const [primaryRemotes, siblingRemotes] = await Promise.all([
+      resolveGitHubRepoForDirectory(root), resolveGitHubRepoForDirectory(sibling),
+    ]);
+    expect(primaryRemotes).toMatchObject({ owner: "fixture" });
+    expect(siblingRemotes).toMatchObject({ owner: "other" });
+    const [primaryCommon, siblingCommon] = await Promise.all([root, sibling].map((cwd) => git.runGitCommand(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])));
+    expect(primaryCommon.stdout).toBe(siblingCommon.stdout);
   });
 });
