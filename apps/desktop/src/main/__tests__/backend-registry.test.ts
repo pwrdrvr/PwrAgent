@@ -16798,6 +16798,50 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("asks each ACP process to close idle sessions, keeping a thread with a live turn", async () => {
+    const { acpBackendId, acpClient, registry } = createKimiAcpRegistry({
+      sessions: [{
+        backendId: "acp:kimi" as AcpBackendId,
+        sessionId: "kimi-session-1",
+        title: "ACP session",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      }],
+    });
+    const closeIdleSessions = vi.fn(async (_params: {
+      idleMs: number;
+      isSessionBusy?: (sessionId: string) => boolean;
+    }) => [] as string[]);
+    Object.assign(acpClient, { closeIdleSessions });
+    const busyDuringSweep = (sessionId: string) =>
+      closeIdleSessions.mock.lastCall?.[0].isSessionBusy?.(sessionId);
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      input: [{ type: "text", text: "work" }],
+    });
+    await registry.closeIdleAcpSessions();
+
+    expect(closeIdleSessions).toHaveBeenCalledTimes(1);
+    expect(closeIdleSessions.mock.lastCall?.[0].idleMs).toBe(10 * 60_000);
+    expect(busyDuringSweep("kimi-session-1")).toBe(true);
+    expect(busyDuringSweep("kimi-session-2")).toBe(false);
+
+    await emitCompletedTurn(registry, acpBackendId, "kimi-session-1");
+    await registry.closeIdleAcpSessions();
+
+    expect(closeIdleSessions).toHaveBeenCalledTimes(2);
+    expect(busyDuringSweep("kimi-session-1")).toBe(false);
+
+    await registry.close();
+    // A closed registry starts no sweep.
+    await registry.closeIdleAcpSessions();
+    expect(closeIdleSessions).toHaveBeenCalledTimes(2);
+  });
+
   it("serializes Kimi control prompts before starting the next ACP turn", async () => {
     const controlPrompt = createDeferred<{ text: string }>();
     const startPrompt = vi.fn(() => ({
