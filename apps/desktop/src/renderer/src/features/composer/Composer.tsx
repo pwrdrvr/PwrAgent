@@ -161,6 +161,7 @@ import {
 import { AppIcon } from "../../components/AppIcon";
 import { InstanceChip, InstanceGlyph } from "../federation/InstanceGlyph";
 import { isOutdatedOwnerError } from "../workspace-recovery/MissingWorktreeCard";
+import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import { filterAtReferenceCandidates } from "../../lib/instance-references";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
@@ -11428,17 +11429,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const prAutoDispatchProjectOverride = prAutoDispatchProject
     ? describeProjectAutoFixOverride(prAutoDispatchProject.forgeAutomation, prAutoDispatchProject.label)
     : undefined;
+  // On, but every PR it could repair has merged or closed.
+  const prAutoDispatchIdleTooltip = props.thread?.prAutoDispatchEnabled
+    ? describeEndedPullRequestAutoFix(props.thread)
+    : undefined;
   const prAutoDispatchTooltip = !backgroundPrPollingEnabled
     ? "Auto-fix PR paused — turn on background PR polling in Settings"
     : !prAutoDispatchAllowed
       ? "Auto-fix PR disabled globally — allow it in Git settings"
-      : prAutoDispatchProjectOverride
+      : prAutoDispatchProjectOverride?.muted
         ? prAutoDispatchProjectOverride.tooltip
-        : hasAttachedPullRequest
+        : prAutoDispatchIdleTooltip
+          ? prAutoDispatchIdleTooltip
+          : prAutoDispatchProjectOverride
+            ? prAutoDispatchProjectOverride.tooltip
+            : hasAttachedPullRequest
           ? "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI."
           : "Auto-fix PR — starts when a PR for this workspace is linked";
   const prAutoDispatchProjectMuted = Boolean(
     prAutoDispatchAvailable && prAutoDispatchProjectOverride?.muted,
+  );
+  const prAutoDispatchIdle = Boolean(
+    prAutoDispatchAvailable && !prAutoDispatchProjectMuted && prAutoDispatchIdleTooltip,
   );
   // Environments are edited on the machine that runs them, so a peer's
   // thread or a remote execution workspace gets no editor here.
@@ -14762,12 +14774,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               type="button"
               className={`composer__toggle tooltip-target${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""
-              }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}`}
+              }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}${
+                prAutoDispatchIdle ? " is-idle" : ""
+              }`}
               aria-label="Auto-fix PR"
               aria-pressed={Boolean(props.thread.prAutoDispatchEnabled)}
               // aria-pressed keeps the thread's own value; this says what the
-              // project does to it, which the tooltip only shows on hover.
-              aria-description={prAutoDispatchAvailable ? prAutoDispatchProjectOverride?.tooltip : undefined}
+              // project, or an ended PR, does to it, which the tooltip only
+              // shows on hover.
+              aria-description={!prAutoDispatchAvailable
+                ? undefined
+                : prAutoDispatchIdle
+                  ? prAutoDispatchIdleTooltip
+                  : prAutoDispatchProjectOverride?.tooltip}
               data-tooltip={prAutoDispatchTooltip}
               disabled={!prAutoDispatchAvailable}
               onClick={() => {
@@ -16304,6 +16323,30 @@ function hasPrimaryWorkspacePullRequest(
     normalizeGitOriginUrl(`${pr.provider}/${pr.org}/${pr.repo}`)
       === primaryRepository,
   );
+}
+
+/**
+ * What an Auto-fix chip says when every PR on the primary workspace has
+ * merged or closed: it stays on, with nothing to repair. Undefined while any
+ * of them is open, or when none is attached.
+ */
+function describeEndedPullRequestAutoFix(
+  thread: NavigationThreadSummary,
+): string | undefined {
+  const primaryRepository = getPrimaryWorkspaceRepository(thread);
+  if (!primaryRepository) return undefined;
+  const prs = (thread.prs ?? []).filter((pr) =>
+    normalizeGitOriginUrl(`${pr.provider}/${pr.org}/${pr.repo}`) === primaryRepository);
+  if (prs.length === 0) return undefined;
+  let latest: { number: number; state: "merged" | "closed" } | undefined;
+  for (const pr of prs) {
+    const state = resolveLifecycleState(pr);
+    if (state !== "merged" && state !== "closed") return undefined;
+    if (!latest || pr.number > latest.number) latest = { number: pr.number, state };
+  }
+  return latest
+    ? `Auto-fix PR is on, but #${latest.number} ${latest.state}. It starts again when an open PR is linked.`
+    : undefined;
 }
 
 function getPrimaryWorkspaceRepository(

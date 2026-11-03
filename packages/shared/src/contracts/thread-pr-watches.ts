@@ -119,6 +119,12 @@ export type ThreadPrAutoFixState = {
     threadId: string;
     title?: string;
   };
+  /**
+   * The PR merged or closed. Auto-fix stays on but has nothing to repair,
+   * so it wakes the thread only if the PR reopens. An owner that predates
+   * this field sends none.
+   */
+  prEnded?: "merged" | "closed";
 };
 
 export type ThreadPrWatchesResponse =

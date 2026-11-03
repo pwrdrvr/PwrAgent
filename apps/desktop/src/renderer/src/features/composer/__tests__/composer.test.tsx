@@ -1330,6 +1330,61 @@ describe("Composer", () => {
     );
   });
 
+  it("mutes Auto-fix PR once every linked PR merged or closed, and keeps it on", () => {
+    const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const pr = (number: number, lifecycleState: "open" | "merged" | "closed") => ({
+      provider: "github.com",
+      number,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing" as const,
+      lifecycleState,
+      url: `https://github.com/pwrdrvr/PwrAgent/pull/${number}`,
+    });
+    const thread = (prs: NavigationThreadSummary["prs"]): NavigationThreadSummary => ({
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+      linkedDirectories: [{ id: "directory-1", kind: "local", label: "PwrAgent", path: "/repo/PwrAgent" }],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+      prs,
+    });
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread([pr(3100, "closed"), pr(3204, "merged")])}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    expect(toggle).toHaveClass("is-active", "is-idle");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const idle = "Auto-fix PR is on, but #3204 merged. It starts again when an open PR is linked.";
+    expect(toggle).toHaveAttribute("data-tooltip", idle);
+    expect(toggle).toHaveAttribute("aria-description", idle);
+    fireEvent.click(toggle);
+    expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+
+    // One open PR is enough for Auto-fix to have work.
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread([pr(3204, "merged"), pr(3210, "open")])}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-idle");
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
+  });
+
   it("mutes Auto-fix PR while its project pauses forge activity, without changing the thread's value", () => {
     const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
     const thread: NavigationThreadSummary = {

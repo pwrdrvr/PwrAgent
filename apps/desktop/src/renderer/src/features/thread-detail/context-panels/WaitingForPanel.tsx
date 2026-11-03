@@ -3,6 +3,7 @@ import {
   THREAD_DEPENDENCY_CONDITION_PHRASES,
   THREAD_PR_WATCH_CONTROL_CAPABILITY,
   buildPullRequestStatusKey,
+  isThreadPendingWakeLive,
   type NavigationThreadSummary,
   type ThreadPendingWake,
   type ThreadPendingWakeHold,
@@ -122,6 +123,8 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   // An owner newer than this window can list kinds it cannot draw.
   const wakes = state.wakes.filter((wake) => KNOWN_KINDS.has(wake.kind));
   const groups = groupWakes(wakes, props.thread);
+  // Auto-fix on an ended PR is listed but waits for nothing.
+  const liveCount = wakes.filter(isThreadPendingWakeLive).length;
   const readOnlyOnPeer = peer && wakes.some((wake) => wake.stop && !canStop(wake));
   const endedRows = state.ended.slice(0, ENDED_ROWS);
   const notice = readHoldNotice(props.thread, wakes);
@@ -135,7 +138,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
     <section className="context-panel__section waiting-for-panel">
       <header className="waiting-for-panel__header">
         <h3>Waiting for</h3>
-        {wakes.length > 0 ? <span className="waiting-for-panel__count">{wakes.length}</span> : null}
+        {liveCount > 0 ? <span className="waiting-for-panel__count">{liveCount}</span> : null}
       </header>
       <div className="waiting-for-panel__body">
         {notice ? (
@@ -165,7 +168,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
             ) : null}
           </div>
         ) : null}
-        {groups.length === 0 ? (
+        {liveCount === 0 ? (
           <div className="waiting-for-panel__empty">
             <p className="waiting-for-panel__empty-title">{state.incomplete ? "Could not confirm everything this thread is waiting for." : "Nothing will wake this thread."}</p>
             <p className="pr-watch-list__sub">
@@ -173,7 +176,8 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
               thread, or start a monitor; ask it to.
             </p>
           </div>
-        ) : groups.map((group) => (
+        ) : null}
+        {groups.map((group) => (
           <div className="waiting-for-panel__group" key={group.id} role="group" aria-label={group.label}>
             <p className="pr-watch-list__eyebrow waiting-for-panel__eyebrow">
               <span>{group.label}</span>
@@ -184,7 +188,12 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
               const open = openKey === wake.key;
               const detail = open ? renderDetail(wake, props, now) : null;
               return (
-                <div className={`pr-watch-list__row waiting-for-panel__row${open ? " is-open" : ""}`} key={wake.key}>
+                <div
+                  className={`pr-watch-list__row waiting-for-panel__row${open ? " is-open" : ""}${
+                    isThreadPendingWakeLive(wake) ? "" : " is-idle"
+                  }`}
+                  key={wake.key}
+                >
                   <span className="pr-watch-list__icon" aria-hidden="true">{view.icon}</span>
                   <span className="pr-watch-list__text">
                     <button
@@ -365,17 +374,28 @@ function groupWakes(wakes: readonly ThreadPendingWake[], thread: NavigationThrea
       if (!byPr.has(prKey)) byPr.set(prKey, []);
       byPr.get(prKey)!.push(wake);
     }
-    for (const [prKey, prWakes] of byPr) {
+    // A PR whose rows all wait for nothing follows the live ones.
+    const prGroups = [...byPr].sort(([, left], [, right]) =>
+      Number(!left.some(isThreadPendingWakeLive)) - Number(!right.some(isThreadPendingWakeLive)));
+    for (const [prKey, prWakes] of prGroups) {
       const prNumber = readPrNumber(prKey, prWakes, thread);
+      const ended = readPrEnded(prWakes);
       groups.push({
         id: `prs:${prKey}`,
         label: spec.label,
-        ...(prNumber !== undefined ? { aside: `#${prNumber}` } : {}),
+        ...(prNumber !== undefined ? { aside: `#${prNumber}${ended ? ` · ${ended}` : ""}` } : {}),
         wakes: prWakes,
       });
     }
   }
   return groups;
+}
+
+function readPrEnded(wakes: readonly ThreadPendingWake[]): "merged" | "closed" | undefined {
+  for (const wake of wakes) {
+    if (wake.kind === "pr_auto_fix" && wake.prEnded) return wake.prEnded;
+  }
+  return undefined;
 }
 
 function readPrNumber(
@@ -461,6 +481,16 @@ function describeWake(
       };
     }
     case "pr_auto_fix": {
+      if (wake.prEnded) {
+        const prNumber = readPrNumber(wake.prKey, [wake], thread);
+        const pr = prNumber !== undefined ? `#${prNumber}` : "the PR";
+        return {
+          icon: <PullRequestIcon size={12} />,
+          title: "Auto-fix idle",
+          plainTitle: "Auto-fix idle",
+          sub: `On, but ${pr} ${wake.prEnded}, so there is nothing to repair. It wakes this thread again only if the PR reopens.`,
+        };
+      }
       const plainTitle = wake.state === "paused" ? "Auto-fix paused"
         : wake.state === "handled_by_other_thread" ? `Auto-fix handled by ${wake.handledBy?.title ?? "another thread"}`
         : "Auto-fix";

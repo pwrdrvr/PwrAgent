@@ -3991,7 +3991,9 @@ describe("app server ipc", () => {
       backgroundPrPollingEnabled: boolean;
       prAutoDispatchAllowed: boolean;
       prAutoDispatchBudgetPaused: boolean;
+      prStatusRegistry: Map<string, { pr: PrSummary; fetchedAt: number }>;
     };
+    const registry = service.prStatusRegistry;
     const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
     const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
     const previous = {
@@ -4039,6 +4041,23 @@ describe("app server ipc", () => {
           { threadId: "thread-late", state: "paused" },
         ],
       });
+
+      // A merged PR leaves Auto-fix on with nothing to repair.
+      service.prAutoDispatchBudgetPaused = false;
+      registry.set(prKey, {
+        pr: githubPr({
+          number: 3193, org: "pwrdrvr", repo: "pwragent", state: "passing", title: "Merged PR",
+          url: "https://github.com/pwrdrvr/pwragent/pull/3193", lifecycleState: "merged",
+        }),
+        fetchedAt: 1,
+      });
+      await expect(handler(local, { action: "active" })).resolves.toMatchObject({
+        autoFix: [
+          { threadId: "thread-owner", state: "active", prEnded: "merged" },
+          { threadId: "thread-late", state: "handled_by_other_thread", prEnded: "merged" },
+        ],
+      });
+      registry.delete(prKey);
 
       // Git settings stop Auto-fix: windows already hide its rows.
       service.backgroundPrPollingEnabled = false;
