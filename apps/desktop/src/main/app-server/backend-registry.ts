@@ -18606,10 +18606,10 @@ export class DesktopBackendRegistry {
         if (!next) break;
         this.pendingTranscriptRepairReplays.delete(threadId);
         try {
-          await collectConcurrent([
-            () => this.repairCodexThreadDirectoryRelationship({ reason: "selected-thread", threadId }),
-            () => this.restoreCodexNativeSubAgentsFromReplay(threadId, next),
-          ], 2, (repair) => repair());
+          await joinConcurrent([
+            this.repairCodexThreadDirectoryRelationship({ reason: "selected-thread", threadId }),
+            this.restoreCodexNativeSubAgentsFromReplay(threadId, next),
+          ]);
         } catch (error) {
           backendRegistryLog.warn("codex transcript metadata repair failed", {
             threadId, error: error instanceof Error ? error.message : String(error),
