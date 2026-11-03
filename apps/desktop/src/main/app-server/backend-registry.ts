@@ -16500,7 +16500,7 @@ export class DesktopBackendRegistry {
     if (isAcpBackendId(backend)) {
       return await this.archiveAcpThread({
         backend,
-        threadId: request.threadId, backgroundCleanup: request.backgroundCleanup,
+        threadId: request.threadId, backgroundCleanup: request.backgroundCleanup, preserveWorktrees: request.preserveWorktrees,
       }, beforeMutation, finishMutation);
     }
     let result: { threadId: string };
@@ -16753,7 +16753,7 @@ export class DesktopBackendRegistry {
             ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
           ]), overlays[result.threadId]) };
         }
-        const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
+        const needsWorktreeOwnership = !params.preserveWorktrees && (isAcpBackendId(backend) || !targetThread
           || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));
         return await this.findThreadForArchiveCleanup({
           backend, threadId: result.threadId, context, codexRolloutMissing,
@@ -16790,7 +16790,6 @@ export class DesktopBackendRegistry {
       ? await this.archiveThreadWorktrees({
           backend, activeThreads: cleanupMetadata.activeThreads, archivedThreads: cleanupMetadata.archivedThreads,
           thread: cleanupMetadata.thread, context, codexRolloutMissing, worktreeEvidence: cleanupMetadata.worktreeEvidence,
-          preserveArchivedAcpWorktrees: backend === "claude",
         })
       : this.buildArchiveCleanupMetadataSkippedResult({ backend, threadId: result.threadId, error: cleanupMetadataError }));
     if (codexRolloutMissing) {
@@ -16969,6 +16968,7 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
     backgroundCleanup?: boolean;
+    preserveWorktrees?: boolean;
   }, beforeMutation?: () => Promise<() => void>, finishMutation?: () => void): Promise<ArchiveThreadResponse> {
     let session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
@@ -17011,7 +17011,7 @@ export class DesktopBackendRegistry {
       origin: "thread-archive",
     });
     const completion = this.enqueueArchiveCleanup({ backend: params.backend, threadId: params.threadId, archivedAt, codexRolloutMissing: false,
-      preserveWorktrees: true, messagingCleanup: {} });
+      preserveWorktrees: params.preserveWorktrees, messagingCleanup: {} });
     finishMutation?.();
     return await this.observeArchiveCleanupCompletion(completion, { ...params, archivedAt });
   }
@@ -17024,8 +17024,22 @@ export class DesktopBackendRegistry {
     if (!session) {
       throw new Error(`ACP thread not found: ${params.threadId}`);
     }
+    const thread = this.acpBackend.sessionToThreadSummary(session);
+    const worktrees = await this.restoreThreadWorktrees({ ...params, thread });
+    const failures = worktrees.filter((worktree) => worktree.error
+      || (!worktree.restored && worktree.skippedReason !== "Worktree path already exists."));
+    if (failures.length) throw new Error(`ACP worktree restoration failed; the thread remains archived: ${failures.map((worktree) =>
+      `${worktree.worktreePath}: ${worktree.error ?? worktree.skippedReason}`).join("; ")}`);
+    // Even a previous failed provider load may have recreated the checkout.
+    // Keep the archive marker until both checkout validation and protocol load
+    // succeed, and preserve runtime metadata reported during that load.
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    if (overlay?.worktreeSnapshots?.some((snapshot) => snapshot.state === "restored")) {
+      try { await this.acpBackend.restoreWorktreeSession(params.backend, params.threadId); }
+      catch (error) { throw new Error(`ACP session restoration failed; the thread remains archived: ${error instanceof Error ? error.message : String(error)}`); }
+    }
     const restoredAt = Date.now();
-    const restoredSession = { ...session };
+    const restoredSession = { ...this.acpBackend.getSession(params.backend, params.threadId) ?? session };
     delete restoredSession.archivedAt;
     this.acpBackend.upsertSession({
       ...restoredSession,
@@ -17051,7 +17065,7 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
       restoredAt,
-      worktrees: [],
+      worktrees,
     };
   }
 
@@ -37845,7 +37859,7 @@ export class DesktopBackendRegistry {
     for (const thread of inventory.archivedThreads) {
       // A removed checkout may no longer enrich to a linked directory. Its
       // archived provider cwd still proves association with a managed id.
-      if (thread.source !== "codex" && thread.source !== "claude") continue;
+      if (thread.source !== "codex" && thread.source !== "claude" && !isAcpBackendId(thread.source)) continue;
       if (thread.projectKey && await this.worktreeContainerService.containerPath(thread.projectKey)) {
         ownersByPath.set(normalizeWorktreePathForComparison(thread.projectKey), thread);
       }
@@ -37878,10 +37892,10 @@ export class DesktopBackendRegistry {
         }
         continue;
       }
-      if (this.hasArchivedAcpWorktreeOwner(worktreePath, inventory)) {
+      if (this.archivedAcpWorktreeBlocker(worktreePath, inventory)) {
         report.protectedWorktrees += 1;
         report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
-          skippedReason: "Archived ACP session owns this worktree; ACP restore does not recreate snapshots." });
+          skippedReason: this.archivedAcpWorktreeBlocker(worktreePath, inventory) });
         continue;
       }
       if (inventory.worktreeEvidence?.externalPaths.has(worktreePath)
@@ -37912,7 +37926,6 @@ export class DesktopBackendRegistry {
           backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(),
           cleanup: await this.archiveThreadWorktrees({
             ...current, backend: candidate.backend, thread, context,
-            preserveArchivedAcpWorktrees: true,
           }),
         };
       });
@@ -37989,11 +38002,20 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private hasArchivedAcpWorktreeOwner(worktreePath: string, inventory: Pick<ArchiveCleanupMetadata, "worktreeEvidence">): boolean {
-    return this.worktreeContainerService.worktreeComparisonPaths(worktreePath).some((value) =>
+  private archivedAcpWorktreeOwners(worktreePath: string, inventory: Pick<ArchiveCleanupMetadata, "worktreeEvidence">): AppServerThreadSummary[] {
+    return this.worktreeContainerService.worktreeComparisonPaths(worktreePath).flatMap((value) =>
       (inventory.worktreeEvidence?.archivedByPath.get(normalizeWorktreePathForComparison(value)) ?? [])
-        .some((thread) => isAcpBackendId(thread.source)),
+        .filter((thread) => isAcpBackendId(thread.source)),
     );
+  }
+
+  private archivedAcpWorktreeBlocker(worktreePath: string, inventory: Pick<ArchiveCleanupMetadata, "worktreeEvidence">): string | undefined {
+    for (const owner of this.archivedAcpWorktreeOwners(worktreePath, inventory)) {
+      if (!isAcpBackendId(owner.source)) continue;
+      const reason = this.acpBackend.worktreeArchiveBlockedReason(owner.source, owner.id);
+      if (reason) return reason;
+    }
+    return undefined;
   }
 
   private async readPacedArchiveCleanupMetadata(params: ArchiveCleanupDiscoveryRequest): Promise<ArchiveCleanupMetadata> {
@@ -38401,7 +38423,6 @@ export class DesktopBackendRegistry {
     context?: ArchiveCleanupContext;
     codexRolloutMissing?: boolean;
     worktreeEvidence?: ArchiveCleanupMetadata["worktreeEvidence"];
-    preserveArchivedAcpWorktrees?: boolean;
   }): Promise<ArchiveThreadCleanupResult[]> {
     // Ownership may live on another (even archived) thread using the same
     // checkout. A provider alias without the marker must not authorize removal.
@@ -38450,9 +38471,9 @@ export class DesktopBackendRegistry {
     const cleanupCandidate = async (candidate: WorktreeArchiveCandidate): Promise<ArchiveThreadCleanupResult> => {
       await params.context?.checkpoint();
       try {
-        if (params.preserveArchivedAcpWorktrees && this.hasArchivedAcpWorktreeOwner(candidate.worktreePath, params)) {
+        if (this.archivedAcpWorktreeBlocker(candidate.worktreePath, params)) {
           return { worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
-            skippedReason: "Archived ACP session owns this worktree; ACP restore does not recreate snapshots." };
+            skippedReason: this.archivedAcpWorktreeBlocker(candidate.worktreePath, params) };
         }
         if (externalWorktreePaths.has(normalizeWorktreePathForComparison(candidate.worktreePath))) {
           return {
@@ -38491,6 +38512,9 @@ export class DesktopBackendRegistry {
           };
         }
 
+        for (const owner of this.archivedAcpWorktreeOwners(candidate.worktreePath, params)) {
+          if (isAcpBackendId(owner.source)) await this.acpBackend.prepareWorktreeArchive(owner.source, owner.id);
+        }
         let removalMetadata: ArchiveCleanupMetadata | undefined;
         let removalRevision = this.archiveWorkspaceRevision;
         const admission = {
@@ -38522,8 +38546,8 @@ export class DesktopBackendRegistry {
               throw new Error("Another thread lifecycle mutation is still in flight; the worktree was kept. Retry archive after it settles.");
             }
               const key = normalizeWorktreePathForComparison(candidate.worktreePath);
-              if (params.preserveArchivedAcpWorktrees && this.hasArchivedAcpWorktreeOwner(key, current)) {
-                throw new Error("Archived ACP session owns this worktree; the checkout was kept.");
+              for (const owner of this.archivedAcpWorktreeOwners(key, current)) {
+                if (isAcpBackendId(owner.source)) this.acpBackend.assertWorktreeArchiveReleased(owner.source, owner.id);
               }
               if (!current.thread.linkedDirectories.some((directory) => {
                 const worktreePath = linkedDirectoryWorktreePath(directory);
@@ -38800,9 +38824,13 @@ export class DesktopBackendRegistry {
                   await this.overlayStore.upsertWorktreeSnapshot({ backend: params.backend, threadId: params.threadId,
                     snapshot: { ...candidate.snapshot, state: "restored", restoredAt: sharedRestore.restoredAt,
                       restoredCheckoutIdentity: sharedRestore.restoredCheckoutIdentity } });
-                } else if (params.backend === "claude") {
+                } else if (params.backend === "claude" || isAcpBackendId(params.backend)) {
                   throw new Error("An unexpected or incomplete checkout already exists at the archived worktree path; it was kept without modification.");
                 }
+              }
+              if (isAcpBackendId(params.backend) && candidate.snapshot?.state === "restored"
+                && !await this.worktreeArchiveService.isRestoredCheckout(candidate.snapshot)) {
+                throw new Error("The restored ACP checkout was replaced; it was kept without modification.");
               }
               return {
                 worktreePath: candidate.worktreePath,
@@ -38832,8 +38860,8 @@ export class DesktopBackendRegistry {
                   snapshotRef: candidate.snapshot.snapshotRef,
                   snapshotCommit: candidate.snapshot.snapshotCommit,
                   snapshot: candidate.snapshot,
-                  allowDetachedFallback: params.backend !== "claude",
-                  ...(params.backend === "claude" ? { restoreSourceCheckout: true } : {}),
+                  allowDetachedFallback: params.backend !== "claude" && !isAcpBackendId(params.backend),
+                  ...(params.backend === "claude" || isAcpBackendId(params.backend) ? { restoreSourceCheckout: true } : {}),
                 })
               : await this.worktreeArchiveService.restoreDetached({
                   backend: params.backend,

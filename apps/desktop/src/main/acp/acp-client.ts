@@ -368,6 +368,28 @@ export class AcpAgentClient {
     return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
   }
 
+  supportsArchivedSessionRestore(): boolean {
+    return this.runtimeCapabilities?.agentCapabilities?.loadSession === true;
+  }
+
+  /** Release just this session; never cancel another session on the process. */
+  async closeSessionForArchive(sessionId: string): Promise<boolean> {
+    if (this.activeTurns.has(sessionId) || this.hasActiveOperations()) {
+      throw new Error("An ACP operation is still active; the checkout was kept.");
+    }
+    if (!this.ownsSession(sessionId)) return true;
+    if (this.runtimeCapabilities?.agentCapabilities?.session?.close !== true) return false;
+    return await this.withOperation(async () => {
+      const protocolSessionId = this.protocolSessionIdFor(sessionId);
+      await this.options.transport.request("session/close", { sessionId: protocolSessionId });
+      this.loadedSessionCwds.delete(protocolSessionId);
+      this.agentSessionIdsByAppSessionId.delete(sessionId);
+      this.appSessionIdsByAgentSessionId.delete(protocolSessionId);
+      this.retainableSessionIds.delete(sessionId);
+      return true;
+    });
+  }
+
   supportsTurnSteering(): boolean {
     return this.options.backendId === "acp:grok"
       && (this.options.supportsTurnSteering === true
