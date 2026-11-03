@@ -5297,6 +5297,7 @@ class DesktopAppServerService {
       backendTasks: async (thread) => thread.backend === "claude"
         ? (await registry.listBackgroundTerminals(thread)).terminals
         : [],
+      backendWakes: (thread) => registry.listBackendWakes(thread),
       hold: async (thread) => await registry.readThreadWakeHold(thread),
       heldEntries: (thread) => registry.listHeldThreadQueueEntries(thread),
     };

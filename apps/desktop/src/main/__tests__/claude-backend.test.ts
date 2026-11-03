@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
+import type { HookEvent, HookInput, Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import {
   CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
@@ -31,6 +31,16 @@ afterEach(async () => {
   const failed = closed.find((result) => result.status === "rejected");
   if (failed) throw failed.reason;
 });
+
+/** Run the query's hooks for one event, as the CLI would. */
+async function runHooks(options: Options, event: HookEvent, input: Record<string, unknown>): Promise<void> {
+  for (const matcher of options.hooks?.[event] ?? []) {
+    if (matcher.matcher && !new RegExp(`^(${matcher.matcher})$`).test(String(input.tool_name))) continue;
+    for (const hook of matcher.hooks) {
+      await hook({ hook_event_name: event, ...input } as unknown as HookInput, undefined, { signal: new AbortController().signal });
+    }
+  }
+}
 
 async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUserMessage>) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
   generateSessionTitle?: (description: string, options?: { persist?: boolean }) => Promise<string | null>;
@@ -696,7 +706,8 @@ describe("Claude SDK backend", () => {
       await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
       await f.waitForTurn();
       expect(f.queries[0]!.hooks?.PostToolUse?.map((matcher) => matcher.matcher))
-        .toEqual(["ReportFindings", "Bash|Monitor"]);
+        .toEqual(["ReportFindings", "Bash|Monitor", "ScheduleWakeup|CronCreate|CronDelete"]);
+      expect(f.queries[0]!.hooks?.Stop).toHaveLength(1);
     });
 
     it("turns a ReportFindings call into a review card instead of a tool row", async () => {
@@ -2168,6 +2179,94 @@ describe("Claude SDK backend", () => {
       ? [(event.notification.params as { item: Record<string, unknown> }).item] : [])[0];
     expect(item).toBeDefined();
     expect(item).not.toHaveProperty("origin");
+  });
+
+  it("keeps the process open for Claude's own /loop wake-up, and carries the turn it starts", async () => {
+    const fire = Promise.withResolvers<void>();
+    const firedTurnDone = Promise.withResolvers<void>();
+    const loop = { id: "a1b2c3d4", schedule: "5 14 3 11 *", recurring: false, prompt: "/loop check the deploy" };
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "schedule", content: [{ type: "tool_use", id: "tool-wake", name: "ScheduleWakeup",
+          input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt } }],
+      } } as SDKMessage;
+      await runHooks(options, "PostToolUse", {
+        tool_name: "ScheduleWakeup", tool_use_id: "tool-wake",
+        tool_input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt },
+        tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
+      });
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "waiting", content: [{ type: "text", text: "I'll check again in ten minutes." }],
+      } } as SDKMessage;
+      await runHooks(options, "Stop", { stop_hook_active: false, session_crons: [loop] });
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      await fire.promise;
+      // The wake-up fires inside Claude's process and starts a native turn.
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "checked", content: [{ type: "text", text: "The deploy is healthy." }],
+      } } as SDKMessage;
+      await firedTurnDone.promise;
+      await runHooks(options, "Stop", { stop_hook_active: false, session_crons: [] });
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/loop check the deploy" }] });
+    await f.waitForTurn();
+    // Without the process the wake-up would never fire.
+    expect(f.close).not.toHaveBeenCalled();
+    expect(f.backend.liveSessionThreadIds()).toEqual([threadId]);
+    expect(f.backend.listSessionWakes(threadId)).toEqual([{
+      id: "a1b2c3d4", origin: "loop_wakeup", schedule: "5 14 3 11 *", recurring: false, prompt: "/loop check the deploy",
+      reason: "The deploy takes ten minutes.", nextFireAt: 4_000_000_000_000, createdAt: expect.any(Number),
+    }]);
+    const wakeUpdates = () => f.events.filter((event) => event.notification.method === "thread/sessionWakes/updated")
+      .map((event) => (event.notification.params as { wakes: Array<{ id: string }> }).wakes.map((wake) => wake.id));
+    expect(wakeUpdates().at(-1)).toEqual(["a1b2c3d4"]);
+    // It runs no task, so the thread reads idle and has no working marker.
+    expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
+    expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
+
+    fire.resolve();
+    await vi.waitFor(() => expect(f.events.filter((event) => event.notification.method === "turn/started")).toHaveLength(2));
+    firedTurnDone.resolve();
+    await f.waitForTurn();
+    await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+    expect(f.close).toHaveBeenCalled();
+    expect(f.run).toHaveBeenCalledOnce();
+    expect(f.backend.listSessionWakes(threadId)).toEqual([]);
+    expect(wakeUpdates().at(-1)).toEqual([]);
+  });
+
+  it("archives a thread whose process stays open only for Claude's own wakes, and ends them", async () => {
+    const f = await fixture(async function* (options, prompt) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      await runHooks(options, "PostToolUse", {
+        tool_name: "CronCreate", tool_use_id: "tool-cron", tool_input: { cron: "*/5 * * * *", prompt: "Check CI" },
+        tool_response: { id: "e5f6a7b8", humanSchedule: "Every 5 minutes", recurring: true, nextFireAt: 4_000_000_000_000 },
+      });
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "scheduled", content: [{ type: "text", text: "I'll check CI every five minutes." }],
+      } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "scheduled" } as SDKMessage;
+      // Claude keeps reading its input until the session closes.
+      for await (const _message of prompt) { /* drain */ }
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Check CI every five minutes" }] });
+    await f.waitForTurn();
+    expect(f.backend.listSessionWakes(threadId)).toEqual([expect.objectContaining({
+      id: "e5f6a7b8", origin: "cron", humanSchedule: "Every 5 minutes", recurring: true,
+    })]);
+    expect(f.backend.liveSessionThreadIds()).toEqual([threadId]);
+
+    await f.backend.setArchived(threadId, true);
+    expect(f.close).toHaveBeenCalled();
+    expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    expect((await f.store.read(threadId)).thread.archivedAt).toEqual(expect.any(Number));
+    expect(f.events.filter((event) => event.notification.method === "thread/sessionWakes/updated").at(-1)?.notification.params)
+      .toEqual({ threadId, wakes: [] });
   });
 
   it("ends the turn at its result while a background command keeps the session open, then carries Claude's follow-up", async () => {

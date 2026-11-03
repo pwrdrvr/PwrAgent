@@ -295,6 +295,7 @@ import {
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
+  type AppServerBackendWake,
   type InspectTokenMiserOutputRequest,
   type InspectTokenMiserOutputResponse,
   type AnalyzeThreadToolHistoryRequest,
@@ -25204,6 +25205,14 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       turnId: result.turnId,
     };
+  }
+
+  /**
+   * Turns a backend scheduled in its own live process, from memory. Only
+   * Claude schedules them: its /loop wake-ups and session crons.
+   */
+  listBackendWakes(params: { backend: AppServerBackendKind; threadId: string }): AppServerBackendWake[] {
+    return params.backend === "claude" ? this.claudeBackend.listSessionWakes(params.threadId) : [];
   }
 
   /**

@@ -6,6 +6,7 @@ import {
   isThreadLockRefusal,
   parseThreadPendingWakeKey,
   type AppServerBackendKind,
+  type AppServerBackendWake,
   type AppServerBackgroundTask,
   type PendingWakeScheduledAction,
   type PendingWakeScheduledActions,
@@ -69,6 +70,8 @@ export type ThreadPendingWakeReaders = {
   recentSubAgents: (thread: PendingWakeThread, limit: number) => Promise<ThreadSubAgentSummary[]>;
   /** Tasks the backend runs for the thread; only background ones wake it. */
   backendTasks: (thread: PendingWakeThread) => Promise<AppServerBackgroundTask[]>;
+  /** Turns the backend scheduled in its own live process, such as Claude's /loop. */
+  backendWakes: (thread: PendingWakeThread) => AppServerBackendWake[];
   /** What holds the thread's wakes now: its lock, else its paused project. */
   hold: (thread: PendingWakeThread) => Promise<ThreadPendingWakeHold | undefined>;
   /** Queue entries that wait for a release rather than for a free thread. */
@@ -105,7 +108,7 @@ export async function buildThreadPendingWakes(
     }
   };
   const [
-    prWatches, prHistory, autoFix, dependencies, scheduled, monitors, subAgents, tasks, hold, heldEntries,
+    prWatches, prHistory, autoFix, dependencies, scheduled, monitors, subAgents, tasks, backendWakes, hold, heldEntries,
   ] = await Promise.all([
     options.activePrWatches ?? read("prWatches", [] as ThreadPullRequestWatchSummary[], () => readers.prWatches(thread)),
     endedLimit === 0 ? [] : read("prWatchHistory", [] as ThreadPrWatchHistoryEntry[], () => readers.prWatchHistory(thread, endedLimit)),
@@ -115,6 +118,7 @@ export async function buildThreadPendingWakes(
     read("monitors", [] as PendingTaskMonitorWake[], () => readers.monitors(thread)),
     endedLimit === 0 ? [] : read("recentSubAgents", [] as ThreadSubAgentSummary[], () => readers.recentSubAgents(thread, endedLimit)),
     read("backendTasks", [] as AppServerBackgroundTask[], () => readers.backendTasks(thread)),
+    read("backendWakes", [] as AppServerBackendWake[], () => readers.backendWakes(thread)),
     read("hold", undefined as ThreadPendingWakeHold | undefined, () => readers.hold(thread)),
     read("heldEntries", [] as PendingHeldQueueEntry[], () => readers.heldEntries(thread)),
   ]);
@@ -126,7 +130,9 @@ export async function buildThreadPendingWakes(
       .filter((entry) => !scheduledEntryIds.has(entry.entryId))
       .sort((left, right) => left.createdAt - right.createdAt)
       .map((entry) => heldMessageWake(entry, hold)),
-    ...withHold(scheduledWakes(scheduled.actions), hold),
+    // A known time first; a held action or an untimed schedule after.
+    ...withHold([...scheduledWakes(scheduled.actions), ...backendWakes.map(backendWake)]
+      .sort((left, right) => (left.wakesAt ?? Infinity) - (right.wakesAt ?? Infinity)), hold),
     ...withHold(pullRequestWakes(prWatches, autoFix.filter((state) =>
       state.backend === thread.backend && state.threadId === thread.threadId)), hold),
     ...withHold(dependencyWakes(dependencies), hold),
@@ -233,13 +239,13 @@ function pullRequestWakes(
  * turn source. A paused project fetches no PR status, so PR watches wait,
  * and it holds or drops what a dependency or a monitor sends; it leaves
  * scheduled actions alone. Auto-fix is off under either hold, and a
- * backend's own task is the backend's to continue.
+ * backend's own task or scheduled wake is the backend's to start.
  */
 function withHold(wakes: ThreadPendingWake[], hold: ThreadPendingWakeHold | undefined): ThreadPendingWake[] {
   if (!hold || hold.kind === "queue_held") return wakes;
   return wakes.map((wake) => {
     const holds = hold.kind === "thread_locked"
-      ? wake.kind !== "pr_auto_fix" && wake.kind !== "backend_task"
+      ? wake.kind !== "pr_auto_fix" && wake.kind !== "backend_task" && wake.kind !== "backend_wake"
       : wake.kind === "pr_watch" || wake.kind === "dependency" || wake.kind === "monitor";
     return holds ? { ...wake, held: hold } : wake;
   });
@@ -349,6 +355,27 @@ function backendTaskWake(task: AppServerBackgroundTask): ThreadPendingWake {
     createdBy: "agent",
     durable: false,
     stop: "stop",
+  };
+}
+
+/**
+ * The backend's agent scheduled it and only that agent can cancel it, so the
+ * row has no stop. It lives in the backend's process.
+ */
+function backendWake(wake: AppServerBackendWake): ThreadPendingWake {
+  return {
+    kind: "backend_wake",
+    key: buildThreadPendingWakeKey("backend_wake", wake.id),
+    wake: {
+      ...wake,
+      prompt: clip(wake.prompt, THREAD_PENDING_WAKE_TEXT_MAX_CHARS),
+      ...(wake.reason ? { reason: clip(wake.reason, DETAIL_MAX_CHARS * 3) } : {}),
+      ...(wake.humanSchedule ? { humanSchedule: clip(wake.humanSchedule, DETAIL_MAX_CHARS) } : {}),
+    },
+    ...(wake.createdAt !== undefined ? { createdAt: wake.createdAt } : {}),
+    ...(wake.nextFireAt !== undefined ? { wakesAt: wake.nextFireAt } : {}),
+    createdBy: "agent",
+    durable: false,
   };
 }
 
@@ -491,6 +518,8 @@ export async function stopThreadPendingWake(
         return { ok: true, stopped: true };
       case "pr_auto_fix":
         return failure("invalid_arguments", "Turn Auto-fix off from the thread's own setting.");
+      case "backend_wake":
+        return failure("invalid_arguments", BACKEND_WAKE_STOP_MESSAGE);
     }
   } catch (error) {
     return failure("failed", error instanceof Error ? error.message : String(error));
@@ -535,11 +564,15 @@ export async function stopRemoteThreadPendingWake(
       case "dependency":
       case "pr_auto_fix":
         return failure("federation_unsupported", `This runs on ${ownerLabel}. Stop it there.`);
+      case "backend_wake":
+        return failure("invalid_arguments", BACKEND_WAKE_STOP_MESSAGE);
     }
   } catch (error) {
     return failure("failed", error instanceof Error ? error.message : String(error));
   }
 }
+
+const BACKEND_WAKE_STOP_MESSAGE = "Only the agent can cancel its own schedule. Ask it to stop.";
 
 function failure(code: ThreadPendingWakesErrorCode, message: string): ThreadPendingWakesResponse {
   return { ok: false, error: { code, message } };

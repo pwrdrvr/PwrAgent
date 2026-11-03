@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  AppServerBackendWake,
   AppServerBackgroundTask,
   ScheduledThreadAction,
   ThreadDependency,
@@ -86,6 +87,20 @@ function task(overrides: Partial<AppServerBackgroundTask> = {}): AppServerBackgr
   };
 }
 
+function claudeWake(overrides: Partial<AppServerBackendWake> = {}): AppServerBackendWake {
+  return {
+    id: "a1b2c3d4",
+    origin: "loop_wakeup",
+    schedule: "5 14 3 11 *",
+    recurring: false,
+    prompt: "/loop check the staging deploy",
+    reason: "Deploy takes about ten minutes.",
+    nextFireAt: 5_000,
+    createdAt: 4_500,
+    ...overrides,
+  };
+}
+
 function readers(overrides: Partial<ThreadPendingWakeReaders> = {}): ThreadPendingWakeReaders {
   return {
     prWatches: async () => [],
@@ -96,6 +111,7 @@ function readers(overrides: Partial<ThreadPendingWakeReaders> = {}): ThreadPendi
     monitors: () => [],
     recentSubAgents: async () => [],
     backendTasks: async () => [],
+    backendWakes: () => [],
     hold: async () => undefined,
     heldEntries: () => [],
     ...overrides,
@@ -166,6 +182,48 @@ describe("buildThreadPendingWakes", () => {
     expect(list.wakes.find((wake) => wake.kind === "pr_auto_fix")).toMatchObject({ prNumber: 3174, stop: "turn_off" });
     // Process memory: they end if PwrAgent quits, and the row says so.
     expect(list.wakes.filter((wake) => !wake.durable).map((wake) => wake.kind)).toEqual(["monitor", "backend_task"]);
+  });
+
+  it("lists Claude's own wakes with the scheduled actions by time, with no stop", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      hold: async () => LOCKED,
+      scheduledActions: () => ({ actions: [
+        scheduled({ id: "scheduled-held", status: "held" }),
+        scheduled(),
+      ] }),
+      backendWakes: () => [
+        claudeWake(),
+        claudeWake({
+          id: "e5f6a7b8", origin: "cron", schedule: "*/5 * * * *", recurring: true, humanSchedule: "every 5 minutes",
+          prompt: "x".repeat(5_000), nextFireAt: undefined,
+        }),
+      ],
+    }), THREAD);
+
+    expect(list.wakes.map((wake) => wake.key)).toEqual([
+      "backend_wake:a1b2c3d4",
+      "scheduled_action:scheduled-action:1",
+      "scheduled_action:scheduled-held",
+      "backend_wake:e5f6a7b8",
+    ]);
+    expect(list.wakes[0]).toEqual({
+      kind: "backend_wake",
+      key: "backend_wake:a1b2c3d4",
+      wake: claudeWake(),
+      createdAt: 4_500,
+      wakesAt: 5_000,
+      createdBy: "agent",
+      // It lives in Claude's process, and only Claude can cancel it.
+      durable: false,
+    });
+    const cron = list.wakes[3]!;
+    expect(cron).not.toHaveProperty("wakesAt");
+    expect(cron.kind === "backend_wake" && cron.wake.prompt.length).toBe(600);
+    // Claude starts it in its own process, so a lock cannot hold it.
+    expect(list.wakes.filter((wake) => wake.held).map((wake) => wake.key)).toEqual([
+      "scheduled_action:scheduled-action:1",
+      "scheduled_action:scheduled-held",
+    ]);
   });
 
   it("offers no Turn Off while another thread owns the PR's repairs", async () => {
@@ -381,6 +439,11 @@ describe("stopThreadPendingWake", () => {
     await expect(stopThreadPendingWake(owner, THREAD, "pr_auto_fix:github/acme/widgets#1")).resolves.toMatchObject({
       ok: false, error: { code: "invalid_arguments" },
     });
+    // Only Claude can cancel the wakes it scheduled.
+    await expect(stopThreadPendingWake(owner, THREAD, "backend_wake:a1b2c3d4")).resolves.toEqual({
+      ok: false, error: { code: "invalid_arguments", message: "Only the agent can cancel its own schedule. Ask it to stop." },
+    });
+    expect(owner.calls).toEqual([]);
   });
 
   it("keeps a peer's dependencies on their own instance", async () => {
@@ -398,6 +461,9 @@ describe("stopThreadPendingWake", () => {
     expect(remote.stopBackendTask).toHaveBeenCalledWith("task-1");
     await expect(stopRemoteThreadPendingWake(remote, "held_message:thread-turn:1")).resolves.toEqual({ ok: true, stopped: true });
     expect(remote.discardHeldMessage).toHaveBeenCalledWith("thread-turn:1");
+    await expect(stopRemoteThreadPendingWake(remote, "backend_wake:a1b2c3d4")).resolves.toMatchObject({
+      ok: false, error: { code: "invalid_arguments" },
+    });
   });
 });
 

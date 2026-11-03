@@ -784,6 +784,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/prAutoDispatch/updated",
   "thread/prWatches/updated",
   "thread/pullRequests/updated",
+  "thread/sessionWakes/updated",
   "thread/started",
   "thread/status/changed",
   "thread/subAgents/updated",
