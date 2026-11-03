@@ -16108,6 +16108,10 @@ export class DesktopBackendRegistry {
       isSessionBusy: (backend, threadId) => this.closed
         || this.shutdownRequested
         || this.acpSessionNeedsLiveEvents(backend, threadId),
+    }).catch((error) => {
+      backendRegistryLog.warn("idle ACP session close failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }).finally(() => {
       this.acpIdleSessionSweep = undefined;
     });
@@ -16115,14 +16119,13 @@ export class DesktopBackendRegistry {
     await sweep;
   }
 
-  /** Work on an ACP thread that needs its session open: a turn or queued input. */
+  /**
+   * Work on an ACP thread that needs its session open: a turn, a reserved
+   * turn start or a review (`threadHasActiveTurn`), or queued input.
+   */
   private acpSessionNeedsLiveEvents(backend: AcpBackendId, threadId: string): boolean {
-    if (this.threadHasActiveTurn(threadId, backend)) return true;
-    const turnPrefix = `${backend}:${threadId}:`;
-    for (const key of this.activeTurnKeys) {
-      if (key.startsWith(turnPrefix)) return true;
-    }
-    return this.threadTurnQueue.getQueuedEntries({ backend, threadId }).length > 0;
+    return this.threadHasActiveTurn(threadId, backend)
+      || !this.threadTurnQueue.iterateQueuedEntries({ backend, threadId }).next().done;
   }
 
   async sweepInactiveThreads(): Promise<void> {

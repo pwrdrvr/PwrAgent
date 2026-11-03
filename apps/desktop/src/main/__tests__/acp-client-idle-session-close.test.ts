@@ -64,12 +64,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   stateDb.close();
 });
 
 async function createClient(options: {
   transport?: GrokLikeTransport;
   onRequest?: ConstructorParameters<typeof AcpAgentClient>[0]["onRequest"];
+  onPromptError?: ConstructorParameters<typeof AcpAgentClient>[0]["onPromptError"];
 } = {}) {
   const transport = options.transport ?? new GrokLikeTransport({
     initialize: GROK_INITIALIZE,
@@ -88,6 +90,7 @@ async function createClient(options: {
     now: () => clock,
     mcpServers,
     ...(options.onRequest ? { onRequest: options.onRequest } : {}),
+    ...(options.onPromptError ? { onPromptError: options.onPromptError } : {}),
   });
   await client.initialize();
   return { client, mcpServers, transport };
@@ -286,6 +289,51 @@ describe("AcpAgentClient idle session close", () => {
     await finishPrompt(client, "grok-session", "queued prompt");
 
     expect(transport.methods().slice(-2)).toEqual(["session/load", "session/prompt"]);
+  });
+
+  it("ignores turn ends that session/load replays while a prompt reloads", async () => {
+    vi.useFakeTimers();
+    let releasePrompt: (() => void) | undefined;
+    const transport = new GrokLikeTransport({
+      initialize: GROK_INITIALIZE,
+      "session/new": { sessionId: "grok-session" },
+    });
+    const request = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/load") {
+        transport.emitSessionUpdate(String(params?.sessionId), {
+          sessionUpdate: "turn_finished",
+          text: "earlier answer",
+        });
+      }
+      if (method === "session/prompt") {
+        await new Promise<void>((resolve) => {
+          releasePrompt = resolve;
+        });
+      }
+      return await request(method, params, timeoutMs);
+    };
+    const onPromptError = vi.fn();
+    const { client } = await createClient({ transport, onPromptError });
+    await client.startSession({ cwd: "/repo", executionMode: "default" });
+    clock += IDLE_MS;
+    await client.closeIdleSessions({ idleMs: IDLE_MS });
+
+    client.startPrompt({ sessionId: "grok-session", prompt: "a long task" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transport.methods().slice(-2)).toEqual(["session/load", "session/prompt"]);
+
+    // Past the 5 s grace a live turn end would start.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(onPromptError).not.toHaveBeenCalled();
+    expect(client.hasActiveTurns()).toBe(true);
+    expect(transport.notifications.map((notification) => notification.method))
+      .not.toContain("session/cancel");
+
+    releasePrompt?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.hasActiveTurns()).toBe(false);
+    expect(onPromptError).not.toHaveBeenCalled();
   });
 
   it("reloads a closed session before other session requests", async () => {

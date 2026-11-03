@@ -1610,8 +1610,12 @@ export class AcpAgentClient {
     const fromSessionLoad = loadState !== undefined || isExplicitSessionReplay;
     const activeTurn = this.activeTurns.get(sessionId);
     const updateKind = readUpdateKind(update);
+    // Only a live update ends the turn. A prompt for an idle-closed session
+    // reloads it while the turn is tracked, and session/load replays the
+    // earlier turns' terminal updates.
     if (
       activeTurn
+      && !fromSessionLoad
       && (updateKind === "turn_finished" || updateKind === "turn_completed")
     ) {
       activeTurn.onTerminalUpdate?.();
