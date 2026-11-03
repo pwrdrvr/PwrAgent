@@ -34,6 +34,7 @@ export type DiscoverCommandOptions<Source extends string> = {
   autoCandidates: Array<CommandDiscoveryInput<Source>>;
   env: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  signal?: AbortSignal;
   versionArgs?: string[];
   parseVersion: (output: string) => string | undefined;
   compareVersions?: (left?: string, right?: string) => number;
@@ -189,6 +190,8 @@ async function readCommandVersion(params: {
   failureReason?: string;
 }> {
   try {
+    // Shutdown cancels admission before this call. Let an admitted probe
+    // finish normally: execFile's AbortSignal can reject before stdio closes.
     const result = await execFile(params.command, params.versionArgs, {
       env: buildPwrAgentChildProcessEnv(params.env),
       timeout: 2_000,
@@ -217,6 +220,7 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
   options: {
     env: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
+    signal?: AbortSignal;
     versionArgs?: string[];
     parseVersion: (output: string) => string | undefined;
     validateVersion?: (version: string) => string | undefined;
@@ -229,7 +233,7 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
   },
 ): Promise<CommandDiscoveryCandidate<Source> | undefined> {
   const trimmedCommand = candidate.command?.trim();
-  if (!trimmedCommand) {
+  if (!trimmedCommand || options.signal?.aborted) {
     return undefined;
   }
 
@@ -245,6 +249,7 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     resolvedCommand && existence !== "not_found"
       ? await pathIsExecutable(resolvedCommand)
       : false;
+  if (options.signal?.aborted) return undefined;
   const preflightResult = existence !== "not_found"
     ? await options.preflightCandidate?.({
         command: probeCommand,
@@ -254,6 +259,7 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
       })
     : undefined;
 
+  if (options.signal?.aborted) return undefined;
   if (preflightResult?.failureReason) {
     return {
       command: resolvedCommand || trimmedCommand,

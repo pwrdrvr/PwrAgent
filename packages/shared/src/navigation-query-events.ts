@@ -39,6 +39,7 @@ export function navigationQueryEventRequiresRefresh(method: string, params?: unk
 // archive, reparenting, provider refreshes and unknown future events retain
 // discovery coverage even when the new child's identity is not subscribed yet.
 const THREAD_ROW_ONLY_METHODS = new Set([
+  "thread/dependencies/updated", "thread/scheduledAction/updated",
   "thread/status/changed", "thread/name/updated", "navigation/thread/seen",
   "thread/pullRequests/updated", "thread/reactions/updated", "thread/lock/updated", "thread/agent/updated",
   "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",

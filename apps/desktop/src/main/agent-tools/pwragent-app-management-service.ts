@@ -3,6 +3,7 @@ import type {
   PwrAgentAppManagementData,
   PwrAgentAppRequest,
   PwrAgentAppResponse,
+  PwrAgentCodexAppServerStatus,
   PwrAgentUpdateToolStatus,
 } from "@pwragent/shared";
 import type {
@@ -15,9 +16,21 @@ import {
   readAppUpdateStatus,
 } from "../auto-updater";
 import { requestQuit } from "../quit-manager";
+import type {
+  CodexAppServerProcessSample,
+  CodexAppServerRecycleSettings,
+  CodexAppServerRecycleStatus,
+} from "../codex-app-server/app-server-recycle-policy";
+
+export type CodexAppServerDiagnostics = {
+  process?: CodexAppServerProcessSample;
+  recycle: CodexAppServerRecycleStatus;
+  settings: CodexAppServerRecycleSettings;
+};
 
 export type PwrAgentAppManagementServiceOptions = {
   now?: () => number;
+  readCodexAppServerDiagnostics?: () => Promise<CodexAppServerDiagnostics | undefined>;
   requestRestart?: (performRestart: () => void) => Promise<boolean>;
   requestStop?: (performStop: () => void) => Promise<boolean>;
   startedAt: number;
@@ -140,14 +153,21 @@ export function createPwrAgentAppManagementHandler(
         };
       }
 
+      const codexAppServer = await options.readCodexAppServerDiagnostics?.()
+        .catch(() => undefined);
       return {
         ok: true,
-        data: buildManagementData({
-          action,
-          options,
-          result: { status: "reported" },
-          updateStatus: readAppUpdateStatus(),
-        }),
+        data: {
+          ...buildManagementData({
+            action,
+            options,
+            result: { status: "reported" },
+            updateStatus: readAppUpdateStatus(),
+          }),
+          ...(codexAppServer
+            ? { codexAppServer: toCodexAppServerStatus(codexAppServer) }
+            : {}),
+        },
       };
     } catch (error) {
       return {
@@ -196,6 +216,59 @@ function buildRuntimeStatus(
     nowLocal: formatLocalDateTime(now),
     uptimeMs,
     uptimeHuman: formatDuration(uptimeMs),
+  };
+}
+
+export function toCodexAppServerStatus(
+  diagnostics: CodexAppServerDiagnostics,
+): PwrAgentCodexAppServerStatus {
+  const { process, recycle, settings } = diagnostics;
+  const last = recycle.lastRecycle;
+  return {
+    running: process !== undefined,
+    ...(process
+      ? {
+          pid: process.pid,
+          uptimeMs: process.uptimeMs,
+          uptimeHuman: formatDuration(process.uptimeMs),
+          ...(process.childProcessCount !== undefined
+            ? { childProcessCount: process.childProcessCount }
+            : {}),
+          ...(process.openFdCount !== undefined ? { openFdCount: process.openFdCount } : {}),
+        }
+      : {}),
+    recycle: {
+      enabled: settings.enabled,
+      idleMinutes: settings.idleMs / 60_000,
+      maxUptimeHours: settings.maxUptimeMs / 3_600_000,
+      maxChildProcesses: settings.maxChildProcesses,
+      maxOpenFds: settings.maxOpenFds,
+      recycleCount: recycle.recycleCount,
+      ...(last
+        ? {
+            lastRecycle: {
+              atIso: new Date(last.at).toISOString(),
+              reasons: [...last.reasons],
+              uptimeMs: last.uptimeMs,
+              idleMs: last.idleMs,
+              ...(last.childProcessCount !== undefined
+                ? { childProcessCount: last.childProcessCount }
+                : {}),
+              ...(last.openFdCount !== undefined ? { openFdCount: last.openFdCount } : {}),
+              ...(last.orphansReaped !== undefined ? { orphansReaped: last.orphansReaped } : {}),
+            },
+          }
+        : {}),
+      ...(recycle.lastCheck
+        ? {
+            lastCheck: {
+              atIso: new Date(recycle.lastCheck.at).toISOString(),
+              outcome: recycle.lastCheck.outcome,
+              ...(recycle.lastCheck.blocker ? { blocker: recycle.lastCheck.blocker } : {}),
+            },
+          }
+        : {}),
+    },
   };
 }
 

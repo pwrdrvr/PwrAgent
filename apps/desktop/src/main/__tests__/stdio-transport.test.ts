@@ -661,3 +661,66 @@ describe("StdioJsonRpcTransport", () => {
     await transport.close();
   });
 });
+
+describe("StdioJsonRpcTransport process tree cleanup", () => {
+  it.skipIf(process.platform === "win32")(
+    "kills descendants that outlive the app server's process-group stop",
+    async () => {
+      const actual = await vi.importActual<typeof import("node:child_process")>(
+        "node:child_process",
+      );
+      // A real process-group leader stands in for the app server, so the
+      // group stop is real; the escaped MCP child is a fixture table entry.
+      spawnMock.mockImplementation((_command, _args, options) =>
+        actual.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+          stdio: ["pipe", "pipe", "pipe"],
+          detached: (options as { detached?: boolean }).detached,
+        }));
+      let serverPid = 0;
+      let escapedAlive = true;
+      const escaped = { pid: 4_000_001, command: "npm exec @upstash/context7-mcp@latest" };
+      const readProcessTable = vi.fn(async () => [
+        ...(escapedAlive ? [{ ...escaped, ppid: serverPid || 1 }] : []),
+      ]);
+      const signals: Array<[number, NodeJS.Signals]> = [];
+      const transport = new StdioJsonRpcTransport({
+        command: "codex",
+        readProcessTable,
+        signalProcess: (pid, signal) => {
+          signals.push([pid, signal]);
+          if (pid === escaped.pid) escapedAlive = false;
+        },
+      });
+      await transport.connect();
+      const info = transport.getProcessInfo();
+      expect(info?.pid).toEqual(expect.any(Number));
+      serverPid = info!.pid;
+
+      await transport.close();
+
+      expect(transport.getProcessInfo()).toBeUndefined();
+      expect(signals).toEqual([[escaped.pid, "SIGTERM"]]);
+      expect(transport.takeLastStopReport()).toEqual({ descendants: 1, orphansReaped: 1 });
+      expect(transport.takeLastStopReport()).toBeUndefined();
+      expect(transportLog.warn).toHaveBeenCalledWith(
+        "app-server descendants outlived its stop and were killed",
+        expect.objectContaining({ descendants: 1, orphansReaped: 1 }),
+      );
+    },
+  );
+
+  it("stops the process group of an app server that died on its own", async () => {
+    const child = Object.assign(new MockCodexChildProcess(), { pid: 4_000_002 });
+    spawnMock.mockReturnValue(child);
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      onUnexpectedExit: vi.fn(),
+      signalProcess: (pid, signal) => { signals.push([pid, signal]); },
+    });
+    await transport.connect();
+    child.emit("close", null, "SIGSEGV");
+    expect(signals).toEqual(process.platform === "win32" ? [] : [[-4_000_002, "SIGTERM"]]);
+    await transport.close();
+  });
+});

@@ -90,9 +90,45 @@ export type PwrAgentAppRuntimeStatus = {
   uptimeHuman: string;
 };
 
+/**
+ * The Codex app server PwrAgent supervises, for troubleshooting. A long-lived
+ * server is replaced while idle once it runs too long or starts too many
+ * processes; `recycle` holds that policy and its last result.
+ */
+export type PwrAgentCodexAppServerStatus = {
+  running: boolean;
+  pid?: number;
+  uptimeMs?: number;
+  uptimeHuman?: string;
+  /** Every process below the server: MCP servers, commands, terminals. */
+  childProcessCount?: number;
+  /** Reported where the OS lists descriptors cheaply (Linux). */
+  openFdCount?: number;
+  recycle: {
+    enabled: boolean;
+    idleMinutes: number;
+    maxUptimeHours: number;
+    maxChildProcesses: number;
+    maxOpenFds: number;
+    recycleCount: number;
+    lastRecycle?: {
+      atIso: string;
+      reasons: string[];
+      uptimeMs: number;
+      idleMs: number;
+      childProcessCount?: number;
+      openFdCount?: number;
+      orphansReaped?: number;
+    };
+    lastCheck?: { atIso: string; outcome: string; blocker?: string };
+  };
+};
+
 export type PwrAgentAppManagementData = {
   action: PwrAgentAppManagementAction;
   runtime: PwrAgentAppRuntimeStatus;
+  /** Present on `status` when the app server can be read. */
+  codexAppServer?: PwrAgentCodexAppServerStatus;
   update: {
     status: PwrAgentUpdateToolStatus;
     updateAvailableToDownload: boolean;

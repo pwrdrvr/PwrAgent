@@ -34,4 +34,17 @@ describe("buildCodexClientArgs with model providers", () => {
   it("adds nothing without providers", () => {
     expect(buildCodexClientArgs({}, [], []).join(" ")).not.toContain("model_providers");
   });
+
+  it.each([
+    { configOverrides: [] },
+    { configOverrides: ["thread_unload_delay_secs=1800"] },
+  ])(
+    "disables the additional Codex unload delay after config overrides: $configOverrides",
+    ({ configOverrides }) => {
+      const args = buildCodexClientArgs({}, configOverrides);
+      const overrides = args.filter((_arg, index) => args[index - 1] === "-c");
+      const unloadOverrides = overrides.filter((entry) => entry.startsWith("thread_unload_delay_secs="));
+      expect(unloadOverrides).toEqual([...configOverrides, "thread_unload_delay_secs=0"]);
+    },
+  );
 });
