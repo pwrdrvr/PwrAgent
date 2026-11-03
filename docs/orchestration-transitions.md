@@ -17,6 +17,10 @@ and publishes start then terminal exactly once. An unidentified idle notificatio
 cannot prove which starting turn ended. Existing release serialization and its
 failed-start idle replay continue to govern those signals.
 
+A buffered failure also retains its error reason and applies the normal failure
+hold before admission settles and dispatch resumes. Replaying a hold already
+applied by an immediate release does not emit another held event.
+
 FIFO contents, per-entry pause, queue hold, and dispatch suspension remain
 independent of admission. Mutation tails still serialize edits. Failed queued
 starts restore their position and require an operator retry.

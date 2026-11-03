@@ -919,7 +919,10 @@ export class ThreadTurnQueue {
     // Only an identified turn outcome can be matched to a later start ack.
     // An unqualified idle signal may belong to the previous turn.
     if (params.turnId !== undefined) {
-      this.applyAdmission(key, { type: "terminal", terminal: { turnId: params.turnId, status: params.status } });
+      this.applyAdmission(key, {
+        type: "terminal",
+        terminal: { turnId: params.turnId, status: params.status, errorMessage: params.errorMessage },
+      });
     }
     if (this.releasingKeys.has(key)) {
       // Codex commonly follows a terminal event with a status→idle event.
@@ -952,11 +955,7 @@ export class ThreadTurnQueue {
         });
       }
       if (params.status === "turn/failed") {
-        await this.holdQueue(
-          key,
-          params.errorMessage
-            ?? "The previous turn failed. Review the error before retrying queued messages.",
-        );
+        await this.holdAfterTurnFailure(key, params.errorMessage);
       }
       if (!this.heldQueues.has(key)) {
         startResult = await this.startNext(key);
@@ -1072,7 +1071,12 @@ export class ThreadTurnQueue {
       });
       await this.emit({ type: "started", entry, turnId: result.turnId });
       if (admission.terminal) {
-        await this.emit({ type: "terminal", entry, ...admission.terminal });
+        await this.emit({ type: "terminal", entry, turnId: admission.terminal.turnId, status: admission.terminal.status });
+        if (admission.terminal.status === "turn/failed") {
+          // A reentrant release buffered the outcome before it could hold the
+          // FIFO. Apply that policy before finally schedules the next drain.
+          await this.holdAfterTurnFailure(key, admission.terminal.errorMessage);
+        }
       }
       return result;
     } catch (error) {
@@ -1116,6 +1120,17 @@ export class ThreadTurnQueue {
       }
     }
     return undefined;
+  }
+
+  private async holdAfterTurnFailure(
+    key: string,
+    errorMessage?: string,
+  ): Promise<void> {
+    const reason = errorMessage
+      ?? "The previous turn failed. Review the error before retrying queued messages.";
+    // An immediate start's release may already have applied this hold.
+    if (this.heldQueues.get(key) === reason) return;
+    await this.holdQueue(key, reason);
   }
 
   private async holdQueue(key: string, reason: string): Promise<void> {

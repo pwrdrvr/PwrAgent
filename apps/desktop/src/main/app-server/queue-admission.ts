@@ -1,4 +1,4 @@
-export type QueueTerminal = { turnId: string; status?: string };
+export type QueueTerminal = { turnId: string; status?: string; errorMessage?: string };
 
 /** Admission owns the async handoff, independently of the FIFO and its holds. */
 export type QueueAdmission =
