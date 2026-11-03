@@ -44,6 +44,17 @@ import { mergeTranscriptEvents } from "./transcript-merge.js";
 
 const DEFAULT_RUN_HISTORY_LIMIT = 200;
 
+const TERMINAL_RUN_STATUSES = ["completed", "failed", "cancelled", "skipped"] as const;
+const RUN_STATUS_TRANSITIONS: Record<AutomationRunStatus, readonly AutomationRunStatus[]> = {
+  pending: ["queued", "running", ...TERMINAL_RUN_STATUSES],
+  queued: ["running", ...TERMINAL_RUN_STATUSES],
+  running: TERMINAL_RUN_STATUSES,
+  completed: [],
+  failed: [],
+  cancelled: [],
+  skipped: [],
+};
+
 const automationStoreLog = getMainLogger("pwragent:automations");
 
 const UNDERSTOOD_SCHEDULE_KINDS = new Set<string>(AUTOMATION_SCHEDULE_KINDS);
@@ -649,6 +660,7 @@ export class AutomationStore {
     runId: string;
     backendThreadId?: string;
     backendTurnId: string;
+    queueEntryId?: string;
     startedAt?: number;
     now?: number;
   }): AutomationRunSummary | undefined {
@@ -656,6 +668,7 @@ export class AutomationStore {
       status: "running",
       backendThreadId: params.backendThreadId,
       backendTurnId: params.backendTurnId,
+      queueEntryId: params.queueEntryId,
       startedAt: params.startedAt ?? params.now ?? Date.now(),
       now: params.now,
     });
@@ -670,6 +683,10 @@ export class AutomationStore {
     coalescedCount?: number;
     now?: number;
   }): AutomationRunSummary | undefined {
+    const current = this.getRun(params.runId);
+    if (!current || !RUN_STATUS_TRANSITIONS[current.status].includes(params.status)) {
+      return current;
+    }
     const completedAt = params.completedAt ?? params.now ?? Date.now();
     const run = this.updateRun(params.runId, {
       status: params.status,
@@ -684,6 +701,43 @@ export class AutomationStore {
       lastRunAt: completedAt,
       lastRunStatus: params.status,
       now: params.now ?? completedAt,
+    });
+    return run;
+  }
+
+  /** A throttle marker aggregates distinct drops; it is not another terminal event. */
+  coalesceRateLimitedRun(params: {
+    runId: string;
+    coalescedCount: number;
+    errorMessage: string;
+    now: number;
+  }): AutomationRunSummary | undefined {
+    const row = this.getRunRow(params.runId);
+    if (!row) return undefined;
+    const current = this.runFromRow(row);
+    if (
+      !current
+      || current.status !== "skipped"
+      || current.skipReason !== "rate_limited"
+      || params.coalescedCount <= (current.coalescedCount ?? 0)
+    ) return current;
+    const run = {
+      ...current,
+      coalescedCount: params.coalescedCount,
+      errorMessage: params.errorMessage,
+      completedAt: params.now,
+    };
+    this.upsertRun(run, {
+      backend: row.backend,
+      threadId: row.thread_id,
+      queueEntryId: row.queue_entry_id ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: params.now,
+    });
+    this.updateAutomationLastRun(run.automationId, {
+      lastRunAt: params.now,
+      lastRunStatus: run.status,
+      now: params.now,
     });
     return run;
   }
@@ -951,7 +1005,7 @@ export class AutomationStore {
   private updateRun(
     runId: string,
     input: {
-      status?: AutomationRunStatus;
+      status: AutomationRunStatus;
       queuedAt?: number;
       startedAt?: number;
       completedAt?: number;
@@ -969,24 +1023,40 @@ export class AutomationStore {
     const current = this.runFromRow(row);
     if (!current) return undefined;
     const now = input.now ?? Date.now();
+    const transitions = RUN_STATUS_TRANSITIONS[current.status];
+    const acceptsLifecycle = transitions.includes(input.status)
+      || (transitions.length > 0 && input.status === current.status);
+    // Lifecycle events may beat submission acknowledgements. Stale updates
+    // can fill missing identities, but cannot rewind status, timestamps or outcome.
     const nextRun: AutomationRunSummary = {
       ...current,
-      status: input.status ?? current.status,
-      queuedAt: input.queuedAt ?? current.queuedAt,
-      startedAt: input.startedAt ?? current.startedAt,
-      completedAt: input.completedAt ?? current.completedAt,
-      backendThreadId: input.backendThreadId ?? current.backendThreadId,
-      backendTurnId: input.backendTurnId ?? current.backendTurnId,
-      errorMessage: input.errorMessage ?? current.errorMessage,
-      skipReason: input.skipReason ?? current.skipReason,
-      coalescedCount: input.coalescedCount ?? current.coalescedCount,
+      status: acceptsLifecycle ? input.status : current.status,
+      queuedAt: current.queuedAt ?? (acceptsLifecycle ? input.queuedAt : undefined),
+      startedAt: current.startedAt ?? (acceptsLifecycle ? input.startedAt : undefined),
+      completedAt: current.completedAt ?? (acceptsLifecycle ? input.completedAt : undefined),
+      backendThreadId: current.backendThreadId ?? input.backendThreadId,
+      backendTurnId: current.backendTurnId ?? input.backendTurnId,
+      queueEntryId: input.queueEntryId ?? current.queueEntryId,
+      errorMessage: acceptsLifecycle
+        ? input.errorMessage ?? current.errorMessage
+        : current.errorMessage,
+      skipReason: acceptsLifecycle
+        ? input.skipReason ?? current.skipReason
+        : current.skipReason,
+      coalescedCount: acceptsLifecycle
+        ? input.coalescedCount ?? current.coalescedCount
+        : current.coalescedCount,
     };
+    if (
+      (Object.keys(nextRun) as (keyof AutomationRunSummary)[])
+        .every((key) => nextRun[key] === current[key])
+    ) return current;
     this.upsertRun(nextRun, {
       backend: row.backend,
       threadId: row.thread_id,
-      queueEntryId: input.queueEntryId ?? row.queue_entry_id ?? undefined,
+      queueEntryId: nextRun.queueEntryId,
       createdAt: row.created_at,
-      updatedAt: now,
+      updatedAt: Math.max(row.updated_at, now),
     });
     return nextRun;
   }
