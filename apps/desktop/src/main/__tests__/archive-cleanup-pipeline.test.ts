@@ -8,7 +8,11 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { deleteThreadAssets } from "../app-server/thread-assets";
 import { CountingBackendClient, codexThread, publishNotification } from "./fixtures/thread-read-harness";
 import budgets from "./fixtures/archive-cleanup-budgets.json";
-import type { ArchiveCleanupCheckpointStore, ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
+import { ArchiveCleanupCheckpointStore, type ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 const registryLog = vi.hoisted(() => ({ debug() {}, info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock("../log", () => ({ getMainLogger: () => registryLog }));
@@ -135,8 +139,8 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
   return { registry, client, counts, events, overlays, store, claudeStore, archiveWorktree, completion };
 }
 
-function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerThreadSummary[], history: AppServerThreadSummary[] = []) {
-  const fixture = build(active);
+function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerThreadSummary[], history: AppServerThreadSummary[] = [], checkpoint?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">) {
+  const fixture = build(active, undefined, checkpoint);
   const archived = [...history];
   fixture.client.archiveThread.mockImplementation(async ({ threadId }) => {
     fixture.counts.archiveMutations += 1;
@@ -185,6 +189,40 @@ function buildRepair() {
 }
 
 describe("archive cleanup pipeline", () => {
+  it("bounds durable reference-wait writes for a 100-thread batch and two releases", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+    const temp = createTempStateDb("pwragent-reference-wait-budget-");
+    const db = StateDb.open(temp.dbPath);
+    const checkpoint = new ArchiveCleanupCheckpointStore(db.raw);
+    const directory = { id: "shared", kind: "worktree" as const, label: "shared", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const targets = Array.from({ length: 100 }, (_, index) => codexThread({ id: `waiting-${index}`, linkedDirectories: [directory] }));
+    const fixture = buildArchiveBurst(["one", "two"].map((id) => codexThread({ id, projectKey: `/contrived/other-${id}`, linkedDirectories: [] })), targets, [], checkpoint);
+    for (const id of ["one", "two"]) fixture.overlays.set(id, { backend: "codex", threadId: id, extraLinkedDirectories: [directory] });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await drivePacer(fixture.registry, Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id }))));
+        for (const id of ["one", "two"]) {
+          fixture.overlays.set(id, { backend: "codex", threadId: id, extraLinkedDirectories: [] });
+          const completed = id === "two" ? new Promise<AgentEvent>((resolve) => fixture.registry.onEvent((event) => {
+            if (event.notification.method === "thread/archiveCleanup/completed") resolve(event);
+          })) : undefined;
+          await publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: [id] } });
+          if (completed) await drivePacer(fixture.registry, completed);
+          else expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+        }
+      });
+      expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+      expectSqliteWriteBudget({ scenario: "archive-worktree-100-reference-wait-release",
+        note: "100 archived owners of one checkout: one queue-drain checkpoint, one non-final release, one final drain deletion; 3 commits, zero idle writes. At 10 batches/day and 128 KiB/commit, at most 3.75 MB/day.", writes });
+    } finally {
+      await fixture.registry.close();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each(["shared", "unrelated"] as const)("honors the removal reservation for a late controlled %s attachment", async (attachment) => {
     vi.useFakeTimers();
     const target = codexThread({ id: "target", linkedDirectories: [{ id: "worktree", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" }] });
@@ -768,7 +806,7 @@ describe("archive cleanup pipeline", () => {
     });
     const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
     await vi.advanceTimersByTimeAsync(10_000);
-    const result = await scan;
+    const result = await drivePacer(fixture.registry, scan);
     expect(result.cleanup).toEqual([expect.objectContaining({ worktreePath: path.normalize("/contrived/denied"), removedWorktree: false, error: "Access denied" })]);
     expect(result.candidates).toEqual([{ backend: "codex", threadId: "valid", worktreePath: path.normalize("/contrived/valid") }]);
   });
@@ -968,7 +1006,7 @@ describe("archive cleanup pipeline", () => {
     vi.mocked(stat).mockImplementation(async () => ({ isDirectory: () => true }) as Awaited<ReturnType<typeof stat>>);
     const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
     await vi.advanceTimersByTimeAsync(100_000);
-    const result = await scan;
+    const result = await drivePacer(fixture.registry, scan);
     expect(result.archivedThreads).toBe(501);
     expect(result.candidates).toHaveLength(498);
     expect(result.protectedWorktrees).toBe(3);

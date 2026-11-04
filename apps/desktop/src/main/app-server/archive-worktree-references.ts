@@ -70,6 +70,11 @@ export class ArchiveWorktreeReferences {
   scheduled(intent: ArchiveCleanupIntent): void {
     for (const row of intent.deferredWorktrees ?? []) this.eligible.delete(row);
   }
+  pending(intent: ArchiveCleanupIntent): DeferredArchiveWorktree[] {
+    const owner = this.owners.get(buildThreadIdentityKey(intent.backend, intent.threadId));
+    return (intent.deferredWorktrees ?? []).filter((row) => [...owner?.worktrees.values() ?? []]
+      .some((current) => current.worktreePath === row.worktreePath));
+  }
 
   /** Invalidate before the first read. A late completion cannot release a
    * reference which a newer directory mutation has changed again. */

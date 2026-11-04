@@ -64960,6 +64960,7 @@ script = "printf setup"
     };
     const childThread: AppServerThreadSummary = {
       id: "thread-child",
+      projectKey: "/repo/child",
       title: "Child thread",
       titleSource: "explicit",
       linkedDirectories: [],
