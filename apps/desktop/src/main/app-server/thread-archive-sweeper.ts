@@ -173,6 +173,30 @@ export function archiveCandidateKeepReason(
     : "Recently active";
 }
 
+/** Groups each root with its native sub-agent threads, which archive with it. */
+export function archiveFamilies(candidates: ThreadArchiveCandidate[]): (root: ThreadArchiveCandidate) => ThreadArchiveCandidate[] {
+  const children = new Map<string, ThreadArchiveCandidate[]>();
+  for (const candidate of candidates) {
+    const parentId = candidate.thread.codexNativeSubAgent?.parentThreadId;
+    if (!parentId) continue;
+    const key = buildThreadIdentityKey(candidate.thread.source, parentId);
+    children.set(key, [...children.get(key) ?? [], candidate]);
+  }
+  return (root) => {
+    const group: ThreadArchiveCandidate[] = [];
+    const seen = new Set<string>();
+    const visit = (candidate: ThreadArchiveCandidate) => {
+      const key = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
+      if (seen.has(key)) return;
+      seen.add(key);
+      group.push(candidate);
+      for (const child of children.get(key) ?? []) visit(child);
+    };
+    visit(root);
+    return group;
+  };
+}
+
 /** Main-process housekeeping. Only explicit start() schedules it, so registry
  * construction and startup discovery never wait on archive or Git work. */
 export class ThreadArchiveSweeper {
@@ -282,26 +306,7 @@ export class ThreadArchiveSweeper {
       threads.skipped = "Threads could not be listed";
       return;
     }
-    const children = new Map<string, ThreadArchiveCandidate[]>();
-    for (const candidate of candidates) {
-      const parentId = candidate.thread.codexNativeSubAgent?.parentThreadId;
-      if (!parentId) continue;
-      const key = buildThreadIdentityKey(candidate.thread.source, parentId);
-      children.set(key, [...children.get(key) ?? [], candidate]);
-    }
-    const groupFor = (root: ThreadArchiveCandidate): ThreadArchiveCandidate[] => {
-      const group: ThreadArchiveCandidate[] = [];
-      const seen = new Set<string>();
-      const visit = (candidate: ThreadArchiveCandidate) => {
-        const key = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
-        if (seen.has(key)) return;
-        seen.add(key);
-        group.push(candidate);
-        for (const child of children.get(key) ?? []) visit(child);
-      };
-      visit(root);
-      return group;
-    };
+    const groupFor = archiveFamilies(candidates);
     /** The first reason any member of the family must stay, if one does. */
     const familyKeepReason = (group: ThreadArchiveCandidate[]): string | undefined => {
       const now = Date.now();

@@ -134,6 +134,20 @@ export const APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL =
   "app-server:run-thread-archive-sweep";
 export const THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL =
   "app-server:thread-archive-sweep-status-changed";
+/** Thread maintenance: a reviewed scan of idle threads and archived
+ * checkouts, and a run of the operator's selections from one scan. */
+export const APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL =
+  "app-server:scan-thread-maintenance";
+export const APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL =
+  "app-server:apply-thread-maintenance";
+export const APP_SERVER_GET_THREAD_MAINTENANCE_RUN_CHANNEL =
+  "app-server:get-thread-maintenance-run";
+export const APP_SERVER_STOP_THREAD_MAINTENANCE_CHANNEL =
+  "app-server:stop-thread-maintenance";
+export const THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL =
+  "app-server:thread-maintenance-run-changed";
+/** Main asks the focused main window to open the Thread maintenance dialog. */
+export const WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL = "window:open-thread-maintenance";
 export const GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL =
   "app-server:github-pr-saml-enforcement";
 export const MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL =

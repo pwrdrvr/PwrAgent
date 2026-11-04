@@ -2550,6 +2550,9 @@ function archivedWorktreeKeptReasons(report: ArchivedWorktreeRepairReport): Reco
   return kept;
 }
 
+/** How long a reviewed approval to snapshot past the limit stays usable. */
+const REVIEWED_SNAPSHOT_LIMIT_TTL_MS = 30 * 60_000;
+
 const MISSING_WORKTREE_SKIP_REASON = "Worktree directory no longer exists.";
 const MISSING_REPOSITORY_SKIP_REASON = "Its repository no longer exists; the checkout was kept.";
 
@@ -10058,6 +10061,10 @@ export class DesktopBackendRegistry {
   >();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
   private threadArchiveSweeper?: ThreadArchiveSweeper;
+  /** In-memory, per-thread approvals from a reviewed maintenance run to
+   * snapshot past the normal size limit. Never persisted: a restart drops
+   * them, and the cleanup retry then keeps the checkout. */
+  private readonly reviewedSnapshotLimits = new Map<string, { bytes: number; expiresAt: number }>();
   private readonly threadArchiveSweepStatusListeners = new Set<(status: DesktopThreadArchiveSweepStatus) => void>();
   private readonly readThreadArchivePolicy: () => DesktopThreadArchivePolicy;
   private readonly runtimeInstanceId: string;
@@ -16685,6 +16692,82 @@ export class DesktopBackendRegistry {
     return () => { this.threadArchiveSweepStatusListeners.delete(listener); };
   }
 
+  /** Every non-archived thread as a housekeeping candidate. Complete
+   * provider reads without navigation projection or display persistence, so
+   * an idle sweep makes no SQLite commits. */
+  async listAutoArchiveCandidates(): Promise<ThreadArchiveCandidate[]> {
+    await this.subAgentStartupReconciliation;
+    if (this.closed || this.isBootstrapModeFn()) return [];
+    // Use complete provider reads without navigation projection or display
+    // persistence. An idle hourly sweep must make no SQLite commits.
+    const codexThreads = this.isCodexBootstrapDeferredFn() || !this.codexClient.listNativeSubAgentThreads ? [] : (await Promise.all([
+      this.codexClient.listThreads({
+        archived: false, enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true,
+      }, { callerReason: "auto-archive" }),
+      this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
+    ])).flat();
+    const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
+    // One read for every thread a PR watch will wake.
+    const watchedThreadKeys = new Set(
+      (await this.overlayStore.listAllActivePrStatusWatches()).map((watch) =>
+        buildThreadIdentityKey(watch.backend, watch.threadId)),
+    );
+    const candidates: ThreadArchiveCandidate[] = [];
+    // A failed read keeps only the threads it covers, never the whole list.
+    const unreadable = (error: unknown, backend: AppServerBackendKind, threadId?: string) => {
+      backendRegistryLog.warn("auto-archive candidate state read failed; the thread is kept", {
+        backend, threadId, error: error instanceof Error ? error.message : String(error),
+      });
+    };
+    for (const backend of new Set(threads.map((thread) => thread.source))) {
+      const backendThreads = threads.filter((thread) => thread.source === backend);
+      let overlays: Record<string, ThreadOverlayState | undefined> | undefined;
+      try {
+        overlays = await this.overlayStore.getThreadOverlayStates({
+          backend, threadIds: backendThreads.map((thread) => thread.id),
+        });
+      } catch (error) { unreadable(error, backend); }
+      for (const thread of backendThreads) {
+        const activePrWatch = watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
+        if (!overlays) {
+          candidates.push({ thread, activePrWatch, unreadable: true });
+          continue;
+        }
+        try {
+          candidates.push({
+            thread, overlay: overlays[thread.id],
+            activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
+            activePrWatch,
+          });
+        } catch (error) {
+          unreadable(error, backend, thread.id);
+          candidates.push({ thread, overlay: overlays[thread.id], activePrWatch, unreadable: true });
+        }
+      }
+    }
+    return candidates;
+  }
+
+  /** The project a candidate counts toward: its main checkout. */
+  async resolveAutoArchiveProject({ thread, overlay }: ThreadArchiveCandidate): Promise<string | undefined> {
+    const directory = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []][0];
+    // Scratch projects share one quota per projects root, matching their
+    // single Workspaces row. Each would otherwise be its own project and
+    // never reach the per-project limit.
+    const descriptor = directory ? classifyDirectory(directory) : undefined;
+    if (descriptor?.kind === "workspace") return descriptor.key;
+    const cwd = directory?.worktreePath ?? directory?.path;
+    if (!cwd) return thread.projectKey;
+    try {
+      const { stdout } = await runGitCommand(cwd, ["worktree", "list", "--porcelain"], { timeout: 10_000 });
+      return stdout.split("\n").find((line) => line.startsWith("worktree "))?.slice(9);
+    } catch {
+      // The managed checkout may already be gone; its linked repository
+      // still identifies the project without making each old worktree a quota.
+      return directory?.path ?? thread.projectKey;
+    }
+  }
+
   private getThreadArchiveSweeper(): ThreadArchiveSweeper {
     return this.threadArchiveSweeper ??= new ThreadArchiveSweeper({
       getPolicy: () => this.readThreadArchivePolicy(),
@@ -16713,76 +16796,8 @@ export class DesktopBackendRegistry {
         }
       },
       cleanupRetention: async (onFailure) => await this.sweepArchivedThreadRetention(onFailure),
-      resolveProject: async ({ thread, overlay }) => {
-        const directory = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []][0];
-        // Scratch projects share one quota per projects root, matching their
-        // single Workspaces row. Each would otherwise be its own project and
-        // never reach the per-project limit.
-        const descriptor = directory ? classifyDirectory(directory) : undefined;
-        if (descriptor?.kind === "workspace") return descriptor.key;
-        const cwd = directory?.worktreePath ?? directory?.path;
-        if (!cwd) return thread.projectKey;
-        try {
-          const { stdout } = await runGitCommand(cwd, ["worktree", "list", "--porcelain"], { timeout: 10_000 });
-          return stdout.split("\n").find((line) => line.startsWith("worktree "))?.slice(9);
-        } catch {
-          // The managed checkout may already be gone; its linked repository
-          // still identifies the project without making each old worktree a quota.
-          return directory?.path ?? thread.projectKey;
-        }
-      },
-      listCandidates: async () => {
-        await this.subAgentStartupReconciliation;
-        if (this.closed || this.isBootstrapModeFn()) return [];
-        // Use complete provider reads without navigation projection or display
-        // persistence. An idle hourly sweep must make no SQLite commits.
-        const codexThreads = this.isCodexBootstrapDeferredFn() || !this.codexClient.listNativeSubAgentThreads ? [] : (await Promise.all([
-          this.codexClient.listThreads({
-            archived: false, enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true,
-          }, { callerReason: "auto-archive" }),
-          this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
-        ])).flat();
-        const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
-        // One read for every thread a PR watch will wake.
-        const watchedThreadKeys = new Set(
-          (await this.overlayStore.listAllActivePrStatusWatches()).map((watch) =>
-            buildThreadIdentityKey(watch.backend, watch.threadId)),
-        );
-        const candidates: ThreadArchiveCandidate[] = [];
-        // A failed read keeps only the threads it covers, never the whole list.
-        const unreadable = (error: unknown, backend: AppServerBackendKind, threadId?: string) => {
-          backendRegistryLog.warn("auto-archive candidate state read failed; the thread is kept", {
-            backend, threadId, error: error instanceof Error ? error.message : String(error),
-          });
-        };
-        for (const backend of new Set(threads.map((thread) => thread.source))) {
-          const backendThreads = threads.filter((thread) => thread.source === backend);
-          let overlays: Record<string, ThreadOverlayState | undefined> | undefined;
-          try {
-            overlays = await this.overlayStore.getThreadOverlayStates({
-              backend, threadIds: backendThreads.map((thread) => thread.id),
-            });
-          } catch (error) { unreadable(error, backend); }
-          for (const thread of backendThreads) {
-            const activePrWatch = watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
-            if (!overlays) {
-              candidates.push({ thread, activePrWatch, unreadable: true });
-              continue;
-            }
-            try {
-              candidates.push({
-                thread, overlay: overlays[thread.id],
-                activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
-                activePrWatch,
-              });
-            } catch (error) {
-              unreadable(error, backend, thread.id);
-              candidates.push({ thread, overlay: overlays[thread.id], activePrWatch, unreadable: true });
-            }
-          }
-        }
-        return candidates;
-      },
+      resolveProject: async (candidate) => await this.resolveAutoArchiveProject(candidate),
+      listCandidates: async () => await this.listAutoArchiveCandidates(),
       refreshCandidate: async (candidate) => await this.refreshAutoArchiveCandidate(candidate),
       isBusy: (candidate) => this.autoArchiveCandidateIsBusy(candidate),
       canArchive: async (candidates) => await this.autoArchiveCandidatesAreEligible(candidates),
@@ -39444,21 +39459,129 @@ export class DesktopBackendRegistry {
    * admission and the ordinary snapshot/restore persistence boundary. */
   repairArchivedThreadWorktrees(options: {
     dryRun?: boolean;
+    /** Limit removal to these reviewed checkouts. Empty folders only when asked. */
+    select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
   } = {}): Promise<ArchivedWorktreeRepairReport> {
     // A manual sweep joins startup repair rather than queuing duplicate removals.
-    // Read-only audits never join a mutating pass.
+    // Read-only audits never join a mutating pass. A reviewed selection waits
+    // for a running pass, then runs on its own: joining would report on
+    // checkouts nobody selected.
     if (options.dryRun) return this.runArchivedThreadWorktreeRepair(options);
-    if (this.archivedWorktreeRepair) return this.archivedWorktreeRepair;
-    const running = this.runArchivedThreadWorktreeRepair(options).finally(() => {
-      this.archivedWorktreeRepair = undefined;
+    if (this.archivedWorktreeRepair && !options.select) return this.archivedWorktreeRepair;
+    const previous = this.archivedWorktreeRepair?.catch(() => undefined);
+    const running = (async () => {
+      await previous;
+      return await this.runArchivedThreadWorktreeRepair(options);
+    })().finally(() => {
+      if (this.archivedWorktreeRepair === running) this.archivedWorktreeRepair = undefined;
     });
     this.archivedWorktreeRepair = running;
     return running;
   }
 
+  /** Read-only list of archived threads' checkouts still on disk, for review. */
+  async auditArchivedCheckouts(): Promise<{
+    candidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string }>;
+    kept: Record<string, number>;
+    emptyFolders: number;
+  }> {
+    const report = await this.repairArchivedThreadWorktrees({ dryRun: true });
+    return {
+      candidates: report.candidates,
+      kept: archivedWorktreeKeptReasons(report),
+      emptyFolders: report.emptyContainerCandidates.length,
+    };
+  }
+
+  /** Remove only reviewed archived checkouts. Each removal still takes fresh
+   * ownership admission and snapshots changes, exactly like the repair pass. */
+  async removeArchivedCheckouts(selection: { worktreePaths: string[]; emptyFolders: boolean }): Promise<{
+    removed: { worktreePath: string }[];
+    kept: { worktreePath: string; reason: string }[];
+    failed: { worktreePath: string; message: string }[];
+    emptyFoldersRemoved: number;
+    emptyFoldersFailed: { worktreePath: string; message: string }[];
+  }> {
+    const selected = new Set(selection.worktreePaths.map(normalizeWorktreePathForComparison));
+    const report = await this.repairArchivedThreadWorktrees({
+      select: { worktreePaths: selected, emptyFolders: selection.emptyFolders },
+    });
+    const result = {
+      removed: [] as { worktreePath: string }[],
+      kept: [] as { worktreePath: string; reason: string }[],
+      failed: [] as { worktreePath: string; message: string }[],
+      emptyFoldersRemoved: 0,
+      emptyFoldersFailed: [] as { worktreePath: string; message: string }[],
+    };
+    const seen = new Set<string>();
+    for (const item of report.cleanup) {
+      if (!item.worktreePath) continue;
+      const key = normalizeWorktreePathForComparison(item.worktreePath);
+      if (!selected.has(key)) continue;
+      seen.add(key);
+      if (item.removedWorktree) result.removed.push({ worktreePath: item.worktreePath });
+      else if (item.error) result.failed.push({ worktreePath: item.worktreePath, message: item.error });
+      else result.kept.push({ worktreePath: item.worktreePath, reason: item.skippedReason ?? "Kept" });
+    }
+    for (const detail of report.protectedWorktreeDetails) {
+      const key = normalizeWorktreePathForComparison(detail.worktreePath);
+      if (!selected.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      result.kept.push({ worktreePath: detail.worktreePath,
+        reason: detail.externallyManaged ? "Externally managed" : "Used by an active thread" });
+    }
+    for (const key of selected) {
+      if (!seen.has(key)) result.kept.push({ worktreePath: key, reason: "No longer an archived checkout" });
+    }
+    if (selection.emptyFolders) {
+      for (const item of report.containerCleanup) {
+        if (item.removed) result.emptyFoldersRemoved += 1;
+        else if (item.error) result.emptyFoldersFailed.push({ worktreePath: item.worktreePath, message: item.error });
+      }
+    }
+    return result;
+  }
+
+  /** Approve one thread's next archive to snapshot up to `bytes`. Expires on
+   * its own so a stale approval never applies to a later archive. */
+  approveReviewedSnapshotLimit(backend: AppServerBackendKind, threadId: string, bytes: number): void {
+    this.reviewedSnapshotLimits.set(buildThreadIdentityKey(backend, threadId), {
+      bytes, expiresAt: Date.now() + REVIEWED_SNAPSHOT_LIMIT_TTL_MS,
+    });
+  }
+
+  clearReviewedSnapshotLimit(backend: AppServerBackendKind, threadId: string): void {
+    this.reviewedSnapshotLimits.delete(buildThreadIdentityKey(backend, threadId));
+  }
+
+  private reviewedSnapshotLimitFor(backend: AppServerBackendKind, threadId: string): number | undefined {
+    const key = buildThreadIdentityKey(backend, threadId);
+    const approval = this.reviewedSnapshotLimits.get(key);
+    if (!approval) return undefined;
+    if (approval.expiresAt < Date.now()) {
+      this.reviewedSnapshotLimits.delete(key);
+      return undefined;
+    }
+    return approval.bytes;
+  }
+
+  /** Housekeeping hooks shared with the reviewed Thread maintenance run. */
+  getThreadArchivePolicy(): DesktopThreadArchivePolicy {
+    return this.readThreadArchivePolicy();
+  }
+
+  refreshArchiveCandidate(candidate: ThreadArchiveCandidate): Promise<ThreadArchiveCandidate> {
+    return this.refreshAutoArchiveCandidate(candidate);
+  }
+
+  isArchiveCandidateBusy(candidate: ThreadArchiveCandidate): boolean {
+    return this.autoArchiveCandidateIsBusy(candidate);
+  }
+
   private async runArchivedThreadWorktreeRepair(options: {
     dryRun?: boolean;
+    select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
   } = {}): Promise<ArchivedWorktreeRepairReport> {
     await this.subAgentStartupReconciliation;
@@ -39576,6 +39699,12 @@ export class DesktopBackendRegistry {
       return { backend: "codex", threadId: "", archivedAt: Date.now(), cleanup: [] };
     });
     if (options.dryRun) return report;
+    if (options.select) {
+      const { worktreePaths, emptyFolders } = options.select;
+      report.candidates = report.candidates.filter((candidate) =>
+        worktreePaths.has(normalizeWorktreePathForComparison(candidate.worktreePath)));
+      if (!emptyFolders) report.emptyContainerCandidates = [];
+    }
     const total = report.candidates.length + report.emptyContainerCandidates.length;
     options.onProgress?.(0, total, report);
     let completed = 0;
@@ -40779,6 +40908,7 @@ export class DesktopBackendRegistry {
           threadId: params.thread.id,
           worktreePath: candidate.worktreePath,
           repositoryPath: candidate.repositoryPath,
+          maxSnapshotBytes: this.reviewedSnapshotLimitFor(params.backend, params.thread.id),
           beforeRemove: params.context && this.codexClient.listArchiveCleanupThreadsPage ? async () => {
             this.archiveWorktreeRemovalAdmissions.add(admission);
             this.archiveWorkspaceOwnership.beginAdmission(scope);

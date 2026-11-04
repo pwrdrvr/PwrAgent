@@ -474,6 +474,8 @@ import {
 } from "../../shared/ipc";
 import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
+import { registerThreadMaintenanceIpc, unregisterThreadMaintenanceIpc } from "./thread-maintenance-ipc";
+import { disposeThreadMaintenanceService } from "../thread-maintenance-runtime";
 import {
   federationWindowTargetForWebContents,
   isFederationWindowWebContents,
@@ -11044,6 +11046,7 @@ export function registerAppServerIpcHandlers(): void {
         }
       }
     });
+  registerThreadMaintenanceIpc();
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
   ipcMain.handle(
     APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
@@ -12354,6 +12357,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeCodexRestartStatus = undefined;
   unsubscribeThreadArchiveSweepStatus?.();
   unsubscribeThreadArchiveSweepStatus = undefined;
+  unregisterThreadMaintenanceIpc();
+  disposeThreadMaintenanceService();
   ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);

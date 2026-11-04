@@ -29,6 +29,8 @@ type ArchiveWorktreeParams = {
   worktreePath: string;
   repositoryPath?: string;
   now?: number;
+  /** One reviewed approval to snapshot past the service limit. Never lower. */
+  maxSnapshotBytes?: number;
   /** Returns a synchronous admission check for the actual removal dispatch. */
   beforeRemove?: () => Promise<() => void>;
 };
@@ -326,6 +328,7 @@ export class WorktreeArchiveService {
       threadId: params.threadId,
       worktree,
       worktreePath,
+      maxSnapshotBytes: params.maxSnapshotBytes,
     });
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
@@ -582,6 +585,7 @@ export class WorktreeArchiveService {
   }
 
   private async createSnapshotCommit(params: {
+    maxSnapshotBytes?: number;
     backend: AppServerBackendKind;
     threadId: string;
     worktree: WorktreeInfo;
@@ -602,6 +606,7 @@ export class WorktreeArchiveService {
       if (files.size > MAX_WORKTREE_SNAPSHOT_FILES) {
         throw new Error(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
       }
+      const limit = Math.max(this.maxSnapshotBytes, params.maxSnapshotBytes ?? 0);
       let bytes = 0;
       for (const file of files) {
         try {
@@ -611,8 +616,8 @@ export class WorktreeArchiveService {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
-        if (bytes > this.maxSnapshotBytes) {
-          throw new Error(`Snapshot size limit exceeded (${this.maxSnapshotBytes} bytes); the worktree was kept.`);
+        if (bytes > limit) {
+          throw new Error(`Snapshot size limit exceeded (${limit} bytes); the worktree was kept.`);
         }
       }
       await this.runGit(params.worktreePath, ["add", "-A", "--", "."], { env });

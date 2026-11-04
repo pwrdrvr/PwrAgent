@@ -249,6 +249,10 @@ import type {
   CodexAppServerRestartResult,
   CodexAppServerRestartStatus,
   DesktopThreadArchiveSweepStatus,
+  ThreadMaintenanceApplyRequest,
+  ThreadMaintenanceRules,
+  ThreadMaintenanceRun,
+  ThreadMaintenanceScan,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
@@ -824,6 +828,12 @@ import {
   APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
   APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
   THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
+  APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL,
+  APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL,
+  APP_SERVER_GET_THREAD_MAINTENANCE_RUN_CHANNEL,
+  APP_SERVER_STOP_THREAD_MAINTENANCE_CHANNEL,
+  THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL,
+  WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL,
@@ -1861,6 +1871,17 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL),
   runThreadArchiveSweep: async (): Promise<DesktopThreadArchiveSweepStatus> =>
     await ipcRenderer.invoke(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL),
+  scanThreadMaintenance: async (request?: {
+    rules?: Partial<ThreadMaintenanceRules>;
+    projectKey?: string;
+  }): Promise<ThreadMaintenanceScan> =>
+    await ipcRenderer.invoke(APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL, request),
+  applyThreadMaintenance: async (request: ThreadMaintenanceApplyRequest): Promise<ThreadMaintenanceRun> =>
+    await ipcRenderer.invoke(APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL, request),
+  getThreadMaintenanceRun: async (): Promise<ThreadMaintenanceRun | null> =>
+    await ipcRenderer.invoke(APP_SERVER_GET_THREAD_MAINTENANCE_RUN_CHANNEL),
+  stopThreadMaintenance: async (): Promise<void> =>
+    await ipcRenderer.invoke(APP_SERVER_STOP_THREAD_MAINTENANCE_CHANNEL),
   listBackends: async (
     request?: ListBackendsRequest
   ): Promise<ListBackendsResponse> =>
@@ -3335,6 +3356,30 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  onThreadMaintenanceRunChanged: (
+    callback: (run: ThreadMaintenanceRun) => void,
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, run: ThreadMaintenanceRun) => callback(run);
+    ipcRenderer.on(THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  onOpenThreadMaintenanceRequested: (
+    callback: (request: { projectKey?: string }) => void,
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, request: unknown) => {
+      const projectKey = request && typeof request === "object"
+        && typeof (request as { projectKey?: unknown }).projectKey === "string"
+        ? (request as { projectKey: string }).projectKey
+        : undefined;
+      callback(projectKey ? { projectKey } : {});
+    };
+    ipcRenderer.on(WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL, listener);
     };
   },
   onThreadArchiveSweepStatusChanged: (
