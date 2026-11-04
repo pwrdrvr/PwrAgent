@@ -7,7 +7,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("Windows finishes session callbacks before will-quit after inspector detachment", async () => {
+test("Windows retains session callbacks and the inspector until preparation completes", async () => {
   test.skip(process.platform !== "win32", "Windows native storage shutdown");
   const app = await launchElectronApp({
     fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
@@ -20,14 +20,20 @@ test("Windows finishes session callbacks before will-quit after inspector detach
     receivedRequest();
   });
   const prefix = `[e2e-session-quit:${randomUUID()}]`;
-  let acceptedQuit: () => void = () => undefined;
-  const quitAccepted = new Promise<void>((resolve) => { acceptedQuit = resolve; });
+  const stages: string[] = [];
   const child = app.electronApp.process();
   let buffered = "";
   const onStderr = (chunk: Buffer | string) => {
     buffered += chunk.toString();
-    if (buffered.includes(prefix)) acceptedQuit();
-    buffered = buffered.slice(-prefix.length);
+    for (;;) {
+      const end = buffered.indexOf("\n");
+      if (end < 0) break;
+      const line = buffered.slice(0, end);
+      const start = line.indexOf(prefix);
+      if (start >= 0) stages.push(line.slice(start + prefix.length).trim());
+      buffered = buffered.slice(end + 1);
+    }
+    buffered = buffered.slice(-16_384);
   };
   child.stderr?.on("data", onStderr);
   try {
@@ -41,28 +47,31 @@ test("Windows finishes session callbacks before will-quit after inspector detach
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected the loopback server address");
     await app.electronApp.evaluate(({ app, net, session }, { prefix, url }) => {
-      let willQuit = false;
-      app.once("will-quit", () => { willQuit = true; });
-      app.on("before-quit", (event) => {
-        // Production's listener runs first. Wait for its resource disposal
-        // to finish and allow quit before releasing the controlled callback.
-        if (!event.defaultPrevented) process.stderr.write(`${prefix}\n`);
-      });
+      app.on("before-quit", () => process.stderr.write(`${prefix}before-quit\n`));
+      app.once("will-quit", () => process.stderr.write(`${prefix}will-quit\n`));
       const ownedSession = session.defaultSession;
       const clearData = ownedSession.clearData.bind(ownedSession);
       ownedSession.clearData = async (options) => {
         await (await net.fetch(url)).arrayBuffer();
         await clearData(options);
-        if (willQuit) throw new Error("Entered will-quit before the owned session callback completed");
+        process.stderr.write(`${prefix}callback-complete\n`);
       };
     }, { prefix, url: `http://127.0.0.1:${address.port}/session-drain` });
     const closing = app.closeApplication();
     await Promise.race([
-      Promise.all([requestReceived, quitAccepted]),
+      requestReceived,
       closing.then(() => { throw new Error("Closed before the controlled session callback was released"); }),
     ]);
+    // The inspector and renderer are owned until the controlled callback
+    // completes. Waiting for quit here would make the test hold readiness
+    // until shutdown, while shutdown correctly waits for readiness.
+    expect(await app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBeGreaterThan(0);
+    expect(stages).toEqual([]);
     response!.end("released");
     await closing;
+    expect(stages[0]).toBe("callback-complete");
+    expect(stages).toContain("before-quit");
+    expect(stages.at(-1)).toBe("will-quit");
   } finally {
     response?.end();
     try {
