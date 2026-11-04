@@ -47,6 +47,9 @@ const scenario = fc.record({
 }).filter((value) => value.backend === "codex" || value.route === "binding");
 
 async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "actor" | "policy"): Promise<void> {
+  // An unsolicited replacement turn has no messaging origin on a Default
+  // Agent route. A persistent binding also receives that replacement's activity.
+  const replacementOwnsActivity = input.lifecycle === "replacement" && input.route === "binding";
   let now = 1_000;
   const receivedAt = now;
   const db = openInMemoryStateDb();
@@ -192,7 +195,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
       }
       const activityCount = states.length;
       const requestCount = requests.length;
-      expect(states.at(-1)).toBe(input.lifecycle === "replacement" ? "active" : "idle");
+      expect(states.at(-1)).toBe(replacementOwnsActivity ? "active" : "idle");
       response.resolve();
       await handling;
       // The provider lifecycle owns the state now. Completing an earlier
@@ -212,7 +215,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
   }
   // Reference lifecycle: a started turn keeps activity; a failed or queued
   // attempt on this idle thread must not leave a preparation lease running.
-  expect(states.at(-1)).toBe(input.lifecycle && input.lifecycle !== "replacement"
+  expect(states.at(-1)).toBe(input.lifecycle && !replacementOwnsActivity
     ? "idle" : input.outcome === "started" ? "active" : "idle");
   if (!input.lifecycle && input.outcome === "started" && input.requestFails) expect(requests).toHaveLength(2);
 }
