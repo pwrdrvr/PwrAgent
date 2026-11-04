@@ -39005,6 +39005,7 @@ export class DesktopBackendRegistry {
     const raw = await this.readPacedArchiveCleanupInventory({ ...params, identityOnly: true, targetThread: undefined });
     const target = raw.thread ?? (params.codexRolloutMissing ? raw.activeTarget : undefined);
     if (!target) return raw;
+    const startedAt = Date.now();
     const directoryObservations = new Map<string, Promise<ThreadDirectoryEnrichment>>();
     const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
     const checkpoint = async () => { await params.context?.checkpoint(); };
@@ -39077,6 +39078,11 @@ export class DesktopBackendRegistry {
       }
     }
     params.context?.assertCurrent();
+    backendRegistryLog.info("archive cleanup candidates enriched", {
+      backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId,
+      durationMs: Date.now() - startedAt, candidateRoots: roots.length,
+      directoryObservations: directoryObservations.size, workspaceObservations: workspaceObservations.size,
+    });
     return this.selectArchiveCleanupInventory({ ...raw, activeThreads, archivedThreads, worktreeEvidence }, { ...params, targetThread: undefined });
   }
 

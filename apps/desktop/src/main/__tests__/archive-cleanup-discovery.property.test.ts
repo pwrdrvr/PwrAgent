@@ -8,6 +8,7 @@ import path from "node:path";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { resolveWorktreeRepositoryDirectory } from "../app-server/thread-directory-enricher";
 import type { AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState } from "@pwragent/shared";
+import type { ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 import type { ArchiveCleanupContext } from "../app-server/archive-cleanup-queue";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexAppServerClient } from "../codex-app-server/client";
@@ -31,8 +32,9 @@ vi.mock("node:fs/promises", async (original) => {
 type Row = { id: string; cwd: string };
 type Noise = { archived: boolean; claude: boolean; cwd: number };
 type CleanupBoundary = {
+  enqueueArchiveCleanup(intent: ArchiveCleanupIntent): Promise<{ cleanup: Array<{ removedWorktree: boolean }> }>;
   completeArchivedThreadCleanup(params: { backend: "codex"; threadId: string; archivedAt: number;
-    codexRolloutMissing: boolean; messagingCleanup: {}; context: ArchiveCleanupContext }): Promise<{ cleanup: Array<{ removedWorktree: boolean }> }>;
+    codexRolloutMissing: boolean; messagingCleanup: { error?: string }; context: ArchiveCleanupContext }): Promise<{ cleanup: Array<{ removedWorktree: boolean }> }>;
   findThreadForArchiveCleanup(params: { backend: "codex"; threadId: string; context: ArchiveCleanupContext; reuseInventory: boolean }): Promise<{ thread: AppServerThreadSummary }>;
   claudeBackend: { listThreads(params: { archived: boolean }): Promise<AppServerThreadSummary[]> };
 };
@@ -303,4 +305,84 @@ it("uses real Git and canonical paths as the snapshot/removal oracle at the chan
       ["external-alias", "keep"], ["primary", "keep"], ["locked", "keep"],
     ] });
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// Inject only the queue's scheduling effect. Registry reference tracking,
+// dispatch, provider/overlay reads, lifecycle fences and admission remain real.
+// The production pacer's serialization/cancellation has its own queue suite.
+function scheduledQueue(context: ArchiveCleanupContext) {
+  const jobs = new Map<string, { promise: Promise<unknown>; cancelled: boolean }>();
+  return {
+    get availableSlots() { return 256 - jobs.size; },
+    pending: (key: string) => jobs.get(key)?.promise,
+    pendingKeys: () => [...jobs.keys()],
+    isCancelled: (key: string) => jobs.get(key)?.cancelled === true,
+    enqueue(key: string, work: (context: ArchiveCleanupContext) => Promise<unknown>) {
+      if (jobs.has(key)) return jobs.get(key)!.promise;
+      const job = { promise: Promise.resolve() as Promise<unknown>, cancelled: false };
+      job.promise = Promise.resolve().then(async () => await work({ ...context, batch: {}, assertCurrent: () => {
+        if (job.cancelled) throw new Error("Cancelled fixture cleanup");
+      } })).finally(() => { jobs.delete(key); });
+      jobs.set(key, job);
+      return job.promise;
+    },
+    cancel(key: string) { const job = jobs.get(key); if (job) job.cancelled = true; },
+    async cancelAndWait(key: string) { this.cancel(key); await jobs.get(key)?.promise.catch(() => {}); },
+    async close() { await Promise.all([...jobs.keys()].map(async (key) => { await this.cancelAndWait(key); })); },
+  };
+}
+
+it("automatically completes once after the last owner releases while unrelated events continue", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }),
+    fc.array(fc.record({ owner: fc.integer({ min: 0, max: 3 }), attached: fc.boolean(), duplicate: fc.boolean() }), { maxLength: 12 }),
+    fc.scheduler(), async (count, events, scheduler) => {
+      const run = await fixture([]);
+      const owners = new Set(Array.from({ length: count }, (_, i) => i));
+      run.rows.active = [...owners].map((i) => ({ id: `owner-${i}`, cwd: "/fixture/candidate-0" }));
+      const context: ArchiveCleanupContext = { ...run.context, checkpoint: async () => {
+        await run.registry.publishLocalEvent({ backend: "codex", notification: { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["unrelated"] } } });
+        await scheduler.schedule(Promise.resolve(), "paced cleanup with unrelated activity");
+      } };
+      Object.assign(run.registry, { archiveCleanupQueue: scheduledQueue(context) });
+      let completions = 0;
+      let finish!: () => void;
+      const completed = new Promise<void>((resolve) => { finish = resolve; });
+      run.registry.onEvent((event) => {
+        if (event.notification.method === "thread/archiveCleanup/completed"
+          && event.notification.params.cleanup.some((item) => item.removedWorktree)) { completions += 1; finish(); }
+      });
+      const notify = async (owner: number) => {
+        await run.registry.publishLocalEvent({ backend: "codex", notification: { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: [`owner-${owner}`] } } });
+      };
+      const writeOwner = (owner: number, attached: boolean) => {
+        if (attached) owners.add(owner); else owners.delete(owner);
+        run.rows.active = [...owners].map((i) => ({ id: `owner-${i}`, cwd: "/fixture/candidate-0" }));
+        // A released owner still exists elsewhere; its current cwd, rather
+        // than an event's historical payload, is the ownership oracle.
+        for (let i = 0; i < count; i++) if (!owners.has(i)) run.rows.active.push({ id: `owner-${i}`, cwd: `/fixture/released-${i}` });
+      };
+      try {
+        await scheduler.waitFor(run.boundary.enqueueArchiveCleanup({ backend: "codex", threadId: "target", archivedAt: 1, codexRolloutMissing: false, messagingCleanup: {} }));
+        expect(run.removed).toBe(0);
+        for (const event of events) {
+          if (run.removed) break;
+          const owner = event.owner % count;
+          writeOwner(owner, event.attached);
+          await scheduler.waitFor(notify(owner));
+          if (event.duplicate) await scheduler.waitFor(notify(owner));
+          await scheduler.waitAll();
+          if (owners.size) expect(run.removed).toBe(0);
+        }
+        if (!run.removed) {
+          for (let i = 0; i < count; i++) {
+            writeOwner(i, false);
+            await scheduler.waitFor(notify(i));
+          }
+          await scheduler.waitFor(completed);
+        }
+        await scheduler.waitAll();
+        expect(run.removed).toBe(1);
+        expect(completions).toBe(1);
+      } finally { await run.registry.close(); }
+    }), { numRuns: 25 });
 });
