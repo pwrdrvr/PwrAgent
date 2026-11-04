@@ -146,6 +146,12 @@ describe("to-do dispatch target", () => {
     expect(onRun).not.toHaveBeenCalled();
   });
 
+  it("disables a send to the card's own thread when it cannot be done here", () => {
+    const target = { backend: "claude" as const, threadId: "thread-a" };
+    setup({ todo: { ...card, action: { type: "send_message", prompt: "Follow up", target } } });
+    expect((screen.getByRole("button", { name: "Send request" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("shows the agent's proposed destination before sending", async () => {
     const target = { backend: "codex" as const, threadId: "owner", title: "Existing PR owner" };
     const { onRun } = setup({ todo: { ...card, action: { type: "send_message", prompt: "Refresh the PR", target } } });

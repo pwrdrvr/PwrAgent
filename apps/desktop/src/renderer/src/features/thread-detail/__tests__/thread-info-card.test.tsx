@@ -109,6 +109,7 @@ describe("thread info helpers", () => {
       executionMode: "full-access", ownerOffline: false,
     });
     expect(threadInfoFacts(summary({ hasActiveSubAgent: true })).subAgentWorking).toBe(true);
+    expect(threadInfoFacts(summary({ hasBackgroundTasks: true })).running).toBe(true);
     expect(threadInfoFacts(summary({ federation: {
       ref: { backend: "codex", threadId: THREAD_ID, target: { scope: "remote", instanceId: "lab" } },
       instanceLabel: "lab-mini / default", peerStatus: "disconnected",
@@ -137,6 +138,18 @@ describe("thread info helpers", () => {
     await readThreadInfoCost(api, target, undefined, 20_000);
     expect(api.readThreadFamilyPricing).toHaveBeenCalledTimes(1);
     await readThreadInfoCost(api, target, undefined, 40_000);
+    expect(api.readThreadFamilyPricing).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a newer cost read when an older one fails", async () => {
+    const target = { backend: "codex" as const, threadId: THREAD_ID };
+    let fail: (error: Error) => void = () => {};
+    api.readThreadFamilyPricing.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const older = readThreadInfoCost(api, target, undefined, 1_000);
+    const newer = readThreadInfoCost(api, target, undefined, 40_000);
+    fail(new Error("offline"));
+    expect(await older).toEqual({ state: "unavailable" });
+    expect(await readThreadInfoCost(api, target, undefined, 41_000)).toBe(await newer);
     expect(api.readThreadFamilyPricing).toHaveBeenCalledTimes(2);
   });
 });
@@ -200,5 +213,27 @@ describe("thread chip hover card", () => {
     expect(card).toHaveTextContent("not found");
     expect(card).toHaveTextContent("No connected machine reports this thread.");
     expect(card).not.toHaveTextContent("Provider");
+  });
+
+  it("does not call a thread missing when the read fails", async () => {
+    api.getNavigationQueryPage.mockRejectedValueOnce(new Error("offline"));
+    renderChip({}, []);
+    const card = await openCard();
+
+    expect(card).not.toHaveTextContent("not found");
+    expect(card).toHaveTextContent("Provider");
+  });
+
+  it("opens no card and reads nothing when a click focuses the chip", async () => {
+    renderChip({}, [summary()]);
+    const chip = screen.getByRole("button", { name: /^Open thread/ });
+    await act(async () => {
+      fireEvent.pointerDown(chip);
+      fireEvent.focus(chip);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(api.readThreadFamilyPricing).not.toHaveBeenCalled();
   });
 });

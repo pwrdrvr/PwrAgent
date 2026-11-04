@@ -52,7 +52,9 @@ export function threadInfoFacts(row: NavigationThreadSummary | NavigationRow): T
     ...(row.createdAt ? { createdAt: row.createdAt } : {}),
     ...(row.updatedAt ? { updatedAt: row.updatedAt } : {}),
     ...(row.archivedAt ? { archivedAt: row.archivedAt } : {}),
-    running: row.threadStatus === "active" || row.hasActiveSubAgent === true,
+    running: row.threadStatus === "active"
+      || row.hasActiveSubAgent === true
+      || row.hasBackgroundTasks === true,
     subAgentWorking: row.hasActiveSubAgent === true,
     ...(row.gitBranch ? { gitBranch: row.gitBranch } : {}),
     ...(row.executionMode ? { executionMode: row.executionMode } : {}),
@@ -129,11 +131,16 @@ export function readThreadInfoCost(
   const key = `${owner?.instanceId ?? "local"}:${target.backend}:${target.threadId}`;
   const cached = costCache.get(key);
   if (cached && now - cached.at < COST_TTL_MS) return cached.cost;
-  const cost = read({ backend: target.backend, threadId: target.threadId, ...(owner ? { federationTarget: owner } : {}) })
-    .then(threadInfoCost, (): ThreadInfoCost => {
-      costCache.delete(key);
-      return { state: "unavailable" };
-    });
+  for (const [entryKey, entry] of costCache) {
+    if (now - entry.at >= COST_TTL_MS) costCache.delete(entryKey);
+  }
+  const cost: Promise<ThreadInfoCost> = read({
+    backend: target.backend, threadId: target.threadId, ...(owner ? { federationTarget: owner } : {}),
+  }).then(threadInfoCost, (): ThreadInfoCost => {
+    // A newer read may have replaced this one; keep that entry.
+    if (costCache.get(key)?.cost === cost) costCache.delete(key);
+    return { state: "unavailable" };
+  });
   costCache.set(key, { at: now, cost });
   return cost;
 }

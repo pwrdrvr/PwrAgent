@@ -48,6 +48,9 @@ export function ThreadChip(props: ThreadChipProps) {
   const threadInfo = useThreadInfo(link);
   const card = <ThreadInfoCard info={threadInfo.info} label={label} link={link} />;
   const latestCardRef = useRef(card);
+  // A click focuses the chip on its way to opening the thread; only keyboard
+  // focus opens the card, so a click starts no reads.
+  const pointerFocusRef = useRef(false);
   latestCardRef.current = card;
   const tooltipVisible = tooltipController.visible;
   const updateTooltip = tooltipController.update;
@@ -124,6 +127,10 @@ export function ThreadChip(props: ThreadChipProps) {
           }}
           onDragStart={(event) => event.preventDefault()}
           onFocus={(event) => {
+            if (pointerFocusRef.current) {
+              pointerFocusRef.current = false;
+              return;
+            }
             threadInfo.load();
             tooltipController.show(event.currentTarget, latestCardRef.current);
           }}
@@ -140,6 +147,8 @@ export function ThreadChip(props: ThreadChipProps) {
             });
           }}
           onMouseLeave={tooltipController.hide}
+          onPointerDown={() => { pointerFocusRef.current = true; }}
+          onPointerUp={() => { pointerFocusRef.current = false; }}
         >
           <ThreadIcon className="thread-chip__icon" size={12} />
           <span className="thread-chip__label">#{label.replace(/^#/, "")}</span>

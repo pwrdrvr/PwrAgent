@@ -884,7 +884,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           ) : (
             <TodoSplitButton
               label={sendingMessage ? "Send request" : todo.error ? "Retry" : "Start thread"}
-              disabled={sendingMessage && (!messageTarget || !canSendMessage)}
+              // Without Do it here, a send to the card's own thread is refused.
+              disabled={sendingMessage && (!messageTarget || !canSendMessage || targetsOwnThread)}
               Icon={HandoffIcon}
               menuLabel="Handoff options"
               onClick={() => runAction()}

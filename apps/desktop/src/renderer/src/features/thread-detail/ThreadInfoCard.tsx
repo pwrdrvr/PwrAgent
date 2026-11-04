@@ -5,7 +5,7 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { useFederationInstanceNameLookup } from "../../lib/federation-display-label";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import { readRendererFederationLabel, readRendererFederationTarget } from "../../lib/federation-window";
 import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
 import { formatRelativeTime } from "../navigation/thread-time";
 import {
@@ -58,13 +58,14 @@ export function useThreadInfo(link: ResolvedThreadLink): {
     };
     setInfo({
       ...(loaded ? { facts: threadInfoFacts(loaded) } : {}),
-      factsState: loaded ? "ready" : api?.getNavigationQueryPage ? "loading" : "missing",
+      // Without a read, or when it fails, the thread is unknown, not missing.
+      factsState: loaded ? "ready" : api?.getNavigationQueryPage ? "loading" : "ready",
       cost: api?.readThreadFamilyPricing ? { state: "loading" } : { state: "unavailable" },
     });
     if (!loaded && api?.getNavigationQueryPage) {
       readThreadInfoRow(api, target, windowTarget).then(
         (row) => settle(row ? { facts: threadInfoFacts(row), factsState: "ready" } : { factsState: "missing" }),
-        () => settle({ factsState: "missing" }),
+        () => settle({ factsState: "ready" }),
       );
     }
     if (api?.readThreadFamilyPricing) {
@@ -83,10 +84,6 @@ function sinceLabel(timestamp: number, now: number): string {
   return /^\d/.test(label) ? `${label} ago` : label;
 }
 
-function formatUsd(micros: number): string {
-  return formatTokenUsageMicrosAsUsd(micros);
-}
-
 export function ThreadInfoCard(props: {
   link: ResolvedThreadLink;
   label: string;
@@ -98,7 +95,7 @@ export function ThreadInfoCard(props: {
   const instanceNames = useFederationInstanceNameLookup();
   const machine = link.instanceId
     ? instanceNames(link.instanceId, link.instanceLabel ?? link.instanceId).label
-    : readRendererFederationTarget() ? undefined : "This machine";
+    : readRendererFederationTarget() ? readRendererFederationLabel() : "This machine";
   const facts = info.facts;
   const title = facts?.title?.trim() || props.label;
   const missing = info.factsState === "missing";
@@ -184,7 +181,7 @@ export function ThreadInfoCard(props: {
             <>
               <div className="thread-info-card__cost">
                 <span className="thread-info-card__cost-total">
-                  {formatUsd(cost.totalMicros)}{cost.partial ? "+" : ""}
+                  {formatTokenUsageMicrosAsUsd(cost.totalMicros)}{cost.partial ? "+" : ""}
                 </span>
                 <span className="thread-info-card__cost-caption">
                   with {cost.subThreadCount} sub-thread{cost.subThreadCount === 1 ? "" : "s"}
@@ -199,17 +196,17 @@ export function ThreadInfoCard(props: {
               ) : null}
               <div className="pr-status-card__row">
                 <span className="pr-status-card__row-label">This thread</span>
-                <span className="pr-status-card__row-value">{formatUsd(cost.ownMicros)}</span>
+                <span className="pr-status-card__row-value">{formatTokenUsageMicrosAsUsd(cost.ownMicros)}</span>
               </div>
               <div className="pr-status-card__row">
                 <span className="pr-status-card__row-label">Sub-threads</span>
-                <span className="pr-status-card__row-value">{formatUsd(cost.totalMicros - cost.ownMicros)}</span>
+                <span className="pr-status-card__row-value">{formatTokenUsageMicrosAsUsd(cost.totalMicros - cost.ownMicros)}</span>
               </div>
             </>
           ) : (
             <div className="thread-info-card__cost">
               <span className="thread-info-card__cost-total">
-                {formatUsd(cost.ownMicros)}{cost.partial ? "+" : ""}
+                {formatTokenUsageMicrosAsUsd(cost.ownMicros)}{cost.partial ? "+" : ""}
               </span>
               <span className="thread-info-card__cost-caption">this thread</span>
             </div>
