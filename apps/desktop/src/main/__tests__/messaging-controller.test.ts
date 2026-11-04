@@ -1,4 +1,5 @@
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
+import { currentMessagingModels, messagingModelCatalog, otherMessagingModels } from "./fixtures/messaging-model-catalog";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22943,6 +22944,56 @@ describe("MessagingController", () => {
       body: expect.stringContaining("Retry the command"),
     });
   });
+
+  it.each(["telegram", "discord", "slack", "mattermost", "feishu", "line"] as const)(
+    "%s model menus put superseded models behind Other for existing and new threads", async (channel) => {
+      const harness = await createHarness({
+        channel,
+        listBackends: async () => ({
+          fetchedAt: 1000,
+          backends: [buildBackendSummary({ launchpadOptions: { models: messagingModelCatalog } })],
+        }),
+      });
+      const channelRef = { channel, conversation: { id: "chat-1", kind: "dm" as const } };
+      const callback = (actionId: string, value?: MessagingJsonValue) =>
+        harness.controller.handleInboundEvent(buildCallbackEvent({ actionId, value, channel: channelRef }));
+      const choices = () => {
+        const intent = harness.delivered.at(-1)!;
+        if (intent.kind === "single_select") return intent.choices;
+        if (intent.kind === "confirmation") return intent.actions;
+        throw new Error(`Expected a model picker, got ${intent.kind}`);
+      };
+      const modelIds = (id: string) => choices().filter((choice) => choice.id === id)
+        .map((choice) => (choice.value as { model: string }).model);
+      await callback("bind:codex:thread-1", { backend: "codex", threadId: "thread-1" });
+      await callback("status:model");
+      expect(modelIds("status:set-model")).toEqual(currentMessagingModels);
+      const other = choices().find((choice) => choice.label === "Other")!;
+      expect(other).toBeDefined();
+      await callback(other.id, other.value);
+      expect(modelIds("status:set-model")).toEqual(otherMessagingModels);
+      const back = choices().find((choice) => choice.label === "Back")!;
+      await callback(back.id, back.value);
+      expect(modelIds("status:set-model")).toEqual(currentMessagingModels);
+      await callback(other.id, other.value);
+      await callback("status:set-model", { model: otherMessagingModels[0]! });
+      expect(harness.setThreadModelSettings).toHaveBeenCalledWith(expect.objectContaining({ model: otherMessagingModels[0] }));
+
+      await harness.controller.handleInboundEvent({ ...buildCommandEvent("/new"), channel: channelRef });
+      await callback("browse:select-project", {
+        directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+      });
+      await callback("browse:new:model");
+      expect(modelIds("browse:new:set-model")).toEqual(currentMessagingModels);
+      const newOther = choices().find((choice) => choice.label === "Other")!;
+      expect(newOther).toBeDefined();
+      await callback(newOther.id, newOther.value);
+      expect(modelIds("browse:new:set-model")).toEqual(otherMessagingModels);
+      await callback("browse:new:set-model", { model: otherMessagingModels[1]! });
+      expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ patch: { model: otherMessagingModels[1] } }));
+      harness.controller.dispose();
+    },
+  );
 
   it("opens a model picker and stores the selected model", async () => {
     const harness = await createHarness({
