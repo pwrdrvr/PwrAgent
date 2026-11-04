@@ -14,9 +14,9 @@ import { isCodexInvalidResponseMessageIdError, repairCodexInvalidResponseMessage
 
 export * from "@pwragent/owner-core/codex-app-server/client";
 
-type DesktopCodexClientOptions = CodexClientOptions & Pick<StdioJsonRpcTransportOptions,
+type DesktopCodexClientOptions = CodexClientOptions & Partial<Pick<StdioJsonRpcTransportOptions,
   "command" | "args" | "resolveArgs" | "resolveCommand"
->;
+>>;
 
 /** Desktop owns process launch, profile state, diagnostics, and rollout repair. */
 export class CodexAppServerClient extends OwnerCodexAppServerClient {
@@ -28,6 +28,7 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
         args: options.args ?? [],
         ...callbacks,
       }),
+      clientInfo: { name: "pwragent-desktop", title: "PwrAgent" },
       logger: getMainLogger("pwragent:codex-client"),
       rpcLogger: getMainLogger("pwragent:json-rpc"),
       listingDiagnostics,

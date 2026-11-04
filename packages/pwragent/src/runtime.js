@@ -57,7 +57,7 @@ export class Runtime {
       case "read": {
         const job = this.store.get(params.id);
         if (!job.threadId) throw new Error("This job has no confirmed thread ID");
-        return { threadId: job.threadId, replay: await this.codex.readThread({ threadId: job.threadId }) };
+        return this.codex.readThreadProtocolResult({ threadId: job.threadId, includeTurns: true });
       }
       case "interrupt": {
         const job = this.store.get(params.id);

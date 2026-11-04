@@ -76,6 +76,11 @@ export class Codex extends CodexAppServerClient {
       onUnexpectedExit: () => {} });
     super({ env: { ...process.env, CODEX_HOME: home }, requestTimeoutMs: timeout }, {
       createTransport: (callbacks) => { transport.onUnexpectedExit = callbacks.onUnexpectedExit; return transport; },
+      clientInfo: { name: "pwragent-headless", title: "PwrAgent Headless" },
+      onRequestFailure: (error) => {
+        // A lost mutation response leaves an uncertain outcome; stop this host.
+        if (error instanceof Error && error.message.startsWith("json-rpc timeout:")) onFailure(error);
+      },
       logger: quietLogger,
       rpcLogger: quietLogger,
       listingDiagnostics: { trace: (_stage, _fields, work) => work(), link() {} },

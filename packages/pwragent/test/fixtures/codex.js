@@ -46,7 +46,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     assert.equal(initialized, false);
     assert.equal(params.capabilities.experimentalApi, true);
     initialized = true;
-    reply({ userAgent: "fixture-codex/0.159.2" });
+    reply({ userAgent: "fixture-codex/0.159.2", codexHome: process.env.CODEX_HOME, platformFamily: "unix", platformOs: "linux" });
   } else if (method === "initialized") {
     assert.ok(initialized);
     acknowledged = true;

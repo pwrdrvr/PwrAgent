@@ -3,13 +3,12 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Codex } from "../src/codex.js";
 import { Runtime } from "../src/runtime.js";
 
 function runningRuntime(request) {
   let job = { id: "job", threadId: "thread", turnId: "turn", status: "running" };
   return Object.assign(Object.create(Runtime.prototype), {
-    active: job.id, loadedThreads: new Set(), codex: { request },
+    active: job.id, loadedThreads: new Set(), codex: { interruptTurn: (params) => request("turn/interrupt", params) },
     store: { get: () => job, save: (value) => { job = { ...value }; return job; } },
     onFailure: (error) => { throw error; },
   });
@@ -41,37 +40,34 @@ for (const operation of ["send_private_response", "send_messaging_file", "render
   assert.equal(sends, 2);
 });
 
-test("loaded threads start turns directly, and closed threads resume from the provider", async () => {
-  const methods = [];
-  const runtime = runningRuntime(async (method) => {
-    methods.push(method);
-    return method === "thread/resume" ? { thread: { id: "thread" } } : { turn: { id: "next-turn", status: "inProgress" } };
-  });
+test("turn startup delegates subscription and resume ownership to the shared client", async () => {
+  const calls = [];
+  const runtime = runningRuntime(async () => ({}));
+  runtime.codex.startTurn = async (params) => { calls.push(params); return { threadId: "thread", turnId: "next-turn" }; };
   runtime.workspace = "/fixture";
   runtime.projects = { resolve: (cwd) => cwd };
   runtime.loadedThreads.add("thread");
   await runtime.start({ ...runtime.store.get("job"), sandbox: "read-only" }, "first turn");
-  assert.deepEqual(methods, ["turn/start"], "a new thread has no persisted rollout to resume yet");
   runtime.notification({ method: "thread/closed", params: { threadId: "thread" } });
   assert.equal(runtime.loadedThreads.has("thread"), false);
-  methods.length = 0;
   await runtime.start({ ...runtime.store.get("job"), sandbox: "read-only" }, "next turn");
-  assert.deepEqual(methods, ["thread/resume", "turn/start"]);
-  assert.equal(runtime.loadedThreads.has("thread"), true);
+  assert.deepEqual(calls.map(({ threadId, input }) => ({ threadId, input })), [
+    { threadId: "thread", input: [{ type: "text", text: "first turn" }] },
+    { threadId: "thread", input: [{ type: "text", text: "next turn" }] },
+  ]);
 });
 
-for (const rejection of ["RPC rejection", "pending limit", "synchronous rejection"]) {
+for (const rejection of ["RPC rejection", "synchronous rejection"]) {
   test(`interrupt can retry after ${rejection}`, async () => {
     let calls = 0;
     const runtime = runningRuntime((method, params) => {
       assert.equal(method, "turn/interrupt");
       assert.deepEqual(params, { threadId: "thread", turnId: "turn" });
       if (++calls > 1) return Promise.resolve({});
-      if (rejection === "pending limit") return Codex.prototype.request.call({ pending: { size: 32 } }, method, params);
       if (rejection === "synchronous rejection") throw new Error(rejection);
       return Promise.reject(new Error(rejection));
     });
-    await assert.rejects(runtime.handle("interrupt", { id: "job" }), /rejection|Too many pending/);
+    await assert.rejects(runtime.handle("interrupt", { id: "job" }), /rejection/);
     assert.equal(runtime.store.get("job").status, "running");
     await runtime.handle("interrupt", { id: "job" });
     assert.equal(calls, 2);

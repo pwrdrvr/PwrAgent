@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { CodexAppServerClient } from "../dist/federation-core.js";
 import { HeadlessBackend, PLACEHOLDER_THREAD_TITLE } from "../src/federation-backend.js";
 
 function backendFixture(t, jobs, read = async () => ({ thread: { turns: [] } })) {
@@ -10,8 +11,33 @@ function backendFixture(t, jobs, read = async () => ({ thread: { turns: [] } }))
   mkdirSync(local, { recursive: true });
   const directory = mkdtempSync(path.join(local, "titles-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  let receive;
+  const logger = { debug() {}, info() {}, warn() {}, error() {} };
+  const codex = new CodexAppServerClient({}, {
+    createTransport: () => ({
+      connect: async () => {}, close: async () => {}, setCloseHandler() {},
+      setMessageHandler: (handler) => { receive = handler; },
+      send: (raw) => {
+        const { id, method, params } = JSON.parse(raw);
+        if (id === undefined) return;
+        void (async () => {
+          const result = method === "initialize"
+            ? { userAgent: "fixture-codex/0.159.2", codexHome: "/fixture", platformFamily: "unix", platformOs: "linux" }
+            : await read(method, params);
+          if (result.thread) result.thread = { id: params.threadId, ...result.thread };
+          receive(JSON.stringify({ id, result }));
+        })();
+      },
+    }),
+    clientInfo: { name: "fixture", title: "Fixture" },
+    logger, rpcLogger: logger,
+    listingDiagnostics: { trace: (_stage, _fields, work) => work(), link() {} },
+    authState: { isBlocked: () => false, assertAvailable() {} }, signInRequiredMessage: "Sign in required",
+    buildShellEnvironment: (env) => env, enrichThreadDirectory: async () => ({ linkedDirectories: [] }),
+    sampleAppServerProcessTree: async () => ({}),
+  });
   const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(),
-    store: { directory: path.join(directory, "jobs"), jobs }, codex: { request: read }, onFailure: (error) => { throw error; } };
+    store: { directory: path.join(directory, "jobs"), jobs }, codex, onFailure: (error) => { throw error; } };
   const published = [];
   const backend = new HeadlessBackend(runtime, (event, eventClass) => published.push({ eventClass, ...event.notification }));
   return { backend, published, registry: () => JSON.parse(readFileSync(backend.file, "utf8")).threads };

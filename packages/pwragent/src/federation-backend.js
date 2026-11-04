@@ -227,7 +227,7 @@ export class HeadlessBackend {
           const original = job.messageOrigin;
           this.runtime.save({ ...job, messageOrigin: { ...incoming, ...mergeCausalMessagingContext([original, incoming]) } });
         }
-        const result = await this.runtime.codex.steerTurn( { threadId: params.threadId, expectedTurnId: params.expectedTurnId || job.turnId, input });
+        const result = await this.runtime.codex.steerTurn({ threadId: params.threadId, expectedTurnId: params.expectedTurnId || job.turnId, input });
         return { backend: "codex", threadId: params.threadId, turnId: result.turnId || job.turnId, disposition: "steered",
           ...(name === "controlActiveTurn" ? { ok: true, requestId: params.requestId } : {}) };
       }
@@ -340,7 +340,7 @@ export class HeadlessBackend {
     const cwd = this.runtime.projects.resolve(params.cwd || params.directoryPath || params.projectKey);
     this.creating = true;
     try {
-      const result = await this.runtime.codex.startThread( { cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
+      const result = await this.runtime.codex.startThread({ cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
       if (!result?.threadId || typeof result.threadId !== "string" || result.threadId.length > 256) throw new Error("Invalid thread/start response");
       this.runtime.loadedThreads.add(result.threadId);
       const thread = { id: result.threadId, messagingFileTools: true, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
@@ -391,6 +391,8 @@ export class HeadlessBackend {
     const thread = this.owned(id);
     if (thread.titleSource === "fallback" && summary.titleSource !== "fallback") {
       this.setTitle(thread, summary.title, summary.titleSource);
+    } else if (thread.titleSource === "fallback") {
+      this.deriveTitle(id, replay.messages.find((message) => message.role === "user")?.text);
     }
     return { backend: "codex", threadId: id, fetchedAt: Date.now(), threadStatus: this.summary(thread).threadStatus,
       replay: { ...replay, entries, messages: entries.filter((entry) => entry.type === "message") } };

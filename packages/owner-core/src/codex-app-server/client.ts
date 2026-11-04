@@ -7938,9 +7938,14 @@ export class CodexAppServerClient {
     // any operation, helper or recovery opens or closes.
     const requestBeforeSubscriptionTracking = this.rawConnection.request.bind(this.rawConnection);
     this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
-      const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
-      this.observeThreadSubscription(method, params, result);
-      return result;
+      try {
+        const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
+        this.observeThreadSubscription(method, params, result);
+        return result;
+      } catch (error) {
+        this.host.onRequestFailure?.(error);
+        throw error;
+      }
     };
     this.connection = {
       request: (...args) => this.requestWhenAvailable(...args),
@@ -10625,6 +10630,13 @@ export class CodexAppServerClient {
     return response.terminated;
   }
 
+  /** Raw protocol response retained for hosts with an existing protocol CLI. */
+  async readThreadProtocolResult(params: CodexThreadReadParams): Promise<CodexThreadReadResponse> {
+    await this.ensureInitialized();
+    return await this.connection.request("thread/read", params,
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) as CodexThreadReadResponse;
+  }
+
   async readThread(params: {
     threadId: string;
     includeTurns?: boolean;
@@ -12235,8 +12247,7 @@ export class CodexAppServerClient {
           };
         } = {
           clientInfo: {
-            name: "pwragent-desktop",
-            title: "PwrAgent",
+            ...this.host.clientInfo,
             version: this.options.clientVersion ?? "0.0.0",
           },
           capabilities: {

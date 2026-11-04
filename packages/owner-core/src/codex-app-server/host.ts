@@ -45,6 +45,8 @@ export type CodexClientHost = {
     onAuthenticationRejected: (home: string) => void;
     onUnexpectedExit: (exit: CodexAppServerExit) => void;
   }) => CodexClientTransport;
+  clientInfo: { name: string; title: string };
+  onRequestFailure?: (error: unknown) => void;
   logger: CodexClientLogger;
   rpcLogger: CodexClientLogger;
   listingDiagnostics: CodexListingDiagnostics;

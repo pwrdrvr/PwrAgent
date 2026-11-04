@@ -84,7 +84,7 @@ export function setupHandoffs(federation, directory) {
         try {
           const cwd = runtime.projects.contained(await realpath(request.directoryPath));
           if (backend.threads.size >= 10000) throw new Error("Thread retention limit reached");
-          const result = await runtime.codex.forkThread( { threadId: request.sourceThreadId, path: request.sourceThreadPath,
+          const result = await runtime.codex.forkThread({ threadId: request.sourceThreadId, path: request.sourceThreadPath,
             cwd, approvalPolicy: "never", sandbox: "read-only" });
           const id = result.threadId;
           if (typeof id !== "string" || !id || backend.threads.has(id)) throw new Error("Invalid forked thread identity");
@@ -98,7 +98,7 @@ export function setupHandoffs(federation, directory) {
       readThread: async ({ threadId }) => ({ replay: (await backend.readThread(threadId)).replay }),
       archiveThread: async ({ threadId }) => {
         backend.owned(threadId);
-        await runtime.codex.archiveThread( { threadId });
+        await runtime.codex.archiveThread({ threadId });
         backend.owned(threadId).archived = true;
         backend.persist();
         backend.invalidate(threadId);
