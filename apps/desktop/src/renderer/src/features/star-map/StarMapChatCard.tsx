@@ -1,4 +1,4 @@
-import { buildModelMenu, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared";
+import { buildModelMenu, codexSpeedOptions, modelMenuOtherLabel, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared";
 import {
   memo,
   useCallback,
@@ -1762,7 +1762,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         id: option.id,
         label: option.label,
       })),
-      otherModelsLabel: threadSource === "claude" ? "Other Models" : undefined,
+      otherModelsLabel: modelMenuOtherLabel(threadSource),
       reasoningEfforts: supportsReasoning ? reasoningEfforts : [],
       supportsFastMode: supportsFast,
       speeds: threadSource === "codex"

@@ -57,6 +57,11 @@ export function splitModelMenuOptions<T extends ModelMenuEntry>(
   return { primary, other };
 }
 
+/** What a picker calls its Other entry. Claude's own menu says "Other Models". */
+export function modelMenuOtherLabel(kind: string | undefined): string {
+  return kind === "claude" ? "Other Models" : "Other";
+}
+
 /**
  * Arrange a catalog for any model picker, so every surface that offers a
  * model offers the same list in the same order.

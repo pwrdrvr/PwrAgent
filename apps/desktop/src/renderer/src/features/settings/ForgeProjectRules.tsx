@@ -132,7 +132,12 @@ function backendModels(
   keep: (option: { id: string; providerId?: string }) => boolean = () => true,
 ): BackendModelOption[] {
   const backend = backends?.find((entry) => entry.kind === kind);
-  return (backend?.launchpadOptions?.models ?? []).filter(keep);
+  // One row per id, even when a catalog repeats one.
+  const byId = new Map<string, BackendModelOption>();
+  for (const option of backend?.launchpadOptions?.models ?? []) {
+    if (keep(option) && !byId.has(option.id)) byId.set(option.id, option);
+  }
+  return [...byId.values()];
 }
 
 /** A catalog's models in the composer's order, superseded ones grouped last. */

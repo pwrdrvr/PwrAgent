@@ -61,13 +61,6 @@ export function composerDropdownOptionLabels(root: ParentNode = document): strin
   );
 }
 
-/** Section titles of an open `ComposerDropdown` list, in order. */
-export function composerDropdownGroupLabels(root: ParentNode = document): string[] {
-  return [...root.querySelectorAll(".composer-dropdown__group-label")].map((label) =>
-    label.textContent ?? "",
-  );
-}
-
 /**
  * A `Select` list as titled sections, in order: options outside any group
  * read as one section with no title. Leaves the list as it found it.
@@ -102,13 +95,10 @@ export function selectSections(
 /** The sections every Settings model list must show for `codexCatalogModels()`. */
 export function expectedCodexSelectSections(
   leading: string[],
-  options: { withProvider?: boolean } = {},
 ): Array<{ group?: string; labels: string[] }> {
   return [
     { labels: [...leading, ...CURRENT_CODEX_MODEL_LABELS] },
     { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
-    ...(options.withProvider === false
-      ? []
-      : [{ group: PROVIDER_MODEL.providerLabel!, labels: [PROVIDER_MODEL.label!] }]),
+    { group: PROVIDER_MODEL.providerLabel!, labels: [PROVIDER_MODEL.label!] },
   ];
 }

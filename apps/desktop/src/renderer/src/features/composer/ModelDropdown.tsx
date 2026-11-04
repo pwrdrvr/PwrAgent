@@ -2,6 +2,7 @@ import type { ComponentProps } from "react";
 import {
   buildModelMenu,
   formatModelOptionLabel,
+  modelMenuOtherLabel,
   type BackendModelOption,
   type BackendSummary,
 } from "@pwragent/shared";
@@ -60,11 +61,11 @@ export function ModelDropdown(
   return (
     <ComposerDropdown
       {...dropdown}
-      options={models.length === 0 && emptyOptions ? emptyOptions : options}
+      options={models.length === 0 && emptyOptions ? [...leadingOptions, ...emptyOptions] : options}
       optionsLabel={kind ? formatBackendLabel(kind) : undefined}
       groups={groups}
       otherOptions={menu.other.map(modelDropdownOption)}
-      otherLabel={kind === "claude" ? "Other Models" : undefined}
+      otherLabel={modelMenuOtherLabel(kind)}
     />
   );
 }
