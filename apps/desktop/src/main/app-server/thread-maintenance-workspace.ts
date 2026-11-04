@@ -1,6 +1,6 @@
 import { lstat, stat } from "node:fs/promises";
 import path from "node:path";
-import { isRebuildableOutputPath, type ThreadMaintenanceWorkspace } from "@pwragent/shared";
+import { REBUILDABLE_OUTPUT_NAMES, type ThreadMaintenanceWorkspace } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 import { WORKSPACE_KEEP_REASONS } from "./thread-archive-sweeper";
 
@@ -30,27 +30,25 @@ export async function inspectMaintenanceWorkspace(
     throw error;
   }
   const git = async (args: string[]) => (await runGitCommand(cwd, args, { signal: options.signal, timeout: 15_000 })).stdout;
-  let changedOutput: string;
   try {
-    changedOutput = await git(["diff", "--name-only", "-z", "HEAD", "--", "."]);
+    await git(["rev-parse", "--is-inside-work-tree"]);
   } catch (error) {
+    // Archive leaves a folder with no repository at or above it in place.
+    // A broken worktree link reports a different message and fails closed.
     if (isOutsideAnyGitRepository(error)) return { workspace: { kind: "notGit" } };
     throw error;
   }
+  const changedOutput = await git(["diff", "--name-only", "-z", "HEAD", "--", "."]);
   const untracked = (await git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
   const ignored = (await git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]))
     .split("\0").filter(Boolean);
-  const submodules = (await git(["submodule", "status", "--recursive"])).split("\n")
-    .filter((line) => /^[+-U]/.test(line));
-  if (submodules.length) return { keep: WORKSPACE_KEEP_REASONS.changes };
   const rebuildable = new Set<string>();
   for (const entry of ignored) {
-    if (!isRebuildableOutputPath(entry) || !options.rebuildableOutputIsClean) {
+    const folder = rebuildableOutputFolder(entry);
+    if (!folder || !options.rebuildableOutputIsClean) {
       return { keep: options.rebuildableOutputIsClean ? "Other ignored files" : WORKSPACE_KEEP_REASONS.ignored };
     }
-    rebuildable.add(entry.replace(/\\/g, "/").replace(/\/+$/, "").split("/").find(
-      (segment, index, segments) => isRebuildableOutputPath(segments.slice(0, index + 1).join("/")),
-    ) ?? entry);
+    rebuildable.add(folder);
   }
   const retained = (await git(["rev-list", "--count", "HEAD", "--not", "--branches", "--remotes"])).trim();
   if (retained !== "0") return { keep: WORKSPACE_KEEP_REASONS.unretained };
@@ -63,6 +61,9 @@ export async function inspectMaintenanceWorkspace(
   for (const file of files) {
     try {
       const info = await lstat(path.join(cwd, file));
+      // A changed directory entry is a submodule with its own work. A
+      // recovery snapshot cannot hold that, so the checkout is kept.
+      if (info.isDirectory()) return { keep: WORKSPACE_KEEP_REASONS.changes };
       // Do not follow links into dependencies or unrelated directories.
       if (info.isFile() || info.isSymbolicLink()) {
         bytes += info.size;
@@ -83,4 +84,12 @@ function isOutsideAnyGitRepository(error: unknown): boolean {
   const stderr = (error as { stderr?: unknown })?.stderr;
   const text = `${error instanceof Error ? error.message : String(error)}\n${typeof stderr === "string" ? stderr : ""}`;
   return text.includes("not a git repository (or any of the parent directories)");
+}
+
+/** The rebuildable folder an ignored path lives in, as a relative path such
+ * as `packages/web/node_modules`. Undefined for any other ignored path. */
+export function rebuildableOutputFolder(ignoredPath: string): string | undefined {
+  const segments = ignoredPath.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
+  const index = segments.findIndex((segment) => REBUILDABLE_OUTPUT_NAMES.has(segment));
+  return index < 0 ? undefined : segments.slice(0, index + 1).join("/");
 }

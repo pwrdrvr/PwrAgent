@@ -473,7 +473,7 @@ export class ThreadMaintenanceService {
     const archived = await this.deps.archiveFamily(refreshed, {
       preserveWorktrees: workspace.kind === "overLimit" && overLimit === "keepCheckout",
       ...(workspace.kind === "overLimit" && overLimit === "snapshotAll"
-        ? { snapshotLimitBytes: Math.ceil(workspace.bytes * 1.1) } : {}),
+        ? { snapshotLimitBytes: Math.ceil(workspace.bytes * 11 / 10) } : {}),
     });
     return archived ? true : "Archive cancelled";
   }
