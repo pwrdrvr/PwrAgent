@@ -48432,6 +48432,75 @@ script = "printf setup"
     });
   });
 
+  it("finds a peer's thread for a to-do request raised without its owner", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const federatedSend = vi.fn(async (request: PwrAgentFederatedThreadMessageRequest) =>
+      request.resolutionMode === "remembered_only" ? undefined : {
+        backend: request.backend, threadId: request.threadId, turnId: "remote-turn",
+        instanceId: "peer", instanceLabel: "Studio",
+      });
+    registry.setFederatedThreadMessageHandler(federatedSend);
+
+    await registry.sendThreadTodoMessage({ sourceBackend: "codex", sourceThreadId: "sender",
+      target: { backend: "codex", threadId: "remote-recipient" },
+      prompt: "Pick this up", todo: { id: "todo-9", title: "Hand it over" } });
+
+    expect(federatedSend.mock.lastCall?.[0]).toEqual(expect.objectContaining({
+      threadId: "remote-recipient", resolutionMode: "discover_only",
+    }));
+  });
+
+  it("records the owning peer of a to-do's destination thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const search = vi.fn(async (_request: unknown) => ({
+      ok: true as const,
+      data: {
+        query: "remote-recipient", totalCount: 2, truncated: false, searchedInstances: [], failures: [],
+        results: [
+          { instanceId: "other", instanceLabel: "Laptop", isLocal: false, backend: "claude" as const,
+            threadId: "remote-recipient", title: "Wrong backend", score: 1 },
+          { instanceId: "peer", instanceLabel: "M4 Mini / default", isLocal: false, backend: "codex" as const,
+            threadId: "remote-recipient", title: "Archived worktree cleanup", score: 1 },
+        ],
+      },
+    }));
+    registry.setPwrAgentFederationHandler(search);
+    const source = { backend: "codex" as const, threadId: "sender" };
+
+    await expect(registry.locateThreadTodoMessageTarget(source, { backend: "codex", threadId: "remote-recipient" }))
+      .resolves.toEqual({
+        backend: "codex", threadId: "remote-recipient",
+        instanceId: "peer", instanceLabel: "M4 Mini / default", title: "Archived worktree cleanup",
+      });
+    expect(search.mock.lastCall?.[0]).toEqual(expect.objectContaining({
+      operation: "search_federation_threads", context: source,
+      args: expect.objectContaining({ query: "remote-recipient", scope: "remote", backend: "codex" }),
+    }));
+
+    // A thread this instance owns stays local, and no peer is asked.
+    search.mockClear();
+    await expect(registry.locateThreadTodoMessageTarget(source, { backend: "codex", threadId: "sender" }))
+      .resolves.toEqual({ backend: "codex", threadId: "sender", title: "Sender" });
+    expect(search).not.toHaveBeenCalled();
+
+    // A thread nobody reports keeps the agent's target.
+    search.mockResolvedValueOnce({ ok: true, data: {
+      query: "gone", totalCount: 0, truncated: false, searchedInstances: [], failures: [], results: [],
+    } });
+    await expect(registry.locateThreadTodoMessageTarget(source, { backend: "codex", threadId: "gone" }))
+      .resolves.toEqual({ backend: "codex", threadId: "gone" });
+  });
+
   it("never lets an agent's own send claim a to-do card", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
