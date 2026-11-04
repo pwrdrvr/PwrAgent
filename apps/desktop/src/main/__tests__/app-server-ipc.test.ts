@@ -13383,7 +13383,7 @@ describe("app server ipc", () => {
       const federationTarget = { scope: "remote" as const, instanceId: "owner_one" };
       const request = { federationTarget, directoryKey, directoryKind: "directory", directoryLabel: "app",
         directoryPath: "/repo/app", preferredBackend: "codex" };
-      const local = { launchpad: { directoryKey, directoryKind: "directory", directoryLabel: "app", directoryPath: "/repo/app",
+      const local = { launchpad: { directoryKey, directoryKind: "directory" as const, directoryLabel: "app", directoryPath: "/repo/app",
         backend: "codex" as const, executionMode: "default" as const, prompt: "Investigate", model: "viewer-only", reasoningEffort: "high",
         fastMode: true, serviceTier: "priority", branchName: undefined, createdAt: 100, updatedAt: 100 },
         defaults: { backend: "codex" as const, executionMode: "default" as const } };
@@ -13432,7 +13432,7 @@ describe("app server ipc", () => {
     const store = new SqliteOverlayStore(db);
     const launchpad = { directoryKey: "directory:/repo/app", directoryKind: "directory" as const,
       directoryLabel: "app", directoryPath: "/repo/app", backend: "codex" as const, executionMode: "default" as const,
-      model: "viewer-only", prompt: "Investigate", branchName: undefined, createdAt: 100, updatedAt: 100 };
+      model: "viewer-only", workMode: "local" as const, prompt: "Investigate", branchName: undefined, createdAt: 100, updatedAt: 100 };
     const defaults = { backend: "codex" as const, executionMode: "default" as const, model: "owner-model" };
     const request = { directoryKey: launchpad.directoryKey, directoryKind: launchpad.directoryKind,
       directoryLabel: launchpad.directoryLabel, directoryPath: launchpad.directoryPath,
