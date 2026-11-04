@@ -34,6 +34,8 @@
     "release:channels": "node ./scripts/package-manager-release.mjs",
     "test:desktop-e2e": "pnpm --filter @pwragent/desktop test:e2e",
     "test:desktop-e2e:windows-diagnostics": "node apps/desktop/scripts/run-windows-e2e-with-pipe-diagnostics.mjs",
+    "probe:electron-native-quit": "node apps/desktop/scripts/probe-electron-native-quit.mjs",
+    "probe:windows-native-quit": "node apps/desktop/scripts/run-windows-e2e-with-pipe-diagnostics.mjs --electron-only",
     "test:desktop-e2e:nice": "node ./scripts/nice-run.mjs pnpm test:desktop-e2e",
     "eval:smoke": "pnpm --filter @pwragent/desktop eval:smoke",
     "eval:smoke:build": "pnpm --filter @pwragent/desktop preeval:smoke && pnpm --filter @pwragent/desktop eval:smoke",

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, launcherParentMatches, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
 import { localSymbolDirectories, nativeDebuggerStatus, nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
 const roots = [];
@@ -15,6 +15,26 @@ const names = [1, 2, 3, 4].map((n) => "\\Device\\NamedPipe\\uv\\" + n + "-123");
 const inventory = () => ({ verified: true, liveAfter: true, pipes: names.map((name) => ({ name })) });
 
 describe("Windows natural pipe evidence", () => {
+  it("binds a launcher through native parent creation when the JavaScript clock lags", () => {
+    const event = { pid: 77, workerPid: 7, at: 1000 };
+    const source = { pid: 77, created: "116444736010042220", verified: true, liveAfter: true };
+    const child = { pid: 77, created: source.created, ppid: 7,
+      parentCreated: "116444736009000000", name: "electron.exe" };
+    const parent = { pid: 7, created: child.parentCreated };
+    expect(BigInt(source.created) > (BigInt(event.at) + 1n) * 10000n + 116444736000000000n).toBe(true);
+    expect(launcherParentMatches(event, source, child, parent)).toBe(true);
+    for (const changed of [{ verified: false }, { liveAfter: false }, { pid: 78 }, { created: "116444736010042221" }]) {
+      expect(launcherParentMatches(event, { ...source, ...changed }, child, parent)).toBe(false);
+    }
+    for (const changed of [{ ppid: 8 }, { parentCreated: "116444736009000001" }, { name: "node.exe" }]) {
+      expect(launcherParentMatches(event, source, { ...child, ...changed }, parent)).toBe(false);
+    }
+    expect(launcherParentMatches(event, source, child, { ...parent, created: source.created + "0" })).toBe(false);
+    expect(launcherParentMatches(event, source, { ...child, parentCreated: source.created + "0" },
+      { ...parent, created: source.created + "0" })).toBe(false);
+    expect(launcherParentMatches(event, source, child, undefined)).toBe(false);
+  });
+
   it("samples with a non-suspending attach and local symbols, then rejects changed process identities", () => {
     const cache = path.resolve("private-symbol-cache");
     expect(nativeStackArguments(77, cache)).toEqual([
