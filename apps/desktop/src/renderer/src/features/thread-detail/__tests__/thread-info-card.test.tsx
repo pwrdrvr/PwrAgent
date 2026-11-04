@@ -10,6 +10,7 @@ import type {
 } from "@pwragent/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { ThreadChip } from "../ThreadChip";
 import {
@@ -54,20 +55,22 @@ function family(members: ThreadFamilyPricingMember[]): ReadThreadFamilyPricingRe
   return { members, readAt: 0 } as ReadThreadFamilyPricingResponse;
 }
 
+type ReadFamily = NonNullable<DesktopApi["readThreadFamilyPricing"]>;
+type QueryPage = NonNullable<DesktopApi["getNavigationQueryPage"]>;
 let api: {
-  readThreadFamilyPricing: ReturnType<typeof vi.fn>;
-  getNavigationQueryPage: ReturnType<typeof vi.fn>;
+  readThreadFamilyPricing: ReturnType<typeof vi.fn<ReadFamily>>;
+  getNavigationQueryPage: ReturnType<typeof vi.fn<QueryPage>>;
 };
 
 beforeEach(() => {
   clearThreadInfoCostCache();
   api = {
-    readThreadFamilyPricing: vi.fn(async (_request: ReadThreadFamilyPricingRequest) => family([
+    readThreadFamilyPricing: vi.fn<ReadFamily>(async (_request: ReadThreadFamilyPricingRequest) => family([
       member({ self: true, totalCostMicros: 3_160_000 }),
       member({ threadId: "child-1", totalCostMicros: 4_000_000 }),
       member({ threadId: "child-2", totalCostMicros: 1_870_000 }),
     ])),
-    getNavigationQueryPage: vi.fn(async (_request: NavigationQueryRequest): Promise<NavigationQueryPage> => ({
+    getNavigationQueryPage: vi.fn<QueryPage>(async (_request: NavigationQueryRequest): Promise<NavigationQueryPage> => ({
       entries: [],
     }) as unknown as NavigationQueryPage),
   };
