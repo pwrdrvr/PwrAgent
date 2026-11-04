@@ -228,7 +228,7 @@ describe("MessagingController", () => {
       });
       expectSqliteWriteBudget({
         scenario: "messaging-first-typing-before-startup",
-        note: "One admitted reply through its first activity delivery with backend startup blocked; one boundary delivery commit, no timer persistence.",
+        note: "One admitted reply through its first activity delivery with startup blocked: 1 commit, 12360 WAL bytes; 0.247 MB/day at 20 turns/day, 12.36 MB/day at 1000, 0 idle/timer writes.",
         writes,
       });
     } finally {
