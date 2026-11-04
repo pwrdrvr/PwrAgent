@@ -30692,14 +30692,20 @@ export class DesktopBackendRegistry {
       : undefined;
     const modelOption = findAcpModelConfigOption(capabilities);
     const effortOption = findAcpThoughtLevelConfigOption(capabilities);
+    const runtimeEffort = (effortOption ? settings.acpRuntime?.configValues?.[effortOption.id] : undefined)
+      ?? settings.acpRuntime?.reasoningEffort;
+    // A single advertised thought level is fixed runtime state, not an
+    // adjustable reasoning override. Preserve it in acpRuntime; explicit
+    // overrides and values outside that menu still require admission.
+    const fixedRuntimeEffort = effortOption?.values.length === 1
+      && effortOption.values[0]?.value === runtimeEffort;
     const requested = {
       ...settings,
       model: settings.model
         ?? (modelOption ? settings.acpRuntime?.configValues?.[modelOption.id] : undefined)
         ?? settings.acpRuntime?.currentModelId,
       reasoningEffort: settings.reasoningEffort
-        ?? (effortOption ? settings.acpRuntime?.configValues?.[effortOption.id] : undefined)
-        ?? settings.acpRuntime?.reasoningEffort,
+        ?? (fixedRuntimeEffort ? undefined : runtimeEffort),
     };
     const options = await this.getBackendLaunchpadOptions(backend, "thread-admission");
     const resolved = resolveModelSettingsFromOptions(backend, options, requested);
@@ -44995,12 +45001,20 @@ export class DesktopBackendRegistry {
         extraLinkedDirectories: [],
       } satisfies ThreadOverlayState);
 
+    let handoffModelSettings: ModelSettings;
     try {
-      await this.admitNewThreadModelSettings(backend, {
+      // Inherited effort and speed are preferences for the source model.
+      // Adapt them to the destination before layering on explicit arguments,
+      // which must pass admission without silent correction.
+      const inherited = await this.resolveModelSettings(backend, {
+        ...(backend === sourceBackend ? sourceOverlay : {}),
         model: request.args.model ?? (backend === sourceBackend ? sourceOverlay.model : undefined),
-        reasoningEffort: request.args.reasoningEffort ?? (backend === sourceBackend ? sourceOverlay.reasoningEffort : undefined),
-        serviceTier: request.args.serviceTier ?? (backend === sourceBackend ? sourceOverlay.serviceTier : undefined),
-        fastMode: request.args.fastMode ?? (backend === sourceBackend ? sourceOverlay.fastMode : undefined),
+      }, "agent-handoff");
+      handoffModelSettings = await this.admitNewThreadModelSettings(backend, {
+        model: request.args.model ?? inherited.model,
+        reasoningEffort: request.args.reasoningEffort ?? inherited.reasoningEffort,
+        serviceTier: request.args.serviceTier ?? inherited.serviceTier,
+        fastMode: request.args.fastMode ?? inherited.fastMode,
       });
     } catch (error) {
       return threadOrchestrationFailure("invalid_arguments", error instanceof Error ? error.message : String(error));
@@ -45213,20 +45227,7 @@ export class DesktopBackendRegistry {
     const inheritedSettings: HandoffTaskInheritedSettings = {
       backend,
       executionMode,
-      model:
-        request.args.model ??
-        (backend === sourceBackend ? sourceOverlay.model : undefined),
-      reasoningEffort:
-        request.args.reasoningEffort ??
-        (backend === sourceBackend
-          ? sourceOverlay.reasoningEffort
-          : undefined),
-      serviceTier:
-        request.args.serviceTier ??
-        (backend === sourceBackend ? sourceOverlay.serviceTier : undefined),
-      fastMode:
-        request.args.fastMode ??
-        (backend === sourceBackend ? sourceOverlay.fastMode : undefined),
+      ...handoffModelSettings,
       approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
       codexEnvironmentRuntime:
