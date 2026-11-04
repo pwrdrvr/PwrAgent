@@ -257,8 +257,10 @@ The light block is **not** uniformly AA-clean. These predate the accent retune a
 when the warning is something read: a figure, a sentence, or a chip label. Its
 light value is the `--savings-over` amber, at least 4.5:1 on every light
 surface. Every warning `color:` rule reads it, and the theme contract test
-fails on one that reads `--status-warning`. Every theme except Tangerine light
-aliases the two, so only Tangerine light shows the difference.
+fails on one that reads `--status-warning`. Every dark theme aliases the two.
+Every light theme splits them: text keeps a 4.5:1 amber, and dots take a
+yellow at the 3:1 mark floor. At text strength, the light pending PR dot read
+as the black closed dot.
 
 #### Token Miser verdict
 
