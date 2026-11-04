@@ -3,10 +3,10 @@ import { useRecoverableState } from "./RendererRecoveryState";
 
 /**
  * One entry in the renderer's browser-style navigation history. Only the
- * three "content" surfaces are recorded: an open thread (by identity key),
- * a project launchpad (by directory key, plus the peer's instance id when the
- * launchpad starts its thread on another machine), and the thread-search
- * view.
+ * "content" surfaces are recorded: an open thread (by identity key), a
+ * project launchpad (by directory key, plus the peer's instance id when the
+ * launchpad starts its thread on another machine), a thread that is still
+ * starting from a submitted launchpad, and the thread-search view.
  * Overlay-ish surfaces — Settings, Automations, and the empty no-selection
  * state — are deliberately untracked: they behave like modal chrome, not
  * places you navigate back to. The caller signals those by passing
@@ -15,6 +15,14 @@ import { useRecoverableState } from "./RendererRecoveryState";
 export type NavigationHistoryLocation = (
   | { view: "launchpad"; directoryKey: string; instanceId?: string }
   | { view: "search" }
+  /**
+   * A submitted launchpad whose thread does not exist yet. Keyed by the
+   * creation, not the directory: the directory's launchpad is an empty draft
+   * again by now. When the thread lands, every entry for the creation becomes
+   * that thread's entry. A creation that ends with no thread becomes its
+   * launchpad's entry, where the draft was put back.
+   */
+  | { view: "starting"; creationId: string; directoryKey: string; instanceId?: string }
   | { view: "thread"; threadKey: string }
 ) & {
   /**
@@ -33,6 +41,9 @@ function sameLocation(
 ): boolean {
   if (a.view === "search") {
     return b.view === "search";
+  }
+  if (a.view === "starting") {
+    return b.view === "starting" && a.creationId === b.creationId;
   }
   if (a.view === "launchpad") {
     // Peer directory keys are the peer's paths, which can coincide with this
@@ -66,21 +77,32 @@ function appendLocation(
 }
 
 /**
- * Drop entries that no longer pass `isLive`, collapsing any consecutive
- * duplicates the removals expose (A, dead, A → A). Returns the input
- * array unchanged when nothing was pruned so effect callers can compare
- * by identity.
+ * Rewrite each entry through `resolve` and drop entries that no longer pass
+ * `isLive`, collapsing any consecutive duplicates the changes expose
+ * (A, dead, A → A). Returns the input array unchanged when nothing changed
+ * so effect callers can compare by identity.
  */
 function pruneStack(
   stack: NavigationHistoryLocation[],
   isLive: (location: NavigationHistoryLocation) => boolean,
+  resolve: (location: NavigationHistoryLocation) => NavigationHistoryLocation,
 ): NavigationHistoryLocation[] {
-  const filtered = stack.filter(isLive);
-  if (filtered.length === stack.length) {
+  let rewritten = false;
+  const resolved = stack.map((location) => {
+    const next = resolve(location);
+    rewritten ||= next !== location;
+    return next;
+  });
+  const filtered = resolved.filter(isLive);
+  if (!rewritten && filtered.length === stack.length) {
     return stack;
   }
+  return collapseRepeats(filtered);
+}
+
+function collapseRepeats(stack: NavigationHistoryLocation[]): NavigationHistoryLocation[] {
   const collapsed: NavigationHistoryLocation[] = [];
-  for (const location of filtered) {
+  for (const location of stack) {
     const top = collapsed[collapsed.length - 1];
     if (top !== undefined && sameLocation(top, location)) {
       continue;
@@ -88,6 +110,33 @@ function pruneStack(
     collapsed.push(location);
   }
   return collapsed;
+}
+
+/**
+ * Keep one entry per launchpad, as `appendLocation` does. A creation that
+ * ends with no thread becomes its launchpad's entry, and the operator may
+ * have reopened that launchpad since. The cursor's copy wins, then the
+ * newest Back copy, then the nearest Forward copy. Returns the input arrays
+ * unchanged when nothing was dropped.
+ */
+function keepOneEntryPerLaunchpad(
+  back: NavigationHistoryLocation[],
+  cursor: NavigationHistoryLocation | undefined,
+  forward: NavigationHistoryLocation[],
+): { back: NavigationHistoryLocation[]; forward: NavigationHistoryLocation[] } {
+  const kept: NavigationHistoryLocation[] = cursor?.view === "launchpad" ? [cursor] : [];
+  const keep = (location: NavigationHistoryLocation): boolean => {
+    if (location.view !== "launchpad") return true;
+    if (kept.some((candidate) => sameLocation(candidate, location))) return false;
+    kept.push(location);
+    return true;
+  };
+  const keptBack = [...back].reverse().filter(keep).reverse();
+  const keptForward = forward.filter(keep);
+  return {
+    back: keptBack.length === back.length ? back : collapseRepeats(keptBack),
+    forward: keptForward.length === forward.length ? forward : collapseRepeats(keptForward),
+  };
 }
 
 type HistoryStacks = {
@@ -138,6 +187,14 @@ export function useNavigationHistory(args: {
    * both directions of history.
    */
   liveLaunchpadKeys?: ReadonlySet<string>;
+  /**
+   * Creations still starting from a submitted launchpad, by creation id,
+   * each with its thread's identity key once the owner has answered. A
+   * `starting` entry follows its creation: it becomes the thread's entry when
+   * the key arrives, and the launchpad's entry when the creation ends
+   * without one. Pass undefined to leave `starting` entries alone.
+   */
+  startingThreads?: ReadonlyMap<string, string | undefined>;
 }): {
   canGoBack: boolean;
   canGoForward: boolean;
@@ -158,9 +215,32 @@ export function useNavigationHistory(args: {
   });
 
   const archivedThreadKeys = args.archivedThreadKeys;
-  const current = args.current?.view === "thread" && archivedThreadKeys?.has(args.current.threadKey)
+  const startingThreads = args.startingThreads;
+  // A creation's thread key, kept from the render that brought it until no
+  // entry can still name the creation. The key and the creation's end can
+  // arrive in separate renders, and the end alone must not read as a failure.
+  const startedThreadKeysRef = useRef(new Map<string, string>());
+  // Creation ids the current-location effect has already seen. A `starting`
+  // location for an id not in here is the launchpad being submitted.
+  const knownCreationIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const startedThreadKey = args.current?.view === "starting"
+    ? startingThreads?.get(args.current.creationId)
+    : undefined;
+  const currentLabel = args.current?.label;
+  const startedThreadLocation = useMemo<NavigationHistoryLocation | undefined>(
+    () => startedThreadKey !== undefined
+      ? {
+          view: "thread",
+          threadKey: startedThreadKey,
+          ...(currentLabel !== undefined ? { label: currentLabel } : {}),
+        }
+      : undefined,
+    [currentLabel, startedThreadKey],
+  );
+  const resolvedCurrent = startedThreadLocation ?? args.current;
+  const current = resolvedCurrent?.view === "thread" && archivedThreadKeys?.has(resolvedCurrent.threadKey)
     ? undefined
-    : args.current;
+    : resolvedCurrent;
   useEffect(() => {
     const observed = currentRef.current;
     currentRef.current = current;
@@ -178,6 +258,21 @@ export function useNavigationHistory(args: {
         stacksRef.current = next;
         setStacks(next);
       }
+      return;
+    }
+    if (
+      current.view === "starting"
+      && !knownCreationIdsRef.current.has(current.creationId)
+      && prev.cursor?.view === "launchpad"
+      && prev.cursor.directoryKey === current.directoryKey
+      && prev.cursor.instanceId === current.instanceId
+    ) {
+      // Submitting a launchpad turns the draft into the starting thread. It
+      // replaces the launchpad's entry instead of stacking on it: going Back
+      // to the directory's launchpad would open an empty draft.
+      const next: HistoryStacks = { ...prev, cursor: current };
+      stacksRef.current = next;
+      setStacks(next);
       return;
     }
     if (observed !== undefined && sameLocation(observed, current)) {
@@ -203,13 +298,51 @@ export function useNavigationHistory(args: {
     stacksRef.current = next;
     setStacks(next);
   }, [current]);
+  // Declared after the effect above, so that effect sees a new creation as
+  // new in the commit that brings it.
+  useEffect(() => {
+    if (startingThreads !== undefined) {
+      knownCreationIdsRef.current = new Set(startingThreads.keys());
+    }
+  }, [startingThreads]);
 
   const liveThreadKeys = args.liveThreadKeys;
   const liveLaunchpadKeys = args.liveLaunchpadKeys;
   useLayoutEffect(() => {
-    if (liveThreadKeys === undefined && liveLaunchpadKeys === undefined && archivedThreadKeys === undefined) {
+    if (
+      liveThreadKeys === undefined
+      && liveLaunchpadKeys === undefined
+      && archivedThreadKeys === undefined
+      && startingThreads === undefined
+    ) {
       return;
     }
+    const startedThreadKeys = startedThreadKeysRef.current;
+    for (const [creationId, threadKey] of startingThreads ?? []) {
+      if (threadKey !== undefined) {
+        startedThreadKeys.set(creationId, threadKey);
+      }
+    }
+    const resolve = (location: NavigationHistoryLocation): NavigationHistoryLocation => {
+      if (location.view !== "starting" || startingThreads === undefined) {
+        return location;
+      }
+      const threadKey = startingThreads.get(location.creationId)
+        ?? startedThreadKeys.get(location.creationId);
+      const label = location.label !== undefined ? { label: location.label } : {};
+      if (threadKey !== undefined) {
+        return { view: "thread", threadKey, ...label };
+      }
+      if (startingThreads.has(location.creationId)) {
+        return location;
+      }
+      // Ended with no thread. Main put the draft back in the launchpad.
+      return {
+        view: "launchpad",
+        directoryKey: location.directoryKey,
+        ...(location.instanceId !== undefined ? { instanceId: location.instanceId } : {}),
+      };
+    };
     const prev = stacksRef.current;
     const isLive = (location: NavigationHistoryLocation): boolean => {
       if (location.view === "thread") {
@@ -224,12 +357,21 @@ export function useNavigationHistory(args: {
       }
       return true;
     };
-    let back = pruneStack(prev.back, isLive);
-    let forward = pruneStack(prev.forward, isLive);
+    let back = pruneStack(prev.back, isLive, resolve);
+    let forward = pruneStack(prev.forward, isLive, resolve);
+    const resolvedCursor = prev.cursor !== undefined ? resolve(prev.cursor) : undefined;
     let cursor =
-      prev.cursor !== undefined && isLive(prev.cursor)
-        ? prev.cursor
+      resolvedCursor !== undefined && isLive(resolvedCursor)
+        ? resolvedCursor
         : undefined;
+    if (startingThreads !== undefined) {
+      // Every entry for an ended creation was rewritten above.
+      for (const creationId of startedThreadKeys.keys()) {
+        if (!startingThreads.has(creationId)) {
+          startedThreadKeys.delete(creationId);
+        }
+      }
+    }
     if (
       prev.cursor !== undefined
       && cursor === undefined
@@ -241,6 +383,7 @@ export function useNavigationHistory(args: {
       cursor = back[back.length - 1];
       back = back.slice(0, -1);
     }
+    ({ back, forward } = keepOneEntryPerLaunchpad(back, cursor, forward));
     // Removing the middle visit in A → archived B → A must not leave an
     // enabled Back button targeting the location already showing.
     while (cursor && back.length && sameLocation(back[back.length - 1], cursor)) {
@@ -262,7 +405,7 @@ export function useNavigationHistory(args: {
     const next: HistoryStacks = { back, cursor, forward };
     stacksRef.current = next;
     setStacks(next);
-  }, [archivedThreadKeys, current, liveLaunchpadKeys, liveThreadKeys]);
+  }, [archivedThreadKeys, current, liveLaunchpadKeys, liveThreadKeys, startingThreads]);
 
   const goBack = useCallback((): void => {
     const prev = stacksRef.current;
