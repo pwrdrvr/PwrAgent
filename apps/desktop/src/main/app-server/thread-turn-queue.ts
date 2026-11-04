@@ -673,15 +673,15 @@ export class ThreadTurnQueue {
   /**
    * Puts back messages that waited in thread queues when a quiet restart
    * stopped the app, at startup and before any window reads the queue, so
-   * it emits nothing. Each joins the back of its FIFO in its original
-   * order, behind the thread's continuation. An id that is already queued
-   * is skipped.
+   * it emits nothing. Each joins the back of its FIFO in the order given,
+   * which is the order they waited, behind the thread's continuation. An id
+   * that is already queued is skipped.
    */
   restoreQueued(
     entries: ReadonlyArray<Omit<ThreadTurnQueueEntry, "restartContinuation" | "pauseRevision">>,
   ): ThreadTurnQueueEntry[] {
     const restored: ThreadTurnQueueEntry[] = [];
-    for (const input of [...entries].sort((left, right) => left.createdAt - right.createdAt)) {
+    for (const input of entries) {
       if (this.findQueuedEntry(input.id)) continue;
       const entry: ThreadTurnQueueEntry = input.paused
         ? { ...input, paused: true, pauseRevision: 1 }

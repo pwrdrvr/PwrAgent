@@ -33,6 +33,12 @@ export type StoredRestartQueuedFields = Partial<Pick<ThreadTurnQueueEntry,
 >> & {
   /** Paused, or held for the operator: it comes back paused, never sent. */
   paused?: true;
+  /**
+   * Its place among the queued messages saved together. Restore follows
+   * it, so messages queued in the same millisecond, or reordered by the
+   * operator, come back in the order they waited.
+   */
+  position?: number;
 };
 
 export type StoredRestartContinuation = {
@@ -97,9 +103,11 @@ export class RestartContinuationStore {
   ): StoredRestartContinuation[] {
     if (continuations.length === 0) return [];
     return this.db.transaction(() => {
-      const existing = new Set((this.db.prepare(
-        "SELECT payload FROM restart_continuations",
-      ).all() as Array<{ payload: string }>).flatMap((row) => {
+      const rows = this.db.prepare(
+        "SELECT entry_id, payload FROM restart_continuations",
+      ).all() as Array<{ entry_id: string; payload: string }>;
+      const payloads = new Map(rows.map((row) => [row.entry_id, row.payload]));
+      const existing = new Set(rows.flatMap((row) => {
         try {
           const value = JSON.parse(row.payload) as Partial<StoredRestartContinuation>;
           return value.kind === undefined
@@ -113,17 +121,20 @@ export class RestartContinuationStore {
         "INSERT INTO restart_continuations(entry_id, owner_instance_id, owner_pid, created_at, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO NOTHING",
       );
       const upsert = this.db.prepare(
-        "INSERT INTO restart_continuations(entry_id, owner_instance_id, owner_pid, created_at, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET payload = excluded.payload WHERE payload <> excluded.payload",
+        "INSERT INTO restart_continuations(entry_id, owner_instance_id, owner_pid, created_at, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET payload = excluded.payload",
       );
       const saved: StoredRestartContinuation[] = [];
       for (const continuation of continuations) {
         if (continuation.kind === "queued") {
+          const payload = JSON.stringify(continuation);
+          // A message saved unchanged by an earlier pass costs no write.
+          if (payloads.get(continuation.id) === payload) continue;
           upsert.run(
             continuation.id,
             instanceId,
             this.options.processId ?? process.pid,
             continuation.createdAt,
-            JSON.stringify(continuation),
+            payload,
           );
           continue;
         }

@@ -4780,36 +4780,44 @@ describe("DesktopBackendRegistry", () => {
       });
     });
 
-    it("carries queued messages across a restart behind the continuation, in order, paused ones still paused", async () => {
+    it("carries queued messages across a restart behind the continuation, in queue order, paused ones still paused", async () => {
       const { payloads, store } = durableStore();
       const first = launch(store, "instance-a");
       await startRunningTurn(first.registry, "busy");
-      const one = await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Queued one") });
-      const two = await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Queued two") });
-      expect(one).toMatchObject({ status: "queued" });
-      expect(two).toMatchObject({ status: "queued" });
-      if (one.status !== "queued" || two.status !== "queued") throw new Error("expected queued turns");
-      await first.registry.setQueuedTurnPaused({ queueEntryId: two.entry.id, paused: true });
+      // Each message gets its own time, so only the queue order can explain
+      // the order they come back in.
+      let clock = Date.now();
+      const now = vi.spyOn(Date, "now").mockImplementation(() => clock++);
+      onTestFinished(() => now.mockRestore());
+      const queue = async (value: string) => {
+        const result = await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text(value) });
+        if (result.status !== "queued") throw new Error("expected a queued turn");
+        return result.entry.id;
+      };
+      const one = await queue("Queued one");
+      const two = await queue("Queued two");
+      const three = await queue("Queued three");
+      // The operator moves the newest to the front and pauses another.
+      await first.registry.moveQueuedTurn({ queueEntryId: three, beforeQueueEntryId: one });
+      await first.registry.setQueuedTurnPaused({ queueEntryId: two, paused: true });
 
       expect(first.registry.saveRestartContinuations(first.registry.beginQuietRestart())).toBe(1);
       // An edit after the save replaces the saved copy.
-      first.registry.updateQueuedTurnInput(one.entry.id, text("Queued one, edited"));
-      expect(payloads().map((row) => [row.kind ?? "continuation", row.input])).toEqual([
-        ["queued", text("Queued one, edited")],
-        ["queued", text("Queued two")],
-        ["continuation", [expect.objectContaining({ text: expect.stringContaining("PwrAgent restarted.") })]],
-      ]);
+      first.registry.updateQueuedTurnInput(one, text("Queued one, edited"));
+      expect(payloads().find((row) => row.id === one)?.input).toEqual(text("Queued one, edited"));
       await first.registry.close();
+      now.mockRestore();
 
       const second = launch(store, "instance-b", ["instance-b"]);
-      const queued = second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" });
-      expect(queued.map((entry) => entry.displayText)).toEqual([
+      const restored = second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" });
+      expect(restored.map((entry) => entry.displayText)).toEqual([
         expect.stringContaining("PwrAgent restarted."),
+        "Queued three",
         "Queued one, edited",
         "Queued two",
       ]);
-      expect(queued.map((entry) => entry.queueEntryId).slice(1)).toEqual([one.entry.id, two.entry.id]);
-      expect(queued.map((entry) => entry.paused ?? false)).toEqual([false, false, true]);
+      expect(restored.map((entry) => entry.queueEntryId).slice(1)).toEqual([three, one, two]);
+      expect(restored.map((entry) => entry.paused ?? false)).toEqual([false, false, false, true]);
 
       second.registry.beginRestartContinuationDispatch();
       await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(1));
@@ -4820,7 +4828,7 @@ describe("DesktopBackendRegistry", () => {
       // The queued messages wait for the continuation's turn, as on any thread.
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(second.codexClient.startTurnCallCount).toBe(1);
-      expect(payloads().map((row) => row.kind)).toEqual(["queued", "queued"]);
+      expect(payloads().map((row) => row.kind)).toEqual(["queued", "queued", "queued"]);
     });
 
     it("reports the gate while it waits and opens it when the operator starts everything now", async () => {

@@ -2380,7 +2380,7 @@ export function buildRestartContinuationText(stoppedAt: number): string {
 }
 
 /** A queued message as a quiet restart saves it. */
-function storedRestartQueuedEntry(entry: ThreadTurnQueueEntry): StoredRestartContinuation {
+function storedRestartQueuedEntry(entry: ThreadTurnQueueEntry, position: number): StoredRestartContinuation {
   return {
     id: entry.id,
     backend: entry.backend,
@@ -2407,6 +2407,7 @@ function storedRestartQueuedEntry(entry: ThreadTurnQueueEntry): StoredRestartCon
       ...(entry.title ? { title: entry.title } : {}),
       // A held message waited on the operator; it must not send itself.
       ...(entry.paused || entry.manualReleaseRequired ? { paused: true as const } : {}),
+      position,
     },
   };
 }
@@ -2415,7 +2416,7 @@ function storedRestartQueuedEntry(entry: ThreadTurnQueueEntry): StoredRestartCon
 function restartQueuedEntry(
   stored: StoredRestartContinuation,
 ): Omit<ThreadTurnQueueEntry, "restartContinuation" | "pauseRevision"> {
-  const { origin, paused, ...settings } = stored.queued ?? {};
+  const { origin, paused, position: _position, ...settings } = stored.queued ?? {};
   return {
     ...settings,
     id: stored.id,
@@ -22044,7 +22045,7 @@ export class DesktopBackendRegistry {
     // continuation restored earlier keeps the row it has.
     const queued = this.threadTurnQueue.getAllQueuedEntries()
       .filter((entry) => !entry.restartContinuation && !entry.projectHold)
-      .map((entry) => storedRestartQueuedEntry(entry));
+      .map((entry, position) => storedRestartQueuedEntry(entry, position));
     try {
       const saved = store.saveAll(this.runtimeInstanceId, [...continuations, ...queued]);
       for (const entry of queued) this.durableRestartContinuations.set(entry.id, entry);
@@ -22082,8 +22083,12 @@ export class DesktopBackendRegistry {
     }
     if (claimed.length === 0) return;
     for (const continuation of claimed) this.durableRestartContinuations.set(continuation.id, continuation);
+    // In the order they waited. Rows from before positions were saved, or
+    // from another restart, follow by time.
+    const position = (stored: StoredRestartContinuation) => stored.queued?.position ?? Number.MAX_SAFE_INTEGER;
     const queued = this.threadTurnQueue.restoreQueued(claimed
       .filter((continuation) => continuation.kind === "queued")
+      .sort((left, right) => position(left) - position(right) || left.createdAt - right.createdAt)
       .map((continuation) => restartQueuedEntry(continuation)));
     if (queued.length > 0) {
       backendRegistryLog.info("restart queued messages restored", {
@@ -22198,7 +22203,7 @@ export class DesktopBackendRegistry {
   private refreshRestartQueuedEntry(entry: ThreadTurnQueueEntry): void {
     const stored = this.durableRestartContinuations.get(entry.id);
     if (!stored || stored.kind !== "queued" || !this.restartContinuationStore) return;
-    const next = storedRestartQueuedEntry(entry);
+    const next = storedRestartQueuedEntry(entry, stored.queued?.position ?? Number.MAX_SAFE_INTEGER);
     try {
       this.restartContinuationStore.update(next);
       this.durableRestartContinuations.set(entry.id, next);
