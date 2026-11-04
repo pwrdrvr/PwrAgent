@@ -44380,6 +44380,26 @@ export class DesktopBackendRegistry {
     }
     const refusal = this.agentMessageProjectRefusal(request.args);
     if (refusal) return threadOrchestrationFailure(PROJECT_PAUSED_ERROR_CODE, refusal);
+    // An agent's send is checked here, on the caller's instance, before a
+    // local or federated send: a peer only sees a mode, not that an agent
+    // asked for it. The operator's to-do dispatch delivers without it.
+    if (
+      request.args.executionMode !== undefined
+      || request.args.approvalPolicy !== undefined
+      || request.args.sandbox !== undefined
+    ) {
+      const accessRefusal = checkAgentAccessRequest(
+        await this.resolveAgentCallerExecutionMode({
+          backend: request.context.backend,
+          threadId: request.context.threadId,
+          turnId: sourceTurnId,
+        }),
+        request.args,
+      );
+      if (accessRefusal) {
+        return threadOrchestrationFailure(accessRefusal.code, accessRefusal.message);
+      }
+    }
     return await this.deliverMessageToThread(request);
   }
 
@@ -44437,25 +44457,6 @@ export class DesktopBackendRegistry {
         "forbidden",
         "send_message_to_thread targets another thread. Continue the current thread by replying normally.",
       );
-    }
-    // Checked here, on the caller's instance, before a local or federated
-    // send: a peer only sees a mode, not that an agent asked for it.
-    if (
-      request.args.executionMode !== undefined
-      || request.args.approvalPolicy !== undefined
-      || request.args.sandbox !== undefined
-    ) {
-      const accessRefusal = checkAgentAccessRequest(
-        await this.resolveAgentCallerExecutionMode({
-          backend: request.context.backend,
-          threadId: request.context.threadId,
-          turnId: sourceTurnId,
-        }),
-        request.args,
-      );
-      if (accessRefusal) {
-        return threadOrchestrationFailure(accessRefusal.code, accessRefusal.message);
-      }
     }
 
     const correspondenceId = `correspondence:${randomUUID()}`;

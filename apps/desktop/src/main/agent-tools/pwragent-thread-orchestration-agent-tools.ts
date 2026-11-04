@@ -334,11 +334,7 @@ function inputSchemaForOperation(
           reasoningEffort: { type: "string" },
           serviceTier: { type: "string" },
           fastMode: { type: "boolean" },
-          executionMode: {
-            type: "string",
-            description:
-              "Cannot exceed this thread's mode. Omit to inherit it.",
-          },
+          executionMode: { type: "string" },
           approvalPolicy: { type: "string" },
           sandbox: { type: "string" },
           branchName: {
@@ -451,11 +447,7 @@ function inputSchemaForOperation(
           reasoningEffort: { type: "string" },
           serviceTier: { type: "string" },
           fastMode: { type: "boolean" },
-          executionMode: {
-            type: "string",
-            description:
-              "Cannot exceed this thread's mode. Omit to keep the target's.",
-          },
+          executionMode: { type: "string" },
           approvalPolicy: { type: "string" },
           sandbox: { type: "string" },
         },
