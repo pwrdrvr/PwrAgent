@@ -16,10 +16,15 @@ import {
  *   the task, or until the live background set that named it drops it, and
  *   then never runs again.
  * - Commands keep their Actions rows.
+ * - Waiting For lists every running task, sub-agents included: Claude takes
+ *   another turn when any of them ends.
  *
  * The model is the event stream itself: each task's lifecycle as Claude
- * reports it, with notifications that race task_updated and a live set that
- * lags a settlement.
+ * reports it, with notifications that race task_updated, redelivered starts
+ * and notifications, and a live set that lags a settlement. Whether a task
+ * runs follows the CLI's documented rule, not the tracker: once the live
+ * background set has been seen, a background task runs only while the set
+ * names it, and a foreground task is never in the set.
  */
 
 type TaskKind = "agent" | "bash";
@@ -32,6 +37,8 @@ type TaskPlan = {
   end: "notification" | "updated-then-notification" | "dropped-from-set" | "none";
   status: Terminal;
   progress: number;
+  /** Claude sends the settling notification twice. */
+  duplicateEnd: boolean;
 };
 
 type Step =
@@ -47,6 +54,7 @@ const taskPlan = fc.record<TaskPlan>({
   end: fc.constantFrom("notification", "updated-then-notification", "dropped-from-set", "none"),
   status: fc.constantFrom<Terminal>("completed", "failed", "stopped"),
   progress: fc.nat({ max: 2 }),
+  duplicateEnd: fc.boolean(),
 });
 
 /**
@@ -63,6 +71,9 @@ const scenario = fc.array(taskPlan, { minLength: 1, maxLength: 5 }).chain((plans
       steps.push({ type: "updated", task, status: plan.status });
       steps.push({ type: "notification", task, status: plan.status });
     } else if (plan.end === "notification") {
+      steps.push({ type: "notification", task, status: plan.status });
+    }
+    if (plan.duplicateEnd && (plan.end === "notification" || plan.end === "updated-then-notification")) {
       steps.push({ type: "notification", task, status: plan.status });
     }
     return steps;
@@ -158,45 +169,53 @@ const CARD_STATUS: Record<Terminal, string> = {
 };
 
 describe("Claude sub-agent projection", () => {
-  it("never shows a sub-agent in Actions, and gives each one card that follows its lifecycle", () => {
+  it("never shows a sub-agent in Actions, keeps it in Waiting For, and gives it one card that follows its lifecycle", () => {
     fc.assert(fc.property(scenario, ({ plans, steps }) => {
       const tracker = new ClaudeTaskTracker(() => 1_000);
-      // Model: each started task's card status, or none for a command.
-      const model = new Map<number, string>();
+      // Model, from the event stream alone.
+      const started: number[] = [];
+      const settled = new Map<number, Terminal>();
+      const named = new Set<number>();
+      let liveSet: Set<number> | undefined;
       const terminalCards = new Set<string>();
 
       for (const step of steps) {
         tracker.apply(message(step, plans));
-        if (step.type === "start" && plans[step.task].kind === "agent" && !model.has(step.task)) {
-          model.set(step.task, "running");
-        }
-        if ((step.type === "updated" || step.type === "notification") && plans[step.task].kind === "agent") {
-          model.set(step.task, CARD_STATUS[step.status]);
+        if (step.type === "start" && !started.includes(step.task)) started.push(step.task);
+        if ((step.type === "updated" || step.type === "notification") && !settled.has(step.task)) {
+          settled.set(step.task, step.status);
         }
         if (step.type === "set") {
-          for (const task of step.dropping) {
-            if (plans[task].kind === "agent" && model.get(task) === "running") model.set(task, "success");
-          }
+          liveSet = new Set(step.lagging);
+          for (const task of step.lagging) named.add(task);
         }
+        const runs = (task: number) => !settled.has(task)
+          && (!plans[task].backgrounded || !liveSet || liveSet.has(task));
+        const dropped = (task: number) => !settled.has(task) && plans[task].backgrounded
+          && named.has(task) && liveSet !== undefined && !liveSet.has(task);
 
-        // Actions: commands only, every running command.
+        // Waiting For: every running task, commands and sub-agents.
+        expect(tracker.active().map((task) => task.taskId)).toEqual(started.filter(runs).map(taskId));
+
+        // Actions: running commands only.
         const rows = tracker.actionTasks().map((task) => claudeTaskRow(task, { cwd: "/repo" }));
+        expect(rows.map((row) => row.processId))
+          .toEqual(started.filter((task) => plans[task].kind === "bash" && runs(task)).map(taskId));
         expect(rows.filter((row) => row.kind === "agent")).toEqual([]);
-        const activeCommands = tracker.active()
-          .filter((task) => task.taskType !== "local_agent")
-          .map((task) => task.taskId);
-        expect(rows.map((row) => row.processId)).toEqual(activeCommands);
 
         // Cards: one per sub-agent, in start order, matching the model.
+        const agents = started.filter((task) => plans[task].kind === "agent");
         const cards = tracker.subAgentCards();
         expect(cards.map((card) => card.monitorId))
-          .toEqual([...model.keys()].map((task) => `${CLAUDE_SUB_AGENT_MONITOR_ID_PREFIX}${taskId(task)}`));
-        for (const card of cards) {
-          const task = Number(card.taskId.slice("task-".length));
-          expect(card.status).toBe(model.get(task));
+          .toEqual(agents.map((task) => `${CLAUDE_SUB_AGENT_MONITOR_ID_PREFIX}${taskId(task)}`));
+        cards.forEach((card, index) => {
+          const task = agents[index];
+          const ended = settled.get(task);
+          expect(card.status).toBe(ended ? CARD_STATUS[ended] : dropped(task) ? "success" : "running");
+          // Once a card ends it never runs again.
           if (card.status !== "running") terminalCards.add(card.monitorId);
           else expect(terminalCards.has(card.monitorId)).toBe(false);
-        }
+        });
       }
     }));
   });

@@ -265,6 +265,7 @@ import {
   estimateTokenUsageCost,
   formatTokenUsageUsd,
   CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+  type AppServerBackgroundTask,
   isClaudeNativeSubAgent,
   isCodexNativeSubAgentVisibleInNavigation,
   isToolManagedWorktreePath,
@@ -29911,6 +29912,15 @@ export class DesktopBackendRegistry {
         };
       },
     );
+  }
+
+  /**
+   * The backend tasks a thread waits on, for Waiting For. Only Claude takes
+   * another turn when one ends, and its sub-agents count: the Actions list
+   * leaves them out because they have Sub-agents cards.
+   */
+  listBackendTaskWakes(thread: { backend: AppServerBackendKind; threadId: string }): AppServerBackgroundTask[] {
+    return thread.backend === "claude" ? this.claudeBackend.listWaitingTasks(thread.threadId) : [];
   }
 
   async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {

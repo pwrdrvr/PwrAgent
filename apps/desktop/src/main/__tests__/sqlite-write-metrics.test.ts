@@ -452,6 +452,10 @@ describe("sqlite write metrics", () => {
         threadId: "claude-native:agent-1", title: "Audit the SDK", threadStatus: "active", agentNickname: "general-purpose",
       })]);
       expect((await registry.listBackgroundTerminals({ backend: "claude", threadId })).terminals).toEqual([]);
+      // Waiting For still lists it: Claude takes another turn when it ends.
+      expect(registry.listBackendTaskWakes({ backend: "claude", threadId })).toEqual([expect.objectContaining({
+        processId: "agent-1", kind: "agent", command: "Audit the SDK", background: true,
+      })]);
       expect(events.filter((event) => event.notification.method === "thread/backgroundTasks/updated")
         .flatMap((event) => (event.notification.params as { tasks: unknown[] }).tasks)).toEqual([]);
       expect(events.some((event) => event.notification.method === "thread/subAgents/updated")).toBe(true);
@@ -472,6 +476,7 @@ describe("sqlite write metrics", () => {
       expect(await tray(threadId)).toEqual([expect.objectContaining({
         threadId: "claude-native:agent-1", threadStatus: "idle",
       })]);
+      await vi.waitFor(() => expect(registry.listBackendTaskWakes({ backend: "claude", threadId })).toEqual([]));
     } finally { await registry.close(); }
   });
 

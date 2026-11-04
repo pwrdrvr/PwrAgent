@@ -8,6 +8,7 @@ import {
   type ThreadSubAgentSummary,
   type TokenMiserSubAgentAccounting,
 } from "@pwragent/shared";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { statSync } from "node:fs";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -379,6 +380,31 @@ describe("thread sub-agent table", () => {
       // Claude Code's own sub-agents are harness workers, like Codex's.
       expect(rows.filter((row) => row.lens === "harness").map((row) => row.monitor_id).sort())
         .toEqual(["claude-native:", "claude-native:task-1", "codex-native:", "codex-native:worker"]);
+    });
+
+    it("agrees with the shared lens for any monitor id (differential)", async () => {
+      const { stateDb, store } = openStore();
+      // Ids near every prefix boundary: a whole prefix, a cut one, one with a
+      // suffix, and arbitrary text.
+      const prefixes = ["system:token-miser:", "codex-native:", "claude-native:", "review:", "task-monitor:"];
+      const monitorId = fc.oneof(
+        fc.tuple(fc.constantFrom(...prefixes), fc.string({ maxLength: 6 })).map(([prefix, rest]) => prefix + rest),
+        fc.tuple(fc.constantFrom(...prefixes), fc.nat({ max: 20 })).map(([prefix, cut]) => prefix.slice(0, cut)),
+        fc.string({ maxLength: 20 }),
+      ).filter((id) => id.length > 0);
+      let run = 0;
+      await fc.assert(fc.asyncProperty(fc.uniqueArray(monitorId, { minLength: 1, maxLength: 12 }), async (ids) => {
+        // Each run writes its own thread; the storage key contains its id.
+        const threadId = `differential-${run += 1}-end`;
+        await store.upsertThreadSubAgents({ backend: "codex", threadId,
+          subAgents: ids.map((id, index) => card(index, { monitorId: id })) });
+        const rows = stateDb.raw.prepare(`SELECT monitor_id, ${THREAD_SUB_AGENT_LENS_SQL} AS lens FROM thread_sub_agents
+          WHERE instr(thread_id, ?) > 0`)
+          .all(threadId) as Array<{ monitor_id: string; lens: SubAgentLens }>;
+        expect(rows).toHaveLength(ids.length);
+        const lenses = new Map(rows.map((row) => [row.monitor_id, row.lens]));
+        for (const id of ids) expect([id, lenses.get(id)]).toEqual([id, subAgentLens(card(0, { monitorId: id }))]);
+      }), { numRuns: 50 });
     });
 
     it("counts and pages the panel as the shared visibility rule filters it", async () => {

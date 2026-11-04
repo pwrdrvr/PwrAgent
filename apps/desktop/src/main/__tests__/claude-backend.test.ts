@@ -3335,6 +3335,12 @@ describe("Claude SDK backend", () => {
         agentName: "Explore", startedAt: expect.any(Number) },
     ]));
     expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([]);
+    // Claude takes another turn when it ends, so Waiting For still lists it.
+    await vi.waitFor(() => expect(f.backend.listWaitingTasks(threadId)).toEqual([{
+      itemId: "tool-agent", processId: "agent-1", command: "Audit the SDK", cwd: f.root,
+      kind: "agent", agentType: "Explore", progress: "3 tool uses · last Grep",
+      background: true, startedAt: expect.any(Number),
+    }]));
     expect(f.backend.backgroundTaskThreadIds()).toEqual([threadId]);
     expect(f.backend.activeTaskCount(threadId)).toBe(1);
     expect(f.subAgentRecords.every((record) => record.threadId === threadId)).toBe(true);
@@ -3347,6 +3353,7 @@ describe("Claude SDK backend", () => {
       monitorId: "claude-native:agent-1", status: "cancelled", lastMessage: "Stopped",
     });
     expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
+    expect(f.backend.listWaitingTasks(threadId)).toEqual([]);
     expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
     expect(f.events.find((event) => event.notification.method === "item/completed"
       && (event.notification.params.item as { id?: string }).id === "tool-agent")?.notification.params)

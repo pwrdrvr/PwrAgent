@@ -1901,8 +1901,8 @@ export class ClaudeBackend {
     await this.emit({ method: "thread/sessionWakes/updated", params: { threadId: live.session.thread.id, wakes } });
   }
 
-  private taskRows(live: LiveSession): AppServerBackgroundTask[] {
-    return live.tasks.actionTasks().map((task) => {
+  private taskRows(live: LiveSession, tasks = live.tasks.actionTasks()): AppServerBackgroundTask[] {
+    return tasks.map((task) => {
       const row = task.toolUseId ? live.toolRows.get(task.toolUseId) : undefined;
       const command = claudeShellCommand(row?.entry.details[0]);
       return claudeTaskRow(task, { cwd: live.session.cwd, ...(command !== undefined ? { command } : {}) });
@@ -1961,6 +1961,15 @@ export class ClaudeBackend {
   /** Commands and sub-agents Claude is running for the thread. */
   activeTaskCount(threadId: string): number {
     return this.sessions.get(threadId)?.tasks.active().length ?? 0;
+  }
+
+  /**
+   * Everything Claude continues the thread after, for Waiting For: its
+   * commands and its sub-agents. Actions lists only the commands.
+   */
+  listWaitingTasks(threadId: string): AppServerBackgroundTask[] {
+    const live = this.sessions.get(threadId);
+    return live ? this.taskRows(live, live.tasks.active()) : [];
   }
 
   /** Stops one task. Claude reports the stop through the task's notification. */
