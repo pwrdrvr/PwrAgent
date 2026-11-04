@@ -520,10 +520,10 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
                   // are decoration beside the name, so the name says what
                   // they mean.
                   aria-label={`Jump to ${project.label}${
-                    project.active || project.activeRemote
-                      ? `${project.active ? ", turn running" : ""}${
-                        project.activeRemote ? ", turn running on another instance" : ""
-                      }`
+                    project.active && project.activeRemote
+                      ? ", turns running here and on another instance"
+                      : project.active ? ", turn running"
+                      : project.activeRemote ? ", turn running on another instance"
                       : project.review ? ", unread" : ""
                   }${project.forgeActivityPaused ? ", forge activity paused" : ""}`}
                   onClick={() => {

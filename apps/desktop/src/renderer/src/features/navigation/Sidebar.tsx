@@ -1047,13 +1047,14 @@ export function Sidebar(props: SidebarProps) {
     );
     const pinned = projects.filter(isPinnedDirectory).sort(comparePinnedDirectories);
     const unpinned = projects.filter((directory) => !isPinnedDirectory(directory));
+    const federationViewer = isFederationViewerWindow();
     return [...pinned, ...unpinned].map((directory) => ({
       key: directory.key,
       label: directory.label,
       containsSelection:
         indexSelectedItemKey === buildLaunchpadSelectionKey(directory.key)
         || (selectedThreadDirectoryKeys?.includes(directory.key) ?? false),
-      ...projectTurnMarks(directory.counts, isFederationViewerWindow()),
+      ...projectTurnMarks(directory.counts, federationViewer),
       review: (directory.counts?.review ?? 0) > 0,
       ...(isProjectForgeActivityPaused(directory) ? { forgeActivityPaused: true } : {}),
       ...(isPinnedDirectory(directory) ? { pinned: true } : {}),

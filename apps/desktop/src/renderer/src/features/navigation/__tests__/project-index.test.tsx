@@ -136,7 +136,7 @@ describe("ProjectIndex", () => {
       return Array.from(mark.querySelectorAll(".thinking-scanner")).map((scanner) =>
         scanner.closest(".project-index__mark-remote") ? "remote" : "local");
     };
-    expect(marks("Jump to both, turn running, turn running on another instance")).toEqual(["local", "remote"]);
+    expect(marks("Jump to both, turns running here and on another instance")).toEqual(["local", "remote"]);
     // A peer's turn outranks the unread cookie, as a local turn does.
     expect(marks("Jump to peer, turn running on another instance")).toEqual(["remote"]);
     expect(marks("Jump to here, turn running")).toEqual(["local"]);
