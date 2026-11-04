@@ -284,6 +284,54 @@ async function runModel(sequence: Iterable<fc.AsyncCommand<Model, Real>>): Promi
 }
 
 describe("ThreadTurnQueue model", () => {
+  it("handles an external turn's terminal after acknowledging steer deliveries into it", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), terminal, async (deliveries, status) => {
+      let active = true;
+      const steered: string[] = [];
+      const started: string[] = [];
+      const queue = new ThreadTurnQueue({
+        now: () => 1_000,
+        isThreadActive: () => active,
+        canSteerThread: () => active,
+        steerTurn: async (entry) => {
+          steered.push(entry.id);
+          return { ...THREAD, turnId: "external-turn" };
+        },
+        startTurn: async (entry) => {
+          expect(active).toBe(false);
+          active = true;
+          started.push(entry.id);
+          return { ...THREAD, turnId: `turn-${entry.id}` };
+        },
+      });
+      try {
+        // The provider owns this turn. Steer acknowledgements confirm
+        // delivery into it; only its terminal event says it has ended.
+        for (let index = 0; index < deliveries; index += 1) {
+          await queue.submitGroupedSteer({
+            ...THREAD, id: `steer-${index}`, origin: "manual",
+            input: [{ type: "text", text: `guidance-${index}` }],
+          });
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(steered).toHaveLength(index + 1);
+        }
+        await queue.submit({
+          ...THREAD, id: "next", origin: "manual",
+          input: [{ type: "text", text: "Start a separate turn" }],
+        });
+        active = false;
+        await queue.releaseThread({ ...THREAD, turnId: "external-turn", status });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(started).toEqual(status === "turn/completed" ? ["next"] : []);
+        expect(queue.getQueuedEntries(THREAD).map((entry) => ({
+          id: entry.id, held: Boolean(entry.manualReleaseRequired),
+        }))).toEqual(status === "turn/failed" ? [{ id: "next", held: true }] : []);
+      } finally {
+        queue.close();
+      }
+    }), { numRuns: 25 });
+  });
+
   it("holds every waiting entry after failure even if the newest hold already has that reason", async () => {
     await runModel([
       new QueueCommand({ kind: "submit" }),
