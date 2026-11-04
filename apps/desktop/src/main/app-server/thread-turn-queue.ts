@@ -237,8 +237,6 @@ type ThreadTurnQueueReleaseParams = {
 };
 
 type AdmittedEntry = {
-  key: string;
-  kind: "start" | "steer";
   entryId: string;
   turnId?: string;
 };
@@ -246,6 +244,7 @@ type AdmittedEntry = {
 type StartNextResult = "none" | "started" | "blocked";
 
 const RECENT_ADMITTED_ENTRY_LIMIT = 1_000;
+const RECENT_TERMINAL_TURN_LIMIT = 1_000;
 
 function groupedAgentInput(messages: QueuedAgentMessage[]): AppServerTurnInputItem[] {
   if (messages.length === 1) return structuredClone(messages[0]!.input);
@@ -297,6 +296,7 @@ export class ThreadTurnQueue {
   private readonly admissions = new Map<string, QueueAdmission>();
   private readonly runningEntries = new Map<string, RunningEntry>();
   private readonly recentlyAdmittedEntries = new Map<string, AdmittedEntry>();
+  private readonly recentlyProcessedTerminals = new Set<string>();
   private readonly releasingKeys = new Set<string>();
   private readonly pendingReleaseKeys = new Set<string>();
   /**
@@ -1035,6 +1035,10 @@ export class ThreadTurnQueue {
 
   async releaseThread(params: ThreadTurnQueueReleaseParams): Promise<void> {
     const key = this.keyFor(params);
+    // Only processed outcomes prove a turn has ended. An admission or
+    // an unidentified idle release says nothing about its final outcome.
+    if (params.turnId !== undefined
+      && this.recentlyProcessedTerminals.has(JSON.stringify([key, params.turnId]))) return;
     const admission = this.admissions.get(key);
     // Buffer identified outcomes through the started callback as well as the
     // backend handoff. Only the acknowledgement proves which turn they end.
@@ -1046,16 +1050,8 @@ export class ThreadTurnQueue {
       return;
     }
     const running = this.runningEntries.get(key);
-    if (params.turnId !== undefined && (running?.turnId !== undefined
-      ? running.turnId !== params.turnId
-      : [...this.recentlyAdmittedEntries.values()].some((entry) =>
-        entry.kind === "start" && entry.key === key && entry.turnId === params.turnId))) {
-      // A terminal for an older admission must not hold newer work, even
-      // when that older turn ended before the current FIFO was submitted.
-      // A steer acknowledges delivery into an externally owned turn, not
-      // its completion. That turn still releases and holds its waiting FIFO.
-      return;
-    }
+    if (params.turnId !== undefined && running?.turnId !== undefined
+      && running.turnId !== params.turnId) return;
     if (this.releasingKeys.has(key)) {
       // Codex commonly follows a terminal event with a status→idle event.
       // Keep only that no-turn-id release if it lands while we are awaiting a
@@ -1088,6 +1084,9 @@ export class ThreadTurnQueue {
   }
 
   private async settleRelease(key: string, params: ThreadTurnQueueReleaseParams): Promise<void> {
+    if (params.turnId !== undefined && params.status !== "idle") {
+      this.rememberTerminal(key, params.turnId);
+    }
     const running = this.runningEntries.get(key);
     if (
       running &&
@@ -1132,7 +1131,7 @@ export class ThreadTurnQueue {
         // batch; new senders can only append to the next queued steer.
         const attempt = Symbol("queue admission");
         this.applyAdmission(key, { type: "begin", attempt, kind: "steer" });
-        this.rememberAdmittedEntry({ key, kind: "steer", entryId: next.id });
+        this.rememberAdmittedEntry({ entryId: next.id });
         let delivered = false;
         try {
           const result = await this.options.steerTurn(next);
@@ -1150,7 +1149,7 @@ export class ThreadTurnQueue {
             return "none";
           }
           this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
-          this.rememberAdmittedEntry({ key, kind: "steer", entryId: next.id, turnId: result.turnId });
+          this.rememberAdmittedEntry({ entryId: next.id, turnId: result.turnId });
           delivered = true;
           await this.emit({ type: "started", entry: next, turnId: result.turnId });
           return "started";
@@ -1205,7 +1204,7 @@ export class ThreadTurnQueue {
     const key = this.keyFor(entry);
     const attempt = Symbol("queue admission");
     this.applyAdmission(key, { type: "begin", attempt });
-    this.rememberAdmittedEntry({ key, kind: "start", entryId: entry.id });
+    this.rememberAdmittedEntry({ entryId: entry.id });
     try {
       const result = await this.options.startTurn(entry);
       const admission = this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
@@ -1214,8 +1213,6 @@ export class ThreadTurnQueue {
       // without resurrecting a running entry for the already completed turn.
       if (!admission.terminal) this.runningEntries.set(key, { entry, turnId: result.turnId });
       this.rememberAdmittedEntry({
-        key,
-        kind: "start",
         entryId: entry.id,
         turnId: result.turnId,
       });
@@ -1225,6 +1222,7 @@ export class ThreadTurnQueue {
         ? completedAdmission.terminal : undefined;
       if (terminal) {
         if (admission.terminal) {
+          this.rememberTerminal(key, terminal.turnId);
           await this.emit({ type: "terminal", entry, turnId: terminal.turnId, status: terminal.status });
           if (terminal.status === "turn/failed") {
             await this.holdAfterTurnFailure(key, terminal.errorMessage);
@@ -1244,6 +1242,7 @@ export class ThreadTurnQueue {
         if (admission && admission.phase !== "idle" && admission.attempt === attempt) {
           for (const terminal of admission.terminals.values()) {
             if (terminal.status === "turn/failed") {
+              this.rememberTerminal(key, terminal.turnId);
               await this.holdAfterTurnFailure(key, terminal.errorMessage);
             }
           }
@@ -1380,6 +1379,15 @@ export class ThreadTurnQueue {
     const reason = this.holdReasonFor(key);
     if (!reason) return entry;
     return { ...entry, manualReleaseRequired: true, holdReason: entry.holdReason ?? reason };
+  }
+
+  private rememberTerminal(key: string, turnId: string): void {
+    this.recentlyProcessedTerminals.add(JSON.stringify([key, turnId]));
+    while (this.recentlyProcessedTerminals.size > RECENT_TERMINAL_TURN_LIMIT) {
+      const oldest = this.recentlyProcessedTerminals.values().next().value;
+      if (oldest === undefined) break;
+      this.recentlyProcessedTerminals.delete(oldest);
+    }
   }
 
   private rememberAdmittedEntry(entry: AdmittedEntry): void {
