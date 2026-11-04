@@ -3328,7 +3328,7 @@ describe("StarMapChatCard settings menu", () => {
           launchpadOptions: { models: codexCatalogModels() },
         }],
       })),
-    } as Partial<DesktopApi>);
+    } as unknown as Partial<DesktopApi>);
     renderCard({ desktopApi, thread: localThread({ model: "gpt-6.1-sol" }) });
     await openSettingsMenu();
 

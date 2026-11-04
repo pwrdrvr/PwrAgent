@@ -1,8 +1,4 @@
-import {
-  buildModelMenu,
-  type BackendModelOption,
-  type BackendSummary,
-} from "@pwragent/shared";
+import { buildModelMenu, type BackendModelOption } from "@pwragent/shared";
 import type { SelectOption } from "../components/Select";
 
 export const OTHER_MODELS_GROUP = "Other models";
@@ -14,7 +10,8 @@ export const OTHER_MODELS_GROUP = "Other models";
  * A `Select` cannot open a submenu, so Other is a titled group instead.
  */
 export function modelSelectOptions(params: {
-  kind: BackendSummary["kind"] | undefined;
+  /** Backend id, such as "codex", "claude" or "acp:<id>". */
+  kind: string | undefined;
   models: readonly BackendModelOption[];
   /** The stored value of a model's row. Defaults to its id. */
   valueFor?: (model: BackendModelOption) => string;

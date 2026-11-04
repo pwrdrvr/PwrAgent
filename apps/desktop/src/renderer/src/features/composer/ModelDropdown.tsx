@@ -31,7 +31,7 @@ type ComposerDropdownProps = ComponentProps<typeof ComposerDropdown>;
 export function ModelDropdown(
   props: Omit<
     ComposerDropdownProps,
-    "groups" | "options" | "optionsLabel" | "otherLabel" | "otherOptions"
+    "groups" | "kind" | "options" | "optionsLabel" | "otherLabel" | "otherOptions"
   > & {
     kind: BackendSummary["kind"] | undefined;
     models: readonly BackendModelOption[];
