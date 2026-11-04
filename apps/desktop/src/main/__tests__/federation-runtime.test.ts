@@ -65,6 +65,7 @@ import { replacementPages } from "../federation/federation-replacement-pages";
 import { FEDERATION_EVENT_STREAM_METHOD } from "../federation/federation-event-stream";
 import * as appState from "../state/app-state";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
+import * as directoryRegistration from "../app-server/directory-registration-service";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 
 // `getDesktopBackendRegistry()` is the one construction that opts into real
@@ -450,6 +451,45 @@ describe("DesktopFederationRuntime", () => {
       expect(DEFAULT_CAPABILITIES).toContain("thread_parent_mutation_v1");
     } finally {
       registry.mockRestore();
+    }
+  });
+
+  it("fences owner directory attachment before registration or overlay I/O", async () => {
+    const stateDb = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(stateDb);
+    setDesktopOverlayStoreForTests(overlayStore);
+    let fenced = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const withThreadWorkspaceMutation = vi.fn(async (_identity: unknown, work: () => Promise<unknown>) => {
+      fenced = true;
+      try { return await work(); } finally { fenced = false; }
+    });
+    let fencedAtRegistration = false;
+    const registration = vi.spyOn(directoryRegistration, "registerDirectoryFromDisk").mockImplementation(async () => {
+      fencedAtRegistration = fenced;
+      await held;
+      return { ok: true, directoryKey: "directory:/owner/extra", directoryLabel: "extra", directoryPath: "/owner/extra",
+        launchpad: { directoryKey: "directory:/owner/extra", directoryKind: "directory", directoryLabel: "extra", directoryPath: "/owner/extra",
+          backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+        defaults: { backend: "codex", executionMode: "default" } };
+    });
+    const publishLocalEvent = vi.fn(async () => undefined);
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({ withThreadWorkspaceMutation, publishLocalEvent } as never);
+    try {
+      const attaching = new DesktopFederationRuntime().localBackend().attachDirectoryToThread({ threadId: "owner", path: "/owner/extra" });
+      expect(fencedAtRegistration).toBe(true);
+      release();
+      await expect(attaching).resolves.toMatchObject({ ok: true });
+      expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "owner" }, expect.any(Function));
+      expect(fenced).toBe(false);
+    } finally {
+      release();
+      registry.mockRestore();
+      registration.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      stateDb.close();
     }
   });
 

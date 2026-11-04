@@ -9938,50 +9938,52 @@ class DesktopAppServerService {
         .attachDirectoryToThread(ownerRequest);
     }
     const backend = request.backend ?? "codex";
-    const registered = await this.registerDirectoryFromDisk({
-      path: request.path,
-      preferredBackend: request.preferredBackend ?? backend,
-    });
-    if (!registered.ok) {
-      return {
-        ok: false,
+    return await getDesktopBackendRegistry().withThreadWorkspaceMutation({ backend, threadId: request.threadId }, async () => {
+      const registered = await this.registerDirectoryFromDisk({
+        path: request.path,
+        preferredBackend: request.preferredBackend ?? backend,
+      });
+      if (!registered.ok) {
+        return {
+          ok: false,
+          backend,
+          threadId: request.threadId,
+          reason: registered.reason,
+          message: registered.message,
+        };
+      }
+
+      const directoryPathId = toLinkedDirectoryPathId(registered.directoryPath);
+      const directory: LinkedDirectorySummary = {
+        id: directoryPathId,
+        kind: "local",
+        label: registered.directoryLabel,
+        path: directoryPathId,
+      };
+      await this.getOverlayStore().addLinkedDirectory({
         backend,
         threadId: request.threadId,
-        reason: registered.reason,
-        message: registered.message,
-      };
-    }
+        directory,
+      });
 
-    const directoryPathId = toLinkedDirectoryPathId(registered.directoryPath);
-    const directory: LinkedDirectorySummary = {
-      id: directoryPathId,
-      kind: "local",
-      label: registered.directoryLabel,
-      path: directoryPathId,
-    };
-    await this.getOverlayStore().addLinkedDirectory({
-      backend,
-      threadId: request.threadId,
-      directory,
-    });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
-      notification: {
-        method: "navigation/threadDirectories/updated",
-        params: {
-          reason: "selected-thread",
-          threadIds: [request.threadId],
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: {
+            reason: "selected-thread",
+            threadIds: [request.threadId],
+          },
         },
-      },
-    });
+      });
 
-    return {
-      ok: true,
-      backend,
-      threadId: request.threadId,
-      directory,
-    };
+      return {
+        ok: true,
+        backend,
+        threadId: request.threadId,
+        directory,
+      };
+    });
   }
 
   async detachDirectoryFromThread(
