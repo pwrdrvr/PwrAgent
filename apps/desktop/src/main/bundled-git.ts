@@ -54,20 +54,22 @@ export async function validateBundledGit(): Promise<string> {
  * another Pwr app or a shell with Git-specific environment overrides. */
 export function bundledGitEnvironment(
   source: NodeJS.ProcessEnv,
-  options: { platform?: NodeJS.Platform } = {},
+  options: { platform?: NodeJS.Platform; exists?: (file: string) => boolean } = {},
 ): NodeJS.ProcessEnv {
+  const platform = options.platform ?? process.platform;
   const clean = { ...source };
+  const root = bundledGitDirectory();
   let inheritedPath = "";
   for (const key of Object.keys(clean)) {
     const upper = key.toUpperCase();
     if (upper === "PATH") {
       inheritedPath = clean[key] ?? "";
       delete clean[key];
-    } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "GIT_CONFIG_SYSTEM", "PWRAGENT_GIT_PATH"].includes(upper)) {
+    } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "PWRAGENT_GIT_PATH"].includes(upper)
+      || (upper === "GIT_CONFIG_SYSTEM" && isOwnSystemConfig(root, clean[key]))) {
       delete clean[key];
     }
   }
-  const root = bundledGitDirectory();
   // An omitted helper override makes Dugite read process.env.GIT_EXEC_PATH
   // again. An explicit empty override resolves the bundled platform layout.
   const helperDirectory = dugite.resolveGitExecPath(root, "");
@@ -79,16 +81,28 @@ export function bundledGitEnvironment(
   // Git puts its exec path first for subcommands; shells and hooks also need
   // the bundled git/git-lfs before any installed versions in PATH.
   const pathEntries = [executableDirectory, helperDirectory, ...(env.PATH ?? "").split(path.delimiter)];
-  const keychainHelper = (options.platform ?? process.platform) === "darwin"
+  const keychainHelper = platform === "darwin"
     ? installedKeychainHelper({
       PATH: operatorSearchPath(inheritedPath, { home: clean.HOME }),
       DEVELOPER_DIR: clean.DEVELOPER_DIR,
     })
     : undefined;
-  // Dugite points POSIX Git at its own etc/gitconfig. On Windows, MinGit reads
+  // An operator's own GIT_CONFIG_SYSTEM survived the loop above and Dugite
+  // keeps it, so it is included in place of the bundle's. Otherwise Dugite
+  // points POSIX Git at the bundle's etc/gitconfig. On Windows, MinGit reads
   // the one inside the bundle that Dugite's build configured.
   const bundleConfig = env.GIT_CONFIG_SYSTEM ?? mingitSystemConfig(root, helperDirectory);
-  const systemConfig = bundleConfig ? bundledSystemConfig(bundleConfig, keychainHelper) : undefined;
+  const systemConfig = bundleConfig
+    ? bundledSystemConfig(bundleConfig, {
+      keychainHelper,
+      // The macOS and Linux bundle is the custom runtime; Windows keeps
+      // Dugite's MinGit, which has no checkout.reflink.
+      reflink: platform !== "win32",
+      caBundle: platform === "linux"
+        ? linuxCaBundleFallback(clean, options.exists ?? existsSync)
+        : undefined,
+    })
+    : undefined;
   if (systemConfig) env.GIT_CONFIG_SYSTEM = systemConfig;
   if (keychainHelper) {
     // Last, so it only answers names nothing earlier provides: a user-level
@@ -282,6 +296,68 @@ export function bundledGitConfigDirectory(): string {
   return path.join(resolvePwragentRoot(), "git");
 }
 
+/** First line of every system config PwrAgent generates. */
+const GENERATED_CONFIG_MARKER = "# Written by PwrAgent:";
+
+/**
+ * Whether an inherited GIT_CONFIG_SYSTEM is one PwrAgent set, not the
+ * operator's: the bundle's own file, or a config PwrAgent generated. A shell
+ * in PwrAgent's terminal carries the generated one, and a generated file
+ * under another PwrAgent root (a dev profile launched from that terminal) is
+ * recognized by its first line. Those are rebuilt rather than included, so
+ * the defaults are not stacked twice. Anything else is the operator's own
+ * system config and must stay visible.
+ */
+export function isOwnSystemConfig(bundleRoot: string, value: string | undefined): boolean {
+  if (!value) return false;
+  const file = path.resolve(value);
+  if (isInsideDirectory(path.resolve(bundleRoot), file)) return true;
+  if (isInsideDirectory(path.resolve(bundledGitConfigDirectory()), file)) return true;
+  try {
+    return readFileSync(file, "utf8").startsWith(GENERATED_CONFIG_MARKER);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The CA bundle a Linux distribution keeps, in the order Go's crypto/x509
+ * searches them. The first is the default compiled into the runtime's
+ * Ubuntu libcurl.
+ */
+const LINUX_CA_BUNDLES = [
+  "/etc/ssl/certs/ca-certificates.crt", // Debian, Ubuntu, Arch, Gentoo
+  "/etc/pki/tls/certs/ca-bundle.crt", // Fedora, RHEL
+  "/etc/ssl/ca-bundle.pem", // openSUSE, SLES
+  "/etc/pki/tls/cacert.pem", // OpenELEC
+  "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS, RHEL 7+
+  "/etc/ssl/cert.pem", // Alpine
+];
+
+/** Certificate variables the operator sets explicitly. Any one of them means
+ * the trust store is already decided outside Git config. */
+const CA_ENVIRONMENT = ["GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE"];
+
+/**
+ * The distribution's CA bundle, when the runtime libcurl's compiled default
+ * (Ubuntu's path) is missing, as on openSUSE and the RHEL family.
+ *
+ * Returns a path for system-scope `http.sslCAInfo`, never GIT_SSL_CAINFO.
+ * The environment variable would beat global and repository config. At
+ * system scope, the system config included after it, then global and
+ * repository config, and any `http.<url>.sslCAInfo`, all still win. An
+ * operator who set a certificate variable gets no fallback at all.
+ */
+export function linuxCaBundleFallback(
+  env: NodeJS.ProcessEnv,
+  exists: (file: string) => boolean = existsSync,
+): string | undefined {
+  if (CA_ENVIRONMENT.some((name) => env[name]?.trim())) return undefined;
+  const [compiledDefault, ...others] = LINUX_CA_BUNDLES;
+  if (exists(compiledDefault)) return undefined;
+  return others.find((file) => exists(file));
+}
+
 /**
  * The bundle's system config with the defaults an installed Git and Git LFS
  * would have set at system scope:
@@ -292,11 +368,18 @@ export function bundledGitConfigDirectory(): string {
  *   `git lfs install` against their global config. The filter also has
  *   git-lfs install its pre-push hook on first use, so pushes upload objects.
  * - On macOS, the installed keychain credential helper.
+ * - On macOS and Linux, `checkout.reflink`, which the custom runtime reads to
+ *   share file contents between checkouts. The app enables it here; the
+ *   runtime itself sets no default.
+ * - On Linux without the runtime libcurl's default CA file, the
+ *   distribution's CA bundle (see `linuxCaBundleFallback`).
  *
  * System scope, like the installed Git's, so global and repository config
  * still override every default: `lfs install --skip-smudge` keeps pointers,
- * and resetting `credential.helper` opts out. The bundle's config is
- * included after the defaults so its own settings win too.
+ * resetting `credential.helper` opts out, and `checkout.reflink = false`
+ * turns sharing off. The system config (the bundle's, or the one the
+ * operator named in GIT_CONFIG_SYSTEM) is included after the defaults so its
+ * own settings win too.
  *
  * Named by content: instances running different app copies write different
  * files instead of rewriting one another's. Returns undefined when the file
@@ -304,12 +387,13 @@ export function bundledGitConfigDirectory(): string {
  */
 function bundledSystemConfig(
   bundleConfig: string,
-  keychainHelper: string | undefined,
+  defaults: { keychainHelper?: string; reflink: boolean; caBundle?: string },
 ): string | undefined {
+  const { keychainHelper, reflink, caBundle } = defaults;
   const content = [
-    "# Written by PwrAgent: defaults for its bundled Git, then the bundle's own",
-    "# system config. PwrAgent rewrites this file, so edit your global config",
-    "# (git config --global) instead; it overrides everything here.",
+    `${GENERATED_CONFIG_MARKER} defaults for its bundled Git, then the system`,
+    "# config it would otherwise read. PwrAgent rewrites this file, so edit your",
+    "# global config (git config --global) instead; it overrides everything here.",
     "[filter \"lfs\"]",
     "\tclean = git-lfs clean -- %f",
     "\tsmudge = git-lfs smudge -- %f",
@@ -323,6 +407,8 @@ function bundledSystemConfig(
         `\thelper = ${quoteConfigValue(`!'${keychainHelper.replaceAll("'", "'\\''")}'`)}`,
       ]
       : []),
+    ...(reflink ? ["[checkout]", "\treflink = true"] : []),
+    ...(caBundle ? ["[http]", `\tsslCAInfo = ${quoteConfigValue(caBundle)}`] : []),
     "[include]",
     `\tpath = ${quoteConfigValue(bundleConfig)}`,
     "",

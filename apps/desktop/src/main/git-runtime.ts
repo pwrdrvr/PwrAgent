@@ -3,10 +3,10 @@ import { access, constants } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
-  bundledGitConfigDirectory,
   bundledGitDirectory,
   bundledGitEnvironment,
   isInsideDirectory,
+  isOwnSystemConfig,
   validateBundledGit,
 } from "./bundled-git";
 import { getConfiguredGitCommand } from "./git-command";
@@ -22,9 +22,6 @@ export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string)
   const env = { ...source };
   const root = path.resolve(bundledGitDirectory());
   const inBundle = (value: string) => isInsideDirectory(root, value);
-  // The system config PwrAgent generates for the bundle includes Dugite's;
-  // an installed Git reads its own.
-  const generatedConfigs = path.resolve(bundledGitConfigDirectory());
   let inheritedPath = "";
   for (const key of Object.keys(env)) {
     const upper = key.toUpperCase();
@@ -32,8 +29,10 @@ export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string)
       inheritedPath = env[key] ?? "";
       delete env[key];
     } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR"].includes(upper)
-      || (["GIT_CONFIG_SYSTEM", "PREFIX", "GIT_SSL_CAINFO"].includes(upper) && env[key] && inBundle(env[key]!))
-      || (upper === "GIT_CONFIG_SYSTEM" && env[key] && isInsideDirectory(generatedConfigs, env[key]!))) {
+      || (["PREFIX", "GIT_SSL_CAINFO"].includes(upper) && env[key] && inBundle(env[key]!))
+      // The system config PwrAgent generates for the bundle includes the
+      // bundle's; an installed Git reads its own. An operator's own stays.
+      || (upper === "GIT_CONFIG_SYSTEM" && isOwnSystemConfig(root, env[key]))) {
       delete env[key];
     }
   }
