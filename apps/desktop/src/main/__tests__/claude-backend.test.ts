@@ -2958,7 +2958,10 @@ describe("Claude SDK backend", () => {
         });
         await runHooks(options, "Stop", { stop_hook_active: false, session_crons: [loop] });
         yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
-        second = (await input.next()).value as SDKUserMessage;
+        const next = await input.next();
+        // A relaunch closes this process's input instead.
+        if (next.done) return;
+        second = next.value as SDKUserMessage;
         yield { type: "assistant", parent_tool_use_id: null, message: { id: "stopping", content: [{ type: "text", text: "Stopping the loop." }] } } as SDKMessage;
         await ended.promise;
         // Claude ended its loop, so nothing holds the process any more.
