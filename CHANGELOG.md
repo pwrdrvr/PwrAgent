@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.3.11 - 2026-11-04
+
+- Thread Locks and Queues - Hold Claude's own follow-ups and wake-ups while a thread is locked. Release lock-held entries in arrival order, preserve each reason when work is held more than once, and keep the lock card visible above To-dos.
+- Scheduled Actions - Stop failed actions from automatically rerunning or returning to the composer. Hold later queued work behind a failed scheduled action until it is resolved.
+- Waiting For - List live Claude /loop wake-ups and session cron jobs alongside other pending work. Route prerequisite PR waits through Continue After and bound the panel's reads and refreshes.
+- Archive Cleanup - Show worktree cleanup progress, protected checkouts, and failures in Settings, with an explicit retry action. Fence cleanup ownership and reclaim worktrees only after their final reference is released.
+- Worktrees and Handoffs - Preserve handoff ancestry, fork handed-off threads without depending on the old source checkout, and avoid carrying Git LFS hooks into imported worktrees. Refuse peer To-do worktrees that would reuse the main checkout.
+- To-do Delivery - Find the owning machine for an existing-thread destination and show its thread information card. Start peer To-do worktrees from the repository's default branch.
+- Reviews and Models - Scope review PR choices and base branches to the selected project. Reject incompatible provider, model, effort, and speed settings instead of silently dropping them.
+- Monitor and MCP Tools - Give job monitors read-only forge tools for CI, PR, log, and artifact checks. Make MCP resource routes discoverable through tool search.
+- Navigation and Rewind - Preserve Back and Forward navigation during thread startup, keep loaded pinned threads after reopening a project, and clear stale rewind overlays and composer prompts.
+- Resource Management - Close idle ACP sessions and their MCP servers, keep Codex alive during foreground reads, and finish shared command discovery before quitting.
+- Responsiveness - Reduce Git and SSH launches for PR metadata and shorten transcript and turn-preparation waits. Keep Outpost navigation and Attention ordering aligned with desktop behavior.
+
 ## v1.3.10 - 2026-11-03
 
 - Calm Motion - Add an appearance option that lets spinners, thinking indicators, and status pulses animate briefly, then hold still. The system's Reduce Motion setting still stops them entirely.
