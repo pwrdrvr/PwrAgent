@@ -5,13 +5,15 @@ import {
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
 } from "@pwragent/shared";
+import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
 import { storageProcessAlive } from "./storage-maintenance";
 
 /**
- * Turns a quiet restart stopped, to continue after the next launch. A row is
- * written before the quit interrupts its turn and deleted when the
- * continuation starts or is discarded, so a second restart before then sends
- * it again rather than losing it.
+ * What a quiet restart carries to the next launch: a continuation for each
+ * turn it stopped, and each message that was waiting in a thread's queue.
+ * A row is written before the quit interrupts anything and deleted when its
+ * entry starts or is discarded, so a second restart before then brings it
+ * back again rather than losing it.
  */
 export const RESTART_CONTINUATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS restart_continuations (
@@ -23,6 +25,16 @@ CREATE TABLE IF NOT EXISTS restart_continuations (
 );
 `;
 
+/** Queue settings a saved queued message keeps across the restart. */
+export type StoredRestartQueuedFields = Partial<Pick<ThreadTurnQueueEntry,
+  | "origin" | "delivery" | "agentMessages" | "agentMessageOrigins" | "executionMode"
+  | "approvalPolicy" | "sandbox" | "model" | "collaborationMode" | "serviceTier"
+  | "reasoningEffort" | "fastMode" | "automationRunId" | "automationName" | "title"
+>> & {
+  /** Paused, or held for the operator: it comes back paused, never sent. */
+  paused?: true;
+};
+
 export type StoredRestartContinuation = {
   id: string;
   backend: AppServerBackendKind;
@@ -30,6 +42,9 @@ export type StoredRestartContinuation = {
   messageOrigin?: AppServerThreadMessageOrigin;
   input: AppServerTurnInputItem[];
   createdAt: number;
+  /** Absent: the thread's continuation. `queued`: a message from its queue. */
+  kind?: "queued";
+  queued?: StoredRestartQueuedFields;
 };
 
 type Row = {
@@ -48,6 +63,8 @@ function parseContinuation(row: Row): StoredRestartContinuation | undefined {
       || typeof value.threadId !== "string" || !value.threadId
       || !Array.isArray(value.input)
       || typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt)
+      || (value.kind !== undefined && value.kind !== "queued")
+      || (value.queued !== undefined && (typeof value.queued !== "object" || value.queued === null))
     ) {
       return undefined;
     }
@@ -68,8 +85,9 @@ export class RestartContinuationStore {
   } = {}) {}
 
   /**
-   * Records every continuation of one quiet restart in one commit. A thread
-   * that already has a stored continuation keeps it and gets no second one.
+   * Records what one quiet restart carries, in one commit. A thread that
+   * already has a stored continuation keeps it and gets no second one. A
+   * queued message replaces its earlier copy, so the latest edit wins.
    * Returns the continuations written.
    */
   saveAll(
@@ -83,7 +101,8 @@ export class RestartContinuationStore {
       ).all() as Array<{ payload: string }>).flatMap((row) => {
         try {
           const value = JSON.parse(row.payload) as Partial<StoredRestartContinuation>;
-          return typeof value.backend === "string" && typeof value.threadId === "string"
+          return value.kind === undefined
+            && typeof value.backend === "string" && typeof value.threadId === "string"
             ? [`${value.backend}:${value.threadId}`] : [];
         } catch {
           return [];
@@ -92,8 +111,21 @@ export class RestartContinuationStore {
       const insert = this.db.prepare(
         "INSERT INTO restart_continuations(entry_id, owner_instance_id, owner_pid, created_at, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO NOTHING",
       );
+      const upsert = this.db.prepare(
+        "INSERT INTO restart_continuations(entry_id, owner_instance_id, owner_pid, created_at, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET payload = excluded.payload",
+      );
       const saved: StoredRestartContinuation[] = [];
       for (const continuation of continuations) {
+        if (continuation.kind === "queued") {
+          upsert.run(
+            continuation.id,
+            instanceId,
+            this.options.processId ?? process.pid,
+            continuation.createdAt,
+            JSON.stringify(continuation),
+          );
+          continue;
+        }
         const thread = `${continuation.backend}:${continuation.threadId}`;
         if (existing.has(thread)) continue;
         existing.add(thread);
@@ -108,6 +140,12 @@ export class RestartContinuationStore {
       }
       return saved;
     }).immediate();
+  }
+
+  /** Rewrites a saved queued message the operator edited. */
+  update(continuation: StoredRestartContinuation): void {
+    this.db.prepare("UPDATE restart_continuations SET payload = ? WHERE entry_id = ?")
+      .run(JSON.stringify(continuation), continuation.id);
   }
 
   remove(entryId: string): void {

@@ -7,11 +7,14 @@ import type { QuietRestartTarget } from "./app-server/backend-registry";
  * each stopped thread its continuation (see `restart-continuation-gate.ts`).
  *
  * 1. Shut the restart gate, so no queued or automatic turn starts.
- * 2. Save one continuation per running thread, before anything is stopped,
- *    so a crash from here on still continues them.
+ * 2. Save one continuation per running thread, and every message waiting
+ *    in a queue, before anything is stopped, so a crash from here on still
+ *    continues them.
  * 3. Steer each running turn that it is about to stop, and SIGTERM every
  *    environment action (SIGKILL after a short grace).
  * 4. Give the turns a short window to finish on their own.
+ * 5. Save again, so a message that queued during the window (a deferred
+ *    messaging steer, say) is carried across too.
  */
 export type QuietRestartDependencies = {
   registry: {
@@ -89,6 +92,7 @@ export async function runQuietRestart(
     targets,
     dependencies.turnGraceMs ?? QUIET_RESTART_TURN_GRACE_MS,
   )) ?? "failed";
+  await step("save-final", () => dependencies.registry.saveRestartContinuations(targets, startedAt));
   summary.durationMs = now() - startedAt;
   dependencies.log.info?.("quiet restart ready to quit", { ...summary });
   return summary;

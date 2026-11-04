@@ -78,6 +78,7 @@ import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLIC
 import { ArchiveCleanupCheckpointStore, type ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 import { ProjectHeldWakeupStore, type StoredProjectHeldWakeup } from "../state/project-held-wakeup-store";
 import { RestartContinuationStore, type StoredRestartContinuation } from "../state/restart-continuation-store";
+import type { RestartGateStatus } from "../../shared/restart-gate";
 import {
   OPEN_RESTART_GATE,
   planRestartDispatch,
@@ -2351,7 +2352,7 @@ type WorktreeArchiveCandidate = {
 };
 
 type ProjectHeldWakeupStoreLike = Pick<ProjectHeldWakeupStore, "save" | "update" | "remove" | "claimOrphaned">;
-type RestartContinuationStoreLike = Pick<RestartContinuationStore, "saveAll" | "remove" | "claimOrphaned">;
+type RestartContinuationStoreLike = Pick<RestartContinuationStore, "saveAll" | "update" | "remove" | "claimOrphaned">;
 
 /** A running turn a quiet restart stops and continues after the restart. */
 export type QuietRestartTarget = {
@@ -2376,6 +2377,56 @@ export function buildRestartContinuationText(stoppedAt: number): string {
     "Check the state of your work, such as processes, partial edits, and build or test output, and continue where you left off.",
     "If the task was already complete, reply with a short summary instead.",
   ].join(" ");
+}
+
+/** A queued message as a quiet restart saves it. */
+function storedRestartQueuedEntry(entry: ThreadTurnQueueEntry): StoredRestartContinuation {
+  return {
+    id: entry.id,
+    backend: entry.backend,
+    threadId: entry.threadId,
+    kind: "queued",
+    input: entry.input,
+    ...(entry.messageOrigin ? { messageOrigin: entry.messageOrigin } : {}),
+    createdAt: entry.createdAt,
+    queued: {
+      origin: entry.origin,
+      ...(entry.delivery ? { delivery: entry.delivery } : {}),
+      ...(entry.agentMessages ? { agentMessages: entry.agentMessages } : {}),
+      ...(entry.agentMessageOrigins ? { agentMessageOrigins: entry.agentMessageOrigins } : {}),
+      ...(entry.executionMode ? { executionMode: entry.executionMode } : {}),
+      ...(entry.approvalPolicy ? { approvalPolicy: entry.approvalPolicy } : {}),
+      ...(entry.sandbox ? { sandbox: entry.sandbox } : {}),
+      ...(entry.model ? { model: entry.model } : {}),
+      ...(entry.collaborationMode ? { collaborationMode: entry.collaborationMode } : {}),
+      ...(entry.serviceTier ? { serviceTier: entry.serviceTier } : {}),
+      ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+      ...(entry.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
+      ...(entry.automationRunId ? { automationRunId: entry.automationRunId } : {}),
+      ...(entry.automationName ? { automationName: entry.automationName } : {}),
+      ...(entry.title ? { title: entry.title } : {}),
+      // A held message waited on the operator; it must not send itself.
+      ...(entry.paused || entry.manualReleaseRequired ? { paused: true as const } : {}),
+    },
+  };
+}
+
+/** A saved queued message back as a queue entry. */
+function restartQueuedEntry(
+  stored: StoredRestartContinuation,
+): Omit<ThreadTurnQueueEntry, "restartContinuation" | "pauseRevision"> {
+  const { origin, paused, ...settings } = stored.queued ?? {};
+  return {
+    ...settings,
+    id: stored.id,
+    backend: stored.backend,
+    threadId: stored.threadId,
+    origin: origin && THREAD_TURN_QUEUE_ORIGINS.includes(origin) ? origin : "manual",
+    input: stored.input,
+    ...(stored.messageOrigin ? { messageOrigin: stored.messageOrigin } : {}),
+    createdAt: stored.createdAt,
+    ...(paused ? { paused: true } : {}),
+  };
 }
 
 /** How long one quiet-restart steer may take before the quit moves on. */
@@ -9544,12 +9595,13 @@ export class DesktopBackendRegistry {
   /** Project-held entries with a durable copy, by queue entry id, as stored. */
   private readonly durableProjectHeldWakeups = new Map<string, StoredProjectHeldWakeup>();
   private readonly restartContinuationStore?: RestartContinuationStoreLike;
-  /** Restart continuations with a durable row, by queue entry id. */
-  private readonly durableRestartContinuations = new Set<string>();
+  /** Restart continuations and saved queued messages with a durable row, by queue entry id. */
+  private readonly durableRestartContinuations = new Map<string, StoredRestartContinuation>();
   /** See `restart-continuation-gate.ts`. */
   private restartGate: RestartGateState = OPEN_RESTART_GATE;
   private readonly restartGateTimers = new Set<ReturnType<typeof setTimeout>>();
   private readonly restartGateListeners = new Set<(closed: boolean) => void>();
+  private readonly restartGateStatusListeners = new Set<(status: RestartGateStatus) => void>();
   private restartDispatchStarted = false;
   private readonly restartDispatchPlanOptions: Omit<RestartDispatchPlanOptions, "now">;
   private readonly archiveWorktreeReferences = new ArchiveWorktreeReferences();
@@ -21798,9 +21850,56 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /** For the main window's notice: what the gate holds and until when. */
+  getRestartGateStatus(): RestartGateStatus {
+    const gate = this.restartGate;
+    if (gate.phase !== "resuming") return { phase: gate.phase };
+    const times = [...gate.pending.values()]
+      .map((item) => item.dispatchAt)
+      .filter((at) => Number.isFinite(at));
+    return {
+      phase: "resuming",
+      waiting: gate.pending.size,
+      ...(times.length > 0 ? { nextAt: Math.min(...times) } : {}),
+      ...(Number.isFinite(gate.releaseBy) ? { releaseBy: gate.releaseBy } : {}),
+    };
+  }
+
+  onRestartGateStatusChanged(listener: (status: RestartGateStatus) => void): () => void {
+    this.restartGateStatusListeners.add(listener);
+    return () => {
+      this.restartGateStatusListeners.delete(listener);
+    };
+  }
+
+  /**
+   * The operator's "Start everything now": opens the gate, so each waiting
+   * continuation and everything behind it starts at once. A quiet restart
+   * under way stays shut.
+   */
+  releaseRestartGate(): RestartGateStatus {
+    this.applyRestartGate({ type: "release" });
+    return this.getRestartGateStatus();
+  }
+
+  private publishRestartGateStatus(): void {
+    const status = this.getRestartGateStatus();
+    for (const listener of this.restartGateStatusListeners) {
+      try {
+        listener(status);
+      } catch (error) {
+        backendRegistryLog.warn("restart gate status listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
   private applyRestartGate(event: RestartGateEvent): void {
     const wasClosed = this.isRestartGateClosed();
+    const previous = this.restartGate;
     this.restartGate = transitionRestartGate(this.restartGate, event);
+    if (this.restartGate !== previous) this.publishRestartGateStatus();
     const closed = this.isRestartGateClosed();
     if (wasClosed === closed) return;
     if (!closed) {
@@ -21940,10 +22039,18 @@ export class DesktopBackendRegistry {
       // Keeps the stop order stable when the next launch sorts by time.
       createdAt: stoppedAt + index,
     }));
+    // Messages waiting in queues live only in memory; carry them across too.
+    // A project-held wake-up already has its own durable copy, and a
+    // continuation restored earlier keeps the row it has.
+    const queued = this.threadTurnQueue.getAllQueuedEntries()
+      .filter((entry) => !entry.restartContinuation && !entry.projectHold)
+      .map((entry) => storedRestartQueuedEntry(entry));
     try {
-      const saved = store.saveAll(this.runtimeInstanceId, continuations);
+      const saved = store.saveAll(this.runtimeInstanceId, [...continuations, ...queued]);
+      for (const entry of queued) this.durableRestartContinuations.set(entry.id, entry);
       backendRegistryLog.info("restart continuations saved", {
         count: saved.length,
+        queued: queued.length,
         threads: [...threads.keys()],
       });
       return saved.length;
@@ -21974,8 +22081,19 @@ export class DesktopBackendRegistry {
       return;
     }
     if (claimed.length === 0) return;
-    for (const continuation of claimed) this.durableRestartContinuations.add(continuation.id);
-    const restored = this.threadTurnQueue.restoreRestartContinuations(claimed.map((continuation) => ({
+    for (const continuation of claimed) this.durableRestartContinuations.set(continuation.id, continuation);
+    const queued = this.threadTurnQueue.restoreQueued(claimed
+      .filter((continuation) => continuation.kind === "queued")
+      .map((continuation) => restartQueuedEntry(continuation)));
+    if (queued.length > 0) {
+      backendRegistryLog.info("restart queued messages restored", {
+        count: queued.length,
+        entryIds: queued.map((entry) => entry.id),
+      });
+    }
+    const restored = this.threadTurnQueue.restoreRestartContinuations(claimed
+      .filter((continuation) => continuation.kind === undefined)
+      .map((continuation) => ({
       id: continuation.id,
       backend: continuation.backend,
       threadId: continuation.threadId,
@@ -21983,7 +22101,7 @@ export class DesktopBackendRegistry {
       input: continuation.input,
       ...(continuation.messageOrigin ? { messageOrigin: continuation.messageOrigin } : {}),
       createdAt: continuation.createdAt,
-    })));
+      })));
     if (restored.length === 0) return;
     this.applyRestartGate({
       type: "restore",
@@ -22018,6 +22136,7 @@ export class DesktopBackendRegistry {
       pending: new Map(plan.schedule.map((item) => [item.entryId, item])),
       releaseBy: plan.releaseBy,
     };
+    this.publishRestartGateStatus();
     backendRegistryLog.info("restart continuation dispatch scheduled", {
       count: plan.schedule.length,
       firstAt: Math.min(...plan.schedule.map((item) => item.dispatchAt)),
@@ -22054,16 +22173,32 @@ export class DesktopBackendRegistry {
    */
   private trackRestartContinuation(event: ThreadTurnQueueLifecycleEvent): void {
     const { entry } = event;
-    if (!entry.restartContinuation) return;
     if (event.type === "started" || event.type === "failed" || event.type === "cancelled") {
       this.forgetRestartContinuation(entry.id);
     }
+    if (!entry.restartContinuation) return;
     if (
       event.type === "started" || event.type === "failed"
       || event.type === "cancelled" || event.type === "blocked"
       || event.type === "held"
     ) {
       this.applyRestartGate({ type: "settled", entryId: entry.id });
+    }
+  }
+
+  /** An operator edit to a saved queued message replaces its durable copy. */
+  private refreshRestartQueuedEntry(entry: ThreadTurnQueueEntry): void {
+    const stored = this.durableRestartContinuations.get(entry.id);
+    if (!stored || stored.kind !== "queued" || !this.restartContinuationStore) return;
+    const next = storedRestartQueuedEntry(entry);
+    try {
+      this.restartContinuationStore.update(next);
+      this.durableRestartContinuations.set(entry.id, next);
+    } catch (error) {
+      backendRegistryLog.warn("restart queued message edit was not saved", {
+        entryId: entry.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -22395,6 +22530,7 @@ export class DesktopBackendRegistry {
 
   private emitQueuedTurnInputUpdated(entry: ThreadTurnQueueEntry): void {
     this.refreshDurableProjectHeldWakeup(entry);
+    this.refreshRestartQueuedEntry(entry);
     this.requestQueuedMessageTitle(entry);
     // This is an input refresh, not another queue admission. In particular,
     // do not replay sender correspondence lifecycle transitions.
@@ -26528,6 +26664,34 @@ export class DesktopBackendRegistry {
       throw new Error("This backend cannot interrupt a running response. Steer or queue the message instead.");
     }
     await this.assertThreadNotLocked(params.backend, params.threadId);
+    // While the restart gate is shut, a steer that did not come from the
+    // operator (messaging, another thread, a monitor) waits in the queue
+    // like any other automatic message. The quiet restart's own steer and
+    // the operator's go through.
+    if (
+      this.isRestartGateClosed()
+      && messageOrigin
+      && messageOrigin.systemReason !== "app-restart"
+    ) {
+      const queued = await this.admitThreadAttachments(
+        { backend: params.backend, threadId: params.threadId, input: params.input },
+        (input, onAdmission) => this.threadTurnQueue.submitSteer({
+          backend: params.backend,
+          threadId: params.threadId,
+          input,
+          messageOrigin,
+          origin: messageOrigin.kind === "messaging" ? "messaging" : "manual",
+        }, { onAdmission }),
+      );
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        turnId: params.expectedTurnId,
+        disposition: "queued",
+        queueEntryId: queued.entry.id,
+        queueEntryCreatedAt: queued.entry.createdAt,
+      };
+    }
     const review = this.findReviewForParentTurn({
       backend: params.backend,
       parentThreadId: params.threadId,

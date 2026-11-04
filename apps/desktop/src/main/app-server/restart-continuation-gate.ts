@@ -7,7 +7,7 @@
  *     ▲                ▲
  *     │              quiet
  *     │                │
- *     └──settled/deadline── resuming ◀──restore── open (next launch)
+ *     └─settled/deadline/release─ resuming ◀──restore── open (next launch)
  *
  * - `quieting`: this process is shutting down for a restart. Nothing in the
  *   turn queue starts or steers. The quiet sequence speaks to running turns
@@ -44,7 +44,9 @@ export type RestartGateEvent =
   | { type: "restore"; schedule: readonly RestartContinuationSchedule[]; releaseBy: number }
   /** A continuation started, was discarded, failed, or was blocked. */
   | { type: "settled"; entryId: string }
-  | { type: "deadline"; at: number };
+  | { type: "deadline"; at: number }
+  /** The operator chose to start everything now. */
+  | { type: "release" };
 
 export const OPEN_RESTART_GATE: RestartGateState = { phase: "open" };
 
@@ -79,6 +81,9 @@ export function transitionRestartGate(
       return current.phase === "resuming" && event.at >= current.releaseBy
         ? OPEN_RESTART_GATE
         : current;
+    case "release":
+      // Never cuts a quiet restart short: its work is already stopping.
+      return current.phase === "resuming" ? OPEN_RESTART_GATE : current;
   }
 }
 

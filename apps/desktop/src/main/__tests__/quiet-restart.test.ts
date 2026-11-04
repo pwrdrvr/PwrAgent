@@ -44,7 +44,7 @@ describe("runQuietRestart", () => {
     });
     expect(deps.calls.slice(0, 2)).toEqual(["begin", "save"]);
     expect(deps.calls.slice(2, 4).sort()).toEqual(["steer", "terminate"]);
-    expect(deps.calls[4]).toBe("wait");
+    expect(deps.calls.slice(4)).toEqual(["wait", "save"]);
     expect(deps.registry.saveRestartContinuations).toHaveBeenCalledWith([target], 1_000);
     expect(deps.terminateActions).toHaveBeenCalledWith(2_000);
     expect(deps.registry.waitForQuietRestartTurns).toHaveBeenCalledWith([target], 7_000);
