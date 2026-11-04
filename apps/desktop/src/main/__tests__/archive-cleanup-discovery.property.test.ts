@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { stat } from "node:fs/promises";
+import { stat, realpath, mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import os from "node:os";
+import path from "node:path";
+import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import { resolveWorktreeRepositoryDirectory } from "../app-server/thread-directory-enricher";
 import type { AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState } from "@pwragent/shared";
 import type { ArchiveCleanupContext } from "../app-server/archive-cleanup-queue";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -14,16 +20,20 @@ vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn()
 vi.mock("../app-server/thread-assets", async (original) => ({
   ...await original<typeof import("../app-server/thread-assets")>(), deleteThreadAssets: async () => {},
 }));
-vi.mock("node:fs/promises", async (original) => ({
-  ...await original<typeof import("node:fs/promises")>(),
-  stat: vi.fn(async () => { throw Object.assign(new Error("Removed fixture"), { code: "ENOENT" }); }),
-}));
+vi.mock("node:fs/promises", async (original) => {
+  const actual = await original<typeof import("node:fs/promises")>();
+  return { ...actual, stat: vi.fn(async (...args: Parameters<typeof actual.stat>) => {
+    if (String(args[0]).startsWith("/fixture/")) throw Object.assign(new Error("Removed fixture"), { code: "ENOENT" });
+    return await actual.stat(...args);
+  }) };
+});
 
 type Row = { id: string; cwd: string };
 type Noise = { archived: boolean; claude: boolean; cwd: number };
 type CleanupBoundary = {
   completeArchivedThreadCleanup(params: { backend: "codex"; threadId: string; archivedAt: number;
     codexRolloutMissing: boolean; messagingCleanup: {}; context: ArchiveCleanupContext }): Promise<{ cleanup: Array<{ removedWorktree: boolean }> }>;
+  findThreadForArchiveCleanup(params: { backend: "codex"; threadId: string; context: ArchiveCleanupContext; reuseInventory: boolean }): Promise<{ thread: AppServerThreadSummary }>;
   claudeBackend: { listThreads(params: { archived: boolean }): Promise<AppServerThreadSummary[]> };
 };
 
@@ -37,8 +47,8 @@ function worktree(cwd: string): LinkedDirectorySummary {
   return { id: cwd, kind: "worktree", label: "fixture", path: "/fixture/repository", worktreePath: cwd };
 }
 
-async function fixture(noise: Noise[], roots = 1, overlayOnly = false) {
-  const candidates = Array.from({ length: roots }, (_, i) => `/fixture/candidate-${i}`);
+async function fixture(noise: Noise[], roots = 1, overlayOnly = false, real?: { cwd: string; repositoryPath: string }) {
+  const candidates = real ? [real.cwd] : Array.from({ length: roots }, (_, i) => `/fixture/candidate-${i}`);
   const effects = { git: 0, workspace: 0 };
   const inspected = new Set<string>();
   const overlays = new Map<string, ThreadOverlayState>();
@@ -46,6 +56,10 @@ async function fixture(noise: Noise[], roots = 1, overlayOnly = false) {
     extraLinkedDirectories: candidates.slice(overlayOnly ? 0 : 1).map(worktree) });
   const client = new CodexAppServerClient({ threadDirectoryEnricher: async (cwd) => {
     effects.git += 1;
+    if (real && cwd) {
+      const directory = await resolveWorktreeRepositoryDirectory(cwd);
+      return { linkedDirectories: directory ? [directory] : [] };
+    }
     return { linkedDirectories: cwd && candidates.includes(cwd) ? [worktree(cwd)] : [] };
   } });
   await client.getInitializeResult();
@@ -63,7 +77,9 @@ async function fixture(noise: Noise[], roots = 1, overlayOnly = false) {
     for (const id of threadIds) inspected.add(`${backend}:${id}`);
     return Object.fromEntries(threadIds.map((id) => [id, overlays.get(id)]));
   };
-  const store = new Proxy({ getArchiveCleanupOverlayStates: readOverlays, getThreadOverlayStates: readOverlays,
+  const snapshots: Array<{ snapshot: { snapshotRef: string; worktreePath: string } }> = [];
+  const store = new Proxy({ upsertWorktreeSnapshot: async (params: typeof snapshots[number]) => { snapshots.push(params); },
+    getArchiveCleanupOverlayStates: readOverlays, getThreadOverlayStates: readOverlays,
     getThreadOverlayState: async ({ threadId }: { threadId: string }) => overlays.get(threadId),
   }, { get(object, key) {
     if (key === "then") return undefined;
@@ -79,7 +95,7 @@ async function fixture(noise: Noise[], roots = 1, overlayOnly = false) {
       snapshotCommit: "abc", createdAt: 1, archivedAt: 2, state: "archived", ignoredFilesExcluded: true };
   });
   const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store as never,
-    worktreeArchiveService: { archive } as never, threadTitleGenerationService: null,
+    worktreeArchiveService: real ? new WorktreeArchiveService() : { archive } as never, threadTitleGenerationService: null,
     acpWorktreeRepositoryResolver: async () => { effects.workspace += 1; return undefined; },
   });
   registries.push(registry);
@@ -89,7 +105,7 @@ async function fixture(noise: Noise[], roots = 1, overlayOnly = false) {
   const context: ArchiveCleanupContext = { batch: {}, assertCurrent() {}, checkpoint: async () => { checkpoints += 1; }, settleCheckpoint: async () => {} };
   const cleanup = async () => await boundary.completeArchivedThreadCleanup({ backend: "codex", threadId: "target", archivedAt: 1,
     codexRolloutMissing: false, messagingCleanup: {}, context });
-  return { registry, boundary, client, transport, rows, claude, overlays, effects, inspected, archive, context, cleanup,
+  return { registry, boundary, client, transport, rows, claude, overlays, effects, inspected, archive, context, cleanup, snapshots,
     get removed() { return removed; }, get checkpoints() { return checkpoints; } };
 }
 
@@ -106,6 +122,7 @@ async function measure(noise: Noise[], roots = 1, overlayOnly = false) {
 
 describe("single archive discovery isolation", () => {
   it("one disjoint archived cwd cannot add a Git discovery (shrunk regression)", async () => {
+    expect(await measure([{ archived: false, claude: false, cwd: 0 }])).toEqual(await measure([]));
     expect(await measure([{ archived: true, claude: false, cwd: 0 }])).toEqual(await measure([]));
   });
 
@@ -118,4 +135,172 @@ describe("single archive discovery isolation", () => {
       },
     ), { numRuns: 25 });
   });
+});
+
+it("shares identities across candidate roots without reusing another root's enrichment", async () => {
+  const run = await fixture([]);
+  try {
+    run.rows.archived.push({ id: "second", cwd: "/fixture/second" });
+    run.overlays.set("second", { backend: "codex", threadId: "second", extraLinkedDirectories: [worktree("/fixture/second")] });
+    const first = await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "target", context: run.context, reuseInventory: true });
+    const pages = run.transport.listings.length;
+    const discoveries = run.effects.git;
+    const second = await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "second", context: run.context, reuseInventory: true });
+    expect(run.transport.listings).toHaveLength(pages);
+    expect(run.effects.git).toBeGreaterThan(discoveries);
+    expect(first.thread.id).toBe("target");
+    expect(second.thread.linkedDirectories).toContainEqual(worktree("/fixture/second"));
+    // A directory write invalidates the identity proof too, even in one batch.
+    await run.registry.withThreadWorkspaceMutation({ backend: "codex", threadId: "second" }, async () => {});
+    await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "second", context: run.context, reuseInventory: true });
+    expect(run.transport.listings.length).toBeGreaterThan(pages);
+  } finally { await run.registry.close(); }
+});
+
+it("bounds a 1876-identity single archive to candidate discovery plus fresh admission", async () => {
+  const noise = Array.from({ length: 1875 }, (_, cwd) => ({ cwd, archived: cwd >= 399, claude: false }));
+  const run = await fixture(noise);
+  try {
+    await run.cleanup();
+    expect(run.removed).toBe(1);
+    expect(run.inspected.size).toBe(1876);
+    expect(run.effects).toEqual({ git: 2, workspace: 0 });
+    expect(run.transport.listings).toHaveLength(38);
+  } finally { await run.registry.close(); }
+});
+
+// The model is a set of reasons a checkout must survive. Operations update the
+// provider/overlay owner, not production predicates. Snapshot preparation is an
+// explicit scheduling boundary: discovery has completed, admission has not.
+it("matches an owner/reference model across late lifecycle and directory events", async () => {
+  const operation = fc.constantFrom("attach", "detach", "restore", "rearchive", "external", "adopt", "fail", "recover", "unrelated");
+  await fc.assert(fc.asyncProperty(fc.array(operation, { maxLength: 16 }), fc.scheduler(), async (operations, scheduler) => {
+    const run = await fixture([]);
+    const blockers = new Set<string>();
+    let failedRead = false;
+    const originalRead = run.client.listArchiveCleanupThreadsPage.bind(run.client);
+    vi.spyOn(run.client, "listArchiveCleanupThreadsPage").mockImplementation(async (params) => {
+      if (failedRead) throw new Error("Safety read unavailable");
+      return await originalRead(params);
+    });
+    run.context.checkpoint = async () => { await scheduler.schedule(Promise.resolve(), "cleanup checkpoint"); };
+    const originalArchive = run.archive.getMockImplementation()!;
+    run.archive.mockImplementationOnce(async (params) => {
+      for (const op of operations) {
+        if (op === "attach" || op === "detach") {
+          run.rows.active = run.rows.active.filter((row) => row.id !== "owner");
+          if (op === "attach") { blockers.add("shared"); run.rows.active.push({ id: "owner", cwd: "/fixture/candidate-0/child" }); }
+          else blockers.delete("shared");
+        } else if (op === "restore" || op === "rearchive") {
+          run.rows.active = run.rows.active.filter((row) => row.id !== "target");
+          run.rows.archived = run.rows.archived.filter((row) => row.id !== "target");
+          run.rows[op === "restore" ? "active" : "archived"].push({ id: "target", cwd: "/fixture/candidate-0" });
+          if (op === "restore") blockers.add("restored"); else blockers.delete("restored");
+        } else if (op === "external" || op === "adopt") {
+          if (op === "external") {
+            blockers.add("external");
+            run.rows.archived = run.rows.archived.filter((row) => row.id !== "external");
+            run.rows.archived.push({ id: "external", cwd: "/fixture/elsewhere" });
+            run.overlays.set("external", { backend: "codex", threadId: "external", extraLinkedDirectories: [{ ...worktree("/fixture/candidate-0"), worktreeOwnership: "external" }] });
+          } else { blockers.delete("external"); run.overlays.delete("external"); }
+        } else if (op === "fail" || op === "recover") {
+          failedRead = op === "fail";
+          if (failedRead) blockers.add("failed read"); else blockers.delete("failed read");
+        } else {
+          // Unrelated activity continues even at the final removal checkpoint.
+          await run.registry.publishLocalEvent({ backend: "codex", notification: { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["unrelated"] } } });
+        }
+      }
+      return await originalArchive(params);
+    });
+    try {
+      await scheduler.waitFor(run.cleanup());
+      expect(run.removed).toBe(blockers.size ? 0 : 1);
+      if (blockers.size) {
+        // Release every final blocker. A new queue drain reads fresh evidence;
+        // unrelated directory notifications need not stop for it to finish.
+        failedRead = false;
+        run.rows.active = [];
+        run.rows.archived = [{ id: "target", cwd: "/fixture/candidate-0" }];
+        run.overlays.clear();
+        run.context.batch = {};
+        await run.registry.publishLocalEvent({ backend: "codex", notification: { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["unrelated"] } } });
+        await scheduler.waitFor(run.cleanup());
+        expect(run.removed).toBe(1);
+      }
+    } finally { await run.registry.close(); }
+  }), { numRuns: 30 });
+});
+
+it.each([true, false])("an unresolved %s-relevant mutation cannot admit removal", async (relevant) => {
+  const run = await fixture([]);
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const archive = run.archive.getMockImplementation()!;
+  let mutation: Promise<unknown> | undefined;
+  run.rows.active.push({ id: "writer", cwd: "/fixture/unrelated" });
+  run.archive.mockImplementationOnce(async (params) => {
+    mutation = run.registry.withThreadLifecycleMutation({ backend: "codex", threadId: "writer",
+      worktreePath: relevant ? "/fixture/candidate-0" : "/fixture/unrelated" }, async () => { entered(); await gate; });
+    await started;
+    return await archive(params);
+  });
+  try {
+    await run.cleanup();
+    expect(run.removed).toBe(relevant ? 0 : 1);
+  } finally { release(); await mutation; await run.registry.close(); }
+});
+
+const execFileAsync = promisify(execFile);
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false", "-C", cwd, ...args]);
+  return stdout.trim();
+}
+
+it("uses real Git and canonical paths as the snapshot/removal oracle at the changed boundary", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-scoped-oracle-")));
+  const repo = path.join(root, "repo");
+  await mkdir(repo);
+  await git(repo, "init", "-b", "main");
+  await git(repo, "config", "user.name", "Fixture");
+  await git(repo, "config", "user.email", "fixture@example.com");
+  await git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--allow-empty", "-m", "initial");
+  let sequence = 0;
+  try {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("eligible", "alias-owner", "descendant-owner", "external-alias", "primary", "locked"), fc.string({ minLength: 1, maxLength: 25 }), async (kind, contents) => {
+      const checkout = path.join(root, `checkout-${sequence++}`);
+      await git(repo, "worktree", "add", "--detach", checkout);
+      const target = kind === "primary" ? repo : checkout;
+      const alias = path.join(root, `alias-${sequence}`);
+      await symlink(checkout, alias, process.platform === "win32" ? "junction" : "dir");
+      await mkdir(path.join(checkout, "child"));
+      await writeFile(path.join(target, "preserved.txt"), contents);
+      if (kind === "locked") await git(repo, "worktree", "lock", checkout);
+      const run = await fixture([], 1, false, { cwd: target, repositoryPath: repo });
+      if (kind === "alias-owner" || kind === "descendant-owner") run.rows.active.push({ id: "owner", cwd: kind === "alias-owner" ? alias : path.join(alias, "child") });
+      if (kind === "external-alias") {
+        run.rows.archived.push({ id: "external", cwd: alias });
+        run.overlays.set("external", { backend: "codex", threadId: "external", extraLinkedDirectories: [{ ...worktree(alias), path: repo, worktreeOwnership: "external" }] });
+      }
+      try {
+        const result = await run.cleanup();
+        const removed = result.cleanup.some((item) => item.removedWorktree);
+        expect(removed).toBe(kind === "eligible");
+        const worktrees = await git(repo, "worktree", "list", "--porcelain");
+        if (removed) {
+          expect(worktrees).not.toContain(checkout.replaceAll("\\", "/"));
+          expect(run.snapshots).toHaveLength(1);
+          expect(await git(repo, "show", `${run.snapshots[0]!.snapshot.snapshotRef}:preserved.txt`)).toBe(contents.trim());
+        } else {
+          expect(await readFile(path.join(target, "preserved.txt"), "utf8")).toBe(contents);
+          expect(worktrees).toContain(checkout.replaceAll("\\", "/"));
+        }
+      } finally { await run.registry.close(); }
+    }), { numRuns: 4, examples: [
+      ["eligible", "snapshot"], ["alias-owner", "keep"], ["descendant-owner", "keep"],
+      ["external-alias", "keep"], ["primary", "keep"], ["locked", "keep"],
+    ] });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
