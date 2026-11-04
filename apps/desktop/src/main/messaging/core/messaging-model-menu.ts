@@ -1,4 +1,4 @@
-import { buildModelMenu, formatModelOptionLabel, modelMenuOtherLabel } from "@pwragent/shared";
+import { buildModelMenu, codexProviderIdOfModel, formatModelOptionLabel, modelMenuOtherLabel } from "@pwragent/shared";
 import type { ModelMenuEntry } from "@pwragent/shared";
 import {
   applyActionCapabilityLimits,
@@ -23,7 +23,15 @@ export function buildMessagingModelMenuActions<T extends MessagingModelOption>(p
   footerActions?: MessagingSurfaceAction[];
   capabilityProfile?: MessagingCapabilityProfile;
 }): MessagingSurfaceAction[] {
-  const menu = buildModelMenu(params);
+  // Older peers can omit optional catalog metadata; qualified Codex IDs
+  // still carry the provider needed by the shared menu rule.
+  const catalog = params.kind === "codex"
+    ? params.models.map((model) => ({
+        ...model,
+        providerId: model.providerId ?? codexProviderIdOfModel(model.id),
+      }))
+    : params.models;
+  const menu = buildModelMenu({ ...params, models: catalog });
   const value = params.menuValue && typeof params.menuValue === "object" && !Array.isArray(params.menuValue)
     ? params.menuValue
     : {};

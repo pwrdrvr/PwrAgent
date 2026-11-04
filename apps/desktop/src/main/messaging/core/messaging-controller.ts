@@ -3568,7 +3568,7 @@ export class MessagingController {
         currentModelId: reviewerModelId,
         menuValue: params.modelMenuValue,
         menuActionId: "review:reviewer:models",
-        selectActionId: (model) => `review:reviewer:model:${models.indexOf(model)}`,
+        selectActionId: (model) => `review:reviewer:model:${models.findIndex((candidate) => candidate.id === model.id)}`,
         capabilityProfile: this.capabilityProfile,
         backAction,
         footerActions: [
