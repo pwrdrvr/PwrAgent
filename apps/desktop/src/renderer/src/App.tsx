@@ -89,6 +89,8 @@ import type { ThreadHandoffSummary } from "./features/federation/thread-handoff-
 import { useThreadHandoffTransfers } from "./features/federation/useThreadHandoffTransfers";
 import { flyBetween } from "./lib/fly-between";
 import { ContinueAfterDialog } from "./features/thread-dependencies/ContinueAfterDialog";
+import { ThreadMaintenanceDialog } from "./features/maintenance/ThreadMaintenanceDialog";
+import { ThreadMaintenanceLauncherContext } from "./features/maintenance/thread-maintenance-launcher";
 import {
   ThreadDependencyIndicatorsContext,
   useThreadDependencyIndicators,
@@ -3364,6 +3366,20 @@ function DesktopAppShell(props: {
     thread: NavigationThreadSummary;
     returnFocus?: RefObject<HTMLElement | null>;
   }>();
+  // Thread maintenance: File → Thread Maintenance…, Settings → Review…, or
+  // an agent. It works on this machine's threads, so a remote window has none.
+  const [threadMaintenance, setThreadMaintenance] = useState<{ projectKey?: string }>();
+  const canMaintainThreads = Boolean(desktopApi?.scanThreadMaintenance) && !readRendererFederationTarget();
+  const openThreadMaintenance = useCallback((request: { projectKey?: string } = {}) => {
+    if (canMaintainThreads) setThreadMaintenance(request);
+  }, [canMaintainThreads]);
+  useEffect(() => {
+    if (!canMaintainThreads || !desktopApi?.onOpenThreadMaintenanceRequested) return;
+    return desktopApi.onOpenThreadMaintenanceRequested((request) => {
+      closeThreadJump();
+      setThreadMaintenance(request);
+    });
+  }, [canMaintainThreads, closeThreadJump, desktopApi]);
   const threadDependencyIndicators = useThreadDependencyIndicators(desktopApi);
   const canContinueAfter = Boolean(desktopApi?.manageThreadDependencies)
     && !readRendererFederationTarget();
@@ -4602,6 +4618,7 @@ function DesktopAppShell(props: {
     <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
     <ThreadHandoffBandContext.Provider value={threadHandoffBand}>
+    <ThreadMaintenanceLauncherContext.Provider value={canMaintainThreads ? openThreadMaintenance : undefined}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -4645,6 +4662,14 @@ function DesktopAppShell(props: {
           thread={continueAfter.thread}
           {...(continueAfter.returnFocus ? { returnFocus: continueAfter.returnFocus } : {})}
           onClose={() => setContinueAfter(undefined)}
+        />
+      ) : null}
+      {threadMaintenance ? (
+        <ThreadMaintenanceDialog
+          desktopApi={desktopApi}
+          policy={settings.snapshot?.worktrees?.archive}
+          {...(threadMaintenance.projectKey ? { projectKey: threadMaintenance.projectKey } : {})}
+          onClose={() => setThreadMaintenance(undefined)}
         />
       ) : null}
       {codexLoginProfile ? (
@@ -5287,6 +5312,7 @@ function DesktopAppShell(props: {
 
       {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
+    </ThreadMaintenanceLauncherContext.Provider>
     </ThreadHandoffBandContext.Provider>
     </ThreadProvidersContext.Provider>
     </ThreadPrWatchIndicatorsContext.Provider>

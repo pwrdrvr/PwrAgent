@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   normalizeThreadArchivePolicy,
   type DesktopSettingsConfigPatch,
@@ -6,6 +6,7 @@ import {
   type DesktopThreadArchiveSweepStatus,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ThreadMaintenanceLauncherContext } from "../maintenance/thread-maintenance-launcher";
 import { SettingsCompOption, SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
 
@@ -145,6 +146,7 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
     );
     return () => { cancelled = true; unsubscribe?.(); };
   }, [api, receive]);
+  const openThreadMaintenance = useContext(ThreadMaintenanceLauncherContext);
   if (!api?.getThreadArchiveSweepStatus) return null;
 
   const busy = requesting || status?.running === true;
@@ -171,7 +173,9 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
   const unlisted = finished ? Math.max(0, status.failed - failures.length) : 0;
   return (
     <SettingsField label="Last sweep"
-      sub="Run now also retries archived worktree cleanup. Recovery snapshots exclude ignored files and keep oversized checkouts in place."
+      sub={openThreadMaintenance
+        ? "Sweeps run hourly. Review shows which threads are idle and why each was kept."
+        : "Run now also retries archived worktree cleanup. Recovery snapshots exclude ignored files and keep oversized checkouts in place."}
       control={
         <div className="settings-archive-sweep">
           <div className="settings-archive-sweep__line">
@@ -196,12 +200,20 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
                 </>
               )}
             </span>
-            {api.runThreadArchiveSweep ? (
-              <button className="button button--ghost settings-section-controls__button settings-archive-sweep__run"
-                type="button" aria-disabled={busy || undefined} onClick={() => { void run(); }}>
-                Run now
-              </button>
-            ) : null}
+            <span className="settings-archive-sweep__buttons">
+              {openThreadMaintenance ? (
+                <button className="button button--ghost settings-section-controls__button settings-archive-sweep__run"
+                  type="button" onClick={() => openThreadMaintenance()}>
+                  Review…
+                </button>
+              ) : null}
+              {api.runThreadArchiveSweep ? (
+                <button className="button button--ghost settings-section-controls__button settings-archive-sweep__run"
+                  type="button" aria-disabled={busy || undefined} onClick={() => { void run(); }}>
+                  Run now
+                </button>
+              ) : null}
+            </span>
           </div>
           {summaryLines.map((line) => <p key={line} className="settings-archive-sweep__text">{line}</p>)}
           {requestError ? <p className="settings-archive-sweep__error" role="alert">{requestError}</p> : null}

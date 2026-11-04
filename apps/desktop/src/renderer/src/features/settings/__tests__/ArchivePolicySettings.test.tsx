@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_THREAD_ARCHIVE_POLICY, type DesktopThreadArchiveSweepStatus } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ArchivePolicySettings } from "../ArchivePolicySettings";
+import { ThreadMaintenanceLauncherContext } from "../../maintenance/thread-maintenance-launcher";
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const FINISHED_AT = new Date(2026, 9, 2, 15, 12).getTime();
@@ -192,5 +193,24 @@ describe("ArchivePolicySettings", () => {
       worktrees: { ...worktrees, processedContainers: 259, removedContainers: 259 } });
     expect(screen.getByText(/Cleaned 259 of 259 empty worktree folders/)).toBeInTheDocument();
     expect(onSweepChanged).toHaveBeenCalledOnce();
+  });
+
+  it("opens Thread maintenance from Review… when App provides it", async () => {
+    const { api } = sweepApi({ running: false, archived: 0, deleted: 0, failed: 0, finishedAt: FINISHED_AT, nextAt: NEXT_AT });
+    const open = vi.fn();
+    render(
+      <ThreadMaintenanceLauncherContext.Provider value={open}>
+        <ArchivePolicySettings desktopApi={api} onWriteConfig={vi.fn(async () => true)} />
+      </ThreadMaintenanceLauncherContext.Provider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+    expect(open).toHaveBeenCalledOnce();
+  });
+
+  it("has no Review… button without a launcher", async () => {
+    const { api } = sweepApi({ running: false, archived: 0, deleted: 0, failed: 0, finishedAt: FINISHED_AT, nextAt: NEXT_AT });
+    render(<ArchivePolicySettings desktopApi={api} onWriteConfig={vi.fn(async () => true)} />);
+    await screen.findByRole("button", { name: "Run now" });
+    expect(screen.queryByRole("button", { name: "Review…" })).toBeNull();
   });
 });
