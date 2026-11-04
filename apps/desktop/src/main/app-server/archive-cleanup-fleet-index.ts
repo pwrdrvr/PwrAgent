@@ -30,7 +30,7 @@ type Entry = FleetRow & {
   resolved: string[];
   /** Canonical path -> the supplied paths that resolved to it. */
   supplied: Map<string, string[]>;
-  externalCanonical: string[];
+  /** An external marker that cannot be resolved protects every checkout. */
   externalUnknown: boolean;
 };
 
@@ -79,7 +79,8 @@ export class ArchiveFleetIndex {
   private readonly memoScopesByKey = new Map<string, Set<string>>();
   /** Canonical path -> memo scopes equal to or inside it. */
   private readonly memoScopesUnder = new Map<string, Set<string>>();
-  private readonly pathWrites: string[] = [];
+  /** Path-scoped writes not yet covered by a complete read. */
+  private readonly pathWrites: Array<{ epoch: number; path: string }> = [];
   private epoch = 0;
   private built = false;
   /** Epoch of the newest rebuild request not yet covered by a read. */
@@ -125,7 +126,8 @@ export class ArchiveFleetIndex {
         this.requestRebuild("workspace write without an absolute path");
         continue;
       }
-      try { this.pathWrites.push(await canonicalWorktreePaths()(value)); }
+      const epoch = ++this.epoch;
+      try { this.pathWrites.push({ epoch, path: await canonicalWorktreePaths()(value) }); }
       catch { this.requestRebuild("workspace write path could not be resolved"); }
     }
   }
@@ -136,7 +138,7 @@ export class ArchiveFleetIndex {
     let scope: string;
     try { scope = await canonicalWorktreePaths()(scopePath); }
     catch { return true; }
-    return this.pathWrites.some((value) => within(scope, value) || within(value, scope));
+    return this.pathWrites.some(({ path: value }) => within(scope, value) || within(value, scope));
   }
 
   dirtyEntries(): Array<{ key: string; epoch: number; changes: ReadonlySet<FleetChange>; membership?: Membership }> {
@@ -164,7 +166,9 @@ export class ArchiveFleetIndex {
     this.byParent.clear();
     for (const row of rows) await this.upsert(row);
     for (const [key, dirty] of this.dirty) if (dirty.epoch <= epoch) this.dirty.delete(key);
-    this.pathWrites.length = 0;
+    // A write noted during the read may postdate the rows it touched.
+    const pending = this.pathWrites.filter((write) => write.epoch > epoch);
+    this.pathWrites.splice(0, this.pathWrites.length, ...pending);
     this.codexWatermark = observed.codexWatermark;
     this.overlayToken = observed.overlayToken;
     this.claudeToken = observed.claudeToken;
@@ -188,16 +192,16 @@ export class ArchiveFleetIndex {
     this.unknown.delete(key);
     this.externalUnknown.delete(key);
     for (const value of entry.resolved) {
-      this.exact.get(value)?.delete(key);
+      remove(this.exact, value, key);
       for (const ancestor of ancestors(value)) {
         const keys = this.under.get(ancestor);
         keys?.delete(key);
         if (keys && !keys.size) this.under.delete(ancestor);
       }
     }
-    this.byThreadId.get(entry.threadId)?.delete(key);
+    remove(this.byThreadId, entry.threadId, key);
     const parent = entry.overlay?.parentThreadId;
-    if (parent) this.byParent.get(parent)?.delete(key);
+    if (parent) remove(this.byParent, parent, key);
   }
 
   get(key: string): FleetRow | undefined {
@@ -261,7 +265,7 @@ export class ArchiveFleetIndex {
   }
 
   private async insert(row: FleetRow): Promise<void> {
-    const entry: Entry = { ...row, resolved: [], supplied: new Map(), externalCanonical: [], externalUnknown: false };
+    const entry: Entry = { ...row, resolved: [], supplied: new Map(), externalUnknown: false };
     const canonical: string[] = [];
     let unknown = row.paths.length === 0 || row.unknownWorkspace === true;
     for (const value of row.paths) {
@@ -271,8 +275,10 @@ export class ArchiveFleetIndex {
         entry.supplied.set(resolved, [...entry.supplied.get(resolved) ?? [], value]);
       } catch { unknown = true; }
     }
+    // External markers are also workspace paths, so they are indexed above;
+    // here only an unresolvable one matters.
     for (const value of row.externalPaths) {
-      try { entry.externalCanonical.push(await this.resolve(value)); }
+      try { await this.resolve(value); }
       catch { entry.externalUnknown = true; }
     }
     entry.resolved = [...new Set(canonical)];
@@ -316,7 +322,12 @@ export class ArchiveFleetIndex {
     this.memos.set(scope, slot);
     for (const key of keys) add(this.memoScopesByKey, key, scope);
     for (const ancestor of ancestors(scope)) add(this.memoScopesUnder, ancestor, scope);
-    const value = await compute(keys);
+    let value: T;
+    try { value = await compute(keys); }
+    catch (error) {
+      if (this.memos.get(scope) === slot) this.forgetMemo(scope);
+      throw error;
+    }
     if (this.memos.get(scope) === slot) slot.value = value;
     return value;
   }
@@ -325,8 +336,8 @@ export class ArchiveFleetIndex {
     const slot = this.memos.get(scope);
     if (!slot) return;
     this.memos.delete(scope);
-    for (const key of slot.keys) this.memoScopesByKey.get(key)?.delete(scope);
-    for (const ancestor of ancestors(scope)) this.memoScopesUnder.get(ancestor)?.delete(scope);
+    for (const key of slot.keys) remove(this.memoScopesByKey, key, scope);
+    for (const ancestor of ancestors(scope)) remove(this.memoScopesUnder, ancestor, scope);
   }
 
   private forgetAllMemos(): void {
@@ -360,6 +371,12 @@ function add(map: Map<string, Set<string>>, key: string, value: string): void {
     map.set(key, set);
   }
   set.add(value);
+}
+
+function remove(map: Map<string, Set<string>>, key: string, value: string): void {
+  const set = map.get(key);
+  set?.delete(value);
+  if (set && !set.size) map.delete(key);
 }
 
 function within(parent: string, child: string): boolean {

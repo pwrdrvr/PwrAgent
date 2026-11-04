@@ -9650,13 +9650,17 @@ export class DesktopBackendRegistry {
     inventory: ArchiveCleanupInventory;
   }>();
   private archiveWorkspaceRevision = 0;
-  /** `archiveWorktreeReferences.additions` at the last successful checkpoint. */
+  /** Additions (reference rows plus queued intents) at the last checkpoint. */
   private archiveCheckpointedAdditions = -1;
+  /** Counts cleanup intents queued, so a boundary persists new queued work. */
+  private archiveCleanupIntentAdditions = 0;
   /** The fleet index of the current cleanup queue batch. Each batch reads the
    * fleet once; writers and notifications keep it current within the batch. */
   private archiveFleet?: { batch: object; index: ArchiveFleetIndex };
   /** The identities each fleet admission found related to its scope. */
   private readonly archiveFleetAdmissionKeys = new WeakMap<ArchiveWorkspaceAdmission, ReadonlySet<string>>();
+  /** Each fleet admission's related paths per identity; see `ownershipPaths`. */
+  private readonly archiveFleetAdmissionPaths = new WeakMap<ArchiveWorkspaceAdmission, ReadonlyMap<string, readonly string[]>>();
   private readonly threadArchiveOperations = new Map<string, Promise<ArchiveThreadResponse>>();
   private readonly archiveCleanupCompletions = new Map<string, { promise: Promise<ArchiveThreadResponse>; archivedAt: number }>();
   private readonly cancelledArchiveCleanupKeys = new Set<string>();
@@ -17119,7 +17123,7 @@ export class DesktopBackendRegistry {
     // recovered row, so a reference boundary persists only what was added.
     // Rewriting the remaining backlog after each release was quadratic.
     // A drained backlog is still written: an empty checkpoint serializes nothing.
-    const additions = this.archiveWorktreeReferences.additions;
+    const additions = this.archiveWorktreeReferences.additions + this.archiveCleanupIntentAdditions;
     if (phase === "reference-change" && additions === this.archiveCheckpointedAdditions && this.archiveCheckpointedAdditions >= 0
       && (this.archiveWorktreeReferences.hasOwners || this.pendingArchiveCleanupIntents.size > 0)) return;
     try {
@@ -17191,6 +17195,8 @@ export class DesktopBackendRegistry {
     const queuedAt = Date.now();
     const logFields = { backend: intent.backend, threadId: intent.threadId, archivedAt: intent.archivedAt, runtimeInstanceId: this.runtimeInstanceId, queuedAt };
     backendRegistryLog.info("archive cleanup queued", { ...logFields, resuming, queueDepth: this.archiveCleanupQueue.pendingKeys().length + 1 });
+    // Released and recovered intents are already durable; a fresh archive is not.
+    if (!resuming && this.pendingArchiveCleanupIntents.get(key) !== intent) this.archiveCleanupIntentAdditions += 1;
     this.pendingArchiveCleanupIntents.set(key, intent);
     let startedAt: number | undefined;
     const completion = this.archiveCleanupQueue.enqueue(key, async (context) => {
@@ -39858,13 +39864,11 @@ export class DesktopBackendRegistry {
       if (!base) {
         if (isAcpBackendId(backend)) {
           const session = this.acpBackend.getSession(backend, threadId);
-          if (!session) {
-            index.delete(key);
-            index.settle(key, epoch);
-            continue;
-          }
-          base = this.acpBackend.sessionToThreadSummary(session);
-          archived = Boolean(session.archivedAt);
+          // Deletion is announced; an unreadable session is not proof that it
+          // is gone, so it protects every checkout until it can be read.
+          base = session ? this.acpBackend.sessionToThreadSummary(session)
+            : { id: threadId, source: backend, title: "", titleSource: "explicit", linkedDirectories: [] };
+          if (session) archived = Boolean(session.archivedAt);
         } else if (backend === "claude") {
           if (!claude) {
             claude = new Map();
@@ -40077,6 +40081,8 @@ export class DesktopBackendRegistry {
   ) {
     const rows = index.rows(keys);
     const ownershipPaths = new WeakMap<AppServerThreadSummary, readonly string[]>();
+    const pathsByKey = new Map<string, readonly string[]>();
+    if (removalAdmission) this.archiveFleetAdmissionPaths.set(removalAdmission, pathsByKey);
     const enriched = await this.enrichArchiveFleetRows(rows, directoryFilter, context, directoryObservations, workspaceObservations);
     context?.assertCurrent();
     const activeThreads: AppServerThreadSummary[] = [];
@@ -40092,7 +40098,10 @@ export class DesktopBackendRegistry {
       const related = await index.relatedPaths(row.key, scopes);
       const known = new Set(row.paths);
       const paths = related ? [...new Set([...related, ...archiveWorkspacePaths(summary).filter((value) => !known.has(value))])] : undefined;
-      if (paths) ownershipPaths.set(summary, paths);
+      if (paths) {
+        ownershipPaths.set(summary, paths);
+        pathsByKey.set(row.key, paths);
+      }
       byKey.set(row.key, { row, summary });
       (row.archived ? archivedThreads : activeThreads).push(summary);
       removalAdmission?.observeThread(row.key, [...paths ?? archiveWorkspacePaths(summary), ...(row.unknownWorkspace ? [""] : [])]);
@@ -52624,7 +52633,10 @@ export class DesktopBackendRegistry {
     if (!row) return;
     // While admission is still reading, `prepare` proves the indexed paths.
     if (related && !related.has(key) && !row.unknownWorkspace && row.paths.length) scope.observeDisjoint(key, row.paths);
-    else scope.observeThread(key, [...row.paths, ...(row.unknownWorkspace || !row.paths.length ? [""] : [])]);
+    else {
+      const paths = this.archiveFleetAdmissionPaths.get(scope)?.get(key) ?? row.paths;
+      scope.observeThread(key, [...paths, ...(row.unknownWorkspace || !paths.length ? [""] : [])]);
+    }
   }
 
   private archiveWorkspaceMutationsFor(scope: ArchiveWorkspaceAdmission, mutations = this.archiveWorkspaceMutations()): ArchiveWorkspaceMutation[] {
