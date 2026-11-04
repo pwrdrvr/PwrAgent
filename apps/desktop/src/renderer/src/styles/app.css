@@ -1670,6 +1670,7 @@
   display: flex;
   width: 340px;
   max-width: calc(100vw - 16px);
+  /* 320px is POPOVER_MAX_HEIGHT in pr-rollup-popover-placement.ts. Change both. */
   max-height: min(320px, calc(100vh - 16px));
   flex-direction: column;
   border: 1px solid var(--border-strong);
