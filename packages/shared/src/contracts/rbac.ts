@@ -711,6 +711,11 @@ export function permissionForActionId(
   if (actionId.startsWith("questionnaire:")) {
     return "elicitation.answer";
   }
+  // Model submenu navigation carries the entry button's permission, including
+  // callbacks delivered before an actor's model-settings access was revoked.
+  if (actionId.startsWith("status:model:")) {
+    return "thread.settings.model";
+  }
   // Every skills sub-action (select / remove / paging / search) is gated on the
   // same permission as the `status:skills` entry button, so the sub-nav can't
   // be driven — or drift ungated — by an actor who can't open the browser.
