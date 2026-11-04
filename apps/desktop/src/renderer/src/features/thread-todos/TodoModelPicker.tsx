@@ -4,9 +4,9 @@ import type { BackendSummary, ModelSettingsRecent, ThreadTodo, ThreadTodoModelSe
 import { resolveThreadTodoModelSettings, sameThreadTodoModelSettings } from "@pwragent/shared";
 import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
-import { splitModelMenuOptions } from "../../lib/model-menu-options";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
+import { ModelDropdown } from "../composer/ModelDropdown";
 import { useTodoDispatchBackends, useTodoDispatchContext } from "./TodoDispatchProvider";
 import { customTodoDispatchSettings, formatTodoDispatchSettings, todoDispatchRecentResolves } from "./todo-dispatch-model";
 
@@ -119,7 +119,6 @@ export function TodoModelPicker(props: MachinePickerProps) {
   const providers = backends.filter((backend) => backend.available && backend.capabilities.createThread);
   const backend = backends.find((entry) => entry.kind === selection.settings.backend);
   const models = backend?.launchpadOptions?.models ?? [];
-  const { primary: primaryModels, other: otherModels } = splitModelMenuOptions(backend?.kind, models);
   const model = models.find((entry) => entry.id === selection.settings.model);
   const efforts = model?.supportsReasoning === false ? [] : model?.reasoningEfforts ?? backend?.launchpadOptions?.reasoningEfforts ?? [];
   const recentRows = recents.filter((recent) => todoDispatchRecentResolves(recent, backends)).slice(0, 5);
@@ -150,11 +149,8 @@ export function TodoModelPicker(props: MachinePickerProps) {
                 const next = providers.find((entry) => entry.kind === value);
                 if (next) props.onPick(customTodoDispatchSettings(next));
               }} />
-            <ComposerDropdown ariaLabel="To-do model" triggerRole="menuitem" menuPlacement="below" disabled={models.length === 0}
-              options={models.length ? primaryModels.map((entry) => ({ value: entry.id, label: entry.label ?? entry.id }))
-                : [{ value: "", label: "Default model" }]}
-              otherOptions={otherModels.map((entry) => ({ value: entry.id, label: entry.label ?? entry.id }))}
-              otherLabel={backend?.kind === "claude" ? "Other Models" : undefined}
+            <ModelDropdown ariaLabel="To-do model" triggerRole="menuitem" menuPlacement="below" disabled={models.length === 0}
+              kind={backend?.kind} models={models} emptyOptions={[{ value: "", label: "Default model" }]}
               value={selection.settings.model ?? ""} onChange={(value) => {
                 if (backend) props.onPick(customTodoDispatchSettings(backend, value));
               }} />

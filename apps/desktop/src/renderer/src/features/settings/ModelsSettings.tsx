@@ -24,8 +24,9 @@ import type {
   DesktopUpdateChannel,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { Select, type SelectOption } from "../../components/Select";
+import { Select, groupRuns, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { modelSelectOptions } from "../../lib/model-select-options";
 import {
   describeExecutionModeForBackend,
   formatExecutionModeLabel,
@@ -1595,6 +1596,7 @@ function ProviderModelDefaultField(props: {
   const { pending: fastAllowPending, track: trackFastAllow } =
     useSettingsFieldPending();
   const models = props.backend.launchpadOptions?.models ?? [];
+  const modelRows = modelSelectOptions({ kind: props.backend.kind, models });
   const selectedModel = props.defaults?.model ?? "";
   const modelOption = models.find((model) => model.id === selectedModel);
   const reasoningOptions = reasoningOptionsFor(
@@ -1654,11 +1656,16 @@ function ProviderModelDefaultField(props: {
               {selectedModel && !modelOption ? (
                 <option value={selectedModel}>{selectedModel} (unavailable)</option>
               ) : null}
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label ?? model.id}
-                </option>
-              ))}
+              {groupRuns(modelRows).map((run) => {
+                const rows = run.indexes.map((index) => (
+                  <option key={modelRows[index]!.value} value={modelRows[index]!.value}>
+                    {modelRows[index]!.label}
+                  </option>
+                ));
+                return run.group === undefined ? rows : (
+                  <optgroup key={run.group} label={run.group}>{rows}</optgroup>
+                );
+              })}
             </select>
             {selectedModel && reasoningOptions.length > 0 ? (
               <select
