@@ -52,6 +52,30 @@ describe("pending worktree references", () => {
     expect(refs.intents()[0]?.deferredWorktrees?.[0]?.blockers).toEqual(["codex:owner"]);
   });
 
+  it.each([false, true])("fulfills every canonical owner after an alias becomes dangling (retain again=%s)", async (retainAgain) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pending-worktree-alias-"));
+    roots.push(root);
+    const checkout = path.join(root, "checkout");
+    const alias = path.join(root, "alias");
+    await mkdir(checkout);
+    await symlink(checkout, alias, process.platform === "win32" ? "junction" : "dir");
+    const refs = new ArchiveWorktreeReferences();
+    await refs.retain(intent("first"), { worktreePath: alias, blockers: [] });
+    await refs.retain(intent("second"), { worktreePath: checkout, blockers: [] });
+    await refs.retain(intent("unrelated"), { worktreePath: path.join(root, "other"), blockers: ["codex:active"] });
+    await rm(checkout, { recursive: true });
+    await expect(realpath(alias)).rejects.toMatchObject({ code: "ENOENT" });
+    if (retainAgain) {
+      await refs.retain(intent("first"), { worktreePath: alias, blockers: [] });
+      expect(refs.intents().find((row) => row.threadId === "first")?.deferredWorktrees).toHaveLength(1);
+    }
+    await refs.fulfilled(alias);
+    expect(refs.intents().map((row) => row.threadId)).toEqual(["unrelated"]);
+    const recovered = new ArchiveWorktreeReferences();
+    for (const request of refs.intents()) for (const worktree of request.deferredWorktrees!) await recovered.retain(request, worktree);
+    expect(recovered.recoveryIntents().map((row) => row.threadId)).toEqual(["unrelated"]);
+  });
+
   it("retains all checkouts but retries one physical request per canonical checkout after restart", async () => {
     const refs = new ArchiveWorktreeReferences();
     await refs.retain(intent("first"), { worktreePath: "/fixture/one", blockers: ["codex:owner"] });

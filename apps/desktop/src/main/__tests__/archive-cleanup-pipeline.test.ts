@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentEvent, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
+import { ArchiveWorktreeReferences } from "../app-server/archive-worktree-references";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { deleteThreadAssets } from "../app-server/thread-assets";
@@ -372,15 +373,32 @@ describe("archive cleanup pipeline", () => {
     expect(saved).toEqual([]);
   });
 
-  it("finishes snapshot persistence after a failed write and restart without removing the checkout twice", async () => {
+  it.each([false, true])("finishes snapshot persistence after a failed write and restart without removing the checkout twice (deferred=%s)", async (deferred) => {
     vi.useFakeTimers();
     const target = codexThread({ id: "target", linkedDirectories: [{ id: "worktree", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" }] });
     let saved: ArchiveCleanupIntent[] = [];
     const checkpoint = { save: vi.fn((_id: string, intents: ArchiveCleanupIntent[]) => { saved = structuredClone(intents); }), recover: vi.fn(() => saved) };
-    const first = build([], target, checkpoint);
+    const owner = codexThread({ id: "owner", projectKey: "/contrived/other", linkedDirectories: [] });
+    const first = build(deferred ? [owner] : [], target, checkpoint);
+    if (deferred) {
+      first.overlays.set("owner", { backend: "codex", threadId: "owner", extraLinkedDirectories: target.linkedDirectories });
+      await drivePacer(first.registry, first.registry.archiveThread({ backend: "codex", threadId: "target" }));
+      expect(first.archiveWorktree).not.toHaveBeenCalled();
+      expect(saved[0]?.deferredWorktrees?.[0]?.snapshot).toBeUndefined();
+    }
     Object.assign(first.store, { upsertWorktreeSnapshot: vi.fn(async () => { throw new Error("Snapshot store unavailable"); }) });
-    const result = await drivePacer(first.registry, first.registry.archiveThread({ backend: "codex", threadId: "target" }));
-    expect(result.cleanup[0]?.error).toContain("Snapshot store unavailable");
+    if (deferred) {
+      const completed = new Promise<void>((resolve) => first.registry.onEvent((event) => {
+        if (event.notification.method === "thread/archiveCleanup/completed") resolve();
+      }));
+      first.overlays.set("owner", { backend: "codex", threadId: "owner", extraLinkedDirectories: [] });
+      await publishNotification(first.registry, { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["owner"] } });
+      await drivePacer(first.registry, completed);
+    } else {
+      const result = await drivePacer(first.registry, first.registry.archiveThread({ backend: "codex", threadId: "target" }));
+      expect(result.cleanup[0]?.error).toContain("Snapshot store unavailable");
+    }
+    expect(first.archiveWorktree).toHaveBeenCalledOnce();
     expect(saved[0]?.deferredWorktrees?.[0]?.snapshot?.snapshotCommit).toBe("abc");
     await first.registry.close();
     const resumed = build([], target, checkpoint);
@@ -395,6 +413,35 @@ describe("archive cleanup pipeline", () => {
     expect(resumed.archiveWorktree).not.toHaveBeenCalled();
     expect(resumed.client.archiveThread).not.toHaveBeenCalled();
     expect(saved).toEqual([]);
+  });
+
+  it("drains 300 released checkouts through bounded queue capacity without stranding overflow", async () => {
+    vi.useFakeTimers();
+    const fixture = build([codexThread({ id: "owner", projectKey: "/contrived/other", linkedDirectories: [] })]);
+    const refs = new ArchiveWorktreeReferences();
+    for (let index = 0; index < 300; index += 1) {
+      await refs.retain({ backend: "codex", threadId: `waiting-${index}`, archivedAt: 1, codexRolloutMissing: false, messagingCleanup: {} },
+        { worktreePath: `/contrived/worktree-${index}`, blockers: ["codex:owner"] });
+    }
+    // Exercise the real release dispatcher and bounded queue, keeping the
+    // already-covered provider/removal admission outside this scheduling test.
+    const complete = vi.fn(async (intent: ArchiveCleanupIntent) => {
+      for (const row of intent.deferredWorktrees ?? []) await refs.fulfilled(row.worktreePath);
+      return { backend: intent.backend, threadId: intent.threadId, archivedAt: intent.archivedAt,
+        cleanup: (intent.deferredWorktrees ?? []).map((row) => ({ worktreePath: row.worktreePath, removedWorktree: true, deletedBranch: false })) };
+    });
+    Object.assign(fixture.registry, { archiveWorktreeReferences: refs, completeArchivedThreadCleanup: complete });
+    let publications = 0;
+    const completed = new Promise<void>((resolve) => fixture.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed" && ++publications === 300) resolve();
+    }));
+    await publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["owner"] } });
+    await drivePacer(fixture.registry, completed);
+    expect(complete).toHaveBeenCalledTimes(300);
+    expect(refs.intents()).toEqual([]);
+    expect(fixture.events.filter((event) => event.notification.method === "thread/archiveCleanup/completed"
+      && event.notification.params.error)).toEqual([]);
+    expect(fixture.client.archiveThread).not.toHaveBeenCalled();
   });
 
   it("does not lose a final-reference release received before stale inventory records its waiter", async () => {
