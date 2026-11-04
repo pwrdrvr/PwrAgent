@@ -151,6 +151,8 @@ test("captures the model pickers this change touched", async () => {
       await page.getByRole("button", { name: /New Automation/ }).click();
       await expect(page.getByText("New automation", { exact: true })).toBeVisible();
       await dismissNotices();
+      // Model, access and tools sit under the collapsed Advanced settings row.
+      await page.getByText(/^Advanced settings/).click();
       const provider = page.getByRole("button", { name: /^Automation model provider/ });
       await provider.scrollIntoViewIfNeeded();
       await provider.click();
