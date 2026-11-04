@@ -31,6 +31,12 @@ import type {
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
+import {
+  CURRENT_CODEX_MODEL_LABELS,
+  PROVIDER_MODEL,
+  SUPERSEDED_CODEX_MODEL_LABELS,
+  codexCatalogModels,
+} from "../../../test/model-catalog";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { AppearanceController } from "../../../lib/useAppearance";
 import { SettingsScreen } from "../SettingsScreen";
@@ -1007,6 +1013,46 @@ describe("SettingsScreen", () => {
     });
     expect(screen.getByText("sudo apt install ./beta.deb")).toBeInTheDocument();
     expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
+  });
+
+  it("lists default models the way the composer does: current first, superseded under Other models", () => {
+    const cachedBackends = [{
+      kind: "codex",
+      label: "OpenAI",
+      available: true,
+      methods: [],
+      capabilities: { createThread: true },
+      executionModes: [],
+      launchpadOptions: { models: codexCatalogModels() },
+    }] as unknown as BackendSummary[];
+    render(
+      <SettingsScreen
+        cachedBackends={cachedBackends}
+        desktopApi={{
+          listAcpAgents: async () => ({ fetchedAt: 1, entries: [] }),
+          listBackends: async () => await new Promise<never>(() => undefined),
+        }}
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const select = screen.getByLabelText("OpenAI default model");
+    const labels = (parent: Element) =>
+      [...parent.children].filter((child) => child.tagName === "OPTION")
+        .map((option) => option.textContent);
+    expect(labels(select)).toEqual([
+      "Provider advertised default",
+      ...CURRENT_CODEX_MODEL_LABELS,
+    ]);
+    expect([...select.querySelectorAll("optgroup")].map((group) => ({
+      group: group.label,
+      labels: labels(group),
+    }))).toEqual([
+      { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
+      { group: PROVIDER_MODEL.providerLabel, labels: [PROVIDER_MODEL.label] },
+    ]);
   });
 
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {

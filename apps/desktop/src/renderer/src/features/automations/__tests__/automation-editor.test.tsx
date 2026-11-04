@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerBackendKind,
   AutomationDetail,
+  BackendModelOption,
   InboundPreviewMessage,
   McpConnectionStatus,
   MessagingChannelKind,
@@ -21,6 +22,12 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
+import {
+  CURRENT_CODEX_MODEL_LABELS,
+  SUPERSEDED_CODEX_MODEL_LABELS,
+  codexCatalogModels,
+  composerDropdownOptionLabels,
+} from "../../../test/model-catalog";
 import { AutomationEditor, INBOUND_PROVIDER_LABELS } from "../AutomationEditor";
 
 afterEach(() => {
@@ -138,6 +145,42 @@ describe("AutomationEditor", () => {
         ],
       },
     });
+  });
+
+  it("lists the run model the way the composer does: current first, superseded under Other", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: {} }), codexCatalogModels())}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Automation model(?::|$)/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "GPT-6.1-Sol" })).toBeInTheDocument(),
+    );
+    const list = screen.getByRole("listbox", { name: /^Automation model/ });
+    expect(composerDropdownOptionLabels(list)).toEqual([
+      "Inherit Agent model",
+      ...CURRENT_CODEX_MODEL_LABELS,
+      "Other",
+      "Ternary-Bonsai-27B",
+    ]);
+    expect(within(list).getByRole("group", { name: "PrismML Bonsai (local)" }))
+      .toBeInTheDocument();
+    fireEvent.click(within(list).getByRole("option", { name: "Other" }));
+    const other = screen.getByRole("listbox", { name: "Automation model: Other" });
+    expect(composerDropdownOptionLabels(other)).toEqual(SUPERSEDED_CODEX_MODEL_LABELS);
+    fireEvent.click(within(other).getByRole("option", { name: "GPT-5.6-Luna" }));
+    expect(
+      screen.getByRole("button", { name: /^Automation model(?::|$)/ }),
+    ).toHaveAttribute("data-value", "gpt-5.6-luna");
   });
 
   it("submits an inbound Slack trigger with execution overrides and source reply output", async () => {
@@ -3230,7 +3273,16 @@ function fakeSettings(params: {
   } as unknown as ReadDesktopMessagingSettingsResponse;
 }
 
-function fakeDesktopApi(settings: ReadDesktopMessagingSettingsResponse): DesktopApi {
+function fakeDesktopApi(
+  settings: ReadDesktopMessagingSettingsResponse,
+  models: BackendModelOption[] = [
+    {
+      id: "gpt-5",
+      reasoningEfforts: ["low", "medium", "high"],
+    },
+    { id: "gpt-5.4-mini" },
+  ],
+): DesktopApi {
   return {
     readMessagingSettings: async () => settings,
     // The execution Model/Reasoning selects are populated from this catalog —
@@ -3247,13 +3299,7 @@ function fakeDesktopApi(settings: ReadDesktopMessagingSettingsResponse): Desktop
           capabilities: {},
           executionModes: [],
           launchpadOptions: {
-            models: [
-              {
-                id: "gpt-5",
-                reasoningEfforts: ["low", "medium", "high"],
-              },
-              { id: "gpt-5.4-mini" },
-            ],
+            models,
             reasoningEfforts: ["low", "medium", "high"],
           },
         },

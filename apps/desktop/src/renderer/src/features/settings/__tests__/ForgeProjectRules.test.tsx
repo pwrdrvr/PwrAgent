@@ -9,11 +9,18 @@ import {
 } from "../../../test/phase-probes";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  BackendSummary,
   DesktopCodexModelProvider,
   ForgeAgentToolPolicy,
   ForgeAgentToolRule,
 } from "@pwragent/shared";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
+import {
+  CURRENT_CODEX_MODEL_LABELS,
+  SUPERSEDED_CODEX_MODEL_LABELS,
+  codexCatalogModels,
+  selectSections,
+} from "../../../test/model-catalog";
 import { ForgeProjectRules } from "../ForgeProjectRules";
 import { decodeForgeRulesRoute, encodeForgeRulesRoute } from "../forge-rules-route";
 
@@ -60,12 +67,13 @@ function policyWith(
 
 function renderRules(
   policy: ForgeAgentToolPolicy,
-  options: { focusRepository?: string } = {},
+  options: { focusRepository?: string; backends?: BackendSummary[] } = {},
 ) {
   const onRulesChange = vi.fn(async (_rules: ForgeAgentToolRule[]) => true);
   render(
     <ForgeProjectRules
       acpAgents={[{ registryId: "grok", name: "Grok" }]}
+      backends={options.backends}
       codexProviders={[LOCAL_PROVIDER]}
       focusRepository={options.focusRepository ?? REPOSITORY}
       policy={policy}
@@ -194,6 +202,32 @@ describe("ForgeProjectRules", () => {
     );
     expect(within(rulesTable()).getByRole("combobox", { name: "Approve and merge for Claude" }))
       .toHaveClass("is-risk");
+  });
+
+  it("lists Codex models the way the composer does: current first, superseded under Other models", async () => {
+    const { onRulesChange } = renderRules(policyWith([ALL_AGENTS_RULE]), {
+      backends: [{
+        kind: "codex",
+        label: "Codex",
+        available: true,
+        launchpadOptions: { models: codexCatalogModels() },
+      } as unknown as BackendSummary],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "+ Add agent" }));
+    const picker = screen.getByRole("group", { name: "Add an agent" });
+    chooseSelectOption(within(picker).getByRole("combobox", { name: "Agent" }), "Codex");
+    const model = within(picker).getByRole("combobox", { name: "Model" });
+    expect(selectSections(model)).toEqual([
+      { labels: ["Any model", ...CURRENT_CODEX_MODEL_LABELS] },
+      { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
+      { labels: ["Another model…"] },
+    ]);
+    chooseSelectOption(model, "GPT-5.6-Sol");
+    fireEvent.click(within(picker).getByRole("button", { name: "Add agent" }));
+    await waitFor(() => expect(onRulesChange).toHaveBeenCalledWith([
+      ALL_AGENTS_RULE,
+      { repository: REPOSITORY, agent: { backend: "codex", model: "gpt-5.6-sol" }, access: {} },
+    ]));
   });
 
   it("adds a Codex model provider row with a known model", async () => {

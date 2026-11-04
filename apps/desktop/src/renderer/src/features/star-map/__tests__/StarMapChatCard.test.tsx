@@ -24,6 +24,11 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
+import {
+  CURRENT_CODEX_MODEL_LABELS,
+  SUPERSEDED_CODEX_MODEL_LABELS,
+  codexCatalogModels,
+} from "../../../test/model-catalog";
 import { StarMapChatCard } from "../StarMapChatCard";
 import {
   useComposerDraftStore,
@@ -3305,6 +3310,42 @@ describe("StarMapChatCard settings menu", () => {
           model: "gpt-5-spark",
           threadId: "t-remote",
         }),
+      );
+    });
+  });
+
+  it("lists models the way the composer does: current first, superseded under Other", async () => {
+    const desktopApi = settingsApi({
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1,
+        backends: [{
+          kind: "codex",
+          label: "Codex",
+          available: true,
+          methods: [],
+          capabilities: {},
+          executionModes: [],
+          launchpadOptions: { models: codexCatalogModels() },
+        }],
+      })),
+    } as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread({ model: "gpt-6.1-sol" }) });
+    await openSettingsMenu();
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
+    await screen.findByRole("menuitemradio", { name: "GPT-6.1-Sol" });
+    const radios = () =>
+      screen.getAllByRole("menuitemradio").map((row) => row.textContent?.replace("✓", ""));
+    // An existing Codex thread keeps its provider, so the provider's model
+    // is not offered here, as in the full composer.
+    expect(radios()).toEqual(CURRENT_CODEX_MODEL_LABELS);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Other/ }));
+    await screen.findByRole("menuitemradio", { name: "GPT-5.6-Sol" });
+    expect(radios()).toEqual(SUPERSEDED_CODEX_MODEL_LABELS);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "GPT-5.6-Sol" }));
+    await waitFor(() => {
+      expect(desktopApi.setThreadModelSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "gpt-5.6-sol" }),
       );
     });
   });

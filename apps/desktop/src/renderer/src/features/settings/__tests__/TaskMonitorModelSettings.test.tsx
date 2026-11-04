@@ -6,6 +6,7 @@ import type {
   DesktopTaskMonitorModelChoice,
 } from "@pwragent/shared";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
+import { selectSections } from "../../../test/model-catalog";
 import { TaskMonitorModelSettings } from "../TaskMonitorModelSettings";
 
 // Only the fields the row reads.
@@ -53,6 +54,33 @@ function renderRow(choices: Choices, backends: BackendSummary[] = [codex, claude
 const trigger = () => screen.getByRole("combobox", { name: "Task monitors" });
 
 describe("TaskMonitorModelSettings", () => {
+  it("puts the catalog's older models under Other models, as the composer does", () => {
+    renderRow({}, [codex, {
+      ...claude,
+      launchpadOptions: {
+        models: [
+          { id: "opus", label: "Opus" },
+          { id: "opus-4-1", label: "Opus 4.1", other: true },
+          { id: "sonnet", label: "Sonnet" },
+          { id: "haiku", label: "Haiku" },
+        ],
+      },
+    } as BackendSummary]);
+
+    expect(selectSections(trigger())).toEqual([
+      {
+        labels: [
+          "Automatic (Haiku)",
+          "Helper model (GPT-6-Luna)",
+          "Opus",
+          "Sonnet",
+          "Haiku",
+        ],
+      },
+      { group: "Other models", labels: ["Opus 4.1"] },
+    ]);
+  });
+
   it("names the lightweight model Automatic runs and the model the Helper model runs", () => {
     renderRow({});
 
