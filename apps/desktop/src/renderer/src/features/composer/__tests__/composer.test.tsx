@@ -11689,7 +11689,11 @@ describe("Composer", () => {
     const cancelScheduledThreadAction = vi.fn(async () => {
       throw new Error("owner refused");
     });
-    const steerTurn = vi.fn(async () => ({ turnId: "turn-1" }));
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
     render(
       <Composer
         activeTurnId="turn-1"
