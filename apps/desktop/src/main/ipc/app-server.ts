@@ -3414,6 +3414,26 @@ class DesktopAppServerService {
   }
 
   /**
+   * These PRs merged, closed or reopened. Auto-fix on each one changes
+   * between live and idle, so every thread holding it re-lists.
+   */
+  private publishPrAutoFixPrEndedChanges(prKeys: ReadonlySet<string>): void {
+    if (prKeys.size === 0 || !this.backgroundPrPollingEnabled || !this.prAutoDispatchAllowed) return;
+    void (async () => {
+      const holders = (await this.getOverlayStore().listPrAutoDispatchCandidates())
+        .filter((candidate) => prKeys.has(candidate.prKey));
+      await this.publishPrWatchesUpdated(holders.map((holder) => ({
+        backend: holder.backend,
+        threadId: holder.threadId,
+      })));
+    })().catch((error: unknown) => {
+      appServerLog.warn("failed to publish Auto-fix PR end", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  /**
    * The thread's attached PRs on its primary repository, from the overlay.
    * A thread no navigation refresh has listed yet gets its primary
    * repository resolved first, so its PRs are not read as non-primary.
@@ -5394,10 +5414,13 @@ class DesktopAppServerService {
     }
     const selected = thread ? candidates.filter((candidate) => candidate.backend === thread.backend && candidate.threadId === thread.threadId) : candidates;
     return selected.map((candidate): ThreadPrAutoFixState => {
+      const lifecycle = this.prStatusRegistry.get(candidate.prKey)?.pr.lifecycleState;
       const base = {
         backend: candidate.backend,
         threadId: candidate.threadId,
         prKey: candidate.prKey,
+        // A merged or closed PR has nothing left to repair.
+        ...(lifecycle === "merged" || lifecycle === "closed" ? { prEnded: lifecycle } : {}),
       };
       if (this.prAutoDispatchBudgetPaused) return { ...base, state: "paused" };
       const winner = winners.get(candidate.prKey)!;
@@ -6498,6 +6521,7 @@ class DesktopAppServerService {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
     const staleKeys: string[] = [];
+    const endedChanged = new Set<string>();
     for (const pr of prs.map(stripPrLinkedDirectoryPaths)) {
       const key = getPrStatusKey(pr);
       const current = this.prStatusRegistry.get(key);
@@ -6514,6 +6538,9 @@ class DesktopAppServerService {
         if (transition) {
           transition.threadKeys = this.findThreadKeysForPrKey(key);
           transitions.push(transition);
+        }
+        if (current && isTerminalPullRequest(current.pr) !== isTerminalPullRequest(pr)) {
+          endedChanged.add(key);
         }
       }
       this.prStatusRegistry.set(key, {
@@ -6539,6 +6566,7 @@ class DesktopAppServerService {
     if (transitions.length > 0) {
       this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source });
     }
+    this.publishPrAutoFixPrEndedChanges(endedChanged);
     return changedPrs;
   }
 
