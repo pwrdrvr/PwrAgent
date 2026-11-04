@@ -22,6 +22,7 @@ import {
 } from "../pr-watches/useThreadPrWatchIndicators";
 import { PrChip } from "./PrChip";
 import { PrStatusCard } from "./PrStatusCard";
+import { placeRollupPopover } from "./pr-rollup-popover-placement";
 import {
   prChipModifierClasses,
   prStatusLabel,
@@ -61,8 +62,6 @@ type PrRollupChipProps = {
 /** Hover opens a peek; a click or the keyboard keeps it open. */
 type OpenMode = "hover" | "pinned";
 
-const POPOVER_GAP = 6;
-const VIEWPORT_MARGIN = 8;
 
 /**
  * The Minimal density's single PR chip, on the row's title line.
@@ -110,7 +109,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const hoverTimerRef = useRef<number | null>(null);
   const popoverId = useId();
   const [openMode, setOpenMode] = useState<OpenMode | null>(null);
-  const [position, setPosition] = useState<{ top: number; left: number }>();
+  const [position, setPosition] = useState<{ top: number; left: number; maxHeight: number }>();
   const open = openMode !== null;
   const {
     show: showCard,
@@ -193,28 +192,31 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     triggerRef,
   });
 
-  // Place below the chip, right edges aligned, and flip above when the
-  // list would run off the bottom of the window.
+  // Below the chip, else above; a list too tall for either side scrolls.
   useLayoutEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current;
     const popover = popoverRef.current;
     if (!trigger || !popover) return;
-    const rect = trigger.getBoundingClientRect();
-    const width = popover.offsetWidth;
-    const height = popover.offsetHeight;
-    const left = Math.min(
-      Math.max(VIEWPORT_MARGIN, rect.right - width),
-      window.innerWidth - width - VIEWPORT_MARGIN,
-    );
-    const below = rect.bottom + POPOVER_GAP;
-    const top = below + height > window.innerHeight - VIEWPORT_MARGIN
-      ? Math.max(VIEWPORT_MARGIN, rect.top - POPOVER_GAP - height)
-      : below;
+    // Measured past any cap from the last placement, so a list that grew
+    // while open can take the room it now needs.
+    const list = popover.querySelector<HTMLElement>(".pr-rollup-popover__list");
+    const contentHeight = list
+      ? popover.offsetHeight - list.clientHeight + list.scrollHeight
+      : popover.offsetHeight;
+    const next = placeRollupPopover({
+      chip: trigger.getBoundingClientRect(),
+      width: popover.offsetWidth,
+      contentHeight,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    });
     setPosition((current) =>
-      current && current.top === top && current.left === left
+      current
+      && current.top === next.top
+      && current.left === next.left
+      && current.maxHeight === next.maxHeight
         ? current
-        : { top, left });
+        : next);
   }, [open, rollup.ordered.length]);
 
   // An outside press or a scroll elsewhere closes it: the popover is fixed
@@ -375,7 +377,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             aria-label={`Pull requests for ${props.threadTitle}`}
             className="pr-rollup-popover"
             style={position
-              ? { top: position.top, left: position.left }
+              ? { top: position.top, left: position.left, maxHeight: position.maxHeight }
               : { top: 0, left: 0, visibility: "hidden" }}
             onMouseEnter={cancelHoverDismiss}
             onMouseLeave={() => {

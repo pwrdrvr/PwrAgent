@@ -36,6 +36,20 @@ export function anchoredTooltipPosition(params: {
   if (belowTop + height <= bounds.bottom) {
     return { left: centerLeft, top: belowTop };
   }
+  // Beside the target, level with its top and slid up or down to stay in
+  // bounds. A sidebar chip has the whole window to its right.
+  const besideTop = Math.max(
+    bounds.top,
+    Math.min(target.top, bounds.bottom - height),
+  );
+  const rightLeft = target.right + TOOLTIP_GAP;
+  if (rightLeft + width <= bounds.right) {
+    return { left: rightLeft, top: besideTop };
+  }
+  const leftLeft = target.left - TOOLTIP_GAP - width;
+  if (leftLeft >= bounds.left) {
+    return { left: leftLeft, top: besideTop };
+  }
   const availableAbove = Math.max(0, target.top - TOOLTIP_GAP - bounds.top);
   const availableBelow = Math.max(0, bounds.bottom - target.bottom - TOOLTIP_GAP);
   const preferredTop = availableAbove >= availableBelow ? aboveTop : belowTop;
