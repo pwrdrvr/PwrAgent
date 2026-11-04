@@ -4670,13 +4670,18 @@ describe("DesktopBackendRegistry", () => {
       return { codexClient, registry };
     };
     const text = (value: string) => [{ type: "text" as const, text: value }];
+    const startRunningTurn = async (registry: DesktopBackendRegistry, threadId: string) => {
+      const started = await registry.submitTurn({ backend: "codex", threadId, input: text("Long task") });
+      expect(started).toMatchObject({ status: "started" });
+      if (started.status !== "started") throw new Error("expected a started turn");
+      await emitStartedTurn(registry, "codex", threadId, started.turnId);
+    };
 
     it("steers the running turn, then continues it first after a restart while other work waits", async () => {
       const { rows, store } = durableStore();
       const { writes } = await measureSqliteWrites(async () => {
         const first = launch(store, "instance-a");
-        await expect(first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Long task") }))
-          .resolves.toMatchObject({ status: "started" });
+        await startRunningTurn(first.registry, "busy");
 
         const targets = first.registry.beginQuietRestart();
         expect(targets).toEqual([expect.objectContaining({ backend: "codex", threadId: "busy" })]);
@@ -4728,7 +4733,7 @@ describe("DesktopBackendRegistry", () => {
     it("opens the gate when a continuation is discarded", async () => {
       const { rows, store } = durableStore();
       const first = launch(store, "instance-a");
-      await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Long task") });
+      await startRunningTurn(first.registry, "busy");
       first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
       await first.registry.close();
 
@@ -4744,7 +4749,7 @@ describe("DesktopBackendRegistry", () => {
     it("leaves a live sibling instance's continuations with that instance", async () => {
       const { rows, store } = durableStore();
       const first = launch(store, "instance-a");
-      await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Long task") });
+      await startRunningTurn(first.registry, "busy");
       first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
 
       const sibling = launch(store, "instance-b", ["instance-a", "instance-b"]);
