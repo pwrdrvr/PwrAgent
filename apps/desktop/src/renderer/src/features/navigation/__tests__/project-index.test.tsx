@@ -15,6 +15,7 @@ import {
   spyProjects,
 } from "../project-index";
 import { resolveDirectoryDrop } from "../directory-pin-drop";
+import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 
 /**
  * The sidebar's project index (PwrAgent Claude Design: "Sidebar Project
@@ -120,6 +121,25 @@ describe("ProjectIndex", () => {
     expect(screen.getByRole("button", { name: "Jump to atlas-web, turn running" })).toHaveClass("is-selected");
     expect(screen.getByRole("button", { name: "Jump to harbor, unread" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Jump to atlas-api" })).not.toHaveClass("is-selected");
+  });
+
+  it("stacks the local scanner above the grey peer scanner, and draws only the one that applies", () => {
+    renderIndex({
+      projects: [
+        { key: "dir:both", label: "both", containsSelection: false, active: true, activeRemote: true, review: false },
+        { key: "dir:peer", label: "peer", containsSelection: false, active: false, activeRemote: true, review: true },
+        { key: "dir:here", label: "here", containsSelection: false, active: true, review: false },
+      ],
+    });
+    const marks = (name: string) => {
+      const mark = screen.getByRole("button", { name }).querySelector(".project-index__mark")!;
+      return Array.from(mark.querySelectorAll(".thinking-scanner")).map((scanner) =>
+        scanner.closest(".project-index__mark-remote") ? "remote" : "local");
+    };
+    expect(marks("Jump to both, turn running, turn running on another instance")).toEqual(["local", "remote"]);
+    // A peer's turn outranks the unread cookie, as a local turn does.
+    expect(marks("Jump to peer, turn running on another instance")).toEqual(["remote"]);
+    expect(marks("Jump to here, turn running")).toEqual(["local"]);
   });
 
   it("is one Tab stop, walked with the arrows, Home/End, and typeahead", () => {
@@ -273,6 +293,37 @@ describe("Sidebar project index", () => {
     });
     expect(screen.queryByRole("navigation", { name: "Project index" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /project index/ })).not.toBeInTheDocument();
+  });
+
+  it("marks a project whose only running turn is on a peer with the grey scanner", () => {
+    const peerTurn: NavigationThreadSummary = {
+      ...thread("t-quill", "quill"),
+      threadStatus: "active",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-instance" },
+          threadId: "t-quill",
+        },
+        instanceLabel: "Peer",
+      },
+    } as NavigationThreadSummary;
+    const localTurn = { ...thread("t-relay", "relay"), threadStatus: "active" } as NavigationThreadSummary;
+    const threads = [peerTurn, localTurn];
+    renderSidebar({
+      threads,
+      inboxThreads: threads,
+      directories: [
+        { ...directory("quill", "t-quill"), threadKeys: [threadSummaryIdentityKey(peerTurn)] },
+        directory("relay", "t-relay"),
+      ],
+    });
+    const nav = screen.getByRole("navigation", { name: "Project index" });
+    const quill = within(nav).getByRole("button", { name: "Jump to quill, turn running on another instance" });
+    expect(quill.querySelectorAll(".thinking-scanner")).toHaveLength(1);
+    expect(quill.querySelector(".project-index__mark-remote .thinking-scanner")).not.toBeNull();
+    const relay = within(nav).getByRole("button", { name: "Jump to relay, turn running" });
+    expect(relay.querySelector(".project-index__mark-remote")).toBeNull();
   });
 
   it("opens Directories from a flat lens without changing the selection", () => {

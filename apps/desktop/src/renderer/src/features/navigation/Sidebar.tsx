@@ -57,6 +57,7 @@ import {
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
+  isFederationViewerWindow,
   readRendererFederationLabel,
   readRendererFederationTarget,
 } from "../../lib/federation-window";
@@ -133,6 +134,7 @@ import {
 } from "./DirectoriesList";
 import { applyDirectoryDrop, type DirectoryDrop } from "./directory-pin-drop";
 import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
+import { projectTurnMarks } from "./project-index";
 import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog";
 import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
 import {
@@ -1051,7 +1053,7 @@ export function Sidebar(props: SidebarProps) {
       containsSelection:
         indexSelectedItemKey === buildLaunchpadSelectionKey(directory.key)
         || (selectedThreadDirectoryKeys?.includes(directory.key) ?? false),
-      active: (directory.counts?.active ?? 0) > 0,
+      ...projectTurnMarks(directory.counts, isFederationViewerWindow()),
       review: (directory.counts?.review ?? 0) > 0,
       ...(isProjectForgeActivityPaused(directory) ? { forgeActivityPaused: true } : {}),
       ...(isPinnedDirectory(directory) ? { pinned: true } : {}),

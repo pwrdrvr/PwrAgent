@@ -5609,10 +5609,18 @@ textarea,
   text-overflow: ellipsis;
 }
 
+/* Local and peer turns stack, as in the Attention tab. Two 6px scanners and
+   the gap fit the 20px line box, so the row keeps its height. */
 .project-index__mark {
   display: flex;
   flex: none;
+  flex-direction: column;
   align-items: center;
+  gap: 2px;
+}
+
+.project-index__mark-remote {
+  display: flex;
 }
 
 .project-index__paused {
@@ -6120,11 +6128,13 @@ body.is-project-index-resizing {
 }
 
 /* One recipe for every beam that sweeps a peer's turn: the Attention
-   readout, the thread row's mark (sidebar and Star Map card), and the
-   transcript's pending line. They are the same statement — "running, but
-   not here" — so a second tint for one of them would be a second meaning. */
+   readout, the thread row's mark (sidebar and Star Map card), the project
+   index's mark, and the transcript's pending line. They are the same
+   statement — "running, but not here" — so a second tint for one of them
+   would be a second meaning. */
 .signal-count--remote-active .thinking-scanner,
 .thread-row__status-indicator--remote .thinking-scanner,
+.project-index__mark-remote .thinking-scanner,
 .transcript-list__pending--remote .thinking-scanner {
   --thinking-scanner-tint: var(--text-muted);
   --thinking-scanner-tint-bright: var(--text-secondary);
