@@ -25,8 +25,8 @@ export type McpGatewaySearchResult = {
     serverNameInAgent?: string;
     resourceDiscovery?: {
       server: string;
-      listTool: "list_mcp_resources";
-      readTool: "read_mcp_resource";
+      listTool: "list_mcp_resources" | "ListMcpResourcesTool";
+      readTool: "read_mcp_resource" | "ReadMcpResourceTool";
     };
   }>;
   unavailable: Array<{ connectionId: string; message: string }>;
@@ -124,6 +124,11 @@ export class McpGatewayToolService {
       }).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score
         || a.tool.connectionId.localeCompare(b.tool.connectionId) || a.tool.toolName.localeCompare(b.tool.toolName));
       const result: McpGatewaySearchResult = { tools: [], unavailable };
+      const resourceTools = context.backend === "codex"
+        ? { listTool: "list_mcp_resources" as const, readTool: "read_mcp_resource" as const }
+        : context.backend === "claude"
+          ? { listTool: "ListMcpResourcesTool" as const, readTool: "ReadMcpResourceTool" as const }
+          : undefined;
       for (const { tool } of ranked.slice(0, args.limit ?? 3)) {
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
         const identity = identities.get(tool.connectionId);
@@ -133,7 +138,7 @@ export class McpGatewayToolService {
               ...identity, connectionId: tool.connectionId, serverName: tool.serverName,
               ...(serverNameInAgent ? {
                 serverNameInAgent,
-                resourceDiscovery: { server: serverNameInAgent, listTool: "list_mcp_resources" as const, readTool: "read_mcp_resource" as const },
+                ...(resourceTools ? { resourceDiscovery: { server: serverNameInAgent, ...resourceTools } } : {}),
               } : {}),
             }]
           : result.servers;

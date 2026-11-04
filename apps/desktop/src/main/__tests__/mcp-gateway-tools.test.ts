@@ -39,6 +39,26 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("fixed MCP gateway tools", () => {
+  it.each([
+    { backend: "codex", listTool: "list_mcp_resources", readTool: "read_mcp_resource" },
+    { backend: "claude", listTool: "ListMcpResourcesTool", readTool: "ReadMcpResourceTool" },
+    { backend: "acp:fixture", listTool: undefined, readTool: undefined },
+    { backend: "acp:claude", listTool: undefined, readTool: undefined },
+  ] as const)("advertises only supported resource tools for $backend", async ({ backend, listTool, readTool }) => {
+    const f = fixture();
+    let alias: string | undefined = "native-resource-server";
+    const service = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: f.requestGatewayToolOperation }, approve: f.approve,
+      selectedConnections: async () => ["one"], serverNameInAgent: () => alias,
+    });
+    const found = await service.search({ query: "lookup" }, { ...context, backend });
+    expect(found.servers![0].serverNameInAgent).toBe(alias);
+    expect(found.servers![0].resourceDiscovery).toEqual(listTool ? { server: alias, listTool, readTool } : undefined);
+    alias = undefined;
+    expect((await service.search({ query: "lookup" }, { ...context, backend })).servers).toBeUndefined();
+    expect(f.approve).not.toHaveBeenCalled();
+  });
+
   it.each(["standalone", "desktop"])("returns a host-resolved resource route for a %s server", async (owner) => {
     const f = fixture();
     f.catalog.set("one", [{ ...tool(), serverIdentity: {
