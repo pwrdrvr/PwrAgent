@@ -32201,7 +32201,7 @@ export class DesktopBackendRegistry {
         if (notification.method === "thread/unarchived" || notification.method === "thread/deleted") {
           this.archiveCleanupQueue.cancel(buildThreadIdentityKey(backend, notification.params.threadId));
         }
-        if (archiveWorkspaceChanged) await this.prepareArchiveWorkspaceChanges(backend, notification);
+        if (archiveWorkspaceChanged && this.archiveWorktreeRemovalAdmissions.size) await this.prepareArchiveWorkspaceChanges(backend, notification);
         if (backend === "codex" && notification.method === "account/updated") {
           this.forgetCodexAccountRateLimits();
         }
@@ -50444,10 +50444,9 @@ export class DesktopBackendRegistry {
           directory.worktreeOwnership === "external",
         ])];
       }));
-    // An older navigation observation may already contain this owner while
-    // the final safety inventory does not. Any positive ownership observation
-    // during admission must invalidate that inventory, even if its paths match
-    // the older row. Keep the invalidation until the removal attempt settles.
+    // A navigation observation can reveal an owner missing from the final
+    // inventory even when it matches an older row. Record its canonical scope;
+    // unrelated observations must not invalidate another checkout's removal.
     this.recordArchiveWorkspaceChange(key, archiveWorkspacePaths(thread), true);
     if (
       !previous
@@ -51230,7 +51229,7 @@ export class DesktopBackendRegistry {
     if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
       this.archiveCleanupQueue.cancel(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
     }
-    if (archiveWorkspaceChanged) await this.prepareArchiveWorkspaceChanges(event.backend, event.notification);
+    if (archiveWorkspaceChanged && this.archiveWorktreeRemovalAdmissions.size) await this.prepareArchiveWorkspaceChanges(event.backend, event.notification);
     if (event.notification.method === "navigation/threadDirectories/updated") {
       // Managed local MCP servers in these threads are told their roots moved.
       const threadIds = readRecord(event.notification.params)?.threadIds;

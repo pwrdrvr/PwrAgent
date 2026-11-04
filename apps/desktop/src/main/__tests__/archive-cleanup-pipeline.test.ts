@@ -1106,14 +1106,16 @@ describe("archive cleanup pipeline", () => {
       return assertRemoval;
     } }));
 
-    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
-
-    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
-    expect(fixture.counts.providerPages).toBe(backend === "codex" ? 5 : 4);
-    expect(fixture.counts.archiveMutations).toBe(1);
-    for (const thread of others) {
-      await publishNotification(fixture.registry, { method: "turn/completed", params: { threadId: thread.id, turnId: `turn-${thread.id}`, turn: { id: `turn-${thread.id}`, status: "completed" } } }, backend);
-      await publishNotification(fixture.registry, { method: "thread/status/changed", params: { threadId: thread.id, status: { type: "idle" } } }, backend);
+    try {
+      const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+      expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      expect(fixture.counts.providerPages).toBe(backend === "codex" ? 5 : 4);
+      expect(fixture.counts.archiveMutations).toBe(1);
+    } finally {
+      for (const thread of others) {
+        await publishNotification(fixture.registry, { method: "turn/completed", params: { threadId: thread.id, turnId: `turn-${thread.id}`, turn: { id: `turn-${thread.id}`, status: "completed", output: [] } } }, backend);
+        await publishNotification(fixture.registry, { method: "thread/status/changed", params: { threadId: thread.id, status: { type: "idle" } } }, backend);
+      }
     }
   });
 
