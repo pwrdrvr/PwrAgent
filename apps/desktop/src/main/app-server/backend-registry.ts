@@ -38548,6 +38548,12 @@ export class DesktopBackendRegistry {
       };
     }
 
+    backendRegistryLog.warn("archive cleanup target omitted from aggregate inventory", {
+      backend: params.backend, threadId: params.threadId,
+      activeThreads: activeThreads.length, archivedThreads: archivedThreads.length,
+      persistedAcpSession: isAcpBackendId(params.backend) ? this.acpBackend.getSession(params.backend, params.threadId) : undefined,
+      availableAcpBackends: (await this.acpBackend.listAvailableAgents()).map((agent) => agent.backendId),
+    });
     this.invalidateThreadListCache();
     throw new Error("Thread metadata was not found.");
   }
