@@ -661,6 +661,15 @@ importers:
 
   packages/owner-core:
     dependencies:
+      '@shutterstock/p-map-iterable':
+        specifier: ^1.2.0
+        version: 1.2.0(aggregate-error@3.1.0)
+      '@pwrdrvr/codex-app-server-protocol':
+        specifier: 0.164.0
+        version: 0.164.0
+      '@pwrdrvr/agent-transport':
+        specifier: ^0.1.7
+        version: 0.1.7
       '@pwragent/shared':
         specifier: workspace:*
         version: link:../shared

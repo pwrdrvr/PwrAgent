@@ -1,0 +1,12285 @@
+import type { CodexClientHost, CodexClientLogger, CodexListingDiagnostics, CodexClientTransport, CodexAppServerExit, CodexAppServerProcessInfo, CodexInvalidResponseMessageIdRecoveryResult, CodexRecoveryBlockingTurn, ThreadDirectoryEnrichment, DirectoryEnrichmentCaller } from "./host";
+import type { NativeVoiceNotification } from "./native-voice-protocol";
+import type { ThreadRealtimeStartParams, ThreadRealtimeAppendTextParams } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type {
+  ListBackgroundTerminalsResponse,
+  CodexBackgroundTerminal,
+} from "@pwragent/shared";
+import type {
+  ThreadBackgroundTerminalsListResponse,
+  ThreadBackgroundTerminalsTerminateResponse,
+} from "@pwrdrvr/codex-app-server-protocol/v2";
+import { normalizeAutoReviewNotification } from "./auto-review";
+import { rememberBoundedMap } from "../bounded-map";
+import { usageAccountKey } from "../usage-account-identity";
+import { nativeReviewTarget } from "@pwragent/shared/pull-request-review";
+import { ThreadListTextCache } from "./thread-list-text-cache";
+import { codexRequestCountsAsActivity, withCodexRequestActivity } from "./request-activity";
+import { mkdir } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+import {
+  buildSubAgentActivityDetail,
+  readCodexNativeSubAgentName,
+  estimateTokenUsageCost,
+  formatSearchCommandActionLabel,
+  formatTokenUsagePriceFactor,
+  formatTokenUsageStandardRateSuffix,
+  formatTokenUsageUsd,
+  formatTokenUsageUsdPerMillion,
+  isToolManagedWorktreePath,
+  navigationQueryEventRequiresRefresh,
+  normalizeCodexAsyncQuestions,
+  parseCodexTurnErrorMessage,
+  readSubAgentActivity,
+  resolveOpenAiPricingServiceTier,
+  resolveHelperModel,
+  resolveTokenUsagePriceUnavailableReason,
+  shortenDerivedThreadTitle,
+  shortSubAgentThreadId,
+  subAgentActivitySummaryParts,
+  subAgentTargetLabel,
+  type DesktopHelperModelSettings,
+  type HelperModelId,
+  type HelperModelResolution,
+  type ThreadUsageLineRecord,
+  type ThreadPricingSnapshot,
+  type ThreadUsageTokenBreakdown,
+} from "@pwragent/shared";
+import type {
+  AppServerAvailableCommandSummary,
+  CodexAppServerRestartStatus,
+  AppServerFileInputItem,
+  AppServerLocalFileInputItem,
+  AppServerNotification,
+  AppServerPendingRequestNotification,
+  AppServerThreadCommandDetail,
+  AppServerThreadActivityDetail,
+  AppServerThreadActivityEntry,
+  AppServerThreadActivityStatus,
+  AppServerThreadEntry,
+  AppServerThreadFilePart,
+  AppServerThreadImagePart,
+  AppServerThreadMessagePart,
+  AppServerThreadMessageEntry,
+  AppServerTranscriptPhase,
+  AppServerThreadPlanEntry,
+  AppServerThreadReviewEntry,
+  AppServerThreadPlanStep,
+  AppServerThreadPlanStepStatus,
+  AppServerThreadTurnMetadata,
+  AppServerThreadTurnStatus,
+  AppServerSkillSummary,
+  AppServerThreadReplay,
+  AppServerThreadReplayPagination,
+  AppServerThreadStatus,
+  AppServerThreadTitleSource,
+  AppServerThreadSummary,
+  AppServerTurnInputItem,
+  AppServerCollaborationModeRequest,
+  AppServerReviewDelivery,
+  AppServerReviewTarget,
+  BackendAccountSummary,
+  BackendModelOption,
+  BackendRateLimitSummary,
+  CodexThreadEnvironmentRuntime,
+  CodexMcpInventoryDetail,
+  CodexMcpServerSummary,
+  LinkedDirectorySummary,
+} from "@pwragent/shared";
+import { isPwrSnapSignedMediaUrl } from "../pwrsnap-media-url";
+import type {
+  ClientRequest as CodexClientRequest,
+  InitializeParams as CodexInitializeParams,
+  InitializeResponse as CodexInitializeResponse,
+  ReasoningEffort as CodexReasoningEffort,
+  ServerRequest as CodexServerRequest,
+} from "@pwrdrvr/codex-app-server-protocol";
+import type {
+  ApprovalsReviewer,
+  TurnSettingsUpdateParams,
+  TurnSettingsUpdateResponse,
+  ConfigValueWriteParams as CodexConfigValueWriteParams,
+  Model as CodexModel,
+  ModelListParams as CodexModelListParams,
+  ModelListResponse as CodexModelListResponse,
+  SandboxMode as CodexSandboxMode,
+  SandboxPolicy as CodexSandboxPolicy,
+  ReviewStartParams as CodexReviewStartParams,
+  SkillsListParams as CodexSkillsListParams,
+  ThreadForkParams as CodexThreadForkParams,
+  ThreadInjectItemsParams as CodexThreadInjectItemsParams,
+  ThreadItem as CodexThreadItem,
+  ThreadItemsListParams as CodexThreadItemsListParams,
+  ThreadItemsListResponse as CodexThreadItemsListResponse,
+  ThreadItemsReadParams as CodexThreadItemsReadParams,
+  ThreadItemsReadResponse as CodexThreadItemsReadResponse,
+  ThreadListParams as CodexThreadListParams,
+  ThreadReadParams as CodexThreadReadParams,
+  ThreadReadResponse as CodexThreadReadResponse,
+  ThreadResumeParams as CodexThreadResumeParams,
+  ThreadSettingsUpdateParams as CodexThreadSettingsUpdateParams,
+  ThreadStartParams as CodexThreadStartParams,
+  ThreadTurnsListParams as CodexThreadTurnsListParams,
+  ThreadRevertParams as CodexThreadRevertParams,
+  ThreadTurnsListResponse as CodexThreadTurnsListResponse,
+  Turn as CodexTurn,
+  TurnInterruptParams as CodexTurnInterruptParams,
+  TurnStartParams as CodexTurnStartParams,
+  TurnSteerParams as CodexTurnSteerParams,
+  DynamicToolSpec as CodexDynamicToolSpec,
+  DynamicToolCallResponse,
+  UserInput as CodexUserInput,
+} from "@pwrdrvr/codex-app-server-protocol/v2";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
+import {
+  JsonRpcConnection,
+  type JsonRpcId,
+  type JsonRpcObserver,
+  type JsonRpcObserverDiagnostics,
+  type JsonRpcObserverEvent,
+} from "@pwrdrvr/agent-transport";
+import { withAgentSetupVariablePolicy } from "../agent-setup-variables";
+import {
+  isCodexReviewPromptText,
+  isPwrAgentInlineReviewPrompt,
+  normalizeReviewDisplayText,
+  normalizeReviewOutputRecord,
+} from "@pwragent/shared/review-command";
+import {
+  formatDynamicToolOutput,
+  formatMcpToolOutput,
+  formatToolActivityTitle,
+  formatToolIdentifier,
+  formatToolInvocation,
+} from "@pwragent/shared/tool-activity";
+import {
+  CodexAppServerRestartPolicy,
+  type CodexAppServerRestartPolicyOptions,
+} from "./app-server-restart-policy";
+import {
+  decideCodexAppServerRecycle,
+  type CodexAppServerProcessSample,
+  type CodexAppServerRecycleOutcome,
+  type CodexAppServerRecycleSettings,
+  type CodexAppServerRecycleStatus,
+} from "./app-server-recycle-policy";
+import type {
+  ThreadTitleAdapterParams,
+  ThreadTitleAdapterResult,
+} from "../thread-title-generation-service";
+import {
+  normalizeCompatibleApprovalPolicy,
+  resolveCodexProtocolCompatibility,
+  serializeCompatibleDynamicTools,
+  usesGeneratedCodexModelListResponse,
+  type CodexProtocolCompatibility,
+  type CompatibleApprovalPolicy,
+  type CompatibleDynamicToolSpec,
+} from "./protocol-compatibility";
+import { CodexModelProviderTranslator } from "./codex-model-provider-translation";
+import { persistCodexFileInput } from "./codex-file-input-files";
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const CODEX_APP_SERVER_EXITED_MID_TURN =
+  "The Codex app server stopped before this turn finished.";
+// Codex gives client creation, initialization, and tool discovery separate
+// 30-second startup budgets. Full inventory also lists resources with a
+// 300-second request budget. Leave headroom for auth discovery and processing.
+// These are bounded defaults, not a ceiling on configurable/paginated MCP work.
+const DEFAULT_MCP_INVENTORY_TIMEOUT_MS = 120_000;
+const DEFAULT_FULL_MCP_INVENTORY_TIMEOUT_MS = 420_000;
+const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
+const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
+
+const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
+const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
+/** Wire method Codex uses to invoke a dynamic tool the client advertised. */
+const CODEX_DYNAMIC_TOOL_CALL_METHOD = "item/tool/call";
+const CODEX_CONNECTION_MCP_CONFIG_READ_REASON = "connection-mcp-inventory";
+const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
+  tmpdir(),
+  "pwragent",
+  "codex-title-helper",
+);
+const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
+  web_search: "disabled",
+  include_permissions_instructions: false,
+  include_apps_instructions: false,
+  include_collaboration_mode_instructions: false,
+  include_environment_context: false,
+  project_doc_max_bytes: 0,
+  skills: {
+    include_instructions: false,
+    bundled: { enabled: false },
+  },
+  features: {
+    apps: false,
+    code_mode: false,
+    code_mode_only: false,
+    current_time_reminder: false,
+    deferred_executor: false,
+    enable_fanout: false,
+    goals: false,
+    image_generation: false,
+    memories: false,
+    multi_agent: false,
+    multi_agent_v2: false,
+    plugins: false,
+    standalone_web_search: false,
+    token_budget: false,
+    tool_suggest: false,
+  },
+  orchestrator: {
+    mcp: { enabled: false },
+    skills: { enabled: false },
+  },
+  tools: {
+    experimental_request_user_input: { enabled: false },
+  },
+  hooks: {
+    PreToolUse: [],
+    PermissionRequest: [],
+    PostToolUse: [],
+    PreCompact: [],
+    PostCompact: [],
+    SessionStart: [],
+    UserPromptSubmit: [],
+    SubagentStart: [],
+    SubagentStop: [],
+    Stop: [],
+  },
+};
+const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
+  web_search: "disabled",
+  include_permissions_instructions: false,
+  include_apps_instructions: false,
+  include_collaboration_mode_instructions: false,
+  include_environment_context: false,
+  project_doc_max_bytes: 0,
+  skills: {
+    include_instructions: false,
+  },
+  features: {
+    apps: false,
+    plugins: false,
+    tool_suggest: false,
+    image_generation: false,
+    multi_agent: false,
+    goals: false,
+  },
+};
+const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
+  "features.default_mode_request_user_input";
+// Rank familiar models, but let the server decide which models are available.
+// An allowlist here would silently hide every newly released model on refresh.
+const PREFERRED_CODEX_MODEL_ORDER = [
+  "gpt-6-astra",
+  "gpt-6.1-sol",
+  "gpt-6-sol",
+  "gpt-6.1-terra",
+  "gpt-6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex-spark",
+  "gpt-5.2",
+] as const;
+const MAX_INLINE_FILE_DIFF_CHARS = 512 * 1024;
+const MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS = Math.ceil((16 * 1024 * 1024) / 3) * 4;
+const THREAD_METADATA_READ_RETRY_DELAYS_MS = [50, 150, 300] as const;
+const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/bmp",
+  "image/gif",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+]);
+const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+export type CodexClientOptions = {
+  authenticationRecovery?: boolean;
+  /** The profile's helper model settings, read per helper turn. */
+  readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
+  /** Captures the profile's explicit group or current protocol account. */
+  resolveUsageAccountKey?: () => Promise<string | undefined>;
+  /** Ids of the model providers PwrAgent configured, read per message. */
+  resolveModelProviderIds?: () => ReadonlySet<string>;
+  env?: NodeJS.ProcessEnv;
+  resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
+  bundledToolsDirectory?: string;
+  /**
+   * Whether a thread's agent gets the shell variables its environment's
+   * setup captured. Read at every thread start, fork, resume and turn. When
+   * it answers false, the variables stay out of Codex's config; setup and
+   * Run actions are unaffected.
+   */
+  passSetupVariablesToAgents?: () => boolean;
+  directoryResolver?: (
+    projectKey?: string
+  ) => Promise<LinkedDirectorySummary[]>;
+  threadDirectoryEnricher?: (
+    projectKey?: string,
+    caller?: DirectoryEnrichmentCaller,
+  ) => Promise<ThreadDirectoryEnrichment>;
+  connectionObserver?: JsonRpcObserver;
+  requestTimeoutMs?: number;
+  mcpInventoryTimeoutMs?: number;
+  clientVersion?: string;
+  resolvePwrdrvrTokenMiserActivationNonce?: () => string | undefined;
+  /**
+   * Gate predicate consulted on every `ensureInitialized` call. When it
+   * returns true, the client refuses to spawn / connect the Codex CLI
+   * subprocess and throws {@link CodexBootstrapDeferredError}. The
+   * BackendRegistry wires this to `DesktopSettingsService
+   * .isCodexBootstrapDeferred()` so a brand-new PwrAgent profile (or
+   * one mid-wizard) doesn't slurp threads from an arbitrary Codex
+   * identity AND, importantly, doesn't even attempt to spawn the
+   * `codex` binary on machines that don't have it installed yet. The
+   * gate is the architectural boundary between "we know what backend
+   * the operator wants" and "fire it up."
+   */
+  isCodexBootstrapDeferred?: () => boolean;
+  /** Test seam for the backoff and circuit breaker after unexpected exits. */
+  appServerRestartPolicy?: CodexAppServerRestartPolicyOptions;
+  /** Test seam: counts below the running app server for the idle recycle. */
+  sampleAppServerProcessTree?: (
+    process: CodexAppServerProcessInfo,
+  ) => Promise<{ childProcessCount?: number; openFdCount?: number }>;
+  /** Test seam for the idle recycle and idle-thread unsubscribe clock. */
+  now?: () => number;
+};
+
+/**
+ * Thrown instead of starting Codex after it exited on its own too many times
+ * in a row. Only an operator restart (`restartAppServer`) clears it.
+ */
+export class CodexAppServerStoppedError extends Error {
+  constructor(exits: number, windowMs: number) {
+    super(
+      `Codex stopped unexpectedly ${exits} times in ${Math.round(windowMs / 60_000)} minutes,`
+      + " so PwrAgent stopped restarting it. Restart Codex to try again.",
+    );
+    this.name = "CodexAppServerStoppedError";
+  }
+}
+
+/**
+ * Thrown by `ensureInitialized` when `isCodexBootstrapDeferred` returns
+ * true. Callers catch this to surface a clean "backend deferred" state
+ * (e.g. `describeCodexBackend` reports `available: false` with a
+ * recognizable reason) instead of treating it as a Codex CLI error.
+ */
+export class CodexBootstrapDeferredError extends Error {
+  constructor(message = "codex bootstrap deferred until onboarding completes") {
+    super(message);
+    this.name = "CodexBootstrapDeferredError";
+  }
+}
+
+type InitializeResult = Partial<CodexInitializeResponse>;
+
+export type CodexServerCapabilities = {
+  pwrdrvrTokenMiser?: {
+    version: 1;
+    identity: "pwrdrvr.pwragent.token-miser";
+    initializeCapabilityField: "pwrdrvrTokenMiser";
+    threadStartField: "pwrdrvrTokenMiser";
+    threadResumeField: "pwrdrvrTokenMiser";
+    descriptorEnvironmentVariable:
+      "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH";
+    descriptorVersion: 1;
+    codeModeNestedPostToolUse?: false;
+  };
+  codeModeOutputReducer?: {
+    actionableState?: {
+      version: 1;
+      reducerRequestField: "actionable_state";
+      reducerResponseField: "actionable_state";
+      modelOutputTag: "codex_actionable_state";
+    };
+    continuationGuidanceVersion?: number;
+    deferredCompletion?: {
+      version: 1;
+      terminalOnly: true;
+      preservesOriginalCallId: true;
+      preservesCellId: true;
+      waitToolName: "wait";
+    };
+    dynamicToolsResumeField?: "dynamicTools";
+    intentContextVersion?: 1;
+    modelGuidance?: {
+      version: 1;
+      toolDescriptionConfigKey:
+        "features.code_mode.output_reducer.tool_description_guidance";
+      continuationConfigKey:
+        "features.code_mode.output_reducer.continuation_guidance";
+      modelVisibleOverheadRequestField:
+        "model_visible_overhead_characters";
+    };
+    postToolUseField?: "parent_intent";
+    postToolUseGrouping?: {
+      versionField: string;
+      version: number;
+      cellIdField: string;
+      toolCallIdField: string;
+    };
+    postToolUseExactOutput?: {
+      version: 1;
+      versionField: "token_miser_exact_tool_response_version";
+      responseField: "token_miser_exact_tool_response";
+    };
+    protocolVersion?: number;
+    reducerRequestField?: "parent_intent";
+  };
+};
+
+export type CodexPwrdrvrTokenMiserActivation = {
+  version: 1;
+  enabled: true;
+};
+
+type RawCodexThreadSummary = Omit<
+  AppServerThreadSummary,
+  "source" | "linkedDirectories"
+> & {
+  codexThreadSourceKind?: string;
+  originator?: string;
+  path?: string;
+  projectKey?: string;
+  gitOriginUrl?: string;
+};
+
+export type CodexThreadMigrationMetadata = AppServerThreadSummary & {
+  rolloutPath?: string;
+};
+
+type RawCodexThreadListPage = {
+  nextCursor?: string;
+  threads: RawCodexThreadSummary[];
+};
+
+type CodexThreadStartPayload = Omit<
+  CodexThreadStartParams,
+  "approvalPolicy" | "dynamicTools"
+> & {
+  approvalPolicy?: CompatibleApprovalPolicy;
+  dynamicTools?: CompatibleDynamicToolSpec[] | null;
+  persistExtendedHistory?: boolean;
+  pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
+};
+
+type CodexThreadResumePayload = Omit<
+  CodexThreadResumeParams,
+  "approvalPolicy" | "dynamicTools"
+> & {
+  approvalPolicy?: CompatibleApprovalPolicy;
+  dynamicTools?: CompatibleDynamicToolSpec[] | null;
+  persistExtendedHistory?: boolean;
+  pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
+};
+
+type CodexThreadForkPayload = Omit<
+  CodexThreadForkParams,
+  "approvalPolicy"
+> & {
+  approvalPolicy?: CompatibleApprovalPolicy;
+  persistExtendedHistory?: boolean;
+};
+
+type CodexTurnStartPayload = Omit<
+  CodexTurnStartParams,
+  "approvalPolicy"
+> & {
+  approvalPolicy?: CompatibleApprovalPolicy;
+};
+
+type SkillCatalogEntry = {
+  commands?: AppServerAvailableCommandSummary[];
+  cwd?: string;
+  skills: AppServerSkillSummary[];
+};
+
+type CodexThreadNameRecord = {
+  id: string;
+  threadName: string;
+};
+
+type CodexClientRequestMethod = CodexClientRequest["method"];
+type CodexServerRequestMethod = CodexServerRequest["method"];
+
+const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
+  "error",
+  "warning",
+  "configWarning",
+  "thread/started",
+  "turn/started",
+  "turn/completed",
+  "item/agentMessage/delta",
+  "item/started",
+  "item/completed",
+  "item/plan/delta",
+  "turn/plan/updated",
+  "turn/diff/updated",
+  "serverRequest/resolved",
+  "thread/compacted",
+  "thread/reverted",
+  "thread/archived",
+  "thread/deleted",
+  "thread/unarchived",
+  "skills/changed",
+  "thread/name/updated",
+  "thread/status/changed",
+  "thread/tokenUsage/updated",
+  "account/updated",
+  "account/rateLimits/updated",
+  "item/commandExecution/outputDelta",
+  "item/commandExecution/terminalInteraction",
+  "item/fileChange/outputDelta",
+  "item/autoApprovalReview/started",
+  "item/autoApprovalReview/completed",
+  "guardianWarning",
+  "hook/started",
+  "hook/completed",
+  "mcpServer/oauthLogin/completed",
+  "mcpServer/startupStatus/updated",
+]);
+const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/tool/requestUserInput",
+  "mcpServer/elicitation/request",
+  "item/permissions/requestApproval",
+  "item/tool/call",
+  "account/chatgptAuthTokens/refresh",
+  "applyPatchApproval",
+  "execCommandApproval",
+]);
+function logCodexClientDebug(codexClientLog: CodexClientLogger, event: string, payload: Record<string, unknown>): void {
+  if (process.env.NODE_ENV === "production") {
+    return;
+  }
+
+  codexClientLog.debug(event, payload);
+}
+
+function isApprovalLikeMethod(method: string): boolean {
+  return method.endsWith("/requestApproval");
+}
+
+function isHandledServerRequestMethod(method: string): boolean {
+  return (
+    isApprovalLikeMethod(method) ||
+    method === "applyPatchApproval" ||
+    method === "execCommandApproval" ||
+    method === "item/tool/requestUserInput" ||
+    method === "mcpServer/elicitation/request" ||
+    method === "item/tool/call"
+  );
+}
+
+/** How long after a thread/name/set its echo is still recognized. */
+const THREAD_NAME_ECHO_WINDOW_MS = 60_000;
+
+function isKnownCodexNotificationMethod(
+  method: string
+): boolean {
+  return (
+    GENERATED_CODEX_NOTIFICATION_METHODS.has(method) ||
+    method === "thread/settings/updated"
+  );
+}
+
+function isKnownCodexServerRequestMethod(
+  method: string
+): method is CodexServerRequestMethod {
+  return GENERATED_CODEX_SERVER_REQUEST_METHODS.has(
+    method as CodexServerRequestMethod
+  );
+}
+
+function isRequestLikeMethod(method: string): boolean {
+  return method.includes("/request");
+}
+
+function describePayloadShape(payload: unknown): {
+  payloadType: string;
+  payloadKeys?: string[];
+  payloadLength?: number;
+} {
+  if (payload === null) {
+    return { payloadType: "null" };
+  }
+
+  if (payload === undefined) {
+    return { payloadType: "undefined" };
+  }
+
+  if (Array.isArray(payload)) {
+    return {
+      payloadType: "array",
+      payloadLength: payload.length,
+    };
+  }
+
+  if (typeof payload === "object") {
+    return {
+      payloadType: "object",
+      payloadKeys: Object.keys(payload as Record<string, unknown>).sort(),
+    };
+  }
+
+  return { payloadType: typeof payload };
+}
+
+function logUnhandledCodexMessage(codexClientLog: CodexClientLogger, params: {
+  kind: "notification" | "request";
+  method: string;
+  payload: unknown;
+  /**
+   * Methods this client has already warned about. Owned by the client rather
+   * than the module so a reconnect re-warns once, and so one test's unknown
+   * method cannot downgrade the next test's warning to a debug line.
+   */
+  reportedNotificationMethods: Set<string>;
+}): void {
+  if (params.kind === "request") {
+    codexClientLog.error("unhandled inbound codex request", {
+      method: params.method,
+      payload: params.payload,
+    });
+    return;
+  }
+
+  if (isApprovalLikeMethod(params.method) || isRequestLikeMethod(params.method)) {
+    codexClientLog.error("unhandled inbound codex notification", {
+      method: params.method,
+      payload: params.payload,
+    });
+    return;
+  }
+
+  // A method we do not model is worth one warning, not one per delivery: Codex
+  // pushes some of these (remoteControl/status/changed) on every connect, and
+  // repeats add nothing once the shape has been recorded.
+  const alreadyReported = params.reportedNotificationMethods.has(params.method);
+  params.reportedNotificationMethods.add(params.method);
+  const details = {
+    method: params.method,
+    ...describePayloadShape(params.payload),
+    payload: params.payload,
+  };
+  if (alreadyReported) {
+    codexClientLog.debug("unknown codex notification", details);
+    return;
+  }
+
+  codexClientLog.warn("unknown codex notification", details);
+}
+
+function logSkillsChangedNotification(codexClientLog: CodexClientLogger, params: {
+  payload: unknown;
+  listenerCount: number;
+  initialized: boolean;
+}): void {
+  codexClientLog.warn("codex skills changed notification received", {
+    method: "skills/changed",
+    ...describePayloadShape(params.payload),
+    listenerCount: params.listenerCount,
+    initialized: params.initialized,
+    expectedFollowup: "call skills/list when refreshed skill metadata is needed",
+    payload: params.payload,
+  });
+}
+
+/**
+ * One line per MCP approval or login request, so a repeated prompt can be
+ * traced to what Codex asked for. `_meta` carries the tool's arguments, which
+ * can hold queries, paths, typed text, or tokenized URLs, so only the keys
+ * and Codex's own descriptors are logged, never a parameter value or the URL.
+ * Computer Use writes its own title ("Allow Computer Use to use "Electron"?"),
+ * which names the app; any other server may put arguments in the title.
+ */
+function logMcpElicitationRequest(codexClientLog: CodexClientLogger, params: unknown, requestId: string | undefined): void {
+  const record = asRecord(params);
+  const meta = asRecord(record?.["_meta"]);
+  const serverName = readStringFromRecord(record, "serverName");
+  const persist = meta?.["persist"];
+  const toolParamsDisplay = Array.isArray(meta?.["tool_params_display"])
+    ? meta["tool_params_display"] as unknown[]
+    : [];
+  codexClientLog.info("MCP elicitation request", {
+    threadId: readStringFromRecord(record, "threadId"),
+    turnId: readStringFromRecord(record, "turnId"),
+    requestId,
+    serverName,
+    mode: readStringFromRecord(record, "mode"),
+    approvalKind: readStringFromRecord(meta, "codex_approval_kind"),
+    connectorId: readStringFromRecord(meta, "connector_id"),
+    connectorName: readStringFromRecord(meta, "connector_name"),
+    riskLevel: readStringFromRecord(meta, "riskLevel"),
+    persist: typeof persist === "string" ? [persist] : readStringArray(persist),
+    paramNames: toolParamsDisplay.flatMap((entry) => {
+      const name = pickString(asRecord(entry) ?? {}, ["name", "key", "label", "display_name"]);
+      return name ? [name] : [];
+    }),
+    metaKeys: meta ? Object.keys(meta) : [],
+    ...(serverName === "cua_repl"
+      ? { message: readStringFromRecord(record, "message") }
+      : {}),
+  });
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+/**
+ * Codex recursively merges `mcp_servers`, so an empty table does not erase
+ * servers configured in lower layers. Pin every inventoried server off in the
+ * helper-thread overlay.
+ */
+function buildCodexHelperConfig(
+  baseConfig: NonNullable<CodexThreadStartParams["config"]>,
+  serverNames: string[],
+  disableExecution = false,
+): NonNullable<CodexThreadStartParams["config"]> {
+  return {
+    ...baseConfig,
+    // Legacy notifications are independent of features.hooks and can receive
+    // helper output. Keep both suppressions thread-local on the shared server.
+    notify: [],
+    // Apply to both config variants: trusted hooks run outside model-tool
+    // approval/sandbox handling, including before the helper's first turn.
+    features: {
+      ...(asRecord(baseConfig.features) ?? {}),
+      hooks: false,
+      ...(disableExecution ? {
+        shell_tool: false,
+        unified_exec: false,
+        js_repl: false,
+        code_mode: false,
+        code_mode_only: false,
+        multi_agent: false,
+        multi_agent_v2: false,
+        enable_fanout: false,
+      } : {}),
+    },
+    ...(serverNames.length > 0 ? {
+      mcp_servers: Object.fromEntries(
+        serverNames.map((name) => [name, { enabled: false }]),
+      ),
+    } : {}),
+  };
+}
+
+function readConfiguredMcpServerNames(value: unknown): string[] {
+  const effectiveConfig = asRecord(asRecord(value)?.config);
+  if (!effectiveConfig) {
+    throw new Error("codex_title_config_read_invalid_response");
+  }
+  const configuredServersValue = effectiveConfig.mcp_servers;
+  if (configuredServersValue === undefined) {
+    return [];
+  }
+  const configuredServers = asRecord(configuredServersValue);
+  if (!configuredServers) {
+    throw new Error("codex_title_config_read_invalid_mcp_servers");
+  }
+  return Object.keys(configuredServers).sort();
+}
+
+function createCodexObserverWithConfigReadRedaction(
+  observer: JsonRpcObserver | undefined,
+): JsonRpcObserver | undefined {
+  if (!observer) {
+    return undefined;
+  }
+  const sensitiveRequestIds = new Set<string>();
+
+  return {
+    onMessage: async (event) => {
+      const redactedEvent = redactCodexThreadMcpHeaders(event);
+      const requestId = redactedEvent.envelope.id;
+      const requestKey = requestId === null || requestId === undefined
+        ? undefined
+        : String(requestId);
+      if (
+        redactedEvent.direction === "outbound"
+        && redactedEvent.envelope.method === "config/read"
+        && (
+          redactedEvent.diagnostics?.callerReason === CODEX_THREAD_TITLE_CONFIG_READ_REASON
+          || redactedEvent.diagnostics?.callerReason === CODEX_CONNECTION_MCP_CONFIG_READ_REASON
+        )
+        && requestKey
+      ) {
+        sensitiveRequestIds.add(requestKey);
+        await observer.onMessage(redactedEvent);
+        return;
+      }
+      if (
+        redactedEvent.direction !== "inbound"
+        || !requestKey
+        || !sensitiveRequestIds.delete(requestKey)
+        || !Object.hasOwn(redactedEvent.envelope, "result")
+      ) {
+        await observer.onMessage(redactedEvent);
+        return;
+      }
+
+      const names = readConfiguredMcpServerNames(redactedEvent.envelope.result);
+      const envelope: JsonRpcObserverEvent["envelope"] = {
+        ...redactedEvent.envelope,
+        result: {
+          config: {
+            mcp_servers: Object.fromEntries(names.map((name) => [name, {}])),
+          },
+        },
+      };
+      await observer.onMessage({
+        ...redactedEvent,
+        envelope,
+        raw: JSON.stringify(envelope),
+      });
+    },
+  };
+}
+
+function redactCodexThreadMcpHeaders(
+  event: JsonRpcObserverEvent,
+): JsonRpcObserverEvent {
+  if (
+    event.direction !== "outbound"
+    || (
+      event.envelope.method !== "thread/start"
+      && event.envelope.method !== "thread/resume"
+      && event.envelope.method !== "thread/fork"
+    )
+  ) {
+    return event;
+  }
+  const params = asRecord(event.envelope.params);
+  const config = asRecord(params?.config);
+  const servers = asRecord(config?.mcp_servers);
+  if (!params || !config || !servers) {
+    return event;
+  }
+
+  let redacted = false;
+  const redactedServers = Object.fromEntries(
+    Object.entries(servers).map(([name, value]) => {
+      const server = asRecord(value);
+      const headers = asRecord(server?.http_headers);
+      if (!server || !headers) {
+        return [name, value];
+      }
+      redacted = true;
+      return [
+        name,
+        {
+          ...server,
+          http_headers: Object.fromEntries(
+            Object.keys(headers).map((headerName) => [headerName, "[redacted]"]),
+          ),
+        },
+      ];
+    }),
+  );
+  if (!redacted) {
+    return event;
+  }
+
+  const envelope: JsonRpcObserverEvent["envelope"] = {
+    ...event.envelope,
+    params: {
+      ...params,
+      config: {
+        ...config,
+        mcp_servers: redactedServers,
+      },
+    },
+  };
+  return {
+    ...event,
+    envelope,
+    raw: JSON.stringify(envelope),
+  };
+}
+
+function readMcpServerInventoryPage(value: unknown): {
+  names: string[];
+  namesWithTools: string[];
+  nextCursor?: string;
+} {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.data)) {
+    throw new Error("codex_title_mcp_inventory_invalid_response");
+  }
+
+  const namesWithTools: string[] = [];
+  const names = record.data.map((item) => {
+    const name = readStringFromRecord(item, "name");
+    if (!name) {
+      throw new Error("codex_title_mcp_inventory_invalid_server");
+    }
+    const tools = asRecord(asRecord(item)?.tools);
+    if (!tools) {
+      throw new Error("codex_title_mcp_inventory_invalid_tools");
+    }
+    if (Object.keys(tools).length > 0) {
+      namesWithTools.push(name);
+    }
+    return name;
+  });
+  const nextCursorValue = record.nextCursor;
+  if (nextCursorValue === null || nextCursorValue === undefined) {
+    return { names, namesWithTools };
+  }
+  if (typeof nextCursorValue !== "string" || !nextCursorValue.trim()) {
+    throw new Error("codex_title_mcp_inventory_invalid_cursor");
+  }
+  return { names, namesWithTools, nextCursor: nextCursorValue.trim() };
+}
+
+function readMcpAuthStatus(value: unknown): CodexMcpServerSummary["authStatus"] {
+  if (
+    value === "unknown"
+    || value === "unsupported"
+    || value === "notLoggedIn"
+    || value === "bearerToken"
+    || value === "oAuth"
+  ) {
+    return value;
+  }
+  throw new Error("codex_mcp_inventory_invalid_auth_status");
+}
+
+function readMcpResourceSummaries(
+  value: unknown,
+): NonNullable<CodexMcpServerSummary["resources"]> {
+  if (!Array.isArray(value)) {
+    throw new Error("codex_mcp_inventory_invalid_resources");
+  }
+  return value.map((item) => {
+    const record = asRecord(item);
+    const name = readStringFromRecord(record, "name");
+    const uri = readStringFromRecord(record, "uri");
+    if (!name || !uri) {
+      throw new Error("codex_mcp_inventory_invalid_resource");
+    }
+    const title = readStringFromRecord(record, "title");
+    return { name, uri, ...(title ? { title } : {}) };
+  });
+}
+
+function readMcpResourceTemplateSummaries(
+  value: unknown,
+): NonNullable<CodexMcpServerSummary["resourceTemplates"]> {
+  if (!Array.isArray(value)) {
+    throw new Error("codex_mcp_inventory_invalid_resource_templates");
+  }
+  return value.map((item) => {
+    const record = asRecord(item);
+    const name = readStringFromRecord(record, "name");
+    const uriTemplate = readStringFromRecord(record, "uriTemplate");
+    if (!name || !uriTemplate) {
+      throw new Error("codex_mcp_inventory_invalid_resource_template");
+    }
+    const title = readStringFromRecord(record, "title");
+    return { name, uriTemplate, ...(title ? { title } : {}) };
+  });
+}
+
+function readMcpServerStatusPage(
+  value: unknown,
+  detail: CodexMcpInventoryDetail,
+): { servers: CodexMcpServerSummary[]; nextCursor?: string } {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.data)) {
+    throw new Error("codex_mcp_inventory_invalid_response");
+  }
+
+  const servers = record.data.map((item) => {
+    const server = asRecord(item);
+    const name = readStringFromRecord(server, "name");
+    const tools = asRecord(server?.tools);
+    if (!name || !tools) {
+      throw new Error("codex_mcp_inventory_invalid_server");
+    }
+    return {
+      name,
+      authStatus: readMcpAuthStatus(server?.authStatus),
+      tools: Object.keys(tools).sort((left, right) => left.localeCompare(right)),
+      ...(detail === "full"
+        ? {
+            resources: readMcpResourceSummaries(server?.resources),
+            resourceTemplates: readMcpResourceTemplateSummaries(
+              server?.resourceTemplates,
+            ),
+          }
+        : {}),
+    } satisfies CodexMcpServerSummary;
+  });
+  const nextCursorValue = record.nextCursor;
+  if (nextCursorValue === null || nextCursorValue === undefined) {
+    return { servers };
+  }
+  if (typeof nextCursorValue !== "string" || !nextCursorValue.trim()) {
+    throw new Error("codex_mcp_inventory_invalid_cursor");
+  }
+  return { servers, nextCursor: nextCursorValue.trim() };
+}
+
+function readThreadInstructionSources(value: unknown): string[] | null {
+  const sources = asRecord(value)?.instructionSources;
+  if (!Array.isArray(sources)) {
+    return null;
+  }
+  const normalized: string[] = [];
+  for (const source of sources) {
+    if (typeof source !== "string" || !source.trim()) {
+      return null;
+    }
+    normalized.push(source.trim());
+  }
+  return normalized;
+}
+
+function pickString(
+  record: Record<string, unknown>,
+  keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function readStringFromRecord(value: unknown, key: string): string | undefined {
+  const record = asRecord(value);
+  return record ? pickString(record, [key]) : undefined;
+}
+
+function buildHelperTurnKey(threadId: string, turnId: string): string {
+  return `${threadId}:${turnId}`;
+}
+
+function readHelperTokenUsage(params: unknown): unknown {
+  const record = asRecord(params);
+  if (!record) {
+    return undefined;
+  }
+  const turn = asRecord(record.turn);
+  return (
+    record.tokenUsage ??
+    record.token_usage ??
+    record.usage ??
+    turn?.tokenUsage ??
+    turn?.token_usage ??
+    turn?.usage
+  );
+}
+
+function extractTurnIdFromNotificationParams(params: unknown): string | undefined {
+  const directTurnId = readStringFromRecord(params, "turnId");
+  if (directTurnId) {
+    return directTurnId;
+  }
+
+  const turn = asRecord(params)?.turn;
+  return readStringFromRecord(turn, "id");
+}
+
+function extractThreadIdFromNotification(
+  notification: AppServerNotification,
+  rawParams: unknown
+): string | undefined {
+  return (
+    readStringFromRecord(notification.params, "threadId") ??
+    extractThreadIdFromValue(rawParams)
+  );
+}
+
+type StructuredRecordPredicate = (record: Record<string, unknown>) => boolean;
+
+const TITLE_RECORD_PREDICATE: StructuredRecordPredicate = (record) =>
+  isThreadTitleObject(record);
+
+/**
+ * Locate the structured-output record in a helper-turn result tree. The shape
+ * is identified by a caller-supplied predicate (a `{title}` record for title
+ * generation, an arbitrary-schema record for other one-shots), so the same
+ * extraction serves both title generation and generic structured output.
+ */
+function findStructuredRecord(
+  value: unknown,
+  isMatch: StructuredRecordPredicate,
+): Record<string, unknown> | undefined {
+  if (typeof value === "string") {
+    const record = asRecord(parseStructuredValue(value));
+    return record && isMatch(record) ? record : undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findStructuredRecord(entry, isMatch);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  if (isMatch(record)) {
+    return record;
+  }
+
+  for (const key of [
+    "output",
+    "content",
+    "message",
+    "text",
+    "item",
+    "items",
+    "turn",
+    "response",
+    "result",
+    "data",
+  ]) {
+    const found = findStructuredRecord(record[key], isMatch);
+    if (found) {
+      return found;
+    }
+  }
+
+  return undefined;
+}
+
+function isThreadTitleObject(value: unknown): value is { title: string } {
+  const record = asRecord(value);
+  return typeof record?.title === "string" && record.title.trim().length > 0;
+}
+
+function pickRawString(
+  record: Record<string, unknown>,
+  keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function pickStringAllowEmpty(
+  record: Record<string, unknown> | null | undefined,
+  keys: string[]
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function pickNumber(
+  record: Record<string, unknown>,
+  keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function pickFiniteNumber(
+  record: Record<string, unknown>,
+  keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function pickFiniteNumericValue(
+  record: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function pickBoolean(
+  record: Record<string, unknown>,
+  keys: string[]
+): boolean | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function extractRequestMetadata(value: unknown): {
+  threadId?: string;
+  turnId?: string;
+  requestId?: string;
+} {
+  const record = asRecord(value);
+  if (!record) {
+    return {};
+  }
+
+  const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
+  const turnRecord = asRecord(record.turn);
+
+  return {
+    threadId:
+      pickString(record, ["threadId", "thread_id", "conversationId", "conversation_id"]) ??
+      pickString(threadRecord ?? {}, ["id", "threadId", "thread_id", "conversationId"]),
+    turnId:
+      pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
+      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"]),
+    requestId:
+      pickString(record, [
+        "requestId",
+        "request_id",
+        "serverRequestId",
+        "approvalId",
+        "approval_id",
+        "callId",
+        "call_id",
+        "id",
+      ]) ??
+      pickString(asRecord(record.serverRequest) ?? {}, ["id", "requestId", "request_id"]),
+  };
+}
+
+function normalizePendingRequestNotification(
+  method: string,
+  params: unknown,
+  rpcId?: JsonRpcId,
+): AppServerPendingRequestNotification {
+  const record = asRecord(params) ?? {};
+  const metadata = extractRequestMetadata(params);
+
+  return {
+    method,
+    params: {
+      ...record,
+      ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
+      ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
+      requestId: metadata.requestId ?? String(rpcId ?? `${method}-request`),
+    } as AppServerPendingRequestNotification["params"],
+  };
+}
+
+// Codex's auto-review circuit breaker interrupts a turn after too many
+// denials. By default it reports that only through this guardianWarning text
+// and then a plain interrupted turn/completed. With
+// `auto_review.circuit_break_action = "strict"` the interrupted turn also
+// carries `codexErrorInfo: "tooManyDenials"`.
+const GUARDIAN_DENIAL_LIMIT_WARNING =
+  /rejected too many approval requests[\s\S]*interrupting the turn/i;
+
+function isGuardianDenialLimitWarning(message: string): boolean {
+  return GUARDIAN_DENIAL_LIMIT_WARNING.test(message);
+}
+
+/**
+ * Codex signals a failed turn through `turn/completed` with `turn.status` set
+ * to "failed". Translate that into the normalized `turn/failed` notification the
+ * rest of the app already understands, carrying a human-readable error message.
+ * A turn that Codex interrupted at the auto-review denial limit fails the same
+ * way. Returns undefined when the notification is not a failed `turn/completed`, in
+ * which case the caller falls through to the generic passthrough normalizer.
+ */
+function normalizeFailedTurnCompletedNotification(
+  method: string,
+  record: Record<string, unknown>,
+  metadata: { threadId?: string; turnId?: string },
+  guardianDenialLimitMessage?: string,
+): AppServerNotification | undefined {
+  if (method !== "turn/completed") {
+    return undefined;
+  }
+  const turn = asRecord(record.turn);
+  if (!turn) return undefined;
+  const status = pickString(turn, ["status"]);
+  const turnError = asRecord(turn.error);
+  // Codex stopped this turn, not the operator, so report it as a failure.
+  const deniedTooOften =
+    status === "interrupted"
+    && (pickString(turnError ?? {}, ["codexErrorInfo"]) === "tooManyDenials"
+      || guardianDenialLimitMessage !== undefined);
+  if (status !== "failed" && !deniedTooOften) {
+    return undefined;
+  }
+
+  const turnId = pickString(turn, ["id", "turnId", "turn_id"]) ?? metadata.turnId;
+  const threadId =
+    metadata.threadId ?? pickString(record, ["threadId", "thread_id"]);
+  if (!turnId || !threadId) {
+    return undefined;
+  }
+
+  const message = parseCodexTurnErrorMessage(
+    pickStringAllowEmpty(turnError, ["message"]) ?? guardianDenialLimitMessage,
+  );
+  const startedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["startedAt", "started_at"]),
+  );
+  const completedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["completedAt", "completed_at"]),
+  );
+  const durationMs = pickFiniteNumber(turn, ["durationMs", "duration_ms"]);
+
+  return {
+    method: "turn/failed",
+    params: {
+      threadId,
+      turnId,
+      turn: {
+        id: turnId,
+        status: "failed",
+        ...(typeof turn.rootTurnId === "string" || turn.rootTurnId === null
+          ? { rootTurnId: turn.rootTurnId } : {}),
+        ...(startedAt !== undefined ? { startedAt } : {}),
+        ...(completedAt !== undefined ? { completedAt } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        error: { message },
+      },
+    },
+  };
+}
+
+type LiveAgentMessagePhase = {
+  threadId: string;
+  turnId?: string;
+  phase: AppServerTranscriptPhase;
+};
+
+function normalizeServerNotification(
+  method: string,
+  params: unknown,
+  liveMessagePhases: Map<string, LiveAgentMessagePhase>,
+  guardianDenialLimitMessage?: string,
+): AppServerNotification {
+  const autoReview = normalizeAutoReviewNotification(method, params);
+  if (autoReview) return autoReview;
+  if (method === "thread/settings/updated") {
+    return normalizeThreadSettingsUpdatedNotification(params);
+  }
+
+  const record = asRecord(params) ?? {};
+  const metadata = extractRequestMetadata(params);
+  if (
+    metadata.threadId
+    && (method === "turn/completed" || method === "turn/failed" || method === "thread/closed")
+  ) {
+    for (const [key, value] of liveMessagePhases) {
+      if (
+        value.threadId === metadata.threadId
+        && (method === "thread/closed" || value.turnId === metadata.turnId)
+      ) {
+        liveMessagePhases.delete(key);
+      }
+    }
+  }
+  // A revert from any client replaces the thread's history. Downstream
+  // consumers already reload a thread on PwrAgent's provider-neutral rewind.
+  if (method === "thread/reverted" && typeof record.threadId === "string") {
+    return {
+      method: "thread/rewound",
+      params: { threadId: record.threadId, updatedAt: Date.now() },
+    };
+  }
+  if (method === "guardianWarning" && typeof record.message === "string") {
+    return { method: "warning", params: {
+      ...(typeof record.threadId === "string" ? { threadId: record.threadId } : {}),
+      message: record.message,
+      // Guardian emits routine review decisions as warnings. Preserve them in
+      // thread activity without promoting each decision to a global toast.
+      presentation: "activity-only",
+    } };
+  }
+  // Codex reports a failed turn as `turn/completed` whose `turn.status` is
+  // "failed" (with the provider error in `turn.error`), not as a distinct
+  // `turn/failed` method. Re-map it here, at the adapter boundary, so the rest
+  // of the app sees a single, uniform `turn/failed` notification — the renderer
+  // session-error banner, messaging delivery, and headless-automation error
+  // extraction all already key on `turn/failed`. Doing the alias here keeps the
+  // Codex-specific shape out of every downstream consumer.
+  const failedTurn = normalizeFailedTurnCompletedNotification(
+    method,
+    record,
+    metadata,
+    guardianDenialLimitMessage,
+  );
+  if (failedTurn) {
+    return failedTurn;
+  }
+
+  const itemRecord = asRecord(record.item);
+  const normalizedItem =
+    itemRecord && (method === "item/started" || method === "item/completed")
+      ? normalizeLiveNotificationItem(itemRecord)
+      : undefined;
+  // Codex deltas omit phase. Carry the item's phase so every live consumer
+  // applies the same interim-answer policy as thread/read replay.
+  const itemId = normalizedItem?.type === "agentMessage"
+    ? pickString(normalizedItem, ["id"])
+    : method === "item/agentMessage/delta" ? pickString(record, ["itemId"]) : undefined;
+  const phaseKey = metadata.threadId && itemId
+    ? JSON.stringify([metadata.threadId, metadata.turnId, itemId])
+    : undefined;
+  const phase = normalizeAgentMessagePhase(
+    pickString(normalizedItem ?? record, ["phase"]),
+  ) ?? (phaseKey ? liveMessagePhases.get(phaseKey)?.phase : undefined);
+  if (phaseKey && metadata.threadId && phase) {
+    rememberBoundedMap(liveMessagePhases, phaseKey, {
+      threadId: metadata.threadId,
+      turnId: metadata.turnId,
+      phase,
+    }, 1_000);
+  }
+
+  const configWarningMetadata =
+    method === "configWarning"
+      ? extractConfigWarningMetadata(record)
+      : undefined;
+
+  return {
+    method: method as AppServerNotification["method"],
+    params: {
+      ...record,
+      ...(configWarningMetadata ?? {}),
+      ...(normalizedItem ? {
+        item: normalizedItem.type === "agentMessage" && phase
+          ? { ...normalizedItem, phase }
+          : normalizedItem,
+      } : {}),
+      ...(method === "item/agentMessage/delta" && phase ? { phase } : {}),
+      ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
+      ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
+      ...(metadata.requestId ? { requestId: metadata.requestId } : {}),
+    } as AppServerNotification["params"],
+  } as AppServerNotification;
+}
+
+function normalizeThreadSettingsUpdatedNotification(
+  params: unknown,
+): AppServerNotification {
+  const record = asRecord(params) ?? {};
+  const settings = asRecord(record.threadSettings) ?? asRecord(record.thread_settings) ?? {};
+  const rawServiceTier =
+    readNullableString(settings, ["serviceTier", "service_tier"]) ??
+    readNullableString(record, ["serviceTier", "service_tier"]);
+  const normalizedServiceTier = normalizeObservedCodexServiceTier(rawServiceTier);
+  const threadId =
+    pickString(record, ["threadId", "thread_id"]) ??
+    pickString(settings, ["threadId", "thread_id"]);
+  return {
+    method: "thread/codexSettings/observed",
+    params: {
+      ...(threadId ? { threadId } : {}),
+      ...pickOptionalString(settings, "model", ["model"]),
+      ...pickOptionalString(settings, "reasoningEffort", ["reasoningEffort", "effort"]),
+      ...(rawServiceTier !== undefined ? { rawServiceTier } : {}),
+      ...(normalizedServiceTier !== undefined
+        ? { serviceTier: normalizedServiceTier }
+        : {}),
+      ...observedFastModeFromCodexServiceTier(rawServiceTier),
+    },
+  } as AppServerNotification;
+}
+
+function readNullableString(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | null | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (value === null) {
+      return null;
+    }
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function pickOptionalString(
+  record: Record<string, unknown>,
+  outputKey: string,
+  inputKeys: string[],
+): Record<string, string> {
+  const value = pickString(record, inputKeys);
+  return value ? { [outputKey]: value } : {};
+}
+
+function normalizeObservedCodexServiceTier(
+  serviceTier: string | null | undefined,
+): string | null | undefined {
+  if (serviceTier === null) {
+    return null;
+  }
+  const normalized = serviceTier?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "priority") {
+    return "fast";
+  }
+  if (normalized === "default") {
+    return null;
+  }
+  return normalized;
+}
+
+function observedFastModeFromCodexServiceTier(
+  serviceTier: string | null | undefined,
+): { fastMode?: boolean } {
+  const normalized = normalizeObservedCodexServiceTier(serviceTier);
+  if (normalized === undefined) {
+    return {};
+  }
+  return { fastMode: normalized === "fast" };
+}
+
+function extractConfigWarningMetadata(
+  record: Record<string, unknown>,
+): { trustedProjectPath?: string; configPath?: string } | undefined {
+  const summary = pickString(record, ["summary"]);
+  if (!summary) {
+    return undefined;
+  }
+
+  const trustLine = summary
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /as a trusted project in/i.test(line));
+  const trustMatch = trustLine?.match(
+    /add\s+(.+?)\s+as a trusted project in\s+(.+?)\s*\.?$/i,
+  );
+  if (!trustMatch) {
+    return undefined;
+  }
+
+  const trustedProjectPath = trustMatch[1]?.trim();
+  const configPath = trustMatch[2]?.trim();
+  return {
+    ...(trustedProjectPath ? { trustedProjectPath } : {}),
+    ...(configPath ? { configPath } : {}),
+  };
+}
+
+function normalizeLiveNotificationItem(
+  item: Record<string, unknown>
+): Record<string, unknown> {
+  const normalized = { ...item };
+  if (item.type === "agentMessage") {
+    const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
+    if (phase) normalized.phase = phase;
+  }
+  const functionName =
+    pickString(item, ["toolName", "tool_name", "name"]) ??
+    undefined;
+  if (functionName && typeof normalized.toolName !== "string") {
+    normalized.toolName = functionName;
+  }
+
+  const parsedArguments = parseStructuredValue(item.arguments);
+  if (parsedArguments && typeof parsedArguments === "object" && !Array.isArray(parsedArguments)) {
+    normalized.arguments = parsedArguments;
+  }
+
+  return normalized;
+}
+
+function normalizeEpochTimestamp(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return value < 1_000_000_000_000 ? value * 1_000 : value;
+}
+
+function findFirstNestedValue(value: unknown, keys: string[], depth = 0): unknown {
+  if (depth > 8) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = findFirstNestedValue(entry, keys, depth + 1);
+      if (nested !== undefined) {
+        return nested;
+      }
+    }
+    return undefined;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      return record[key];
+    }
+  }
+  for (const child of Object.values(record)) {
+    const nested = findFirstNestedValue(child, keys, depth + 1);
+    if (nested !== undefined) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+export function formatRateLimitWindowName(params: {
+  limitId?: string;
+  limitName?: string;
+  windowKey: "primary" | "secondary";
+  windowMinutes?: number;
+}): string {
+  const rawId = params.limitId?.trim();
+  const rawName = params.limitName?.trim();
+  let windowLabel: string;
+  const minutes = params.windowMinutes;
+  if (typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0) {
+    if (minutes === 10_080) {
+      windowLabel = "Weekly limit";
+    } else if (minutes % 1440 === 0) {
+      windowLabel = `${Math.round(minutes / 1440)}d limit`;
+    } else if (minutes % 60 === 0) {
+      windowLabel = `${Math.round(minutes / 60)}h limit`;
+    } else {
+      windowLabel = `${minutes}m limit`;
+    }
+  } else {
+    windowLabel = params.windowKey === "primary" ? "Primary limit" : "Secondary limit";
+  }
+  if (!rawId || rawId.toLowerCase() === "codex") {
+    return windowLabel;
+  }
+  return `${rawName ?? rawId} ${windowLabel}`.trim();
+}
+
+const CREDITS_RATE_LIMIT_NAME = "Credits";
+const CREDITS_RATE_LIMIT_ID = "credits";
+
+export function extractRateLimitSummaries(
+  value: unknown,
+): BackendRateLimitSummary[] {
+  const out = new Map<string, BackendRateLimitSummary>();
+  const addCredits = (snapshot: Record<string, unknown>): void => {
+    const credits = extractCreditsRateLimit(snapshot);
+    if (!credits) {
+      return;
+    }
+    const existing = out.get(CREDITS_RATE_LIMIT_NAME);
+    out.set(
+      CREDITS_RATE_LIMIT_NAME,
+      existing ? preferCreditsRateLimit(existing, credits) : credits,
+    );
+  };
+  const addWindow = (
+    windowValue: unknown,
+    params: { limitId?: string; limitName?: string; windowKey: "primary" | "secondary" }
+  ): void => {
+    const window = asRecord(windowValue);
+    if (!window) {
+      return;
+    }
+    const usedPercent = pickFiniteNumber(window, ["usedPercent", "used_percent"]);
+    const windowMinutes = pickFiniteNumber(window, [
+      "windowDurationMins",
+      "window_duration_mins",
+      "windowMinutes",
+      "window_minutes",
+    ]);
+    const name = formatRateLimitWindowName({
+      limitId: params.limitId,
+      limitName: params.limitName,
+      windowKey: params.windowKey,
+      windowMinutes,
+    });
+    out.set(name, {
+      name,
+      limitId: params.limitId,
+      limitName: params.limitName,
+      windowKey: params.windowKey,
+      usedPercent,
+      remaining:
+        typeof usedPercent === "number" ? Math.max(0, Math.round(100 - usedPercent)) : undefined,
+      resetAt: normalizeEpochTimestamp(
+        pickNumber(window, ["resetsAt", "resets_at", "resetAt", "reset_at"])
+      ),
+      windowSeconds: typeof windowMinutes === "number" ? Math.round(windowMinutes * 60) : undefined,
+      windowMinutes,
+    });
+  };
+  const addIndividualLimit = (
+    limitValue: unknown,
+    params: { limitId?: string; limitName?: string },
+  ): void => {
+    const individualLimit = asRecord(limitValue);
+    if (!individualLimit) {
+      return;
+    }
+    const limit = pickFiniteNumericValue(individualLimit, ["limit", "max", "capacity"]);
+    const used = pickFiniteNumericValue(individualLimit, ["used", "consumed"]);
+    const remainingPercent = pickFiniteNumericValue(individualLimit, [
+      "remainingPercent",
+      "remaining_percent",
+    ]);
+    const usedPercent = typeof remainingPercent === "number"
+      ? Math.max(0, Math.min(100, 100 - remainingPercent))
+      : typeof used === "number" && typeof limit === "number" && limit > 0
+        ? Math.max(0, Math.min(100, (used / limit) * 100))
+        : undefined;
+    const rawId = params.limitId?.trim();
+    const rawName = params.limitName?.trim();
+    const name = !rawId || rawId.toLowerCase() === "codex"
+      ? "Individual limit"
+      : `${rawName ?? rawId} Individual limit`;
+    out.set(name, {
+      name,
+      limitId: params.limitId,
+      limitName: params.limitName,
+      windowKey: "individual",
+      limit,
+      used,
+      remaining:
+        typeof limit === "number" && typeof used === "number"
+          ? Math.max(0, limit - used)
+          : undefined,
+      usedPercent,
+      resetAt: normalizeEpochTimestamp(
+        pickNumber(individualLimit, ["resetsAt", "resets_at", "resetAt", "reset_at"]),
+      ),
+    });
+  };
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach((entry) => visit(entry));
+      return;
+    }
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+    if ("primary" in record || "secondary" in record || "credits" in record) {
+      const limitId = pickString(record, ["limitId", "limit_id", "id"]);
+      const limitName = pickString(record, ["limitName", "limit_name", "name", "label"]);
+      addWindow(record.primary, { limitId, limitName, windowKey: "primary" });
+      addWindow(record.secondary, { limitId, limitName, windowKey: "secondary" });
+      addIndividualLimit(record.individualLimit ?? record.individual_limit, {
+        limitId,
+        limitName,
+      });
+      addCredits(record);
+    }
+    const byLimitId = asRecord(record.rateLimitsByLimitId ?? record.rate_limits_by_limit_id);
+    if (byLimitId) {
+      for (const [limitId, snapshot] of Object.entries(byLimitId)) {
+        const snapshotRecord = asRecord(snapshot);
+        if (!snapshotRecord) {
+          continue;
+        }
+        const limitName = pickString(snapshotRecord, ["limitName", "limit_name", "name", "label"]);
+        addWindow(snapshotRecord.primary, { limitId, limitName, windowKey: "primary" });
+        addWindow(snapshotRecord.secondary, { limitId, limitName, windowKey: "secondary" });
+        addIndividualLimit(
+          snapshotRecord.individualLimit ?? snapshotRecord.individual_limit,
+          { limitId, limitName },
+        );
+        addCredits(snapshotRecord);
+      }
+    }
+    const remaining = pickFiniteNumber(record, [
+      "remaining",
+      "remainingCount",
+      "remaining_count",
+      "available",
+    ]);
+    const limit = pickFiniteNumber(record, ["limit", "max", "quota", "capacity"]);
+    const used = pickFiniteNumber(record, ["used", "consumed", "count"]);
+    const resetAt = pickNumber(record, [
+      "resetAt",
+      "reset_at",
+      "resetsAt",
+      "resets_at",
+      "nextResetAt",
+    ]);
+    const windowSeconds = pickFiniteNumber(record, [
+      "windowSeconds",
+      "window_seconds",
+      "resetInSeconds",
+      "retryAfterSeconds",
+    ]);
+    const name =
+      pickString(record, ["name", "label", "scope", "resource", "model", "id"]) ??
+      (typeof remaining === "number" ||
+      typeof limit === "number" ||
+      typeof used === "number" ||
+      typeof resetAt === "number"
+        ? `limit-${out.size + 1}`
+        : undefined);
+    if (name) {
+      const existing = out.get(name);
+      out.set(name, {
+        name,
+        limitId: existing?.limitId,
+        limitName: existing?.limitName,
+        windowKey: existing?.windowKey,
+        remaining: remaining ?? existing?.remaining,
+        limit: limit ?? existing?.limit,
+        used: used ?? existing?.used,
+        usedPercent: existing?.usedPercent,
+        resetAt: normalizeEpochTimestamp(resetAt) ?? existing?.resetAt,
+        windowSeconds: windowSeconds ?? existing?.windowSeconds,
+        windowMinutes: existing?.windowMinutes,
+      });
+    }
+    for (const key of [
+      "limits",
+      "items",
+      "data",
+      "results",
+      "entries",
+      "buckets",
+      "rateLimits",
+      "rate_limits",
+      "rateLimitsByLimitId",
+      "rate_limits_by_limit_id",
+    ]) {
+      visit(record[key]);
+    }
+  };
+  visit(value);
+  return [...out.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function extractCreditsRateLimit(
+  snapshot: Record<string, unknown>,
+): BackendRateLimitSummary | undefined {
+  const credits = asRecord(snapshot.credits);
+  if (!credits) {
+    return undefined;
+  }
+  const hasCredits = pickBoolean(credits, ["hasCredits", "has_credits"]);
+  const unlimited = pickBoolean(credits, ["unlimited"]);
+  if (hasCredits === undefined && unlimited === undefined) {
+    // Reset-credit ledgers also use a `credits` array/object. Account balance
+    // snapshots always carry the boolean flags from CreditsSnapshot.
+    return undefined;
+  }
+  return {
+    name: CREDITS_RATE_LIMIT_NAME,
+    limitId: CREDITS_RATE_LIMIT_ID,
+    windowKey: "credits",
+    hasCredits: hasCredits === true,
+    unlimited: unlimited === true,
+    remaining: parseCreditBalance(pickString(credits, ["balance"])),
+  };
+}
+
+function preferCreditsRateLimit(
+  current: BackendRateLimitSummary,
+  next: BackendRateLimitSummary,
+): BackendRateLimitSummary {
+  if (next.unlimited && !current.unlimited) {
+    return next;
+  }
+  if (current.unlimited && !next.unlimited) {
+    return current;
+  }
+  const currentRemaining = current.remaining ?? Number.NEGATIVE_INFINITY;
+  const nextRemaining = next.remaining ?? Number.NEGATIVE_INFINITY;
+  if (nextRemaining !== currentRemaining) {
+    return nextRemaining > currentRemaining ? next : current;
+  }
+  if (next.hasCredits && !current.hasCredits) {
+    return next;
+  }
+  return current;
+}
+
+function parseCreditBalance(raw: string | undefined): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const trimmed = raw.replace(/^\$/, "").replace(/,/g, "").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
+}
+
+function extractAccountSummary(value: unknown): BackendAccountSummary {
+  const root = asRecord(value) ?? {};
+  const account =
+    asRecord(findFirstNestedValue(value, ["account"])) ?? asRecord(root.account) ?? undefined;
+  const type = pickString(account ?? {}, ["type"]);
+  const routing = asRecord(root.workspaceRouting ?? root.workspace_routing);
+  const accountId = pickString(routing ?? {}, ["chatgptAccountId", "chatgpt_account_id"]);
+  return {
+    type: type === "apiKey" || type === "chatgpt" ? type : undefined,
+    ...(accountId ? { accountId } : {}),
+    email: pickString(account ?? {}, ["email"]),
+    planType: pickString(account ?? {}, ["planType", "plan_type"]),
+    requiresOpenaiAuth: pickBoolean(root, ["requiresOpenaiAuth", "requires_openai_auth"]),
+  };
+}
+
+function collectText(value: unknown): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectText(entry));
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const directKeys = [
+    "text",
+    "message",
+    "summary",
+    "title",
+    "content",
+    "description",
+    "reason"
+  ];
+
+  const output = directKeys.flatMap((key) => collectText(record[key]));
+  for (const nestedKey of ["item", "thread", "response", "result", "data"]) {
+    output.push(...collectText(record[nestedKey]));
+  }
+  return output;
+}
+
+function dedupeJoinedText(parts: string[]): string | undefined {
+  const unique = [...new Set(parts.map((value) => value.trim()).filter(Boolean))];
+  if (unique.length === 0) {
+    return undefined;
+  }
+  return unique.join("\n\n");
+}
+
+function isCodexImageBoundaryText(value: string): boolean {
+  const trimmed = value.trim();
+  return /^<image\b[^>]*>$/i.test(trimmed) || /^<\/image>$/i.test(trimmed);
+}
+
+function normalizeThreadSummary(value: string | undefined): string | undefined {
+  const trimmed = value?.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (
+    trimmed.length > 160 ||
+    trimmed.startsWith("[$") ||
+    trimmed.includes("](/") ||
+    trimmed.includes("/Users/")
+  ) {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+function measureThreadPreviewBytes(thread: RawCodexThreadSummary): number {
+  const record = asRecord(thread);
+  if (!record) {
+    return 0;
+  }
+  const preview = pickString(record, [
+    "preview",
+    "summary",
+    "snippet",
+    "firstUserMessage",
+    "first_user_message",
+  ]);
+  return preview ? Buffer.byteLength(preview) : 0;
+}
+
+function normalizeSessionOriginator(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function isAllowedCodexSessionOriginator(value: string | undefined): boolean {
+  const normalized = normalizeSessionOriginator(value);
+  if (!normalized) {
+    return true;
+  }
+
+  return (
+    normalized.startsWith("codex") ||
+    normalized === "pwragent-desktop" ||
+    normalized === "pwragnt-desktop"
+  );
+}
+
+function normalizeComparableFilesystemPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return path.resolve(trimmed).replace(/[\\/]+$/, "").replaceAll("\\", "/");
+}
+
+function isPwrSnapChatWorkspacePath(value: string | undefined): boolean {
+  const normalized = normalizeComparableFilesystemPath(value);
+  return Boolean(normalized?.match(/\/Documents\/PwrSnap\/Chats(?:\/|$)/));
+}
+
+function isPwrSnapRuntimeContext(value: string | undefined): boolean {
+  return Boolean(value?.trim().startsWith('<runtime_context source="pwrsnap"'));
+}
+
+function isKnownCompanionAppCodexThread(thread: RawCodexThreadSummary): boolean {
+  if (isPwrSnapChatWorkspacePath(thread.projectKey)) {
+    return true;
+  }
+
+  if (thread.title.trim() === "PwrSnap Capture Metadata Worker") {
+    return true;
+  }
+
+  return isPwrSnapRuntimeContext(thread.title) || isPwrSnapRuntimeContext(thread.summary);
+}
+
+function isVisibleCodexThreadSource(thread: RawCodexThreadSummary): boolean {
+  const sourceKind = thread.codexThreadSourceKind?.trim().toLowerCase();
+  // Native Codex subagents appear on their originating thread as activity and
+  // PwrAgent-managed workers have an inspection-only transcript. Neither is a
+  // durable navigation thread. Codex source-kind variants use camelCase while
+  // the durable ThreadSource marker is the lowercase string "subagent".
+  return sourceKind !== "guardian_review" && !sourceKind?.startsWith("subagent");
+}
+
+function filterVisibleCodexThreads(
+  threads: RawCodexThreadSummary[]
+): RawCodexThreadSummary[] {
+  return threads.filter(
+    (thread) =>
+      isAllowedCodexSessionOriginator(thread.originator) &&
+      isVisibleCodexThreadSource(thread) &&
+      !isKnownCompanionAppCodexThread(thread),
+  );
+}
+
+function isPlaceholderThreadTitle(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === "untitled thread";
+}
+
+function normalizeTitleForComparison(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function getThreadTitleInfo(rawExplicitTitle: string | undefined, derivedTitle: string | undefined): {
+  title: string;
+  titleSource: AppServerThreadTitleSource;
+} {
+  const explicitTitle = normalizeExplicitThreadName(rawExplicitTitle);
+  const shortenedDerivedTitle = shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle;
+
+  if (explicitTitle && !isPlaceholderThreadTitle(explicitTitle)) {
+    if (
+      derivedTitle &&
+      (normalizeTitleForComparison(explicitTitle) === normalizeTitleForComparison(derivedTitle) ||
+        (shortenedDerivedTitle &&
+          normalizeTitleForComparison(explicitTitle) ===
+            normalizeTitleForComparison(shortenedDerivedTitle)))
+    ) {
+      return {
+        title: shortenedDerivedTitle ?? explicitTitle,
+        titleSource: "derived",
+      };
+    }
+
+    return {
+      title: explicitTitle,
+      titleSource: "explicit",
+    };
+  }
+
+  if (derivedTitle) {
+    return {
+      title: shortenedDerivedTitle ?? derivedTitle,
+      titleSource: "derived",
+    };
+  }
+
+  return {
+    title: "Untitled thread",
+    titleSource: "fallback",
+  };
+}
+
+function normalizeExplicitThreadName(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || isPlaceholderThreadTitle(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function isPlaceholderThreadName(value: string | undefined): boolean {
+  return isPlaceholderThreadTitle(value);
+}
+
+function deriveThreadNameFromInput(input: AppServerTurnInputItem[]): string | undefined {
+  const text = input
+    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n");
+
+  return (shortenDerivedThreadTitle(text) ?? text) || undefined;
+}
+
+async function resolveThreadProjectKey(
+  thread: RawCodexThreadSummary
+): Promise<string | undefined> {
+  const projectKey = thread.projectKey?.trim();
+  return projectKey || undefined;
+}
+
+function buildProjectKeyLinkedDirectories(
+  projectKey: string | undefined
+): LinkedDirectorySummary[] {
+  const directoryPath = projectKey?.trim();
+  if (!directoryPath) {
+    return [];
+  }
+
+  const resolvedPath = path.isAbsolute(directoryPath)
+    ? directoryPath
+    : path.resolve(directoryPath);
+  const isWorktree = isToolManagedWorktreePath(resolvedPath);
+
+  return [
+    {
+      id: resolvedPath,
+      label: path.basename(resolvedPath) || resolvedPath,
+      path: resolvedPath,
+      ...(isWorktree ? { worktreePath: resolvedPath } : {}),
+      kind: isWorktree ? "worktree" : "local",
+    },
+  ];
+}
+
+function normalizeConversationRole(
+  value: string | undefined
+): "user" | "assistant" | undefined {
+  const normalized = value?.trim().replace(/[-_\s]/g, "").toLowerCase();
+  if (normalized === "user" || normalized === "usermessage") {
+    return "user";
+  }
+  if (
+    normalized === "assistant" ||
+    normalized === "agentmessage" ||
+    normalized === "assistantmessage"
+  ) {
+    return "assistant";
+  }
+  return undefined;
+}
+
+function normalizeAgentMessagePhase(
+  value: string | undefined
+): AppServerTranscriptPhase | undefined {
+  if (value === "commentary") {
+    return "commentary";
+  }
+  if (value === "partial" || value === "partial_answer") {
+    return "partial";
+  }
+  if (value === "final" || value === "final_answer") {
+    return "final";
+  }
+  return undefined;
+}
+
+function collectLegacyMessageText(record: Record<string, unknown>): string {
+  return (
+    dedupeJoinedText([
+      ...collectText(record.content),
+      ...collectText(record.text),
+      ...collectText(record.message),
+      ...collectText(record.messages),
+      ...collectText(record.input),
+      ...collectText(record.output),
+      ...collectText(record.parts)
+    ]) ?? ""
+  );
+}
+
+function isReviewActionText(text: string): boolean {
+  return text.includes("<user_action>") && text.includes("<action>review</action>");
+}
+
+function isPlainReviewFindingText(text: string): boolean {
+  return (
+    /\b(?:full\s+)?review comments?:/i.test(text) &&
+    /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
+  );
+}
+
+function shouldUseAssistantReviewText(params: {
+  assistantText: string;
+  reviewText: string;
+}): boolean {
+  if (!isPlainReviewFindingText(params.assistantText)) {
+    return false;
+  }
+
+  const normalizedAssistant = normalizeSuppressionText(params.assistantText);
+  const normalizedReview = normalizeSuppressionText(params.reviewText);
+  return (
+    !normalizedReview ||
+    normalizedAssistant === normalizedReview ||
+    normalizedAssistant.startsWith(normalizedReview) ||
+    normalizedAssistant.includes(normalizedReview)
+  );
+}
+
+function normalizeSuppressionText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function collectReviewSuppressionTexts(value: unknown): Set<string> {
+  const output = new Set<string>();
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach((entry) => visit(entry));
+      return;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+
+    const role = normalizeConversationRole(
+      pickString(record, ["role", "author", "speaker", "source", "type"])
+    );
+    if (role === "assistant") {
+      const text = collectLegacyMessageText(record);
+      if (isPlainReviewFindingText(text)) {
+        output.add(normalizeSuppressionText(text));
+      }
+    }
+
+    const reviewOutput = normalizeReviewOutput(record);
+    if (reviewOutput?.overall_explanation) {
+      output.add(normalizeSuppressionText(reviewOutput.overall_explanation));
+    }
+    const reviewEvent = normalizeReviewEventItem(record);
+    if (reviewEvent?.event === "exitedreviewmode") {
+      const review = pickRawString(reviewEvent.item, ["review", "text"]);
+      if (review) {
+        output.add(normalizeSuppressionText(review));
+      }
+    }
+
+    for (const key of [
+      "items",
+      "messages",
+      "content",
+      "parts",
+      "entries",
+      "data",
+      "results",
+      "turns",
+      "events",
+      "payload",
+      "item",
+      "message",
+      "thread",
+      "response",
+      "result"
+    ]) {
+      visit(record[key]);
+    }
+  };
+
+  visit(value);
+  return output;
+}
+
+function collectAssistantReviewTexts(items: Record<string, unknown>[]): string[] {
+  const output: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of items) {
+    const role = normalizeConversationRole(
+      pickString(item, ["role", "author", "speaker", "source", "type"])
+    );
+    if (role !== "assistant") {
+      continue;
+    }
+
+    const text = buildMessageContent(item).text;
+    if (!isPlainReviewFindingText(text)) {
+      continue;
+    }
+
+    const key = normalizeSuppressionText(text);
+    if (!seen.has(key)) {
+      seen.add(key);
+      output.push(text);
+    }
+  }
+
+  return output;
+}
+
+function shouldSuppressConversationMessage(
+  record: Record<string, unknown>,
+  suppressedAssistantTexts = new Set<string>(),
+  nativeReviewTurn = false,
+): boolean {
+  const text = collectLegacyMessageText(record);
+  const role = normalizeConversationRole(
+    pickString(record, ["role", "author", "speaker", "source", "type"])
+  );
+  return (
+    isReviewActionText(text) ||
+    (role === "user" && isPwrAgentInlineReviewPrompt(text)) ||
+    (nativeReviewTurn && role === "user" && !record.origin && isCodexReviewPromptText(text)) ||
+    (role === "assistant" && suppressedAssistantTexts.has(normalizeSuppressionText(text)))
+  );
+}
+
+function normalizeRenderableImageUrl(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("file://") ||
+    trimmed.startsWith("data:image/")
+  ) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("/")) {
+    return `file://${trimmed}`;
+  }
+
+  return undefined;
+}
+
+function buildImagePartFromUrl(value: string | undefined): AppServerThreadImagePart | undefined {
+  const url = normalizeRenderableImageUrl(value);
+  return url ? { type: "image", url } : undefined;
+}
+
+function extractDynamicToolCallImageParts(
+  item: Record<string, unknown>,
+  toolName: string,
+): AppServerThreadImagePart[] {
+  const contentItems = Array.isArray(item.contentItems)
+    ? item.contentItems
+    : Array.isArray(item.content_items)
+      ? item.content_items
+      : [];
+  return contentItems.flatMap((value): AppServerThreadImagePart[] => {
+    const contentItem = asRecord(value);
+    if (normalizeItemType(pickString(contentItem ?? {}, ["type"])) !== "inputimage") {
+      return [];
+    }
+    const image = buildImagePartFromUrl(
+      pickString(contentItem ?? {}, ["imageUrl", "image_url"]),
+    );
+    return image ? [{ ...image, alt: `${toolName} result` }] : [];
+  });
+}
+
+function extractImagePartsFromValue(value: unknown): AppServerThreadImagePart[] {
+  if (typeof value === "string") {
+    const part = buildImagePartFromUrl(value);
+    return part ? [part] : [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractImagePartsFromValue(entry));
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const part = buildImagePartFromUrl(
+    pickString(record, [
+      "image_url",
+      "imageUrl",
+      "url",
+      "src",
+      "uri",
+      "path",
+      "localPath",
+      "local_path"
+    ])
+  );
+  if (!part) {
+    return [];
+  }
+
+  const alt = pickString(record, ["alt", "altText", "alt_text", "title", "name"]);
+  if (alt) {
+    part.alt = alt;
+  }
+  return [part];
+}
+
+function extractDirectImageParts(record: Record<string, unknown>): AppServerThreadImagePart[] {
+  return [
+    ...extractImagePartsFromValue(record.local_images),
+    ...extractImagePartsFromValue(record.localImages),
+    ...extractImagePartsFromValue(record.images),
+    ...extractImagePartsFromValue(record.image_urls),
+    ...extractImagePartsFromValue(record.imageUrls)
+  ];
+}
+
+function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePart[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractStructuredMessageParts(entry));
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const normalizedType = pickString(record, ["type", "contentType", "content_type"])
+    ?.trim()
+    .toLowerCase();
+
+  if (
+    normalizedType === "text" ||
+    normalizedType === "input_text" ||
+    normalizedType === "output_text"
+  ) {
+    const text = pickString(record, ["text", "value", "content"]);
+    if (text && isCodexImageBoundaryText(text)) {
+      return [];
+    }
+    return text ? [{ type: "text", text }] : [];
+  }
+
+  const imagePart = buildImagePartFromUrl(
+    pickString(record, [
+      "image_url",
+      "imageUrl",
+      "url",
+      "src",
+      "uri",
+      "path",
+      "localPath",
+      "local_path"
+    ])
+  );
+  if (
+    imagePart &&
+    (normalizedType === "image" ||
+      normalizedType === "input_image" ||
+      normalizedType === "localimage" ||
+      normalizedType === "local_image" ||
+      normalizedType === "output_image" ||
+      normalizedType === "image_url" ||
+      "image_url" in record ||
+      "imageUrl" in record)
+  ) {
+    const alt = pickString(record, ["alt", "altText", "alt_text", "title", "name"]);
+    if (alt) {
+      imagePart.alt = alt;
+    }
+    return [imagePart];
+  }
+
+  if (normalizedType === "file" || normalizedType === "input_file") {
+    const name = pickString(record, ["name", "filename", "fileName", "file_name"]);
+    if (!name) {
+      return [];
+    }
+    const part: AppServerThreadFilePart = {
+      type: "file",
+      name,
+    };
+    const mimeType = pickString(record, ["mimeType", "mime_type", "mediaType", "media_type"]);
+    if (mimeType) {
+      part.mimeType = mimeType;
+    }
+    const sizeBytes = pickNumber(record, ["sizeBytes", "size_bytes", "bytes"]);
+    if (sizeBytes !== undefined) {
+      part.sizeBytes = sizeBytes;
+    }
+    return [part];
+  }
+
+  for (const nestedKey of ["content", "parts", "input", "output", "data"]) {
+    const nestedParts = extractStructuredMessageParts(record[nestedKey]);
+    if (nestedParts.length > 0) {
+      return nestedParts;
+    }
+  }
+
+  return [];
+}
+
+/** The text and parts a replay message gets from one raw message item. */
+export function buildMessageContent(record: Record<string, unknown>): {
+  parts?: AppServerThreadMessagePart[];
+  text: string;
+} {
+  const structuredParts = [
+    ...extractStructuredMessageParts(record.content),
+    ...extractStructuredMessageParts(record.parts),
+    ...extractDirectImageParts(record)
+  ];
+
+  if (structuredParts.length > 0) {
+    const text =
+      dedupeJoinedText(
+        structuredParts.flatMap((part) => (part.type === "text" ? [part.text] : []))
+      ) ?? collectLegacyMessageText(record);
+    const parts =
+      structuredParts.some((part) => part.type === "text") || !text
+        ? structuredParts
+        : [{ type: "text" as const, text }, ...structuredParts];
+
+    return {
+      parts,
+      text
+    };
+  }
+
+  const text = collectLegacyMessageText(record);
+  return { text };
+}
+
+function hasThreadMessageImages(
+  message: Pick<AppServerThreadMessageEntry, "parts">
+): boolean {
+  return threadMessageImageUrls(message).length > 0;
+}
+
+function threadMessageImageUrls(
+  message: Pick<AppServerThreadMessageEntry, "parts">
+): string[] {
+  return (
+    message.parts
+      ?.filter((part): part is Extract<AppServerThreadMessagePart, { type: "image" }> =>
+        part.type === "image"
+      )
+      .map((part) => part.url) ?? []
+  );
+}
+
+function imageUrlsMatch(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((url, index) => url === right[index]);
+}
+
+function imageUrlsAreRawEventMirror(left: string[], right: string[]): boolean {
+  if (left.length === 0 || left.length !== right.length) {
+    return false;
+  }
+
+  const leftDataUrls = left.every((url) => url.startsWith("data:image/"));
+  const rightDataUrls = right.every((url) => url.startsWith("data:image/"));
+  const leftFileUrls = left.every((url) => url.startsWith("file://"));
+  const rightFileUrls = right.every((url) => url.startsWith("file://"));
+
+  return (leftDataUrls && rightFileUrls) || (leftFileUrls && rightDataUrls);
+}
+
+function messageTimestampsAreWithin(
+  left: AppServerThreadReplay["messages"][number],
+  right: AppServerThreadReplay["messages"][number],
+  windowMs: number
+): boolean {
+  if (typeof left.createdAt !== "number" || typeof right.createdAt !== "number") {
+    return false;
+  }
+
+  return Math.abs(left.createdAt - right.createdAt) <= windowMs;
+}
+
+function messagesAreNearDuplicateImagePrompts(
+  left: AppServerThreadReplay["messages"][number],
+  right: AppServerThreadReplay["messages"][number]
+): boolean {
+  if (left.role !== right.role || left.text !== right.text) {
+    return false;
+  }
+
+  const leftImageUrls = threadMessageImageUrls(left);
+  const rightImageUrls = threadMessageImageUrls(right);
+  const leftHasImages = leftImageUrls.length > 0;
+  const rightHasImages = rightImageUrls.length > 0;
+
+  if (!leftHasImages && !rightHasImages) {
+    if (left.role !== "assistant") {
+      return false;
+    }
+
+    if (typeof left.createdAt !== "number" || typeof right.createdAt !== "number") {
+      return true;
+    }
+
+    return messageTimestampsAreWithin(left, right, 1_000);
+  }
+
+  if (leftHasImages && rightHasImages) {
+    if (imageUrlsMatch(leftImageUrls, rightImageUrls)) {
+      return (
+        typeof left.createdAt !== "number" ||
+        typeof right.createdAt !== "number" ||
+        messageTimestampsAreWithin(left, right, 1_000)
+      );
+    }
+
+    return (
+      imageUrlsAreRawEventMirror(leftImageUrls, rightImageUrls) &&
+      messageTimestampsAreWithin(left, right, 100)
+    );
+  }
+
+  if (typeof left.createdAt !== "number" || typeof right.createdAt !== "number") {
+    return true;
+  }
+
+  return messageTimestampsAreWithin(left, right, 1_000);
+}
+
+function appendConversationMessage(
+  output: AppServerThreadReplay["messages"],
+  message: AppServerThreadReplay["messages"][number]
+): void {
+  const existingIndex = output.findIndex((candidate) =>
+    messagesAreNearDuplicateImagePrompts(candidate, message)
+  );
+  if (existingIndex === -1) {
+    output.push(message);
+    return;
+  }
+
+  const existing = output[existingIndex];
+  if (existing && !hasThreadMessageImages(existing) && hasThreadMessageImages(message)) {
+    output[existingIndex] = message;
+  }
+}
+
+function extractConversationMessages(value: unknown): AppServerThreadReplay["messages"] {
+  const output: AppServerThreadReplay["messages"] = [];
+  const suppressedAssistantTexts = collectReviewSuppressionTexts(value);
+  const timestampKeys = [
+    "createdAt",
+    "created_at",
+    "startedAt",
+    "started_at",
+    "timestamp",
+    "time",
+  ];
+
+  const visit = (node: unknown, inheritedCreatedAt?: number, nativeReviewTurn = false): void => {
+    if (Array.isArray(node)) {
+      node.forEach((entry) => visit(entry, inheritedCreatedAt, nativeReviewTurn));
+      return;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+    const recordCreatedAt = normalizeEpochTimestamp(
+      pickNumber(record, timestampKeys)
+    );
+    const createdAt = recordCreatedAt ?? inheritedCreatedAt;
+
+    const items = Array.isArray(record.items) ? record.items : [];
+    const isReviewTurn = nativeReviewTurn || items.some((item) => {
+      const candidate = asRecord(item);
+      return candidate && normalizeReviewEventItem(candidate) !== undefined;
+    });
+    const role = normalizeConversationRole(
+      pickString(record, ["role", "author", "speaker", "source", "type"])
+    );
+    const content = buildMessageContent(record);
+    if (
+      role &&
+      (content.text || content.parts?.length) &&
+      !shouldSuppressConversationMessage(record, suppressedAssistantTexts, isReviewTurn)
+    ) {
+      appendConversationMessage(output, {
+        id:
+          pickString(record, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
+          `message-${output.length + 1}`,
+        role,
+        text: content.text,
+        ...(role === "assistant" ? asyncQuestionMetadata(record) : {}),
+        ...(content.parts ? { parts: content.parts } : {}),
+        createdAt
+      });
+    }
+
+    for (const key of [
+      "items",
+      "messages",
+      "content",
+      "parts",
+      "entries",
+      "data",
+      "results",
+      "turns",
+      "events",
+      "payload",
+      "item",
+      "message",
+      "thread",
+      "response",
+      "result"
+    ]) {
+      visit(record[key], createdAt, isReviewTurn);
+    }
+  };
+
+  visit(value);
+  return output;
+}
+
+function asyncQuestionMetadata(record: Record<string, unknown>): Pick<
+  AppServerThreadMessageEntry,
+  "delivery" | "questions"
+> {
+  if (record.delivery !== "async") {
+    return {};
+  }
+  const questions = normalizeCodexAsyncQuestions(record.questions);
+  return {
+    delivery: "async",
+    ...(questions ? { questions } : {}),
+  };
+}
+
+function normalizeActivityStatus(
+  value: string | undefined
+): AppServerThreadActivityStatus | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "inprogress") {
+    return "in_progress";
+  }
+  if (
+    normalized === "in_progress" ||
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized === "cancelled"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeTurnStatus(value: string | undefined): AppServerThreadTurnStatus | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "inprogress") {
+    return "in_progress";
+  }
+  if (
+    normalized === "in_progress" ||
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized === "cancelled" ||
+    normalized === "interrupted"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeThreadStatus(value: string | undefined): AppServerThreadStatus | undefined {
+  const normalized = value?.trim().replace(/[-_\s]/g, "").toLowerCase();
+  if (normalized === "active") {
+    return "active";
+  }
+  if (normalized === "idle") {
+    return "idle";
+  }
+  if (normalized === "notloaded") {
+    return "notLoaded";
+  }
+  if (normalized === "unknown") {
+    return "unknown";
+  }
+  return undefined;
+}
+
+function readThreadStatus(value: unknown): AppServerThreadStatus | undefined {
+  if (typeof value === "string") {
+    return normalizeThreadStatus(value);
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const statusRecord = asRecord(record.status);
+  const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
+  const threadStatusRecord = asRecord(threadRecord?.status);
+
+  return normalizeThreadStatus(
+    pickString(statusRecord ?? {}, ["type", "status", "state"]) ??
+      pickString(threadStatusRecord ?? {}, ["type", "status", "state"]) ??
+      pickString(record, ["status", "state"]) ??
+      pickString(threadRecord ?? {}, ["status", "state"])
+  );
+}
+
+function extractTurnMetadata(
+  turn: Record<string, unknown>
+): AppServerThreadTurnMetadata | undefined {
+  const id = pickString(turn, ["id", "turnId", "turn_id", "runId", "run_id"]);
+  if (!id) {
+    return undefined;
+  }
+
+  const startedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["startedAt", "started_at", "createdAt", "timestamp", "time"])
+  );
+  const completedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["completedAt", "completed_at"])
+  );
+  const durationMs = pickNumber(turn, ["durationMs", "duration_ms"]);
+  const status = normalizeTurnStatus(pickString(turn, ["status"]));
+
+  return {
+    id,
+    ...(status ? { status } : {}),
+    ...(typeof turn.rootTurnId === "string" || turn.rootTurnId === null
+      ? { rootTurnId: turn.rootTurnId } : {}),
+    ...(startedAt ? { startedAt } : {}),
+    ...(completedAt ? { completedAt } : {}),
+    ...(typeof durationMs === "number" ? { durationMs } : {}),
+  };
+}
+
+function normalizePlanStepStatus(
+  value: string | undefined
+): AppServerThreadPlanStepStatus | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "inprogress") {
+    return "in_progress";
+  }
+  if (
+    normalized === "pending" ||
+    normalized === "in_progress" ||
+    normalized === "completed"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function collectPlanLines(text: string): AppServerThreadPlanStep[] {
+  const steps = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line): AppServerThreadPlanStep[] => {
+      const completedMatch = line.match(/^[-*]\s+\[(x|X)\]\s+(.+)$/);
+      if (completedMatch) {
+        return [{ step: completedMatch[2].trim(), status: "completed" }];
+      }
+
+      const pendingMatch = line.match(/^[-*]\s+\[\s?\]\s+(.+)$/);
+      if (pendingMatch) {
+        return [{ step: pendingMatch[1].trim(), status: "pending" }];
+      }
+
+      const bulletMatch = line.match(/^([-*]|\d+\.)\s+(.+)$/);
+      if (bulletMatch) {
+        return [{ step: bulletMatch[2].trim(), status: "pending" }];
+      }
+
+      return [];
+    })
+    .filter((step) => step.step.length > 0);
+
+  const deduped = new Map<string, AppServerThreadPlanStep>();
+  for (const step of steps) {
+    deduped.set(`${step.status}:${step.step}`, step);
+  }
+  return [...deduped.values()];
+}
+
+function normalizePlanSteps(value: unknown): AppServerThreadPlanStep[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry): AppServerThreadPlanStep[] => {
+    const record = asRecord(entry);
+    if (!record) {
+      return [];
+    }
+
+    const step = pickString(record, ["step", "title", "text", "label"]);
+    const status = normalizePlanStepStatus(pickString(record, ["status", "state"]));
+    if (!step || !status) {
+      return [];
+    }
+
+    return [{ step, status }];
+  });
+}
+
+function normalizePlanPayload(value: unknown): {
+  explanation?: string;
+  markdown?: string;
+  steps: AppServerThreadPlanStep[];
+} | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const directSteps = normalizePlanSteps(record.steps);
+  const nestedPlanRecord = asRecord(record.plan);
+  const nestedPlanSteps = normalizePlanSteps(record.plan);
+  const nestedRecordSteps = normalizePlanSteps(nestedPlanRecord?.steps);
+  const steps =
+    directSteps.length > 0
+      ? directSteps
+      : nestedPlanSteps.length > 0
+        ? nestedPlanSteps
+        : nestedRecordSteps;
+  const explanation =
+    pickString(record, ["explanation", "summary"]) ??
+    pickString(nestedPlanRecord ?? {}, ["explanation", "summary"]);
+  const markdown =
+    pickRawString(record, ["markdown"]) ??
+    pickRawString(nestedPlanRecord ?? {}, ["markdown"]) ??
+    collectLegacyMessageText(record);
+
+  if (steps.length === 0 && !explanation && !markdown.trim()) {
+    return undefined;
+  }
+
+  return {
+    ...(explanation ? { explanation } : {}),
+    ...(markdown.trim() ? { markdown: markdown.trim() } : {}),
+    steps,
+  };
+}
+
+function parseStructuredValue(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractNestedPlanEntryFromItem(
+  item: Record<string, unknown>,
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
+): AppServerThreadPlanEntry | undefined {
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (!nestedItem) {
+      continue;
+    }
+
+    const nestedPlanEntry = extractPlanEntryFromItem(
+      {
+        ...nestedItem,
+        id:
+          pickString(item, ["id", "itemId", "item_id"]) ??
+          pickString(nestedItem, ["id", "itemId", "item_id", "call_id"])
+      },
+      createdAt,
+      turn
+    );
+    if (nestedPlanEntry) {
+      return nestedPlanEntry;
+    }
+  }
+
+  return undefined;
+}
+
+function extractPlanEntryFromItem(
+  item: Record<string, unknown>,
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
+): AppServerThreadPlanEntry | undefined {
+  const itemType = pickString(item, ["type"]);
+  const normalizedItemType = itemType?.trim().toLowerCase();
+  const itemId =
+    pickString(item, ["id", "itemId", "item_id", "call_id"]) ?? `plan-${createdAt ?? turn?.startedAt ?? 0}`;
+  const nestedPlanEntry = extractNestedPlanEntryFromItem(item, createdAt, turn);
+  if (nestedPlanEntry) {
+    return nestedPlanEntry;
+  }
+
+  if (normalizedItemType === "plan") {
+    const normalizedPayload = normalizePlanPayload(item);
+    const textSteps = collectPlanLines(collectLegacyMessageText(item));
+    const steps = normalizedPayload?.steps.length
+      ? normalizedPayload.steps
+      : textSteps;
+    const explanation = normalizedPayload?.explanation;
+
+    if (steps.length === 0 && !explanation) {
+      return undefined;
+    }
+
+    return {
+      type: "plan",
+      id: itemId,
+      createdAt,
+      ...(turn ? { turn } : {}),
+      ...(explanation ? { explanation } : {}),
+      ...(normalizedPayload?.markdown ? { markdown: normalizedPayload.markdown } : {}),
+      steps,
+    };
+  }
+
+  const functionLikeTypes = new Set([
+    "functioncall",
+    "function_call",
+    "dynamictoolcall",
+    "dynamic_tool_call",
+  ]);
+  const normalizedCollapsedType = normalizedItemType?.replace(/[-_\s]/g, "");
+  if (!normalizedCollapsedType || !functionLikeTypes.has(normalizedCollapsedType)) {
+    return undefined;
+  }
+
+  const functionName = pickString(item, ["name", "toolName", "tool_name", "text"]);
+  if (functionName !== "update_plan") {
+    return undefined;
+  }
+
+  const payload =
+    parseStructuredValue(item.arguments) ??
+    parseStructuredValue(item.input) ??
+    parseStructuredValue(item.output) ??
+    asRecord(item.arguments) ??
+    asRecord(item.input) ??
+    asRecord(item.output);
+  const normalizedPayload = normalizePlanPayload(payload);
+  if (!normalizedPayload) {
+    return undefined;
+  }
+
+  return {
+    type: "plan",
+    id: itemId,
+    createdAt,
+    ...(turn ? { turn } : {}),
+    ...(normalizedPayload.explanation
+      ? { explanation: normalizedPayload.explanation }
+      : {}),
+    ...(normalizedPayload.markdown ? { markdown: normalizedPayload.markdown } : {}),
+    steps: normalizedPayload.steps,
+  };
+}
+
+function extractReviewEntryFromItem(
+  item: Record<string, unknown>,
+  timestamps: {
+    itemCreatedAt?: number;
+    turnCreatedAt?: number;
+  },
+  turn?: AppServerThreadTurnMetadata,
+): AppServerThreadReviewEntry | undefined {
+  const reviewEvent = normalizeReviewEventItem(item);
+  if (!reviewEvent) {
+    return undefined;
+  }
+
+  const { event, item: reviewItem, parent } = reviewEvent;
+  const createdAt =
+    timestamps.itemCreatedAt ??
+    (event === "exitedreviewmode" ? turn?.completedAt : undefined) ??
+    timestamps.turnCreatedAt;
+  const reviewOutput = normalizeReviewOutput(reviewItem);
+  const review =
+    pickRawString(reviewItem, ["review", "text"]) ??
+    (event === "exitedreviewmode" ? reviewOutput?.overall_explanation : undefined) ??
+    "";
+
+  return {
+    type: "review",
+    id:
+      pickString(parent, ["id", "itemId", "item_id"]) ??
+      pickString(reviewItem, ["id", "itemId", "item_id"]) ??
+      `review-${event}`,
+    review,
+    displayText:
+      event === "enteredreviewmode"
+        ? reviewDisplayText(reviewItem) || "Code review started"
+        : undefined,
+    ...(createdAt ? { createdAt } : {}),
+    ...(turn ? { turn } : {}),
+    ...(reviewOutput ? { output: reviewOutput } : {}),
+  };
+}
+
+function normalizeReviewEventItem(
+  item: Record<string, unknown>
+): {
+  event: "enteredreviewmode" | "exitedreviewmode";
+  item: Record<string, unknown>;
+  parent: Record<string, unknown>;
+} | undefined {
+  if (
+    normalizeItemType(pickString(item, ["type"])) === "enteredreviewmode" ||
+    normalizeItemType(pickString(item, ["type"])) === "exitedreviewmode"
+  ) {
+    return {
+      event: normalizeItemType(pickString(item, ["type"])) as
+        | "enteredreviewmode"
+        | "exitedreviewmode",
+      item,
+      parent: item,
+    };
+  }
+
+  for (const key of ["payload", "item", "responseItem", "response_item", "data"]) {
+    const nested = asRecord(item[key]);
+    const nestedType = normalizeItemType(pickString(nested ?? {}, ["type"]));
+    if (nested && (nestedType === "enteredreviewmode" || nestedType === "exitedreviewmode")) {
+      return {
+        event: nestedType,
+        item: nested,
+        parent: item,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeReviewOutput(
+  item: Record<string, unknown>
+): AppServerThreadReviewEntry["output"] | undefined {
+  const data = asRecord(item.data);
+  const reviewOutput =
+    asRecord(data?.reviewOutput) ??
+    asRecord(data?.review_output) ??
+    asRecord(item.reviewOutput) ??
+    asRecord(item.review_output);
+  return normalizeReviewOutputRecord(reviewOutput);
+}
+
+function reviewDisplayText(item: Record<string, unknown>): string | undefined {
+  const direct = pickRawString(item, ["review", "text"]);
+  if (direct) {
+    return normalizeReviewDisplayText(direct);
+  }
+
+  const hint = pickString(item, ["user_facing_hint", "userFacingHint"]);
+  if (hint) {
+    return normalizeReviewDisplayText(hint);
+  }
+
+  const target = asRecord(item.target);
+  const targetType = pickString(target ?? {}, ["type"]);
+  if (targetType === "uncommittedChanges" || targetType === "uncommitted_changes") {
+    return "Review current changes";
+  }
+  if (targetType === "baseBranch" || targetType === "base_branch") {
+    const branch = pickString(target ?? {}, ["branch", "baseBranch", "base_branch"]);
+    return branch
+      ? normalizeReviewDisplayText(`changes against ${branch}`)
+      : "Review changes";
+  }
+  if (targetType === "commit") {
+    const sha = pickString(target ?? {}, ["sha", "commit"]);
+    return sha ? `Review commit ${sha}` : "Review commit";
+  }
+
+  return undefined;
+}
+
+function pushActivityDetail(
+  details: AppServerThreadActivityDetail[],
+  detailsByKey: Map<string, AppServerThreadActivityDetail>,
+  detail: AppServerThreadActivityDetail
+): void {
+  const key = JSON.stringify(detail.images?.length ? ["image", detail.id] : ["label", detail.label]);
+  const existing = detailsByKey.get(key);
+  if (existing) {
+    if (!existing.status || existing.status === "completed") {
+      existing.status = detail.status ?? existing.status;
+    }
+    return;
+  }
+  details.push(detail);
+  detailsByKey.set(key, detail);
+}
+
+function normalizeFileChangeKind(
+  value: string | undefined
+): "add" | "delete" | "update" {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "add" || normalized === "delete" || normalized === "update") {
+    return normalized;
+  }
+  return "update";
+}
+
+function extractDiffText(change: Record<string, unknown>): string | undefined {
+  const directDiff = pickString(change, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+  if (directDiff) {
+    return directDiff;
+  }
+
+  const diffRecord = asRecord(change.diff);
+  if (diffRecord) {
+    return pickString(diffRecord, ["text", "patch", "diff", "unifiedDiff", "unified_diff"]);
+  }
+
+  return undefined;
+}
+
+type FileChangeText = {
+  source: "content" | "diff";
+  text: string;
+};
+
+function extractFileChangeText(params: {
+  change: Record<string, unknown>;
+  changeKind: Record<string, unknown> | null;
+  changeType: "add" | "delete" | "update";
+}): FileChangeText | undefined {
+  if (params.changeType === "add" || params.changeType === "delete") {
+    const content =
+      pickStringAllowEmpty(params.changeKind, ["content"]) ??
+      pickStringAllowEmpty(params.change, ["content"]);
+    if (content !== undefined) {
+      return { source: "content", text: content };
+    }
+
+    const diff = extractDiffText(params.change);
+    if (diff === undefined) {
+      return undefined;
+    }
+    return looksLikeUnifiedDiff(diff)
+      ? { source: "diff", text: diff }
+      : { source: "content", text: diff };
+  }
+
+  const diff =
+    pickStringAllowEmpty(params.changeKind, ["unified_diff", "unifiedDiff"]) ??
+    extractDiffText(params.change);
+  return diff !== undefined ? { source: "diff", text: diff } : undefined;
+}
+
+function looksLikeUnifiedDiff(text: string): boolean {
+  let lineStart = 0;
+  while (lineStart <= text.length && lineStart < 4096) {
+    const lineEnd = text.indexOf("\n", lineStart);
+    const end = lineEnd === -1 ? text.length : lineEnd;
+    const line = text.slice(lineStart, end).trim();
+    if (!line) {
+      lineStart = lineEnd === -1 ? text.length + 1 : lineEnd + 1;
+      continue;
+    }
+
+    if (
+      line.startsWith("diff --git ") ||
+      line.startsWith("--- ") ||
+      line.startsWith("@@ ")
+    ) {
+      return true;
+    }
+
+    if (!isUnifiedDiffMetadataLine(line)) {
+      return false;
+    }
+
+    lineStart = lineEnd === -1 ? text.length + 1 : lineEnd + 1;
+  }
+
+  return false;
+}
+
+function isUnifiedDiffMetadataLine(line: string): boolean {
+  return (
+    line.startsWith("Index: ") ||
+    line.startsWith("index ") ||
+    line.startsWith("new file mode ") ||
+    line.startsWith("deleted file mode ") ||
+    line.startsWith("old mode ") ||
+    line.startsWith("new mode ") ||
+    line.startsWith("similarity index ") ||
+    line.startsWith("dissimilarity index ") ||
+    line.startsWith("rename from ") ||
+    line.startsWith("rename to ") ||
+    line.startsWith("copy from ") ||
+    line.startsWith("copy to ") ||
+    line.startsWith("Binary files ") ||
+    line === "GIT binary patch" ||
+    /^=+$/.test(line)
+  );
+}
+
+function summarizeDiff(diff: string): { additions: number; removals: number } {
+  let additions = 0;
+  let removals = 0;
+
+  let lineStart = 0;
+  while (lineStart <= diff.length) {
+    const lineEnd = diff.indexOf("\n", lineStart);
+    const end = lineEnd === -1 ? diff.length : lineEnd;
+    if (lineEnd === -1 && end === lineStart) {
+      break;
+    }
+
+    if (
+      end === lineStart ||
+      diff.startsWith("+++", lineStart) ||
+      diff.startsWith("---", lineStart) ||
+      diff.startsWith("@@", lineStart) ||
+      diff.startsWith("\\", lineStart)
+    ) {
+      lineStart = lineEnd === -1 ? diff.length + 1 : lineEnd + 1;
+      continue;
+    }
+
+    if (diff.charCodeAt(lineStart) === 43) {
+      additions += 1;
+    } else if (diff.charCodeAt(lineStart) === 45) {
+      removals += 1;
+    }
+
+    lineStart = lineEnd === -1 ? diff.length + 1 : lineEnd + 1;
+  }
+
+  return { additions, removals };
+}
+
+function countContentLines(content: string): number {
+  if (content.length === 0) {
+    return 0;
+  }
+
+  let lines = content.endsWith("\n") ? 0 : 1;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content.charCodeAt(index) === 10) {
+      lines += 1;
+    }
+  }
+  return lines;
+}
+
+function splitFileContentLines(content: string): string[] {
+  if (content.length === 0) {
+    return [];
+  }
+
+  const lines = content.split("\n");
+  if (content.endsWith("\n")) {
+    lines.pop();
+  }
+  return lines;
+}
+
+function summarizeFileChangeText(params: {
+  changeType: "add" | "delete" | "update",
+  text: FileChangeText;
+}): { additions: number; removals: number } {
+  if (params.text.source === "diff") {
+    return summarizeDiff(params.text.text);
+  }
+
+  if (params.changeType === "add") {
+    return { additions: countContentLines(params.text.text), removals: 0 };
+  }
+
+  if (params.changeType === "delete") {
+    return { additions: 0, removals: countContentLines(params.text.text) };
+  }
+
+  return summarizeDiff(params.text.text);
+}
+
+function buildContentDiff(params: {
+  changeType: "add" | "delete" | "update";
+  content: string;
+  path?: string;
+}): string {
+  if (params.changeType === "update") {
+    return params.content;
+  }
+
+  const lines = splitFileContentLines(params.content);
+  const path = params.path?.replace(/^\/+/, "") ?? "file";
+  const hunkLineCount = lines.length;
+  const header =
+    params.changeType === "add"
+      ? [`--- /dev/null`, `+++ b/${path}`, `@@ -0,0 +1,${hunkLineCount} @@`]
+      : [`--- a/${path}`, `+++ /dev/null`, `@@ -1,${hunkLineCount} +0,0 @@`];
+  const prefix = params.changeType === "add" ? "+" : "-";
+  return [...header, ...lines.map((line) => `${prefix}${line}`)].join("\n");
+}
+
+function buildFileChangeDiff(params: {
+  changeType: "add" | "delete" | "update";
+  text: FileChangeText;
+  path?: string;
+}): { diff: string; omittedReason?: string; originalLength?: number } {
+  if (params.text.text.length > MAX_INLINE_FILE_DIFF_CHARS) {
+    return {
+      diff: "",
+      omittedReason: `Large file diff omitted from transcript view (${formatByteSize(
+        params.text.text.length
+      )}).`,
+      originalLength: params.text.text.length
+    };
+  }
+
+  if (params.text.source === "diff") {
+    return { diff: params.text.text };
+  }
+
+  return {
+    diff: buildContentDiff({
+      changeType: params.changeType,
+      content: params.text.text,
+      path: params.path
+    })
+  };
+}
+
+function formatByteSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+function formatCommandLabel(command: string | undefined): string {
+  if (!command) {
+    return "Ran command";
+  }
+
+  const stripped = command
+    .replace(/^\/bin\/[a-z]+ -lc /, "")
+    .replace(/^['"]|['"]$/g, "");
+  const collapsed = stripped.replace(/\s+/g, " ").trim();
+  if (!collapsed) {
+    return "Ran command";
+  }
+
+  return collapsed.length > 72 ? `${collapsed.slice(0, 69)}...` : collapsed;
+}
+
+function stripShellWrapper(command: string | undefined): string | undefined {
+  if (!command) {
+    return undefined;
+  }
+
+  const stripped = command
+    .replace(/^\/bin\/[a-z]+ -lc /, "")
+    .replace(/^['"]|['"]$/g, "");
+  const collapsed = stripped.replace(/\s+/g, " ").trim();
+  return collapsed || undefined;
+}
+
+/**
+ * Same separator as the live summary (`summarizeLiveActivity`), so a header
+ * does not change when the turn is read back. Not a comma: "Edited 2 files,
+ * +10, -3" already has commas inside it.
+ */
+function formatActivitySummary(parts: string[]): string {
+  return parts.join(" · ");
+}
+
+function formatElapsedMs(elapsedMs: number): string {
+  if (elapsedMs < 1_000) {
+    return `${elapsedMs}ms`;
+  }
+  const seconds = elapsedMs / 1_000;
+  return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+}
+
+type TokenUsageBreakdown = {
+  cacheWriteInputTokens?: number;
+  cachedInputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+};
+
+type TokenUsageScope = "latest-request" | "total";
+
+type NormalizedTokenUsage = {
+  scope: TokenUsageScope;
+  tokens: TokenUsageBreakdown;
+};
+
+type TokenUsagePricingContext = {
+  fastMode?: boolean;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+};
+
+function readTokenUsageBreakdown(
+  record: Record<string, unknown>
+): TokenUsageBreakdown | undefined {
+  const explicitTotal = pickNumber(record, ["totalTokens", "total_tokens"]);
+  const inputTokens = pickNumber(record, ["inputTokens", "input_tokens"]);
+  const cacheWriteInputTokens = pickNumber(record, [
+    "cacheWriteInputTokens",
+    "cache_write_input_tokens",
+    "cache_write_tokens",
+  ]);
+  const cachedInputTokens = pickNumber(record, [
+    "cachedInputTokens",
+    "cached_input_tokens",
+  ]);
+  const outputTokens = pickNumber(record, ["outputTokens", "output_tokens"]);
+  const reasoningOutputTokens = pickNumber(record, [
+    "reasoningOutputTokens",
+    "reasoning_output_tokens",
+  ]);
+  const derivedTotal =
+    (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
+  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+
+  if (
+    totalTokens === undefined &&
+    inputTokens === undefined &&
+    cacheWriteInputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    outputTokens === undefined &&
+    reasoningOutputTokens === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    cacheWriteInputTokens,
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
+}
+
+function normalizeTokenUsagePayload(
+  record: Record<string, unknown>
+): NormalizedTokenUsage | undefined {
+  const root =
+    asRecord(record.tokenUsage) ??
+    asRecord(record.token_usage) ??
+    asRecord(record.info) ??
+    record;
+  const latestUsage =
+    asRecord(root.last) ??
+    asRecord(root.last_token_usage);
+  const totalUsage =
+    asRecord(root.total) ??
+    asRecord(root.total_token_usage);
+  const currentUsage = latestUsage ?? totalUsage ?? root;
+  const tokens = readTokenUsageBreakdown(currentUsage);
+  if (!tokens) {
+    return undefined;
+  }
+
+  return {
+    scope: latestUsage ? "latest-request" : "total",
+    tokens,
+  };
+}
+
+function formatTokenCount(value: number): string {
+  return Math.round(value).toLocaleString();
+}
+
+function readTokenUsageFastMode(record: Record<string, unknown>): boolean | undefined {
+  const value = record.fastMode ?? record.fast_mode;
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readTokenUsagePricingContext(
+  record: Record<string, unknown>
+): TokenUsagePricingContext {
+  const payload = asRecord(record.payload);
+  const settings =
+    asRecord(asRecord(record.collaboration_mode)?.settings) ??
+    asRecord(asRecord(payload?.collaboration_mode)?.settings);
+  return {
+    fastMode:
+      readTokenUsageFastMode(record) ??
+      readTokenUsageFastMode(payload ?? {}) ??
+      readTokenUsageFastMode(settings ?? {}),
+    model:
+      pickString(record, ["model", "modelId", "model_id"]) ??
+      pickString(payload ?? {}, ["model", "modelId", "model_id"]) ??
+      pickString(settings ?? {}, ["model", "modelId", "model_id"]),
+    reasoningEffort:
+      pickString(record, ["reasoningEffort", "reasoning_effort", "effort"]) ??
+      pickString(payload ?? {}, [
+        "reasoningEffort",
+        "reasoning_effort",
+        "effort",
+      ]) ??
+      pickString(settings ?? {}, [
+        "reasoningEffort",
+        "reasoning_effort",
+        "effort",
+      ]),
+    serviceTier:
+      pickString(record, ["serviceTier", "service_tier"]) ??
+      pickString(payload ?? {}, ["serviceTier", "service_tier"]) ??
+      pickString(settings ?? {}, ["serviceTier", "service_tier"]),
+  };
+}
+
+function mergeTokenUsagePricingContext(
+  primary: TokenUsagePricingContext,
+  fallback?: TokenUsagePricingContext
+): TokenUsagePricingContext {
+  return {
+    fastMode: primary.fastMode ?? fallback?.fastMode,
+    model: primary.model ?? fallback?.model,
+    reasoningEffort: primary.reasoningEffort ?? fallback?.reasoningEffort,
+    serviceTier: primary.serviceTier ?? fallback?.serviceTier,
+  };
+}
+
+function hasTokenUsagePricingContext(context: TokenUsagePricingContext): boolean {
+  return Boolean(
+    context.model
+    || context.reasoningEffort
+    || context.serviceTier
+    || context.fastMode !== undefined
+  );
+}
+
+function extractTokenUsagePricingContext(value: unknown): TokenUsagePricingContext | undefined {
+  const visit = (node: unknown): TokenUsagePricingContext | undefined => {
+    if (Array.isArray(node)) {
+      for (const entry of node) {
+        const context = visit(entry);
+        if (context) {
+          return context;
+        }
+      }
+      return undefined;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return undefined;
+    }
+
+    const normalizedType = normalizeItemType(pickString(record, ["type"]));
+    if (normalizedType === "turncontext") {
+      const context = readTokenUsagePricingContext(record);
+      if (hasTokenUsagePricingContext(context)) {
+        return context;
+      }
+    }
+
+    for (const key of [
+      "events",
+      "items",
+      "payload",
+      "item",
+      "data",
+      "thread",
+      "response",
+      "result",
+    ]) {
+      const context = visit(record[key]);
+      if (context) {
+        return context;
+      }
+    }
+    return undefined;
+  };
+
+  return visit(value);
+}
+
+function summarizeTokenUsageActivity(
+  record: Record<string, unknown>,
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata,
+  pricingContext?: TokenUsagePricingContext,
+  threadId?: string
+): AppServerThreadActivityEntry | undefined {
+  const normalizedType = normalizeItemType(pickString(record, ["type"]));
+  if (normalizedType !== "tokencount" && normalizedType !== "tokenusage") {
+    return undefined;
+  }
+
+  const normalized = normalizeTokenUsagePayload(record);
+  if (!normalized) {
+    return undefined;
+  }
+
+  const { scope, tokens } = normalized;
+  const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
+  const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const cacheWriteInputTokens = Math.min(
+    uncachedInputTokens,
+    Math.max(0, tokens.cacheWriteInputTokens ?? 0),
+  );
+  const regularInputTokens = uncachedInputTokens - cacheWriteInputTokens;
+  const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
+  const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const billedOutputTokens = outputTokens + reasoningOutputTokens;
+  const resolvedPricingContext = mergeTokenUsagePricingContext(
+    readTokenUsagePricingContext(record),
+    pricingContext
+  );
+  const cost = estimateTokenUsageCost({
+    cacheWriteInputTokens,
+    cachedInputTokens,
+    at: createdAt,
+    fastMode: resolvedPricingContext.fastMode,
+    inputTokenScope: scope === "latest-request" ? "request" : "aggregate",
+    model: resolvedPricingContext.model,
+    outputTokens,
+    reasoningOutputTokens,
+    serviceTier: resolvedPricingContext.serviceTier,
+    uncachedInputTokens,
+  });
+  const idSuffix = typeof createdAt === "number" ? Math.round(createdAt) : "unknown";
+  const summaryParts = [
+    `${formatTokenCount(uncachedInputTokens)} uncached in`,
+    cacheWriteInputTokens > 0
+      ? `${formatTokenCount(cacheWriteInputTokens)} cache writes`
+      : undefined,
+    `${formatTokenCount(cachedInputTokens)} cached`,
+    reasoningOutputTokens > 0
+      ? `${formatTokenCount(outputTokens)} out (${formatTokenCount(reasoningOutputTokens)} reasoning)`
+      : `${formatTokenCount(outputTokens)} out`,
+    cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
+  ];
+  const summaryPrefix = scope === "latest-request" ? "Latest request usage" : "Usage";
+  const totalTokens = Math.max(
+    0,
+    tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
+  );
+  const sourceItemId =
+    pickString(record, ["id", "itemId", "item_id", "callId", "call_id"]) ??
+    `${idSuffix}`;
+  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
+    cost
+      ? undefined
+      : resolveTokenUsagePriceUnavailableReason({
+          at: createdAt,
+          cachedInputTokens,
+          fastMode: resolvedPricingContext.fastMode,
+          inputTokenScope: scope === "latest-request" ? "request" : "aggregate",
+          model: resolvedPricingContext.model,
+          serviceTier: resolvedPricingContext.serviceTier,
+          uncachedInputTokens,
+        });
+  const pricingServiceTier = resolveOpenAiPricingServiceTier(
+    resolvedPricingContext,
+  );
+  const usageLine: ThreadUsageLineRecord | undefined = threadId
+    ? {
+        backend: "codex",
+        cacheWriteInputCostMicros: cost?.cacheWriteInputCostMicros ?? 0,
+        cacheWriteInputTokens,
+        cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
+        cachedInputTokens,
+        ...(typeof turn?.completedAt === "number" ? { completedAt: turn.completedAt } : {}),
+        createdAt: createdAt ?? turn?.completedAt ?? Date.now(),
+        currency: cost?.currency ?? "USD",
+        ...(resolvedPricingContext.fastMode !== undefined
+          ? { fastMode: resolvedPricingContext.fastMode }
+          : {}),
+        inputTokens,
+        ...(resolvedPricingContext.model ? { model: resolvedPricingContext.model } : {}),
+        outputCostMicros: cost?.outputCostMicros ?? 0,
+        outputTokens,
+        priceStatus: cost ? "priced" : "unpriced",
+        ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
+        provider: cost?.provider ?? "openai",
+        ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
+        ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+        ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
+        ...(resolvedPricingContext.reasoningEffort
+          ? { reasoningEffort: resolvedPricingContext.reasoningEffort }
+          : {}),
+        reasoningOutputTokens,
+        scope: scope === "latest-request" ? "latest-request" : "total",
+        ...(resolvedPricingContext.serviceTier
+          ? { serviceTier: resolvedPricingContext.serviceTier }
+          : pricingServiceTier
+            ? { serviceTier: pricingServiceTier }
+            : {}),
+        settingsConfidence: resolvedPricingContext.model ? "exact" : "unknown",
+        settingsSource: "turn-context",
+        source: "hydration",
+        sourceItemId,
+        ...(typeof turn?.startedAt === "number" ? { startedAt: turn.startedAt } : {}),
+        status: "finalized",
+        threadId,
+        totalCostMicros: cost?.totalCostMicros ?? 0,
+        totalTokens,
+        ...(turn?.id ? { turnId: turn.id } : {}),
+        uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
+        uncachedInputTokens,
+        usageLineId: [
+          "codex",
+          threadId,
+          turn?.id ?? "no-turn",
+          scope,
+          sourceItemId,
+        ].join(":"),
+      }
+    : undefined;
+  const details: AppServerThreadActivityDetail[] = [
+    {
+      id: `token-usage-${idSuffix}-input`,
+      kind: "read",
+      label: `Input: ${formatTokenCount(inputTokens)} tokens (${formatTokenCount(
+        uncachedInputTokens
+      )} uncached, ${formatTokenCount(cachedInputTokens)} cached)`,
+      status: "completed",
+    },
+    {
+      id: `token-usage-${idSuffix}-output`,
+      kind: "read",
+      label: `Output: ${formatTokenCount(outputTokens)} tokens${
+        reasoningOutputTokens > 0
+          ? `, including ${formatTokenCount(reasoningOutputTokens)} reasoning`
+          : ""
+      }`,
+      status: "completed",
+    },
+  ];
+  if (cost) {
+    details.push(
+      {
+        id: `token-usage-${idSuffix}-uncached-input-cost`,
+        kind: "read",
+        label: `Uncached input cost: ${formatTokenCount(
+          regularInputTokens
+        )} tokens at ${formatTokenUsageUsdPerMillion(
+          cost.inputUsdPerMillion
+        )}/M${formatTokenUsageStandardRateSuffix(
+          cost.standardInputRateMultiplier
+        )} = ${formatTokenUsageUsd(cost.uncachedInputUsd)}`,
+        status: "completed",
+      },
+      {
+        id: `token-usage-${idSuffix}-cached-input-cost`,
+        kind: "read",
+        label: `Cached input cost: ${formatTokenCount(
+          cachedInputTokens
+        )} tokens at ${formatTokenUsageUsdPerMillion(
+          cost.cachedInputUsdPerMillion
+        )}/M (${formatTokenUsagePriceFactor(
+          cost.cachedInputUsdPerMillion,
+          cost.inputUsdPerMillion
+        )} uncached${formatTokenUsageStandardRateSuffix(
+          cost.standardCachedInputRateMultiplier,
+          ", "
+        )}) = ${formatTokenUsageUsd(cost.cachedInputUsd)}`,
+        status: "completed",
+      },
+      {
+        id: `token-usage-${idSuffix}-output-cost`,
+        kind: "read",
+        label: `Output cost: ${formatTokenCount(billedOutputTokens)} tokens at ${formatTokenUsageUsdPerMillion(
+          cost.outputUsdPerMillion
+        )}/M${formatTokenUsageStandardRateSuffix(
+          cost.standardOutputRateMultiplier
+        )} = ${formatTokenUsageUsd(cost.outputUsd)}`,
+        status: "completed",
+      }
+    );
+    if (
+      cacheWriteInputTokens > 0
+      && cost.cacheWriteInputUsdPerMillion !== undefined
+    ) {
+      details.push({
+        id: `token-usage-${idSuffix}-cache-write-input-cost`,
+        kind: "read",
+        label: `Cache write cost: ${formatTokenCount(
+          cacheWriteInputTokens
+        )} tokens at ${formatTokenUsageUsdPerMillion(
+          cost.cacheWriteInputUsdPerMillion
+        )}/M = ${formatTokenUsageUsd(cost.cacheWriteInputUsd)}`,
+        status: "completed",
+      });
+    }
+    details.push({
+      id: `token-usage-${idSuffix}-cost`,
+      kind: "read",
+      label: `Cost: ${formatTokenUsageUsd(cost.totalUsd)} list price for ${cost.displayName}`,
+      status: "completed",
+    });
+  } else if (resolvedPricingContext.model) {
+    details.push({
+      id: `token-usage-${idSuffix}-cost-unavailable`,
+      kind: "read",
+      label: `Cost unavailable: no local pricing entry for ${formatUnpricedTokenUsageModelName(
+        resolvedPricingContext
+      )}`,
+      status: "completed",
+    });
+  }
+
+  return {
+    type: "activity",
+    id: `live-token-usage-${turn?.id ?? idSuffix}`,
+    createdAt,
+    summary: `${summaryPrefix}: ${summaryParts.filter(Boolean).join(" · ")}`,
+    status: "completed",
+    details,
+    ...(turn ? { turn } : {}),
+    ...(usageLine ? { usageLine } : {}),
+  };
+}
+
+function formatUnpricedTokenUsageModelName(context: TokenUsagePricingContext): string {
+  const serviceTier = resolveOpenAiPricingServiceTier(context);
+  return [
+    context.model,
+    serviceTier === "priority" ? "Fast/Priority" : undefined,
+    serviceTier === undefined && context.serviceTier
+      ? `service tier ${context.serviceTier}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function readActivityElapsedMs(item: Record<string, unknown>): number | undefined {
+  const data = asRecord(item.data);
+  const direct =
+    pickNumber(item, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]) ??
+    pickNumber(data ?? {}, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]);
+  if (typeof direct === "number") {
+    return direct;
+  }
+
+  const startedAt = normalizeEpochTimestamp(
+    pickNumber(item, ["startedAt", "started_at"])
+  );
+  const completedAt = normalizeEpochTimestamp(
+    pickNumber(item, ["completedAt", "completed_at"])
+  );
+  return typeof startedAt === "number" &&
+    typeof completedAt === "number" &&
+    completedAt >= startedAt
+    ? completedAt - startedAt
+    : undefined;
+}
+
+function appendElapsedLabel(label: string, elapsedMs: number | undefined): string {
+  return typeof elapsedMs === "number" ? `${label} (${formatElapsedMs(elapsedMs)})` : label;
+}
+
+function normalizeItemType(value: string | undefined): string | undefined {
+  return value?.replace(/[-_\s]/g, "").toLowerCase();
+}
+
+function isActivityItemType(itemType: string | undefined): boolean {
+  const normalized = normalizeItemType(itemType);
+  return (
+    normalized === "commandexecution" ||
+    normalized === "filechange" ||
+    normalized === "functioncall" ||
+    normalized === "mcptoolcall" ||
+    normalized === "dynamictoolcall" ||
+    normalized === "collabagenttoolcall" ||
+    normalized === "subagentactivity" ||
+    normalized === "websearch" ||
+    normalized === "imageview" ||
+    normalized === "imagegeneration"
+  );
+}
+
+function extractActivityItemFromReplayItem(
+  item: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (isActivityItemType(pickString(item, ["type"]))) {
+    return item;
+  }
+
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (!nestedItem || !isActivityItemType(pickString(nestedItem, ["type"]))) {
+      continue;
+    }
+
+    const normalizedNestedItemType = normalizeItemType(pickString(nestedItem, ["type"]));
+    return {
+      ...nestedItem,
+      id:
+        normalizedNestedItemType === "functioncall"
+          ? pickString(nestedItem, ["call_id", "callId", "id", "itemId", "item_id"]) ??
+            pickString(item, ["id", "itemId", "item_id"])
+          : pickString(nestedItem, ["id", "itemId", "item_id", "call_id", "callId"]) ??
+            pickString(item, ["id", "itemId", "item_id"])
+    };
+  }
+
+  return undefined;
+}
+
+function extractFunctionCallOutputFromReplayItem(
+  item: Record<string, unknown>
+): { callId: string; output: string } | undefined {
+  const candidates = [item];
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (nestedItem) {
+      candidates.push(nestedItem);
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (normalizeItemType(pickString(candidate, ["type"])) !== "functioncalloutput") {
+      continue;
+    }
+    const callId = pickString(candidate, ["call_id", "callId", "id", "itemId", "item_id"]);
+    const output =
+      pickString(candidate, ["output", "text", "result"]) ??
+      pickString(asRecord(candidate.data) ?? {}, ["output", "text", "result"]);
+    if (callId && output !== undefined) {
+      return { callId, output };
+    }
+  }
+
+  return undefined;
+}
+
+function extractCustomToolOutputImagePartsFromReplayItem(
+  item: Record<string, unknown>
+): AppServerThreadImagePart[] {
+  const candidates = [item];
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (nestedItem) {
+      candidates.push(nestedItem);
+    }
+  }
+
+  return dedupeImageParts(
+    candidates.flatMap((candidate) => {
+      if (normalizeItemType(pickString(candidate, ["type"])) !== "customtoolcalloutput") {
+        return [];
+      }
+
+      return extractCustomToolOutputImageParts(candidate.output);
+    }),
+  );
+}
+
+function extractCustomToolOutputImageParts(value: unknown): AppServerThreadImagePart[] {
+  const parsed = parseStructuredValue(value);
+  const parts = [
+    ...extractStructuredMessageParts(value),
+    ...extractImagePartsFromValue(value),
+    ...(parsed === value
+      ? []
+      : [
+          ...extractStructuredMessageParts(parsed),
+          ...extractImagePartsFromValue(parsed),
+        ]),
+  ];
+
+  return parts.filter(
+    (part): part is AppServerThreadImagePart => part.type === "image",
+  );
+}
+
+function extractMcpToolResultImagePartsFromReplayItem(
+  item: Record<string, unknown>
+): AppServerThreadImagePart[] {
+  const candidates = [item];
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (nestedItem) {
+      candidates.push(nestedItem);
+    }
+  }
+
+  return dedupeImageParts(
+    candidates.flatMap((candidate) => {
+      if (normalizeItemType(pickString(candidate, ["type"])) !== "mcptoolcall") {
+        return [];
+      }
+
+      const result = asRecord(candidate.result);
+      const structuredContent =
+        asRecord(result?.structuredContent) ??
+        asRecord(result?.structured_content);
+      const structuredImageParts = structuredContent
+        ? extractStructuredMessageParts(structuredContent).filter(
+            (part): part is AppServerThreadImagePart => part.type === "image",
+          )
+        : [];
+      const signedImagePart = structuredContent
+        ? buildMcpSignedImagePart(structuredContent)
+        : undefined;
+      const toolName =
+        pickString(candidate, ["tool", "toolName", "tool_name"])
+        ?? "Tool";
+      const contentImageParts = extractMcpToolResultContentImageParts(candidate, toolName);
+      const resourceLinkImageParts = extractMcpResourceLinkImageParts(result?.content);
+      const resourceImageParts = extractMcpResourceImageParts(result?.content);
+      return [
+        ...structuredImageParts,
+        ...contentImageParts,
+        ...resourceLinkImageParts,
+        ...(signedImagePart ? [signedImagePart] : []),
+        ...resourceImageParts,
+      ];
+    }),
+  );
+}
+
+function extractMcpToolResultContentImageParts(
+  item: Record<string, unknown>,
+  toolName: string,
+): AppServerThreadImagePart[] {
+  const result = asRecord(item.result);
+  const content = Array.isArray(result?.content) ? result.content : [];
+  const identifier = formatToolIdentifier(
+    pickString(item, ["server", "serverName", "server_name"]),
+    toolName,
+  );
+  return dedupeImageParts(content.flatMap((value): AppServerThreadImagePart[] => {
+    const directImagePart = buildMcpContentImagePart(asRecord(value) ?? undefined, identifier);
+    const contentRecord = asRecord(value);
+    // Some MCP adapters accidentally serialize a complete CallToolResult into
+    // one text block. Accept one wrapper layer while retaining the normal
+    // MIME, size, and base64 validation for the nested image content.
+    const parsedText = parseStructuredValue(
+      typeof value === "string"
+        ? value
+        : pickString(contentRecord ?? {}, ["text"]),
+    );
+    const nestedResult = asRecord(parsedText);
+    const nestedContent = Array.isArray(nestedResult?.content)
+      ? nestedResult.content
+      : [];
+    const nestedImageParts = nestedContent.flatMap((nestedValue) => {
+      const imagePart = buildMcpContentImagePart(asRecord(nestedValue) ?? undefined, identifier);
+      return imagePart ? [imagePart] : [];
+    });
+    return [
+      ...(directImagePart ? [directImagePart] : []),
+      ...nestedImageParts,
+    ];
+  }));
+}
+
+function buildMcpContentImagePart(
+  block: Record<string, unknown> | undefined,
+  identifier: string,
+): AppServerThreadImagePart | undefined {
+  const type = normalizeItemType(pickString(block ?? {}, ["type"]));
+  const mimeType = pickString(block ?? {}, ["mimeType", "mime_type"])
+    ?.trim()
+    .toLowerCase();
+  const data = pickString(block ?? {}, ["data"]);
+  if (
+    type !== "image"
+    || !mimeType
+    || !MCP_RESOURCE_IMAGE_MIME_TYPES.has(mimeType)
+    || !data
+    || data.length > MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS
+    || data.length % 4 === 1
+    || !BASE64_IMAGE_BLOB_PATTERN.test(data)
+  ) {
+    return undefined;
+  }
+
+  return {
+    type: "image",
+    url: `data:${mimeType};base64,${data}`,
+    alt: `${identifier} result`,
+  };
+}
+
+function buildMcpSignedImagePart(
+  structuredContent: Record<string, unknown>,
+): AppServerThreadImagePart | undefined {
+  const signedUrl = pickString(structuredContent, ["signedUrl", "signed_url"]);
+  const mimeType = pickString(structuredContent, ["mimeType", "mime_type"]);
+  if (
+    !signedUrl
+    || !mimeType?.toLowerCase().startsWith("image/")
+    || !isPwrSnapSignedMediaUrl(signedUrl)
+  ) {
+    return undefined;
+  }
+
+  const imagePart = buildImagePartFromUrl(signedUrl);
+  if (!imagePart) {
+    return undefined;
+  }
+
+  const alt = pickString(structuredContent, ["alt", "altText", "alt_text", "title", "name"]);
+  if (alt) {
+    imagePart.alt = alt;
+  }
+  return imagePart;
+}
+
+function extractMcpResourceLinkImageParts(content: unknown): AppServerThreadImagePart[] {
+  const contentBlocks = Array.isArray(content) ? content : [content];
+  return dedupeImageParts(
+    contentBlocks.flatMap((contentBlock) => {
+      const resourceLink = asRecord(contentBlock);
+      if (!resourceLink) {
+        return [];
+      }
+      const type = normalizeItemType(
+        pickString(resourceLink, ["type", "contentType", "content_type"]),
+      );
+      const uri = pickString(resourceLink, ["uri", "url"]);
+      const mimeType = pickString(resourceLink, ["mimeType", "mime_type"]);
+      if (
+        type !== "resourcelink"
+        || !uri
+        || !mimeType?.toLowerCase().startsWith("image/")
+        || !isPwrSnapSignedMediaUrl(uri)
+      ) {
+        return [];
+      }
+
+      const imagePart = buildImagePartFromUrl(uri);
+      if (!imagePart) {
+        return [];
+      }
+
+      const alt = pickString(resourceLink, [
+        "name",
+        "title",
+        "alt",
+        "altText",
+        "alt_text",
+      ]);
+      return [{ ...imagePart, ...(alt ? { alt } : {}) }];
+    }),
+  );
+}
+
+function extractMcpResourceImageParts(content: unknown): AppServerThreadImagePart[] {
+  const contentBlocks = Array.isArray(content) ? content : [content];
+  return dedupeImageParts(
+    contentBlocks.flatMap((contentBlock) => {
+      const contentRecord = asRecord(contentBlock);
+      const parsedText = parseStructuredValue(
+        typeof contentBlock === "string"
+          ? contentBlock
+          : pickString(contentRecord ?? {}, ["text"]),
+      );
+      const resourceCandidates = [
+        contentRecord,
+        asRecord(contentRecord?.resource),
+        asRecord(parsedText),
+      ];
+
+      return resourceCandidates.flatMap((candidate) => {
+        if (!candidate) {
+          return [];
+        }
+
+        const resources = Array.isArray(candidate.contents)
+          ? candidate.contents
+          : [candidate];
+        return resources.flatMap((resource) => {
+          const imagePart = buildMcpResourceImagePart(asRecord(resource) ?? undefined);
+          return imagePart ? [imagePart] : [];
+        });
+      });
+    }),
+  );
+}
+
+function buildMcpResourceImagePart(
+  resource: Record<string, unknown> | undefined,
+): AppServerThreadImagePart | undefined {
+  const mimeType = pickString(resource ?? {}, ["mimeType", "mime_type"])
+    ?.trim()
+    .toLowerCase();
+  const blob = pickString(resource ?? {}, ["blob"]);
+  if (
+    !mimeType
+    || !MCP_RESOURCE_IMAGE_MIME_TYPES.has(mimeType)
+    || !blob
+    || blob.length > MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS
+    || blob.length % 4 === 1
+    || !BASE64_IMAGE_BLOB_PATTERN.test(blob)
+  ) {
+    return undefined;
+  }
+
+  return {
+    type: "image",
+    url: `data:${mimeType};base64,${blob}`,
+  };
+}
+
+function dedupeImageParts(
+  imageParts: AppServerThreadImagePart[]
+): AppServerThreadImagePart[] {
+  const seenUrls = new Set<string>();
+  return imageParts.filter((imagePart) => {
+    if (seenUrls.has(imagePart.url)) {
+      return false;
+    }
+    seenUrls.add(imagePart.url);
+    return true;
+  });
+}
+
+function appendImagePartsToMessage<T extends {
+  parts?: AppServerThreadMessagePart[];
+  text: string;
+}>(
+  message: T,
+  imageParts: AppServerThreadImagePart[],
+): T {
+  const existingImageUrls = new Set(
+    (message.parts ?? [])
+      .filter((part): part is AppServerThreadImagePart => part.type === "image")
+      .map((part) => part.url),
+  );
+  const missingImageParts = imageParts.filter((imagePart) => {
+    if (existingImageUrls.has(imagePart.url)) {
+      return false;
+    }
+    existingImageUrls.add(imagePart.url);
+    return true;
+  });
+  if (missingImageParts.length === 0) {
+    return message;
+  }
+
+  return {
+    ...message,
+    parts: [
+      ...(message.parts ?? (message.text ? [{ type: "text", text: message.text }] : [])),
+      ...missingImageParts,
+    ],
+  };
+}
+
+function attachCustomToolOutputImagesToTurn(params: {
+  createdAt?: number;
+  entries: AppServerThreadEntry[];
+  imageParts: AppServerThreadImagePart[];
+  startIndex: number;
+  turn?: AppServerThreadTurnMetadata;
+}): void {
+  if (params.imageParts.length === 0) {
+    return;
+  }
+
+  let fallbackAssistantIndex: number | undefined;
+  for (let index = params.entries.length - 1; index >= params.startIndex; index -= 1) {
+    const entry = params.entries[index];
+    if (entry?.type !== "message" || entry.role !== "assistant") {
+      continue;
+    }
+    if (entry.phase === "final") {
+      params.entries[index] = appendImagePartsToMessage(entry, params.imageParts);
+      return;
+    }
+    fallbackAssistantIndex ??= index;
+  }
+
+  if (fallbackAssistantIndex !== undefined) {
+    const entry = params.entries[fallbackAssistantIndex];
+    if (entry?.type === "message") {
+      params.entries[fallbackAssistantIndex] = appendImagePartsToMessage(entry, params.imageParts);
+    }
+    return;
+  }
+
+  params.entries.push({
+    type: "message",
+    id: `tool-output-images-${params.turn?.id ?? params.entries.length + 1}`,
+    role: "assistant",
+    text: "",
+    parts: params.imageParts,
+    createdAt: params.createdAt,
+    ...(params.turn ? { turn: params.turn } : {}),
+  });
+}
+
+function mergeEntryMetadataIntoReplayMessages(
+  messages: AppServerThreadReplay["messages"],
+  entries: AppServerThreadEntry[],
+): AppServerThreadReplay["messages"] {
+  const entriesById = new Map(
+    entries.flatMap((entry) =>
+      entry.type === "message"
+        ? [[entry.id, entry] as const]
+        : [],
+    ),
+  );
+
+  return messages.map((message) => {
+    const entry = entriesById.get(message.id);
+    if (!entry || entry.role !== message.role) {
+      return message;
+    }
+
+    const imageParts = entry.parts?.filter(
+      (part): part is AppServerThreadImagePart => part.type === "image",
+    ) ?? [];
+    return appendImagePartsToMessage({ ...message, createdAt: entry.createdAt }, imageParts);
+  });
+}
+
+function parseToolArguments(item: Record<string, unknown>): Record<string, unknown> | undefined {
+  return (
+    asRecord(parseStructuredValue(item.arguments)) ??
+    asRecord(parseStructuredValue(item.input)) ??
+    asRecord(item.arguments) ??
+    asRecord(item.input) ??
+    undefined
+  );
+}
+
+function buildMcpToolCommandDetail(params: {
+  item: Record<string, unknown>;
+  toolName: string;
+  elapsedMs: number | undefined;
+}): AppServerThreadCommandDetail {
+  const identifier = formatToolIdentifier(
+    pickString(params.item, ["server", "serverName", "server_name"]),
+    params.toolName,
+  );
+  const args = parseToolArguments(params.item);
+  const output = formatMcpToolOutput({
+    error: params.item.error,
+    result: params.item.result,
+  });
+  return {
+    displayCommand: formatToolInvocation(identifier, args),
+    rawCommand: identifier,
+    source: "tool",
+    ...(output ? { output } : {}),
+    ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),
+  };
+}
+
+/** Undefined when the call has neither arguments nor a result: there is nothing to expand. */
+function buildDynamicToolCommandDetail(params: {
+  item: Record<string, unknown>;
+  toolName: string;
+  elapsedMs: number | undefined;
+}): AppServerThreadCommandDetail | undefined {
+  const identifier = formatToolIdentifier(
+    pickString(params.item, ["namespace", "toolNamespace", "tool_namespace"]),
+    params.toolName,
+  );
+  const args = parseToolArguments(params.item);
+  const output = formatDynamicToolOutput(
+    params.item.contentItems ?? params.item.content_items,
+  );
+  if (!output && (!args || Object.keys(args).length === 0)) {
+    return undefined;
+  }
+  return {
+    displayCommand: formatToolInvocation(identifier, args),
+    rawCommand: identifier,
+    source: "tool",
+    ...(output ? { output } : {}),
+    ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),
+  };
+}
+
+function readActivityOutputText(item: Record<string, unknown>): string | undefined {
+  const data = asRecord(item.data);
+  return (
+    pickString(item, [
+      "aggregatedOutput",
+      "aggregated_output",
+      "functionCallOutput",
+      "output",
+      "text",
+    ]) ??
+    pickString(data ?? {}, ["aggregatedOutput", "aggregated_output", "output", "text"])
+  );
+}
+
+function readActivityExitCode(item: Record<string, unknown>): number | undefined {
+  const data = asRecord(item.data);
+  return (
+    pickNumber(item, ["exitCode", "exit_code"]) ??
+    pickNumber(data ?? {}, ["exitCode", "exit_code"])
+  );
+}
+
+function buildCommandDetail(params: {
+  item: Record<string, unknown>;
+  command: string | undefined;
+  elapsedMs: number | undefined;
+}): AppServerThreadCommandDetail | undefined {
+  const displayCommand = stripShellWrapper(params.command);
+  if (!displayCommand) {
+    return undefined;
+  }
+
+  const cwd = pickString(params.item, ["cwd", "workingDirectory", "working_directory"]);
+  const output = readActivityOutputText(params.item);
+  const exitCode = readActivityExitCode(params.item);
+  return {
+    displayCommand,
+    ...(params.command ? { rawCommand: params.command } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(output ? { output } : {}),
+    ...(typeof exitCode === "number" ? { exitCode } : {}),
+    ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),
+  };
+}
+
+function summarizeActivityItems(
+  items: Record<string, unknown>[],
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
+): AppServerThreadActivityEntry | undefined {
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  const details: AppServerThreadActivityDetail[] = [];
+  const detailsByKey = new Map<string, AppServerThreadActivityDetail>();
+  let inspectedFiles = 0;
+  let commandsRun = 0;
+  let changedFiles = 0;
+  let changedFileAdditions = 0;
+  let changedFileRemovals = 0;
+  let toolCalls = 0;
+  let spawnedAgents = 0;
+  let waitedAgents = 0;
+  let failedCollabCalls = 0;
+  let status: AppServerThreadActivityStatus | undefined;
+
+  for (const item of items) {
+    // Path-based worker reports. The renderer's live transcript builds the
+    // same row from the same shared builder, so the two merge by id.
+    const subAgentActivity = readSubAgentActivity(item);
+    if (subAgentActivity) {
+      status ??= "completed";
+      pushActivityDetail(
+        details,
+        detailsByKey,
+        buildSubAgentActivityDetail(subAgentActivity),
+      );
+      continue;
+    }
+
+    const itemId =
+      pickString(item, ["id", "itemId", "item_id"]) ?? `activity-${details.length + 1}`;
+    const itemStatus = normalizeActivityStatus(pickString(item, ["status"]));
+    if (itemStatus === "failed") {
+      status = "failed";
+    } else if (!status) {
+      status = itemStatus;
+    }
+
+    const itemType = pickString(item, ["type"]);
+    const normalizedItemType = normalizeItemType(itemType);
+    const elapsedMs = readActivityElapsedMs(item);
+    if (normalizedItemType === "commandexecution") {
+      const command = pickString(item, ["command"]);
+      const actions = Array.isArray(item.commandActions)
+        ? item.commandActions
+            .map((entry) => asRecord(entry))
+            .filter((entry): entry is Record<string, unknown> => entry !== null)
+        : [];
+
+      if (actions.length === 0) {
+        commandsRun += 1;
+        pushActivityDetail(details, detailsByKey, {
+          id: itemId,
+          kind: "command",
+          label: appendElapsedLabel(formatCommandLabel(command), elapsedMs),
+          command: buildCommandDetail({ item, command, elapsedMs }),
+          status: itemStatus
+        });
+        continue;
+      }
+
+      for (const [index, action] of actions.entries()) {
+        const actionType = pickString(action, ["type"]);
+        const actionPath = pickString(action, ["path"]);
+        const actionQuery = pickString(action, ["query"]);
+        const fallbackName = pickString(action, ["name"]);
+        const detailId = `${itemId}-${index + 1}`;
+
+        if (actionType === "read" && actionPath) {
+          inspectedFiles += 1;
+          pushActivityDetail(details, detailsByKey, {
+            id: detailId,
+            kind: "read",
+            label: appendElapsedLabel(
+              `Read ${path.basename(actionPath) || actionPath}`,
+              elapsedMs
+            ),
+            path: actionPath,
+            status: itemStatus
+          });
+          continue;
+        }
+
+        if (actionType === "search") {
+          inspectedFiles += 1;
+          pushActivityDetail(details, detailsByKey, {
+            id: detailId,
+            kind: "read",
+            label: appendElapsedLabel(
+              formatSearchCommandActionLabel({
+                path: actionPath,
+                query: actionQuery,
+              }),
+              elapsedMs
+            ),
+            ...(actionPath ? { path: actionPath } : {}),
+            status: itemStatus
+          });
+          continue;
+        }
+
+        if (actionType === "listFiles") {
+          inspectedFiles += 1;
+          const label = actionPath
+            ? `Listed ${path.basename(actionPath) || actionPath}`
+            : "Listed files";
+          pushActivityDetail(details, detailsByKey, {
+            id: detailId,
+            kind: "read",
+            label: appendElapsedLabel(label, elapsedMs),
+            ...(actionPath ? { path: actionPath } : {}),
+            status: itemStatus
+          });
+          continue;
+        }
+
+        commandsRun += 1;
+        const label = fallbackName?.trim() || formatCommandLabel(command);
+        pushActivityDetail(details, detailsByKey, {
+          id: detailId,
+          kind: "command",
+          label: appendElapsedLabel(label, elapsedMs),
+          ...(actionPath ? { path: actionPath } : {}),
+          command: buildCommandDetail({ item, command, elapsedMs }),
+          status: itemStatus
+        });
+      }
+      continue;
+    }
+
+    if (normalizedItemType === "filechange") {
+      const changes = Array.isArray(item.changes)
+        ? item.changes
+            .map((entry) => asRecord(entry))
+            .filter((entry): entry is Record<string, unknown> => entry !== null)
+        : [];
+
+      for (const [index, change] of changes.entries()) {
+        const changePath = pickString(change, ["path"]);
+        const changeKind = asRecord(change.kind);
+        const changeType = normalizeFileChangeKind(
+          pickString(changeKind ?? {}, ["type"]) ?? pickString(change, ["kind"])
+        );
+        const changeText = extractFileChangeText({ change, changeKind, changeType });
+        const diffSummary =
+          changeText !== undefined
+            ? summarizeFileChangeText({ changeType, text: changeText })
+            : undefined;
+        const diffPayload =
+          changeText !== undefined
+            ? buildFileChangeDiff({
+                changeType,
+                text: changeText,
+                path: changePath
+              })
+            : undefined;
+        changedFiles += 1;
+        changedFileAdditions += diffSummary?.additions ?? 0;
+        changedFileRemovals += diffSummary?.removals ?? 0;
+        pushActivityDetail(details, detailsByKey, {
+          id: `${itemId}-${index + 1}`,
+          kind: "write",
+          label: `${changeType[0]?.toUpperCase() ?? "U"}${changeType.slice(1)} ${
+            changePath ? path.basename(changePath) || changePath : "file"
+          }`,
+          path: changePath,
+          status: itemStatus,
+          ...(diffPayload !== undefined && diffSummary
+            ? {
+                fileDiff: {
+                  kind: changeType,
+                  diff: diffPayload.diff,
+                  additions: diffSummary.additions,
+                  removals: diffSummary.removals,
+                  ...(diffPayload.omittedReason
+                    ? { omittedReason: diffPayload.omittedReason }
+                    : {}),
+                  ...(diffPayload.originalLength !== undefined
+                    ? { originalLength: diffPayload.originalLength }
+                    : {})
+                }
+              }
+            : {})
+        });
+      }
+      continue;
+    }
+
+    if (normalizedItemType === "functioncall") {
+      toolCalls += 1;
+      const functionName =
+        pickString(item, ["name", "toolName", "tool_name", "tool", "text"]) ?? "Used tool";
+      const args = parseToolArguments(item);
+      const command = args ? pickString(args, ["cmd", "command", "displayCommand"]) : undefined;
+      const commandDetail = functionName === "exec_command"
+        ? buildCommandDetail({ item, command, elapsedMs })
+        : undefined;
+      pushActivityDetail(details, detailsByKey, {
+        id: itemId,
+        kind: "command",
+        label: appendElapsedLabel(
+          functionName === "exec_command" ? formatCommandLabel(command) : functionName,
+          elapsedMs
+        ),
+        ...(commandDetail ? { command: commandDetail } : {}),
+        status: itemStatus
+      });
+      continue;
+    }
+
+    if (normalizedItemType === "collabagenttoolcall") {
+      const receiverThreadIds = readStringArray(item.receiverThreadIds);
+      const tool = pickString(item, ["tool"]) ?? "collabAgent";
+      if (tool === "spawnAgent" && itemStatus !== "failed") {
+        spawnedAgents += receiverThreadIds.length || 1;
+      } else if (tool === "wait") {
+        waitedAgents += receiverThreadIds.length;
+      }
+      if (itemStatus === "failed") {
+        failedCollabCalls += 1;
+      }
+
+      const agents = collabAgentDetails(item, receiverThreadIds);
+      const label = formatCollabAgentToolLabel({ agents, tool, receiverThreadIds, status: itemStatus });
+      const commandDetail = buildCollabAgentCommandDetail({
+        item,
+        label,
+        operation: collabAgentOperation(tool),
+        receiverThreadIds,
+        tool,
+      });
+      pushActivityDetail(details, detailsByKey, {
+        id: itemId,
+        kind: "command",
+        label: appendElapsedLabel(label, elapsedMs),
+        command: commandDetail,
+        status: itemStatus
+      });
+      continue;
+    }
+
+    if (
+      normalizedItemType === "mcptoolcall" ||
+      normalizedItemType === "dynamictoolcall" ||
+      normalizedItemType === "websearch" ||
+      normalizedItemType === "imageview" ||
+      normalizedItemType === "imagegeneration"
+    ) {
+      toolCalls += 1;
+      const toolName =
+        pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
+        (normalizedItemType === "websearch" ? "web search"
+          : normalizedItemType === "imageview" ? `View image: ${pickString(item, ["path"]) ?? "unknown image"}` : undefined);
+      const args = parseToolArguments(item);
+      const query =
+        pickString(item, ["query"]) ??
+        pickString(args ?? {}, ["query", "q"]);
+      const explicitTitle = pickString(args ?? {}, ["title"]);
+      const mcpCommandDetail =
+        normalizedItemType === "mcptoolcall" && toolName
+          ? buildMcpToolCommandDetail({ item, toolName, elapsedMs })
+          : undefined;
+      const dynamicCommandDetail =
+        normalizedItemType === "dynamictoolcall" && toolName
+          ? buildDynamicToolCommandDetail({ item, toolName, elapsedMs })
+          : undefined;
+      const images =
+        normalizedItemType === "dynamictoolcall"
+          ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
+          : normalizedItemType === "mcptoolcall"
+            ? extractMcpToolResultContentImageParts(item, toolName ?? "Tool")
+          : normalizedItemType === "imageview" && typeof item.path === "string" && path.isAbsolute(item.path)
+            ? [{ type: "image" as const, url: pathToFileURL(item.path).toString(), sourceUrl: pathToFileURL(item.path).toString(), alt: path.basename(item.path) }]
+          : [];
+      const label =
+        (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
+        && explicitTitle
+        ? formatToolActivityTitle(explicitTitle)
+        : normalizedItemType === "mcptoolcall" && toolName
+          ? `Used MCP ${formatToolIdentifier(
+              pickString(item, ["server", "serverName", "server_name"]),
+              toolName,
+            )}`
+          : toolName ?? "Used tool";
+      pushActivityDetail(details, detailsByKey, {
+        id: itemId,
+        kind: normalizedItemType === "websearch" ? "read" : "command",
+        label: [
+          appendElapsedLabel(label, elapsedMs),
+          query ? `: ${query}` : "",
+        ].join(""),
+        ...(images.length > 0 ? { images } : {}),
+        ...(mcpCommandDetail || dynamicCommandDetail
+          ? { command: mcpCommandDetail ?? dynamicCommandDetail }
+          : {}),
+        status: itemStatus
+      });
+    }
+  }
+
+  const summaryParts: string[] = [];
+  if (inspectedFiles > 0) {
+    summaryParts.push(
+      `Explored ${inspectedFiles} file${inspectedFiles === 1 ? "" : "s"}`
+    );
+  }
+  if (commandsRun > 0) {
+    summaryParts.push(`Ran ${commandsRun} command${commandsRun === 1 ? "" : "s"}`);
+  }
+  if (changedFiles > 0) {
+    summaryParts.push(
+      [
+        `Edited ${changedFiles} file${changedFiles === 1 ? "" : "s"}`,
+        changedFileAdditions > 0 || changedFileRemovals > 0
+          ? `+${changedFileAdditions.toLocaleString()}, -${changedFileRemovals.toLocaleString()}`
+          : "",
+      ].filter(Boolean).join(", ")
+    );
+  }
+  if (toolCalls > 0) {
+    summaryParts.push(`Used ${toolCalls} tool${toolCalls === 1 ? "" : "s"}`);
+  }
+  if (spawnedAgents > 0) {
+    summaryParts.push(`Spawned ${spawnedAgents} agent${spawnedAgents === 1 ? "" : "s"}`);
+  }
+  if (waitedAgents > 0) {
+    summaryParts.push(`Waited on ${waitedAgents} agent${waitedAgents === 1 ? "" : "s"}`);
+  }
+  summaryParts.push(...subAgentActivitySummaryParts(details));
+  if (failedCollabCalls > 0) {
+    summaryParts.push(
+      `${failedCollabCalls} collaboration tool${failedCollabCalls === 1 ? "" : "s"} failed`
+    );
+  }
+
+  if (summaryParts.length === 0 && details.length === 0) {
+    return undefined;
+  }
+
+  return {
+    type: "activity",
+    id: `activity-${pickString(items[0] ?? {}, ["id", "itemId", "item_id"]) ?? "1"}`,
+    // Only canonical command groups are self-contained here. Legacy calls can
+    // depend on separate output items, and detail IDs can be synthesized.
+    ...(items.length <= 100 && items.every((item) => item.type === "commandExecution"
+      && typeof item.id === "string" && item.id.length > 0)
+      ? { itemIds: items.map((item) => item.id as string) } : {}),
+    summary:
+      summaryParts.length > 0
+        ? formatActivitySummary(summaryParts)
+        : `Recorded ${details.length} activity item${details.length === 1 ? "" : "s"}`,
+    createdAt,
+    status,
+    details,
+    ...(turn ? { turn } : {})
+  };
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    : [];
+}
+
+function formatCollabAgentToolLabel(params: {
+  agents: Array<{ name?: string; threadId: string }>;
+  tool: string;
+  receiverThreadIds: string[];
+  status: AppServerThreadActivityStatus | undefined;
+}): string {
+  const targetCount = params.receiverThreadIds.length;
+  const targetLabel =
+    targetCount === 1
+      ? subAgentTargetLabel(params.agents[0])
+      : targetCount > 1
+        ? `${targetCount} agents`
+        : "agent";
+  const failedPrefix = params.status === "failed" ? "Failed to " : "";
+
+  if (params.tool === "spawnAgent") {
+    if (params.status === "failed") {
+      return `${failedPrefix}spawn ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Spawning" : "Spawned"} ${targetLabel}`;
+  }
+  if (params.tool === "wait") {
+    if (params.status === "failed") {
+      return `${failedPrefix}wait on ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Waiting on" : "Waited on"} ${targetLabel}`;
+  }
+  if (params.tool === "sendInput") {
+    if (params.status === "failed") {
+      return `${failedPrefix}send input to ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Sending input to" : "Sent input to"} ${targetLabel}`;
+  }
+  if (params.tool === "resumeAgent") {
+    if (params.status === "failed") {
+      return `${failedPrefix}resume ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Resuming" : "Resumed"} ${targetLabel}`;
+  }
+  if (params.tool === "closeAgent") {
+    if (params.status === "failed") {
+      return `${failedPrefix}close ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Closing" : "Closed"} ${targetLabel}`;
+  }
+  return `${failedPrefix}Used ${params.tool}`;
+}
+
+function buildCollabAgentCommandDetail(params: {
+  item: Record<string, unknown>;
+  label: string;
+  operation: NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"];
+  receiverThreadIds: string[];
+  tool: string;
+}): AppServerThreadCommandDetail {
+  const prompt = pickString(params.item, ["prompt"]);
+  const model = pickString(params.item, ["model"]);
+  const reasoningEffort = pickString(params.item, ["reasoningEffort", "reasoning_effort"]);
+  const fastMode = pickBoolean(params.item, ["fastMode", "fast_mode"]);
+  const stateSummary = formatCollabAgentStates(asRecord(params.item.agentsStates));
+  const output = [
+    params.receiverThreadIds.length > 0
+      ? `Agents: ${params.receiverThreadIds.join(", ")}`
+      : undefined,
+    model ? `Model: ${model}` : undefined,
+    reasoningEffort ? `Reasoning effort: ${reasoningEffort}` : undefined,
+    fastMode !== undefined ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
+    prompt ? `Prompt: ${truncateActivityText(prompt, 1_000)}` : undefined,
+    stateSummary ? `Agent states:\n${stateSummary}` : undefined,
+  ].filter((entry): entry is string => Boolean(entry)).join("\n\n");
+
+  const displayCommand =
+    params.receiverThreadIds.length > 0
+      ? `${params.tool} ${params.receiverThreadIds.map(shortAgentId).join(", ")}`
+      : params.tool;
+  return {
+    displayCommand,
+    rawCommand: params.tool,
+    ...(output ? { output } : {}),
+    subAgent: {
+      backend: "codex",
+      origin: "codex-native",
+      operation: params.operation,
+      agents: collabAgentDetails(params.item, params.receiverThreadIds),
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(fastMode !== undefined ? { fastMode } : {}),
+    },
+  };
+}
+
+function collabAgentOperation(
+  tool: string,
+): NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"] {
+  switch (tool) {
+    case "spawnAgent":
+      return "spawn";
+    case "wait":
+      return "wait";
+    case "sendInput":
+      return "send_input";
+    case "resumeAgent":
+      return "resume";
+    case "closeAgent":
+      return "close";
+    default:
+      return "unknown";
+  }
+}
+
+function collabAgentDetails(
+  item: Record<string, unknown>,
+  receiverThreadIds: string[],
+): NonNullable<AppServerThreadCommandDetail["subAgent"]>["agents"] {
+  const states = asRecord(item.agentsStates) ?? asRecord(item.agents_states);
+  const receiverThreads = Array.isArray(item.receiverThreads)
+    ? item.receiverThreads
+    : Array.isArray(item.receiver_threads)
+      ? item.receiver_threads
+      : [];
+  return receiverThreadIds.map((threadId) => {
+    const state = asRecord(states?.[threadId]);
+    const receiver = receiverThreads
+      .map(asRecord)
+      .find((value) => pickString(value ?? {}, ["threadId", "thread_id", "id"]) === threadId);
+    const receiverThread = asRecord(receiver?.thread) ?? receiver;
+    const name = readCodexNativeSubAgentName(state, receiverThread);
+    const status = pickString(state ?? {}, ["status", "state"]);
+    const message = pickString(state ?? {}, ["message", "output", "summary"]);
+    return {
+      threadId,
+      ...(name ? { name } : {}),
+      ...(status ? { status } : {}),
+      ...(message ? { message: truncateActivityText(message, 1_000) } : {}),
+    };
+  });
+}
+
+function formatCollabAgentStates(
+  states: Record<string, unknown> | null
+): string | undefined {
+  if (!states) {
+    return undefined;
+  }
+  const lines = Object.entries(states).flatMap(([agentId, value]) => {
+    const record = asRecord(value);
+    if (!record) {
+      return [];
+    }
+    const status = pickString(record, ["status"]) ?? "unknown";
+    const message = pickString(record, ["message"]);
+    const header = `${shortAgentId(agentId)}: ${status} (${agentId})`;
+    if (!message) {
+      return [header];
+    }
+    return [`${header}\nOutput:\n${indentCollabAgentMessage(message)}`];
+  });
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+function indentCollabAgentMessage(message: string): string {
+  return message
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim()
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+function shortAgentId(agentId: string): string {
+  return shortSubAgentThreadId(agentId);
+}
+
+function truncateActivityText(text: string, maxLength: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+}
+
+function extractTokenUsageEntries(
+  value: unknown,
+  pricingContext?: TokenUsagePricingContext,
+  threadId?: string
+): AppServerThreadActivityEntry[] {
+  const output: AppServerThreadActivityEntry[] = [];
+
+  const visit = (
+    node: unknown,
+    inheritedCreatedAt?: number,
+    inheritedPricingContext?: TokenUsagePricingContext
+  ): TokenUsagePricingContext | undefined => {
+    if (Array.isArray(node)) {
+      let activePricingContext = inheritedPricingContext;
+      for (const entry of node) {
+        activePricingContext =
+          visit(entry, inheritedCreatedAt, activePricingContext) ??
+          activePricingContext;
+      }
+      return activePricingContext;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return inheritedPricingContext;
+    }
+
+    const recordCreatedAt = normalizeEpochTimestamp(
+      pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
+    );
+    const createdAt = recordCreatedAt ?? inheritedCreatedAt;
+    const normalizedType = normalizeItemType(pickString(record, ["type"]));
+    const recordPricingContext =
+      normalizedType === "turncontext"
+        ? mergeTokenUsagePricingContext(
+            readTokenUsagePricingContext(record),
+            inheritedPricingContext
+          )
+        : inheritedPricingContext;
+    const tokenUsageActivity = summarizeTokenUsageActivity(
+      record,
+      createdAt,
+      undefined,
+      recordPricingContext,
+      threadId
+    );
+    if (tokenUsageActivity) {
+      output.push(tokenUsageActivity);
+    }
+
+    let activePricingContext = recordPricingContext;
+    for (const key of [
+      "events",
+      "items",
+      "payload",
+      "item",
+      "data",
+      "thread",
+      "response",
+      "result",
+    ]) {
+      activePricingContext =
+        visit(record[key], createdAt, activePricingContext) ??
+        activePricingContext;
+    }
+    return activePricingContext;
+  };
+
+  visit(value, undefined, pricingContext);
+  return output;
+}
+
+function sortEntriesByCreatedAt(entries: AppServerThreadEntry[]): AppServerThreadEntry[] {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((left, right) => {
+      const leftCreatedAt = left.entry.createdAt;
+      const rightCreatedAt = right.entry.createdAt;
+      if (
+        typeof leftCreatedAt === "number" &&
+        typeof rightCreatedAt === "number" &&
+        leftCreatedAt !== rightCreatedAt
+      ) {
+        return leftCreatedAt - rightCreatedAt;
+      }
+      if (typeof leftCreatedAt === "number" && typeof rightCreatedAt !== "number") {
+        return -1;
+      }
+      if (typeof leftCreatedAt !== "number" && typeof rightCreatedAt === "number") {
+        return 1;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.entry);
+}
+
+function timestampFromRecord(record: Record<string, unknown>): number | undefined {
+  return normalizeEpochTimestamp(
+    pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
+  );
+}
+
+function extractThreadEntries(
+  value: unknown,
+  options: { threadId?: string } = {},
+): AppServerThreadEntry[] {
+  const record = asRecord(value);
+  const thread = asRecord(record?.thread);
+  const threadId = extractThreadIdFromValue(value) ?? options.threadId;
+  const turns = Array.isArray(thread?.turns)
+    ? thread.turns
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => entry !== null)
+    : [];
+
+  if (turns.length === 0) {
+    return sortEntriesByCreatedAt([
+      ...extractConversationMessages(value).map(
+        (message): AppServerThreadMessageEntry => ({
+          type: "message",
+          ...message
+        }),
+      ),
+      ...extractTokenUsageEntries(value, undefined, threadId),
+    ]);
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+
+  for (const turn of turns) {
+    const turnStartIndex = entries.length;
+    const turnMetadata = extractTurnMetadata(turn);
+    const turnPricingContext = extractTokenUsagePricingContext(turn);
+    const createdAt = normalizeEpochTimestamp(
+      pickNumber(turn, ["startedAt", "createdAt", "timestamp", "time"])
+    );
+    const rawItems = Array.isArray(turn.items)
+      ? turn.items
+          .map((entry) => asRecord(entry))
+          .filter((entry): entry is Record<string, unknown> => entry !== null)
+      : [];
+    const assistantImageParts = dedupeImageParts(
+      rawItems.flatMap((item) => [
+        ...extractCustomToolOutputImagePartsFromReplayItem(item),
+        ...extractMcpToolResultImagePartsFromReplayItem(item),
+      ]),
+    );
+    const nativeReviewTurn = rawItems.some((item) => normalizeReviewEventItem(item) !== undefined);
+    const assistantReviewTexts = collectAssistantReviewTexts(rawItems);
+    const suppressedAssistantTexts = collectReviewSuppressionTexts(rawItems);
+    for (const text of assistantReviewTexts) {
+      suppressedAssistantTexts.add(normalizeSuppressionText(text));
+    }
+    const pendingActivityItems: Record<string, unknown>[] = [];
+    const pendingActivityById = new Map<string, Record<string, unknown>>();
+    let pendingActivityCreatedAt: number | undefined;
+
+    const flushActivityItems = (): void => {
+      const activity = summarizeActivityItems(
+        pendingActivityItems,
+        pendingActivityCreatedAt,
+        turnMetadata
+      );
+      pendingActivityItems.length = 0;
+      pendingActivityById.clear();
+      pendingActivityCreatedAt = undefined;
+      if (activity) {
+        entries.push(activity);
+      }
+    };
+
+    for (const item of rawItems) {
+      const itemCreatedAt = timestampFromRecord(item);
+      const itemType = pickString(item, ["type"]);
+      const role = normalizeConversationRole(itemType);
+      if (role) {
+        flushActivityItems();
+        if (shouldSuppressConversationMessage(item, suppressedAssistantTexts, nativeReviewTurn)) {
+          continue;
+        }
+        const content = buildMessageContent(item);
+        if (!content.text && !content.parts?.length) {
+          continue;
+        }
+        const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
+        // Turn start is a prompt boundary, not the send time of every
+        // assistant message in a potentially hours-long turn. Leave unknown
+        // item times absent; the renderer can retain times observed live.
+        const messageCreatedAt =
+          itemCreatedAt ??
+          (role === "assistant"
+            ? phase === "final" ? turnMetadata?.completedAt : undefined
+            : createdAt);
+        entries.push({
+          type: "message",
+          id:
+            pickString(item, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
+            `message-${entries.length + 1}`,
+          role,
+          text: content.text,
+          ...(role === "assistant" ? asyncQuestionMetadata(item) : {}),
+          ...(content.parts ? { parts: content.parts } : {}),
+          createdAt: messageCreatedAt,
+          ...(turnMetadata ? { turn: turnMetadata } : {}),
+          ...(phase ? { phase } : {})
+        });
+        continue;
+      }
+
+      const planEntry = extractPlanEntryFromItem(item, itemCreatedAt, turnMetadata);
+      if (planEntry) {
+        flushActivityItems();
+        entries.push(planEntry);
+        continue;
+      }
+
+      const reviewEntry = extractReviewEntryFromItem(
+        item,
+        { itemCreatedAt, turnCreatedAt: createdAt },
+        turnMetadata
+      );
+      if (reviewEntry) {
+        flushActivityItems();
+        const assistantReviewText =
+          reviewEntry.displayText === undefined
+            ? assistantReviewTexts.find((text) =>
+                shouldUseAssistantReviewText({
+                  assistantText: text,
+                  reviewText: reviewEntry.review,
+                })
+              )
+            : undefined;
+        entries.push(
+          assistantReviewText
+            ? {
+                ...reviewEntry,
+                review: assistantReviewText,
+              }
+            : reviewEntry
+        );
+        continue;
+      }
+
+      const tokenUsageActivity = summarizeTokenUsageActivity(
+        item,
+        itemCreatedAt ?? turnMetadata?.completedAt ?? createdAt,
+        turnMetadata,
+        mergeTokenUsagePricingContext(
+          readTokenUsagePricingContext(item),
+          turnPricingContext
+        ),
+        threadId
+      );
+      if (tokenUsageActivity) {
+        flushActivityItems();
+        entries.push(tokenUsageActivity);
+        continue;
+      }
+
+      const activityItem = extractActivityItemFromReplayItem(item);
+      if (activityItem) {
+        if (pendingActivityItems.length === 0) {
+          pendingActivityCreatedAt = itemCreatedAt;
+        }
+        pendingActivityItems.push(activityItem);
+        // Match the former reverse search: any supported alias selects the
+        // most recent pending item, and a message/plan boundary resets scope.
+        for (const key of ["id", "itemId", "item_id", "call_id", "callId"]) {
+          const id = pickString(activityItem, [key]);
+          if (id) pendingActivityById.set(id, activityItem);
+        }
+        continue;
+      }
+
+      const functionCallOutput = extractFunctionCallOutputFromReplayItem(item);
+      if (functionCallOutput) {
+        const activityItem = pendingActivityById.get(functionCallOutput.callId);
+        if (activityItem) activityItem.functionCallOutput = functionCallOutput.output;
+      }
+    }
+
+    flushActivityItems();
+    attachCustomToolOutputImagesToTurn({
+      createdAt: turnMetadata?.completedAt ?? createdAt,
+      entries,
+      imageParts: assistantImageParts,
+      startIndex: turnStartIndex,
+      turn: turnMetadata,
+    });
+  }
+
+  return entries;
+}
+
+function extractReplayPagination(value: unknown): AppServerThreadReplayPagination {
+  const record = asRecord(value);
+  const supportsPagination = Boolean(
+    record &&
+      (pickBoolean(record, ["supportsPagination", "supports_pagination"]) ||
+        pickString(record, ["previousCursor", "previous_cursor", "before", "cursor"]))
+  );
+  const hasPreviousPage = Boolean(
+    record &&
+      (pickBoolean(record, ["hasPreviousPage", "has_previous_page", "hasMore", "has_more"]) ||
+        pickString(record, ["previousCursor", "previous_cursor", "before", "cursor"]))
+  );
+  const previousCursor = record
+    ? pickString(record, ["previousCursor", "previous_cursor", "before", "cursor"])
+    : undefined;
+
+  return {
+    supportsPagination,
+    hasPreviousPage,
+    previousCursor
+  };
+}
+
+export function extractThreadReplayFromReadResult(
+  value: unknown,
+  options: { threadId?: string } = {}
+): AppServerThreadReplay {
+  const entries = extractThreadEntries(value, options);
+  const messages = mergeEntryMetadataIntoReplayMessages(
+    extractConversationMessages(value),
+    entries,
+  );
+  const agentName = readCodexNativeSubAgentName(value);
+  let lastUserMessage: string | undefined;
+  let lastAssistantMessage: string | undefined;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!lastAssistantMessage && message?.role === "assistant") {
+      lastAssistantMessage = message.text;
+    }
+    if (!lastUserMessage && message?.role === "user") {
+      lastUserMessage = message.text;
+    }
+    if (lastUserMessage && lastAssistantMessage) {
+      break;
+    }
+  }
+
+  const threadStatus = readThreadStatus(value);
+  return {
+    entries,
+    messages,
+    ...(agentName ? { agentName } : {}),
+    lastUserMessage,
+    lastAssistantMessage,
+    pagination: extractReplayPagination(value),
+    ...(threadStatus ? { threadStatus } : {})
+  };
+}
+
+
+function extractThreadIdFromValue(value: unknown): string | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
+  return (
+    pickString(record, ["threadId", "thread_id", "conversationId", "conversation_id"]) ??
+    pickString(threadRecord ?? {}, ["id", "threadId", "thread_id", "conversationId"])
+  );
+}
+
+function extractThreadNameRecordFromValue(
+  value: unknown,
+): CodexThreadNameRecord | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
+  const threadId = extractThreadIdFromValue(value);
+  if (!threadId || record.ephemeral === true || threadRecord?.ephemeral === true) {
+    return undefined;
+  }
+
+  const preview =
+    pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
+    pickString(threadRecord ?? {}, [
+      "preview",
+      "snippet",
+      "firstUserMessage",
+      "first_user_message",
+    ]);
+  const rawName =
+    normalizeExplicitThreadName(
+      pickString(record, ["threadName", "thread_name", "name", "title"]) ??
+        pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"])
+    );
+  const indexName =
+    rawName ?? (preview ? shortenDerivedThreadTitle(preview) ?? preview : undefined);
+  return {
+    id: threadId,
+    threadName: indexName?.trim() || "Untitled thread",
+  };
+}
+
+function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const name = pickString(record, ["name", "id", "slug"]);
+  if (!name) {
+    return undefined;
+  }
+
+  // Codex reads SKILL.json's `interface.short_description` and marks the
+  // top-level `shortDescription` (from SKILL.md) legacy. Prefer the interface
+  // one: it is the one-line summary the skill's author wrote for a picker.
+  const skillInterface = asRecord(record.interface);
+  const pluginId = pickString(record, ["pluginId", "plugin_id"]);
+  return {
+    name,
+    description: pickString(record, ["description", "summary"]),
+    shortDescription:
+      (skillInterface
+        ? pickString(skillInterface, ["shortDescription", "short_description"])
+        : undefined)
+      ?? pickString(record, ["shortDescription", "short_description"]),
+    path: pickString(record, ["path", "skillPath", "skill_path"]),
+    enabled: pickBoolean(record, ["enabled"]),
+    scope: pickString(record, ["scope"]),
+    ...(pluginId ? { pluginId } : {}),
+  };
+}
+
+function extractAvailableCommandSummary(
+  value: unknown,
+): AppServerAvailableCommandSummary | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const name = pickString(record, ["name", "id", "command"]);
+  if (!name) {
+    return undefined;
+  }
+
+  return {
+    name,
+    description: pickString(record, ["description", "summary"]),
+    aliases: pickStringArray(record.aliases),
+    scope: "backend",
+    source: "provider",
+  };
+}
+
+function extractSkillCatalog(value: unknown): SkillCatalogEntry[] {
+  const record = asRecord(value);
+  const data = Array.isArray(record?.data)
+    ? record.data
+    : Array.isArray(value)
+      ? value
+      : [];
+
+  return data.flatMap((entry): SkillCatalogEntry[] => {
+    const entryRecord = asRecord(entry);
+    if (!entryRecord) {
+      return [];
+    }
+
+    const rawSkills = Array.isArray(entryRecord.skills)
+      ? entryRecord.skills
+      : Array.isArray(entryRecord.data)
+        ? entryRecord.data
+        : [];
+    const skills = rawSkills.flatMap((skill) => {
+      const normalized = extractSkillSummary(skill);
+      return normalized ? [normalized] : [];
+    });
+    const rawCommands = Array.isArray(entryRecord.commands)
+      ? entryRecord.commands
+      : Array.isArray(entryRecord.availableCommands)
+        ? entryRecord.availableCommands
+        : [];
+    const commands = rawCommands.flatMap((command) => {
+      const normalized = extractAvailableCommandSummary(command);
+      return normalized ? [normalized] : [];
+    });
+
+    return [
+      {
+        ...(commands.length > 0 ? { commands } : {}),
+        cwd: pickString(entryRecord, ["cwd"]),
+        skills
+      }
+    ];
+  });
+}
+
+function pickStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const strings = [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return strings.length > 0 ? strings : undefined;
+}
+
+function pickModelServiceTierIds(
+  record: Record<string, unknown>,
+): string[] | undefined {
+  const value = record.serviceTiers ?? record.service_tiers;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return [
+    ...new Set(
+      value
+        .map((item) =>
+          typeof item === "string"
+            ? item
+            : pickString(asRecord(item) ?? {}, ["id"]),
+        )
+        .map((tier) => tier?.trim().toLowerCase())
+        .filter((tier): tier is string => Boolean(tier)),
+    ),
+  ];
+}
+
+function pickModelAdditionalSpeedTiers(
+  record: Record<string, unknown>,
+): string[] | undefined {
+  const value = record.additionalSpeedTiers ?? record.additional_speed_tiers;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((tier) => tier.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function pickModelSupportsFast(
+  record: Record<string, unknown>,
+): boolean | undefined {
+  const serviceTierIds = pickModelServiceTierIds(record);
+  const additionalSpeedTiers = pickModelAdditionalSpeedTiers(record);
+  // Legacy responses used both structured service tiers and speed-tier
+  // aliases. A present empty array is authoritative. When an old app-server
+  // omits both fields, leave the capability unknown so the registry can use
+  // its model-id fallback.
+  if (serviceTierIds !== undefined || additionalSpeedTiers !== undefined) {
+    return Boolean(
+      serviceTierIds?.includes("priority")
+      || additionalSpeedTiers?.includes("fast"),
+    );
+  }
+
+  return undefined;
+}
+
+function pickReasoningEfforts(record: Record<string, unknown>): string[] | undefined {
+  const value =
+    record.supportedReasoningEfforts ?? record.supported_reasoning_efforts;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const efforts = [
+    ...new Set(
+      value
+        .map((item) =>
+          typeof item === "string"
+            ? item
+            : pickString(asRecord(item) ?? {}, ["reasoningEffort", "reasoning_effort"]),
+        )
+        .map((effort) => effort?.trim())
+        .filter((effort): effort is string => Boolean(effort)),
+    ),
+  ];
+  return efforts;
+}
+
+function extractModelOptions(value: unknown): BackendModelOption[] {
+  const record = asRecord(value);
+  const data = Array.isArray(record?.data)
+    ? record.data
+    : Array.isArray(value)
+      ? value
+      : [];
+
+  const models = data.flatMap((entry): BackendModelOption[] => {
+    const modelRecord = asRecord(entry);
+    if (!modelRecord) {
+      return [];
+    }
+    const id = pickString(modelRecord, ["id", "name", "model"]);
+    if (!id || pickBoolean(modelRecord, ["hidden"]) === true) {
+      return [];
+    }
+    const inputModalities = modelRecord.inputModalities ?? modelRecord.input_modalities;
+
+    return [
+      {
+        id,
+        label: formatCodexModelLabel(
+          id,
+          pickString(modelRecord, ["displayName", "display_name", "label"]),
+        ),
+        current: pickBoolean(modelRecord, [
+          "current",
+          "default",
+          "isDefault",
+          "is_default",
+        ]),
+        defaultReasoningEffort: pickString(modelRecord, [
+          "defaultReasoningEffort",
+          "default_reasoning_effort",
+        ]),
+        reasoningEfforts: pickReasoningEfforts(modelRecord),
+        supportsReasoning: pickBoolean(modelRecord, [
+          "supportsReasoning",
+          "supports_reasoning",
+        ]) ?? (pickReasoningEfforts(modelRecord)?.length === 0 ? false : undefined),
+        supportsFast: pickModelSupportsFast(modelRecord),
+        serviceTiers: pickModelServiceTierIds(modelRecord)
+          ?? pickModelAdditionalSpeedTiers(modelRecord),
+        supportsSteering: pickBoolean(modelRecord, [
+          "supportsSteering",
+          "supports_steering",
+        ]),
+        // Prefer explicit capabilities, including a text-only modality list.
+        // Older servers without either retain the known Spark exclusion.
+        supportsImage:
+          pickBoolean(modelRecord, [
+            "supportsImage",
+            "supports_image",
+            "supportsVision",
+            "supports_vision",
+          ]) ?? (
+            Array.isArray(inputModalities)
+              ? inputModalities.includes("image")
+              : isSparkModelId(id) ? false : undefined
+          ),
+      },
+    ];
+  });
+
+  return sortCodexModels(models);
+}
+
+function summarizeRawModelList(value: unknown): Array<Record<string, unknown>> {
+  const record = asRecord(value);
+  const data = Array.isArray(record?.data)
+    ? record.data
+    : Array.isArray(value)
+      ? value
+      : [];
+
+  return data.flatMap((entry) => {
+    const modelRecord = asRecord(entry);
+    if (!modelRecord) {
+      return [];
+    }
+
+    return [
+      {
+        id: pickString(modelRecord, ["id", "name", "model"]) ?? null,
+        displayName:
+          pickString(modelRecord, ["displayName", "display_name", "label"]) ?? null,
+        current:
+          pickBoolean(modelRecord, ["current", "default", "isDefault", "is_default"]) ??
+          null,
+        hidden: pickBoolean(modelRecord, ["hidden"]) ?? null,
+        supportsReasoning:
+          pickBoolean(modelRecord, ["supportsReasoning", "supports_reasoning"]) ?? null,
+        supportedReasoningEfforts: pickReasoningEfforts(modelRecord) ?? null,
+        defaultReasoningEffort:
+          pickString(modelRecord, [
+            "defaultReasoningEffort",
+            "default_reasoning_effort",
+          ]) ?? null,
+        additionalSpeedTiers:
+          pickModelAdditionalSpeedTiers(modelRecord) ?? null,
+        serviceTiers: pickModelServiceTierIds(modelRecord) ?? null,
+        supportsFast: pickModelSupportsFast(modelRecord) ?? null,
+      },
+    ];
+  });
+}
+
+function parseInitializeResponse(value: unknown): CodexInitializeResponse {
+  const record = asRecord(value);
+  if (
+    !record
+    || typeof record.userAgent !== "string"
+    || typeof record.codexHome !== "string"
+    || typeof record.platformFamily !== "string"
+    || typeof record.platformOs !== "string"
+  ) {
+    throw new Error(
+      "codex app server initialize response does not match the generated protocol",
+    );
+  }
+
+  return value as CodexInitializeResponse;
+}
+
+type ConsumedCodexModel = Pick<
+  CodexModel,
+  | "additionalSpeedTiers"
+  | "defaultReasoningEffort"
+  | "displayName"
+  | "hidden"
+  | "id"
+  | "inputModalities"
+  | "isDefault"
+> & {
+  serviceTiers: Array<
+    Pick<CodexModel["serviceTiers"][number], "id">
+  >;
+  supportedReasoningEfforts: Array<
+    Pick<CodexModel["supportedReasoningEfforts"][number], "reasoningEffort">
+  >;
+};
+
+type ConsumedCodexModelListResponse = Pick<
+  CodexModelListResponse,
+  "nextCursor"
+> & {
+  data: ConsumedCodexModel[];
+};
+
+function isConsumedCodexModel(value: unknown): value is ConsumedCodexModel {
+  const record = asRecord(value);
+  return Boolean(
+    record
+    && typeof record.id === "string"
+    && typeof record.displayName === "string"
+    && typeof record.hidden === "boolean"
+    && Array.isArray(record.supportedReasoningEfforts)
+    && record.supportedReasoningEfforts.every((effort) => {
+      const effortRecord = asRecord(effort);
+      return Boolean(
+        effortRecord
+        && typeof effortRecord.reasoningEffort === "string",
+      );
+    })
+    && typeof record.defaultReasoningEffort === "string"
+    && Array.isArray(record.inputModalities)
+    && record.inputModalities.every(
+      (modality) => modality === "text" || modality === "image",
+    )
+    && Array.isArray(record.additionalSpeedTiers)
+    && record.additionalSpeedTiers.every((tier) => typeof tier === "string")
+    && Array.isArray(record.serviceTiers)
+    && record.serviceTiers.every((tier) => {
+      const tierRecord = asRecord(tier);
+      return Boolean(tierRecord && typeof tierRecord.id === "string");
+    })
+    && typeof record.isDefault === "boolean",
+  );
+}
+
+function parseConsumedCodexModelListResponse(
+  value: unknown,
+): ConsumedCodexModelListResponse {
+  const record = asRecord(value);
+  if (
+    !record
+    || !Array.isArray(record.data)
+    || !record.data.every(isConsumedCodexModel)
+    || (
+      record.nextCursor !== null
+      && typeof record.nextCursor !== "string"
+    )
+  ) {
+    throw new Error(
+      "codex app server model/list response does not provide the generated fields PwrAgent consumes",
+    );
+  }
+
+  return value as ConsumedCodexModelListResponse;
+}
+
+function extractGeneratedModelOptions(
+  response: ConsumedCodexModelListResponse,
+): BackendModelOption[] {
+  const models = response.data.flatMap((model): BackendModelOption[] => {
+    if (model.hidden) {
+      return [];
+    }
+
+    const serviceTierIds = model.serviceTiers.map((tier) =>
+      tier.id.trim().toLowerCase()
+    );
+    const additionalSpeedTiers = model.additionalSpeedTiers.map((tier) =>
+      tier.trim().toLowerCase()
+    );
+    return [
+      {
+        id: model.id,
+        label: formatCodexModelLabel(model.id, model.displayName),
+        current: model.isDefault,
+        defaultReasoningEffort: model.defaultReasoningEffort,
+        reasoningEfforts: model.supportedReasoningEfforts.map(
+          (effort) => effort.reasoningEffort,
+        ),
+        supportsReasoning: model.supportedReasoningEfforts.length > 0,
+        serviceTiers: serviceTierIds,
+        supportsFast:
+          serviceTierIds.includes("priority")
+          || additionalSpeedTiers.includes("fast"),
+        supportsImage: model.inputModalities.includes("image"),
+      },
+    ];
+  });
+
+  return sortCodexModels(models);
+}
+
+function summarizeGeneratedModelList(
+  response: ConsumedCodexModelListResponse,
+): Array<Record<string, unknown>> {
+  return response.data.map((model) => ({
+    id: model.id,
+    displayName: model.displayName,
+    current: model.isDefault,
+    hidden: model.hidden,
+    supportsReasoning: model.supportedReasoningEfforts.length > 0,
+    supportedReasoningEfforts: model.supportedReasoningEfforts.map(
+      (effort) => effort.reasoningEffort,
+    ),
+    defaultReasoningEffort: model.defaultReasoningEffort,
+    additionalSpeedTiers: model.additionalSpeedTiers,
+    serviceTiers: model.serviceTiers.map((tier) => tier.id),
+    supportsFast:
+      model.serviceTiers.some((tier) => tier.id.trim().toLowerCase() === "priority")
+      || model.additionalSpeedTiers.some(
+        (tier) => tier.trim().toLowerCase() === "fast",
+      ),
+    inputModalities: model.inputModalities,
+  }));
+}
+
+function isSparkModelId(id: string): boolean {
+  return id.toLowerCase().includes("spark");
+}
+
+function formatCodexModelLabel(id: string, displayName?: string): string {
+  const match = /^gpt-([^-]+)(?:-(.+))?$/i.exec(id.trim());
+  if (!match) {
+    return displayName?.trim() || id;
+  }
+
+  const version = match[1];
+  const suffix = match[2]
+    ?.split("-")
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase())
+    .join("-");
+
+  return suffix ? `GPT-${version}-${suffix}` : `GPT-${version}`;
+}
+
+function sortCodexModels(models: BackendModelOption[]): BackendModelOption[] {
+  const order = new Map<string, number>(
+    PREFERRED_CODEX_MODEL_ORDER.map((id, index) => [id, index]),
+  );
+
+  return [...models].sort((left, right) => {
+    const leftOrder = order.get(left.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = order.get(right.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder;
+  });
+}
+
+function extractTurnIdFromValue(value: unknown): string | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const turnRecord = asRecord(record.turn);
+  return (
+    pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
+    pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"])
+  );
+}
+
+function extractThreadRecords(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractThreadRecords(entry));
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const directId = pickString(record, ["id", "threadId", "thread_id", "conversationId"]);
+  if (directId && !Array.isArray(record.items) && !Array.isArray(record.threads)) {
+    return [record];
+  }
+
+  const output: Record<string, unknown>[] = [];
+  for (const key of ["threads", "items", "data", "results"]) {
+    const nested = record[key];
+    if (Array.isArray(nested)) {
+      output.push(...nested.flatMap((entry) => extractThreadRecords(entry)));
+    }
+  }
+  return output;
+}
+
+function isMethodUnavailableError(error: unknown, method?: string): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const normalized = text.toLowerCase();
+
+  if (
+    normalized.includes("method not found")
+    || normalized.includes("unknown method")
+  ) {
+    return true;
+  }
+
+  if (normalized.includes("is not supported yet")) {
+    return !method || normalized.includes(method.toLowerCase());
+  }
+
+  if (!normalized.includes("unknown variant")) {
+    return false;
+  }
+
+  if (!method) {
+    return true;
+  }
+
+  return normalized.includes(`unknown variant \`${method.toLowerCase()}\``);
+}
+
+function isAlreadyInitializedError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.toLowerCase().includes("already initialized");
+}
+
+function isUnmaterializedThreadError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("unavailable before first user message")
+    && (
+      normalized.includes("includeturns")
+      || normalized.includes("thread/turns/list")
+    )
+  );
+}
+
+function isTransientThreadMetadataReadError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("thread-store internal error")
+    && normalized.includes("failed to read session metadata")
+  );
+}
+
+async function requestWithThreadMetadataReadRetry<T>(
+  request: () => Promise<T>,
+): Promise<T> {
+  let retryIndex = 0;
+  while (true) {
+    try {
+      return await request();
+    } catch (error) {
+      const delayMs = THREAD_METADATA_READ_RETRY_DELAYS_MS[retryIndex];
+      if (delayMs === undefined || !isTransientThreadMetadataReadError(error)) {
+        throw error;
+      }
+      retryIndex += 1;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
+    }
+  }
+}
+
+function isThreadNotFoundError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.toLowerCase().includes("thread not found:");
+}
+
+function readCodexThreadSourceKind(
+  record: Record<string, unknown>,
+  sessionRecord: Record<string, unknown> | null,
+): string | undefined {
+  const explicit =
+    pickString(record, ["threadSource", "thread_source"]) ??
+    pickString(sessionRecord ?? {}, ["threadSource", "thread_source"]);
+  const source =
+    asRecord(record.source) ??
+    asRecord(sessionRecord?.source);
+  const subAgent = source?.subAgent ?? source?.sub_agent;
+  // Native review children report the generic durable `subagent` marker.
+  // Their more specific protocol source distinguishes disposable reviews
+  // from ordinary workers that must continue to protect their checkout.
+  if (subAgent === "review" && (!explicit || explicit === "subagent")) return "subAgentReview";
+  if (explicit) {
+    return explicit;
+  }
+
+  if (typeof subAgent === "string") {
+    switch (subAgent) {
+      case "review":
+        return "subAgentReview";
+      case "compact":
+        return "subAgentCompact";
+      default:
+        return "subAgentOther";
+    }
+  }
+
+  const subAgentRecord = asRecord(subAgent);
+  if (!subAgentRecord) {
+    return undefined;
+  }
+  // thread/list can omit the durable guardian_review marker returned by
+  // thread/read. Its session source still identifies the approval helper.
+  if (subAgentRecord.other === "guardian") {
+    return "guardian_review";
+  }
+  if (asRecord(subAgentRecord.thread_spawn) || asRecord(subAgentRecord.threadSpawn)) {
+    return "subAgentThreadSpawn";
+  }
+  return "subAgentOther";
+}
+
+function readCodexNativeSubAgent(
+  record: Record<string, unknown>,
+  sessionRecord: Record<string, unknown> | null,
+  sourceKind: string | undefined,
+): AppServerThreadSummary["codexNativeSubAgent"] {
+  const source =
+    asRecord(record.source) ??
+    asRecord(sessionRecord?.source);
+  const subAgent =
+    asRecord(source?.subAgent) ??
+    asRecord(source?.sub_agent);
+  const spawn =
+    asRecord(subAgent?.thread_spawn) ??
+    asRecord(subAgent?.threadSpawn);
+  if (sourceKind !== "subAgentThreadSpawn" && !spawn) {
+    return undefined;
+  }
+
+  const parentThreadId =
+    pickString(spawn ?? {}, ["parentThreadId", "parent_thread_id"]) ??
+    pickString(record, ["parentThreadId", "parent_thread_id"]) ??
+    pickString(sessionRecord ?? {}, ["parentThreadId", "parent_thread_id"]);
+  if (!parentThreadId) {
+    return undefined;
+  }
+
+  const depth = pickNumber(spawn ?? {}, ["depth"]);
+  const agentPath =
+    pickString(record, ["agentPath", "agent_path"]) ??
+    pickString(sessionRecord ?? {}, ["agentPath", "agent_path"]) ??
+    pickString(spawn ?? {}, ["agentPath", "agent_path"]);
+  const agentNickname =
+    pickString(record, ["agentNickname", "agent_nickname"]) ??
+    pickString(sessionRecord ?? {}, ["agentNickname", "agent_nickname"]) ??
+    pickString(spawn ?? {}, ["agentNickname", "agent_nickname"]);
+  const agentRole =
+    pickString(record, ["agentRole", "agent_role"]) ??
+    pickString(sessionRecord ?? {}, ["agentRole", "agent_role"]) ??
+    pickString(spawn ?? {}, ["agentRole", "agent_role"]);
+
+  return {
+    parentThreadId,
+    ...(depth !== undefined ? { depth } : {}),
+    ...(agentPath ? { agentPath } : {}),
+    ...(agentNickname ? { agentNickname } : {}),
+    ...(agentRole ? { agentRole } : {}),
+  };
+}
+
+const LIVE_TURN_ACTIVITY_METHODS = new Set([
+  "thread/closed",
+  "thread/status/changed",
+  "turn/cancelled",
+  "turn/completed",
+  "turn/failed",
+]);
+
+// A notification after which a turn that blocked history recovery may be over.
+function isLiveTurnActivityMethod(rawMethod: string, normalizedMethod: string): boolean {
+  return LIVE_TURN_ACTIVITY_METHODS.has(rawMethod)
+    || LIVE_TURN_ACTIVITY_METHODS.has(normalizedMethod);
+}
+
+function isRequestTimeoutError(error: unknown, method: string): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.toLowerCase().includes(`json-rpc timeout: ${method.toLowerCase()}`);
+}
+
+function extractThreadsFromValue(value: unknown, textCache: ThreadListTextCache): RawCodexThreadSummary[] {
+  const items = extractThreadRecords(value);
+  const summaries = new Map<string, RawCodexThreadSummary>();
+
+  for (const record of items) {
+    const threadId =
+      pickString(record, ["threadId", "thread_id", "id", "conversationId", "conversation_id"]) ??
+      pickString(asRecord(record.thread) ?? {}, ["id", "threadId", "thread_id"]);
+
+    if (!threadId) {
+      continue;
+    }
+
+    const sessionRecord = asRecord(record.session);
+    const codexThreadSourceKind = readCodexThreadSourceKind(record, sessionRecord);
+    const codexNativeSubAgent = readCodexNativeSubAgent(
+      record,
+      sessionRecord,
+      codexThreadSourceKind,
+    );
+    const gitInfoRecord =
+      asRecord(record.gitInfo) ??
+      asRecord(record.git_info) ??
+      asRecord(sessionRecord?.gitInfo) ??
+      asRecord(sessionRecord?.git_info);
+    const projectKey =
+      pickString(record, ["projectKey", "project_key", "cwd"]) ??
+      pickString(sessionRecord ?? {}, ["cwd", "projectKey", "project_key"]);
+    const originator =
+      pickString(record, ["originator"]) ??
+      pickString(sessionRecord ?? {}, ["originator"]);
+    const rolloutPath =
+      pickString(record, ["path"]) ??
+      pickString(sessionRecord ?? {}, ["path"]);
+    const rawExplicitTitle = pickString(record, ["title", "name", "headline"])
+      ?? pickString(sessionRecord ?? {}, ["title", "name", "headline"]);
+    const rawDerivedTitle =
+      pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
+      pickString(sessionRecord ?? {}, [
+        "preview",
+        "snippet",
+        "firstUserMessage",
+        "first_user_message",
+      ]);
+    const rawSummary =
+      pickString(record, [
+        "summary",
+        "preview",
+        "snippet",
+        "firstUserMessage",
+        "first_user_message",
+      ]) ??
+        pickString(sessionRecord ?? {}, [
+          "summary",
+          "preview",
+          "snippet",
+          "firstUserMessage",
+          "first_user_message",
+        ]);
+    const text = textCache.read(threadId, [rawExplicitTitle, rawDerivedTitle, rawSummary], () => {
+      const titleInfo = getThreadTitleInfo(rawExplicitTitle, rawDerivedTitle);
+      const summary = normalizeThreadSummary(rawSummary);
+      return {
+        ...titleInfo,
+        summary: summary === titleInfo.title
+          || (titleInfo.titleSource === "derived" && summary === normalizeThreadSummary(rawDerivedTitle))
+          ? undefined : summary,
+      };
+    });
+    const threadStatus = readThreadStatus(record);
+
+    summaries.set(threadId, {
+      id: threadId,
+      ...text,
+      ...(threadStatus ? { threadStatus } : {}),
+      isPinned: pickBoolean(record, ["isPinned", "is_pinned"]),
+      originator,
+      path: rolloutPath,
+      projectKey,
+      model:
+        pickString(record, ["model"]) ??
+        pickString(sessionRecord ?? {}, ["model"]),
+      serviceTier:
+        pickString(record, ["serviceTier", "service_tier"]) ??
+        pickString(sessionRecord ?? {}, ["serviceTier", "service_tier"]),
+      reasoningEffort:
+        pickString(record, ["reasoningEffort", "reasoning_effort"]) ??
+        pickString(sessionRecord ?? {}, ["reasoningEffort", "reasoning_effort"]),
+      fastMode:
+        pickBoolean(record, ["fastMode", "fast_mode"]) ??
+        pickBoolean(sessionRecord ?? {}, ["fastMode", "fast_mode"]),
+      createdAt: normalizeEpochTimestamp(
+        pickNumber(record, ["createdAt", "created_at"]) ??
+          pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"])
+      ),
+      updatedAt: normalizeEpochTimestamp(
+        pickNumber(record, ["updatedAt", "updated_at", "lastActivityAt", "createdAt"]) ??
+          pickNumber(sessionRecord ?? {}, ["updatedAt", "updated_at", "lastActivityAt"])
+      ),
+      archivedAt: normalizeEpochTimestamp(
+        pickNumber(record, ["archivedAt", "archived_at"]) ??
+          pickNumber(sessionRecord ?? {}, ["archivedAt", "archived_at"])
+      ),
+      gitBranch:
+        pickString(gitInfoRecord ?? {}, ["branch"]) ??
+        pickString(asRecord(sessionRecord?.gitInfo) ?? {}, ["branch"]) ??
+        pickString(asRecord(sessionRecord?.git_info) ?? {}, ["branch"]),
+      gitOriginUrl: pickString(gitInfoRecord ?? {}, [
+        "originUrl",
+        "origin_url",
+        "remoteUrl",
+        "remote_url",
+      ]),
+      codexThreadSourceKind,
+      codexNativeSubAgent,
+    });
+  }
+
+  return [...summaries.values()].sort(
+    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+  );
+}
+
+function extractThreadListPage(value: unknown, textCache: ThreadListTextCache): RawCodexThreadListPage {
+  const record = asRecord(value);
+  return {
+    nextCursor: record
+      ? pickString(record, ["nextCursor", "next_cursor", "after"])
+      : undefined,
+    threads: extractThreadsFromValue(value, textCache),
+  };
+}
+
+function buildThreadDiscoveryPayloads(
+  filter?: string,
+  archived?: boolean,
+  cursor?: string,
+  limit = 50,
+  sourceKinds?: CodexThreadListParams["sourceKinds"],
+  ancestorThreadId?: string,
+): CodexThreadListParams[] {
+  const searchTerm = filter?.trim() || undefined;
+  const baseParams: CodexThreadListParams = {
+    archived,
+    cursor,
+    limit,
+    sortKey: "updated_at",
+    sourceKinds: sourceKinds ?? ["cli", "vscode"],
+    useStateDbOnly: true,
+    ...(ancestorThreadId ? { ancestorThreadId } : {}),
+  };
+
+  // A scoped recovery must never fall back to the global worker collection.
+  if (ancestorThreadId) {
+    return [{ ...baseParams, searchTerm }];
+  }
+
+  return [
+    {
+      ...baseParams,
+      searchTerm,
+    },
+    {
+      ...baseParams,
+    },
+    cursor ? { cursor } : {}
+  ];
+}
+
+const CODEX_NATIVE_SUBAGENT_DISCOVERY_LIMIT = 100;
+
+// Worktree safety inventories include every checkout user, including threads
+// excluded from navigation and older app-server/exec-created conversations.
+const CODEX_WORKTREE_SAFETY_SOURCE_KINDS: NonNullable<CodexThreadListParams["sourceKinds"]> = [
+  "cli", "vscode", "exec", "appServer", "subAgent", "subAgentReview",
+  "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown",
+];
+
+function threadTitleSourcePriority(
+  titleSource: AppServerThreadTitleSource
+): number {
+  switch (titleSource) {
+    case "explicit":
+      return 2;
+    case "derived":
+      return 1;
+    case "fallback":
+    default:
+      return 0;
+  }
+}
+
+function mergeThreadSummaries(
+  threads: RawCodexThreadSummary[]
+): RawCodexThreadSummary[] {
+  const merged = new Map<string, RawCodexThreadSummary>();
+
+  for (const thread of threads) {
+    const current = merged.get(thread.id);
+    if (!current) {
+      merged.set(thread.id, thread);
+      continue;
+    }
+
+    const currentPriority = threadTitleSourcePriority(current.titleSource);
+    const nextPriority = threadTitleSourcePriority(thread.titleSource);
+    const preferNext =
+      nextPriority > currentPriority ||
+      (nextPriority === currentPriority &&
+        (thread.updatedAt ?? 0) > (current.updatedAt ?? 0));
+
+    merged.set(thread.id, preferNext ? thread : current);
+  }
+
+  return [...merged.values()].sort(
+    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+  );
+}
+
+function mergeArchivedThreadMetadata(params: {
+  activeThreads: RawCodexThreadSummary[];
+  archivedThreads: RawCodexThreadSummary[];
+}): RawCodexThreadSummary[] {
+  const archivedById = new Map(
+    params.archivedThreads.map((thread) => [thread.id, thread] as const)
+  );
+
+  return params.activeThreads
+    .map((thread) => {
+      const archived = archivedById.get(thread.id);
+      if (!archived) {
+        return thread;
+      }
+
+      return mergeThreadSummaries([thread, archived])[0] ?? thread;
+    })
+    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+}
+
+function buildThreadMetadataCacheKey(filter?: string): string {
+  return filter?.trim() || "";
+}
+
+function normalizeGitOriginUrl(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
+  const candidate = sshMatch
+    ? `${sshMatch[1]}/${sshMatch[2]}`
+    : trimmed.replace(/^[a-z]+:\/\//i, "");
+
+  const normalized = candidate
+    .replace(/\.git$/i, "")
+    .replace(/^ssh\//i, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+
+  return normalized || undefined;
+}
+
+type EnrichedCodexThread = AppServerThreadSummary & {
+  gitOriginUrl?: string;
+};
+
+const THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY = 8;
+const THREAD_DIRECTORY_ENRICHMENT_MAX_UNREAD = 16;
+
+function hydrateMissingLinkedDirectoriesFromSiblingRepos(
+  threads: EnrichedCodexThread[]
+): EnrichedCodexThread[] {
+  const donorDirectoriesByOrigin = new Map<string, LinkedDirectorySummary[]>();
+
+  for (const thread of threads) {
+    if (thread.linkedDirectories.length === 0) {
+      continue;
+    }
+
+    const normalizedOrigin = normalizeGitOriginUrl(thread.gitOriginUrl);
+    if (!normalizedOrigin || donorDirectoriesByOrigin.has(normalizedOrigin)) {
+      continue;
+    }
+
+    const rootDirectories = thread.linkedDirectories.filter(
+      (directory) => !directory.worktreePath
+    );
+    donorDirectoriesByOrigin.set(
+      normalizedOrigin,
+      rootDirectories.length > 0 ? rootDirectories : thread.linkedDirectories
+    );
+  }
+
+  return threads.map((thread) => {
+    if (thread.linkedDirectories.length > 0) {
+      return thread;
+    }
+
+    const normalizedOrigin = normalizeGitOriginUrl(thread.gitOriginUrl);
+    if (!normalizedOrigin) {
+      return thread;
+    }
+
+    const donorDirectories = donorDirectoriesByOrigin.get(normalizedOrigin);
+    if (!donorDirectories || donorDirectories.length === 0) {
+      return thread;
+    }
+
+    const linkedDirectories = donorDirectories.map((directory) => {
+      if (!thread.projectKey || thread.projectKey === directory.path) {
+        return directory;
+      }
+
+      return {
+        ...directory,
+        worktreePath: thread.projectKey,
+        kind: "worktree" as const,
+      };
+    });
+
+    return {
+      ...thread,
+      linkedDirectories,
+    };
+  });
+}
+
+function normalizeCodexSandboxMode(
+  value?: string
+): CodexSandboxMode | undefined {
+  const normalized = value?.trim();
+  if (
+    normalized === "read-only" ||
+    normalized === "workspace-write" ||
+    normalized === "danger-full-access"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function buildCodexSandboxPolicy(
+  value?: string
+): CodexSandboxPolicy | undefined {
+  const mode = normalizeCodexSandboxMode(value);
+  if (!mode) {
+    return undefined;
+  }
+  if (mode === "danger-full-access") {
+    return { type: "dangerFullAccess" };
+  }
+  if (mode === "read-only") {
+    return { type: "readOnly", networkAccess: false };
+  }
+  return {
+    type: "workspaceWrite",
+    writableRoots: [],
+    networkAccess: false,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
+  };
+}
+
+function normalizeCodexServiceTier(
+  value?: string | null
+): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  const normalized = value?.trim();
+  if (normalized === "fast" || normalized === "priority") {
+    return "priority";
+  }
+  if (normalized === "flex" || normalized === "ultrafast") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function resolveCodexServiceTier(params: {
+  fastMode?: boolean;
+  serviceTier?: string | null;
+}): string | null | undefined {
+  if (params.serviceTier === "ultrafast") {
+    return "ultrafast";
+  }
+  if (params.fastMode === true) {
+    return "priority";
+  }
+  if (params.fastMode === false) {
+    return params.serviceTier &&
+      params.serviceTier !== "fast" &&
+      params.serviceTier !== "priority"
+      ? params.serviceTier
+      : null;
+  }
+  return params.serviceTier;
+}
+
+function normalizeCodexReasoningEffort(
+  value?: string
+): CodexReasoningEffort | undefined {
+  const normalized = value?.trim();
+  if (
+    normalized === "none" ||
+    normalized === "minimal" ||
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "xhigh" ||
+    normalized === "max" ||
+    normalized === "ultra"
+  ) {
+    return normalized as CodexReasoningEffort;
+  }
+  return undefined;
+}
+
+function applyApprovalReviewer(
+  payload: Pick<CodexThreadStartParams, "approvalsReviewer">,
+  params: { approvalsReviewer?: ApprovalsReviewer; approvalPolicy?: string; sandbox?: string },
+  compatibility: CodexProtocolCompatibility,
+): void {
+  if (params.approvalsReviewer === "auto_review") {
+    if (!compatibility.supportsAutoReview) {
+      throw new Error("Auto access requires Codex 0.153.0 or later.");
+    }
+    if ((params.approvalPolicy && params.approvalPolicy !== "on-request")
+      || (params.sandbox && params.sandbox !== "workspace-write")) {
+      throw new Error("Auto access requires on-request approvals and the workspace-write sandbox.");
+    }
+  }
+  if (params.approvalsReviewer && compatibility.supportsAutoReview) {
+    payload.approvalsReviewer = params.approvalsReviewer;
+  }
+}
+
+function buildThreadStartPayload(params: {
+  cwd?: string;
+  runtimeWorkspaceRoots?: string[];
+  environments?: CodexThreadStartParams["environments"];
+  baseInstructions?: CodexThreadStartParams["baseInstructions"];
+  model?: string;
+  approvalPolicy?: string;
+  approvalsReviewer?: ApprovalsReviewer;
+  sandbox?: string;
+  serviceTier?: string | null;
+  fastMode?: boolean;
+  ephemeral?: boolean;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  config?: CodexThreadStartParams["config"];
+  defaultModeRequestUserInput?: boolean;
+  dynamicTools?: CodexDynamicToolSpec[];
+  threadSource?: CodexThreadStartParams["threadSource"];
+  bundledToolsDirectory?: string;
+  buildShellEnvironment?: CodexClientHost["buildShellEnvironment"];
+  pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
+}, compatibility: CodexProtocolCompatibility): CodexThreadStartPayload {
+  const base: CodexThreadStartPayload = {
+    experimentalRawEvents: false,
+  };
+  if (compatibility.includePersistExtendedHistory) {
+    base.persistExtendedHistory = false;
+  }
+
+  if (params.cwd?.trim()) {
+    base.cwd = params.cwd.trim();
+  }
+  if (params.runtimeWorkspaceRoots !== undefined) {
+    base.runtimeWorkspaceRoots = params.runtimeWorkspaceRoots;
+  }
+  if (params.environments !== undefined) {
+    base.environments = params.environments;
+  }
+  if (params.baseInstructions !== undefined) {
+    base.baseInstructions = params.baseInstructions;
+  }
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  const approvalPolicy = normalizeCompatibleApprovalPolicy(
+    params.approvalPolicy,
+    compatibility,
+  );
+  if (approvalPolicy) {
+    base.approvalPolicy = approvalPolicy;
+  }
+  applyApprovalReviewer(base, params, compatibility);
+
+  const sandbox = normalizeCodexSandboxMode(params.sandbox);
+  if (sandbox) {
+    base.sandbox = sandbox;
+  }
+
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
+    base.serviceTier = serviceTier;
+  }
+  if (params.ephemeral !== undefined) {
+    base.ephemeral = params.ephemeral;
+  }
+  if (params.threadSource) {
+    base.threadSource = params.threadSource;
+  }
+  if (params.pwrdrvrTokenMiser) {
+    base.pwrdrvrTokenMiser = params.pwrdrvrTokenMiser;
+  }
+  const config = mergeCodexShellEnvironmentPolicyConfig(
+    mergeCodexDefaultModeRequestUserInputConfig(
+      params.config,
+      params.defaultModeRequestUserInput,
+    ),
+    params.codexEnvironmentRuntime,
+    params.bundledToolsDirectory,
+    params.buildShellEnvironment,
+  );
+  if (config) {
+    base.config = config;
+  }
+  if (params.dynamicTools) {
+    base.dynamicTools = serializeCompatibleDynamicTools(
+      params.dynamicTools,
+      compatibility,
+    );
+  }
+  if (
+    params.environments === undefined &&
+    params.codexEnvironmentRuntime?.executionTarget === "remote" &&
+    params.codexEnvironmentRuntime.environmentId &&
+    params.cwd?.trim()
+  ) {
+    base.environments = [
+      {
+        environmentId: params.codexEnvironmentRuntime.environmentId,
+        cwd: params.cwd.trim(),
+      },
+    ];
+  }
+
+  return base;
+}
+
+function mergeCodexShellEnvironmentPolicyConfig(
+  config: CodexThreadStartParams["config"] | undefined,
+  runtime: CodexThreadEnvironmentRuntime | undefined,
+  bundledToolsDirectory?: string,
+  buildShellEnvironment?: CodexClientHost["buildShellEnvironment"],
+): CodexThreadStartParams["config"] | undefined {
+  const sanitizedConfig = sanitizeCodexShellEnvironmentPolicyConfig(config);
+  if (runtime?.executionTarget !== "local" || !runtime.shellEnvironment) {
+    return sanitizedConfig;
+  }
+  const hydratedEnvironment = buildShellEnvironment
+    ? buildShellEnvironment(runtime.shellEnvironment, bundledToolsDirectory)
+    : runtime.shellEnvironment;
+  const shellEnvironment = Object.fromEntries(
+    Object.entries(hydratedEnvironment).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[0] === "string" &&
+        entry[0].length > 0 &&
+        typeof entry[1] === "string",
+    ),
+  );
+  if (!Object.keys(shellEnvironment).length) {
+    return sanitizedConfig;
+  }
+  const baseConfig = isPlainRecord(sanitizedConfig) ? sanitizedConfig : {};
+  return Object.entries(shellEnvironment).reduce<Record<string, unknown>>(
+    (nextConfig, [key, value]) => {
+      if (isShellEnvironmentVariableName(key)) {
+        nextConfig[`shell_environment_policy.set.${key}`] = value;
+      }
+      return nextConfig;
+    },
+    { ...baseConfig },
+  ) as CodexThreadStartParams["config"];
+}
+
+function sanitizeCodexShellEnvironmentPolicyConfig(
+  config: CodexThreadStartParams["config"] | undefined,
+): CodexThreadStartParams["config"] | undefined {
+  if (!isPlainRecord(config)) {
+    return config;
+  }
+  const sanitized = { ...config };
+  for (const key of Object.keys(sanitized)) {
+    const environmentKey = key.startsWith("shell_environment_policy.set.")
+      ? key.slice("shell_environment_policy.set.".length)
+      : undefined;
+    if (environmentKey?.toUpperCase() === "ELECTRON_RENDERER_URL") {
+      delete sanitized[key];
+    }
+  }
+  return sanitized as CodexThreadStartParams["config"];
+}
+
+function mergeCodexDefaultModeRequestUserInputConfig(
+  config: CodexThreadStartParams["config"] | undefined,
+  enabled: boolean | undefined,
+): CodexThreadStartParams["config"] | undefined {
+  if (!enabled) {
+    return config;
+  }
+  const baseConfig = isPlainRecord(config) ? config : {};
+  return {
+    ...baseConfig,
+    [CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY]: true,
+  } as CodexThreadStartParams["config"];
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isShellEnvironmentVariableName(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+}
+
+function buildThreadForkPayload(params: {
+  threadId: string;
+  path?: string;
+  cwd?: string;
+  model?: string;
+  approvalPolicy?: string;
+  approvalsReviewer?: ApprovalsReviewer;
+  sandbox?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  config?: CodexThreadForkParams["config"];
+  bundledToolsDirectory?: string;
+  buildShellEnvironment?: CodexClientHost["buildShellEnvironment"];
+}, compatibility: CodexProtocolCompatibility): CodexThreadForkPayload {
+  const base: CodexThreadForkPayload = {
+    threadId: params.threadId,
+    excludeTurns: true,
+    threadSource: "user",
+  };
+  if (compatibility.includePersistExtendedHistory) {
+    base.persistExtendedHistory = false;
+  }
+
+  if (params.path?.trim()) {
+    base.path = params.path.trim();
+  }
+  if (params.cwd?.trim()) {
+    const cwd = params.cwd.trim();
+    base.cwd = cwd;
+    base.runtimeWorkspaceRoots = [cwd];
+  }
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  const approvalPolicy = normalizeCompatibleApprovalPolicy(
+    params.approvalPolicy,
+    compatibility,
+  );
+  if (approvalPolicy) {
+    base.approvalPolicy = approvalPolicy;
+  }
+  applyApprovalReviewer(base, params, compatibility);
+
+  const sandbox = normalizeCodexSandboxMode(params.sandbox);
+  if (sandbox) {
+    base.sandbox = sandbox;
+  }
+
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
+    base.serviceTier = serviceTier;
+  }
+
+  const config = mergeCodexShellEnvironmentPolicyConfig(
+    params.config,
+    params.codexEnvironmentRuntime,
+    params.bundledToolsDirectory,
+    params.buildShellEnvironment,
+  );
+  if (config) {
+    base.config = config;
+  }
+
+  return base;
+}
+
+function buildThreadResumePayloads(params: {
+  threadId: string;
+  cwd?: string;
+  model?: string;
+  approvalPolicy?: string;
+  approvalsReviewer?: ApprovalsReviewer;
+  sandbox?: string;
+  serviceTier?: string | null;
+  reasoningEffort?: string;
+  fastMode?: boolean;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  config?: CodexThreadResumeParams["config"];
+  defaultModeRequestUserInput?: boolean;
+  bundledToolsDirectory?: string;
+  buildShellEnvironment?: CodexClientHost["buildShellEnvironment"];
+  dynamicTools?: CodexDynamicToolSpec[];
+  pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
+}, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
+  const base: CodexThreadResumePayload = {
+    threadId: params.threadId,
+    // Transcript history is read separately through the paginated APIs.
+    excludeTurns: true,
+  };
+  if (compatibility.includePersistExtendedHistory) {
+    base.persistExtendedHistory = false;
+  }
+
+  if (params.cwd?.trim()) {
+    base.cwd = params.cwd.trim();
+  }
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  const approvalPolicy = normalizeCompatibleApprovalPolicy(
+    params.approvalPolicy,
+    compatibility,
+  );
+  if (approvalPolicy) {
+    base.approvalPolicy = approvalPolicy;
+  }
+  applyApprovalReviewer(base, params, compatibility);
+
+  const sandbox = normalizeCodexSandboxMode(params.sandbox);
+  if (sandbox) {
+    base.sandbox = sandbox;
+  }
+
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
+    base.serviceTier = serviceTier;
+  }
+
+  const config = mergeCodexShellEnvironmentPolicyConfig(
+    mergeCodexDefaultModeRequestUserInputConfig(
+      params.config,
+      params.defaultModeRequestUserInput,
+    ),
+    params.codexEnvironmentRuntime,
+    params.bundledToolsDirectory,
+    params.buildShellEnvironment,
+  );
+  if (config) {
+    base.config = config;
+  }
+  if (params.dynamicTools) {
+    base.dynamicTools = serializeCompatibleDynamicTools(
+      params.dynamicTools,
+      compatibility,
+    );
+  }
+  if (params.pwrdrvrTokenMiser !== undefined) {
+    base.pwrdrvrTokenMiser = params.pwrdrvrTokenMiser;
+  }
+
+  return [base];
+}
+
+function extractStringProperty(value: unknown, ...keys: string[]): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function buildCollaborationModeOverrides(params: {
+  collaborationMode?: AppServerCollaborationModeRequest;
+  fallbackModel?: string;
+  fallbackReasoningEffort?: string;
+}): { model: string; effort: CodexReasoningEffort | null } | undefined {
+  if (!params.collaborationMode) {
+    return undefined;
+  }
+
+  const settings = params.collaborationMode.settings ?? {};
+  const model =
+    settings.model?.trim() ||
+    params.fallbackModel?.trim() ||
+    DEFAULT_CODEX_COLLABORATION_MODEL;
+  const reasoningEffort =
+    normalizeCodexReasoningEffort(settings.reasoningEffort) ??
+    normalizeCodexReasoningEffort(params.fallbackReasoningEffort) ??
+    null;
+  return {
+    model,
+    effort: reasoningEffort,
+  };
+}
+
+function toCodexUserInput(
+  input: Exclude<
+    AppServerTurnInputItem,
+    AppServerFileInputItem | AppServerLocalFileInputItem
+  >,
+): CodexUserInput {
+  if (input.type === "text") {
+    return {
+      type: "text",
+      text: input.text,
+      text_elements: [],
+    };
+  }
+
+  if (input.type === "image") {
+    return {
+      type: "image",
+      url: input.url,
+    };
+  }
+
+  return {
+    type: "localImage",
+    path: input.path,
+  };
+}
+
+async function prepareCodexUserInput(params: {
+  input: AppServerTurnInputItem[];
+  onInputTextPrepared?: (text: string | undefined) => void;
+}): Promise<CodexUserInput[]> {
+  const prepared: CodexUserInput[] = [];
+  const fileReferences: string[] = [];
+
+  for (const input of params.input) {
+    if (input.type === "localFile") {
+      const name = input.name?.trim() || path.basename(input.path);
+      fileReferences.push(
+        formatCodexFileReference({ ...input, name }, input.path),
+      );
+      prepared.push({
+        type: "mention",
+        name,
+        path: input.path,
+      });
+      continue;
+    }
+
+    if (input.type !== "file") {
+      prepared.push(toCodexUserInput(input));
+      continue;
+    }
+
+    const filePath = await persistCodexFileInput(input);
+    fileReferences.push(formatCodexFileReference(input, filePath));
+    prepared.push({
+      type: "mention",
+      name: input.name,
+      path: filePath,
+    });
+  }
+
+  const input: CodexUserInput[] = fileReferences.length === 0 ? prepared : [
+    {
+      type: "text",
+      text: [
+        "Files attached or referenced from PwrAgent are available locally for this turn:",
+        ...fileReferences,
+        "PwrAgent provided local path references rather than raw file payloads. Small validated text previews may appear above; use local tools to inspect files as needed.",
+      ].join("\n"),
+      text_elements: [],
+    },
+    ...prepared,
+  ];
+  // Publish the exact prepared text before any user-item notification can arrive.
+  // The registry must match the generated file preamble as well as the prompt.
+  params.onInputTextPrepared?.(input.flatMap((item) =>
+    item.type === "text" && item.text.trim() ? [item.text.trim()] : []
+  ).join("\n") || undefined);
+  return input;
+}
+
+function formatCodexFileReference(
+  file: Pick<AppServerFileInputItem, "name" | "mimeType" | "sizeBytes">
+    | Pick<
+        AppServerLocalFileInputItem,
+        | "mimeType"
+        | "name"
+        | "sizeBytes"
+        | "textPreview"
+        | "textPreviewTruncated"
+      >,
+  filePath: string,
+): string {
+  const metadata = [
+    file.mimeType ? `Type: ${file.mimeType}` : undefined,
+    typeof file.sizeBytes === "number"
+      ? `Size: ${formatByteSize(file.sizeBytes)}`
+      : undefined,
+  ].filter((value): value is string => Boolean(value));
+  const reference = metadata.length > 0
+    ? `- ${file.name}: ${filePath} (${metadata.join(" | ")})`
+    : `- ${file.name}: ${filePath}`;
+  if (!("textPreview" in file) || !file.textPreview) {
+    return reference;
+  }
+  const previewLabel = file.textPreviewTruncated
+    ? "Validated text preview (truncated):"
+    : "Validated text preview:";
+  return [
+    reference,
+    previewLabel,
+    "<pwragent-local-file-preview>",
+    file.textPreview,
+    "</pwragent-local-file-preview>",
+  ].join("\n");
+}
+
+function buildTurnStartPayload(params: {
+  threadId: string;
+  parentTurnId?: string;
+  rootTurnId?: string;
+  input: CodexUserInput[];
+  cwd?: string;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string | null;
+  fastMode?: boolean;
+  approvalPolicy?: string;
+  approvalsReviewer?: ApprovalsReviewer;
+  sandbox?: string;
+  outputSchema?: CodexTurnStartParams["outputSchema"];
+  collaborationMode?: AppServerCollaborationModeRequest;
+  collaborationFallbackModel?: string;
+  collaborationFallbackReasoningEffort?: string;
+}, compatibility: CodexProtocolCompatibility): CodexTurnStartPayload {
+  const base: CodexTurnStartPayload = {
+    threadId: params.threadId,
+    input: params.input,
+  };
+
+  if (compatibility.supportsTurnAncestry && params.parentTurnId) {
+    base.parentTurnId = params.parentTurnId;
+    if (params.rootTurnId) base.rootTurnId = params.rootTurnId;
+  }
+  if (params.cwd?.trim()) {
+    base.cwd = params.cwd.trim();
+  }
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  const reasoningEffort = normalizeCodexReasoningEffort(params.reasoningEffort);
+  if (reasoningEffort) {
+    base.effort = reasoningEffort;
+  }
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
+    base.serviceTier = serviceTier;
+  }
+  const approvalPolicy = normalizeCompatibleApprovalPolicy(
+    params.approvalPolicy,
+    compatibility,
+  );
+  if (approvalPolicy) {
+    base.approvalPolicy = approvalPolicy;
+  }
+  applyApprovalReviewer(base, params, compatibility);
+  const sandboxPolicy = buildCodexSandboxPolicy(params.sandbox);
+  if (sandboxPolicy) {
+    base.sandboxPolicy = sandboxPolicy;
+  }
+  if (params.outputSchema) {
+    base.outputSchema = params.outputSchema;
+  }
+  const collaborationOverrides = buildCollaborationModeOverrides({
+    collaborationMode: params.collaborationMode,
+    fallbackModel: params.collaborationFallbackModel ?? params.model,
+    fallbackReasoningEffort:
+      params.collaborationFallbackReasoningEffort ?? params.reasoningEffort,
+  });
+  if (collaborationOverrides) {
+    base.model = collaborationOverrides.model;
+    base.effort = collaborationOverrides.effort;
+  }
+
+  return base;
+}
+
+function buildReviewStartPayload(params: {
+  threadId: string;
+  target: AppServerReviewTarget;
+  delivery?: AppServerReviewDelivery;
+}): CodexReviewStartParams {
+  return {
+    threadId: params.threadId,
+    target: nativeReviewTarget(params.target),
+    delivery: params.delivery ?? "inline",
+  };
+}
+
+function buildThreadSettingsUpdatePayload(params: {
+  threadId: string;
+  cwd?: string;
+  model?: string;
+  serviceTier?: string | null;
+  reasoningEffort?: string;
+  fastMode?: boolean;
+}): CodexThreadSettingsUpdateParams | undefined {
+  const payload: CodexThreadSettingsUpdateParams = {
+    threadId: params.threadId,
+  };
+
+  if (params.cwd?.trim()) {
+    payload.cwd = params.cwd.trim();
+  }
+
+  if (params.model?.trim()) {
+    payload.model = params.model.trim();
+  }
+
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
+    payload.serviceTier = serviceTier;
+  }
+
+  const effort = normalizeCodexReasoningEffort(params.reasoningEffort);
+  if (effort) {
+    payload.effort = effort;
+  }
+
+  return payload.cwd !== undefined ||
+    payload.model !== undefined ||
+    payload.serviceTier !== undefined ||
+    payload.effort !== undefined
+    ? payload
+    : undefined;
+}
+
+const CODEX_THREAD_HISTORY_PAGE_SIZE = 100;
+const CODEX_THREAD_ITEM_HYDRATION_CONCURRENCY = 8;
+
+function buildThreadReadPayload(params: {
+  threadId: string;
+}): CodexThreadReadParams {
+  return {
+    threadId: params.threadId,
+    includeTurns: false,
+  };
+}
+
+function threadReadResultIncludesTurns(value: unknown): boolean {
+  const record = asRecord(value);
+  const thread = asRecord(record?.thread);
+  return Array.isArray(thread?.turns) && thread.turns.length > 0;
+}
+
+async function requestCodexThreadItemsPage(params: {
+  client: Pick<JsonRpcConnection, "request">;
+  payload: CodexThreadItemsListParams;
+  timeoutMs: number;
+}): Promise<CodexThreadItemsListResponse> {
+  try {
+    return await requestWithThreadMetadataReadRetry(async () => {
+      return await requestWithFallbacks({
+        client: params.client,
+        methods: ["thread/items/list"],
+        payloads: [params.payload],
+        timeoutMs: params.timeoutMs,
+      }) as CodexThreadItemsListResponse;
+    });
+  } catch (error) {
+    if (!isMethodUnavailableError(error, "thread/items/list")) {
+      throw error;
+    }
+  }
+
+  return await requestWithThreadMetadataReadRetry(async () => {
+    return await requestWithFallbacks({
+      client: params.client,
+      methods: ["thread/turns/items/list"],
+      payloads: [params.payload],
+      timeoutMs: params.timeoutMs,
+    }) as CodexThreadItemsListResponse;
+  });
+}
+
+async function listCodexThreadItems(params: {
+  client: Pick<JsonRpcConnection, "request">;
+  threadId: string;
+  timeoutMs: number;
+  turnId: string;
+}): Promise<CodexThreadItem[]> {
+  const items: CodexThreadItem[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+
+  while (true) {
+    const payload = {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      ...(cursor ? { cursor } : {}),
+      limit: CODEX_THREAD_HISTORY_PAGE_SIZE,
+      sortDirection: "asc",
+    } satisfies CodexThreadItemsListParams;
+    const page = await requestCodexThreadItemsPage({
+      client: params.client,
+      payload,
+      timeoutMs: params.timeoutMs,
+    });
+    // Newer servers wrap thread-wide item pages in { turnId, item }, while
+    // the legacy turn-items endpoint (and older servers) return items directly.
+    // Unwrap at this protocol boundary so message boundaries still split tool
+    // activity groups exactly as they do in thread/turns/list's full view.
+    items.push(...page.data.map((value) => {
+      const record = asRecord(value);
+      const item = typeof record?.type === "string" ? record : asRecord(record?.item);
+      if (!item || typeof item.type !== "string") throw new Error("Invalid Codex thread item page.");
+      return item as CodexThreadItem;
+    }));
+    const nextCursor = page.nextCursor ?? undefined;
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      break;
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  return items;
+}
+
+async function hydrateCodexThreadHistory(params: {
+  before?: string;
+  client: Pick<JsonRpcConnection, "request">;
+  limit?: number;
+  readResult: unknown;
+  threadId: string;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const turns: CodexTurn[] = [];
+  const seenCursors = new Set<string>();
+  const requestedLimit = params.limit === undefined
+    ? undefined
+    : Math.max(0, Math.floor(params.limit));
+  let cursor = params.before;
+  let nextCursor: string | undefined;
+
+  while (requestedLimit === undefined || turns.length < requestedLimit) {
+    const remaining = requestedLimit === undefined
+      ? CODEX_THREAD_HISTORY_PAGE_SIZE
+      : requestedLimit - turns.length;
+    if (remaining <= 0) {
+      break;
+    }
+    const payload = {
+      threadId: params.threadId,
+      ...(cursor ? { cursor } : {}),
+      limit: Math.min(CODEX_THREAD_HISTORY_PAGE_SIZE, remaining),
+      sortDirection: "desc",
+      itemsView: "full",
+    } satisfies CodexThreadTurnsListParams;
+    const page = await requestWithThreadMetadataReadRetry(async () => {
+      return await requestWithFallbacks({
+        client: params.client,
+        methods: ["thread/turns/list"],
+        payloads: [payload],
+        timeoutMs: params.timeoutMs,
+      });
+    }) as CodexThreadTurnsListResponse;
+    turns.push(...page.data);
+    nextCursor = page.nextCursor ?? undefined;
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      break;
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  const hydratedTurns: Array<CodexTurn | undefined> = [];
+  for await (const hydrated of new IterableMapper(
+    turns.map((turn, index) => ({ index, turn })),
+    async ({ index, turn }) => {
+      if (turn.itemsView === "full") {
+        return { index, turn };
+      }
+      return {
+        index,
+        turn: {
+          ...turn,
+          items: await listCodexThreadItems({
+            client: params.client,
+            threadId: params.threadId,
+            timeoutMs: params.timeoutMs,
+            turnId: turn.id,
+          }),
+          itemsView: "full" as const,
+        },
+      };
+    },
+    {
+      concurrency: CODEX_THREAD_ITEM_HYDRATION_CONCURRENCY,
+      maxUnread: CODEX_THREAD_ITEM_HYDRATION_CONCURRENCY,
+    },
+  )) {
+    hydratedTurns[hydrated.index] = hydrated.turn;
+  }
+  const record = asRecord(params.readResult) ?? {};
+  const thread = asRecord(record.thread) ?? {};
+  return {
+    ...record,
+    thread: {
+      ...thread,
+      turns: hydratedTurns
+        .filter((turn): turn is CodexTurn => Boolean(turn))
+        .reverse(),
+    },
+    supportsPagination: true,
+    hasPreviousPage: Boolean(nextCursor),
+    ...(nextCursor ? { previousCursor: nextCursor } : {}),
+  };
+}
+
+async function requestWithFallbacks(params: {
+  listingDiagnostics?: CodexListingDiagnostics;
+  client: Pick<JsonRpcConnection, "request">;
+  diagnostics?: JsonRpcObserverDiagnostics;
+  methods: Array<CodexClientRequestMethod | (string & {})>;
+  payloads: unknown[];
+  timeoutMs: number;
+  deadlineAt?: number;
+  listingPage?: number;
+}): Promise<unknown> {
+  let lastError: unknown;
+  let attempt = 0;
+
+  for (const method of params.methods) {
+    for (const payload of params.payloads) {
+      const timeoutMs = params.deadlineAt === undefined
+        ? params.timeoutMs
+        : Math.min(params.timeoutMs, params.deadlineAt - Date.now());
+      if (timeoutMs <= 0) throw new Error("Thread search deadline expired.");
+      try {
+        attempt += 1;
+        const request = () => params.client.request(method, payload, timeoutMs, params.diagnostics);
+        return await (method === "thread/list"
+          ? params.listingDiagnostics?.trace("provider-rpc", { caller: params.diagnostics?.callerReason, page: params.listingPage, attempt,
+            ...(attempt > 1 ? { reason: "provider-fallback" } : {}) }, request) ?? request()
+          : request());
+      } catch (error) {
+        lastError = error;
+        if (!isMethodUnavailableError(error, method)) {
+          continue;
+        }
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function requestThreadListPages(params: {
+  listingDiagnostics: CodexListingDiagnostics;
+  logger: CodexClientLogger;
+  textCache: ThreadListTextCache;
+  archived?: boolean;
+  client: Pick<JsonRpcConnection, "request">;
+  diagnostics?: JsonRpcObserverDiagnostics;
+  filter?: string;
+  limit?: number;
+  maxPages?: number;
+  requireComplete?: boolean;
+  requestTimeoutMs: number;
+  deadlineAt?: number;
+  sourceKinds?: CodexThreadListParams["sourceKinds"];
+  ancestorThreadId?: string;
+}): Promise<RawCodexThreadSummary[]> {
+  const pages: RawCodexThreadSummary[] = [];
+  const seenCursors = new Set<string>();
+  const startedAt = Date.now();
+  let maxPageThreads = 0;
+  let maxPreviewBytes = 0;
+  let pageCount = 0;
+  let previewBytes = 0;
+  let rawThreadCount = 0;
+  let terminalReason: "max-pages" | "no-next-cursor" | "repeated-cursor" | undefined;
+  let cursor: string | undefined;
+  const requestedLimit = params.limit ?? 50;
+  const maxPagesLimit =
+    params.maxPages !== undefined && Number.isFinite(params.maxPages)
+      ? Math.max(1, Math.floor(params.maxPages))
+      : undefined;
+
+  do {
+    const result = await requestWithFallbacks({
+      client: params.client,
+      diagnostics: params.diagnostics,
+      methods: ["thread/list"] as CodexClientRequestMethod[],
+      payloads: buildThreadDiscoveryPayloads(
+        params.filter,
+        params.archived,
+        cursor,
+        requestedLimit,
+        params.sourceKinds,
+        params.ancestorThreadId,
+      ),
+      timeoutMs: params.requestTimeoutMs,
+      deadlineAt: params.deadlineAt,
+      listingPage: pageCount + 1,
+      listingDiagnostics: params.listingDiagnostics,
+    });
+    const page = extractThreadListPage(result, params.textCache);
+    pages.push(...page.threads);
+    pageCount += 1;
+    rawThreadCount += page.threads.length;
+    maxPageThreads = Math.max(maxPageThreads, page.threads.length);
+    for (const thread of page.threads) {
+      const threadPreviewBytes = measureThreadPreviewBytes(thread);
+      previewBytes += threadPreviewBytes;
+      maxPreviewBytes = Math.max(maxPreviewBytes, threadPreviewBytes);
+    }
+
+    if (maxPagesLimit !== undefined && pageCount >= maxPagesLimit) {
+      terminalReason = "max-pages";
+      break;
+    }
+
+    const nextCursor = page.nextCursor?.trim();
+    if (!nextCursor) {
+      terminalReason = "no-next-cursor";
+      break;
+    }
+    if (seenCursors.has(nextCursor)) {
+      if (params.requireComplete) throw new Error("Thread discovery returned a repeated cursor; archive eligibility is incomplete.");
+      terminalReason = "repeated-cursor";
+      break;
+    }
+
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  const mergedThreads = mergeThreadSummaries(pages);
+  logCodexClientDebug(params.logger, "threadListPages", {
+    archived: params.archived === true,
+    callerReason: params.diagnostics?.callerReason ?? "thread-list",
+    durationMs: Date.now() - startedAt,
+    filterPresent: Boolean(params.filter?.trim()),
+    maxPageThreads,
+    maxPreviewBytes,
+    mergedThreadCount: mergedThreads.length,
+    ownerId: params.diagnostics?.ownerId,
+    pageCount,
+    previewBytes,
+    rawThreadCount,
+    terminalReason,
+  });
+
+  return mergedThreads;
+}
+
+/**
+ * Services one dynamic tool call made by a helper tool turn. Receives the raw
+ * request so the single `readAgentDynamicToolCall` parser in agent-tool land
+ * stays the only place that decodes the wire shape.
+ */
+export type HelperThreadToolCallHandler = (request: {
+  method: string;
+  params: Record<string, unknown>;
+}) => Promise<DynamicToolCallResponse>;
+
+type HelperTurnResult =
+  | {
+      status: "ok";
+      object: unknown;
+      tokenUsage?: unknown;
+    }
+  | {
+      status: "failed";
+      error: Error;
+    };
+
+async function ensureCodexThreadTitleWorkspace(): Promise<string> {
+  await mkdir(CODEX_THREAD_TITLE_WORKSPACE_DIR, { recursive: true });
+  return CODEX_THREAD_TITLE_WORKSPACE_DIR;
+}
+
+type NativeVoiceCatalogProof = {
+  dynamicTools: unknown;
+  cwd?: string;
+  runtime?: CodexThreadEnvironmentRuntime;
+  defaultModeRequestUserInput?: boolean;
+};
+
+export class CodexAppServerClient {
+  private readonly rawConnection: JsonRpcConnection;
+  // All ordinary RPCs, including continuations of multi-request operations,
+  // pass through admission. Only lifecycle work uses the raw connection.
+  private readonly connection: Pick<JsonRpcConnection, "request">;
+  private readonly modelProviderTranslator?: CodexModelProviderTranslator;
+  private lifecycleBarrier: Promise<void> | null = null;
+  private readonly activeRequests = new Set<Promise<unknown>>();
+  // closeGeneration invalidates admitted work across close; serverGeneration
+  // identifies one transport incarnation, including exits during initialization.
+  // Neither replaces the lifecycle barrier or draining active requests.
+  private closeGeneration = 0;
+  private pendingCloses = 0;
+  private serverGeneration = 0;
+  private readonly runningTurnIdsByThread = new Map<string, string>();
+  // A denial-limit guardianWarning means Codex is about to interrupt the
+  // thread's running turn. That interrupted completion is a failure.
+  private readonly guardianDenialLimitsByThread = new Map<
+    string,
+    { message: string; turnId?: string }
+  >();
+  private readonly turnRoots = new Map<string, string | null>();
+  private readonly liveUsageSnapshots = new Map<string, {
+    tokens: ThreadUsageTokenBreakdown;
+    model?: string;
+    serviceTier?: string;
+  }>();
+  private readonly pricingSnapshotReads = new Map<string, Promise<ThreadPricingSnapshot>>();
+  // Bumped whenever a turn may have ended (a terminal, a thread status change,
+  // a helper turn's cleanup, or a close). History recovery waits on it rather
+  // than on a clock when another turn still runs on this process.
+  private liveTurnActivitySequence = 0;
+  private readonly liveTurnActivityWaiters = new Set<() => void>();
+  private rejectedCodexHome?: string;
+  private transportClosePromise: Promise<void> | null = null;
+  private readonly restartPolicy: CodexAppServerRestartPolicy;
+  private readonly transport: CodexClientTransport;
+  /** Last Codex event or ordinary RPC; background probes do not postpone recycling. */
+  private lastAppServerActivityAt: number;
+  /** Requests from Codex (approvals, user input, tool calls) not yet answered. */
+  private pendingServerRequests = 0;
+  private recycleStatus: CodexAppServerRecycleStatus = { recycleCount: 0 };
+  /**
+   * Threads this connection subscribed to with thread/start, thread/fork or
+   * thread/resume, and when each last saw a request or an event. Codex keeps
+   * a subscribed thread loaded, with its MCP servers running, until every
+   * subscriber leaves, so `unsubscribeIdleThreads` must let go of them.
+   */
+  private readonly subscribedThreads = new Map<string, number>();
+  /** Keep parent-addressable children without re-reading them on every sweep. */
+  private readonly keptSubAgentThreads = new Set<string>();
+  /** Bumped each time a thread unloads, so operations resume it again. */
+  private readonly threadUnloadGenerations = new Map<string, number>();
+  /** Requests from Codex (approvals, user input, tool calls) per thread. */
+  private readonly pendingServerRequestsByThread = new Map<string, number>();
+  private threadUnsubscribeUnsupported = false;
+  private restartStatus: CodexAppServerRestartStatus = { stopped: false };
+  private readonly restartStatusListeners = new Set<
+    (status: CodexAppServerRestartStatus) => void
+  >();
+  private readonly unexpectedExitListeners = new Set<() => void>();
+  private cancelRestartBackoff?: () => void;
+  private readonly lastDirectoryEnrichment = new Map<string, ThreadDirectoryEnrichment>();
+  private readonly threadDirectoryEnricher: (
+    projectKey?: string,
+    caller?: DirectoryEnrichmentCaller,
+  ) => Promise<ThreadDirectoryEnrichment>;
+  private readonly archivedThreadMetadataByFilter = new Map<
+    string,
+    RawCodexThreadSummary[]
+  >();
+  private readonly archivedThreadMetadataInFlightByFilter = new Map<
+    string,
+    Promise<RawCodexThreadSummary[]>
+  >();
+  private readonly archivedThreadMetadataScheduledByFilter = new Set<string>();
+  private readonly archivedThreadMetadataLastRefreshByFilter = new Map<string, number>();
+  private initialized = false;
+  private tokenMiserActivationNegotiated = false;
+  private initializationPromise: Promise<void> | null = null;
+  private initializeResult: InitializeResult | null = null;
+  private availableHelperModels: BackendModelOption[] = [];
+  private readonly realtimeListeners = new Set<(event: NativeVoiceNotification) => void>();
+  private readonly realtimeDisconnectListeners = new Set<() => void>();
+  /** A `model/list` completed, so an empty catalog really is empty. */
+  private helperModelsRead = false;
+  /** The first helper turn's catalog read, shared by turns that start with it. */
+  private helperModelsReading: Promise<unknown> | null = null;
+  /** Skipped helper models already logged since the last catalog read. */
+  private readonly helperModelWarnings = new Set<string>();
+  private readonly notificationListeners = new Set<
+    (notification: AppServerNotification) => void | Promise<void>
+  >();
+  private readonly mcpStartupStatusByContext = new Map<
+    string,
+    Map<
+      string,
+      {
+        status: NonNullable<CodexMcpServerSummary["startupStatus"]>;
+        error?: string;
+      }
+    >
+  >();
+  private readonly threadListTextCache = new ThreadListTextCache();
+  private readonly pendingThreadListings = new Map<string, Promise<AppServerThreadSummary[]>>();
+  private readonly pendingThreadInventories = new Map<string, Promise<RawCodexThreadSummary[]>>();
+  private activeThreadListingGeneration = 0;
+  private archivedThreadListingGeneration = 0;
+  private readonly threadListingInvalidations = new WeakSet<AppServerNotification>();
+  private readonly recordedThreadNames = new Map<string, string>();
+  /**
+   * Names this client set with `thread/name/set` that Codex has not echoed
+   * yet. Codex 0.159.2 answers the request, then sends `thread/name/updated`
+   * with no `titleSource`, which every recorder reads as an operator rename.
+   * The caller of each set announces the name with its real source, so the
+   * echo is dropped. An entry expires, so a build that never echoes cannot
+   * leave one behind to swallow a later rename to the same name.
+   */
+  private readonly pendingThreadNameEchoes = new Map<string, Array<{ name: string; expiresAt: number }>>();
+  private readonly requestListeners = new Set<
+    (
+      request: AppServerPendingRequestNotification
+    ) => Promise<unknown> | unknown
+  >();
+  // Only thread/start in this live process proves the initial catalog. Forks
+  // and persisted IDs do not. Settings are acknowledged again at admission.
+  private readonly freshNativeVoiceThreads = new Map<string, NativeVoiceCatalogProof>();
+  // Admission proves the loaded catalog, independently of first-turn rollout
+  // bookkeeping. Owned realtime handoffs do not replace that catalog.
+  private readonly admittedNativeVoiceThreads = new Map<string, NativeVoiceCatalogProof>();
+  private readonly ownedRealtimeThreads = new Set<string>();
+  // thread/start has no persisted history until its first turn. Forks can
+  // already have history, so pending-first-turn resume state is not enough.
+  private readonly threadsAwaitingFirstTurn = new Set<string>();
+  private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
+  private readonly pendingFirstTurnShellEnvironments = new Map<string, string | undefined>();
+  private readonly helperThreadIds = new Set<string>();
+  private readonly pendingHelperThreadStarts = new Set<Promise<string | undefined>>();
+  private readonly helperTurnWaiters = new Map<
+    string,
+    {
+      resolve: (result: Extract<HelperTurnResult, { status: "ok" }>) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private readonly completedHelperTurnResults = new Map<string, HelperTurnResult>();
+  private readonly helperTurnTitleObjects = new Map<string, unknown>();
+  private readonly helperTurnTokenUsage = new Map<string, unknown>();
+  /** Per-helper-thread output-shape predicate (defaults to the title shape). */
+  private readonly helperThreadPredicates = new Map<
+    string,
+    StructuredRecordPredicate
+  >();
+  /**
+   * Helper threads that are allowed to call PwrAgent dynamic tools, and the
+   * handler that services those calls.
+   *
+   * Routing them here rather than through the ordinary notification/request
+   * listeners is the point. `BackendRegistry.handleServerRequest` gates every
+   * dynamic tool call on `activeTurnKeys` — proof that the call came from a
+   * live turn on a thread the registry owns. A helper turn is ephemeral and
+   * never enters that map, so it could not pass the gate; registering the
+   * thread here for exactly the lifetime of its turn is the same proof
+   * expressed by ownership instead of by lookup. Nothing outside the caller's
+   * `runHelperToolTurn` frame can reach the handler.
+   */
+  private readonly helperThreadToolHandlers = new Map<
+    string,
+    HelperThreadToolCallHandler
+  >();
+  /**
+   * Helper threads whose turn completes on `turn/completed` alone, with no
+   * structured record required. A tool turn's outcome is whatever its tools
+   * did, so demanding a final JSON object would fail turns that already
+   * succeeded.
+   */
+  private readonly helperToolTurnThreadIds = new Set<string>();
+
+  /** Unknown notification methods already warned about on this connection. */
+  private readonly reportedUnknownNotificationMethods = new Set<string>();
+  private readonly liveMessagePhases = new Map<string, LiveAgentMessagePhase>();
+
+  constructor(private readonly options: CodexClientOptions, private readonly host: CodexClientHost) {
+    this.restartPolicy = new CodexAppServerRestartPolicy(options.appServerRestartPolicy);
+    this.lastAppServerActivityAt = this.now();
+    this.transport = host.createTransport({
+      onAuthenticationRejected: (home) => {
+        this.rejectedCodexHome = home;
+        const runningTurns = [...this.runningTurnIdsByThread];
+        this.runningTurnIdsByThread.clear();
+        void (async () => {
+          await this.close();
+          await this.failRunningTurns(runningTurns, host.signInRequiredMessage);
+        })().catch((error) => this.host.logger.warn("Codex auth shutdown failed", { error: String(error) }));
+      },
+      onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
+    });
+    this.rawConnection = new JsonRpcConnection(
+      this.transport,
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      createCodexObserverWithConfigReadRedaction(options.connectionObserver),
+      { logContext: { backend: "codex" }, logger: host.rpcLogger },
+    );
+    // Every request, admitted or lifecycle, reaches Codex through this one
+    // function, so qualified model ids are translated in one place.
+    const resolveModelProviderIds = options.resolveModelProviderIds;
+    if (resolveModelProviderIds) {
+      this.modelProviderTranslator = new CodexModelProviderTranslator(resolveModelProviderIds);
+      const translator = this.modelProviderTranslator;
+      const rawRequest = this.rawConnection.request.bind(this.rawConnection);
+      this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
+        const translated = translator.translateRequest(method, params);
+        const result = await rawRequest(method, translated, timeoutMs, diagnostics);
+        return translator.observeResponse(method, translated, result);
+      };
+    }
+    // Every route to Codex passes here, so this sees each subscription that
+    // any operation, helper or recovery opens or closes.
+    const requestBeforeSubscriptionTracking = this.rawConnection.request.bind(this.rawConnection);
+    this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
+      const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
+      this.observeThreadSubscription(method, params, result);
+      return result;
+    };
+    this.connection = {
+      request: (...args) => this.requestWhenAvailable(...args),
+    };
+    const directoryResolver = options.directoryResolver;
+    this.threadDirectoryEnricher =
+      options.threadDirectoryEnricher ??
+      (directoryResolver
+        ? async (projectKey?: string) => ({
+            linkedDirectories: await directoryResolver(projectKey),
+          })
+        : host.enrichThreadDirectory);
+    this.rawConnection.setNotificationHandler(async (method, rawParams) => {
+      this.lastAppServerActivityAt = this.now();
+      const params = this.modelProviderTranslator
+        ? this.modelProviderTranslator.translateNotification(method, rawParams)
+        : rawParams;
+      if (method === "deprecationNotice") {
+        // Protocol migration guidance belongs in diagnostics, not thread UI.
+        const notice = asRecord(params) ?? {};
+        this.host.logger.warn("codex deprecation notice", {
+          summary: notice.summary,
+          details: notice.details,
+        });
+        return;
+      }
+      if (method === "thread/goal/updated" || method === "thread/goal/cleared") {
+        // Codex-native goals are not supported by this adapter. Do not forward
+        // their lifecycle as normalized PwrAgent thread-state notifications.
+        return;
+      }
+      const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
+      // Realtime is routed to live voice below, never logged: its payloads
+      // carry the operator's spoken words and session SDP, which stay memory
+      // only.
+      if (!isKnownCodexMethod && !method.startsWith("thread/realtime/")) {
+        logUnhandledCodexMessage(this.host.logger, {
+          kind: "notification",
+          method,
+          payload: params,
+          reportedNotificationMethods: this.reportedUnknownNotificationMethods,
+        });
+      }
+      if (method === "skills/changed") {
+        logSkillsChangedNotification(this.host.logger, {
+          payload: params,
+          listenerCount: this.notificationListeners.size,
+          initialized: this.initialized,
+        });
+      }
+      if (method === "mcpServer/startupStatus/updated") {
+        const name = readStringFromRecord(params, "name");
+        const status = readStringFromRecord(params, "status");
+        const error = readStringFromRecord(params, "error");
+        const threadId = extractRequestMetadata(params).threadId;
+        if (
+          name
+          && (status === "starting"
+            || status === "ready"
+            || status === "failed"
+            || status === "cancelled")
+        ) {
+          const contextKey = threadId
+            ? `thread:${threadId}`
+            : "global";
+          const statuses = this.mcpStartupStatusByContext.get(contextKey)
+            ?? new Map();
+          statuses.set(name, {
+            status,
+            ...(error ? { error } : {}),
+          });
+          this.mcpStartupStatusByContext.set(contextKey, statuses);
+          if (status === "failed") {
+            this.host.logger.error("MCP server startup failed", {
+              serverName: name,
+              ...(threadId ? { threadId } : {}),
+              ...(error ? { error } : {}),
+            });
+          }
+        }
+      }
+
+      // Realtime is ephemeral audio/control traffic. Keep it off ordinary
+      // transcript, federation and persistence paths.
+      if (method.startsWith("thread/realtime/")) {
+        const event = { method, params } as NativeVoiceNotification;
+        if (method === "thread/realtime/closed") {
+          const threadId = pickString(asRecord(params) ?? {}, ["threadId", "thread_id"]);
+          if (threadId) this.ownedRealtimeThreads.delete(threadId);
+        }
+        for (const listener of this.realtimeListeners) listener(event);
+        return;
+      }
+      const normalized = normalizeServerNotification(
+        method,
+        params,
+        this.liveMessagePhases,
+        this.takeGuardianDenialLimitMessage(method, params),
+      );
+      if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
+      if (method === "thread/name/updated" && this.consumeThreadNameEcho(params)) return;
+      const helperThreadId = extractThreadIdFromNotification(normalized, params);
+      if (helperThreadId && method === "thread/closed") {
+        // Codex unloaded it; the next operation must resume it first.
+        this.subscribedThreads.delete(helperThreadId);
+        this.keptSubAgentThreads.delete(helperThreadId);
+        this.noteThreadUnloaded(helperThreadId);
+      } else if (helperThreadId && this.subscribedThreads.has(helperThreadId)) {
+        this.subscribedThreads.set(helperThreadId, this.now());
+      }
+      // Codex can send startup warnings before thread/start returns its ID.
+      // Wait only for startup notices, then suppress those belonging to the
+      // helper. Interactive turn traffic continues while the RPC is pending.
+      if (helperThreadId
+        && !this.helperThreadIds.has(helperThreadId)
+        && (normalized.method === "warning" || method === "thread/started")
+        && this.pendingHelperThreadStarts.size > 0) {
+        const startedHelperIds = await Promise.all([...this.pendingHelperThreadStarts]);
+        if (startedHelperIds.includes(helperThreadId)) return;
+      }
+      if (helperThreadId && (normalized.method === "turn/started" || method === "thread/closed")) {
+        this.threadsAwaitingFirstTurn.delete(helperThreadId);
+        this.freshNativeVoiceThreads.delete(helperThreadId);
+        this.pendingFirstTurnThreadResults.delete(helperThreadId);
+        this.pendingFirstTurnShellEnvironments.delete(helperThreadId);
+        if (method === "thread/closed" || !this.ownedRealtimeThreads.has(helperThreadId)) {
+          this.admittedNativeVoiceThreads.delete(helperThreadId);
+        }
+      }
+      if (helperThreadId && this.helperThreadIds.has(helperThreadId)) {
+        this.handleHelperThreadNotification(normalized.method, normalized);
+        if (isLiveTurnActivityMethod(method, normalized.method)) {
+          this.noteLiveTurnActivity();
+        }
+        return;
+      }
+
+      // Retain totals in the owning connection before listener work. Read-only
+      // pricing must not resume an already-owned thread to obtain them.
+      if (normalized.method === "thread/tokenUsage/updated") {
+        const usage = asRecord(normalized.params.tokenUsage) ?? {};
+        const total = readTokenUsageBreakdown(asRecord(usage.total) ?? {});
+        if (total) rememberBoundedMap(this.liveUsageSnapshots, normalized.params.threadId, {
+          tokens: total,
+          model: pickString(asRecord(normalized.params) ?? {}, ["model"]) ?? pickString(usage, ["model"]),
+          serviceTier: pickString(usage, ["serviceTier"]),
+        }, 1_000);
+      } else if (normalized.method === "thread/compacted" || normalized.method === "thread/rewound" || method === "thread/closed"
+        || ((normalized.method === "item/started" || normalized.method === "item/completed")
+          && normalizeItemType(pickString(asRecord(normalized.params.item) ?? {}, ["type"])) === "contextcompaction")) {
+        if (helperThreadId) this.liveUsageSnapshots.delete(helperThreadId);
+      }
+
+      const turnMetadata = extractRequestMetadata(normalized.params);
+      const observedTurnId = turnMetadata.turnId
+        ?? pickString(asRecord(asRecord(normalized.params)?.turn) ?? {}, ["id"]);
+      if (turnMetadata.threadId && observedTurnId) {
+        const turn = asRecord(asRecord(normalized.params)?.turn);
+        if (typeof turn?.rootTurnId === "string" || turn?.rootTurnId === null) {
+          rememberBoundedMap(this.turnRoots, `${turnMetadata.threadId}:${observedTurnId}`, turn.rootTurnId, 1_000);
+        }
+        if (normalized.method === "turn/started") {
+          this.runningTurnIdsByThread.set(turnMetadata.threadId, observedTurnId);
+        } else if (normalized.method === "turn/completed" || normalized.method === "turn/failed") {
+          this.runningTurnIdsByThread.delete(turnMetadata.threadId);
+        }
+      }
+      if (isLiveTurnActivityMethod(method, normalized.method)) {
+        this.noteLiveTurnActivity();
+      }
+
+      if (method === "thread/started") {
+        await this.recordThreadNameWithCodex(params);
+      }
+
+      for (const listener of this.notificationListeners) {
+        await listener(normalized);
+      }
+    });
+    const handleServerRequest: Parameters<JsonRpcConnection["setRequestHandler"]>[0] = async (
+      method,
+      params,
+      rpcId,
+    ) => {
+      const helperToolCallParams = asRecord(params);
+      const helperToolHandler = helperToolCallParams
+        ? this.resolveHelperThreadToolHandler(method, helperToolCallParams)
+        : undefined;
+      if (helperToolHandler && helperToolCallParams) {
+        return await helperToolHandler({ method, params: helperToolCallParams });
+      }
+      const wireRequest = isKnownCodexServerRequestMethod(method)
+        ? ({
+            method,
+            id: rpcId ?? `${method}-request`,
+            params: params ?? {},
+          } as CodexServerRequest)
+        : undefined;
+      const request = normalizePendingRequestNotification(
+        wireRequest?.method ?? method,
+        wireRequest?.params ?? params,
+        rpcId
+      );
+
+      const listeners = [...this.requestListeners];
+      if (listeners.length === 0) {
+        logUnhandledCodexMessage(this.host.logger, {
+          kind: "request",
+          method,
+          payload: params,
+          reportedNotificationMethods: this.reportedUnknownNotificationMethods,
+        });
+        throw new Error(`No desktop request handler registered for ${method}`);
+      }
+
+      if (method === "mcpServer/elicitation/request") {
+        logMcpElicitationRequest(this.host.logger, params, rpcId == null ? undefined : String(rpcId));
+      }
+
+      if (!isHandledServerRequestMethod(method)) {
+        logUnhandledCodexMessage(this.host.logger, {
+          kind: "request",
+          method,
+          payload: params,
+          reportedNotificationMethods: this.reportedUnknownNotificationMethods,
+        });
+      }
+
+      for (const listener of listeners) {
+        return await listener(request);
+      }
+
+      throw new Error(`No desktop request handler registered for ${method}`);
+    };
+    this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
+      this.lastAppServerActivityAt = this.now();
+      this.pendingServerRequests += 1;
+      // A thread waiting on the operator must stay loaded to hear the answer.
+      const threadId = extractRequestMetadata(params).threadId;
+      if (threadId) {
+        this.pendingServerRequestsByThread.set(
+          threadId,
+          (this.pendingServerRequestsByThread.get(threadId) ?? 0) + 1,
+        );
+      }
+      try {
+        return await handleServerRequest(method, params, rpcId);
+      } finally {
+        this.pendingServerRequests -= 1;
+        this.lastAppServerActivityAt = this.now();
+        if (threadId) {
+          const remaining = (this.pendingServerRequestsByThread.get(threadId) ?? 1) - 1;
+          if (remaining > 0) this.pendingServerRequestsByThread.set(threadId, remaining);
+          else this.pendingServerRequestsByThread.delete(threadId);
+          if (this.subscribedThreads.has(threadId)) this.subscribedThreads.set(threadId, this.now());
+        }
+      }
+    });
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private observeThreadSubscription(method: string, params: unknown, result: unknown): void {
+    if (method === "thread/unsubscribe") {
+      const threadId = pickString(asRecord(params) ?? {}, ["threadId"]);
+      if (threadId) {
+        this.subscribedThreads.delete(threadId);
+        this.keptSubAgentThreads.delete(threadId);
+      }
+      return;
+    }
+    if (method !== "thread/start" && method !== "thread/resume" && method !== "thread/fork") return;
+    // A resume names its thread; a start or fork learns it from the result.
+    const threadId = method === "thread/resume"
+      ? pickString(asRecord(params) ?? {}, ["threadId"])
+      : extractThreadIdFromValue(result);
+    if (threadId) this.subscribedThreads.set(threadId, this.now());
+  }
+
+  private noteThreadUnloaded(threadId: string): void {
+    this.threadUnloadGenerations.set(threadId, (this.threadUnloadGenerations.get(threadId) ?? 0) + 1);
+  }
+
+  /** Threads this connection keeps loaded in Codex. */
+  getSubscribedThreadCount(): number {
+    return this.subscribedThreads.size;
+  }
+
+  /**
+   * Let go of threads nothing needs live events for, so Codex can unload them
+   * and stop their MCP servers. Codex unloads a thread only when it is idle
+   * and has no subscriber; before this, every thread a long-lived connection
+   * started or resumed stayed loaded until the server stopped, and a day of
+   * use left hundreds of MCP servers running.
+   *
+   * A thread qualifies after `idleMs` with no request or event, when this
+   * client tracks no turn, pending request, helper turn, voice session or
+   * unstarted first turn for it, and `isThreadBusy` (the owner's view: queued
+   * input, background terminals, live tool items, reviews) says no. Each is
+   * checked again under the lifecycle barrier, together with Codex's own
+   * status for the thread; a sub-agent thread stays, since its parent may
+   * still address it. Cache that classification until it closes or this
+   * connection unsubscribes, so later sweeps need no read. The next operation
+   * on a released thread resumes it, as every thread operation does, and one
+   * already in flight replays its resume.
+   */
+  async unsubscribeIdleThreads(params: {
+    idleMs: number;
+    isThreadBusy: (threadId: string) => boolean;
+    /** Most threads to release in one pass; the barrier holds RPCs meanwhile. */
+    limit?: number;
+  }): Promise<string[]> {
+    if (!this.initialized || this.pendingCloses > 0 || this.threadUnsubscribeUnsupported) return [];
+    const isIdle = (threadId: string): boolean => {
+      const lastActiveAt = this.subscribedThreads.get(threadId);
+      return lastActiveAt !== undefined
+        && !this.keptSubAgentThreads.has(threadId)
+        && this.now() - lastActiveAt >= params.idleMs
+        && !this.threadKeepsSubscription(threadId)
+        && !params.isThreadBusy(threadId);
+    };
+    const candidates = [...this.subscribedThreads.keys()]
+      .filter(isIdle)
+      .slice(0, params.limit ?? 16);
+    if (candidates.length === 0) return [];
+    const serverGeneration = this.serverGeneration;
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // One barrier per thread, so other RPCs wait for at most one thread's
+    // read and unsubscribe rather than the whole pass.
+    const releaseIfIdle = (threadId: string) => this.runLifecycle(async (): Promise<
+      "released" | "kept" | "stop"
+    > => {
+      // No new RPC is admitted, so nothing can start on it from here on.
+      if (!this.initialized || serverGeneration !== this.serverGeneration) return "stop";
+      if (!isIdle(threadId)) return "kept";
+      let thread: Record<string, unknown> | null;
+      try {
+        thread = asRecord(asRecord(await this.rawConnection.request(
+          "thread/read",
+          { threadId, includeTurns: false },
+          timeoutMs,
+        ))?.thread);
+      } catch (error) {
+        if (/not (found|loaded)/i.test(error instanceof Error ? error.message : String(error))) {
+          this.subscribedThreads.delete(threadId);
+        }
+        return "kept";
+      }
+      const status = readThreadStatus(thread);
+      if (status === "notLoaded") {
+        this.subscribedThreads.delete(threadId);
+        return "kept";
+      }
+      if (typeof thread?.parentThreadId === "string"
+        || asRecord(thread?.source)?.subAgent !== undefined) {
+        // Codex 0.153 unload removes the child from the agent controller's
+        // thread manager; send_input and wait do not implicitly resume it.
+        // A thread/closed notification may have arrived during the read.
+        if (this.subscribedThreads.has(threadId)) this.keptSubAgentThreads.add(threadId);
+        return "kept";
+      }
+      // A thread stopped by a system error runs nothing and can go too.
+      const systemError = thread?.status === "systemError"
+        || asRecord(thread?.status)?.type === "systemError";
+      if (status !== "idle" && !systemError) {
+        // Busy: look again next pass.
+        this.subscribedThreads.set(threadId, this.now());
+        return "kept";
+      }
+      if (!isIdle(threadId)) return "kept";
+      try {
+        await this.rawConnection.request("thread/unsubscribe", { threadId }, timeoutMs);
+      } catch (error) {
+        if (isMethodUnavailableError(error, "thread/unsubscribe")) {
+          this.threadUnsubscribeUnsupported = true;
+          return "stop";
+        }
+        this.host.logger.warn("idle Codex thread unsubscribe failed", {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return "kept";
+      }
+      this.subscribedThreads.delete(threadId);
+      this.noteThreadUnloaded(threadId);
+      return "released";
+    });
+    const released: string[] = [];
+    for (const threadId of candidates) {
+      const outcome = await releaseIfIdle(threadId);
+      if (outcome === "stop") break;
+      if (outcome === "released") released.push(threadId);
+    }
+    if (released.length > 0) {
+      this.host.logger.info("unsubscribed idle Codex threads", {
+        count: released.length,
+        stillSubscribed: this.subscribedThreads.size,
+      });
+    }
+    return released;
+  }
+
+  /** Work this client tracks that needs the thread's live events. */
+  private threadKeepsSubscription(threadId: string): boolean {
+    return this.runningTurnIdsByThread.has(threadId)
+      || this.pendingServerRequestsByThread.has(threadId)
+      || this.helperThreadIds.has(threadId)
+      || this.ownedRealtimeThreads.has(threadId)
+      // Its history exists only in this process until the first turn starts.
+      || this.threadsAwaitingFirstTurn.has(threadId);
+  }
+
+  async close(): Promise<void> {
+    // Invalidate a recovery immediately, even when its disk repair cannot be
+    // interrupted. It must finish the atomic write, but must not restart Codex.
+    this.closeGeneration += 1;
+    this.pendingCloses += 1;
+    // A recovery waiting for other turns re-checks the generation and stops.
+    this.noteLiveTurnActivity();
+    // A restart waiting out its backoff must not hold close open. Its
+    // initialization sees the new close generation and gives up.
+    this.cancelRestartBackoff?.();
+    // Stop the transport now: pending RPC responses must not hold shutdown
+    // (or a recovery waiting to drain those RPCs) until their timeouts expire.
+    const stopped = this.stopTransport();
+    void stopped.catch(() => undefined);
+    try {
+      await this.runLifecycle(async () => {
+        try {
+          await stopped;
+        } finally {
+          await this.closeConnection();
+        }
+      });
+    } finally {
+      this.pendingCloses -= 1;
+    }
+  }
+
+  private async failRunningTurns(
+    runningTurns: Array<[threadId: string, turnId: string]>,
+    message: string,
+  ): Promise<void> {
+    const completedAt = Date.now();
+    for (const [threadId, turnId] of runningTurns) {
+      for (const listener of this.notificationListeners) {
+        await listener({
+          method: "turn/failed",
+          params: {
+            threadId,
+            turnId,
+            turn: { id: turnId, status: "failed", completedAt, error: { message } },
+          },
+        });
+      }
+    }
+  }
+
+  /**
+   * The app server ended without `close()` asking it to. Everything the
+   * process held is gone, so reset what `closeConnection` resets. The next
+   * request starts a new server through `initializeConnection`, once the
+   * restart policy's backoff has passed; thread operations replay their
+   * resume and settings on the new `serverGeneration`.
+   *
+   * Restarting lazily rather than on a timer keeps one start path: a caller
+   * that arrives during the backoff waits for it instead of racing a timer to
+   * spawn, and nothing is left to cancel when the app shuts down.
+   */
+  private handleUnexpectedExit(exit: CodexAppServerExit): void {
+    // No terminal notification can follow for a turn whose app-server
+    // exited, so this is the moment its end is observed.
+    const runningTurns = [...this.runningTurnIdsByThread];
+    this.resetConnectionState(new Error("codex app server exited"));
+    const decision = this.restartPolicy.recordExit();
+    this.host.logger.warn("Codex app server exited unexpectedly", {
+      runningTurns: runningTurns.length,
+      code: exit.code,
+      signal: exit.signal,
+      ...(decision.kind === "restart"
+        ? { restartAttempt: decision.attempt, restartDelayMs: decision.delayMs }
+        : { restartsStopped: true, exits: decision.exits, windowMs: decision.windowMs }),
+    });
+    if (decision.kind === "stopped") {
+      this.setRestartStatus({
+        stopped: true,
+        stoppedAt: Date.now(),
+        exits: decision.exits,
+        windowMs: decision.windowMs,
+        lastExit: { code: exit.code, signal: exit.signal },
+      });
+    }
+    // A completed turn can still have a running command. Its owner needs the
+    // transport boundary too; failRunningTurns only covers active turns.
+    for (const listener of this.unexpectedExitListeners) {
+      try {
+        listener();
+      } catch (error) {
+        this.host.logger.warn("Codex app server exit listener failed", {
+          error: String(error),
+        });
+      }
+    }
+    void this.failRunningTurns(runningTurns, CODEX_APP_SERVER_EXITED_MID_TURN)
+      .catch((error) => this.host.logger.warn("Codex exit turn failure delivery failed", { error: String(error) }));
+  }
+
+  getAppServerRestartStatus(): CodexAppServerRestartStatus {
+    return this.restartStatus;
+  }
+
+  onAppServerRestartStatusChanged(
+    listener: (status: CodexAppServerRestartStatus) => void,
+  ): () => void {
+    this.restartStatusListeners.add(listener);
+    return () => {
+      this.restartStatusListeners.delete(listener);
+    };
+  }
+
+  onAppServerUnexpectedExit(listener: (threadIds?: ReadonlySet<string>) => void): () => void {
+    this.unexpectedExitListeners.add(listener);
+    return () => {
+      this.unexpectedExitListeners.delete(listener);
+    };
+  }
+
+  /**
+   * The operator's "Restart Codex": forget the exit history, including an
+   * open breaker, and start the server now.
+   */
+  async restartAppServer(): Promise<void> {
+    this.resetAppServerRestarts("operator restart");
+    await this.ensureInitialized();
+  }
+
+  /**
+   * Forget the exit history, including an open breaker, without starting the
+   * server. The exits it counted belong to a binary that is no longer
+   * selected, so a new Codex version starts with a clean slate.
+   */
+  resetAppServerRestarts(reason: string): void {
+    const wasStopped = this.restartStatus.stopped;
+    this.restartPolicy.reset();
+    // A start already waiting out the old delay proceeds now.
+    this.cancelRestartBackoff?.();
+    this.setRestartStatus({ stopped: false });
+    this.host.logger.info("Codex app server restart history cleared", { reason, wasStopped });
+  }
+
+  /**
+   * The running app server's age and what it has started, or `undefined`
+   * when none is running. It never starts Codex.
+   */
+  async readAppServerProcessSample(): Promise<CodexAppServerProcessSample | undefined> {
+    const info = this.initialized ? this.transport.getProcessInfo?.() : undefined;
+    if (!info) return undefined;
+    const sampledAt = this.now();
+    const counts = await (this.options.sampleAppServerProcessTree ?? this.host.sampleAppServerProcessTree)(info)
+      .catch(() => ({}));
+    return {
+      pid: info.pid,
+      startedAt: info.startedAt,
+      sampledAt,
+      uptimeMs: Math.max(0, sampledAt - info.startedAt),
+      ...counts,
+    };
+  }
+
+  getAppServerRecycleStatus(): CodexAppServerRecycleStatus {
+    return this.recycleStatus;
+  }
+
+  /**
+   * Replace an idle app server that has run too long or started too much
+   * (`decideCodexAppServerRecycle`). The stop reaps its whole process tree;
+   * the next request starts a fresh server, and thread operations replay
+   * their resume and settings on it, as after a crash.
+   *
+   * Idle means no Codex event or foreground RPC for `settings.idleMs`, nothing
+   * this client is tracking, and `isQuiescent()` from the owner, which knows the
+   * work the client cannot see. All of it is checked again under the
+   * lifecycle barrier, where no new RPC can start, together with Codex's own
+   * report of active threads; any doubt leaves the server running.
+   */
+  async maybeRecycleIdleAppServer(params: {
+    settings: CodexAppServerRecycleSettings;
+    isQuiescent: () => boolean;
+  }): Promise<CodexAppServerRecycleOutcome> {
+    let outcome: CodexAppServerRecycleOutcome;
+    try {
+      outcome = await this.tryRecycleIdleAppServer(params);
+    } catch (error) {
+      this.host.logger.warn("Codex app server idle recycle failed", { error: String(error) });
+      outcome = { kind: "busy", blocker: "error" };
+    }
+    this.recycleStatus = {
+      ...this.recycleStatus,
+      ...(outcome.kind === "recycled"
+        ? { recycleCount: this.recycleStatus.recycleCount + 1, lastRecycle: outcome.record }
+        : {}),
+      lastCheck: {
+        at: this.now(),
+        outcome: outcome.kind,
+        ...(outcome.kind === "busy" ? { blocker: outcome.blocker } : {}),
+      },
+    };
+    return outcome;
+  }
+
+  private async tryRecycleIdleAppServer(params: {
+    settings: CodexAppServerRecycleSettings;
+    isQuiescent: () => boolean;
+  }): Promise<CodexAppServerRecycleOutcome> {
+    const blocker = (requests: boolean): string | undefined =>
+      this.appServerRecycleBlocker(requests)
+      ?? (params.isQuiescent() ? undefined : "registry-work");
+    const early = blocker(true);
+    if (early === "not-running") return { kind: "not-running" };
+    if (early) return { kind: "busy", blocker: early };
+    const idleSince = this.lastAppServerActivityAt;
+    const idleMs = this.now() - idleSince;
+    if (idleMs < params.settings.idleMs) return { kind: "not-idle", idleMs };
+    const sample = await this.readAppServerProcessSample();
+    if (!sample) return { kind: "not-running" };
+    const reasons = decideCodexAppServerRecycle(params.settings, sample);
+    if (reasons.length === 0) return { kind: "healthy", sample };
+
+    const serverGeneration = this.serverGeneration;
+    return await this.runLifecycle<CodexAppServerRecycleOutcome>(async () => {
+      // Admitted RPCs have drained and new ones wait at the barrier.
+      const late = (): string | undefined => {
+        if (serverGeneration !== this.serverGeneration) return "not-running";
+        if (this.lastAppServerActivityAt !== idleSince) return "app-server-activity";
+        return blocker(false);
+      };
+      let stillBlocked = late();
+      if (!stillBlocked) {
+        stillBlocked = (await this.listTurnsBlockingProcessStop()).length > 0
+          ? "codex-active-thread"
+          : late();
+      }
+      if (stillBlocked === "not-running") return { kind: "not-running" };
+      if (stillBlocked) return { kind: "busy", blocker: stillBlocked };
+
+      await this.closeConnection();
+      const stop = this.transport.takeLastStopReport?.();
+      const record = {
+        at: this.now(),
+        reasons,
+        pid: sample.pid,
+        uptimeMs: sample.uptimeMs,
+        idleMs: this.now() - idleSince,
+        ...(sample.childProcessCount !== undefined
+          ? { childProcessCount: sample.childProcessCount }
+          : {}),
+        ...(sample.openFdCount !== undefined ? { openFdCount: sample.openFdCount } : {}),
+        ...(stop ? { orphansReaped: stop.orphansReaped } : {}),
+      };
+      this.host.logger.info("Codex app server recycled while idle", record);
+      return { kind: "recycled", record };
+    });
+  }
+
+  /** Work on this process that a stop would cut short, by name. */
+  private appServerRecycleBlocker(includeRequests: boolean): string | undefined {
+    if (!this.initialized || this.pendingCloses > 0 || this.restartStatus.stopped) {
+      return "not-running";
+    }
+    if (this.runningTurnIdsByThread.size > 0) return "running-turn";
+    if (this.pendingServerRequests > 0) return "pending-server-request";
+    if (this.helperThreadIds.size > 0
+      || this.pendingHelperThreadStarts.size > 0
+      || this.helperTurnWaiters.size > 0) {
+      return "helper-turn";
+    }
+    if (this.ownedRealtimeThreads.size > 0) return "realtime-session";
+    // Its history exists only in this process until the first turn starts.
+    if (this.threadsAwaitingFirstTurn.size > 0) return "thread-awaiting-first-turn";
+    if (includeRequests && this.activeRequests.size > 0) return "in-flight-request";
+    return undefined;
+  }
+
+  private setRestartStatus(status: CodexAppServerRestartStatus): void {
+    if (!status.stopped && !this.restartStatus.stopped) return;
+    this.restartStatus = status;
+    for (const listener of this.restartStatusListeners) {
+      try {
+        listener(status);
+      } catch (error) {
+        this.host.logger.warn("Codex restart status listener failed", { error: String(error) });
+      }
+    }
+  }
+
+  private async waitForRestartBackoff(): Promise<void> {
+    const delayMs = this.restartPolicy.remainingDelayMs();
+    if (delayMs <= 0) return;
+    this.host.logger.info("waiting to restart Codex app server", { delayMs });
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        if (this.cancelRestartBackoff === finish) this.cancelRestartBackoff = undefined;
+        resolve();
+      };
+      const timer = setTimeout(finish, delayMs);
+      this.cancelRestartBackoff = finish;
+    });
+  }
+
+  private async closeConnection(): Promise<void> {
+    this.resetConnectionState(new Error("codex app server client closed"));
+    await this.stopTransport();
+  }
+
+  private resetConnectionState(helperTurnError: Error): void {
+    for (const listener of this.realtimeDisconnectListeners) listener();
+    this.initialized = false;
+    this.tokenMiserActivationNegotiated = false;
+    this.runningTurnIdsByThread.clear();
+    this.guardianDenialLimitsByThread.clear();
+    this.liveUsageSnapshots.clear();
+    this.liveMessagePhases.clear();
+    this.initializationPromise = null;
+    this.initializeResult = null;
+    this.availableHelperModels = [];
+    this.helperModelsRead = false;
+    this.rejectHelperTurnWaiters(helperTurnError);
+    this.invalidateThreadListings();
+    this.threadListTextCache.clear();
+    this.freshNativeVoiceThreads.clear();
+    this.admittedNativeVoiceThreads.clear();
+    this.ownedRealtimeThreads.clear();
+    this.threadsAwaitingFirstTurn.clear();
+    this.pendingFirstTurnThreadResults.clear();
+    this.pendingFirstTurnShellEnvironments.clear();
+    this.recordedThreadNames.clear();
+    this.pendingThreadNameEchoes.clear();
+    // A new process has loaded nothing; operations replay their own resume,
+    // keyed on the server generation, so unload counts can start over.
+    this.subscribedThreads.clear();
+    this.keptSubAgentThreads.clear();
+    this.threadUnloadGenerations.clear();
+    this.helperThreadIds.clear();
+    this.helperThreadToolHandlers.clear();
+    this.helperToolTurnThreadIds.clear();
+    this.completedHelperTurnResults.clear();
+    this.mcpStartupStatusByContext.clear();
+    this.helperTurnTitleObjects.clear();
+    this.helperTurnTokenUsage.clear();
+    this.helperThreadPredicates.clear();
+    // Whether closed or exited, the process's turns are over; a recovery
+    // waiting on them re-checks.
+    this.noteLiveTurnActivity();
+  }
+
+  /**
+   * Records a denial-limit warning, and returns it when the turn it named
+   * completes. A later turn on the thread clears an unused warning.
+   */
+  private takeGuardianDenialLimitMessage(
+    method: string,
+    params: unknown,
+  ): string | undefined {
+    if (method !== "guardianWarning" && method !== "turn/started"
+      && method !== "turn/completed" && method !== "thread/closed") {
+      return undefined;
+    }
+    const record = asRecord(params) ?? {};
+    const threadId = pickString(record, ["threadId", "thread_id"]);
+    if (!threadId) return undefined;
+    if (method === "guardianWarning") {
+      if (typeof record.message === "string" && isGuardianDenialLimitWarning(record.message)) {
+        const turnId = this.runningTurnIdsByThread.get(threadId);
+        this.guardianDenialLimitsByThread.set(threadId, {
+          message: record.message,
+          ...(turnId ? { turnId } : {}),
+        });
+      }
+      return undefined;
+    }
+    const pending = this.guardianDenialLimitsByThread.get(threadId);
+    if (!pending) return undefined;
+    this.guardianDenialLimitsByThread.delete(threadId);
+    if (method !== "turn/completed") return undefined;
+    const turnId = pickString(asRecord(record.turn) ?? {}, ["id"]);
+    return !pending.turnId || !turnId || pending.turnId === turnId
+      ? pending.message
+      : undefined;
+  }
+
+  private noteLiveTurnActivity(): void {
+    this.liveTurnActivitySequence += 1;
+    const waiters = [...this.liveTurnActivityWaiters];
+    this.liveTurnActivityWaiters.clear();
+    for (const wake of waiters) wake();
+  }
+
+  private waitForLiveTurnActivity(sinceSequence: number): Promise<void> {
+    if (this.liveTurnActivitySequence !== sinceSequence) return Promise.resolve();
+    return new Promise((resolve) => this.liveTurnActivityWaiters.add(resolve));
+  }
+
+  /**
+   * Turns that stopping this app-server process would kill. Call only inside
+   * `runLifecycle`, after admitted RPCs have drained, so no new turn can start
+   * between this answer and the stop.
+   *
+   * Codex is the authority for what is running: `thread/read` reports a loaded
+   * thread `active` while a turn runs or waits on approval. A turn this client
+   * saw start, or a helper turn in flight, still counts while its thread stays
+   * loaded, because `turn/started` and `turn/completed` race the RPC responses
+   * and a stop would drop a terminal still queued on stdout. A tracked turn on
+   * a thread the process no longer has loaded died with an earlier process.
+   */
+  private async listTurnsBlockingProcessStop(): Promise<CodexRecoveryBlockingTurn[]> {
+    const tracked = new Map<string, CodexRecoveryBlockingTurn>();
+    for (const [threadId, turnId] of this.runningTurnIdsByThread) {
+      tracked.set(threadId, { threadId, turnId });
+    }
+    for (const threadId of this.helperThreadIds) {
+      if (!tracked.has(threadId)) tracked.set(threadId, { threadId });
+    }
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const loadedThreadIds: string[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      let page: unknown;
+      try {
+        page = await this.rawConnection.request(
+          "thread/loaded/list",
+          cursor ? { cursor } : {},
+          timeoutMs,
+        );
+      } catch (error) {
+        // An app-server without the method cannot report status; the turns
+        // this client tracks are then the only evidence available.
+        if (isMethodUnavailableError(error, "thread/loaded/list")) {
+          return [...tracked.values()];
+        }
+        throw error;
+      }
+      const record = asRecord(page);
+      const data = Array.isArray(record?.data) ? record.data : [];
+      loadedThreadIds.push(
+        ...data.filter((entry): entry is string => typeof entry === "string"),
+      );
+      const nextCursor = typeof record?.nextCursor === "string" ? record.nextCursor : null;
+      cursor = nextCursor && !seenCursors.has(nextCursor) ? nextCursor : null;
+      if (cursor) seenCursors.add(cursor);
+    } while (cursor);
+
+    const blocking: CodexRecoveryBlockingTurn[] = [];
+    for (const threadId of new Set(loadedThreadIds)) {
+      const trackedTurn = tracked.get(threadId);
+      if (trackedTurn) {
+        blocking.push(trackedTurn);
+        continue;
+      }
+      let result: unknown;
+      try {
+        result = await this.rawConnection.request(
+          "thread/read",
+          { threadId, includeTurns: false },
+          timeoutMs,
+        );
+      } catch (error) {
+        // Unloaded between the two requests: nothing of it can still run.
+        if (/not (found|loaded)/i.test(error instanceof Error ? error.message : String(error))) {
+          continue;
+        }
+        throw error;
+      }
+      const status = asRecord(asRecord(asRecord(result)?.thread)?.status);
+      if (status?.type === "active") blocking.push({ threadId });
+    }
+    return blocking;
+  }
+
+  private stopTransport(): Promise<void> {
+    if (this.transportClosePromise) return this.transportClosePromise;
+    const stopped = this.rawConnection.close();
+    this.transportClosePromise = stopped;
+    void stopped.finally(() => {
+      if (this.transportClosePromise === stopped) this.transportClosePromise = null;
+    }).catch(() => undefined);
+    return stopped;
+  }
+
+  /**
+   * Repairs the protocol-identified rollout, which requires stopping this
+   * app-server process: it owns this thread's live writer, and Codex unloads an
+   * unsubscribed thread (closing its writer) only after an idle delay — a
+   * fixed 30 minutes in 0.153. A stopped stdio app-server sends no terminal
+   * for the turns it was running, so the stop waits until no turn runs here.
+   * `onWaitingForTurns` hears which turns it is waiting for, each time that
+   * set changes.
+   */
+  async recoverInvalidPersistedResponseMessageIds(params: {
+    failureMessage: string;
+    forkLineageThreadIds?: string[];
+    onWaitingForTurns?: (
+      turns: CodexRecoveryBlockingTurn[],
+    ) => void | Promise<void>;
+    /** Abandons the repair while it waits; never after Codex is stopped. */
+    signal?: AbortSignal;
+    threadId: string;
+  }): Promise<CodexInvalidResponseMessageIdRecoveryResult> {
+    if (!this.host.invalidResponseMessageIdRecovery?.isFailure(params.failureMessage)) {
+      throw new Error(
+        "Codex persisted-message-ID recovery requires the exact invalid ID prefix failure",
+      );
+    }
+    if (this.pendingCloses > 0) throw new Error("codex app server client closed");
+    const generation = this.closeGeneration;
+    const assertNotClosed = () => {
+      if (generation !== this.closeGeneration) {
+        throw new Error("Codex history recovery cancelled because the client was closed");
+      }
+    };
+    const assertNotAbandoned = () => {
+      assertNotClosed();
+      if (params.signal?.aborted) {
+        throw new Error("Codex history recovery was abandoned while waiting for running turns");
+      }
+    };
+    const abandoned = params.signal
+      ? new Promise<void>((resolve) => {
+          params.signal!.addEventListener("abort", () => resolve(), { once: true });
+        })
+      : undefined;
+    let reportedWaitKey: string | undefined;
+    while (true) {
+      assertNotAbandoned();
+      const attempt = await this.attemptInvalidIdRecovery(params, assertNotClosed);
+      if ("recovered" in attempt) return attempt.recovered;
+      // Other threads keep running while this waits: the lifecycle barrier is
+      // released, so their RPCs, approvals, and terminals flow normally.
+      const waitKey = attempt.blockingTurns
+        .map((turn) => `${turn.threadId}:${turn.turnId ?? ""}`)
+        .sort()
+        .join("\n");
+      if (waitKey !== reportedWaitKey) {
+        reportedWaitKey = waitKey;
+        this.host.logger.warn("Codex history recovery is waiting for running turns", {
+          blockingThreadIds: attempt.blockingTurns.map((turn) => turn.threadId),
+          threadId: params.threadId,
+        });
+        await params.onWaitingForTurns?.(attempt.blockingTurns);
+      }
+      const activity = this.waitForLiveTurnActivity(attempt.activitySequence);
+      await (abandoned ? Promise.race([activity, abandoned]) : activity);
+    }
+  }
+
+  private async attemptInvalidIdRecovery(
+    params: {
+      failureMessage: string;
+      forkLineageThreadIds?: string[];
+      threadId: string;
+    },
+    assertNotClosed: () => void,
+  ): Promise<
+    | { recovered: CodexInvalidResponseMessageIdRecoveryResult }
+    | { activitySequence: number; blockingTurns: CodexRecoveryBlockingTurn[] }
+  > {
+    return await this.runLifecycle(async () => {
+      assertNotClosed();
+      await this.initializeConnection();
+      // Read the sequence first: a turn that ends during the check below
+      // bumps it, and the wait then re-checks at once instead of sleeping.
+      const activitySequence = this.liveTurnActivitySequence;
+      const blockingTurns = await this.listTurnsBlockingProcessStop();
+      if (blockingTurns.length > 0) {
+        return { activitySequence, blockingTurns };
+      }
+      // Codex thread/list searchTerm is title/content search, not an ID lookup.
+      // Walk this profile-scoped app-server's protocol listing and select the
+      // exact ID locally so legacy threads in alternate CODEX_HOME profiles are
+      // resolved without guessing at Codex-owned storage paths.
+      const matchingThreads = (
+        await requestThreadListPages({
+          listingDiagnostics: this.host.listingDiagnostics,
+          logger: this.host.logger,
+          textCache: this.threadListTextCache,
+          archived: false,
+          client: this.rawConnection,
+          requestTimeoutMs:
+            this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        })
+      ).filter((thread) => thread.id === params.threadId);
+      if (matchingThreads.length !== 1) {
+        throw new Error(
+          `Codex recovery expected one protocol path for thread ${params.threadId}; found ${matchingThreads.length}`,
+        );
+      }
+      const rolloutPath = matchingThreads[0]!.path?.trim();
+      if (!rolloutPath) {
+        throw new Error(
+          `Codex App Server did not provide a persisted session path for thread ${params.threadId}`,
+        );
+      }
+
+      const env = this.options.resolveEnv
+        ? await this.options.resolveEnv()
+        : this.options.env ?? process.env;
+      const codexHome = path.resolve(
+        extractStringProperty(this.initializeResult, "codexHome", "codex_home")
+        || env.CODEX_HOME?.trim()
+        || path.join(homedir(), ".codex"),
+      );
+
+      // The Codex app-server process is the only writer for this profile. Stop
+      // it and wait for process exit before the narrowly authorized repair so
+      // no in-memory writer can race the atomic replacement.
+      assertNotClosed();
+      await this.closeConnection();
+      assertNotClosed();
+      let recoveryResult: CodexInvalidResponseMessageIdRecoveryResult | undefined;
+      let recoveryError: unknown;
+      try {
+        recoveryResult = await this.host.invalidResponseMessageIdRecovery!.repair({
+          codexHome,
+          forkLineageThreadIds: params.forkLineageThreadIds,
+          rolloutPath,
+          threadId: params.threadId,
+        });
+      } catch (error) {
+        recoveryError = error;
+      }
+
+      assertNotClosed();
+      try {
+        await this.initializeConnection();
+      } catch (restartError) {
+        if (recoveryError) {
+          throw new AggregateError(
+            [recoveryError, restartError],
+            `Codex history recovery and app-server restart both failed for thread ${params.threadId}`,
+            { cause: restartError },
+          );
+        }
+        throw restartError;
+      }
+      if (recoveryError) {
+        throw recoveryError;
+      }
+
+      assertNotClosed();
+      await requestWithFallbacks({
+        client: this.rawConnection,
+        methods: ["thread/resume"],
+        payloads: [{ threadId: params.threadId, excludeTurns: true } satisfies CodexThreadResumeParams],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+      return { recovered: recoveryResult! };
+    });
+  }
+
+  onRealtimeEvent(listener: (event: NativeVoiceNotification) => void, _threadId?: string): () => void {
+    this.realtimeListeners.add(listener);
+    return () => { this.realtimeListeners.delete(listener); };
+  }
+
+  onRealtimeDisconnect(listener: () => void, _threadId?: string): () => void {
+    this.realtimeDisconnectListeners.add(listener);
+    return () => { this.realtimeDisconnectListeners.delete(listener); };
+  }
+
+  async startRealtime(params: ThreadRealtimeStartParams): Promise<void> {
+    await this.ensureInitialized();
+    this.ownedRealtimeThreads.add(params.threadId);
+    try {
+      await this.connection.request("thread/realtime/start", params, 20_000);
+    } catch (error) {
+      this.ownedRealtimeThreads.delete(params.threadId);
+      throw error;
+    }
+  }
+
+  async stopRealtime(threadId: string): Promise<void> {
+    // Never restart a disconnected backend merely to stop voice.
+    if (!this.initialized || this.pendingCloses > 0) return;
+    await this.connection.request("thread/realtime/stop", { threadId }, 10_000);
+    this.ownedRealtimeThreads.delete(threadId);
+  }
+
+  async appendRealtimeText(threadId: string, text: string, role: ThreadRealtimeAppendTextParams["role"] = "user"): Promise<void> {
+    if (!this.initialized || this.pendingCloses > 0) throw new Error("Voice backend disconnected.");
+    await this.connection.request("thread/realtime/appendText", { threadId, text, role } satisfies ThreadRealtimeAppendTextParams, 10_000);
+  }
+
+  onNotification(
+    listener: (notification: AppServerNotification) => void | Promise<void>
+  ): () => void {
+    this.notificationListeners.add(listener);
+    return () => {
+      this.notificationListeners.delete(listener);
+    };
+  }
+
+  onRequest(
+    listener: (
+      request: AppServerPendingRequestNotification
+    ) => Promise<unknown> | unknown
+  ): () => void {
+    this.requestListeners.add(listener);
+    return () => {
+      this.requestListeners.delete(listener);
+    };
+  }
+
+  async getInitializeResult(): Promise<InitializeResult> {
+    await this.ensureInitialized();
+    return this.initializeResult ?? {};
+  }
+
+  isTokenMiserActivationNegotiated(): boolean {
+    return this.initialized
+      && this.pendingCloses === 0
+      && this.tokenMiserActivationNegotiated;
+  }
+
+  async readServerCapabilities(): Promise<CodexServerCapabilities> {
+    await this.ensureInitialized();
+    const result = asRecord(
+      await this.connection.request(
+        "server/capabilities/read",
+        {},
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      ),
+    );
+    const outputReducer = asRecord(result?.codeModeOutputReducer);
+    const actionableState = asRecord(outputReducer?.actionableState);
+    const protocolVersion = outputReducer?.protocolVersion;
+    const continuationGuidanceVersion =
+      outputReducer?.continuationGuidanceVersion;
+    const hasParentIntentContract =
+      outputReducer?.intentContextVersion === 1
+      && outputReducer.reducerRequestField === "parent_intent"
+      && outputReducer.postToolUseField === "parent_intent";
+    const grouping = asRecord(outputReducer?.postToolUseGrouping);
+    const modelGuidance = asRecord(outputReducer?.modelGuidance);
+    const exactOutput = asRecord(outputReducer?.postToolUseExactOutput);
+    const deferredCompletion = asRecord(outputReducer?.deferredCompletion);
+    const managedTokenMiser = asRecord(result?.pwrdrvrTokenMiser);
+    const hasManagedTokenMiserActivationTransport =
+      managedTokenMiser?.version === 1
+      && managedTokenMiser.identity === "pwrdrvr.pwragent.token-miser"
+      && managedTokenMiser.initializeCapabilityField === "pwrdrvrTokenMiser"
+      && managedTokenMiser.threadStartField === "pwrdrvrTokenMiser"
+      && managedTokenMiser.threadResumeField === "pwrdrvrTokenMiser"
+      && managedTokenMiser.descriptorEnvironmentVariable
+        === "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH"
+      && managedTokenMiser.descriptorVersion === 1;
+    const dynamicToolsResumeField =
+      outputReducer?.dynamicToolsResumeField === "dynamicTools"
+        ? "dynamicTools"
+        : undefined;
+
+    const managedCapability = hasManagedTokenMiserActivationTransport
+      ? {
+          pwrdrvrTokenMiser: {
+            version: 1 as const,
+            identity: "pwrdrvr.pwragent.token-miser" as const,
+            initializeCapabilityField: "pwrdrvrTokenMiser" as const,
+            threadStartField: "pwrdrvrTokenMiser" as const,
+            threadResumeField: "pwrdrvrTokenMiser" as const,
+            descriptorEnvironmentVariable:
+              "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH" as const,
+            descriptorVersion: 1 as const,
+            ...(managedTokenMiser.codeModeNestedPostToolUse === false
+              ? { codeModeNestedPostToolUse: false as const }
+              : {}),
+          },
+        }
+      : {};
+
+    return typeof protocolVersion === "number"
+      ? {
+          ...managedCapability,
+          codeModeOutputReducer: {
+            ...(actionableState?.version === 1
+              && actionableState.reducerRequestField === "actionable_state"
+              && actionableState.reducerResponseField === "actionable_state"
+              && actionableState.modelOutputTag === "codex_actionable_state"
+              ? {
+                  actionableState: {
+                    version: 1 as const,
+                    reducerRequestField: "actionable_state" as const,
+                    reducerResponseField: "actionable_state" as const,
+                    modelOutputTag: "codex_actionable_state" as const,
+                  },
+                }
+              : {}),
+            ...(typeof continuationGuidanceVersion === "number"
+              ? { continuationGuidanceVersion }
+              : {}),
+            ...(deferredCompletion?.version === 1
+              && deferredCompletion.terminalOnly === true
+              && deferredCompletion.preservesOriginalCallId === true
+              && deferredCompletion.preservesCellId === true
+              && deferredCompletion.waitToolName === "wait"
+              ? {
+                  deferredCompletion: {
+                    version: 1 as const,
+                    terminalOnly: true as const,
+                    preservesOriginalCallId: true as const,
+                    preservesCellId: true as const,
+                    waitToolName: "wait" as const,
+                  },
+                }
+              : {}),
+            ...(dynamicToolsResumeField
+              ? { dynamicToolsResumeField }
+              : {}),
+            ...(hasParentIntentContract
+              ? {
+                  intentContextVersion: 1 as const,
+                  postToolUseField: "parent_intent" as const,
+                  reducerRequestField: "parent_intent" as const,
+                }
+              : {}),
+            ...(modelGuidance?.version === 1
+              && modelGuidance.toolDescriptionConfigKey
+                === "features.code_mode.output_reducer.tool_description_guidance"
+              && modelGuidance.continuationConfigKey
+                === "features.code_mode.output_reducer.continuation_guidance"
+              && modelGuidance.modelVisibleOverheadRequestField
+                === "model_visible_overhead_characters"
+              ? {
+                  modelGuidance: {
+                    version: 1 as const,
+                    toolDescriptionConfigKey:
+                      "features.code_mode.output_reducer.tool_description_guidance" as const,
+                    continuationConfigKey:
+                      "features.code_mode.output_reducer.continuation_guidance" as const,
+                    modelVisibleOverheadRequestField:
+                      "model_visible_overhead_characters" as const,
+                  },
+                }
+              : {}),
+            ...(typeof grouping?.versionField === "string"
+              && typeof grouping.version === "number"
+              && typeof grouping.cellIdField === "string"
+              && typeof grouping.toolCallIdField === "string"
+              ? {
+                  postToolUseGrouping: {
+                    versionField: grouping.versionField,
+                    version: grouping.version,
+                    cellIdField: grouping.cellIdField,
+                    toolCallIdField: grouping.toolCallIdField,
+                  },
+                }
+              : {}),
+            ...(exactOutput?.version === 1
+              && exactOutput.versionField
+                === "token_miser_exact_tool_response_version"
+              && exactOutput.responseField
+                === "token_miser_exact_tool_response"
+              ? {
+                  postToolUseExactOutput: {
+                    version: 1 as const,
+                    versionField:
+                      "token_miser_exact_tool_response_version" as const,
+                    responseField:
+                      "token_miser_exact_tool_response" as const,
+                  },
+                }
+              : {}),
+            protocolVersion,
+          },
+        }
+      : managedCapability;
+  }
+
+  async readCodexHome(): Promise<string> {
+    await this.ensureInitialized();
+    const env = this.options.resolveEnv
+      ? await this.options.resolveEnv()
+      : this.options.env ?? process.env;
+    return path.resolve(
+      extractStringProperty(this.initializeResult, "codexHome", "codex_home")
+      || env.CODEX_HOME?.trim()
+      || path.join(homedir(), ".codex"),
+    );
+  }
+
+  private getProtocolCompatibility(): CodexProtocolCompatibility {
+    return resolveCodexProtocolCompatibility(
+      this.initializeResult?.userAgent,
+    );
+  }
+
+  async trustProject(params: {
+    projectPath: string;
+    configPath?: string;
+  }): Promise<{ projectPath: string; configPath?: string }> {
+    const projectPath = params.projectPath.trim();
+    if (!projectPath) {
+      throw new Error("projectPath is required");
+    }
+    await this.ensureInitialized();
+
+    const payload: CodexConfigValueWriteParams = {
+      keyPath: "projects",
+      value: {
+        [projectPath]: {
+          trust_level: "trusted",
+        },
+      },
+      mergeStrategy: "upsert",
+      ...(params.configPath?.trim()
+        ? { filePath: params.configPath.trim() }
+        : {}),
+    };
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["config/value/write"],
+      payloads: [payload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      projectPath,
+      ...(params.configPath?.trim()
+        ? { configPath: params.configPath.trim() }
+        : {}),
+    };
+  }
+
+  private async recordThreadNameWithCodex(value: unknown): Promise<void> {
+    const entry = extractThreadNameRecordFromValue(value);
+    const previous = entry ? this.recordedThreadNames.get(entry.id) : undefined;
+    if (
+      !entry ||
+      (previous &&
+        (previous === entry.threadName ||
+          !isPlaceholderThreadName(previous)))
+    ) {
+      return;
+    }
+
+    try {
+      await this.setThreadNameWithCodex({
+        threadId: entry.id,
+        name: entry.threadName,
+      });
+      this.recordedThreadNames.set(entry.id, entry.threadName);
+    } catch (error) {
+      this.host.logger.warn("failed to set codex thread name", {
+        threadId: entry.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async recordDerivedThreadNameWithCodex(params: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<void> {
+    const previous = this.recordedThreadNames.get(params.threadId);
+    const threadName = deriveThreadNameFromInput(params.input);
+    if (!previous || !threadName || !isPlaceholderThreadName(previous)) {
+      return;
+    }
+
+    try {
+      await this.setThreadNameWithCodex({
+        threadId: params.threadId,
+        name: threadName,
+      });
+      this.recordedThreadNames.set(params.threadId, threadName);
+    } catch (error) {
+      this.host.logger.warn("failed to set derived codex thread name", {
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    // The first prompt named the thread. Announce it as derived; Codex's own
+    // echo of this set is dropped because it cannot say where the name came from.
+    for (const listener of this.notificationListeners) {
+      await listener({
+        method: "thread/name/updated",
+        params: { threadId: params.threadId, threadName, titleSource: "derived" },
+      });
+    }
+  }
+
+  private async setThreadNameWithCodex(params: {
+    threadId: string;
+    name: string;
+  }): Promise<void> {
+    // Before the request: Codex sends the echo right after its response.
+    const echo = params.name.trim();
+    const now = Date.now();
+    const pending = (this.pendingThreadNameEchoes.get(params.threadId) ?? []).filter((entry) => entry.expiresAt > now);
+    // Delete first so a thread named again moves to the newest end of the map.
+    this.pendingThreadNameEchoes.delete(params.threadId);
+    rememberBoundedMap(this.pendingThreadNameEchoes, params.threadId,
+      [...pending, { name: echo, expiresAt: now + THREAD_NAME_ECHO_WINDOW_MS }].slice(-8), 1_000);
+    try {
+      await requestWithThreadMetadataReadRetry(async () => {
+        await requestWithFallbacks({
+          client: this.connection,
+          methods: ["thread/name/set"],
+          payloads: [{ threadId: params.threadId, name: params.name }],
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
+      });
+      // The echo follows the response, so the window runs from here.
+      const entry = this.pendingThreadNameEchoes.get(params.threadId)?.find((pending) => pending.name === echo);
+      if (entry) entry.expiresAt = Date.now() + THREAD_NAME_ECHO_WINDOW_MS;
+    } catch (error) {
+      this.forgetThreadNameEcho(params.threadId, echo);
+      throw error;
+    }
+  }
+
+  /** Whether a `thread/name/updated` is Codex echoing a name this client set. */
+  private consumeThreadNameEcho(params: unknown): boolean {
+    const record = asRecord(params) ?? {};
+    const threadId = pickString(record, ["threadId", "thread_id"]);
+    const threadName = pickString(record, ["threadName", "thread_name"]);
+    return threadId !== undefined && threadName !== undefined && this.forgetThreadNameEcho(threadId, threadName);
+  }
+
+  private forgetThreadNameEcho(threadId: string, name: string): boolean {
+    const now = Date.now();
+    const pending = this.pendingThreadNameEchoes.get(threadId);
+    const index = pending?.findIndex((entry) => entry.name === name && entry.expiresAt > now) ?? -1;
+    if (!pending || index < 0) return false;
+    pending.splice(index, 1);
+    if (!pending.length) this.pendingThreadNameEchoes.delete(threadId);
+    return true;
+  }
+
+  private handleHelperThreadNotification(
+    method: string,
+    notification: AppServerNotification
+  ): void {
+    if (
+      method !== "item/completed" &&
+      method !== "turn/completed" &&
+      method !== "turn/failed" &&
+      method !== "thread/tokenUsage/updated"
+    ) {
+      return;
+    }
+
+    const threadId = readStringFromRecord(notification.params, "threadId");
+    const turnId = extractTurnIdFromNotificationParams(notification.params);
+    if (!threadId || !turnId) {
+      return;
+    }
+
+    const predicate =
+      this.helperThreadPredicates.get(threadId) ?? TITLE_RECORD_PREDICATE;
+    const key = buildHelperTurnKey(threadId, turnId);
+    if (method === "thread/tokenUsage/updated") {
+      const tokenUsage = readHelperTokenUsage(notification.params);
+      if (tokenUsage !== undefined) {
+        this.helperTurnTokenUsage.set(key, tokenUsage);
+      }
+      return;
+    }
+    if (method === "item/completed") {
+      const object = findStructuredRecord(notification.params, predicate);
+      if (object) {
+        this.helperTurnTitleObjects.set(key, object);
+      }
+      return;
+    }
+
+    const waiter = this.helperTurnWaiters.get(key);
+    if (method === "turn/failed") {
+      const error = new Error("codex_title_turn_failed");
+      this.helperTurnTitleObjects.delete(key);
+      this.helperTurnTokenUsage.delete(key);
+      if (!waiter) {
+        this.completedHelperTurnResults.set(key, {
+          status: "failed",
+          error,
+        });
+        return;
+      }
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(error);
+      return;
+    }
+
+    const object =
+      findStructuredRecord(notification.params, predicate) ??
+      this.helperTurnTitleObjects.get(key);
+    const tokenUsage =
+      readHelperTokenUsage(notification.params) ?? this.helperTurnTokenUsage.get(key);
+    this.helperTurnTitleObjects.delete(key);
+    this.helperTurnTokenUsage.delete(key);
+    if (!object && this.helperToolTurnThreadIds.has(threadId)) {
+      // A tool turn's product is the side effects its tools had, not a final
+      // JSON record. Completion alone is success; the caller reads what its
+      // own tool handler captured.
+      const completion: Extract<HelperTurnResult, { status: "ok" }> = {
+        status: "ok",
+        object: undefined,
+        ...(tokenUsage !== undefined ? { tokenUsage } : {}),
+      };
+      if (!waiter) {
+        this.completedHelperTurnResults.set(key, completion);
+        return;
+      }
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.resolve(completion);
+      return;
+    }
+    if (!object) {
+      const error = new Error("codex_title_turn_completed_without_title");
+      if (!waiter) {
+        this.completedHelperTurnResults.set(key, {
+          status: "failed",
+          error,
+        });
+        return;
+      }
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(error);
+      return;
+    }
+
+    if (!waiter) {
+      this.completedHelperTurnResults.set(key, {
+        status: "ok",
+        object,
+        ...(tokenUsage !== undefined ? { tokenUsage } : {}),
+      });
+      return;
+    }
+
+    clearTimeout(waiter.timer);
+    this.helperTurnWaiters.delete(key);
+    waiter.resolve({
+      status: "ok",
+      object,
+      ...(tokenUsage !== undefined ? { tokenUsage } : {}),
+    });
+  }
+
+  private waitForHelperTurnTitle(params: {
+    threadId: string;
+    turnId: string;
+    timeoutMs: number;
+  }): Promise<Extract<HelperTurnResult, { status: "ok" }>> {
+    const key = buildHelperTurnKey(params.threadId, params.turnId);
+    const completed = this.completedHelperTurnResults.get(key);
+    if (completed) {
+      this.completedHelperTurnResults.delete(key);
+      if (completed.status === "failed") {
+        return Promise.reject(completed.error);
+      }
+      return Promise.resolve(completed);
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.helperTurnWaiters.delete(key);
+        reject(new Error("codex_title_turn_timeout"));
+      }, Math.max(100, params.timeoutMs));
+      this.helperTurnWaiters.set(key, {
+        resolve,
+        reject,
+        timer,
+      });
+    });
+  }
+
+  /**
+   * Returns the tool handler owning this request, or `undefined` to let the
+   * ordinary listeners have it. Keyed on the helper thread, so a registered
+   * intake turn services its own calls and every other thread is untouched.
+   */
+  private resolveHelperThreadToolHandler(
+    method: string,
+    params: Record<string, unknown>,
+  ): HelperThreadToolCallHandler | undefined {
+    if (method !== CODEX_DYNAMIC_TOOL_CALL_METHOD) return undefined;
+    const threadId = readStringFromRecord(params, "threadId");
+    if (!threadId) return undefined;
+    return this.helperThreadToolHandlers.get(threadId);
+  }
+
+  private rejectHelperTurnWaiters(error: Error): void {
+    for (const [key, waiter] of this.helperTurnWaiters) {
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(error);
+    }
+  }
+
+  /** Mutation fences also arrive locally through the registry, without a
+   * notification on this connection. Existing readers keep their ownership;
+   * callers after the fence cannot join the affected inventory's pre-mutation read.
+   */
+  invalidateThreadListings(notification?: AppServerNotification): void {
+    if (notification) {
+      if (this.threadListingInvalidations.has(notification)) return;
+      this.threadListingInvalidations.add(notification);
+    }
+    // These events change PwrAgent overlays, not Codex inventory or ordering.
+    // Navigation still rebuilds and rereads overlays; it may join the provider
+    // scan already in progress. Unknown and provider mutations remain fences.
+    if (notification && ["navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
+      "thread/pin/reordered", "thread/subAgents/updated"].includes(notification.method)) return;
+    this.activeThreadListingGeneration += 1;
+    // Turn/status and viewer overlay events do not change archived inventory.
+    // Keep its in-flight owner joinable while active navigation advances.
+    if (!notification || !["turn/started", "turn/completed", "turn/failed", "turn/cancelled",
+      "thread/status/changed", "navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
+      "thread/pin/reordered"].includes(notification.method)) {
+      this.archivedThreadListingGeneration += 1;
+    }
+  }
+
+  async listThreads(params?: {
+    archived?: boolean;
+    enrichDirectories?: boolean;
+    filter?: string;
+    limit?: number;
+    maxPages?: number;
+    requireComplete?: boolean;
+    skipArchivedMetadataRefresh?: boolean;
+    deadlineAt?: number;
+  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
+    await this.ensureInitialized();
+
+    // Registry scopes and federation consumers can reach the same provider
+    // through different cache keys. Share the complete listing, including
+    // directory observations, until it settles. Never retain a completed scan.
+    const key = JSON.stringify([
+      params?.archived ? this.archivedThreadListingGeneration : this.activeThreadListingGeneration,
+      params?.archived === true, params?.enrichDirectories ?? true,
+      params?.filter?.trim() || "", params?.limit, params?.maxPages,
+      params?.skipArchivedMetadataRefresh === true, params?.deadlineAt,
+      params?.requireComplete === true,
+    ]);
+    const existing = this.pendingThreadListings.get(key);
+    if (existing) {
+      this.host.listingDiagnostics.link("provider", "coalesced", existing, { caller: diagnostics?.callerReason });
+      return structuredClone(await existing);
+    }
+    const pending = this.host.listingDiagnostics.trace("provider", { provider: "codex", caller: diagnostics?.callerReason, archived: params?.archived === true },
+      () => this.loadThreadListing(params, diagnostics));
+    this.pendingThreadListings.set(key, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.pendingThreadListings.get(key) === pending) this.pendingThreadListings.delete(key);
+    }
+  }
+
+  private async readThreadInventory(
+    params: Parameters<CodexAppServerClient["listThreads"]>[0],
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<RawCodexThreadSummary[]> {
+    // Directory enrichment and archived metadata merging happen after the
+    // physical page walk. Different consumers can share that walk without
+    // sharing mutable results or weakening limits, deadlines or mutation fences.
+    const key = JSON.stringify([
+      params?.archived ? this.archivedThreadListingGeneration : this.activeThreadListingGeneration,
+      params?.archived === true, params?.filter?.trim() || "", params?.limit,
+      params?.maxPages, params?.deadlineAt, params?.requireComplete === true,
+    ]);
+    let pending = this.pendingThreadInventories.get(key);
+    const shared = pending !== undefined;
+    if (!pending) {
+      pending = requestThreadListPages({
+        listingDiagnostics: this.host.listingDiagnostics,
+        logger: this.host.logger,
+        textCache: this.threadListTextCache,
+        archived: params?.archived === true,
+        client: this.connection,
+        diagnostics,
+        filter: params?.filter,
+        limit: params?.limit,
+        maxPages: params?.maxPages,
+        requireComplete: params?.requireComplete,
+        requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        deadlineAt: params?.deadlineAt,
+      });
+      this.pendingThreadInventories.set(key, pending);
+    }
+    try {
+      const rows = await pending;
+      return shared ? structuredClone(rows) : rows;
+    } finally {
+      if (this.pendingThreadInventories.get(key) === pending) this.pendingThreadInventories.delete(key);
+    }
+  }
+
+  private async loadThreadListing(
+    params: Parameters<CodexAppServerClient["listThreads"]>[0],
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<AppServerThreadSummary[]> {
+    if (params?.archived === true) {
+      const archivedThreads = await this.readThreadInventory(params, diagnostics);
+      return await this.enrichThreads(filterVisibleCodexThreads(archivedThreads), {
+        enrichDirectories: params?.enrichDirectories ?? true,
+      });
+    }
+
+    const activeThreads = filterVisibleCodexThreads(
+      await this.readThreadInventory(params, diagnostics),
+    );
+    const threads = params?.skipArchivedMetadataRefresh
+      ? activeThreads
+      : mergeArchivedThreadMetadata({
+          activeThreads,
+          archivedThreads: this.getCachedArchivedThreadMetadata(params?.filter),
+        });
+    if (!params?.skipArchivedMetadataRefresh) {
+      this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
+    }
+
+    return await this.enrichThreads(threads, {
+      enrichDirectories: params?.enrichDirectories ?? true,
+    });
+  }
+
+  /**
+   * Lists native Codex `spawn_agent` workers for parent-scoped disclosure.
+   * Callers must not add these summaries to ordinary navigation.
+   *
+   * Discovery is deliberately one newest-first state-DB page. Its cost stays
+   * fixed as native worker history grows; the navigation projection applies
+   * the shorter display horizon after grouping nested workers.
+   */
+  async listNativeSubAgentThreads(params?: {
+    ancestorThreadId?: string;
+    filter?: string;
+    limit?: number;
+    /** Housekeeping needs every descendant before archiving a parent. */
+    all?: boolean;
+    archived?: boolean;
+  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
+    await this.ensureInitialized();
+
+    const nativeThreads = await requestThreadListPages({
+      listingDiagnostics: this.host.listingDiagnostics,
+      logger: this.host.logger,
+      textCache: this.threadListTextCache,
+      archived: params?.archived === true,
+      client: this.connection,
+      diagnostics,
+      filter: params?.filter,
+      limit: Math.max(
+        1,
+        Math.min(
+          Math.floor(params?.limit ?? CODEX_NATIVE_SUBAGENT_DISCOVERY_LIMIT),
+          CODEX_NATIVE_SUBAGENT_DISCOVERY_LIMIT,
+        ),
+      ),
+      maxPages: params?.all ? undefined : 1,
+      requireComplete: params?.all,
+      requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      sourceKinds: ["subAgent", "subAgentThreadSpawn"],
+      ancestorThreadId: params?.ancestorThreadId,
+    });
+
+    return await this.enrichThreads(
+      nativeThreads.filter((thread) => Boolean(thread.codexNativeSubAgent)),
+      { enrichDirectories: false },
+    );
+  }
+
+  async listThreadsForMigration(params?: {
+    archived?: boolean;
+    filter?: string;
+  }): Promise<CodexThreadMigrationMetadata[]> {
+    await this.ensureInitialized();
+
+    const rawThreads = filterVisibleCodexThreads(
+      await requestThreadListPages({
+        listingDiagnostics: this.host.listingDiagnostics,
+        logger: this.host.logger,
+        textCache: this.threadListTextCache,
+        archived: params?.archived === true,
+        client: this.connection,
+        filter: params?.filter,
+        requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      }),
+    );
+    const enrichedThreads = await this.enrichThreads(rawThreads, {
+      enrichDirectories: true,
+    });
+    const rolloutPathsByThreadId = new Map(
+      rawThreads.map((thread) => [thread.id, thread.path?.trim() || undefined]),
+    );
+
+    return enrichedThreads.map((thread) => ({
+      ...thread,
+      rolloutPath: rolloutPathsByThreadId.get(thread.id),
+    }));
+  }
+
+  private getCachedArchivedThreadMetadata(filter?: string): RawCodexThreadSummary[] {
+    return this.archivedThreadMetadataByFilter.get(buildThreadMetadataCacheKey(filter)) ?? [];
+  }
+
+  private scheduleArchivedThreadMetadataRefresh(
+    filter?: string,
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): void {
+    const cacheKey = buildThreadMetadataCacheKey(filter);
+    const lastRefreshAt = this.archivedThreadMetadataLastRefreshByFilter.get(cacheKey) ?? 0;
+    const hasCachedMetadata = this.archivedThreadMetadataByFilter.has(cacheKey);
+    if (
+      this.archivedThreadMetadataScheduledByFilter.has(cacheKey) ||
+      this.archivedThreadMetadataInFlightByFilter.has(cacheKey) ||
+      (hasCachedMetadata &&
+        Date.now() - lastRefreshAt < ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS)
+    ) {
+      return;
+    }
+
+    // Reserve the filter before yielding to the timer. Otherwise several
+    // active listings can queue callbacks that start sequential full archive
+    // walks after the first callback's page sequence has already settled.
+    this.archivedThreadMetadataScheduledByFilter.add(cacheKey);
+    setTimeout(() => {
+      this.archivedThreadMetadataScheduledByFilter.delete(cacheKey);
+      void withCodexRequestActivity({ countsAsActivity: false }, () =>
+        this.refreshArchivedThreadMetadata(filter, diagnostics)).catch((error) => {
+        this.host.logger.warn("archived thread metadata refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+          filter: filter?.trim() || null,
+        });
+      });
+    }, 0);
+  }
+
+  private async refreshArchivedThreadMetadata(
+    filter?: string,
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<RawCodexThreadSummary[]> {
+    const cacheKey = buildThreadMetadataCacheKey(filter);
+    const inFlight = this.archivedThreadMetadataInFlightByFilter.get(cacheKey);
+    if (inFlight) {
+      return await inFlight;
+    }
+
+    const requestPromise = requestThreadListPages({
+      listingDiagnostics: this.host.listingDiagnostics,
+      logger: this.host.logger,
+      textCache: this.threadListTextCache,
+      archived: true,
+      client: this.connection,
+      diagnostics: diagnostics
+        ? {
+            ...diagnostics,
+            callerReason: `${diagnostics.callerReason ?? "thread-list"}:archived-metadata`,
+          }
+        : undefined,
+      filter,
+      requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    })
+      .then(filterVisibleCodexThreads)
+      .then((threads) => {
+        this.archivedThreadMetadataByFilter.set(cacheKey, threads);
+        this.archivedThreadMetadataLastRefreshByFilter.set(cacheKey, Date.now());
+        return threads;
+      })
+      .finally(() => {
+        this.archivedThreadMetadataInFlightByFilter.delete(cacheKey);
+      });
+
+    this.archivedThreadMetadataInFlightByFilter.set(cacheKey, requestPromise);
+    return await requestPromise;
+  }
+
+  /** `listArchiveCleanupThreadsPage` honors `sortKey: "updated_at"`. */
+  readonly archiveCleanupRecencyReads = true;
+
+  /** Archive safety reads own their cursor and pace each page and discovery
+   * separately. No navigation overlays, native-worker reconciliation or
+   * scheduled archived metadata walk belongs on this read-only path. */
+  async readArchiveCleanupThreadSummary(threadId: string, checkpoint: () => Promise<void>): Promise<AppServerThreadSummary> {
+    await this.ensureInitialized();
+    await checkpoint();
+    const result = await requestWithThreadMetadataReadRetry(async () =>
+      await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    );
+    const rows = extractThreadsFromValue({ data: [asRecord(result)?.thread] }, this.threadListTextCache);
+    const raw = rows.find((row) => row.id === threadId);
+    if (!raw) throw new Error(`Thread metadata was not found: ${threadId}`);
+    const threads = await this.enrichRawThreadDirectories([raw], "thread-list", { checkpoint, strict: true, concurrency: 1 });
+    return threads[0]!;
+  }
+
+  /** Enrich a retained identity inventory without rereading provider membership.
+   * Callers supply scan-local observations; these never authorize removal. */
+  async enrichArchiveCleanupThreads(threads: AppServerThreadSummary[], params: {
+    checkpoint: () => Promise<void>;
+    directoryObservations: Map<string, Promise<ThreadDirectoryEnrichment>>;
+    directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
+  }): Promise<AppServerThreadSummary[]> {
+    return await this.enrichRawThreadDirectories(threads as RawCodexThreadSummary[], "thread-list", {
+      ...params, strict: true, concurrency: 1,
+    });
+  }
+
+  async listArchiveCleanupThreadsPage(params: {
+    archived: boolean;
+    cursor?: string;
+    limit: number;
+    checkpoint: () => Promise<void>;
+    directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+    /** Admission still reads every identity; only disjoint Git probes skip. */
+    directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
+    /**
+     * `updated_at` reads newest-changed rows first, for archive admission's
+     * incremental check. Complete inventories keep `created_at`, whose cursor
+     * activity cannot reorder.
+     */
+    sortKey?: "created_at" | "updated_at";
+  }): Promise<{ threads: AppServerThreadSummary[]; nextCursor?: string }> {
+    await this.ensureInitialized();
+    const result = await requestWithFallbacks({
+      listingDiagnostics: this.host.listingDiagnostics,
+      client: this.connection,
+      diagnostics: { callerReason: "archive-cleanup" },
+      methods: ["thread/list"] as CodexClientRequestMethod[],
+      // A compatibility fallback that drops source/archived/page filters is
+      // an incomplete safety inventory, even if the provider accepts it.
+      payloads: [{
+        archived: params.archived, cursor: params.cursor, limit: params.limit,
+        // Title/turn updates must not move an existing checkout user across
+        // the cursor while the paced safety inventory is being read.
+        sortKey: params.sortKey ?? "created_at", sourceKinds: CODEX_WORKTREE_SAFETY_SOURCE_KINDS, useStateDbOnly: true,
+      } satisfies CodexThreadListParams],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    const page = extractThreadListPage(result, this.threadListTextCache);
+    if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
+    // Native code-review children inherit their parent's cwd and have no
+    // independent checkout to restore, even after retirement. Completed
+    // Guardian approvals are also excluded from active checkout users. Keep
+    // active/uncertain reviews and every ordinary thread or worker.
+    const checkoutUsers = page.threads.filter((thread) =>
+      (thread.codexThreadSourceKind !== "subAgentReview"
+        && (params.archived || thread.codexThreadSourceKind !== "guardian_review"))
+      || (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded"),
+    );
+    const threads = await this.enrichRawThreadDirectories(checkoutUsers, "thread-list", {
+      checkpoint: params.checkpoint,
+      strict: true,
+      concurrency: 1,
+      directoryObservations: params.directoryObservations,
+      directoryFilter: params.directoryFilter,
+    });
+    return { threads: hydrateMissingLinkedDirectoriesFromSiblingRepos(threads), nextCursor: page.nextCursor };
+  }
+
+  private async enrichThreads(
+    threads: RawCodexThreadSummary[],
+    options: { enrichDirectories: boolean },
+  ): Promise<AppServerThreadSummary[]> {
+    if (!options.enrichDirectories) {
+      return threads.map((thread) => {
+        const {
+          codexThreadSourceKind: _codexThreadSourceKind,
+          gitOriginUrl: _gitOriginUrl,
+          originator: _originator,
+          path: _path,
+          ...publicThread
+        } = thread;
+        const projectKey = publicThread.projectKey?.trim() || undefined;
+        const remembered = projectKey ? this.lastDirectoryEnrichment.get(path.resolve(projectKey)) : undefined;
+        return {
+          ...publicThread,
+          projectKey,
+          gitBranch: publicThread.gitBranch,
+          linkedDirectories: remembered?.linkedDirectories ?? buildProjectKeyLinkedDirectories(projectKey),
+          observedGitBranch: remembered?.observedGitBranch,
+          source: "codex" as const,
+        };
+      });
+    }
+
+    const enrichedThreads = await this.enrichRawThreadDirectories(threads, "thread-list");
+
+    return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
+  }
+
+  async enrichThreadDirectories(
+    threads: AppServerThreadSummary[],
+    caller: DirectoryEnrichmentCaller = "explicit-enrichment",
+  ): Promise<AppServerThreadSummary[]> {
+    const enrichedThreads = await this.enrichRawThreadDirectories(
+      threads as RawCodexThreadSummary[],
+      caller,
+    );
+    return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
+  }
+
+  private async enrichRawThreadDirectories(
+    threads: RawCodexThreadSummary[],
+    caller: DirectoryEnrichmentCaller,
+    background?: {
+      checkpoint: () => Promise<void>; strict: boolean; concurrency: number;
+      directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+      directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
+    },
+  ): Promise<EnrichedCodexThread[]> {
+    const enrichedThreads: Array<EnrichedCodexThread | undefined> = [];
+    // A listing can span many mapper batches and contain hundreds of threads
+    // sharing one checkout. Validate each directory once for this observation,
+    // including failures, rather than once for every row. The next listing
+    // observes it again so external workspace changes remain visible.
+    const directories = background?.directoryObservations ?? new Map<string, Promise<ThreadDirectoryEnrichment>>();
+
+    for await (const enrichedThread of new IterableMapper(
+      threads.map((thread, index) => ({ index, thread })),
+      async ({ index, thread }): Promise<{
+        index: number;
+        thread: EnrichedCodexThread;
+      }> => {
+        const projectKey = await resolveThreadProjectKey(thread);
+        let enrichment: ThreadDirectoryEnrichment;
+        try {
+          if (background?.directoryFilter && !await background.directoryFilter(projectKey)) {
+            enrichment = { linkedDirectories: buildProjectKeyLinkedDirectories(projectKey) };
+          } else {
+            const directoryKey = projectKey ? path.resolve(projectKey) : "";
+            let pending = directories.get(directoryKey);
+            if (!pending) {
+              await background?.checkpoint();
+              pending = this.threadDirectoryEnricher(projectKey, caller);
+              directories.set(directoryKey, pending);
+            }
+            enrichment = await pending;
+            if (projectKey) this.lastDirectoryEnrichment.set(path.resolve(projectKey), enrichment);
+          }
+        } catch (error) {
+          if (background?.strict) throw error;
+          this.host.logger.warn("thread directory enrichment failed", {
+            threadId: thread.id,
+            projectKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          enrichment = {
+            linkedDirectories: buildProjectKeyLinkedDirectories(projectKey),
+          };
+        }
+        const {
+          codexThreadSourceKind: _codexThreadSourceKind,
+          originator: _originator,
+          path: _path,
+          ...publicThread
+        } = thread;
+        return {
+          index,
+          thread: {
+            ...publicThread,
+            projectKey,
+            gitBranch: thread.gitBranch,
+            linkedDirectories: enrichment.linkedDirectories,
+            observedGitBranch: enrichment.observedGitBranch,
+            source: "codex" as const,
+          },
+        };
+      },
+      {
+        concurrency: background?.concurrency ?? THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY,
+        maxUnread: THREAD_DIRECTORY_ENRICHMENT_MAX_UNREAD,
+      },
+    )) {
+      enrichedThreads[enrichedThread.index] = enrichedThread.thread;
+    }
+
+    return enrichedThreads.filter(
+      (thread): thread is EnrichedCodexThread => Boolean(thread),
+    );
+  }
+
+  async listSkills(params?: {
+    cwd?: string;
+    cwds?: string[];
+  }): Promise<SkillCatalogEntry[]> {
+    await this.ensureInitialized();
+
+    const cwds = [
+      ...new Set(
+        [...(params?.cwds ?? []), params?.cwd].filter(
+          (cwd): cwd is string => typeof cwd === "string" && cwd.trim().length > 0
+        )
+      ),
+    ];
+    const payload: CodexSkillsListParams = { cwds };
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["skills/list"],
+      payloads: [payload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractSkillCatalog(result);
+  }
+
+  async listMcpServers(params: {
+    threadId?: string;
+    detail: CodexMcpInventoryDetail;
+  }): Promise<CodexMcpServerSummary[]> {
+    await this.ensureInitialized();
+
+    const timeoutMs = this.options.mcpInventoryTimeoutMs
+      ?? this.options.requestTimeoutMs
+      ?? (params.detail === "full"
+        ? DEFAULT_FULL_MCP_INVENTORY_TIMEOUT_MS
+        : DEFAULT_MCP_INVENTORY_TIMEOUT_MS);
+
+    const listPages = async (threadId?: string) => {
+      const servers: CodexMcpServerSummary[] = [];
+      const contextKey = threadId ? `thread:${threadId}` : "global";
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const result = await requestWithFallbacks({
+          client: this.connection,
+          methods: ["mcpServerStatus/list"],
+          payloads: [{
+            ...(threadId ? { threadId } : {}),
+            detail: params.detail,
+            limit: 100,
+            ...(cursor ? { cursor } : {}),
+          }],
+          timeoutMs,
+        });
+        const page = readMcpServerStatusPage(result, params.detail);
+        servers.push(...page.servers);
+        cursor = page.nextCursor;
+        if (cursor) {
+          if (seenCursors.has(cursor)) {
+            throw new Error("codex_mcp_inventory_repeated_cursor");
+          }
+          seenCursors.add(cursor);
+        }
+      } while (cursor);
+
+      return servers
+        .map((server) => {
+          const startup = this.mcpStartupStatusByContext
+            .get(contextKey)
+            ?.get(server.name);
+          return startup
+            ? {
+                ...server,
+                startupStatus: startup.status,
+                ...(startup.error ? { startupError: startup.error } : {}),
+              }
+            : server;
+        })
+        .sort((left, right) => left.name.localeCompare(right.name));
+    };
+
+    if (!params.threadId) {
+      return await listPages();
+    }
+    try {
+      return await listPages(params.threadId);
+    } catch (error) {
+      if (!isThreadNotFoundError(error)) {
+        throw error;
+      }
+      return await listPages();
+    }
+  }
+
+  async reloadMcpConfig(): Promise<void> {
+    await this.ensureInitialized();
+    this.mcpStartupStatusByContext.clear();
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["config/mcpServer/reload"],
+      payloads: [undefined],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+  }
+
+  async startMcpServerOAuthLogin(params: {
+    name: string;
+  }): Promise<{ authorizationUrl: string }> {
+    if (!params.name.trim()) {
+      throw new Error("MCP server name is required");
+    }
+    await this.ensureInitialized();
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["mcpServer/oauth/login"],
+      payloads: [{ name: params.name, timeoutSecs: 120 }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    const authorizationUrl = readStringFromRecord(result, "authorizationUrl");
+    if (!authorizationUrl) {
+      throw new Error("codex_mcp_oauth_login_missing_authorization_url");
+    }
+    return { authorizationUrl };
+  }
+
+  async removeMcpServer(params: { name: string }): Promise<void> {
+    if (!params.name.trim()) {
+      throw new Error("MCP server name is required");
+    }
+    await this.ensureInitialized();
+    const quotedName = `"${params.name
+      .replaceAll("\\", "\\\\")
+      .replaceAll("\"", "\\\"")}"`;
+    const payload: CodexConfigValueWriteParams = {
+      keyPath: `mcp_servers.${quotedName}`,
+      value: null,
+      mergeStrategy: "replace",
+    };
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["config/value/write"],
+      payloads: [payload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    for (const statuses of this.mcpStartupStatusByContext.values()) {
+      statuses.delete(params.name);
+    }
+    await this.reloadMcpConfig();
+    const remaining = await this.listMcpServers({
+      detail: "toolsAndAuthOnly",
+    });
+    if (remaining.some((server) => server.name === params.name)) {
+      throw new Error(
+        `${params.name} is managed by another Codex config layer and could not be removed`,
+      );
+    }
+  }
+
+  /**
+   * The model and effort one helper turn runs, by the shared helper model
+   * rule. Reuses the catalog from the last `model/list`, so a title, diff, or
+   * tool-output summary never fetches a list of its own; the catalog is read
+   * once only while nothing has been listed yet. Refresh updates it.
+   */
+  async resolveHelperModelSelection(params: {
+    helper: HelperModelId;
+    model?: string;
+    reasoningEffort?: string;
+  }): Promise<HelperModelResolution> {
+    // A completed read that offered nothing stays read; only a failed or
+    // missing read is retried, and concurrent helper turns share one.
+    if (!this.helperModelsRead) {
+      this.helperModelsReading ??= this.listModels()
+        .catch((error: unknown) => {
+          this.host.logger.warn("model/list for helper model failed", {
+            helper: params.helper,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          this.helperModelsReading = null;
+        });
+      await this.helperModelsReading;
+    }
+    const resolution = resolveHelperModel({
+      helper: params.helper,
+      settings: this.options.readHelperModelSettings?.(),
+      models: this.availableHelperModels,
+      catalogRead: this.helperModelsRead,
+      requestedModel: params.model,
+      requestedReasoningEffort: params.reasoningEffort,
+    });
+    const skipped = [
+      resolution.unavailableHelperModel,
+      resolution.unavailableDefaultModel,
+    ].filter((model): model is string => model !== undefined);
+    const warningKey = `${params.helper}:${skipped.join(",")}`;
+    if (skipped.length > 0 && !this.helperModelWarnings.has(warningKey)) {
+      this.helperModelWarnings.add(warningKey);
+      this.host.logger.warn("helper model not offered by Codex", {
+        helper: params.helper,
+        skipped,
+        model: resolution.model,
+        source: resolution.source,
+      });
+    }
+    return resolution;
+  }
+
+  async listModels(
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<BackendModelOption[]> {
+    await this.ensureInitialized();
+
+    const startedAt = performance.now();
+    const payload: CodexModelListParams = {};
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      diagnostics,
+      methods: ["model/list"],
+      payloads: [payload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    if (usesGeneratedCodexModelListResponse(this.initializeResult?.userAgent)) {
+      const parsedResult = parseConsumedCodexModelListResponse(result);
+      const models = extractGeneratedModelOptions(parsedResult);
+      this.availableHelperModels = models;
+      this.helperModelsRead = true;
+      this.helperModelWarnings.clear();
+      this.host.logger.info("model/list", {
+        durationMs: Math.round(performance.now() - startedAt),
+        normalizedModelIds: models.map((model) => model.id),
+      });
+      this.host.logger.debug("model/list raw models", {
+        rawModels: summarizeGeneratedModelList(parsedResult),
+      });
+      return models;
+    }
+
+    const models = extractModelOptions(result);
+    this.availableHelperModels = models;
+    this.helperModelsRead = true;
+    this.helperModelWarnings.clear();
+    this.host.logger.info("model/list", {
+      durationMs: Math.round(performance.now() - startedAt),
+      normalizedModelIds: models.map((model) => model.id),
+    });
+    this.host.logger.debug("model/list raw models", {
+      rawModels: summarizeRawModelList(result),
+    });
+
+    return models;
+  }
+
+  async readAccount(): Promise<BackendAccountSummary> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["account/read"],
+      payloads: [{ refreshToken: false }, { refresh_token: false }, {}],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractAccountSummary(result);
+  }
+
+  async readRateLimits(): Promise<BackendRateLimitSummary[]> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["account/rateLimits/read"],
+      payloads: [{}],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractRateLimitSummaries(result);
+  }
+
+  async readAccountUsage(): Promise<unknown> {
+    await this.ensureInitialized();
+
+    return await requestWithFallbacks({
+      client: this.connection,
+      methods: ["account/usage/read"],
+      payloads: [{}],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+  }
+
+  /**
+   * The PwrAgent-configured model provider a thread runs on, as Codex last
+   * reported it. Undefined for Codex's default provider and for threads this
+   * connection has not read yet.
+   */
+  modelProviderForThread(threadId: string): string | undefined {
+    return this.modelProviderTranslator?.providerForThread(threadId);
+  }
+
+  /**
+   * The model provider Codex last reported for a thread, whether or not
+   * PwrAgent configured it: `openai` for Codex's default. Undefined when this
+   * connection has not been told, which callers must treat as unknown.
+   */
+  reportedModelProviderForThread(threadId: string): string | undefined {
+    return this.modelProviderTranslator?.reportedProviderForThread(threadId);
+  }
+
+  async readThreadPricingSnapshot(threadId: string): Promise<ThreadPricingSnapshot> {
+    await this.ensureInitialized();
+    const existing = this.pricingSnapshotReads.get(threadId);
+    if (existing) return await existing;
+    const pending = this.runAdmittedRequest(async () => {
+      const result = await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+      const thread = asRecord(asRecord(result)?.thread);
+      if (thread?.id !== threadId) return {};
+      const model = pickString(thread, ["model"]);
+      const live = this.liveUsageSnapshots.get(threadId);
+      if (live?.tokens) return {
+        model: model ?? live.model, tokens: live.tokens,
+        ...(live.serviceTier ? { serviceTier: live.serviceTier } : {}),
+      };
+
+      // account/usage/read supports thread estimates without loading a thread
+      // or acquiring its writer. Some billing routes/older servers supply no
+      // threadUsage; keep unknown counts unknown instead of resuming to get it.
+      try {
+        const usageResult = asRecord(await this.connection.request("account/usage/read", { threadId },
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
+        // A live notification may arrive while the read is in flight.
+        const latest = this.liveUsageSnapshots.get(threadId);
+        if (latest?.tokens) return {
+          model: model ?? latest.model, tokens: latest.tokens,
+          ...(latest.serviceTier ? { serviceTier: latest.serviceTier } : {}),
+        };
+        const usage = asRecord(usageResult?.threadUsage);
+        if (usage?.threadId !== threadId || !Array.isArray(usage.groups) || usage.groups.length === 0) return { model };
+        const groups = usage.groups.map((group) => asRecord(group) ?? {});
+        const sum = (key: string): number | undefined => {
+          let total = 0;
+          for (const group of groups) {
+            const count = pickNumber(group, [key]);
+            if (count === undefined || !Number.isSafeInteger(count) || count < 0) return undefined;
+            total += count;
+          }
+          return Number.isSafeInteger(total) ? total : undefined;
+        };
+        const tokens: ThreadUsageTokenBreakdown = {
+          inputTokens: sum("inputTokens"), cachedInputTokens: sum("cachedInputTokens"),
+          uncachedInputTokens: sum("netNewInputTokens"), outputTokens: sum("outputTokens"), totalTokens: sum("totalTokens"),
+        };
+        const estimatedCostMicros = pickNumber(usage, ["estimatedUsageUsdMicros"]);
+        return { model, tokens, pricingSource: "provider" as const,
+          ...(estimatedCostMicros !== undefined && Number.isSafeInteger(estimatedCostMicros) && estimatedCostMicros >= 0
+            ? { estimatedCostMicros } : {}),
+        };
+      } catch (error) {
+        this.host.logger.debug("historical pricing snapshot unavailable", { threadId, error: String(error) });
+        return { model };
+      }
+    });
+    this.pricingSnapshotReads.set(threadId, pending);
+    try {
+      return await pending;
+    } finally {
+      this.pricingSnapshotReads.delete(threadId);
+    }
+  }
+
+  /** Exact server-reported ancestry, using live metadata before metadata-only history pages. */
+  async readTurnRoot(params: { threadId: string; turnId: string }): Promise<string | undefined> {
+    await this.ensureInitialized();
+    const key = `${params.threadId}:${params.turnId}`;
+    if (this.turnRoots.has(key)) return this.turnRoots.get(key) ?? undefined;
+    if (!this.getProtocolCompatibility().supportsTurnAncestry) return undefined;
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    do {
+      const page = await this.connection.request("thread/turns/list", {
+        threadId: params.threadId,
+        ...(cursor ? { cursor } : {}),
+        limit: CODEX_THREAD_HISTORY_PAGE_SIZE,
+        sortDirection: "desc",
+        itemsView: "notLoaded",
+      } satisfies CodexThreadTurnsListParams,
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) as CodexThreadTurnsListResponse;
+      const turn = page.data.find((turn) => turn.id === params.turnId);
+      if (turn) {
+        const root = typeof turn.rootTurnId === "string" ? turn.rootTurnId : null;
+        rememberBoundedMap(this.turnRoots, key, root, 1_000);
+        return root ?? undefined;
+      }
+      cursor = page.nextCursor ?? undefined;
+      if (!cursor || seen.has(cursor)) return undefined;
+      seen.add(cursor);
+    } while (cursor);
+    return undefined;
+  }
+
+  /**
+   * One turn's replay, normalized through the same adapter as a history page,
+   * so its messages carry the same parts: a turn's tool screenshots attach to
+   * its final reply. Reads only that turn's items, never a transcript page.
+   */
+  async readThreadTurn(params: {
+    threadId: string;
+    turnId: string;
+  }): Promise<AppServerThreadReplay> {
+    await this.ensureInitialized();
+    const items = await listCodexThreadItems({
+      client: this.connection,
+      threadId: params.threadId,
+      turnId: params.turnId,
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    return extractThreadReplayFromReadResult({ thread: {
+      id: params.threadId, turns: [{ id: params.turnId, items }],
+    } }, { threadId: params.threadId });
+  }
+
+  /** A single invocation's bodies, with no claim about its transcript group. */
+  async readThreadToolInvocation(params: {
+    threadId: string;
+    turnId: string;
+    itemId: string;
+  }): Promise<AppServerThreadActivityDetail[]> {
+    if (!params.threadId || !params.turnId || !params.itemId) throw new Error("Invalid tool invocation detail request.");
+    await this.ensureInitialized();
+    let items: CodexThreadItem[] | undefined;
+    try {
+      // initialize deliberately opts into experimentalApi. Exact invocation
+      // reads are isolated from replay: one item cannot establish a group.
+      const payload = { threadId: params.threadId, turnId: params.turnId, itemIds: [params.itemId] } satisfies CodexThreadItemsReadParams;
+      const response = await requestWithThreadMetadataReadRetry(async () =>
+        await this.connection.request("thread/items/read", payload,
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+      ) as CodexThreadItemsReadResponse;
+      const entry = Array.isArray(response?.data) && response.data.length === 1 ? response.data[0] : undefined;
+      if (entry?.turnId === params.turnId && entry.item?.id === params.itemId && entry.item.type === "commandExecution") {
+        items = [entry.item];
+      }
+    } catch (error) {
+      if (!isMethodUnavailableError(error, "thread/items/read")) throw error;
+    }
+    // Older servers enumerate only the requested turn. Select the raw item
+    // before normalization so adjacent commands cannot become its details.
+    items ??= (await listCodexThreadItems({
+      client: this.connection, threadId: params.threadId, turnId: params.turnId,
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    })).filter((item) => item.id === params.itemId && item.type === "commandExecution");
+    if (items.length !== 1) throw new Error("Tool invocation details are no longer available. Reload the thread.");
+    const replay = extractThreadReplayFromReadResult({ thread: { id: params.threadId,
+      turns: [{ id: params.turnId, items }],
+    } }, { threadId: params.threadId });
+    return replay.entries.flatMap((entry) => entry.type === "activity" ? entry.details : []);
+  }
+
+  async readThreadActivity(params: {
+    threadId: string;
+    turnId: string;
+    entryId: string;
+    itemIds?: string[];
+  }): Promise<AppServerThreadActivityEntry> {
+    const ids = params.itemIds;
+    if (ids && ids.length > 0 && ids.length <= 100
+      && ids.every((id) => typeof id === "string" && id.length > 0)
+      && new Set(ids).size === ids.length && params.entryId === `activity-${ids[0]}`) {
+      await this.ensureInitialized();
+      try {
+        // initialize deliberately opts into experimentalApi. This endpoint is
+        // for an already-discovered group, never transcript enumeration.
+        const payload = { threadId: params.threadId, turnId: params.turnId, itemIds: ids } satisfies CodexThreadItemsReadParams;
+        const response = await requestWithThreadMetadataReadRetry(async () =>
+          await this.connection.request("thread/items/read", payload,
+            this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+        ) as CodexThreadItemsReadResponse;
+        const remaining = new Set(ids);
+        const valid = Array.isArray(response?.data) && response.data.length === ids.length
+          && response.data.every((entry) => entry?.turnId === params.turnId
+            && entry.item?.type === "commandExecution" && remaining.delete(entry.item.id));
+        if (valid) {
+          // Envelopes arrive in canonical stored order, not request order.
+          // The viewer retains the original row's timestamps and turn status.
+          const replay = extractThreadReplayFromReadResult({ thread: { id: params.threadId,
+            turns: [{ id: params.turnId, items: response.data.map((entry) => entry.item) }],
+          } }, { threadId: params.threadId });
+          const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
+          if (entry?.type === "activity") return entry;
+        }
+      } catch (error) {
+        if (!isMethodUnavailableError(error, "thread/items/read")) throw error;
+      }
+    }
+    // No transcript file, whole-thread replay, or accounting read is needed.
+    const replay = await this.readThreadTurn(params);
+    const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
+    if (!entry || entry.type !== "activity") throw new Error("Activity details are no longer available. Reload the thread.");
+    return entry;
+  }
+
+  async readThreadName(threadId: string): Promise<string | undefined> {
+    await this.ensureInitialized();
+    const result = await requestWithThreadMetadataReadRetry(async () =>
+      await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    ) as CodexThreadReadResponse;
+    if (result.thread?.id !== threadId) throw new Error(`Thread metadata was not found: ${threadId}`);
+    // Undo needs the persisted name, before display-title normalization or
+    // preview fallback changes the value shown in thread summaries.
+    return typeof result.thread.name === "string" ? result.thread.name : undefined;
+  }
+
+  async readThreadSummary(threadId: string): Promise<AppServerThreadSummary> {
+    await this.ensureInitialized();
+    const result = await requestWithThreadMetadataReadRetry(async () =>
+      await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    );
+    const summaries = await this.enrichThreads(extractThreadsFromValue({ data: [asRecord(result)?.thread] }, this.threadListTextCache), {
+      enrichDirectories: false,
+    });
+    const thread = summaries.find((summary) => summary.id === threadId);
+    if (!thread) throw new Error(`Thread metadata was not found: ${threadId}`);
+    return { ...thread, linkedDirectories: buildProjectKeyLinkedDirectories(thread.projectKey) };
+  }
+
+  async listBackgroundTerminals(threadId: string): Promise<ListBackgroundTerminalsResponse> {
+    await this.ensureInitialized();
+    const terminals: CodexBackgroundTerminal[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      let response: ThreadBackgroundTerminalsListResponse;
+      try {
+        response = await this.connection.request(
+          "thread/backgroundTerminals/list",
+          { threadId, limit: 100, ...(cursor ? { cursor } : {}) },
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        ) as ThreadBackgroundTerminalsListResponse;
+      } catch (error) {
+        if (isMethodUnavailableError(error, "thread/backgroundTerminals/list")) {
+          return { supported: false, terminals: [] };
+        }
+        // Unlike thread/read, this RPC consults only the loaded thread's
+        // process registry. An unloaded history thread owns no sessions here.
+        const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+        if (message.includes("thread not found:") || message.includes("thread not loaded")) {
+          return { supported: true, terminals: [] };
+        }
+        throw error;
+      }
+      if (!Array.isArray(response.data)) {
+        throw new Error("Codex returned an invalid background terminal list.");
+      }
+      for (const terminal of response.data) {
+        if (typeof terminal.itemId !== "string" || typeof terminal.processId !== "string"
+          || typeof terminal.command !== "string" || typeof terminal.cwd !== "string") {
+          throw new Error("Codex returned an invalid background terminal.");
+        }
+        const memoryKb = terminal.rssKb == null ? undefined : Number(terminal.rssKb);
+        terminals.push({
+          itemId: terminal.itemId, processId: terminal.processId,
+          command: terminal.command, cwd: terminal.cwd,
+          ...(terminal.osPid != null ? { osPid: terminal.osPid } : {}),
+          ...(terminal.cpuPercent != null ? { cpuPercent: terminal.cpuPercent } : {}),
+          ...(memoryKb !== undefined && Number.isSafeInteger(memoryKb) ? { memoryKb } : {}),
+        });
+      }
+      cursor = response.nextCursor ?? undefined;
+      if (cursor && cursors.has(cursor)) {
+        throw new Error("Codex repeated a background terminal cursor.");
+      }
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    return { supported: true, terminals };
+  }
+
+  async terminateBackgroundTerminal(threadId: string, processId: string): Promise<boolean> {
+    await this.ensureInitialized();
+    const response = await this.connection.request(
+      "thread/backgroundTerminals/terminate",
+      { threadId, processId },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    ) as ThreadBackgroundTerminalsTerminateResponse;
+    if (typeof response.terminated !== "boolean") {
+      throw new Error("Codex returned an invalid terminal termination response.");
+    }
+    return response.terminated;
+  }
+
+  async readThread(params: {
+    threadId: string;
+    includeTurns?: boolean;
+    before?: string;
+    limit?: number;
+  }): Promise<AppServerThreadReplay> {
+    await this.ensureInitialized();
+
+    if (params.includeTurns !== false && this.threadsAwaitingFirstTurn.has(params.threadId)) {
+      // Environment setup can block the first turn after thread/start. Do
+      // not ask for paginated history whose source rollout does not exist.
+      return extractThreadReplayFromReadResult(
+        this.pendingFirstTurnThreadResults.get(params.threadId),
+        { threadId: params.threadId },
+      );
+    }
+
+    let result: unknown;
+    try {
+      // Full-history hydration on thread/read is deprecated for paginated
+      // threads. Read metadata first, then hydrate turns and items through
+      // their cursor-based list methods.
+      const payload = buildThreadReadPayload(params);
+      result = await requestWithThreadMetadataReadRetry(async () => {
+        return await requestWithFallbacks({
+          client: this.connection,
+          methods: ["thread/read"],
+          payloads: [payload],
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
+      });
+      if (params.includeTurns === false) {
+        const record = asRecord(result) ?? {};
+        const thread = asRecord(record.thread) ?? {};
+        result = {
+          ...record,
+          thread: {
+            ...thread,
+            turns: [],
+          },
+        };
+      } else if (!threadReadResultIncludesTurns(result)) {
+        result = await hydrateCodexThreadHistory({
+          before: params.before,
+          client: this.connection,
+          limit: params.limit,
+          readResult: result,
+          threadId: params.threadId,
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
+      }
+    } catch (error) {
+      if (!isUnmaterializedThreadError(error)) {
+        throw error;
+      }
+
+      return {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false
+        }
+      };
+    }
+
+    return extractThreadReplayFromReadResult(result, { threadId: params.threadId });
+  }
+
+  /**
+   * The model and effort Codex reports for a thread: its configured settings
+   * while loaded, otherwise the latest persisted ones. Turns are not read.
+   */
+  async readThreadModelSettings(params: {
+    threadId: string;
+  }): Promise<{ model?: string; reasoningEffort?: string } | undefined> {
+    await this.ensureInitialized();
+    const result = await this.connection.request(
+      "thread/read",
+      buildThreadReadPayload({ threadId: params.threadId }),
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    );
+    const thread = asRecord(asRecord(result)?.thread);
+    if (!thread || thread.id !== params.threadId) {
+      return undefined;
+    }
+    const model = pickString(thread, ["model"]);
+    const reasoningEffort = pickString(thread, ["reasoningEffort", "reasoning_effort"]);
+    return model || reasoningEffort
+      ? { ...(model ? { model } : {}), ...(reasoningEffort ? { reasoningEffort } : {}) }
+      : undefined;
+  }
+
+  /** Export bytes through Codex; never open or parse its private storage. */
+  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
+    await this.ensureInitialized();
+    const result = await this.connection.request("thread/read", { threadId, includeTurns: false },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    const thread = asRecord(asRecord(result)?.thread);
+    if (!thread || thread.id !== threadId || typeof thread.path !== "string") {
+      throw new Error("Codex did not provide a persisted thread to export.");
+    }
+    if (asRecord(thread.status)?.type === "active") throw new Error("Wait for the source turn to finish before handoff.");
+    const replay = await this.readThread({ threadId });
+    const file = asRecord(await this.connection.request("fs/readFile", { path: thread.path },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
+    if (typeof file?.dataBase64 !== "string") throw new Error("Codex does not support exporting thread bytes through fs/readFile.");
+    return {
+      rolloutBase64: file.dataBase64,
+      replay,
+      ...(typeof thread.cwd === "string" ? { cwd: thread.cwd } : {}),
+      ...(typeof thread.name === "string" ? { title: thread.name } : {}),
+    };
+  }
+
+  /** Drops the captured setup variables when the profile withholds them. */
+  private withAgentEnvironmentPolicy<
+    T extends { codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime },
+  >(params: T): T {
+    const runtime = withAgentSetupVariablePolicy(
+      params.codexEnvironmentRuntime,
+      this.options.passSetupVariablesToAgents?.() ?? true,
+    );
+    return runtime === params.codexEnvironmentRuntime
+      ? params
+      : { ...params, codexEnvironmentRuntime: runtime };
+  }
+
+  /**
+   * A stock runtime can reuse its acknowledged catalog across owned realtime
+   * handoffs. First-turn rollout bookkeeping is separate from catalog proof.
+   * Unknown turns, mutations and reset revoke admission; drift needs refresh.
+   */
+  async prepareFreshNativeVoiceThread(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean> {
+    params = this.withAgentEnvironmentPolicy(params);
+    await this.ensureInitialized();
+    const admitted = this.admittedNativeVoiceThreads.get(params.threadId);
+    const fresh = admitted ?? this.freshNativeVoiceThreads.get(params.threadId);
+    if (!fresh || (!admitted && !this.pendingFirstTurnThreadResults.has(params.threadId))) return false;
+    const payload = buildThreadStartPayload({
+      ...params, pwrdrvrTokenMiser: params.pwrdrvrTokenMiser ?? undefined,
+      bundledToolsDirectory: this.options.bundledToolsDirectory,
+      buildShellEnvironment: this.host.buildShellEnvironment,
+    }, this.getProtocolCompatibility());
+    if (!isDeepStrictEqual(fresh.dynamicTools, payload.dynamicTools ?? [])
+      || fresh.cwd !== payload.cwd
+      || !isDeepStrictEqual(fresh.runtime, params.codexEnvironmentRuntime)
+      || fresh.defaultModeRequestUserInput !== params.defaultModeRequestUserInput) return false;
+
+    // thread/start has no effort field. Even an unchanged overlay can require
+    // an effort update; await all effective settings, including permissions,
+    // before automatic realtime handoffs can run a coding turn.
+    await this.connection.request("thread/settings/update", {
+      ...buildThreadSettingsUpdatePayload(params),
+      threadId: params.threadId,
+      approvalPolicy: payload.approvalPolicy,
+      approvalsReviewer: payload.approvalsReviewer,
+      sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+    }, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    const current = admitted
+      ? this.admittedNativeVoiceThreads.get(params.threadId)
+      : this.freshNativeVoiceThreads.get(params.threadId);
+    if (current !== fresh) return false;
+    this.admittedNativeVoiceThreads.set(params.threadId, fresh);
+    return true;
+  }
+
+  /**
+   * Refresh the catalog without starting inference. The registry negotiates
+   * dynamicToolsResumeField and reserves the idle thread before calling this.
+   */
+  async refreshThreadTools(params: Parameters<typeof buildThreadResumePayloads>[0] & {
+    dynamicTools: CodexDynamicToolSpec[];
+  }): Promise<void> {
+    await this.prepareIdleNativeVoiceThread(params);
+  }
+
+  /**
+   * Restore a PwrAgent-owned director's persisted catalog on stock Codex.
+   * This does not acknowledge or replace it with the current tool catalog.
+   * The registry restricts this path to the remembered Voice manager.
+   */
+  async resumeNativeVoiceThread(params: Omit<Parameters<CodexAppServerClient["refreshThreadTools"]>[0], "dynamicTools">): Promise<void> {
+    await this.prepareIdleNativeVoiceThread({ ...params, dynamicTools: undefined });
+  }
+
+  private async prepareIdleNativeVoiceThread(params: Parameters<typeof buildThreadResumePayloads>[0]): Promise<void> {
+    params = this.withAgentEnvironmentPolicy(params);
+    await this.ensureInitialized();
+    this.freshNativeVoiceThreads.delete(params.threadId);
+    this.admittedNativeVoiceThreads.delete(params.threadId);
+    const connection = this.createThreadOperationConnection();
+    const current = await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/read"],
+      payloads: [buildThreadReadPayload({ threadId: params.threadId })],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    if (readThreadStatus(current) === "active") {
+      throw new Error("Wait for the current turn to finish or stop it, then change Agent thread status.");
+    }
+    const [resumePayload] = buildThreadResumePayloads({
+      ...params, bundledToolsDirectory: this.options.bundledToolsDirectory,
+      buildShellEnvironment: this.host.buildShellEnvironment,
+    }, this.getProtocolCompatibility());
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/resume"],
+      payloads: [resumePayload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    // Rejoining a loaded thread preserves its model/effort. Automatic voice
+    // handoffs have no turn/start settings override, so update the live thread
+    // explicitly and await acknowledgement before admitting realtime.
+    const settings = buildThreadSettingsUpdatePayload(params);
+    if (settings || params.approvalPolicy || params.approvalsReviewer || params.sandbox) {
+      const payload: CodexThreadSettingsUpdateParams = {
+        ...settings, threadId: params.threadId,
+        approvalPolicy: resumePayload.approvalPolicy as CodexThreadSettingsUpdateParams["approvalPolicy"],
+        approvalsReviewer: resumePayload.approvalsReviewer,
+        sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+      };
+      await connection.request("thread/settings/update", payload,
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    }
+  }
+
+  async injectThreadItems(params: {
+    threadId: string;
+    items: CodexThreadInjectItemsParams["items"];
+  }): Promise<void> {
+    await this.ensureInitialized();
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/inject_items"],
+      payloads: [
+        {
+          threadId: params.threadId,
+          items: params.items,
+        } satisfies CodexThreadInjectItemsParams,
+      ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+  }
+
+  async startThread(params: {
+    cwd?: string;
+    ephemeral?: boolean;
+    model?: string;
+    approvalPolicy?: string;
+    approvalsReviewer?: ApprovalsReviewer;
+    sandbox?: string;
+    serviceTier?: string | null;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
+    defaultModeRequestUserInput?: boolean;
+    dynamicTools?: CodexDynamicToolSpec[];
+    threadSource?: CodexThreadStartParams["threadSource"];
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
+  }): Promise<{ threadId: string }> {
+    params = this.withAgentEnvironmentPolicy(params);
+    await this.ensureInitialized();
+
+    const startPayload = buildThreadStartPayload({
+      ...params, bundledToolsDirectory: this.options.bundledToolsDirectory,
+      buildShellEnvironment: this.host.buildShellEnvironment,
+    }, this.getProtocolCompatibility());
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/start"],
+      payloads: [startPayload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    const threadId = extractThreadIdFromValue(result);
+    if (!threadId) {
+      throw new Error("codex app server thread/start did not return threadId");
+    }
+
+    this.freshNativeVoiceThreads.set(threadId, {
+      dynamicTools: structuredClone(startPayload.dynamicTools ?? []),
+      cwd: params.cwd?.trim() || undefined,
+      runtime: structuredClone(params.codexEnvironmentRuntime),
+      defaultModeRequestUserInput: params.defaultModeRequestUserInput,
+    });
+    this.pendingFirstTurnThreadResults.set(threadId, result);
+    this.threadsAwaitingFirstTurn.add(threadId);
+    this.pendingFirstTurnShellEnvironments.set(
+      threadId,
+      JSON.stringify(params.codexEnvironmentRuntime?.shellEnvironment),
+    );
+    await this.recordThreadNameWithCodex(result);
+
+    return {
+      threadId,
+    };
+  }
+
+  async forkThread(params: {
+    threadId: string;
+    path?: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    approvalsReviewer?: ApprovalsReviewer;
+    sandbox?: string;
+    serviceTier?: string;
+    fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadForkParams["config"];
+  }): Promise<{ threadId: string }> {
+    params = this.withAgentEnvironmentPolicy(params);
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/fork"],
+      payloads: [
+        buildThreadForkPayload(
+          {
+            ...params,
+            bundledToolsDirectory: this.options.bundledToolsDirectory,
+            buildShellEnvironment: this.host.buildShellEnvironment,
+          },
+          this.getProtocolCompatibility(),
+        ),
+      ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    const threadId = extractThreadIdFromValue(result);
+    if (!threadId) {
+      throw new Error("codex app server thread/fork did not return threadId");
+    }
+
+    this.pendingFirstTurnThreadResults.set(threadId, result);
+    this.pendingFirstTurnShellEnvironments.set(
+      threadId,
+      JSON.stringify(params.codexEnvironmentRuntime?.shellEnvironment),
+    );
+    await this.recordThreadNameWithCodex(result);
+
+    return {
+      threadId,
+    };
+  }
+
+  async startTurn(params: {
+    threadId: string;
+    /** Delegation attribution only. */
+    parentTurnId?: string;
+    rootTurnId?: string;
+    input: AppServerTurnInputItem[];
+    onInputTextPrepared?: (text: string | undefined) => void;
+    cwd?: string;
+    approvalPolicy?: string;
+    approvalsReviewer?: ApprovalsReviewer;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string | null;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadResumeParams["config"];
+    defaultModeRequestUserInput?: boolean;
+    dynamicTools?: CodexDynamicToolSpec[];
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
+  }): Promise<{
+    threadId: string;
+    turnId: string;
+  }> {
+    params = this.withAgentEnvironmentPolicy(params);
+    await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
+
+    const pendingFirstTurnResult = this.pendingFirstTurnThreadResults.get(params.threadId);
+    // thread/resume primes the per-thread permission profile in codex
+    // before later turn/start calls. A just-created thread has no rollout
+    // yet, so stock Codex cannot resume it before the first turn. The
+    // PwrAgent fork explicitly advertises a dynamic-tools resume extension
+    // that supports this no-rollout refresh. The registry passes a complete
+    // replacement catalog only after negotiating that exact capability.
+    const shellEnvironmentChanged = pendingFirstTurnResult !== undefined
+      && this.pendingFirstTurnShellEnvironments.get(params.threadId)
+        !== JSON.stringify(params.codexEnvironmentRuntime?.shellEnvironment);
+    // The registry negotiates dynamicTools before supplying it. Environment
+    // changes must negotiate the same no-rollout resume extension themselves.
+    let supportsPendingEnvironmentRefresh = params.dynamicTools !== undefined;
+    if (shellEnvironmentChanged && !supportsPendingEnvironmentRefresh) {
+      const capabilities = await this.readServerCapabilities().catch(() => undefined);
+      supportsPendingEnvironmentRefresh =
+        capabilities?.codeModeOutputReducer?.protocolVersion === 1
+        && capabilities.codeModeOutputReducer.dynamicToolsResumeField === "dynamicTools";
+    }
+    const refreshPendingFirstTurn =
+      pendingFirstTurnResult !== undefined
+      && supportsPendingEnvironmentRefresh
+      && (params.dynamicTools !== undefined || shellEnvironmentChanged);
+    if (shellEnvironmentChanged && !supportsPendingEnvironmentRefresh) {
+      // Stock Codex has no shell-environment override on turn/start. Preserve
+      // the existing thread and apply the selection via resume on the next turn.
+      for (const listener of this.notificationListeners) {
+        await listener({
+          method: "warning",
+          params: {
+            threadId: params.threadId,
+            message: "This Codex version cannot change the environment before the first turn. This turn uses the thread's original environment; the selected environment will apply from the next turn.",
+          },
+        });
+      }
+    }
+    let resumeResult = pendingFirstTurnResult;
+    if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
+      // Resume can replace the catalog or environment even if input
+      // preparation or turn/start later fails. Drop proof before sending it.
+      this.freshNativeVoiceThreads.delete(params.threadId);
+      this.admittedNativeVoiceThreads.delete(params.threadId);
+      const resume = requestWithFallbacks({
+        client: connection,
+        methods: ["thread/resume"],
+        payloads: buildThreadResumePayloads(
+          {
+            threadId: params.threadId,
+            cwd: params.cwd,
+            approvalPolicy: params.approvalPolicy,
+            approvalsReviewer: params.approvalsReviewer,
+            sandbox: params.sandbox,
+            model: params.model,
+            serviceTier: params.serviceTier,
+            reasoningEffort: params.reasoningEffort,
+            fastMode: params.fastMode,
+            codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+            config: params.config,
+            defaultModeRequestUserInput: params.defaultModeRequestUserInput,
+            bundledToolsDirectory: this.options.bundledToolsDirectory,
+            buildShellEnvironment: this.host.buildShellEnvironment,
+            dynamicTools: params.dynamicTools,
+            pwrdrvrTokenMiser: params.pwrdrvrTokenMiser,
+          },
+          this.getProtocolCompatibility(),
+        ),
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+      // Environment overrides are applied by resume; continuing after a
+      // failure would silently run the turn with the previous toolchain.
+      resumeResult = params.dynamicTools !== undefined
+        || params.codexEnvironmentRuntime?.shellEnvironment !== undefined
+        || shellEnvironmentChanged
+        ? await resume
+        : await resume.catch((error: unknown) => {
+            // A shared Codex profile can be readable here while another
+            // app-server holds its writer. turn/start cannot claim that
+            // thread and would mask the conflict with "thread not found".
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.toLowerCase().includes("already has an active writer")) {
+              throw error;
+            }
+            this.host.logger.warn("thread/resume failed before turn/start", {
+              threadId: params.threadId,
+              requestedApprovalPolicy: params.approvalPolicy ?? null,
+              requestedSandbox: params.sandbox ?? null,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return undefined;
+          });
+    }
+
+    const codexInput = await prepareCodexUserInput({
+      input: params.input,
+      onInputTextPrepared: params.onInputTextPrepared,
+    });
+    const result = await requestWithFallbacks({
+      client: connection,
+      methods: ["turn/start"],
+      payloads: [
+        buildTurnStartPayload(
+          {
+            threadId: params.threadId,
+            input: codexInput,
+            parentTurnId: params.parentTurnId,
+            rootTurnId: params.rootTurnId,
+            cwd: params.cwd,
+            model: params.model,
+            reasoningEffort: params.reasoningEffort,
+            serviceTier: params.serviceTier,
+            fastMode: params.fastMode,
+            approvalPolicy: params.approvalPolicy,
+            approvalsReviewer: params.approvalsReviewer,
+            sandbox: params.sandbox,
+            collaborationMode: params.collaborationMode,
+            collaborationFallbackModel:
+              params.model?.trim() || extractStringProperty(resumeResult, "model"),
+            collaborationFallbackReasoningEffort: extractStringProperty(
+              resumeResult,
+              "reasoningEffort",
+              "reasoning_effort"
+            ),
+          },
+          this.getProtocolCompatibility(),
+        ),
+      ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    const threadId = extractThreadIdFromValue(result) ?? params.threadId;
+    const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
+    const turn = asRecord(asRecord(result)?.turn);
+    if (typeof turn?.rootTurnId === "string" || turn?.rootTurnId === null) {
+      rememberBoundedMap(this.turnRoots, `${threadId}:${turnId}`, turn.rootTurnId, 1_000);
+    }
+    this.threadsAwaitingFirstTurn.delete(params.threadId);
+    this.freshNativeVoiceThreads.delete(params.threadId);
+    this.admittedNativeVoiceThreads.delete(params.threadId);
+    this.pendingFirstTurnThreadResults.delete(params.threadId);
+    this.pendingFirstTurnShellEnvironments.delete(params.threadId);
+    await this.recordDerivedThreadNameWithCodex({
+      threadId: params.threadId,
+      input: params.input,
+    });
+
+    return { threadId, turnId };
+  }
+
+  async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
+    return await this.runHelperStructuredTurn({
+      helper: "thread_titles",
+      prompt: params.prompt,
+      schema: params.schema,
+      isMatch: TITLE_RECORD_PREDICATE,
+      timeoutMs: params.timeoutMs,
+      turnTimeoutMs: params.turnTimeoutMs,
+    });
+  }
+
+  /**
+   * Run a single ephemeral helper turn that returns a structured object of an
+   * arbitrary schema (e.g. drafting an automation prompt). Mirrors the title
+   * generation path; the output record is identified by `isMatch`.
+   */
+  async generateStructuredObject(params: {
+    /** Which helper is running, for its per-helper override and effort. */
+    helper: HelperModelId;
+    /** Overrides the row for this call only, when Codex offers it. */
+    model?: string;
+    reasoningEffort?: string;
+    prompt: string;
+    schema: Record<string, unknown>;
+    system?: string;
+    /** Explicitly remove execution and delegation tools for data-only helpers. */
+    disableExecution?: boolean;
+    isMatch: StructuredRecordPredicate;
+    timeoutMs?: number;
+    turnTimeoutMs?: number;
+  }): Promise<ThreadTitleAdapterResult> {
+    return await this.runHelperStructuredTurn(params);
+  }
+
+  /**
+   * Run one ephemeral helper turn that may call PwrAgent dynamic tools.
+   *
+   * The same isolation as `generateStructuredObject` — a throwaway thread, a
+   * scratch cwd, no project docs, every configured MCP server disabled and
+   * attested — with exactly one capability added: the tools in
+   * `dynamicTools`, serviced by `onToolCall` for this turn only.
+   *
+   * There is no return value beyond success or failure. The turn's product is
+   * whatever its tools did, so the caller reads the outcome from the handler
+   * it supplied.
+   */
+  async runHelperToolTurn(params: {
+    helper: HelperModelId;
+    model?: string;
+    reasoningEffort?: string;
+    prompt: string;
+    system?: string;
+    dynamicTools: CodexDynamicToolSpec[];
+    onToolCall: HelperThreadToolCallHandler;
+    timeoutMs?: number;
+    turnTimeoutMs?: number;
+  }): Promise<{ status: "ok" } | { status: "failed"; reason: string }> {
+    const result = await this.runHelperStructuredTurn(params);
+    return result.status === "ok"
+      ? { status: "ok" }
+      : { status: "failed", reason: result.reason };
+  }
+
+  /**
+   * Returns only the effective MCP server names. Connection setup uses this to
+   * avoid creating a transport-less disable entry for an alias that Codex did
+   * not inherit. The protocol observer redacts the complete config response.
+   */
+  async readConfiguredMcpServerNames(params?: {
+    cwd?: string;
+  }): Promise<string[]> {
+    await this.ensureInitialized();
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      diagnostics: { callerReason: CODEX_CONNECTION_MCP_CONFIG_READ_REASON },
+      methods: ["config/read"],
+      payloads: [{
+        includeLayers: false,
+        ...(params?.cwd ? { cwd: params.cwd } : {}),
+      }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    return readConfiguredMcpServerNames(result);
+  }
+
+  /** Read only configured MCP names; the observer wrapper strips secret values. */
+  private async readHelperMcpServerNames(
+    cwd: string,
+    timeoutMs: number,
+  ): Promise<string[]> {
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      diagnostics: { callerReason: CODEX_THREAD_TITLE_CONFIG_READ_REASON },
+      methods: ["config/read"],
+      payloads: [{ includeLayers: false, cwd }],
+      timeoutMs,
+    });
+    return readConfiguredMcpServerNames(result);
+  }
+
+  private async attestHelperHasNoMcpTools(
+    threadId: string,
+    timeoutMs: number,
+  ): Promise<void> {
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    do {
+      const result = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["mcpServerStatus/list"],
+        payloads: [{
+          threadId,
+          detail: "toolsAndAuthOnly",
+          limit: 100,
+          ...(cursor ? { cursor } : {}),
+        }],
+        timeoutMs,
+      });
+      const page = readMcpServerInventoryPage(result);
+      if (page.namesWithTools.length > 0) {
+        throw new Error("codex_title_helper_mcp_tools_present");
+      }
+      cursor = page.nextCursor;
+      if (cursor) {
+        if (seenCursors.has(cursor)) {
+          throw new Error("codex_title_helper_mcp_inventory_repeated_cursor");
+        }
+        seenCursors.add(cursor);
+      }
+    } while (cursor);
+  }
+
+  private async runHelperStructuredTurn(params: {
+    helper: HelperModelId;
+    model?: string;
+    reasoningEffort?: string;
+    prompt: string;
+    /** Omitted by a tool turn, whose product is its tool calls. */
+    schema?: Record<string, unknown>;
+    system?: string;
+    disableExecution?: boolean;
+    isMatch?: StructuredRecordPredicate;
+    /**
+     * PwrAgent tools this helper may call. Supplying these also supplies
+     * `onToolCall`; one without the other either advertises tools nothing can
+     * service or registers a handler nothing can reach.
+     */
+    dynamicTools?: CodexDynamicToolSpec[];
+    onToolCall?: HelperThreadToolCallHandler;
+    timeoutMs?: number;
+    /**
+     * How long the model itself may take to answer, separately from the
+     * protocol round-trips around it. `timeoutMs` governs seven different
+     * requests here — an MCP config read, thread start, MCP attestation,
+     * turn start, and, in `finally`, a turn interrupt and an unsubscribe —
+     * so raising it to buy a harder question more thinking time also grants
+     * every wedged round-trip the same extra hang, including the cleanup
+     * that runs on the timeout path. A caller with a big prompt needs the
+     * one budget raised and the other left alone. Defaults to `timeoutMs`,
+     * so a caller that does not care is unaffected.
+     */
+    turnTimeoutMs?: number;
+  }): Promise<ThreadTitleAdapterResult> {
+    await this.ensureInitialized();
+
+    let helperThreadId: string | undefined;
+    let helperTurnId: string | undefined;
+    let helperTurnCompleted = false;
+    const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
+    const turnTimeoutMs = params.turnTimeoutMs ?? timeoutMs;
+    const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
+    const selection = await this.resolveHelperModelSelection({
+      helper: params.helper,
+      model: params.model,
+      reasoningEffort: params.reasoningEffort,
+    });
+    const helperModel = selection.model;
+    if (!helperModel) {
+      return { status: "unavailable", reason: "codex_helper_no_available_model" };
+    }
+    // Captured now, awaited with the result, so the helper turn does not wait on it.
+    const accountKeyRead = (this.options.resolveUsageAccountKey?.()
+      ?? this.readAccount().then((account) => usageAccountKey(account))).catch(() => undefined);
+    const helperReasoningEffort = normalizeCodexReasoningEffort(
+      selection.reasoningEffort,
+    );
+    const helperSystem = params.system?.trim() || "";
+    const isToolTurn = Boolean(params.onToolCall);
+    // A tool turn has no output schema, so nothing it emits should be
+    // mistaken for a result. Never matching keeps `turn/completed` the only
+    // thing that ends it.
+    const helperPredicate: StructuredRecordPredicate =
+      params.isMatch ?? (isToolTurn ? () => false : TITLE_RECORD_PREDICATE);
+    const protocolCompatibility = this.getProtocolCompatibility();
+    try {
+      const mcpServerNames = await this.readHelperMcpServerNames(
+        helperWorkspaceDir,
+        timeoutMs,
+      );
+      const helperConfig = buildCodexHelperConfig(
+        CODEX_THREAD_TITLE_CONFIG,
+        mcpServerNames,
+        params.disableExecution,
+      );
+      const legacyHelperConfig = buildCodexHelperConfig(
+        LEGACY_CODEX_THREAD_TITLE_CONFIG,
+        mcpServerNames,
+        params.disableExecution,
+      );
+      const threadStartResult = await this.startHelperThread({
+        client: this.connection,
+        methods: ["thread/start"],
+        payloads: [
+          buildThreadStartPayload(
+            {
+              cwd: helperWorkspaceDir,
+              runtimeWorkspaceRoots: [helperWorkspaceDir],
+              environments: [],
+              baseInstructions: helperSystem,
+              model: helperModel,
+              serviceTier: null,
+              ephemeral: true,
+              config: helperConfig,
+              ...(params.dynamicTools ? { dynamicTools: params.dynamicTools } : {}),
+            },
+            protocolCompatibility,
+          ),
+          buildThreadStartPayload(
+            {
+              cwd: helperWorkspaceDir,
+              runtimeWorkspaceRoots: [helperWorkspaceDir],
+              environments: [],
+              baseInstructions: helperSystem,
+              model: helperModel,
+              serviceTier: null,
+              ephemeral: true,
+              config: legacyHelperConfig,
+              ...(params.dynamicTools ? { dynamicTools: params.dynamicTools } : {}),
+            },
+            protocolCompatibility,
+          ),
+        ],
+        timeoutMs,
+      });
+      helperThreadId = extractThreadIdFromValue(threadStartResult);
+      if (!helperThreadId) {
+        return {
+          status: "failed",
+          reason: "codex_title_thread_start_missing_thread_id",
+        };
+      }
+      const instructionSources = readThreadInstructionSources(threadStartResult);
+      if (!instructionSources) {
+        return {
+          status: "failed",
+          reason: "codex_title_thread_start_missing_instruction_sources",
+        };
+      }
+      if (instructionSources.length > 0) {
+        // Current Codex has no thread-level switch for process-owned global
+        // AGENTS.md. The helper cwd and project-doc budget still exclude
+        // project instructions, while the remaining global source is bounded
+        // to one fresh copy because every helper uses a new ephemeral thread.
+        this.host.logger.warn("codex helper thread retained global instruction source", {
+          threadId: helperThreadId,
+          instructionSourceCount: instructionSources.length,
+        });
+      }
+      if (protocolCompatibility.supportsThreadScopedMcpServerStatus) {
+        await this.attestHelperHasNoMcpTools(
+          helperThreadId,
+          timeoutMs,
+        );
+      } else {
+        // Before 0.144, mcpServerStatus/list is process-wide even when a
+        // threadId is supplied. Configured servers are still disabled in the
+        // helper overlay, but that legacy inventory cannot attest the helper
+        // without falsely rejecting tools active on interactive threads.
+        logCodexClientDebug(this.host.logger, "codex helper skipped unavailable thread-scoped MCP attestation", {
+          threadId: helperThreadId,
+        });
+      }
+      this.helperThreadPredicates.set(helperThreadId, helperPredicate);
+      if (params.onToolCall) {
+        // Registered only after the attestation above proves this thread has
+        // no MCP tools, and torn down in `finally`. Between those two points
+        // the thread is the sole holder of this handler.
+        this.helperThreadToolHandlers.set(helperThreadId, params.onToolCall);
+        this.helperToolTurnThreadIds.add(helperThreadId);
+      }
+
+      const turnStartResult = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["turn/start"],
+        payloads: [
+          buildTurnStartPayload(
+            {
+              threadId: helperThreadId,
+              input: [{ type: "text", text: params.prompt, text_elements: [] }],
+              model: helperModel,
+              serviceTier: null,
+              reasoningEffort: helperReasoningEffort,
+              ...(params.schema
+                ? {
+                    outputSchema:
+                      params.schema as CodexTurnStartParams["outputSchema"],
+                  }
+                : {}),
+            },
+            protocolCompatibility,
+          ),
+        ],
+        // This request can carry the finished answer (see the immediate
+        // record check below), so it is the one round-trip that also has to
+        // honour the model's budget. Bounding it at `timeoutMs` would make
+        // a raised `turnTimeoutMs` a no-op whenever the app server
+        // completes the helper turn inside `turn/start`.
+        timeoutMs: Math.max(timeoutMs, turnTimeoutMs),
+      });
+      helperTurnId = extractTurnIdFromValue(turnStartResult);
+      const immediateObject = findStructuredRecord(turnStartResult, helperPredicate);
+      if (immediateObject) {
+        helperTurnCompleted = true;
+        const tokenUsage = readHelperTokenUsage(turnStartResult);
+        const accountKey = await accountKeyRead;
+        return {
+          status: "ok",
+          object: immediateObject,
+          ...(accountKey ? { accountKey } : {}),
+          helperThreadId,
+          ...(helperTurnId ? { helperTurnId } : {}),
+          model: helperModel,
+          reasoningEffort: helperReasoningEffort,
+          ...(tokenUsage !== undefined ? { tokenUsage } : {}),
+        };
+      }
+
+      if (!helperTurnId) {
+        return {
+          status: "failed",
+          reason: "codex_title_turn_start_missing_turn_id",
+        };
+      }
+
+      const helperResult = await this.waitForHelperTurnTitle({
+        threadId: helperThreadId,
+        turnId: helperTurnId,
+        timeoutMs: turnTimeoutMs,
+      });
+      helperTurnCompleted = true;
+      const accountKey = await accountKeyRead;
+      return {
+        status: "ok",
+        object: helperResult.object,
+        ...(accountKey ? { accountKey } : {}),
+        helperThreadId,
+        helperTurnId,
+        model: helperModel,
+        reasoningEffort: helperReasoningEffort,
+        ...(helperResult.tokenUsage !== undefined
+          ? { tokenUsage: helperResult.tokenUsage }
+          : {}),
+      };
+    } catch (error) {
+      return {
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      if (helperThreadId) {
+        if (helperTurnId && !helperTurnCompleted) {
+          await requestWithFallbacks({
+            client: this.connection,
+            methods: ["turn/interrupt"],
+            payloads: [{ threadId: helperThreadId, turnId: helperTurnId }],
+            timeoutMs,
+          }).catch((error: unknown) => {
+            this.host.logger.warn("codex helper turn cleanup interrupt failed", {
+              threadId: helperThreadId,
+              turnId: helperTurnId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+        await requestWithFallbacks({
+          client: this.connection,
+          methods: ["thread/unsubscribe"],
+          payloads: [{ threadId: helperThreadId }],
+          timeoutMs,
+        }).catch((error: unknown) => {
+          this.host.logger.warn("codex helper thread unsubscribe failed", {
+            threadId: helperThreadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+        if (helperTurnId) {
+          const helperTurnKey = buildHelperTurnKey(helperThreadId, helperTurnId);
+          this.completedHelperTurnResults.delete(helperTurnKey);
+          this.helperTurnTitleObjects.delete(helperTurnKey);
+          this.helperTurnTokenUsage.delete(helperTurnKey);
+        }
+        this.helperThreadIds.delete(helperThreadId);
+        this.helperThreadPredicates.delete(helperThreadId);
+        this.helperThreadToolHandlers.delete(helperThreadId);
+        this.helperToolTurnThreadIds.delete(helperThreadId);
+        this.noteLiveTurnActivity();
+      }
+    }
+  }
+
+  private async startHelperThread(
+    params: Parameters<typeof requestWithFallbacks>[0],
+  ): Promise<unknown> {
+    let resolveStarted!: (threadId: string | undefined) => void;
+    const started = new Promise<string | undefined>((resolve) => { resolveStarted = resolve; });
+    this.pendingHelperThreadStarts.add(started);
+    let threadId: string | undefined;
+    try {
+      const result = await requestWithFallbacks(params);
+      threadId = extractThreadIdFromValue(result);
+      // Own notifications before instruction validation and MCP attestation
+      // await further RPCs. Tool handlers still require successful attestation.
+      if (threadId) this.helperThreadIds.add(threadId);
+      return result;
+    } finally {
+      resolveStarted(threadId);
+      this.pendingHelperThreadStarts.delete(started);
+    }
+  }
+
+  async startReview(params: {
+    threadId: string;
+    target: AppServerReviewTarget;
+    delivery?: AppServerReviewDelivery;
+    model?: string;
+    serviceTier?: string | null;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    cwd?: string;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
+    dynamicTools?: CodexDynamicToolSpec[];
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    params = this.withAgentEnvironmentPolicy(params);
+    await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
+
+    // Resume and settings updates can mutate the loaded thread even when
+    // review/start fails. Revoke catalog admission before either request.
+    this.freshNativeVoiceThreads.delete(params.threadId);
+    this.admittedNativeVoiceThreads.delete(params.threadId);
+
+    const pendingFirstTurn = this.pendingFirstTurnThreadResults.has(
+      params.threadId,
+    );
+    if (!pendingFirstTurn || params.dynamicTools !== undefined) {
+      const resume = requestWithFallbacks({
+        client: connection,
+        methods: ["thread/resume"],
+        payloads: buildThreadResumePayloads(
+          {
+            threadId: params.threadId,
+            cwd: params.cwd,
+            model: params.model,
+            serviceTier: params.serviceTier,
+            reasoningEffort: params.reasoningEffort,
+            fastMode: params.fastMode,
+            codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+            config: params.config,
+            bundledToolsDirectory: this.options.bundledToolsDirectory,
+            buildShellEnvironment: this.host.buildShellEnvironment,
+            dynamicTools: params.dynamicTools,
+          },
+          this.getProtocolCompatibility(),
+        ),
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+      if (params.dynamicTools !== undefined) {
+        await resume;
+      } else {
+        await resume.catch(() => undefined);
+      }
+    }
+
+    const settingsPayload = buildThreadSettingsUpdatePayload({
+      threadId: params.threadId,
+      model: params.model,
+      serviceTier: params.serviceTier,
+      reasoningEffort: params.reasoningEffort,
+      fastMode: params.fastMode,
+    });
+    if (settingsPayload) {
+      await requestWithFallbacks({
+        client: connection,
+        methods: ["thread/settings/update"],
+        payloads: [settingsPayload],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+    }
+
+    const result = await requestWithFallbacks({
+      client: connection,
+      methods: ["review/start"],
+      payloads: [buildReviewStartPayload(params)],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    const record = asRecord(result);
+    const reviewThreadId =
+      pickString(record ?? {}, ["reviewThreadId", "review_thread_id"]) ?? params.threadId;
+    const turnRecord = asRecord(record?.turn);
+    const turnId =
+      extractTurnIdFromValue(result) ??
+      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]);
+    if (!turnId) {
+      throw new Error("codex app server review/start did not return turnId");
+    }
+    this.threadsAwaitingFirstTurn.delete(reviewThreadId);
+    this.pendingFirstTurnThreadResults.delete(params.threadId);
+    this.pendingFirstTurnShellEnvironments.delete(params.threadId);
+
+    return {
+      threadId: params.threadId,
+      reviewThreadId,
+      turnId,
+    };
+  }
+
+  async setTurnApprovalReviewer(params: TurnSettingsUpdateParams): Promise<TurnSettingsUpdateResponse> {
+    await this.ensureInitialized();
+    if (!this.getProtocolCompatibility().supportsAutoReview) {
+      throw new Error("Changing the approval reviewer during a turn requires Codex 0.153.0 or later.");
+    }
+    const result = asRecord(await this.connection.request(
+      "turn/settings/update",
+      params,
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    ));
+    if (result?.status !== "applied" && result?.status !== "targetUnavailable") {
+      throw new Error("Codex returned an invalid approval reviewer update result.");
+    }
+    return { status: result.status };
+  }
+
+  async setThreadPermissions(params: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    approvalsReviewer?: ApprovalsReviewer;
+    sandbox?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    // A new thread has no rollout to resume until its first turn. Update the
+    // loaded thread directly, preserving the selected reviewer before that turn.
+    if (this.pendingFirstTurnThreadResults.has(params.threadId)
+      && this.getProtocolCompatibility().supportsAutoReview) {
+      const [permissions] = buildThreadResumePayloads(params, this.getProtocolCompatibility());
+      const payload: CodexThreadSettingsUpdateParams = {
+        threadId: params.threadId,
+        approvalPolicy: permissions.approvalPolicy as CodexThreadSettingsUpdateParams["approvalPolicy"],
+        approvalsReviewer: permissions.approvalsReviewer,
+        sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+        ...(params.cwd ? { cwd: params.cwd } : {}),
+        ...(params.model ? { model: params.model } : {}),
+        ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
+        ...(params.reasoningEffort ? { effort: normalizeCodexReasoningEffort(params.reasoningEffort) } : {}),
+      };
+      await this.connection.request("thread/settings/update", payload,
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+      return { threadId: params.threadId };
+    }
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads(
+        params,
+        this.getProtocolCompatibility(),
+      ),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
+  async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/archive"],
+      payloads: [{ threadId: params.threadId }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: params.threadId,
+    };
+  }
+
+  /** Retire an owned native review through Codex, retaining readable findings.
+   * Recheck identity and idleness: a terminal notification must never archive
+   * the parent or a child that has acquired new work. No workspace cleanup is
+   * requested here; the parent owns that lifecycle. */
+  async retireReviewThread(params: { threadId: string; parentThreadId: string }): Promise<boolean> {
+    if (params.threadId === params.parentThreadId) return false;
+    await this.ensureInitialized();
+    const result = await this.connection.request("thread/read", { threadId: params.threadId, includeTurns: false },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    const thread = asRecord(asRecord(result)?.thread);
+    if (!thread || thread.parentThreadId !== params.parentThreadId
+      || readCodexThreadSourceKind(thread, null) !== "subAgentReview"
+      || !["idle", "notLoaded"].includes(readThreadStatus(thread) ?? "")) return false;
+    await this.archiveThread({ threadId: params.threadId });
+    await this.connection.request("thread/unsubscribe", { threadId: params.threadId },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    return true;
+  }
+
+  async deleteThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+    await requestWithFallbacks({
+      client: this.connection, methods: ["thread/delete"], payloads: [params],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    return { threadId: params.threadId };
+  }
+
+  async restoreThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/unarchive"],
+      payloads: [{ threadId: params.threadId }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
+  async renameThread(params: {
+    threadId: string;
+    name: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    await this.setThreadNameWithCodex(params);
+    this.recordedThreadNames.set(params.threadId, params.name);
+
+    return {
+      threadId: params.threadId,
+    };
+  }
+
+  async updateThreadMetadata(params: {
+    threadId: string;
+    gitInfo?: {
+      branch?: string | null;
+      originUrl?: string | null;
+      sha?: string | null;
+    } | null;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/metadata/update"],
+      payloads: [
+        {
+          threadId: params.threadId,
+          gitInfo: params.gitInfo,
+        },
+      ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
+  async updateThreadWorkspace(params: {
+    threadId: string;
+    cwd: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const payload = buildThreadSettingsUpdatePayload(params);
+    if (!payload) {
+      throw new Error("A non-empty workspace CWD is required.");
+    }
+
+    // Settings updates require a loaded thread. Newly created threads are
+    // already loaded but cannot resume on stock Codex until their first turn
+    // creates a rollout. Existing threads must resume at the destination:
+    // handoff may have already removed the source worktree.
+    if (!this.pendingFirstTurnThreadResults.has(params.threadId)) {
+      await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/resume"],
+        payloads: buildThreadResumePayloads(
+          { threadId: params.threadId, cwd: params.cwd.trim() },
+          this.getProtocolCompatibility(),
+        ),
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+    }
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/settings/update"],
+      payloads: [payload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
+  async interruptTurn(params: {
+    threadId: string;
+    turnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
+    await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
+
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads(
+        {
+          threadId: params.threadId,
+        },
+        this.getProtocolCompatibility(),
+      ),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    }).catch(() => undefined);
+
+    try {
+      const payload: CodexTurnInterruptParams = {
+        threadId: params.threadId,
+        turnId: params.turnId,
+      };
+      await requestWithFallbacks({
+        client: connection,
+        methods: ["turn/interrupt"],
+        payloads: [payload],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+
+      return {
+        threadId: params.threadId,
+        turnId: params.turnId,
+      };
+    } catch (error) {
+      if (!isRequestTimeoutError(error, "turn/interrupt")) {
+        throw error;
+      }
+
+      this.host.logger.warn(
+        "turn/interrupt timed out; waiting for later status updates",
+        {
+          threadId: params.threadId,
+          turnId: params.turnId,
+        }
+      );
+
+      return {
+        threadId: params.threadId,
+        turnId: params.turnId,
+      };
+    }
+  }
+
+  /**
+   * Replaces the thread's history with the prefix before `beforeTurnId`.
+   * Codex leaves local files as they are. Readers hydrate the retained
+   * history through `thread/turns/list`.
+   */
+  async revertThread(params: {
+    threadId: string;
+    beforeTurnId: string;
+  }): Promise<void> {
+    await this.ensureInitialized();
+    if (!this.getProtocolCompatibility().supportsThreadRevert) {
+      throw new Error("Update Codex to rewind threads");
+    }
+    const connection = this.createThreadOperationConnection();
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads(
+        { threadId: params.threadId },
+        this.getProtocolCompatibility(),
+      ),
+      timeoutMs,
+    });
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/revert"],
+      payloads: [
+        {
+          threadId: params.threadId,
+          beforeTurnId: params.beforeTurnId,
+        } satisfies CodexThreadRevertParams,
+      ],
+      timeoutMs,
+    });
+    this.invalidateThreadListings();
+  }
+
+  async compactThread(params: {
+    threadId: string;
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+  }): Promise<{ threadId: string; turnId: string; itemId?: string }> {
+    await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
+
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads(params, this.getProtocolCompatibility()),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    // Rejoining a loaded thread can preserve its previous model. Compaction
+    // has no turn/start override, so apply the selection and await acceptance.
+    const settings = buildThreadSettingsUpdatePayload(params);
+    if (settings) {
+      await requestWithFallbacks({
+        client: connection,
+        methods: ["thread/settings/update"],
+        payloads: [settings],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+    }
+
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/compact/start"],
+      payloads: [
+        {
+          threadId: params.threadId,
+        },
+      ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: params.threadId,
+      turnId: `compact:${params.threadId}`,
+    };
+  }
+
+  async steerTurn(params: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    onInputTextPrepared?: (text: string | undefined) => void;
+    expectedTurnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
+    await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
+
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads(
+        {
+          threadId: params.threadId,
+        },
+        this.getProtocolCompatibility(),
+      ),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    }).catch(() => undefined);
+
+    const codexInput = await prepareCodexUserInput({
+      input: params.input,
+      onInputTextPrepared: params.onInputTextPrepared,
+    });
+    const payload: CodexTurnSteerParams = {
+      threadId: params.threadId,
+      input: codexInput,
+      expectedTurnId: params.expectedTurnId,
+    };
+    const result = await requestWithFallbacks({
+      client: connection,
+      methods: ["turn/steer"],
+      payloads: [payload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: params.threadId,
+      turnId: extractTurnIdFromValue(result) ?? params.expectedTurnId,
+    };
+  }
+
+  private requestWhenAvailable(
+    ...args: Parameters<JsonRpcConnection["request"]>
+  ): Promise<unknown> {
+    return this.runAdmittedRequest(() => this.rawConnection.request(...args));
+  }
+
+  private createThreadOperationConnection(): Pick<JsonRpcConnection, "request"> {
+    let generation = this.serverGeneration;
+    const setup: Array<Parameters<JsonRpcConnection["request"]>> = [];
+    let setupThreadId: string | undefined;
+    let unloadGeneration = 0;
+    const threadUnloaded = () => setupThreadId !== undefined
+      && (this.threadUnloadGenerations.get(setupThreadId) ?? 0) !== unloadGeneration;
+    return {
+      request: (...args) => this.runAdmittedRequest(async () => {
+        const closeGeneration = this.closeGeneration;
+        const request = (...requestArgs: Parameters<JsonRpcConnection["request"]>) => {
+          if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) {
+            throw new Error("codex app server client closed");
+          }
+          return this.rawConnection.request(...requestArgs);
+        };
+        // Resume and settings belong to a process and to a loaded thread.
+        // Reapply successful setup after recovery or after the thread
+        // unloaded, with setup plus the next RPC admitted as one unit.
+        // Never replay the action itself (turn/start, review/start, etc.).
+        if (generation !== this.serverGeneration || threadUnloaded()) {
+          for (const previous of setup) await request(...previous);
+          generation = this.serverGeneration;
+          if (setupThreadId) unloadGeneration = this.threadUnloadGenerations.get(setupThreadId) ?? 0;
+        }
+        const result = await request(...args);
+        if (args[0] === "thread/resume" || args[0] === "thread/settings/update") {
+          setup.push(args);
+          const threadId = pickString(asRecord(args[1]) ?? {}, ["threadId"]);
+          if (args[0] === "thread/resume" && threadId && setupThreadId === undefined) {
+            setupThreadId = threadId;
+            unloadGeneration = this.threadUnloadGenerations.get(threadId) ?? 0;
+          }
+        }
+        return result;
+      }),
+    };
+  }
+
+  private async runAdmittedRequest<T>(work: () => Promise<T>): Promise<T> {
+    if (this.pendingCloses > 0) throw new Error("codex app server client closed");
+    const generation = this.closeGeneration;
+    while (this.lifecycleBarrier) {
+      await this.lifecycleBarrier;
+    }
+    // No await between the final admission check and registering the RPC.
+    // A close must not let a previously admitted continuation revive a writer.
+    if (generation !== this.closeGeneration || !this.initialized) {
+      throw new Error("codex app server client closed");
+    }
+    const countsAsActivity = codexRequestCountsAsActivity();
+    if (countsAsActivity) this.lastAppServerActivityAt = this.now();
+    const request = work();
+    this.activeRequests.add(request);
+    try {
+      return await request;
+    } finally {
+      this.activeRequests.delete(request);
+      if (countsAsActivity) this.lastAppServerActivityAt = this.now();
+    }
+  }
+
+  private async runLifecycle<T>(work: () => Promise<T>): Promise<T> {
+    const previous = this.lifecycleBarrier;
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    // Reserve synchronously, before awaiting initialization or in-flight RPCs.
+    this.lifecycleBarrier = barrier;
+    try {
+      await previous;
+      // Drain RPCs, not whole public operations: helper turns can wait for
+      // notifications until close rejects their waiters. Their later RPCs
+      // must return through admission instead of holding this lifecycle open.
+      await Promise.allSettled([
+        ...this.activeRequests,
+        ...(this.initializationPromise ? [this.initializationPromise] : []),
+      ]);
+      return await work();
+    } finally {
+      if (this.lifecycleBarrier === barrier) this.lifecycleBarrier = null;
+      release();
+    }
+  }
+
+  isAuthenticationRequired(): boolean {
+    return Boolean(this.rejectedCodexHome && this.host.authState.isBlocked(this.rejectedCodexHome));
+  }
+
+  private async ensureInitialized(): Promise<void> {
+    if (this.rejectedCodexHome && !this.options.authenticationRecovery) {
+      this.host.authState.assertAvailable(this.rejectedCodexHome);
+    }
+    if (this.pendingCloses > 0) throw new Error("codex app server client closed");
+    const generation = this.closeGeneration;
+    do {
+      while (this.lifecycleBarrier) {
+        await this.lifecycleBarrier;
+      }
+      if (generation !== this.closeGeneration) {
+        throw new Error("codex app server client closed");
+      }
+      await this.initializeConnection();
+      // A reservation may have arrived while initialization was in flight.
+    } while (this.lifecycleBarrier);
+  }
+
+  private async initializeConnection(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    // Bootstrap gate: when the deferred predicate is set and active,
+    // refuse to spawn the Codex CLI subprocess at all. This is the
+    // architectural choke point that lets `describeCodexBackend`
+    // return a clean "deferred" placeholder for both (a) a fresh
+    // PwrAgent profile mid-wizard and (b) a machine where the
+    // operator hasn't yet confirmed they have a Codex CLI installed
+    // (e.g. Linux without `codex` on PATH).
+    if (this.options.isCodexBootstrapDeferred?.()) {
+      throw new CodexBootstrapDeferredError();
+    }
+
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      return;
+    }
+
+    const restartStatus = this.restartStatus;
+    if (restartStatus.stopped) {
+      throw new CodexAppServerStoppedError(restartStatus.exits, restartStatus.windowMs);
+    }
+
+    const closeGeneration = this.closeGeneration;
+    const serverGeneration = ++this.serverGeneration;
+    const assertNotClosed = () => {
+      if (closeGeneration !== this.closeGeneration || this.pendingCloses > 0) {
+        throw new Error("codex app server client closed");
+      }
+      // An exit reset this attempt and a newer one owns the next server.
+      if (serverGeneration !== this.serverGeneration) {
+        throw new Error("codex app server exited during initialization");
+      }
+    };
+    const initialization = (async () => {
+      await this.waitForRestartBackoff();
+      assertNotClosed();
+      const startedAt = performance.now();
+      await this.rawConnection.connect();
+      assertNotClosed();
+      this.host.logger.info("app-server transport connected", {
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      const handshakeStartedAt = performance.now();
+      try {
+        const activationNonce =
+          this.options.resolvePwrdrvrTokenMiserActivationNonce?.();
+        const initializeParams: CodexInitializeParams & {
+          capabilities: CodexInitializeParams["capabilities"] & {
+            pwrdrvrTokenMiser?: {
+              version: 1;
+              activationNonce: string;
+            };
+          };
+        } = {
+          clientInfo: {
+            name: "pwragent-desktop",
+            title: "PwrAgent",
+            version: this.options.clientVersion ?? "0.0.0",
+          },
+          capabilities: {
+            experimentalApi: true,
+            requestAttestation: false,
+            ...(activationNonce
+              ? {
+                  pwrdrvrTokenMiser: {
+                    version: 1,
+                    activationNonce,
+                  },
+                }
+              : {}),
+          },
+        };
+        const result = await this.rawConnection.request("initialize", initializeParams);
+        assertNotClosed();
+        this.initializeResult = parseInitializeResponse(result);
+        this.tokenMiserActivationNegotiated = Boolean(activationNonce);
+      } catch (error) {
+        if (!isAlreadyInitializedError(error)) {
+          throw error;
+        }
+      }
+
+      assertNotClosed();
+      await this.rawConnection.notify("initialized", {});
+      assertNotClosed();
+      this.initialized = true;
+      this.restartPolicy.recordStarted();
+      this.host.logger.info("app-server initialized", {
+        handshakeDurationMs: Math.round(performance.now() - handshakeStartedAt),
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    })();
+
+    this.initializationPromise = initialization;
+    try {
+      await initialization;
+    } finally {
+      if (!this.initialized && this.initializationPromise === initialization) {
+        this.initializationPromise = null;
+      }
+    }
+  }
+}
