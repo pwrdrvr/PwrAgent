@@ -26,9 +26,12 @@ import {
  * landed thread, and the group it picks is the right answer. The landed
  * thread is what the owner reports: the launchpad's directory, then each
  * `@`-referenced directory attached after it, with the working directory as
- * `projectKey` from Codex and none from Claude or ACP. The renderer sees the
- * list main sent before the thread landed, in whatever order it rendered it,
- * so the generated list is shuffled before the renderer reads it.
+ * `projectKey` from every backend. An `@`-referenced folder links the way the
+ * owner's `attachDirectoryToThread` registers it: at its Git root, with a
+ * `.worktrees/<hash>/…` checkout folded back to its repository, labeled with
+ * that root's basename. The renderer sees the list main sent before the
+ * thread landed, in whatever order it rendered it, so the generated list is
+ * shuffled before the renderer reads it.
  */
 
 const PEER = "pwr_peer";
@@ -49,20 +52,49 @@ const PEER_PARENTS = [
 const LOCAL_WORKSPACE_ROOT = "/Users/me/.pwragent/profiles/default/projects";
 const PEER_WORKSPACE_ROOT = "/Users/peer/.pwragent/profiles/default/projects";
 
+/** A folder the composer `@`-references, as the operator picked it. */
+type Reference = {
+  /** The Git root holding it, or the folder itself when it is not in Git. */
+  root: string;
+  /** The picked folder below `root`; empty when the root itself was picked. */
+  subfolder: string;
+  inGit: boolean;
+};
+
 type PeerProject = {
   kind: "directory" | "workspace";
   label: string;
   path: string;
   workMode: "local" | "worktree";
-  backend: "codex" | "claude";
-  extraPaths: string[];
+  backend: "codex" | "claude" | "acp:kimi";
+  references: Reference[];
 };
 
 const peerPath = fc
   .record({ folder: fc.constantFrom(...NAMES), parent: fc.constantFrom(...PEER_PARENTS) })
   .map(({ folder, parent }) => parent.includes("\\") ? `${parent}\\${folder}` : `${parent}/${folder}`);
-const backend = fc.constantFrom("codex" as const, "claude" as const);
-const extraPaths = fc.array(peerPath, { maxLength: 2 });
+const backend = fc.constantFrom("codex" as const, "claude" as const, "acp:kimi" as const);
+const reference: fc.Arbitrary<Reference> = fc.record({
+  root: fc.oneof(
+    peerPath,
+    // A repository's own `.worktrees` checkout, which the owner folds back
+    // to the repository: its link is named for the repository, not the folder.
+    fc.constantFrom(...NAMES).map((folder) => `/Users/peer/github/PwrGit/.worktrees/ef56/${folder}`),
+  ),
+  subfolder: fc.constantFrom("", "packages/shared", "apps/desktop/src"),
+  inGit: fc.boolean(),
+});
+const references = fc.array(reference, { maxLength: 2 });
+
+/** The directory `attachDirectoryToThread` links for `reference`. */
+function referencedLink(reference: Reference, threadId: string): LinkedDirectorySummary {
+  const picked = (reference.subfolder ? `${reference.root}/${reference.subfolder}` : reference.root)
+    .replace(/\\/g, "/");
+  const path = reference.inGit
+    ? reference.root.replace(/\\/g, "/").replace(/\/\.worktrees\/[^/]+(?:\/[^/]+)?$/, "")
+    : picked;
+  return { id: `${threadId}-${path}`, kind: "local", label: path.split("/").filter(Boolean).pop()!, path };
+}
 
 const localDirectory = fc
   .record({
@@ -102,11 +134,11 @@ const peerProject: fc.Arbitrary<PeerProject> = fc.oneof(
       path: peerPath,
       workMode: fc.constantFrom("local" as const, "worktree" as const),
       backend,
-      extraPaths,
+      references,
     })
     .map((project) => ({ kind: "directory" as const, ...project })),
   fc
-    .record({ backend, extraPaths })
+    .record({ backend, references })
     .map((project) => ({
       kind: "workspace" as const,
       label: "Workspaces",
@@ -125,17 +157,10 @@ function landedThread(project: PeerProject, threadId: string): NavigationThreadS
       ? { id: threadId, kind: "worktree", label: project.label, path: project.path, worktreePath }
       : { id: threadId, kind: "local", label: project.label, path: project.path };
   const linkedDirectories = [launchpadDirectory];
-  for (const extra of project.extraPaths) {
-    if (linkedDirectories.some((linked) => linked.path === extra)) continue;
-    linkedDirectories.push({
-      id: `${threadId}-${extra}`,
-      kind: "local",
-      label: extra.split(/[\\/]/).filter(Boolean).pop()!,
-      path: extra,
-    });
+  for (const link of project.references.map((picked) => referencedLink(picked, threadId))) {
+    if (linkedDirectories.some((linked) => linked.path === link.path)) continue;
+    linkedDirectories.push(link);
   }
-  // The registry records the working directory as `projectKey`. Codex keeps
-  // reporting it; Claude and ACP summaries carry none.
   const cwd = project.kind === "workspace"
     ? launchpadDirectory.path
     : project.workMode === "worktree" ? worktreePath : project.path;
@@ -143,7 +168,7 @@ function landedThread(project: PeerProject, threadId: string): NavigationThreadS
     id: threadId,
     source: project.backend,
     linkedDirectories,
-    ...(project.backend === "codex" ? { projectKey: cwd } : {}),
+    projectKey: cwd,
     federation: {
       ref: buildFederatedThreadRef({ backend: project.backend, instanceId: PEER, threadId }),
       instanceLabel: "Peer",
@@ -178,8 +203,7 @@ describe("starting row placement for a peer's thread", () => {
           const creation = {
             directoryKey: `${project.kind}:${project.path}`,
             directoryLabel: project.label,
-            launchpad: { backend: project.backend, directoryPath: project.path },
-            extraDirectoryPaths: project.extraPaths,
+            launchpad: { directoryPath: project.path },
             target: { scope: "remote" as const, instanceId: PEER },
           };
           const rendered = withStartingPlaceholderDirectories(
@@ -207,7 +231,7 @@ describe("starting row placement for a peer's thread", () => {
       {
         directoryKey: peerDirectory.key,
         directoryLabel: "PwrAgnt",
-        launchpad: { backend: "codex", directoryPath: peerDirectory.path },
+        launchpad: { directoryPath: peerDirectory.path },
         target: { scope: "remote", instanceId: PEER },
       },
       [sameName, peerDirectory],

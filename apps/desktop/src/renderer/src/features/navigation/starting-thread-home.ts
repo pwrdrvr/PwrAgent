@@ -4,7 +4,6 @@ import {
   remoteThreadPlaceholderDirectory,
   type FederationRemoteTarget,
   type FederationTarget,
-  type LinkedDirectorySummary,
   type NavigationDirectorySummary,
   type NavigationLaunchpadDraft,
   type NavigationThreadSummary,
@@ -14,9 +13,7 @@ import {
 export type StartingThreadPlacement = {
   directoryKey: string;
   directoryLabel: string;
-  launchpad: Pick<NavigationLaunchpadDraft, "backend" | "directoryPath">;
-  /** Composer `@`-referenced directories, linked to the thread once it exists. */
-  extraDirectoryPaths?: readonly string[];
+  launchpad: Pick<NavigationLaunchpadDraft, "directoryPath">;
   parentThreadKey?: string;
   target?: FederationTarget;
 };
@@ -40,35 +37,22 @@ function isPeerThreadInLocalList(
 }
 
 /**
- * The directories a peer's thread will link, as its owner reports them:
- * the launchpad's directory, then each `@`-referenced directory in the order
- * the launchpad attaches them after the thread starts.
+ * A peer's thread as its owner will report it, as far as its home goes.
  *
- * The registry records a started thread's working directory as `projectKey`,
- * and Codex keeps reporting it; Claude and ACP summaries carry none, so their
- * home falls to `orderByHomePreference` over these links.
+ * Every backend reports the thread's working directory as `projectKey`, and
+ * the home rule then reads only the linked directory it names: the
+ * launchpad's directory, or its worktree. `@`-referenced directories link
+ * after the thread starts and never change the home, so they are left out.
  */
 function startingPeerThread(
   creation: StartingThreadPlacement,
 ): Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey"> {
   const keyPath = /^(?:directory|workspace):(.+)$/.exec(creation.directoryKey)?.[1] ?? "";
   const path = creation.launchpad.directoryPath?.trim() || keyPath;
-  const linkedDirectories: LinkedDirectorySummary[] = path
-    ? [{ id: creation.directoryKey, kind: "local", label: creation.directoryLabel, path }]
-    : [];
-  for (const extra of creation.extraDirectoryPaths ?? []) {
-    const extraPath = extra.trim();
-    if (!extraPath || linkedDirectories.some((linked) => linked.path === extraPath)) continue;
-    linkedDirectories.push({
-      id: extraPath,
-      kind: "local",
-      label: extraPath.split(/[\\/]/).filter(Boolean).pop() ?? extraPath,
-      path: extraPath,
-    });
-  }
+  if (!path) return { linkedDirectories: [] };
   return {
-    linkedDirectories,
-    ...(path && creation.launchpad.backend === "codex" ? { projectKey: path } : {}),
+    linkedDirectories: [{ id: creation.directoryKey, kind: "local", label: creation.directoryLabel, path }],
+    projectKey: path,
   };
 }
 

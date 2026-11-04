@@ -877,6 +877,9 @@ export function acpSessionToThreadSummary(
           },
         ]
       : [],
+    // The working directory, as Codex reports it: it names which linked
+    // directory is the thread's home once `@`-referenced ones join it.
+    ...(session.cwd ? { projectKey: session.cwd } : {}),
     source: session.backendId,
     executionMode: session.executionMode,
     acpRuntime: session.acpRuntime,
