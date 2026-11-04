@@ -9880,6 +9880,18 @@ export class CodexAppServerClient {
     return threads[0]!;
   }
 
+  /** Enrich a retained identity inventory without rereading provider membership.
+   * Callers supply scan-local observations; these never authorize removal. */
+  async enrichArchiveCleanupThreads(threads: AppServerThreadSummary[], params: {
+    checkpoint: () => Promise<void>;
+    directoryObservations: Map<string, Promise<ThreadDirectoryEnrichment>>;
+    directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
+  }): Promise<AppServerThreadSummary[]> {
+    return await this.enrichRawThreadDirectories(threads as RawCodexThreadSummary[], "thread-list", {
+      ...params, strict: true, concurrency: 1,
+    });
+  }
+
   async listArchiveCleanupThreadsPage(params: {
     archived: boolean;
     cursor?: string;

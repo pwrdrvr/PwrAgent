@@ -126,9 +126,16 @@ does not spend the user allowance.
 
 ### Archived worktree removal admission
 
-Discovery identifies candidates, while every removal and empty-container repair
-obtains a fresh complete membership/overlay inventory across Codex, Claude and
-ACP. Admission requests at most 100 Codex metadata rows per page and reads
+Single-thread discovery first reads complete active/archived identities and
+overlays across Codex, Claude and ACP without Git enrichment. That evidence can
+be shared within one queue batch at the same workspace revision. Each job then
+discovers its target's candidate worktrees and enriches only overlapping cwds,
+including aliases, ancestors and descendants of every candidate root. These
+scoped observations are job-local; they never certify another job's roots.
+Broad repair still discovers candidates across all archived workspaces.
+
+Every removal and empty-container repair obtains a fresh complete
+membership/overlay inventory across Codex, Claude and ACP. Admission requests at most 100 Codex metadata rows per page and reads
 overlays in 25-row slices. It resolves cwd aliases through the filesystem and
 limits Git enrichment to workspaces that overlap the checkout or its container.
 Unrelated identities still contribute their current linked and retained
@@ -141,7 +148,10 @@ revision checked again at destructive dispatch. In-flight lifecycle mutations
 also block admission. These checks add no persistent state or SQLite writes.
 The scan-local filesystem observations never authorize a later removal. The
 scaling and ownership-race budgets live in `archive-cleanup-provider.test.ts`,
-`archive-cleanup-pipeline.test.ts` and `archive-cleanup-budgets.json`.
+`archive-cleanup-pipeline.test.ts` and `archive-cleanup-budgets.json`. Generated
+single-archive isolation, owner/reference models and real-Git snapshot assertions
+at the discovery/admission boundary live in
+`archive-cleanup-discovery.property.test.ts`.
 
 ### Display reads and federation
 

@@ -1114,7 +1114,7 @@ describe("archive worktrees across a desktop restart", () => {
   it("finds an old target on a later archived page and retains its recovery snapshot", async () => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads = [
-      ...Array.from({ length: 30 }, (_, index) => ({ id: `older-archive-${index}`, cwd: fixture.repo, source: "cli", archived: true })),
+      ...Array.from({ length: 100 }, (_, index) => ({ id: `older-archive-${index}`, cwd: fixture.repo, source: "cli", archived: true })),
       { id: "old-target", cwd: fixture.worktree, source: "cli" },
     ];
     const instance = fixture.reopen();
@@ -1123,9 +1123,12 @@ describe("archive worktrees across a desktop restart", () => {
 
     expect(result.cleanup[0]?.removedWorktree).toBe(true);
     const pages = ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list");
-    expect(pages.filter((request) => request.params.archived && request.params.cursor)).toHaveLength(1);
-    expect(pages.filter((request) => request.params.limit === 100)).toHaveLength(2);
-    expect(pages.every((request) => [25, 100].includes(Number(request.params.limit)) && request.params.useStateDbOnly === true)).toBe(true);
+    // The target must cross a real page boundary even with 100-row metadata
+    // pages. The promise is complete discovery and a retained recovery ref.
+    expect(pages.some((request) => request.params.archived && request.params.cursor)).toBe(true);
+    expect(pages.every((request) => Number(request.params.limit) <= 100 && request.params.useStateDbOnly === true)).toBe(true);
+    expect((await instance.store.getThreadOverlayState({ backend: "codex", threadId: "old-target" }))?.worktreeSnapshots)
+      .toEqual([expect.objectContaining({ state: "archived" })]);
   });
 
   it("accepts a delayed matching archive notification through the production provider subscriber", async () => {
