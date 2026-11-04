@@ -97,8 +97,12 @@ function pruneStack(
   if (!rewritten && filtered.length === stack.length) {
     return stack;
   }
+  return collapseRepeats(filtered);
+}
+
+function collapseRepeats(stack: NavigationHistoryLocation[]): NavigationHistoryLocation[] {
   const collapsed: NavigationHistoryLocation[] = [];
-  for (const location of filtered) {
+  for (const location of stack) {
     const top = collapsed[collapsed.length - 1];
     if (top !== undefined && sameLocation(top, location)) {
       continue;
@@ -106,6 +110,33 @@ function pruneStack(
     collapsed.push(location);
   }
   return collapsed;
+}
+
+/**
+ * Keep one entry per launchpad, as `appendLocation` does. A creation that
+ * ends with no thread becomes its launchpad's entry, and the operator may
+ * have reopened that launchpad since. The cursor's copy wins, then the
+ * newest Back copy, then the nearest Forward copy. Returns the input arrays
+ * unchanged when nothing was dropped.
+ */
+function keepOneEntryPerLaunchpad(
+  back: NavigationHistoryLocation[],
+  cursor: NavigationHistoryLocation | undefined,
+  forward: NavigationHistoryLocation[],
+): { back: NavigationHistoryLocation[]; forward: NavigationHistoryLocation[] } {
+  const kept: NavigationHistoryLocation[] = cursor?.view === "launchpad" ? [cursor] : [];
+  const keep = (location: NavigationHistoryLocation): boolean => {
+    if (location.view !== "launchpad") return true;
+    if (kept.some((candidate) => sameLocation(candidate, location))) return false;
+    kept.push(location);
+    return true;
+  };
+  const keptBack = [...back].reverse().filter(keep).reverse();
+  const keptForward = forward.filter(keep);
+  return {
+    back: keptBack.length === back.length ? back : collapseRepeats(keptBack),
+    forward: keptForward.length === forward.length ? forward : collapseRepeats(keptForward),
+  };
 }
 
 type HistoryStacks = {
@@ -352,6 +383,7 @@ export function useNavigationHistory(args: {
       cursor = back[back.length - 1];
       back = back.slice(0, -1);
     }
+    ({ back, forward } = keepOneEntryPerLaunchpad(back, cursor, forward));
     // Removing the middle visit in A → archived B → A must not leave an
     // enabled Back button targeting the location already showing.
     while (cursor && back.length && sameLocation(back[back.length - 1], cursor)) {

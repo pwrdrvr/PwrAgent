@@ -410,7 +410,7 @@ describe("useNavigationHistory", () => {
       expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
     });
 
-    it("keeps the created thread when its key and the creation's end share a render", () => {
+    it("keeps the created thread when its creation ends while another starts", () => {
       const h = submitFromLaunchpad();
       act(() => h.hook.result.current.goBack());
       h.settle();
@@ -441,6 +441,23 @@ describe("useNavigationHistory", () => {
       h.update({ startingThreads: new Map() });
       act(() => h.hook.result.current.goForward());
       expect(h.restore).toHaveBeenLastCalledWith(LAUNCHPAD);
+    });
+
+    it("keeps one entry for a launchpad reopened before its creation failed", () => {
+      const h = submitFromLaunchpad();
+      // Open the directory's new draft, then another thread.
+      h.navigate(LAUNCHPAD);
+      h.navigate(thread("codex:b"));
+      // Back stack: A, starting, launchpad. The creation fails.
+      h.update({ startingThreads: new Map() });
+
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(LAUNCHPAD);
+      h.settle();
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
+      h.settle();
+      expect(h.hook.result.current.canGoBack).toBe(false);
     });
 
     it("keeps the cancelled launchpad as the current place without a hop", () => {
