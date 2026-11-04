@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { truncateThreadTitle } from "../thread-title-generation-service";
 import {
-  displayText,
+  displayTextAround,
   expectClusterPrefix,
 } from "../../../shared/src/__tests__/display-text-arbitraries";
 
@@ -18,7 +18,7 @@ const ACCEPTED_MAX_TITLE_CHARACTERS = 65;
  */
 describe("truncateThreadTitle properties", () => {
   it("keeps a whole-character prefix within the word and character limits", () => {
-    fc.assert(fc.property(displayText(80), (raw) => {
+    fc.assert(fc.property(displayTextAround(ACCEPTED_MAX_TITLE_CHARACTERS, 60, ["a", "b"]), (raw) => {
       const title = raw.trim();
       fc.pre(title.length > 0);
       const collapsed = title.split(/\s+/u).join(" ");

@@ -5,7 +5,7 @@ import {
   formatHashReferenceThreadTooltip,
 } from "../hash-references";
 import {
-  displayText,
+  displayTextAround,
   expectEndCut,
   hasLoneSurrogate,
   whitespaceText,
@@ -29,7 +29,7 @@ describe("hash reference label properties", () => {
   });
 
   it("keeps a whole-character prefix of the collapsed title", () => {
-    fc.assert(fc.property(displayText(80), (title) => {
+    fc.assert(fc.property(displayTextAround(THREAD_LABEL_LENGTH_LIMIT), (title) => {
       const source = collapse(title);
       fc.pre(source.length > 0);
       expectEndCut(source, formatHashReferenceThreadLabel({ id: "thread-1", title }), {
@@ -41,7 +41,7 @@ describe("hash reference label properties", () => {
   });
 
   it("keeps a whole-character prefix in the tooltip", () => {
-    fc.assert(fc.property(displayText(240), (title) => {
+    fc.assert(fc.property(displayTextAround(THREAD_TOOLTIP_LENGTH_LIMIT, 240), (title) => {
       const source = collapse(title);
       fc.pre(source.length > 0);
       expectEndCut(source, formatHashReferenceThreadTooltip({ id: "thread-1", title }), {

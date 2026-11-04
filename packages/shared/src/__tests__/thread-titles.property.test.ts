@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { shortenDerivedThreadTitle } from "../thread-titles";
-import { displayText, expectEndCut, hasLoneSurrogate } from "./display-text-arbitraries";
+import { displayTextAround, expectEndCut, hasLoneSurrogate } from "./display-text-arbitraries";
 
 const MAX_DERIVED_THREAD_TITLE_LENGTH = 72;
 
@@ -17,7 +17,7 @@ function derivedSource(prompt: string): string {
 
 describe("shortenDerivedThreadTitle properties", () => {
   it("keeps a whole-character prefix of the prompt within 72 characters", () => {
-    fc.assert(fc.property(displayText(80), (prompt) => {
+    fc.assert(fc.property(displayTextAround(MAX_DERIVED_THREAD_TITLE_LENGTH), (prompt) => {
       const source = derivedSource(prompt);
       fc.pre(source.length > 0);
       const title = shortenDerivedThreadTitle(prompt)!;

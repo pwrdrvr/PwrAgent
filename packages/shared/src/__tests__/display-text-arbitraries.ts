@@ -23,6 +23,38 @@ export function displayText(maxPieces = 60): fc.Arbitrary<string> {
   return fc.array(displayPiece, { maxLength: maxPieces }).map((pieces) => pieces.join(""));
 }
 
+/**
+ * Text whose length straddles `limit`: plain words up to just short of it,
+ * then a few display pieces, so the cut lands among the pieces that tear.
+ * Random text alone rarely reaches a 72- or 160-character limit with an
+ * emoji or accent right at the cut. Pass filler without spaces to reach a
+ * helper's hard cut rather than its word break.
+ */
+export function displayTextNear(
+  limit: number,
+  fillerUnits: readonly string[] = ["a", "b", " "],
+): fc.Arbitrary<string> {
+  return fc
+    .tuple(
+      fc.string({
+        unit: fc.constantFrom(...fillerUnits),
+        minLength: Math.max(0, limit - 8),
+        maxLength: limit + 2,
+      }),
+      displayText(6),
+    )
+    .map(([filler, tail]) => filler + tail);
+}
+
+/** Random display text, half of it near `limit`. */
+export function displayTextAround(
+  limit: number,
+  maxPieces = 60,
+  fillerUnits?: readonly string[],
+): fc.Arbitrary<string> {
+  return fc.oneof(displayText(maxPieces), displayTextNear(limit, fillerUnits));
+}
+
 /** Whitespace only, which trimming helpers must treat as empty. */
 export const whitespaceText = fc
   .array(fc.constantFrom(" ", "\t", "\n", "\r\n"), { minLength: 1, maxLength: 8 })
