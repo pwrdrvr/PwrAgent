@@ -497,7 +497,7 @@ describe("sqlite write metrics", () => {
       expect(await store.getThreadSubAgent({ backend: "claude", threadId: "claude-thread", monitorId: card.monitorId }))
         .toMatchObject({ status: "success", outcome: "success", lastMessage: "Done" });
       expectSqliteWriteBudget({ scenario: "claude-subagent-cards",
-        note: "one Claude sub-agent's start and end, then a late report: 2 commits per sub-agent; at 200 sub-agents/day ~25 KB WAL each, ~10 MB/day; zero idle", writes });
+        note: "one Claude sub-agent's start and end, then a late report: 2 commits per sub-agent, ~24.7 KB WAL each; ~1 MB/day at 20 sub-agents/day, ~10 MB/day at 200; zero idle", writes });
     } finally { await registry.close(); }
   });
 
