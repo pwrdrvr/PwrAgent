@@ -9614,7 +9614,12 @@ a.button {
   transform: rotate(90deg);
 }
 
-.directory-row__threads .thread-row--compact {
+/* The Directories lens draws rows as stacked cards: title line, then chips.
+   The starting rows waiting above the projects are the same cards. Without
+   this they kept the side-by-side compact layout, and a long title ran off
+   the sidebar unwrapped while its chips stacked up in a column past it. */
+.directory-row__threads .thread-row--compact,
+.directory-list__starting .thread-row--compact {
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
@@ -9622,7 +9627,9 @@ a.button {
 }
 
 .directory-row__threads .thread-row__header,
-.directory-row__threads .thread-row__chips {
+.directory-row__threads .thread-row__chips,
+.directory-list__starting .thread-row__header,
+.directory-list__starting .thread-row__chips {
   width: 100%;
 }
 

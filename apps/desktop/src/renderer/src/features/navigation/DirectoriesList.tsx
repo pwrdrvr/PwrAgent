@@ -63,7 +63,7 @@ import {
   threadSupportsFederationCapability,
 } from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
-import { isFederationViewerWindow } from "../../lib/federation-window";
+import { isFederationViewerWindow, readRendererFederationTarget } from "../../lib/federation-window";
 import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { useThreadPinOrdering, type ThreadPinScope } from "./useThreadPinOrdering";
@@ -97,6 +97,7 @@ import {
   selectUnlandedStartingThreads,
   type PendingSidebarRow,
 } from "./StartingThreadRow";
+import { startingThreadHomeDirectoryKey } from "./starting-thread-home";
 import { PendingThreadRow } from "./SubthreadDraftRow";
 import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
 import { jumpScrollPlan, jumpTailIsOffscreen } from "./project-index";
@@ -495,17 +496,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ),
     [props.directories],
   );
-  // The projects a starting thread will render in. A sub-thread launchpad's
-  // own key names no project; its thread lands under the parent's row.
+  // The projects a starting thread will render in: the row its thread lands
+  // in. For a peer's thread that is the local project main files it under.
+  // A sub-thread launchpad's own key names no project; its thread lands
+  // under the parent's row.
+  const windowFederationTarget = useMemo(readRendererFederationTarget, []);
+  const startingThreadHomeKey = useCallback(
+    (creation: PendingSidebarRow): string | undefined =>
+      startingThreadHomeDirectoryKey(creation, visibleDirectories, windowFederationTarget),
+    [visibleDirectories, windowFederationTarget],
+  );
   const startingThreadDirectoryKeys = useCallback((creation: PendingSidebarRow): string[] => {
     const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
-    return parent
-      ? parent.linkedDirectories.map((linked) => classifyDirectory(linked).key)
-      : [creation.directoryKey];
-  }, [threadsByKey]);
+    if (parent) return parent.linkedDirectories.map((linked) => classifyDirectory(linked).key);
+    const homeKey = startingThreadHomeKey(creation);
+    return homeKey ? [homeKey] : [];
+  }, [startingThreadHomeKey, threadsByKey]);
   const unplacedStartingThreads = selectUnlandedStartingThreads(
     props.startingThreads?.filter((creation) =>
-      !visibleDirectories.some((directory) => directory.key === creation.directoryKey)
+      !startingThreadHomeKey(creation)
       && !(creation.parentThreadKey && threadsByKey.has(creation.parentThreadKey))),
     threadsByKey,
   );
@@ -1320,7 +1329,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const startingSubthreads = directoryStartingThreads.filter((creation) =>
       creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
     const startingRootThreads = directoryStartingThreads.filter((creation) =>
-      creation.directoryKey === directory.key && !startingSubthreads.includes(creation));
+      startingThreadHomeKey(creation) === directory.key && !startingSubthreads.includes(creation));
     // A sub-thread being written opens its parent's tray and gives the
     // parent its chevron, as the thread will once it lands.
     const draftParentKeys = new Set(
@@ -1901,7 +1910,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       {unplacedStartingThreads.length > 0 ? (
         // No project or parent row this lens has loaded will take these, so
         // they wait at the top, the one place every lens can show them.
-        <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Starting threads">
+        <div className="sidebar-list sidebar-list--compact directory-list__starting" role="list" aria-label="Starting threads">
           {unplacedStartingThreads.map((creation) => (
             <PendingThreadRow
               key={creation.selectionKey}
