@@ -15827,13 +15827,17 @@ export class MessagingController {
       navigation ??
       (await this.readMonitorRows(binding.monitor, federationTargetForBinding(binding)));
     const now = this.now();
+    // Startup and timer renders have no inbound operator event.
+    const countsAsActivity = event !== undefined;
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
       binding.monitor,
+      countsAsActivity,
     );
     const snippetsByThreadKey = await this.resolveMonitorSnippets(
       snapshot,
       binding.monitor,
+      countsAsActivity,
     );
     const intent = buildMonitorStatusIntent({
       activeTurnsByThreadKey: activeTurns,
@@ -15879,13 +15883,16 @@ export class MessagingController {
       navigation ??
       (await this.readMonitorRows(subscription.monitor));
     const now = this.now();
+    const countsAsActivity = event !== undefined;
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
       subscription.monitor,
+      countsAsActivity,
     );
     const snippetsByThreadKey = await this.resolveMonitorSnippets(
       snapshot,
       subscription.monitor,
+      countsAsActivity,
     );
     const intent = {
       ...buildMonitorStatusIntent({
@@ -16066,6 +16073,7 @@ export class MessagingController {
   private async resolveMonitorActiveTurns(
     navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
+    countsAsActivity = true,
   ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
     const activeTurns = new Map(this.activeTurnsByThreadKey);
     if (!this.options.backend.readThreadStatus) {
@@ -16082,6 +16090,7 @@ export class MessagingController {
             backend: thread.source,
             federationTarget: federationTargetForThread(thread),
             threadId: thread.id,
+            ...(countsAsActivity ? {} : { countsAsActivity: false }),
           });
           if (status === "active") {
             activeTurns.set(threadKey, {
@@ -16115,6 +16124,7 @@ export class MessagingController {
   private async resolveMonitorSnippets(
     navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
+    countsAsActivity = true,
   ): Promise<ReadonlyMap<string, string>> {
     const snippets = new Map<string, string>();
     if (
@@ -16134,6 +16144,7 @@ export class MessagingController {
               backend: thread.source,
               federationTarget: federationTargetForThread(thread),
               threadId: thread.id,
+              ...(countsAsActivity ? {} : { countsAsActivity: false }),
             });
           const trimmed = text?.trim();
           if (trimmed) {

@@ -14,6 +14,7 @@ import { rememberBoundedMap } from "../bounded-map";
 import { usageAccountKey } from "../usage-account-identity";
 import { nativeReviewTarget } from "../../shared/pull-request-review";
 import { ThreadListTextCache } from "./thread-list-text-cache";
+import { codexRequestCountsAsActivity, withCodexRequestActivity } from "./request-activity";
 import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -7791,8 +7792,8 @@ export class CodexAppServerClient {
   private transportClosePromise: Promise<void> | null = null;
   private readonly restartPolicy: CodexAppServerRestartPolicy;
   private readonly transport: StdioJsonRpcTransport;
-  /** Last message Codex sent, of any kind; the idle recycle measures from it. */
-  private lastAppServerMessageAt: number;
+  /** Last Codex event or ordinary RPC; background probes do not postpone recycling. */
+  private lastAppServerActivityAt: number;
   /** Requests from Codex (approvals, user input, tool calls) not yet answered. */
   private pendingServerRequests = 0;
   private recycleStatus: CodexAppServerRecycleStatus = { recycleCount: 0 };
@@ -7939,7 +7940,7 @@ export class CodexAppServerClient {
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.restartPolicy = new CodexAppServerRestartPolicy(options.appServerRestartPolicy);
-    this.lastAppServerMessageAt = this.now();
+    this.lastAppServerActivityAt = this.now();
     this.transport = new StdioJsonRpcTransport({
       command: options.command?.trim() || "codex",
       authenticationRecovery: options.authenticationRecovery,
@@ -7999,7 +8000,7 @@ export class CodexAppServerClient {
           })
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, rawParams) => {
-      this.lastAppServerMessageAt = this.now();
+      this.lastAppServerActivityAt = this.now();
       const params = this.modelProviderTranslator
         ? this.modelProviderTranslator.translateNotification(method, rawParams)
         : rawParams;
@@ -8221,7 +8222,7 @@ export class CodexAppServerClient {
       throw new Error(`No desktop request handler registered for ${method}`);
     };
     this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
-      this.lastAppServerMessageAt = this.now();
+      this.lastAppServerActivityAt = this.now();
       this.pendingServerRequests += 1;
       // A thread waiting on the operator must stay loaded to hear the answer.
       const threadId = extractRequestMetadata(params).threadId;
@@ -8235,7 +8236,7 @@ export class CodexAppServerClient {
         return await handleServerRequest(method, params, rpcId);
       } finally {
         this.pendingServerRequests -= 1;
-        this.lastAppServerMessageAt = this.now();
+        this.lastAppServerActivityAt = this.now();
         if (threadId) {
           const remaining = (this.pendingServerRequestsByThread.get(threadId) ?? 1) - 1;
           if (remaining > 0) this.pendingServerRequestsByThread.set(threadId, remaining);
@@ -8567,8 +8568,8 @@ export class CodexAppServerClient {
    * the next request starts a fresh server, and thread operations replay
    * their resume and settings on it, as after a crash.
    *
-   * Idle means no message from Codex for `settings.idleMs`, nothing this
-   * client is tracking, and `isQuiescent()` from the owner, which knows the
+   * Idle means no Codex event or foreground RPC for `settings.idleMs`, nothing
+   * this client is tracking, and `isQuiescent()` from the owner, which knows the
    * work the client cannot see. All of it is checked again under the
    * lifecycle barrier, where no new RPC can start, together with Codex's own
    * report of active threads; any doubt leaves the server running.
@@ -8608,7 +8609,7 @@ export class CodexAppServerClient {
     const early = blocker(true);
     if (early === "not-running") return { kind: "not-running" };
     if (early) return { kind: "busy", blocker: early };
-    const idleSince = this.lastAppServerMessageAt;
+    const idleSince = this.lastAppServerActivityAt;
     const idleMs = this.now() - idleSince;
     if (idleMs < params.settings.idleMs) return { kind: "not-idle", idleMs };
     const sample = await this.readAppServerProcessSample();
@@ -8621,7 +8622,7 @@ export class CodexAppServerClient {
       // Admitted RPCs have drained and new ones wait at the barrier.
       const late = (): string | undefined => {
         if (serverGeneration !== this.serverGeneration) return "not-running";
-        if (this.lastAppServerMessageAt !== idleSince) return "app-server-activity";
+        if (this.lastAppServerActivityAt !== idleSince) return "app-server-activity";
         return blocker(false);
       };
       let stillBlocked = late();
@@ -9815,7 +9816,8 @@ export class CodexAppServerClient {
     this.archivedThreadMetadataScheduledByFilter.add(cacheKey);
     setTimeout(() => {
       this.archivedThreadMetadataScheduledByFilter.delete(cacheKey);
-      void this.refreshArchivedThreadMetadata(filter, diagnostics).catch((error) => {
+      void withCodexRequestActivity({ countsAsActivity: false }, () =>
+        this.refreshArchivedThreadMetadata(filter, diagnostics)).catch((error) => {
         codexClientLog.warn("archived thread metadata refresh failed", {
           error: error instanceof Error ? error.message : String(error),
           filter: filter?.trim() || null,
@@ -12125,12 +12127,15 @@ export class CodexAppServerClient {
     if (generation !== this.closeGeneration || !this.initialized) {
       throw new Error("codex app server client closed");
     }
+    const countsAsActivity = codexRequestCountsAsActivity();
+    if (countsAsActivity) this.lastAppServerActivityAt = this.now();
     const request = work();
     this.activeRequests.add(request);
     try {
       return await request;
     } finally {
       this.activeRequests.delete(request);
+      if (countsAsActivity) this.lastAppServerActivityAt = this.now();
     }
   }
 

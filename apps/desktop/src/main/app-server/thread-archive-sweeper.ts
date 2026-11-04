@@ -8,6 +8,7 @@ import {
   isCodexChatsDirectory,
 } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
+import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 
 export const THREAD_AUTO_ARCHIVE_AGE_MS = 7 * 24 * 60 * 60_000;
 export const THREAD_ARCHIVE_SWEEP_INTERVAL_MS = 60 * 60_000;
@@ -155,7 +156,9 @@ export class ThreadArchiveSweeper {
     clearTimeout(this.timer);
     const tally: SweepTally = { archived: 0, deleted: 0, failed: 0 };
     this.publish({ ...tally, running: true, startedAt: Date.now() });
-    this.running = this.run(tally, options.manual === true).catch((error) => {
+    this.running = withCodexRequestActivity(
+      { countsAsActivity: false }, () => this.run(tally, options.manual === true),
+    ).catch((error) => {
       if (!this.abort.signal.aborted) this.fail(tally, error);
     }).finally(() => {
       this.running = undefined;

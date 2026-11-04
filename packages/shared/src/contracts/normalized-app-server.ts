@@ -1440,6 +1440,8 @@ export type ThreadDisplayData = {
 
 export type AppServerReadThreadRequest = {
   display?: ThreadDisplayRead;
+  /** Timer-driven reads opt out of the Codex idle-recycle activity clock. */
+  countsAsActivity?: boolean;
   /** Bounded diagnostic attribution; never transcript content. */
   readReason?: "thread-view" | "star-map-card";
   /** Opt into conditional page revalidation. Empty string requests a first revision. */
