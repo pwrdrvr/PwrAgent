@@ -8006,7 +8006,8 @@ describe("Composer", () => {
     fireEvent.change(picker, { target: { value: prs[0].url } });
     expect(screen.getByText(/stack-1 . main/)).toHaveTextContent("at 1111111");
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/other" } });
-    expect(screen.getByLabelText("Attached pull request")).toHaveValue("");
+    // The project's sole PR is picked, as it is when the target is chosen.
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue(secondaryPr.url);
     expect(within(picker).getAllByRole("option").map((option) => option.textContent))
       .toEqual(["Choose pull request", "#1 Other change — stack-1"]);
     fireEvent.change(picker, { target: { value: secondaryPr.url } });
@@ -8193,7 +8194,7 @@ describe("Composer", () => {
     ]);
 
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/PwrGit" } });
-    fireEvent.change(picker, { target: { value: gitRuntimePrs[2].url } });
+    expect(picker).toHaveValue(gitRuntimePrs[2].url);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
       cwd: "/worktrees/PwrGit",
@@ -8257,6 +8258,22 @@ describe("Composer", () => {
           ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "peer-1" } },
         },
       }}
+    />);
+    await openReviewComposer();
+    expect(screen.queryByLabelText("Review project")).not.toBeInTheDocument();
+    cleanup();
+
+    // A remote execution workspace reviews on its host, not in a local checkout.
+    render(<Composer
+      backends={[reviewProjectBackend()]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      directory={gitDirectory}
+      directories={[gitDirectory, reviewProjectDirectory("PwrGit", "main")]}
+      disabled={false} skills={[]}
+      thread={{
+        ...thread,
+        codexEnvironmentRuntime: { environmentId: "remote-env", executionTarget: "remote" },
+      } as NavigationThreadSummary}
     />);
     await openReviewComposer();
     expect(screen.queryByLabelText("Review project")).not.toBeInTheDocument();

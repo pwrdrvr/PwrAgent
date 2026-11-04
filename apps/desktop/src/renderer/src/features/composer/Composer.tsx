@@ -14,6 +14,7 @@ import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
   describeAttachedPullRequestLocalSync,
   findCheckedOutPullRequest,
+  pullRequestRepositoryKey,
   reviewThreadForWorkspace,
   reviewWorkspacePullRequests,
 } from "../../../../shared/pull-request-review";
@@ -1292,15 +1293,13 @@ function buildUnlinkedReviewWorkspaceOptions(params: {
   seen: Set<string>;
   thread?: NavigationThreadSummary;
 }): ReviewWorkspaceOption[] {
-  const repositoryOf = (pr: PrSummary): string | undefined => {
-    const match = EXPLICIT_REVIEW_PULL_REQUEST_URL.exec(pr.url);
-    return match ? `${match[1]}/${match[2]}/${match[3]}`.toLowerCase() : undefined;
-  };
   const wanted = new Set(
     (params.thread?.prs ?? [])
-      .filter((pr) => !params.coveredPullRequestUrls.has(pr.url))
-      .map(repositoryOf)
-      .filter((repository): repository is string => Boolean(repository)),
+      .filter((pr) =>
+        !params.coveredPullRequestUrls.has(pr.url)
+        && EXPLICIT_REVIEW_PULL_REQUEST_URL.test(pr.url)
+      )
+      .map(pullRequestRepositoryKey),
   );
   const options: ReviewWorkspaceOption[] = [];
   for (const directory of params.directories ?? []) {
@@ -5743,7 +5742,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : rendererFederationTarget?.scope !== "remote";
   const reviewWorkspaceOptions = useMemo(() => {
     const linked = buildReviewWorkspaceOptions(props.thread);
-    if (linked.length === 0 || !reviewDirectoriesShareThreadAuthority) {
+    // A remote execution workspace reviews on its host, so no local checkout
+    // can stand in for one of its projects either.
+    if (
+      linked.length === 0
+      || !reviewDirectoriesShareThreadAuthority
+      || props.thread?.codexEnvironmentRuntime?.executionTarget === "remote"
+    ) {
       return linked;
     }
     const coveredPullRequestUrls = new Set<string>();
@@ -13580,14 +13585,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                           }),
                         workspaceCwd,
                       );
+                      // The PR list follows the project, so only a PR this
+                      // project can also review stays chosen. On the PR
+                      // target, a project's sole PR is the obvious choice,
+                      // as it is when the target is chosen.
+                      const projectOptions = reviewPullRequestOptionsForWorkspace(workspaceCwd);
+                      const keptUrl = projectOptions.some((option) =>
+                        option.pr.url === next.pullRequestUrl
+                      ) ? next.pullRequestUrl : undefined;
                       return {
                         ...next,
-                        // The PR list follows the project, so only a PR this
-                        // project can also review stays chosen.
-                        pullRequestUrl: reviewPullRequestOptions.some((option) =>
-                          option.pr.url === next.pullRequestUrl
-                          && option.workspaces.includes(workspaceCwd)
-                        ) ? next.pullRequestUrl : undefined,
+                        pullRequestUrl: keptUrl
+                          ?? (next.target === "pullRequest" && projectOptions.length === 1
+                            ? projectOptions[0]?.pr.url
+                            : undefined),
                       };
                     });
                     setSendError(undefined);

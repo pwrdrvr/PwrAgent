@@ -32,6 +32,17 @@ export function pullRequestReviewPromptUrl(value: string): string | undefined {
   return EXPLICIT_REVIEW_PULL_REQUEST_URL.test(url) ? url : undefined;
 }
 
+function normalizeReviewWorkspacePath(value: string): string {
+  const path = value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^[a-z]:\//i.test(path) ? path.toLowerCase() : path;
+}
+
+/** A PR's `host/owner/repo`, lowercased, or "" for a URL that names none. */
+export function pullRequestRepositoryKey(pr: Pick<PrSummary, "url">): string {
+  const match = /^https:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\//.exec(pr.url);
+  return match ? `${match[1]}/${match[2]}/${match[3]}`.toLowerCase() : "";
+}
+
 /** Navigation filtering is advisory; the owner verifies fresh Git remotes. */
 export function attachedPullRequestsForWorkspace(params: {
   prs: PrSummary[];
@@ -42,31 +53,23 @@ export function attachedPullRequestsForWorkspace(params: {
   repositories?: string[];
 }): PrSummary[] {
   if (!params.cwd) return [];
-  const normalizePath = (value: string): string => {
-    const path = value.replace(/\\/g, "/").replace(/\/+$/, "");
-    return /^[a-z]:\//i.test(path) ? path.toLowerCase() : path;
-  };
-  const repository = (pr: PrSummary): string => {
-    const match = /^https:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\//.exec(pr.url);
-    return match ? `${match[1]}/${match[2]}/${match[3]}`.toLowerCase() : "";
-  };
   const scoped = params.prs.filter((pr) => pr.linkedDirectoryPaths?.some(
-    (path) => normalizePath(path) === normalizePath(params.cwd!)
-      || (params.repositoryPath && normalizePath(path) === normalizePath(params.repositoryPath)),
+    (path) => normalizeReviewWorkspacePath(path) === normalizeReviewWorkspacePath(params.cwd!)
+      || (params.repositoryPath && normalizeReviewWorkspacePath(path) === normalizeReviewWorkspacePath(params.repositoryPath)),
   ));
   const repositories = new Set([
     ...[params.repository, ...(params.repositories ?? [])]
       .map((value) => value?.trim().toLowerCase())
       .filter((value): value is string => Boolean(value)),
-    ...scoped.map(repository).filter(Boolean),
+    ...scoped.map(pullRequestRepositoryKey).filter(Boolean),
   ]);
-  return params.prs.filter((pr) => repositories.has(repository(pr)));
+  return params.prs.filter((pr) => repositories.has(pullRequestRepositoryKey(pr)));
 }
 
 function sameReviewWorkspacePath(left?: string, right?: string): boolean {
-  const normalize = (value?: string): string =>
-    value?.trim().replace(/\\/g, "/").replace(/\/+$/, "") ?? "";
-  return Boolean(normalize(left)) && normalize(left) === normalize(right);
+  const normalizedLeft = left ? normalizeReviewWorkspacePath(left) : "";
+  return Boolean(normalizedLeft)
+    && normalizedLeft === (right ? normalizeReviewWorkspacePath(right) : "");
 }
 
 function findReviewLinkedDirectory(
@@ -118,12 +121,11 @@ export function reviewThreadForWorkspace(
   const linkedDirectory = findReviewLinkedDirectory(thread, params.cwd);
   const prs = reviewWorkspacePullRequests(params);
   if (sameReviewWorkspacePath(params.cwd, findPrimaryReviewWorkspaceCwd(thread))) {
-    // With no repository identity for the primary checkout, every attached
-    // PR stays a hint, as it was before workspaces were told apart.
-    const identified = prs.length > 0
-      || Boolean(params.directory?.gitStatus?.originRepository)
-      || Boolean(linkedDirectory?.repositoryKey);
-    return identified ? { ...thread, prs } : thread;
+    // The thread's own fields describe the primary checkout. When none of its
+    // PRs match by repository (no identity yet, or an origin that still names
+    // a renamed repository), every attached PR stays a hint, as it was before
+    // workspaces were told apart.
+    return prs.length > 0 ? { ...thread, prs } : thread;
   }
   const secondary: NavigationThreadSummary = { ...thread, prs };
   delete secondary.gitWorkingState;
