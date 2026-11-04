@@ -90,4 +90,38 @@ describe("RestartGateNotice", () => {
     act(() => push?.(RESUMING));
     expect(notices.at(-1)?.id).toBe(RESTART_GATE_NOTICE_ID);
   });
+
+  it("keeps a change pushed while the first read is in flight", async () => {
+    let push: ((status: RestartGateStatus) => void) | undefined;
+    let answer: ((status: RestartGateStatus) => void) | undefined;
+    const desktopApi = {
+      getRestartGateStatus: vi.fn(() => new Promise<RestartGateStatus>((resolve) => {
+        answer = resolve;
+      })),
+      onRestartGateStatusChanged: vi.fn((callback: (status: RestartGateStatus) => void) => {
+        push = callback;
+        return () => undefined;
+      }),
+      releaseRestartGate: vi.fn(async (): Promise<RestartGateStatus> => ({ phase: "open" })),
+    };
+    const notices: Array<AppNoticeToastNotice | undefined> = [];
+    render(<RestartGateNotice desktopApi={desktopApi} onNoticeChanged={(notice) => notices.push(notice)} />);
+    act(() => push?.({ phase: "open" }));
+    // The read was taken before the gate opened; it must not bring the notice back.
+    await act(async () => answer?.(RESUMING));
+    expect(notices.at(-1)).toBeUndefined();
+  });
+
+  it("offers the action again when a release leaves continuations waiting", async () => {
+    const desktopApi = {
+      getRestartGateStatus: vi.fn(async () => RESUMING),
+      onRestartGateStatusChanged: vi.fn(() => () => undefined),
+      releaseRestartGate: vi.fn(async (): Promise<RestartGateStatus> => RESUMING),
+    };
+    const notices: Array<AppNoticeToastNotice | undefined> = [];
+    render(<RestartGateNotice desktopApi={desktopApi} onNoticeChanged={(notice) => notices.push(notice)} />);
+    await act(async () => {});
+    await act(async () => notices.at(-1)?.actions?.[0]?.onClick());
+    expect(notices.at(-1)?.actions?.map((action) => action.label)).toEqual(["Start everything now"]);
+  });
 });

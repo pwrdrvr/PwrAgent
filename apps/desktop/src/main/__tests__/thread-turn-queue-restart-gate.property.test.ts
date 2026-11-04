@@ -3,6 +3,7 @@ import fc from "fast-check";
 import {
   OPEN_RESTART_GATE,
   planRestartDispatch,
+  restartContinuationSettles,
   restartGateHolds,
   transitionRestartGate,
   type RestartGateEvent,
@@ -130,11 +131,7 @@ async function runScenario(input: Scenario) {
       ...(entry.restartContinuation && entry.id ? { restartEntryId: entry.id } : {}),
     }, now),
     onLifecycle: (event) => {
-      if (!event.entry.restartContinuation) return;
-      if (
-        event.type === "started" || event.type === "failed" || event.type === "cancelled"
-        || event.type === "blocked" || event.type === "held"
-      ) {
+      if (event.entry.restartContinuation && restartContinuationSettles(event.type)) {
         applyGate({ type: "settled", entryId: event.entry.id });
       }
     },

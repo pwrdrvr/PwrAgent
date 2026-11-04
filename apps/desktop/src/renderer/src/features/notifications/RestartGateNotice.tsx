@@ -26,17 +26,23 @@ export function RestartGateNotice(props: {
 
   useEffect(() => {
     let cancelled = false;
-    const unsubscribe = desktopApi?.onRestartGateStatusChanged?.((next) => {
-      if (cancelled) return;
+    // A change pushed while the first read is in flight is newer than it.
+    let pushed = false;
+    const apply = (next: RestartGateStatus) => {
       setStatus(next);
       if (next.phase !== "resuming") {
         setReleasing(false);
         setDismissed(false);
       }
+    };
+    const unsubscribe = desktopApi?.onRestartGateStatusChanged?.((next) => {
+      if (cancelled) return;
+      pushed = true;
+      apply(next);
     });
     void desktopApi?.getRestartGateStatus?.()
       .then((next) => {
-        if (!cancelled) setStatus(next);
+        if (!cancelled && !pushed) apply(next);
       })
       .catch(() => {
         // Best effort only. Every later change still pushes an event.
@@ -51,8 +57,15 @@ export function RestartGateNotice(props: {
     () => dismissed ? undefined : buildRestartGateNotice({
       onDismiss: () => setDismissed(true),
       onRelease: () => {
+        if (!desktopApi?.releaseRestartGate) return;
         setReleasing(true);
-        void desktopApi?.releaseRestartGate?.()
+        void desktopApi.releaseRestartGate()
+          .then((next) => {
+            setStatus(next);
+            // Still waiting means the gate did not open: offer the action again.
+            setReleasing(false);
+            if (next.phase !== "resuming") setDismissed(false);
+          })
           .catch(() => setReleasing(false));
       },
       releasing,

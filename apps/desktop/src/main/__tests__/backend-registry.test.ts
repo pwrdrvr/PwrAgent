@@ -175,6 +175,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
 import { RestartContinuationStore, type StoredRestartContinuation } from "../state/restart-continuation-store";
+import type { RestartDispatchPlanOptions } from "../app-server/restart-continuation-gate";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -4659,14 +4660,19 @@ describe("DesktopBackendRegistry", () => {
       ).all() as { payload: string }[]).map((row) => JSON.parse(row.payload) as StoredRestartContinuation);
       return { payloads, rows, store: new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false }) };
     };
-    const launch = (store: RestartContinuationStore, instanceId: string, live: string[] = []) => {
+    const launch = (
+      store: RestartContinuationStore,
+      instanceId: string,
+      live: string[] = [],
+      plan: Omit<RestartDispatchPlanOptions, "now"> = {},
+    ) => {
       const codexClient = new MockBackendClient({});
       const registry = new DesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         projectHeldWakeupStore: null,
         restartContinuationStore: store,
-        restartDispatchPlan: { firstDelayMs: 0, intervalMs: 0, jitterMs: 0, releaseGraceMs: 60_000 },
+        restartDispatchPlan: { firstDelayMs: 0, intervalMs: 0, jitterMs: 0, releaseGraceMs: 60_000, ...plan },
         runtimeInstanceId: instanceId,
         resolveLiveProfileRuntimeInstanceIds: () => live,
       });
@@ -4829,6 +4835,41 @@ describe("DesktopBackendRegistry", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(second.codexClient.startTurnCallCount).toBe(1);
       expect(payloads().map((row) => row.kind)).toEqual(["queued", "queued", "queued"]);
+
+      // The operator resumes the paused one and moves it to the front: the
+      // saved copies follow, so a second restart brings back this queue.
+      const { writes } = await measureSqliteWrites(async () => {
+        await second.registry.setQueuedTurnPaused({ queueEntryId: two, paused: false });
+        await second.registry.moveQueuedTurn({ queueEntryId: two, beforeQueueEntryId: three });
+      });
+      expectSqliteWriteBudget({
+        scenario: "restart-queued-refresh",
+        note: "an operator pause and a reorder of restored queued messages: one commit each, only while saved messages wait. Per operator action, so a few a day.",
+        writes,
+      });
+      const saved = payloads().sort((left, right) => (left.queued?.position ?? 0) - (right.queued?.position ?? 0));
+      expect(saved.map((row) => [row.id, row.queued?.paused ?? false])).toEqual([
+        [two, false],
+        [three, false],
+        [one, false],
+      ]);
+    });
+
+    it("gives a discarded continuation no place in the stagger", async () => {
+      const { store } = durableStore();
+      const first = launch(store, "instance-a");
+      await startRunningTurn(first.registry, "first");
+      await startRunningTurn(first.registry, "second");
+      first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
+      await first.registry.close();
+
+      const second = launch(store, "instance-b", ["instance-b"], { batchSize: 1, intervalMs: 600_000 });
+      const [discarded] = second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "first" });
+      expect(second.registry.cancelQueuedTurn(discarded!.queueEntryId)).toBe(true);
+      second.registry.beginRestartContinuationDispatch();
+      // The remaining continuation takes the first slot, not the second, ten minutes on.
+      await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(1));
+      expect(second.codexClient.startTurnCalls[0]).toMatchObject({ threadId: "second" });
     });
 
     it("reports the gate while it waits and opens it when the operator starts everything now", async () => {

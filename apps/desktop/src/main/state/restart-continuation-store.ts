@@ -154,12 +154,6 @@ export class RestartContinuationStore {
     }).immediate();
   }
 
-  /** Rewrites a saved queued message the operator edited. */
-  update(continuation: StoredRestartContinuation): void {
-    this.db.prepare("UPDATE restart_continuations SET payload = ? WHERE entry_id = ?")
-      .run(JSON.stringify(continuation), continuation.id);
-  }
-
   remove(entryId: string): void {
     this.db.prepare("DELETE FROM restart_continuations WHERE entry_id = ?").run(entryId);
   }

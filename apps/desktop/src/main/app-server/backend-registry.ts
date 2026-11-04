@@ -82,6 +82,7 @@ import type { RestartGateStatus } from "../../shared/restart-gate";
 import {
   OPEN_RESTART_GATE,
   planRestartDispatch,
+  restartContinuationSettles,
   restartGateHolds,
   transitionRestartGate,
   type RestartDispatchPlanOptions,
@@ -2352,7 +2353,7 @@ type WorktreeArchiveCandidate = {
 };
 
 type ProjectHeldWakeupStoreLike = Pick<ProjectHeldWakeupStore, "save" | "update" | "remove" | "claimOrphaned">;
-type RestartContinuationStoreLike = Pick<RestartContinuationStore, "saveAll" | "update" | "remove" | "claimOrphaned">;
+type RestartContinuationStoreLike = Pick<RestartContinuationStore, "saveAll" | "remove" | "claimOrphaned">;
 
 /** A running turn a quiet restart stops and continues after the restart. */
 export type QuietRestartTarget = {
@@ -22041,11 +22042,7 @@ export class DesktopBackendRegistry {
       createdAt: stoppedAt + index,
     }));
     // Messages waiting in queues live only in memory; carry them across too.
-    // A project-held wake-up already has its own durable copy, and a
-    // continuation restored earlier keeps the row it has.
-    const queued = this.threadTurnQueue.getAllQueuedEntries()
-      .filter((entry) => !entry.restartContinuation && !entry.projectHold)
-      .map((entry, position) => storedRestartQueuedEntry(entry, position));
+    const queued = this.restartQueuedSnapshot();
     try {
       const saved = store.saveAll(this.runtimeInstanceId, [...continuations, ...queued]);
       for (const entry of queued) this.durableRestartContinuations.set(entry.id, entry);
@@ -22133,11 +22130,14 @@ export class DesktopBackendRegistry {
   beginRestartContinuationDispatch(): void {
     if (this.restartDispatchStarted || this.restartGate.phase !== "resuming") return;
     this.restartDispatchStarted = true;
-    // Every restored continuation gets a time, settled ones too: one a lock
-    // held before dispatch began still waits its turn once unlocked.
+    // Every restored continuation still in a queue gets a time, settled ones
+    // too: one a lock held before dispatch began still waits its turn once
+    // unlocked. One that was discarded takes no place in the stagger.
     const { pending } = this.restartGate;
+    const queued = new Set(this.threadTurnQueue.getAllQueuedEntries().map((entry) => entry.id));
     const now = Date.now();
-    const plan = planRestartDispatch([...this.restartGate.scheduled.values()], {
+    const plan = planRestartDispatch([...this.restartGate.scheduled.values()]
+      .filter((item) => pending.has(item.entryId) || queued.has(item.entryId)), {
       ...this.restartDispatchPlanOptions,
       now,
     });
@@ -22189,27 +22189,37 @@ export class DesktopBackendRegistry {
     if (event.type === "started" || event.type === "failed" || event.type === "cancelled") {
       this.forgetRestartContinuation(entry.id);
     }
-    if (!entry.restartContinuation) return;
-    if (
-      event.type === "started" || event.type === "failed"
-      || event.type === "cancelled" || event.type === "blocked"
-      || event.type === "held"
-    ) {
+    if (entry.restartContinuation && restartContinuationSettles(event.type)) {
       this.applyRestartGate({ type: "settled", entryId: entry.id });
     }
   }
 
-  /** An operator edit to a saved queued message replaces its durable copy. */
-  private refreshRestartQueuedEntry(entry: ThreadTurnQueueEntry): void {
-    const stored = this.durableRestartContinuations.get(entry.id);
-    if (!stored || stored.kind !== "queued" || !this.restartContinuationStore) return;
-    const next = storedRestartQueuedEntry(entry, stored.queued?.position ?? Number.MAX_SAFE_INTEGER);
+  /** The queued messages a quiet restart carries, in the order they wait. */
+  private restartQueuedSnapshot(): StoredRestartContinuation[] {
+    // A project-held wake-up already has its own durable copy, and a
+    // restored continuation keeps the row it has.
+    return this.threadTurnQueue.getAllQueuedEntries()
+      .filter((entry) => !entry.restartContinuation && !entry.projectHold)
+      .map((entry, position) => storedRestartQueuedEntry(entry, position));
+  }
+
+  /**
+   * After the operator edits, pauses, resumes or reorders a saved queued
+   * message, rewrites the saved copies so a second restart brings back what
+   * the queue holds now. One commit, for the copies that changed; nothing
+   * once every saved message has left the queue.
+   */
+  private refreshRestartQueuedEntries(): void {
+    const store = this.restartContinuationStore;
+    if (!store) return;
+    const saved = this.restartQueuedSnapshot()
+      .filter((entry) => this.durableRestartContinuations.get(entry.id)?.kind === "queued");
+    if (saved.length === 0) return;
     try {
-      this.restartContinuationStore.update(next);
-      this.durableRestartContinuations.set(entry.id, next);
+      store.saveAll(this.runtimeInstanceId, saved);
+      for (const entry of saved) this.durableRestartContinuations.set(entry.id, entry);
     } catch (error) {
-      backendRegistryLog.warn("restart queued message edit was not saved", {
-        entryId: entry.id,
+      backendRegistryLog.warn("restart queued messages were not refreshed", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -22400,6 +22410,7 @@ export class DesktopBackendRegistry {
       request.beforeQueueEntryId,
     );
     if (result.disposition === "moved" && result.backend && result.threadId) {
+      this.refreshRestartQueuedEntries();
       await this.emit({
         backend: result.backend,
         notification: {
@@ -22442,6 +22453,7 @@ export class DesktopBackendRegistry {
       this.forgetDurableProjectHeldWakeup(entry.id);
     }
     if (result.disposition === "updated" && entry) {
+      this.refreshRestartQueuedEntries();
       await this.emit({
         backend: entry.backend,
         notification: {
@@ -22543,7 +22555,7 @@ export class DesktopBackendRegistry {
 
   private emitQueuedTurnInputUpdated(entry: ThreadTurnQueueEntry): void {
     this.refreshDurableProjectHeldWakeup(entry);
-    this.refreshRestartQueuedEntry(entry);
+    this.refreshRestartQueuedEntries();
     this.requestQueuedMessageTitle(entry);
     // This is an input refresh, not another queue admission. In particular,
     // do not replay sender correspondence lifecycle transitions.
@@ -22620,6 +22632,7 @@ export class DesktopBackendRegistry {
     if (!this.isQueuedMessageTitleCurrent(request)) return false;
     const entry = this.threadTurnQueue.setQueuedEntryTitle(request.entryId, title);
     if (!entry) return false;
+    this.refreshRestartQueuedEntries();
     void this.emit({
       backend: entry.backend,
       notification: {

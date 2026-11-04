@@ -56,6 +56,16 @@ export type RestartGateEvent =
 
 export const OPEN_RESTART_GATE: RestartGateState = { phase: "open" };
 
+/**
+ * Whether a queue lifecycle event for a continuation settles it: it
+ * started, was discarded, failed, or now waits on the operator (blocked or
+ * held), who should not have the rest of the app wait on it.
+ */
+export function restartContinuationSettles(eventType: string): boolean {
+  return eventType === "started" || eventType === "failed" || eventType === "cancelled"
+    || eventType === "blocked" || eventType === "held";
+}
+
 export function transitionRestartGate(
   current: RestartGateState,
   event: RestartGateEvent,
