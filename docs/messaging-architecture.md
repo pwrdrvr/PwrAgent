@@ -517,6 +517,20 @@ no PR lookup, Git working-state probe, launchpad hydration, directory-fleet
 walk, or connected-peer enumeration. The shared turn FIFO remains the final
 race-safe admission authority if activity changes after the targeted read.
 
+After routing and permission checks, an idle target gets a bounded typing
+lease before the controller awaits backend startup. MCP preparation, a cold
+provider, and the activity API response must not delay the first activity
+request or prevent backend submission. This preparation lease does not invent
+an active backend turn. Failed or queued attempts release it without stopping
+another preparing attempt or a working turn. The accepted turn retains its
+normal activity signal, including retrying a failed preparation request.
+
+`messaging-first-typing.property.test.ts` checks the transport request boundary
+with deferred startup and API responses, injected time, and a 100 ms budget
+after admission with input debounce disabled. The configured 500 ms input
+debounce is separate. Its provider model also requires a late failed response
+to affect only the lease that issued it, never a replacement lease.
+
 Full navigation remains appropriate for explicit browse, monitor, picker,
 handoff, review, and on-demand rich status workflows. Automatic status-card
 updates and thread-state bus fan-out reuse the targeted projection instead of

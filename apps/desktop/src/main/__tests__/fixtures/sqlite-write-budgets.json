@@ -611,6 +611,7 @@
   "messaging-causal-request-and-attachment": {"commits":3,"note":"One accepted human request (immutable source plus latest-human pointer in one transaction), one attachment claim/outcome, 100 duplicate/bot/read retries. No stream, poll or idle writes.","observedWalBytes":32960,"rowsChanged":4,"statements":4},
   "messaging-causal-steer": {"commits":2,"note":"One attributed Claude steer updates its current turn's causal reference once; one idempotent retry adds no writes. No history traversal or timer writes.","observedWalBytes":20600,"rowsChanged":2,"statements":2},
   "messaging-first-typing-before-startup": {"commits":1,"note":"One admitted reply through its first activity delivery with startup blocked: 1 commit, 12360 WAL bytes; 0.247 MB/day at 20 turns/day, 12.36 MB/day at 1000, 0 idle/timer writes.","observedWalBytes":12360,"rowsChanged":1,"statements":1},
+  "messaging-first-typing-failed-start": {"commits":2,"note":"One preparation activity and its failed-start cleanup: 2 boundary commits; about 0.494 MB/day at 20 failures/day or 24.72 MB/day at 1000; no timer persistence.","observedWalBytes":24720,"rowsChanged":2,"statements":2},
   "messaging-outbound-file-activity": {
     "commits": 1,
     "note": "one send_messaging_file audit row; this runs per agent tool call, so the row count must not grow with attachment parts",
