@@ -114,6 +114,9 @@ export const APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL =
 export const APP_SERVER_RESTART_CODEX_CHANNEL = "app-server:restart-codex";
 export const CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL =
   "app-server:codex-restart-status-changed";
+export const RESTART_GATE_STATUS_CHANNEL = "restart-gate:status";
+export const RESTART_GATE_RELEASE_CHANNEL = "restart-gate:release";
+export const RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL = "restart-gate:status-changed";
 export const APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL =
   "app-server:get-thread-archive-sweep-status";
 export const APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL =

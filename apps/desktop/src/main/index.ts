@@ -141,6 +141,10 @@ import {
   registerQuitBlockerIpcHandlers,
 } from "./ipc/quit-blockers";
 import {
+  disposeRestartGateIpcHandlers,
+  registerRestartGateIpcHandlers,
+} from "./ipc/restart-gate";
+import {
   disposeProfilesIpcHandlers,
   listDesktopPwrAgentProfiles,
   openDesktopPwrAgentProfile,
@@ -711,6 +715,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposePreloadLogIpcHandlers();
   disposeBootInfoIpcHandlers();
   disposeQuitBlockerIpcHandlers();
+  disposeRestartGateIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
   disposeKeybindingsIpcHandlers();
@@ -1861,6 +1866,7 @@ export function bootstrapApp(): void {
       },
     });
     registerQuitBlockerIpcHandlers();
+    registerRestartGateIpcHandlers();
     registerAppIconDragIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch, previousProviderDefaults) => {

@@ -250,6 +250,10 @@ import {
   CODEX_RESTART_NOTICE_ID_PREFIXES,
   CodexRestartNotice,
 } from "./features/notifications/CodexRestartNotice";
+import {
+  RESTART_GATE_NOTICE_ID,
+  RestartGateNotice,
+} from "./features/notifications/RestartGateNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildBundledGitLfsNotice } from "./features/notifications/bundled-git-lfs-notice";
@@ -1076,6 +1080,14 @@ function DesktopAppShell(props: {
     for (const prefix of CODEX_VERSION_NOTICE_ID_PREFIXES) {
       dispatchAppNotice({ type: "dismiss-prefix", prefix });
     }
+    if (notice) {
+      showAppNotice(notice);
+    }
+  }, [showAppNotice]);
+  const syncRestartGateNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    dispatchAppNotice({ type: "dismiss", id: RESTART_GATE_NOTICE_ID });
     if (notice) {
       showAppNotice(notice);
     }
@@ -5000,6 +5012,10 @@ function DesktopAppShell(props: {
         <CodexRestartNotice
           desktopApi={desktopApi}
           onNoticeChanged={syncCodexRestartNotice}
+        />
+        <RestartGateNotice
+          desktopApi={desktopApi}
+          onNoticeChanged={syncRestartGateNotice}
         />
         <AppNoticeStack
           desktopApi={desktopApi}

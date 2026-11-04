@@ -690,6 +690,7 @@ import type {
   RevealQuitBlockerRequest,
   RevealQuitBlockerResponse,
 } from "../shared/quit-blockers";
+import type { RestartGateStatus } from "../shared/restart-gate";
 import {
   AGENT_READ_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
@@ -813,6 +814,9 @@ import {
   APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
   APP_SERVER_RESTART_CODEX_CHANNEL,
   CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+  RESTART_GATE_RELEASE_CHANNEL,
+  RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL,
+  RESTART_GATE_STATUS_CHANNEL,
   APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
   APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
   THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
@@ -1824,6 +1828,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL),
   restartCodex: async (): Promise<CodexAppServerRestartResult> =>
     await ipcRenderer.invoke(APP_SERVER_RESTART_CODEX_CHANNEL),
+  getRestartGateStatus: async (): Promise<RestartGateStatus> =>
+    await ipcRenderer.invoke(RESTART_GATE_STATUS_CHANNEL),
+  releaseRestartGate: async (): Promise<RestartGateStatus> =>
+    await ipcRenderer.invoke(RESTART_GATE_RELEASE_CHANNEL),
   getThreadArchiveSweepStatus: async (): Promise<DesktopThreadArchiveSweepStatus> =>
     await ipcRenderer.invoke(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL),
   runThreadArchiveSweep: async (): Promise<DesktopThreadArchiveSweepStatus> =>
@@ -3290,6 +3298,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  onRestartGateStatusChanged: (
+    callback: (status: RestartGateStatus) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      status: RestartGateStatus,
+    ) => callback(status);
+    ipcRenderer.on(RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL, listener);
     };
   },
   onThreadArchiveSweepStatusChanged: (
