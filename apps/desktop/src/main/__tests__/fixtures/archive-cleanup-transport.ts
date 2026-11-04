@@ -52,12 +52,15 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
     const request = JSON.parse(message) as {
       id?: number;
       method?: string;
-      params?: { archived?: boolean; cursor?: string; sortKey?: string; limit?: number };
+      params?: { archived?: boolean; cursor?: string; sortKey?: string; limit?: number; threadId?: string };
     };
     if (request.id === undefined) return;
     let result: unknown = {};
     if (request.method === "initialize") {
       result = { userAgent: "fixture/1.0", codexHome: "/fixture", platformFamily: "unix", platformOs: "linux" };
+    } else if (request.method === "thread/read") {
+      const row = [...(this.rows?.active ?? []), ...(this.rows?.archived ?? [])].find((row) => row.id === request.params?.threadId);
+      result = { thread: row ? { ...row, name: row.id, updatedAt: 1 } : undefined };
     } else if (request.method === "thread/list") {
       const archived = request.params?.archived === true;
       const cursor = request.params?.cursor;
