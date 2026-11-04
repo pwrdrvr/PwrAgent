@@ -441,7 +441,8 @@ export class FederationRouter {
     const required: FederationCapability =
       envelope.kind === "blob_chunk" ? (envelope.purpose === "file_push" ? "resumable_blobs" : "turn_input_blobs") : "service_forward_v2";
     const source = this.connections.get(sourcePeerId);
-    if (source?.capabilities.includes(required)) return undefined;
+    if (source?.capabilities.includes(required)
+      && (envelope.kind !== "blob_chunk" || envelope.purpose !== "file_push" || source.capabilities.includes("file_push"))) return undefined;
     return this.errorEnvelope(envelope, {
       code: "capability_denied",
       message: envelope.kind === "blob_chunk"

@@ -5,7 +5,7 @@ import path from "node:path";
 import fc from "fast-check";
 import { expect, it } from "vitest";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
-import { BLOB_CHUNK_BYTES, BLOB_COMMIT_BYTES } from "@pwragent/federation/federation-resumable-blob";
+import { BLOB_CHUNK_BYTES, BLOB_COMMIT_BYTES, BLOB_RETENTION_MS, FederationResumableBlobReceiver } from "@pwragent/federation/federation-resumable-blob";
 import { FederationFilePushReceiver, FILE_PUSH_METHODS } from "../federation/federation-file-push";
 
 it("commits each prefix once across generated send/ack/drop/restart interleavings", async () => {
@@ -117,6 +117,52 @@ it("cancel removes the part file and sidecar", async () => {
     expect(await readdir(path.join(root, ".pwragent-resumable"))).toEqual([]);
   } finally {
     await receiver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("expires abandoned partials after 24 hours using the receiver's clock", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "blob-expiry-"));
+  let now = Date.now();
+  const receiver = new FederationResumableBlobReceiver({ directory: () => root, now: () => now });
+  try {
+    await receiver.begin("source", { sha256: "0".repeat(64), sizeBytes: 1, name: "old" });
+    await receiver.disconnect("source");
+    const [old] = await readdir(path.join(root, ".pwragent-resumable"));
+    now += BLOB_RETENTION_MS + 1000;
+    await receiver.initialize();
+    await receiver.begin("source", { sha256: "1".repeat(64), sizeBytes: 1, name: "new" });
+    expect(await readdir(path.join(root, ".pwragent-resumable"))).not.toContain(old);
+  } finally {
+    await receiver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("cancels promptly while the socket has a blocked blob send", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "blob-abort-"));
+  const controller = new AbortController();
+  let release!: () => void;
+  let entered!: () => void;
+  const sending = new Promise<void>((resolve) => { entered = resolve; });
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  let cancelled = false;
+  try {
+    const source = path.join(root, "source");
+    await writeFile(source, "fixture");
+    const transfer = pushResumableBlob({ localInstanceId: "source", targetInstanceId: "target",
+      connection: () => ({ didDisconnect: () => false,
+        rpc: { request: async <T>() => ({ transferId: "blob:fixture", committedOffset: 0 }) as T },
+        send: async () => { entered(); await blocked; },
+      }), waitForReconnect: async () => undefined, cancel: () => { cancelled = true; },
+    }, source, "fixture", { signal: controller.signal });
+    const failure = transfer.catch((error: unknown) => error);
+    await sending;
+    controller.abort(new Error("fixture cancelled"));
+    expect((await failure as Error).message).toBe("fixture cancelled");
+    expect(cancelled).toBe(true);
+  } finally {
+    release();
     await rm(root, { recursive: true, force: true });
   }
 });

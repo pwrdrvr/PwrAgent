@@ -56,6 +56,25 @@ export class FederationResumableBlobReceiver {
     schedule?: (work: () => Promise<void>) => void;
   }) {}
 
+  async initialize(): Promise<void> {
+    const directory = this.options.directory();
+    if (!path.isAbsolute(directory)) return;
+    const root = path.join(directory, ".pwragent-resumable");
+    this.roots.add(root);
+    this.startExpiry();
+    await this.expire(root);
+  }
+
+  private startExpiry(): void {
+    this.expiry ??= setInterval(() => {
+      // Maintenance joins the same queue as writes and cancellation.
+      this.options.schedule?.(async () => {
+        for (const folder of this.roots) await this.expire(folder);
+      });
+    }, 60_000);
+    this.expiry.unref();
+  }
+
   async begin(peerId: string, args: { sha256: string; sizeBytes: number; name: string }): Promise<{
     transferId: string; committedOffset: number;
   }> {
@@ -66,13 +85,7 @@ export class FederationResumableBlobReceiver {
     await mkdir(root, { recursive: true, mode: 0o700 });
     this.roots.add(root);
     await this.expire(root);
-    this.expiry ??= setInterval(() => {
-      // Maintenance joins the same queue as writes and cancellation.
-      this.options.schedule?.(async () => {
-        for (const folder of this.roots) await this.expire(folder);
-      });
-    }, 60_000);
-    this.expiry.unref();
+    this.startExpiry();
     const folder = path.join(root, key);
     for (const [id, transfer] of this.transfers) {
       if (transfer.folder === folder) {
@@ -238,7 +251,11 @@ export class FederationResumableBlobReceiver {
   }
 
   private async expire(root: string): Promise<void> {
-    for (const entry of await readdir(root)) {
+    const entries = await readdir(root).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const entry of entries) {
       if (!/^[a-f0-9]{64}$/.test(entry)) continue;
       const folder = path.join(root, entry);
       const active = [...this.transfers.entries()].filter(([, transfer]) => transfer.folder === folder);

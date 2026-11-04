@@ -44,7 +44,7 @@ it("a relay orders a blob barrier after data while control RPCs bypass it", asyn
   let release!: () => void;
   const drain = new Promise<void>((resolve) => { release = resolve; });
   const router = new FederationRouter({ localInstanceId: "gateway" });
-  router.registerConnection({ peerId: "source", capabilities: ["gateway_relay", "resumable_blobs"], sendEnvelope: () => undefined });
+  router.registerConnection({ peerId: "source", capabilities: ["gateway_relay", "resumable_blobs", "file_push"], sendEnvelope: () => undefined });
   router.registerConnection({ peerId: "target", capabilities: ["resumable_blobs"],
     sendEnvelope: (envelope) => { sent.push(envelope); },
     sendEnvelopeWithBackpressure: async (envelope) => { await drain; sent.push(envelope); },

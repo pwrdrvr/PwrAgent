@@ -89,92 +89,90 @@ export class ThreadInstanceHandoffService {
     progress("package");
     const retryNow = (): void => this.options.retryNow?.();
     sendOptions.retryNow?.addEventListener(THREAD_HANDOFF_RETRY_NOW_EVENT, retryNow);
-    try {
-      return await this.options.backend.withThreadHandoff(request.sourceThreadId, async () => {
-        if (request.operation === "move") await this.options.assertMovable?.(request.sourceThreadId);
-        await mkdir(this.options.directory, { recursive: true });
-        const staging = await mkdtemp(path.join(this.options.directory, "outgoing-"));
-        try {
-          const source = await this.options.backend.exportThreadForHandoff(request.sourceThreadId);
-          signal?.throwIfAborted();
-          const historyDigest = threadHistoryDigest(source.replay);
-          let repository: string | undefined;
-          if (source.cwd) {
-            if (!(await stat(source.cwd)).isDirectory()) throw new Error("The source workspace is not an available directory.");
-            repository = await this.options.runGitCommand(source.cwd, ["rev-parse", "--show-toplevel"])
-              .then((result) => result.stdout.trim())
-              .catch((error: unknown) => {
-                const stderr = error && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
-                if (typeof stderr === "string" && /not a git repository/i.test(stderr)) return undefined;
-                throw error;
-              });
-          }
-          if (repository && !request.targetRepositoryPath?.trim()) {
-            throw new Error("Choose the existing repository path on the receiving machine before transferring a Git thread.");
-          }
-          const filePath = path.join(staging, `${handoffId}.pwragent-handoff.gz`);
-          const git = repository ? await this.options.git.exportGitHandoff(repository) : undefined;
-          if (git && repository && source.cwd) {
-            const relative = path.relative(await realpath(repository), await realpath(source.cwd)).split(path.sep).join("/");
-            if (relative) git.cwdRelative = relative;
-          }
-          const prepared = await this.options.prepareTarget(request.targetInstanceId, {
-            ...(git ? { git, repository: request.targetRepositoryPath } : {}),
-          });
-          signal?.throwIfAborted();
-          if (prepared?.version !== 2 || typeof prepared.platform !== "string"
-            || (git && prepared.git?.head !== git.head)) {
-            throw new Error("Upgrade the receiving PwrAgent and retry. Receiver preflight was not confirmed.");
-          }
-          const workspace = source.cwd && !git ? await exportWorkspaceArchive(source.cwd, staging, prepared.platform) : undefined;
-          await writeFile(filePath, await encodeThreadHandoff({
-            version: 2, handoffId, sourceThreadId: request.sourceThreadId,
-            rolloutBase64: source.rolloutBase64, historyDigest,
-            ...(source.title ? { title: source.title } : {}), ...(git ? { git } : {}),
-            ...(workspace ? { workspace } : {}),
-          }, resumable), { mode: 0o600, flag: "wx" });
-          if (git && repository) await this.options.git.assertGitHandoffUnchanged(repository, git);
-          signal?.throwIfAborted();
-          progress("send");
-          const file = await this.options.push(request.targetInstanceId, filePath, {
-            signal,
-            onProgress: (bytesCommitted, bytesTotal) => {
-              if (!resumable) progress("send", { bytesCommitted, bytesTotal });
-            },
-            onTransferProgress: (update) => progress("send", update),
-          });
-          signal?.throwIfAborted();
-          progress("import");
-          const destination = await this.options.remoteImport(request.targetInstanceId, {
-            handoffId, file, ...(request.targetRepositoryPath ? { targetRepositoryPath: request.targetRepositoryPath } : {}),
-          });
-          if (destination.handoffId !== handoffId || destination.sourceThreadId !== request.sourceThreadId
-            || destination.instanceId !== request.targetInstanceId || !destination.threadId) {
-            throw new Error("The receiver returned an invalid handoff acknowledgement. The source was retained.");
-          }
-          if (request.operation === "move") {
-            progress("verify");
-            try {
-              await this.options.assertMovable?.(request.sourceThreadId);
-              const current = await this.options.backend.exportThreadForHandoff(request.sourceThreadId);
-              if (threadHistoryDigest(current.replay) !== historyDigest) throw new Error("Source history changed during transfer.");
-              if (current.cwd !== source.cwd) throw new Error("Source workspace changed during transfer.");
-              if (git && repository) await this.options.git.assertGitHandoffUnchanged(repository, git);
-              progress("archive");
-              await this.options.backend.archiveThread({ backend: "codex", threadId: request.sourceThreadId, preserveWorktrees: true });
-              destination.sourceArchived = true;
-            } catch (error) {
-              destination.warnings.push(`Destination is ready; source archival was not confirmed: ${error instanceof Error ? error.message : String(error)}`);
-            }
-          }
-          return destination;
-        } finally {
-          await rm(staging, { recursive: true, force: true });
+    return await this.options.backend.withThreadHandoff(request.sourceThreadId, async () => {
+      if (request.operation === "move") await this.options.assertMovable?.(request.sourceThreadId);
+      await mkdir(this.options.directory, { recursive: true });
+      const staging = await mkdtemp(path.join(this.options.directory, "outgoing-"));
+      try {
+        const source = await this.options.backend.exportThreadForHandoff(request.sourceThreadId);
+        signal?.throwIfAborted();
+        const historyDigest = threadHistoryDigest(source.replay);
+        let repository: string | undefined;
+        if (source.cwd) {
+          if (!(await stat(source.cwd)).isDirectory()) throw new Error("The source workspace is not an available directory.");
+          repository = await this.options.runGitCommand(source.cwd, ["rev-parse", "--show-toplevel"])
+            .then((result) => result.stdout.trim())
+            .catch((error: unknown) => {
+              const stderr = error && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
+              if (typeof stderr === "string" && /not a git repository/i.test(stderr)) return undefined;
+              throw error;
+            });
         }
-      });
-    } finally {
+        if (repository && !request.targetRepositoryPath?.trim()) {
+          throw new Error("Choose the existing repository path on the receiving machine before transferring a Git thread.");
+        }
+        const filePath = path.join(staging, `${handoffId}.pwragent-handoff.gz`);
+        const git = repository ? await this.options.git.exportGitHandoff(repository) : undefined;
+        if (git && repository && source.cwd) {
+          const relative = path.relative(await realpath(repository), await realpath(source.cwd)).split(path.sep).join("/");
+          if (relative) git.cwdRelative = relative;
+        }
+        const prepared = await this.options.prepareTarget(request.targetInstanceId, {
+          ...(git ? { git, repository: request.targetRepositoryPath } : {}),
+        });
+        signal?.throwIfAborted();
+        if (prepared?.version !== 2 || typeof prepared.platform !== "string"
+          || (git && prepared.git?.head !== git.head)) {
+          throw new Error("Upgrade the receiving PwrAgent and retry. Receiver preflight was not confirmed.");
+        }
+        const workspace = source.cwd && !git ? await exportWorkspaceArchive(source.cwd, staging, prepared.platform) : undefined;
+        await writeFile(filePath, await encodeThreadHandoff({
+          version: 2, handoffId, sourceThreadId: request.sourceThreadId,
+          rolloutBase64: source.rolloutBase64, historyDigest,
+          ...(source.title ? { title: source.title } : {}), ...(git ? { git } : {}),
+          ...(workspace ? { workspace } : {}),
+        }, resumable), { mode: 0o600, flag: "wx" });
+        if (git && repository) await this.options.git.assertGitHandoffUnchanged(repository, git);
+        signal?.throwIfAborted();
+        progress("send");
+        const file = await this.options.push(request.targetInstanceId, filePath, {
+          signal,
+          onProgress: (bytesCommitted, bytesTotal) => {
+            if (!resumable) progress("send", { bytesCommitted, bytesTotal });
+          },
+          onTransferProgress: (update) => progress("send", update),
+        });
+        signal?.throwIfAborted();
+        progress("import");
+        const destination = await this.options.remoteImport(request.targetInstanceId, {
+          handoffId, file, ...(request.targetRepositoryPath ? { targetRepositoryPath: request.targetRepositoryPath } : {}),
+        });
+        if (destination.handoffId !== handoffId || destination.sourceThreadId !== request.sourceThreadId
+          || destination.instanceId !== request.targetInstanceId || !destination.threadId) {
+          throw new Error("The receiver returned an invalid handoff acknowledgement. The source was retained.");
+        }
+        if (request.operation === "move") {
+          progress("verify");
+          try {
+            await this.options.assertMovable?.(request.sourceThreadId);
+            const current = await this.options.backend.exportThreadForHandoff(request.sourceThreadId);
+            if (threadHistoryDigest(current.replay) !== historyDigest) throw new Error("Source history changed during transfer.");
+            if (current.cwd !== source.cwd) throw new Error("Source workspace changed during transfer.");
+            if (git && repository) await this.options.git.assertGitHandoffUnchanged(repository, git);
+            progress("archive");
+            await this.options.backend.archiveThread({ backend: "codex", threadId: request.sourceThreadId, preserveWorktrees: true });
+            destination.sourceArchived = true;
+          } catch (error) {
+            destination.warnings.push(`Destination is ready; source archival was not confirmed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        return destination;
+      } finally {
+        await rm(staging, { recursive: true, force: true });
+      }
+    }).finally(() => {
       sendOptions.retryNow?.removeEventListener(THREAD_HANDOFF_RETRY_NOW_EVENT, retryNow);
-    }
+    });
   }
 
   async prepare(request: ThreadHandoffPrepareRequest): Promise<ThreadHandoffPrepareResult> {

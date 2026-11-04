@@ -61,8 +61,11 @@ export class FederationFilePushReceiver {
     formatError?: typeof receivingFolderError;
   }) {
     this.blobs = new FederationResumableBlobReceiver({ ...options,
-      schedule: (work) => { this.tail = this.tail.then(work).catch(() => undefined); },
+      schedule: (work) => {
+        if (!this.disposed) this.tail = this.tail.then(work).catch(() => undefined);
+      },
     });
+    this.tail = this.blobs.initialize().catch(() => undefined);
   }
 
   private receivingError(error: unknown, directory: string, operation: string): Error {
@@ -80,6 +83,7 @@ export class FederationFilePushReceiver {
   }
 
   disconnect(peerId: string): Promise<void> {
+    if (this.disposed) return Promise.resolve();
     const work = this.tail.then(() => this.blobs.disconnect(peerId));
     this.tail = work.catch(() => undefined);
     return work;
