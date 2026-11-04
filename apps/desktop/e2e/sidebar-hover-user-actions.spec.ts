@@ -158,9 +158,17 @@ test.describe("sidebar commands under a resting pointer", () => {
   test.beforeEach(async () => {
     fixture = await createFixture();
     app = await launchElectronApp({ fixturePath: fixture.fixturePath, windowSize: { width: 1280, height: 900 } });
+    // Settle the startup selection before switching away from its thread page.
+    await expect(app.window.getByRole("button", { name: "Show Aproject in Directories", exact: true })).toBeVisible();
     await app.window.getByRole("region", { name: "Thread browser" })
       .getByRole("tab", { name: "Directories" }).click();
-    await expect(directoryRow(app.window, "Cproject")).toBeVisible();
+    // Startup selects Aproject thread 1. Its detail read can reveal Aproject
+    // after the directory rows appear, and that disclosure survives selecting
+    // Cproject. Wait for the reveal before establishing a collapsed baseline.
+    const startupDirectory = app.window.getByRole("button", { name: "Aproject", exact: true });
+    await expect(startupDirectory).toHaveAttribute("aria-expanded", "true");
+    await startupDirectory.click();
+    await expect.poll(() => sidebarLayout(app.window)).toEqual(["[Aproject]", "[Bproject]", "[Cproject]"]);
   });
 
   test.afterEach(async () => {
@@ -180,32 +188,39 @@ test.describe("sidebar commands under a resting pointer", () => {
     await expect.poll(() => sidebarLayout(page)).toEqual(["[Aproject]", "[Bproject]", "[Cproject]"]);
   });
 
-  test("unpinning the selected thread's directory shows under background churn", async () => {
-    const page = app.window;
-    const restOn = page.getByRole("button", { name: "Bproject", exact: true });
-    await chooseDirectoryMenuItem(page, "Bproject", "Pin Directory", restOn);
-    await chooseDirectoryMenuItem(page, "Cproject", "Pin Directory", restOn);
-    await page.getByRole("button", { name: "Cproject", exact: true }).click();
-    await page.getByRole("button", { name: /^Cproject thread 1/ }).click();
-    await startChurn(page);
-    try {
-      // The race this guards is timing-dependent; each round is a fresh try.
-      for (let round = 0; round < 5; round += 1) {
-        await movePointerOffSidebar(page);
-        await expect.poll(() => sidebarLayout(page)).toEqual([
-          "[Bproject]*", "[Cproject]*", "Cproject thread 1", "Cproject thread 2", "[Aproject]",
-        ]);
-        await chooseDirectoryMenuItem(page, "Cproject", "Unpin Directory", restOn);
-        await expect.poll(() => sidebarLayout(page)).toEqual([
-          "[Bproject]*", "[Aproject]", "[Cproject]", "Cproject thread 1", "Cproject thread 2",
-        ]);
-        await movePointerOffSidebar(page);
-        await chooseDirectoryMenuItem(page, "Cproject", "Pin Directory", restOn);
+  for (const otherDirectoryExpanded of [false, true]) {
+    test(`unpinning the selected thread's directory shows under background churn${otherDirectoryExpanded ? " with another directory expanded" : ""}`, async () => {
+      const page = app.window;
+      if (otherDirectoryExpanded) {
+        await page.getByRole("button", { name: "Aproject", exact: true }).click();
       }
-    } finally {
-      await stopChurn(page);
-    }
-  });
+      const otherDirectoryThreads = otherDirectoryExpanded ? ["Aproject thread 1", "Aproject thread 2"] : [];
+      const restOn = page.getByRole("button", { name: "Bproject", exact: true });
+      await chooseDirectoryMenuItem(page, "Bproject", "Pin Directory", restOn);
+      await chooseDirectoryMenuItem(page, "Cproject", "Pin Directory", restOn);
+      await page.getByRole("button", { name: "Cproject", exact: true }).click();
+      await page.getByRole("button", { name: /^Cproject thread 1/ }).click();
+      await startChurn(page);
+      try {
+        // The race this guards is timing-dependent; each round is a fresh try.
+        for (let round = 0; round < 5; round += 1) {
+          await movePointerOffSidebar(page);
+          await expect.poll(() => sidebarLayout(page)).toEqual([
+            "[Bproject]*", "[Cproject]*", "Cproject thread 1", "Cproject thread 2", "[Aproject]",
+            ...otherDirectoryThreads,
+          ]);
+          await chooseDirectoryMenuItem(page, "Cproject", "Unpin Directory", restOn);
+          await expect.poll(() => sidebarLayout(page)).toEqual([
+            "[Bproject]*", "[Aproject]", ...otherDirectoryThreads, "[Cproject]", "Cproject thread 1", "Cproject thread 2",
+          ]);
+          await movePointerOffSidebar(page);
+          await chooseDirectoryMenuItem(page, "Cproject", "Pin Directory", restOn);
+        }
+      } finally {
+        await stopChurn(page);
+      }
+    });
+  }
 
   test("an unpinned selected directory does not flash back to pinned under churn", async () => {
     const page = app.window;
