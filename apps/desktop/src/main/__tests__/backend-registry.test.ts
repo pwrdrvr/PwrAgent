@@ -41748,7 +41748,7 @@ command = "pnpm dev"
         { id: "source-model", supportsReasoning: true, reasoningEfforts: ["high"], supportsFast: true },
         { id: "child-model", supportsReasoning, reasoningEfforts: supportsReasoning ? ["low"] : [], supportsFast: false },
       ],
-      threads: [{ id: "parent", title: "Parent", source: "codex", linkedDirectories: [], updatedAt: 1000 }],
+      threads: [{ id: "parent", title: "Parent", titleSource: "explicit", source: "codex", linkedDirectories: [], updatedAt: 1000 }],
     });
     const overlayStore = createOverlayStoreMock({ overlays: {
       "codex:parent": { backend: "codex", threadId: "parent", extraLinkedDirectories: [],

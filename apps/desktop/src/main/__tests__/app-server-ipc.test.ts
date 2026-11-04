@@ -13384,10 +13384,10 @@ describe("app server ipc", () => {
       const request = { federationTarget, directoryKey, directoryKind: "directory", directoryLabel: "app",
         directoryPath: "/repo/app", preferredBackend: "codex" };
       const local = { launchpad: { directoryKey, directoryKind: "directory", directoryLabel: "app", directoryPath: "/repo/app",
-        backend: "codex", executionMode: "default", prompt: "Investigate", model: "viewer-only", reasoningEffort: "high",
-        fastMode: true, serviceTier: "priority", createdAt: 100, updatedAt: 100 },
-        defaults: { backend: "codex", executionMode: "default" } };
-      const defaults = { backend: "codex", executionMode: "default", model: "owner-model", reasoningEffort: "low",
+        backend: "codex" as const, executionMode: "default" as const, prompt: "Investigate", model: "viewer-only", reasoningEffort: "high",
+        fastMode: true, serviceTier: "priority", branchName: undefined, createdAt: 100, updatedAt: 100 },
+        defaults: { backend: "codex" as const, executionMode: "default" as const } };
+      const defaults = { backend: "codex" as const, executionMode: "default" as const, model: "owner-model", reasoningEffort: "low",
         fastMode: false, serviceTier: undefined, acpRuntime: undefined };
       // The owner's independent draft is not the viewer's source of defaults.
       const owner = { launchpad: { ...local.launchpad, model: "owner-draft-model" }, defaults };
@@ -13411,7 +13411,8 @@ describe("app server ipc", () => {
       ensureDirectoryLaunchpad.mockResolvedValueOnce({ ...local, launchpad: { ...local.launchpad, ...defaults } });
       await ensure({}, request);
       expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
-      ensureDirectoryLaunchpad.mockResolvedValueOnce({ ...local, launchpad: { ...local.launchpad, settingsTouchedAt: 200 } });
+      const touched = { ...local, launchpad: { ...local.launchpad, settingsTouchedAt: 200 } };
+      ensureDirectoryLaunchpad.mockResolvedValueOnce(touched);
       expect(await ensure({}, request)).toMatchObject({ launchpad: { model: "viewer-only" } });
       expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
     },
@@ -13431,7 +13432,7 @@ describe("app server ipc", () => {
     const store = new SqliteOverlayStore(db);
     const launchpad = { directoryKey: "directory:/repo/app", directoryKind: "directory" as const,
       directoryLabel: "app", directoryPath: "/repo/app", backend: "codex" as const, executionMode: "default" as const,
-      model: "viewer-only", prompt: "Investigate", createdAt: 100, updatedAt: 100 };
+      model: "viewer-only", prompt: "Investigate", branchName: undefined, createdAt: 100, updatedAt: 100 };
     const defaults = { backend: "codex" as const, executionMode: "default" as const, model: "owner-model" };
     const request = { directoryKey: launchpad.directoryKey, directoryKind: launchpad.directoryKind,
       directoryLabel: launchpad.directoryLabel, directoryPath: launchpad.directoryPath,
@@ -13440,12 +13441,12 @@ describe("app server ipc", () => {
       await store.upsertDirectoryLaunchpad(launchpad);
       federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValue({ launchpad, defaults });
       ensureDirectoryLaunchpad.mockImplementation(async () => ({
-        launchpad: (await store.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey }))!, defaults,
+        launchpad: (await store.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey }))! as typeof launchpad, defaults,
       }));
       updateDirectoryLaunchpad.mockImplementation(async (update) => {
         const current = (await store.getDirectoryLaunchpad({ directoryKey: update.directoryKey }))!;
         return { launchpad: await store.upsertDirectoryLaunchpad(
-          applyNavigationLaunchpadProviderSettingsPatch(current, update.patch)), defaults };
+          applyNavigationLaunchpadProviderSettingsPatch(current, update.patch)) as typeof launchpad, defaults };
       });
       registerAppServerIpcHandlers();
       const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
