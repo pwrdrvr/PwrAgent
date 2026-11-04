@@ -2250,6 +2250,9 @@ function DesktopAppShell(props: {
   // modal-ish chrome. Search query/results live up here so Back lands on a
   // still-populated results list after opening a result unmounts the panel.
   const threadSearchState = useThreadSearchPanelState();
+  const selectedStartingCreation = navigation.pendingLaunchpadCreations.find(
+    (creation) => creation.selectionKey === navigation.selectedItemKey,
+  );
   const historyLocation = useMemo<NavigationHistoryLocation | undefined>(() => {
     if (mainView === "search") {
       return { view: "search", label: "Search" };
@@ -2260,6 +2263,17 @@ function DesktopAppShell(props: {
       // Sub-thread launchpads aimed at a peer live in this window's own
       // launchpad table and restore by key like any local launchpad.
       const peerTarget = navigation.selectedFederatedLaunchpadTarget;
+      if (selectedStartingCreation) {
+        // A submitted launchpad is a thread on its way, not the directory's
+        // draft: history follows it to the thread it becomes.
+        return {
+          view: "starting",
+          creationId: selectedStartingCreation.operationId,
+          directoryKey: selectedStartingCreation.directoryKey,
+          ...(peerTarget ? { instanceId: peerTarget.instanceId } : {}),
+          label: selectedStartingCreation.title,
+        };
+      }
       const peerLabel = peerTarget
         ? newThreadFederationTargets.find((target) =>
           target.instanceId === peerTarget.instanceId)?.label
@@ -2296,7 +2310,13 @@ function DesktopAppShell(props: {
     navigation.selectedThread,
     navigation.selectedThreadKey,
     newThreadFederationTargets,
+    selectedStartingCreation,
   ]);
+  const historyStartingThreads = useMemo(
+    () => new Map(navigation.pendingLaunchpadCreations.map((creation) =>
+      [creation.operationId, creation.threadKey] as const)),
+    [navigation.pendingLaunchpadCreations],
+  );
   const showThread = navigation.showThread;
   const selectDirectoryLaunchpad = navigation.selectDirectoryLaunchpad;
   const openWorkspaceLaunchpad = navigation.openWorkspaceLaunchpad;
@@ -2438,7 +2458,15 @@ function DesktopAppShell(props: {
         return;
       }
       setMainView("thread", () => {
-        if (location.view === "launchpad") {
+        if (location.view === "starting") {
+          const creation = navigation.pendingLaunchpadCreations.find((candidate) =>
+            candidate.operationId === location.creationId);
+          if (creation) {
+            navigation.selectPendingLaunchpad(creation.selectionKey);
+            return;
+          }
+        }
+        if (location.view === "launchpad" || location.view === "starting") {
           if (location.instanceId) {
             const peer = newThreadFederationTargets.find((target) =>
               target.instanceId === location.instanceId);
@@ -2467,6 +2495,7 @@ function DesktopAppShell(props: {
     current: historyLocation,
     restore: restoreHistoryLocation,
     archivedThreadKeys: navigation.archivedThreadKeys,
+    startingThreads: historyStartingThreads,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
   useLensHotkeys({
