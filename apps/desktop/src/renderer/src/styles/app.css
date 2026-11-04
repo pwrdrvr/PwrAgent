@@ -45922,7 +45922,7 @@ button.composer__subthread-source-parent:hover {
 .thread-handoff-steps__step--now .thread-handoff-steps__mark {
   border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-top-color: var(--accent);
-  animation: thread-handoff-step-spin 700ms linear infinite;
+  animation: thread-handoff-step-spin 0.7s linear infinite;
 }
 
 .thread-handoff-steps__step--held .thread-handoff-steps__mark {
@@ -48116,7 +48116,7 @@ button.composer__subthread-source-parent:hover {
 
   :root[data-motion="calm"] .thread-handoff-steps__step--now .thread-handoff-steps__mark {
     animation:
-      thread-handoff-step-spin 700ms linear 2,
+      thread-handoff-step-spin 0.7s linear 2,
       calm-motion-spinner-rest 0s 1.4s forwards;
   }
 
