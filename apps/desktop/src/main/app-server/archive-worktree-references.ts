@@ -67,7 +67,6 @@ export class ArchiveWorktreeReferences {
 
   recoveryIntents(): ArchiveCleanupIntent[] { return this.selectOwners([...this.owners.keys()], false); }
   readyIntents(key: string): ArchiveCleanupIntent[] { return this.selectOwners([key], true); }
-  wasObserved(key: string): boolean { return this.observations.has(key); }
   scheduled(intent: ArchiveCleanupIntent): void {
     for (const row of intent.deferredWorktrees ?? []) this.eligible.delete(row);
   }

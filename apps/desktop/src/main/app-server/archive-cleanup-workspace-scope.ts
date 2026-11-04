@@ -65,6 +65,14 @@ export class ArchiveWorkspaceOwnership {
     }
   }
 
+  assertUsable(key: string, allowOwnCancellation = false): void {
+    for (const admission of new Set(this.admissions())) {
+      if (admission.isReserved && !(allowOwnCancellation && admission.ownerKey === key) && admission.intersects(key)) {
+        throw new Error("Worktree removal is reserved by archive cleanup; retry the workspace change after cleanup finishes.");
+      }
+    }
+  }
+
   async refresh(observation: ArchiveWorkspaceObservation, read: () => Promise<readonly string[]>): Promise<void> {
     if (!observation.tokens.length) return;
     try {
@@ -92,6 +100,10 @@ export class ArchiveWorkspaceAdmission {
   }
 
   get isReserved(): boolean { return this.reserved; }
+
+  intersects(key: string): boolean {
+    return key === this.ownerKey || [...this.threads.get(key)?.paths.values() ?? []].some((value) => value === true);
+  }
 
   reserve(mutations: readonly ArchiveWorkspaceMutation[]): void {
     this.assertCurrent(mutations);

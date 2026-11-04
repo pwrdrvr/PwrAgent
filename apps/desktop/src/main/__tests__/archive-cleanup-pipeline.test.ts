@@ -281,7 +281,7 @@ describe("archive cleanup pipeline", () => {
     const completed = new Promise<AgentEvent>((resolve) => fixture.registry.onEvent((event) => {
       if (event.notification.method === "thread/archiveCleanup/completed") resolve(event);
     }));
-    await publishNotification(fixture.registry, { method, params: { threadId: "owner" } });
+    await publishNotification(fixture.registry, method === "thread/archived" ? { method: "thread/archived", params: { threadId: "owner" } } : { method: "thread/deleted", params: { threadId: "owner" } });
     expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(1);
     await drivePacer(fixture.registry, completed);
     expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
@@ -315,8 +315,11 @@ describe("archive cleanup pipeline", () => {
     expect(saved).toHaveLength(1);
     const resumed = build([owner], target, checkpoint);
     resumed.overlays.set("owner", { backend: "codex", threadId: "owner", extraLinkedDirectories: [directory] });
-    resumed.client.listArchiveCleanupThreadsPage.mockImplementation(async ({ archived }) => ({ threads: archived ? [target] : [owner] }));
-    await drivePacer(resumed.registry, resumed.registry.resumeArchiveCleanupsAtStartup());
+    resumed.client.listArchiveCleanupThreadsPage.mockImplementation(async ({ archived }) => ({ threads: archived ? [target] : [owner], nextCursor: undefined }));
+    const recoveredPublication = new Promise<AgentEvent>((resolve) => resumed.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed") resolve(event);
+    }));
+    await drivePacer(resumed.registry, Promise.all([resumed.registry.resumeArchiveCleanupsAtStartup(), recoveredPublication]));
     expect(resumed.archiveWorktree).not.toHaveBeenCalled();
     expect(resumed.registry.getArchiveCleanupCountForQuit()).toBe(0);
     resumed.overlays.set("owner", { backend: "codex", threadId: "owner", extraLinkedDirectories: [] });
