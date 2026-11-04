@@ -1109,6 +1109,10 @@ export class MessagingController {
   private readonly markdownFileAttachmentSelector =
     new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
+  private readonly preparingTurnActivity = new Map<string, {
+    attempts: Set<symbol>;
+    signaled: boolean;
+  }>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
   private readonly showStreamingOptionConfig:
@@ -5065,6 +5069,7 @@ export class MessagingController {
     this.turnAdmission.markStarting(params.threadKey);
     let turnStarted = false;
     let startingOrigin: ActiveAgentMessagingOrigin | undefined;
+    let preparingActivity: ReturnType<MessagingController["beginTurnPreparationActivity"]> | undefined;
     const startingThreadKey = agentMessagingThreadKey(
       params.binding.backend,
       params.binding.threadId,
@@ -5176,6 +5181,12 @@ export class MessagingController {
       } else {
         this.markAdmissionStage(params.event, "policyResolved");
       }
+      // Permission and routing are settled. Backend startup may still wait on
+      // MCP discovery, runtime setup or a cold provider. Request typing now;
+      // neither those waits nor the activity API response may gate the other.
+      preparingActivity = this.beginTurnPreparationActivity(
+        startingOrigin?.deliveryBinding ?? startingOrigin?.binding ?? params.binding,
+      );
       // Diagnostic for #203-class regressions: a turn that the UI shows
       // as Default Access but routes to the Full Access codex client is
       // a silent security bug — the user thinks they're sandboxed but
@@ -5239,6 +5250,8 @@ export class MessagingController {
             startTurnAcceptedAt,
           };
       if (started.queueStatus === "queued") {
+        await preparingActivity?.finish(false);
+        preparingActivity = undefined;
         this.rememberQueuedAgentMessagingOrigin({
           binding: params.binding,
           event: params.event,
@@ -5291,9 +5304,15 @@ export class MessagingController {
         ?? startingOrigin?.binding
         ?? params.binding;
       this.setActiveTurn(deliveryBinding, activeTurn);
-      await this.signalTurnActivity(deliveryBinding, activeTurn, {
-        force: true,
-      });
+      // Preserve the accepted turn's normal signal (including a retry after a
+      // failed preparation request). This wait is after backend acceptance.
+      await preparingActivity?.settled;
+      const currentTurn = this.getActiveTurn(deliveryBinding);
+      if (currentTurn?.turnId === started.turnId && currentTurn.status === "working") {
+        await this.signalTurnActivity(deliveryBinding, currentTurn, {
+          force: true,
+        });
+      }
       await this.renderAutomaticBindingStatus(
         deliveryBinding,
         undefined,
@@ -5301,6 +5320,8 @@ export class MessagingController {
       );
       return "started";
     } catch (error) {
+      await preparingActivity?.finish(turnStarted);
+      preparingActivity = undefined;
       if (turnStarted) {
         this.logger.debug?.("messaging post-start update failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -5351,6 +5372,7 @@ export class MessagingController {
       );
       return "failed";
     } finally {
+      await preparingActivity?.finish(turnStarted);
       this.turnAdmission.clearStarting(params.threadKey);
       if (
         startingOrigin
@@ -17139,6 +17161,65 @@ export class MessagingController {
       },
       binding,
     );
+  }
+
+  private beginTurnPreparationActivity(binding: MessagingBindingRecord): {
+    settled: Promise<void>;
+    finish: (started: boolean) => Promise<void>;
+  } {
+    let group = this.preparingTurnActivity.get(binding.id);
+    if (!group) {
+      group = { attempts: new Set(), signaled: false };
+      this.preparingTurnActivity.set(binding.id, group);
+    }
+    const attempt = Symbol();
+    group.attempts.add(attempt);
+    const current = this.getActiveTurn(binding);
+    const shouldSignal = group.attempts.size === 1
+      && current?.status !== "working"
+      && current?.status !== "waiting";
+    if (shouldSignal) group.signaled = true;
+    const delivery = shouldSignal
+      ? this.signalTurnActivity(binding, {
+          turnId: `preparing:${binding.id}`,
+          status: "working",
+          updatedAt: this.now(),
+        }, { force: true, reason: "turn_preparation" }).catch((error: unknown) => {
+          this.logger.debug?.("messaging preparation activity failed", {
+            bindingId: binding.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+      : Promise.resolve();
+    const ownedGroup = group;
+    return {
+      settled: delivery,
+      finish: async (started) => {
+        ownedGroup.attempts.delete(attempt);
+        if (ownedGroup.attempts.size === 0) {
+          this.preparingTurnActivity.delete(binding.id);
+          const active = this.getActiveTurn(binding);
+          // Another attempt or a real lifecycle event may own this surface by
+          // now. A failed/queued start cannot cancel that owner's typing.
+          if (!started && ownedGroup.signaled && active?.status !== "working") {
+            await this.signalTurnActivity(binding, active ?? {
+              turnId: `preparing:${binding.id}`,
+              status: "completed",
+              updatedAt: this.now(),
+            }, { force: true, reason: "turn_preparation_finished" }).catch((error: unknown) => {
+              this.logger.debug?.("messaging preparation activity cleanup failed", {
+                bindingId: binding.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          }
+        }
+        // A failed or queued start must report its outcome even when the
+        // earlier activity HTTP request is still pending. It already has a
+        // rejection handler; successful starts await it before their retry.
+        if (started) await delivery;
+      },
+    };
   }
 
   private async signalTurnActivity(
