@@ -25710,12 +25710,30 @@ a.button {
   min-width: 0;
 }
 
-/* The branch takes what the chips leave; it no longer competes with the
-   title, which has its own line. */
+/* The PR strip keeps the palette's width (two chips, then a 126px scroller)
+   and the age never shrinks. The machine chip, branch, and project end in an
+   ellipsis instead of running past the row. The branch gives way first; it no
+   longer competes with the title, which has its own line. */
 .todo-destination-picker .jump-palette__row-branch {
-  flex: 1 1 auto;
+  flex: 1 2 auto;
   max-width: none;
   text-align: left;
+}
+
+.todo-destination-picker .jump-palette__row .chip--instance {
+  flex: 0 1 auto;
+}
+
+/* A block, not a flex box, so `text-overflow` reaches its text. */
+.todo-destination-picker .jump-palette__row-repo {
+  display: inline-block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .todo-destination-picker .jump-palette__section-divider {
