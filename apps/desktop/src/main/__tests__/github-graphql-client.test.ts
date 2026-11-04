@@ -477,6 +477,27 @@ describe("mapGraphqlPrNode heads with nothing tested yet", () => {
     expect(getPrStatusWatchOutcome(summary)).toBeUndefined();
   });
 
+  it("holds a head whose run finished its jobs but not itself", () => {
+    // Shrunk by the model in pr-status-watch.property.test.ts: on the pre-fix
+    // code a one-job run's SUCCESS woke the watch before the run completed.
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [{
+          __typename: "CheckRun",
+          conclusion: "SUCCESS",
+          status: "COMPLETED",
+          completedAt: "2026-11-04T12:44:24Z",
+        }],
+        suites: [{ status: "IN_PROGRESS", workflowRun: { id: "ci-run" } }],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary).toMatchObject({ checkState: "pending", checksStillRunning: true });
+    expect(getPrStatusWatchOutcome(summary)).toBeUndefined();
+  });
+
   it("holds the head even after the skipped checks settle while CI is queued", () => {
     const summary = mapGraphqlPrNode(
       head({
