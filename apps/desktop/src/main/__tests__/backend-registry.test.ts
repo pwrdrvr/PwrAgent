@@ -4071,6 +4071,57 @@ describe("DesktopBackendRegistry", () => {
     expect(codexClient.startTurnCallCount).toBe(0);
   });
 
+  it("keeps a failed turn's hold when a delivery held by a lock is unlocked", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const identity = { backend: "codex" as const, threadId: "parked" };
+    const failed = "The previous turn failed.";
+    await registry.submitHeldTurn({
+      ...identity, queueEntryId: "failed-turn", input: [{ type: "text", text: "Retry me" }], holdReason: failed,
+    });
+    const { lock } = await registry.setThreadLock({ ...identity, locked: true, note: "Parked" }, { source: "operator" });
+    // A monitor's result for the locked thread.
+    await registry.submitHeldTurn({
+      ...identity,
+      queueEntryId: "task-monitor:build",
+      input: [{ type: "text", text: "Monitor result" }],
+      holdReason: threadLockRefusalMessage(lock!),
+    });
+
+    await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(codexClient.startTurnCallCount).toBe(0);
+    // Both wait for the operator to review the failure and press Retry.
+    expect(registry.listHeldThreadQueueEntries(identity).map(({ entryId, holdReason }) => [entryId, holdReason]))
+      .toEqual([["failed-turn", failed], ["task-monitor:build", failed]]);
+  });
+
+  it("starts a delivery held by a lock on unlock though a later stale steer stays held", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const identity = { backend: "codex" as const, threadId: "parked" };
+    const staleSteer = "This steering message was held after its target turn ended. Retry it when the provider is ready.";
+    const { lock } = await registry.setThreadLock({ ...identity, locked: true, note: "Parked" }, { source: "operator" });
+    await registry.submitHeldTurn({
+      ...identity,
+      queueEntryId: "task-monitor:build",
+      input: [{ type: "text", text: "Monitor result" }],
+      holdReason: threadLockRefusalMessage(lock!),
+    });
+    await registry.submitHeldTurn({
+      ...identity, queueEntryId: "stale-steer", input: [{ type: "text", text: "Steer" }], holdReason: staleSteer,
+    });
+
+    const startTurn = vi.spyOn(codexClient, "startTurn");
+    await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" });
+    await vi.waitFor(() => expect(startTurn).toHaveBeenCalledOnce());
+    expect(JSON.stringify(startTurn.mock.calls[0])).toContain("Monitor result");
+    expect(registry.listHeldThreadQueueEntries(identity).map(({ entryId, holdReason }) => [entryId, holdReason]))
+      .toEqual([["stale-steer", staleSteer]]);
+  });
+
   describe("project Forge Automation", () => {
     const PROJECT = "directory:/Users/fixture/src/openclaw";
     const paused: ProjectForgeAutomation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 };
