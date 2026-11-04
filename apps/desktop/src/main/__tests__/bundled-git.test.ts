@@ -11,7 +11,6 @@ import {
   configureBundledGit,
   installedGitLfs,
   installedKeychainHelper,
-  linuxCaBundleFallback,
   operatorSearchPath,
 } from "../bundled-git";
 import { resolveGitExecutable, runGitCommand, streamGitCommand } from "../app-server/git-executable";
@@ -435,45 +434,18 @@ describe.skipIf(process.platform === "win32")("bundled Git system config visibil
     }
   });
 
-  it("points Linux Git at the distribution's CA bundle only beneath every explicit setting", async () => {
-    const { root, globalConfig, source } = await fixture();
-    const openSuse = (file: string) => file === "/etc/ssl/ca-bundle.pem";
+  it("adds no certificate settings and passes the operator's through", async () => {
+    const { root, source } = await fixture();
+    delete source.GIT_SSL_CAINFO;
     try {
-      const env = bundledGitEnvironment(source, { platform: "linux", exists: openSuse });
-      expect(configGet(env, "http.sslCAInfo")).toBe("/etc/ssl/ca-bundle.pem");
-      // Global config wins, as it would over an installed Git's default.
-      await writeFile(globalConfig, "[http]\n\tsslCAInfo = /operator/ca.pem\n");
-      expect(configGet(env, "http.sslCAInfo")).toBe("/operator/ca.pem");
-      // An explicit certificate variable means no fallback is written at all.
-      for (const name of ["GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE"]) {
-        const explicit = bundledGitEnvironment({ ...source, [name]: "/operator/certs" }, { platform: "linux", exists: openSuse });
-        expect(explicit[name]).toBe("/operator/certs");
-        expect(await readFile(explicit.GIT_CONFIG_SYSTEM!, "utf8")).not.toContain("[http]");
-      }
-      // Off Linux, the platform trust store applies.
-      const mac = bundledGitEnvironment(source, { platform: "darwin", exists: openSuse });
-      expect(await readFile(mac.GIT_CONFIG_SYSTEM!, "utf8")).not.toContain("[http]");
+      const env = bundledGitEnvironment(source, { platform: "linux" });
+      expect(env.GIT_SSL_CAINFO).toBeUndefined();
+      expect(await readFile(env.GIT_CONFIG_SYSTEM!, "utf8")).not.toContain("[http]");
+      const explicit = bundledGitEnvironment({ ...source, GIT_SSL_CAINFO: "/operator/ca.pem" }, { platform: "linux" });
+      expect(explicit.GIT_SSL_CAINFO).toBe("/operator/ca.pem");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 });
 
-describe("Linux CA bundle fallback", () => {
-  const only = (...files: string[]) => (file: string) => files.includes(file);
-
-  it("leaves the runtime libcurl's own default alone when it exists", () => {
-    expect(linuxCaBundleFallback({}, only("/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/ca-bundle.pem"))).toBeUndefined();
-  });
-
-  it("finds the openSUSE and RHEL-family bundles", () => {
-    expect(linuxCaBundleFallback({}, only("/etc/ssl/ca-bundle.pem"))).toBe("/etc/ssl/ca-bundle.pem");
-    expect(linuxCaBundleFallback({}, only("/etc/pki/tls/certs/ca-bundle.crt"))).toBe("/etc/pki/tls/certs/ca-bundle.crt");
-    expect(linuxCaBundleFallback({}, only("/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem")))
-      .toBe("/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem");
-  });
-
-  it("returns nothing when no bundle is known", () => {
-    expect(linuxCaBundleFallback({}, only())).toBeUndefined();
-  });
-});

@@ -54,7 +54,7 @@ export async function validateBundledGit(): Promise<string> {
  * another Pwr app or a shell with Git-specific environment overrides. */
 export function bundledGitEnvironment(
   source: NodeJS.ProcessEnv,
-  options: { platform?: NodeJS.Platform; exists?: (file: string) => boolean } = {},
+  options: { platform?: NodeJS.Platform } = {},
 ): NodeJS.ProcessEnv {
   const platform = options.platform ?? process.platform;
   const clean = { ...source };
@@ -98,9 +98,6 @@ export function bundledGitEnvironment(
       // The macOS and Linux bundle is the custom runtime; Windows keeps
       // Dugite's MinGit, which has no checkout.reflink.
       reflink: platform !== "win32",
-      caBundle: platform === "linux"
-        ? linuxCaBundleFallback(clean, options.exists ?? existsSync)
-        : undefined,
     })
     : undefined;
   if (systemConfig) env.GIT_CONFIG_SYSTEM = systemConfig;
@@ -325,44 +322,6 @@ export function isOwnSystemConfig(bundleRoot: string, value: string | undefined)
 }
 
 /**
- * The CA bundle a Linux distribution keeps, in the order Go's crypto/x509
- * searches them. The first is the default compiled into the runtime's
- * Ubuntu libcurl.
- */
-const LINUX_CA_BUNDLES = [
-  "/etc/ssl/certs/ca-certificates.crt", // Debian, Ubuntu, Arch, Gentoo
-  "/etc/pki/tls/certs/ca-bundle.crt", // Fedora, RHEL
-  "/etc/ssl/ca-bundle.pem", // openSUSE, SLES
-  "/etc/pki/tls/cacert.pem", // OpenELEC
-  "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS, RHEL 7+
-  "/etc/ssl/cert.pem", // Alpine
-];
-
-/** Certificate variables the operator sets explicitly. Any one of them means
- * the trust store is already decided outside Git config. */
-const CA_ENVIRONMENT = ["GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE"];
-
-/**
- * The distribution's CA bundle, when the runtime libcurl's compiled default
- * (Ubuntu's path) is missing, as on openSUSE and the RHEL family.
- *
- * Returns a path for system-scope `http.sslCAInfo`, never GIT_SSL_CAINFO.
- * The environment variable would beat global and repository config. At
- * system scope, the system config included after it, then global and
- * repository config, and any `http.<url>.sslCAInfo`, all still win. An
- * operator who set a certificate variable gets no fallback at all.
- */
-export function linuxCaBundleFallback(
-  env: NodeJS.ProcessEnv,
-  exists: (file: string) => boolean = existsSync,
-): string | undefined {
-  if (CA_ENVIRONMENT.some((name) => env[name]?.trim())) return undefined;
-  const [compiledDefault, ...others] = LINUX_CA_BUNDLES;
-  if (exists(compiledDefault)) return undefined;
-  return others.find((file) => exists(file));
-}
-
-/**
  * The bundle's system config with the defaults an installed Git and Git LFS
  * would have set at system scope:
  *
@@ -375,8 +334,6 @@ export function linuxCaBundleFallback(
  * - On macOS and Linux, `checkout.reflink`, which the custom runtime reads to
  *   share file contents between checkouts. The app enables it here; the
  *   runtime itself sets no default.
- * - On Linux without the runtime libcurl's default CA file, the
- *   distribution's CA bundle (see `linuxCaBundleFallback`).
  *
  * System scope, like the installed Git's, so global and repository config
  * still override every default: `lfs install --skip-smudge` keeps pointers,
@@ -391,9 +348,9 @@ export function linuxCaBundleFallback(
  */
 function bundledSystemConfig(
   bundleConfig: string,
-  defaults: { keychainHelper?: string; reflink: boolean; caBundle?: string },
+  defaults: { keychainHelper?: string; reflink: boolean },
 ): string | undefined {
-  const { keychainHelper, reflink, caBundle } = defaults;
+  const { keychainHelper, reflink } = defaults;
   const content = [
     `${GENERATED_CONFIG_MARKER} defaults for its bundled Git, then the system`,
     "# config it would otherwise read. PwrAgent rewrites this file, so edit your",
@@ -412,7 +369,6 @@ function bundledSystemConfig(
       ]
       : []),
     ...(reflink ? ["[checkout]", "\treflink = true"] : []),
-    ...(caBundle ? ["[http]", `\tsslCAInfo = ${quoteConfigValue(caBundle)}`] : []),
     "[include]",
     `\tpath = ${quoteConfigValue(bundleConfig)}`,
     "",
