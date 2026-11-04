@@ -24677,12 +24677,21 @@ a.button {
   opacity: 0.45;
 }
 
+/* The column's own overlays (`.thread-todo-stack`, `.thread-find`) outrank
+   `.context-rail` beside it. Isolating a locked column keeps
+   them, and the lock layer, inside it, so the lock layer can top them
+   without also covering the rail's flyout. */
+.thread-view__primary--locked {
+  isolation: isolate;
+}
+
 /* Pointer-transparent, so the transcript under the dim still scrolls and
-   selects; only the card takes the pointer. */
+   selects; only the card takes the pointer. Above every overlay in the
+   column: an open to-do card once painted over the card at 45% opacity. */
 .thread-lock-layer {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  z-index: 31;
   display: flex;
   align-items: center;
   justify-content: center;
