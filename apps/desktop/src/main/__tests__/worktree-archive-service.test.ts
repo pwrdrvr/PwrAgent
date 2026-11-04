@@ -35,6 +35,37 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 describe("WorktreeArchiveService", () => {
+  it.each(["tracked", "staged", "untracked", "assume-unchanged", "skip-worktree"])("keeps oversized %s work intact before writing any snapshot objects", async (kind) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-snapshot-budget-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    const indexFlag = kind === "assume-unchanged" || kind === "skip-worktree" ? kind : undefined;
+    try {
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      if (kind === "tracked" || indexFlag) {
+        await writeFile(path.join(repoPath, "large.bin"), "base");
+        await git(repoPath, ["add", "large.bin"]);
+      }
+      await git(repoPath, ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "initial"]);
+      await git(repoPath, ["worktree", "add", "--detach", worktreePath]);
+      if (indexFlag) await git(worktreePath, ["update-index", `--${indexFlag}`, "large.bin"]);
+      await writeFile(path.join(worktreePath, "large.bin"), "x".repeat(1025));
+      if (kind === "staged") await git(worktreePath, ["add", "large.bin"]);
+      const before = await git(repoPath, ["count-objects", "-v"]);
+      const service = new WorktreeArchiveService({ maxSnapshotBytes: 1024 });
+      await expect(service.archive({ backend: "codex", threadId: "oversized", repositoryPath: repoPath, worktreePath }))
+        .rejects.toThrow(/snapshot.*limit/i);
+      expect(await readFile(path.join(worktreePath, "large.bin"), "utf8")).toHaveLength(1025);
+      expect(await git(repoPath, ["count-objects", "-v"])).toBe(before);
+      expect(await git(repoPath, ["for-each-ref", "--format=%(refname)", "refs/codex/snapshots/"])).toBe("");
+      if (kind === "assume-unchanged") expect(await git(worktreePath, ["ls-files", "-v", "large.bin"])).toBe("h large.bin");
+      if (kind === "skip-worktree") expect(await git(worktreePath, ["ls-files", "-v", "large.bin"])).toBe("S large.bin");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.runIf(process.platform === "win32").each([false, true])("preserves ignored links when Git locks the worktree (lock during admission: %s)", async (lockDuringAdmission) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-locked-junction-"));
     const repoPath = path.join(root, "repo");

@@ -550,7 +550,8 @@ describe("archive worktrees across a desktop restart", () => {
       title: "Archived ACP owner", cwd: fixture.worktree, createdAt: 1, updatedAt: 1, executionMode: "default", status: "idle", archivedAt: 1 });
     if (scenario === "late ACP owner") {
       let activeReads = 0;
-      ArchiveWorktreeTransport.onList = (params) => { if (!params.archived && ++activeReads === 3) addAcpOwner(); };
+      // Discovery is read 1; the authoritative removal admission is read 2.
+      ArchiveWorktreeTransport.onList = (params) => { if (!params.archived && ++activeReads === 2) addAcpOwner(); };
     } else addAcpOwner();
     await writeFile(path.join(fixture.worktree, "file.txt"), "preserve ACP edits\n");
     const report = await instance.registry.repairArchivedThreadWorktrees();
@@ -577,7 +578,8 @@ describe("archive worktrees across a desktop restart", () => {
     await instance.store.addLinkedDirectory({ backend: "codex", threadId: "invalid", directory: { ...fixture.directory, worktreePath: invalid } });
     const first = await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: async () => await instance.registry.repairArchivedThreadWorktrees() });
     // Windows reports ENOENT below a file; POSIX reports ENOTDIR. Both must
-    // retain the file, continue the valid repair, and complete the once marker.
+    // retain the file and continue the valid repair. Reported failures keep
+    // the pass eligible for another sweep.
     const missingBelowFile = scenario === "non-directory ancestor" && process.platform === "win32";
     const retained = expect.objectContaining({ worktreePath: invalid, removedWorktree: false, error: expect.any(String) });
     const removed = expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true });
@@ -586,8 +588,14 @@ describe("archive worktrees across a desktop restart", () => {
     expect(await readFile(replaced, "utf8")).toBe("retain this file\n");
     await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
     const again = vi.fn(async () => await instance.registry.repairArchivedThreadWorktrees());
-    expect(await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: again })).toBeUndefined();
-    expect(again).not.toHaveBeenCalled();
+    const second = await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: again });
+    if (missingBelowFile) {
+      expect(second).toBeUndefined();
+      expect(again).not.toHaveBeenCalled();
+    } else {
+      expect(again).toHaveBeenCalledOnce();
+      expect(second?.cleanup).toEqual([retained]);
+    }
   });
 
   it("archives, prunes and restores through a symlinked Codex home", async () => {
@@ -784,11 +792,12 @@ describe("archive worktrees across a desktop restart", () => {
     ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.worktree, source: "cli", archived: true }];
     let activeReads = 0;
     ArchiveWorktreeTransport.onList = (params) => {
-      if (!params.archived && ++activeReads === 3) ArchiveWorktreeTransport.threads.push({ id: "new-owner", cwd: fixture.worktree, source: "appServer" });
+      if (!params.archived && ++activeReads === 2) ArchiveWorktreeTransport.threads.push({ id: "new-owner", cwd: fixture.worktree, source: "appServer" });
     };
     const instance = fixture.reopen();
     const result = await instance.registry.repairArchivedThreadWorktrees();
     expect(result.cleanup[0]?.removedWorktree).toBe(false);
+    expect(activeReads).toBe(2);
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
   });
 

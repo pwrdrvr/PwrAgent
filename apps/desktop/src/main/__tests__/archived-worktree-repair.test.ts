@@ -37,7 +37,7 @@ describe("one-time archived worktree repair", () => {
     expectSqliteWriteBudget({ scenario: "archived-worktree-repair-once-marker", note: "One claim and one completion for a 501-thread pass plus a completed-startup no-op: 2 commits total, no per-item or timer writes; about 0.02 MB once and 0 MB/day afterward.", writes });
   });
 
-  it.each([undefined, 2])("runs the ACP-capable pass after repair version %s completed", async (version) => {
+  it.each([undefined, 2, 3])("re-audits after repair version %s completed", async (version) => {
     const { db, repair } = fixture();
     db.raw.prepare("INSERT INTO meta(key,value) VALUES (?,?)").run("archived_worktree_repair_v1", JSON.stringify({ version, completedAt: 1 }));
     await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
@@ -54,6 +54,18 @@ describe("one-time archived worktree repair", () => {
     expect(repair).toHaveBeenCalledTimes(1);
   });
 
+  it("allows manual re-audit of a completed pass but never overlaps a live instance", async () => {
+    const { db, repair } = fixture();
+    await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
+    await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair, force: true });
+    expect(repair).toHaveBeenCalledTimes(2);
+    db.raw.prepare("UPDATE meta SET value=? WHERE key=?").run(
+      JSON.stringify({ version: 4, ownerPid: 123, attemptedAt: 1 }), ARCHIVED_WORKTREE_REPAIR_KEY);
+    await expect(runOneTimeArchivedWorktreeRepair({ db: db.raw, repair, force: true, processAlive: () => true }))
+      .rejects.toThrow("already running in another instance");
+    expect(repair).toHaveBeenCalledTimes(2);
+  });
+
   it("does not mark incomplete discovery as completed or retry it in the same invocation", async () => {
     const { db, report } = fixture();
     const repair = vi.fn<() => Promise<ArchivedWorktreeRepairReport>>(async () => { throw new Error("Provider inventory unavailable"); });
@@ -64,11 +76,15 @@ describe("one-time archived worktree repair", () => {
     expect(repair).toHaveBeenCalledTimes(2);
   });
 
-  it("consumes a complete pass containing retained failures rather than retrying them at every startup", async () => {
+  it("leaves failed cleanups eligible for another pass", async () => {
     const { db, report, repair } = fixture();
     repair.mockResolvedValue({ ...report, cleanup: [{ removedWorktree: false, deletedBranch: false, error: "Protected checkout" }] });
-    await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
-    await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
-    expect(repair).toHaveBeenCalledTimes(1);
+    const { writes } = await measureSqliteWrites(async () => {
+      await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
+      await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
+    });
+    expect(repair).toHaveBeenCalledTimes(2);
+    expectSqliteWriteBudget({ scenario: "archived-worktree-repair-retry-marker",
+      note: "Two failed passes: 4 boundary commits, no per-item or timer writes. At 2 commits/hour and about 0.010 MB/pass, persistent failures cost about 0.25 MB/day; completed idle passes cost 0 MB/day.", writes });
   });
 });

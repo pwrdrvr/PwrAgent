@@ -43,6 +43,16 @@ export type DesktopThreadArchiveSweepStatus = {
   archived: number;
   deleted: number;
   failed: number;
+  /** Archived checkout repair, separate from archiving or deleting conversations. */
+  worktrees?: {
+    candidates: number;
+    protected: number;
+    processed: number;
+    removed: number;
+    emptyContainers?: number;
+    processedContainers?: number;
+    removedContainers?: number;
+  };
   /** First failure of the last finished sweep. */
   error?: string;
 };

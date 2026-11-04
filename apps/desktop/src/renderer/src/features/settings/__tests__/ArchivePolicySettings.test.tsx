@@ -126,11 +126,40 @@ describe("ArchivePolicySettings", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("thread/archive timed out");
   });
 
-  it("hides Run now when archiving and deletion are both off", async () => {
+  it("keeps manual worktree cleanup available when archiving and deletion are both off", async () => {
     const { api } = sweepApi({ running: false, finishedAt: FINISHED_AT, archived: 1, deleted: 0, failed: 0 });
     render(<ArchivePolicySettings value={{ ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false }}
       onWriteConfig={vi.fn(async () => true)} desktopApi={api} />);
-    expect(await screen.findByText(/sweeps do nothing/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Run now" })).not.toBeInTheDocument();
+    expect(await screen.findByText(/Run now can still clean up/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeInTheDocument();
+  });
+
+  it("shows archived worktree progress and refreshes after cleanup alone", async () => {
+    const onSweepChanged = vi.fn();
+    const { api, publish } = sweepApi({ running: false, archived: 0, deleted: 0, failed: 0 });
+    render(<ArchivePolicySettings onWriteConfig={vi.fn(async () => true)} desktopApi={api} onSweepChanged={onSweepChanged} />);
+    await screen.findByText("Not run yet");
+    const worktrees = { candidates: 498, protected: 3, processed: 20, removed: 18 };
+    publish({ running: true, archived: 0, deleted: 0, failed: 0, worktrees });
+    expect(screen.getByText("Worktrees: 20 of 498 checked, 18 cleaned, 3 protected.")).toBeInTheDocument();
+    publish({ running: false, finishedAt: FINISHED_AT, archived: 0, deleted: 0, failed: 0,
+      worktrees: { ...worktrees, processed: 498, removed: 498 } });
+    expect(screen.getByText("Cleaned 498 of 498 archived worktrees. Protected 3.")).toBeInTheDocument();
+    expect(onSweepChanged).toHaveBeenCalledOnce();
+  });
+
+  it("shows empty-folder progress and refreshes after removing only containers", async () => {
+    const onSweepChanged = vi.fn();
+    const { api, publish } = sweepApi({ running: false, archived: 0, deleted: 0, failed: 0 });
+    render(<ArchivePolicySettings onWriteConfig={vi.fn(async () => true)} desktopApi={api} onSweepChanged={onSweepChanged} />);
+    await screen.findByText("Not run yet");
+    const worktrees = { candidates: 0, protected: 0, processed: 0, removed: 0,
+      emptyContainers: 259, processedContainers: 10, removedContainers: 10 };
+    publish({ running: true, archived: 0, deleted: 0, failed: 0, worktrees });
+    expect(screen.getByText("Folders: 10 of 259 checked, 10 cleaned.")).toBeInTheDocument();
+    publish({ running: false, finishedAt: FINISHED_AT, archived: 0, deleted: 0, failed: 0,
+      worktrees: { ...worktrees, processedContainers: 259, removedContainers: 259 } });
+    expect(screen.getByText(/Cleaned 259 of 259 empty worktree folders/)).toBeInTheDocument();
+    expect(onSweepChanged).toHaveBeenCalledOnce();
   });
 });
