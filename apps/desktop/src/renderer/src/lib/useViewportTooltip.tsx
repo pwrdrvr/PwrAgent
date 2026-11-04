@@ -119,6 +119,8 @@ type TooltipState = {
   targetTop: number;
   targetBottom: number;
   targetLeft: number;
+  /** `left + width`, not `right`: a rect stubbed with only a size has no
+   *  `right`, and a NaN position re-renders forever. */
   targetRight: number;
   /** Set for a tooltip that follows the pointer rather than its anchor's box.
    *  The live position is in `pointerRef`; moves never pass through state. */
@@ -515,7 +517,7 @@ export function useViewportTooltip(options: {
                 targetTop: settled.top,
                 targetBottom: settled.bottom,
                 targetLeft: settled.left,
-                targetRight: settled.right,
+                targetRight: settled.left + settled.width,
               }
             : current,
         );
@@ -641,7 +643,7 @@ export function useViewportTooltip(options: {
       targetTop: rect.top,
       targetBottom: rect.bottom,
       targetLeft: rect.left,
-      targetRight: rect.right,
+      targetRight: rect.left + rect.width,
     });
   }, [clearHoverDelay, getHorizontalBounds, rememberTarget, tooltipId]);
 
