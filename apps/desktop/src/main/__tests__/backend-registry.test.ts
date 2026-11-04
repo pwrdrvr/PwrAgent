@@ -4844,7 +4844,7 @@ describe("DesktopBackendRegistry", () => {
       });
       expectSqliteWriteBudget({
         scenario: "restart-queued-refresh",
-        note: "an operator pause and a reorder of restored queued messages: one commit each, only while saved messages wait. Per operator action, so a few a day.",
+        note: "an operator pause and a reorder of restored queued messages: one commit each, only while saved messages wait (~8 KB). Per operator action after a restart, so a few a day.",
         writes,
       });
       const saved = payloads().sort((left, right) => (left.queued?.position ?? 0) - (right.queued?.position ?? 0));

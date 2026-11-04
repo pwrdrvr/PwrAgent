@@ -59,13 +59,16 @@ describe("buildRestartGateNotice", () => {
 describe("RestartGateNotice", () => {
   it("follows the gate, stays closed once dismissed, and returns on the next restart", async () => {
     let push: ((status: RestartGateStatus) => void) | undefined;
+    let released: ((status: RestartGateStatus) => void) | undefined;
     const desktopApi = {
       getRestartGateStatus: vi.fn(async () => RESUMING),
       onRestartGateStatusChanged: vi.fn((callback: (status: RestartGateStatus) => void) => {
         push = callback;
         return () => undefined;
       }),
-      releaseRestartGate: vi.fn(async (): Promise<RestartGateStatus> => ({ phase: "open" })),
+      releaseRestartGate: vi.fn(() => new Promise<RestartGateStatus>((resolve) => {
+        released = resolve;
+      })),
     };
     const notices: Array<AppNoticeToastNotice | undefined> = [];
     render(<RestartGateNotice desktopApi={desktopApi} onNoticeChanged={(notice) => notices.push(notice)} />);
@@ -76,7 +79,7 @@ describe("RestartGateNotice", () => {
     expect(desktopApi.releaseRestartGate).toHaveBeenCalledTimes(1);
     expect(notices.at(-1)?.status?.state).toBe("progress");
 
-    act(() => push?.({ phase: "open" }));
+    await act(async () => released?.({ phase: "open" }));
     expect(notices.at(-1)).toBeUndefined();
 
     act(() => push?.(RESUMING));
