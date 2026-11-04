@@ -13,6 +13,7 @@ import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadReq
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
+import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
 import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
 import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "./git-head-branch";
@@ -9494,6 +9495,8 @@ export class DesktopBackendRegistry {
   private readonly projectHeldWakeupStore?: ProjectHeldWakeupStoreLike;
   /** Project-held entries with a durable copy, by queue entry id, as stored. */
   private readonly durableProjectHeldWakeups = new Map<string, StoredProjectHeldWakeup>();
+  private readonly archiveWorktreeReferences = new ArchiveWorktreeReferences();
+  private readonly canonicalArchiveOwnership = new WeakMap<AppServerThreadSummary[], Promise<{ active: Map<string, AppServerThreadSummary[]>; unknown: AppServerThreadSummary[]; external: Set<string> }>>();
   private readonly pendingArchiveCleanupIntents = new Map<string, ArchiveCleanupIntent>();
   private archiveCleanupResumeStarted = false;
   private archivedWorktreeRepair?: Promise<ArchivedWorktreeRepairReport>;
@@ -16686,7 +16689,10 @@ export class DesktopBackendRegistry {
         // its workspace). Existing operation-specific locks keep their order.
         await this.threadLifecycleLocks.run(key, async () => {});
       }
-      return await work(finishMutation);
+      const result = await work(finishMutation);
+      finishMutation();
+      await this.observeReleasedArchiveReference(backend, identity.threadId);
+      return result;
     } finally {
       finishMutation();
     }
@@ -16921,6 +16927,7 @@ export class DesktopBackendRegistry {
     // them in mutation admission would prevent independent queued removals.
     // The operation promise remains registered for inverse-intent ordering.
     finishMutation?.();
+    await this.observeReleasedArchiveReference(backend, result.threadId, true);
     return await this.observeArchiveCleanupCompletion(completion, {
       backend, threadId: result.threadId, archivedAt, backgroundCleanup: request.backgroundCleanup, mustComplete: codexRolloutMissing,
     });
@@ -16931,7 +16938,12 @@ export class DesktopBackendRegistry {
   }
 
   checkpointArchiveCleanupsForQuit(): void {
-    this.archiveCleanupCheckpointStore?.save(this.runtimeInstanceId, [...this.pendingArchiveCleanupIntents.values()]);
+    const intents = new Map(this.archiveWorktreeReferences.intents().map((intent) => [buildThreadIdentityKey(intent.backend, intent.threadId), intent]));
+    for (const [key, intent] of this.pendingArchiveCleanupIntents) {
+      const deferred = intents.get(key)?.deferredWorktrees;
+      intents.set(key, intent.deferredWorktrees && deferred ? { ...intent, deferredWorktrees: deferred } : intent);
+    }
+    this.archiveCleanupCheckpointStore?.save(this.runtimeInstanceId, [...intents.values()]);
   }
 
   private tryCheckpointArchiveCleanupsForQuit(phase: "before-drain" | "after-drain"): void {
@@ -16974,6 +16986,8 @@ export class DesktopBackendRegistry {
       });
       for (const outcome of response.cleanup) backendRegistryLog.info("archive cleanup worktree outcome", { ...logFields, ...outcome });
       if (this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
+      // Persist only reference-wait boundaries, not every successful archive.
+      if (this.archiveWorktreeReferences.intents().length || intent.deferredWorktrees) this.checkpointArchiveCleanupsForQuit();
     }, (error: unknown) => {
       const completedAt = Date.now();
       backendRegistryLog.info("archive cleanup stopped", { ...logFields, completedAt,
@@ -16993,7 +17007,10 @@ export class DesktopBackendRegistry {
     const recovered = this.archiveCleanupCheckpointStore.recover(this.runtimeInstanceId, this.resolveLiveProfileRuntimeInstanceIdsFn);
     const remaining = [...new Map(recovered.map((intent) => [buildThreadIdentityKey(intent.backend, intent.threadId), intent])).values()]
       .filter((intent) => !this.pendingArchiveCleanupIntents.has(buildThreadIdentityKey(intent.backend, intent.threadId)));
-    for (const intent of remaining) this.pendingArchiveCleanupIntents.set(buildThreadIdentityKey(intent.backend, intent.threadId), intent);
+    for (const intent of remaining) {
+      for (const worktree of intent.deferredWorktrees ?? []) await this.archiveWorktreeReferences.retain(intent, worktree);
+      this.pendingArchiveCleanupIntents.set(buildThreadIdentityKey(intent.backend, intent.threadId), intent);
+    }
     while (remaining.length > 0 && !this.closed) {
       const keys = this.archiveCleanupQueue.pendingKeys();
       const room = ARCHIVE_CLEANUP_QUEUE_LIMIT - keys.length;
@@ -17082,6 +17099,7 @@ export class DesktopBackendRegistry {
     messagingCleanup: { error?: string };
     context: ArchiveCleanupContext;
     requireArchived?: boolean;
+    deferredWorktrees?: ArchiveCleanupIntent["deferredWorktrees"];
   }): Promise<ArchiveThreadResponse> {
     const { backend, archivedAt, codexRolloutMissing, messagingCleanup, context } = params;
     const result = { threadId: params.threadId };
@@ -17152,6 +17170,7 @@ export class DesktopBackendRegistry {
       ? await this.archiveThreadWorktrees({
           backend, activeThreads: cleanupMetadata.activeThreads, archivedThreads: cleanupMetadata.archivedThreads,
           thread: cleanupMetadata.thread, context, codexRolloutMissing, worktreeEvidence: cleanupMetadata.worktreeEvidence,
+          deferredWorktrees: params.deferredWorktrees,
         })
       : this.buildArchiveCleanupMetadataSkippedResult({ backend, threadId: result.threadId, error: cleanupMetadataError }));
     if (codexRolloutMissing) {
@@ -39121,6 +39140,7 @@ export class DesktopBackendRegistry {
     context?: ArchiveCleanupContext;
     codexRolloutMissing?: boolean;
     worktreeEvidence?: ArchiveCleanupMetadata["worktreeEvidence"];
+    deferredWorktrees?: ArchiveCleanupIntent["deferredWorktrees"];
   }): Promise<ArchiveThreadCleanupResult[]> {
     // Ownership may live on another (even archived) thread using the same
     // checkout. A provider alias without the marker must not authorize removal.
@@ -39155,6 +39175,13 @@ export class DesktopBackendRegistry {
       ).values(),
     ];
 
+    if (params.deferredWorktrees) {
+      const canonical = canonicalWorktreePaths();
+      const requested = new Set(await Promise.all(params.deferredWorktrees.map((row) => canonical(row.worktreePath))));
+      const selected = await Promise.all(uniqueCandidates.map(async (candidate) => requested.has(await canonical(candidate.worktreePath))));
+      for (let index = uniqueCandidates.length - 1; index >= 0; index -= 1) if (!selected[index]) uniqueCandidates.splice(index, 1);
+    }
+
     if (uniqueCandidates.length === 0) {
       backendRegistryLog.debug("archive thread worktree cleanup skipped: no worktree candidates", {
         backend: params.backend,
@@ -39183,14 +39210,12 @@ export class DesktopBackendRegistry {
             skippedReason: "Externally managed worktree; thread archive leaves this checkout in place.",
           };
         }
-        const activeUsers = this.findActiveThreadsUsingWorktree({
-          activeThreads: params.worktreeEvidence
-            ? params.worktreeEvidence.activeByPath.get(normalizeWorktreePathForComparison(candidate.worktreePath)) ?? [] : params.activeThreads,
-          archivedThreadId: params.thread.id,
-          archivedThreadBackend: params.backend,
-          worktreePath: candidate.worktreePath,
-        });
+        const ownership = await this.readCanonicalArchiveOwnership(params, candidate.worktreePath);
+        if (ownership.external) return { worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
+          skippedReason: "Externally managed worktree; thread archive leaves this checkout in place." };
+        const activeUsers = ownership.users.filter((thread) => thread.id !== params.thread.id || thread.source !== params.backend);
         if (activeUsers.length > 0) {
+          await this.retainDeferredArchiveWorktree(params, candidate, activeUsers.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
           const activeThreadIds = activeUsers.map((thread) => thread.id);
           const skippedReason =
             activeThreadIds.length === 1
@@ -39242,6 +39267,7 @@ export class DesktopBackendRegistry {
               removalAdmission: scope,
             });
             removalMetadata = current;
+            const ownership = await this.readCanonicalArchiveOwnership(current, candidate.worktreePath);
             await scope.prepare(this.archiveWorkspaceMutations());
           const check = () => {
             params.context!.assertCurrent();
@@ -39258,10 +39284,8 @@ export class DesktopBackendRegistry {
                 thread.linkedDirectories.some((directory) => directory.worktreeOwnership === "external"
                   && normalizeWorktreePathForComparison(linkedDirectoryWorktreePath(directory) ?? "") === key),
               ))) throw new Error("Externally managed worktree; thread archive leaves this checkout in place.");
-              const users = this.findActiveThreadsUsingWorktree({
-                activeThreads: current.worktreeEvidence ? current.worktreeEvidence.activeByPath.get(key) ?? [] : current.activeThreads, archivedThreadId: params.thread.id,
-                archivedThreadBackend: params.backend, worktreePath: candidate.worktreePath,
-              });
+              if (ownership.external) throw new Error("Externally managed worktree; the checkout was kept.");
+              const users = ownership.users.filter((thread) => thread.id !== params.thread.id || thread.source !== params.backend);
               if (users.length) throw new Error("Worktree is still used by another active thread; the checkout was kept.");
             };
             check();
@@ -39291,6 +39315,7 @@ export class DesktopBackendRegistry {
           context: params.context,
         });
 
+        await this.archiveWorktreeReferences.fulfilled(candidate.worktreePath);
         let worktreeStillExists = false;
         try {
           worktreeStillExists = await pathExists(snapshot.worktreePath);
@@ -39368,6 +39393,7 @@ export class DesktopBackendRegistry {
             skippedReason: "Worktree directory no longer exists.",
           };
         }
+        await this.retainDeferredArchiveWorktree(params, candidate, removalAdmission?.scope.changedThreadKeys() ?? []);
         backendRegistryLog.warn("archive thread worktree cleanup failed", {
           backend: params.backend,
           threadId: params.thread.id,
@@ -39389,6 +39415,82 @@ export class DesktopBackendRegistry {
     const results: ArchiveThreadCleanupResult[] = [];
     for (const candidate of uniqueCandidates) results.push(await cleanupCandidate(candidate));
     return results;
+  }
+
+  private async retainDeferredArchiveWorktree(
+    params: { backend: AppServerBackendKind; thread: AppServerThreadSummary },
+    candidate: WorktreeArchiveCandidate,
+    blockers: string[],
+  ): Promise<void> {
+    const key = buildThreadIdentityKey(params.backend, params.thread.id);
+    const intent = this.pendingArchiveCleanupIntents.get(key) ?? {
+      backend: params.backend, threadId: params.thread.id, archivedAt: Date.now(), codexRolloutMissing: false, messagingCleanup: {},
+    };
+    await this.archiveWorktreeReferences.retain(intent, { ...candidate, blockers });
+  }
+
+  private async observeReleasedArchiveReference(backend: AppServerBackendKind, threadId: string, released = false): Promise<void> {
+    const key = buildThreadIdentityKey(backend, threadId);
+    if (!this.archiveWorktreeReferences.hasReference(key) || this.closed) return;
+    const generation = this.archiveWorktreeReferences.beginObservation(key);
+    try {
+      let paths: string[] = [];
+      if (!released) {
+        paths = await this.readArchiveWorkspaceProviderPaths(backend, threadId);
+        if (!paths.length) throw new Error("Thread workspace ownership is unknown.");
+        const read = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+        const overlays = await read.call(this.overlayStore, { backend, threadIds: [threadId] });
+        paths.push(...archiveWorkspacePaths({ linkedDirectories: withRetainedWorktrees(overlays[threadId]?.extraLinkedDirectories ?? [], overlays[threadId]) }));
+      }
+      const ready = await this.archiveWorktreeReferences.observe(key, generation, paths);
+      this.checkpointArchiveCleanupsForQuit();
+      for (const intent of ready) {
+        const completion = this.enqueueArchiveCleanup(intent, true);
+        await this.observeArchiveCleanupCompletion(completion, { ...intent, backgroundCleanup: true });
+      }
+    } catch (error) {
+      backendRegistryLog.warn("archive reference reconciliation failed; pending ownership retained", { backend, threadId,
+        error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private async readCanonicalArchiveOwnership(
+    params: { activeThreads: AppServerThreadSummary[]; archivedThreads: AppServerThreadSummary[] },
+    worktreePath: string,
+  ): Promise<{ users: AppServerThreadSummary[]; external: boolean }> {
+    let pending = this.canonicalArchiveOwnership.get(params.activeThreads);
+    if (!pending) {
+      pending = (async () => {
+        const canonical = canonicalWorktreePaths();
+        const active = new Map<string, AppServerThreadSummary[]>();
+        const unknown: AppServerThreadSummary[] = [];
+        const external = new Set<string>();
+        for (const thread of params.activeThreads) {
+          const paths = archiveWorkspacePaths(thread);
+          if (!paths.length) unknown.push(thread);
+          for (const value of paths) {
+            try {
+              const key = await canonical(value);
+              const users = active.get(key) ?? [];
+              if (!users.includes(thread)) users.push(thread);
+              active.set(key, users);
+            } catch { if (!unknown.includes(thread)) unknown.push(thread); }
+          }
+        }
+        for (const thread of [...params.activeThreads, ...params.archivedThreads]) for (const directory of thread.linkedDirectories) {
+          if (directory.worktreeOwnership !== "external") continue;
+          const value = linkedDirectoryWorktreePath(directory) ?? directory.path;
+          try { external.add(await canonical(value)); } catch { external.add("*"); }
+        }
+        return { active, unknown, external };
+      })();
+      this.canonicalArchiveOwnership.set(params.activeThreads, pending);
+    }
+    const { active, unknown, external } = await pending;
+    const key = await canonicalWorktreePaths()(worktreePath);
+    const users = new Set([...active.get(key) ?? [], ...unknown]);
+    for (const [value, owners] of active) if (value.startsWith(key + path.sep)) for (const owner of owners) users.add(owner);
+    return { users: [...users], external: external.has(key) || external.has("*") };
   }
 
   private async retainSharedWorktreeSnapshotForArchivedThreads(params: {
@@ -51359,6 +51461,9 @@ export class DesktopBackendRegistry {
     }
     if (archiveWorkspaceChanged && this.archiveWorktreeRemovalAdmissions.size) await this.prepareArchiveWorkspaceChanges(event.backend, event.notification, archiveWorkspaceChanged);
     if (event.notification.method === "navigation/threadDirectories/updated") {
+      const ids = readRecord(event.notification.params)?.threadIds;
+      if (Array.isArray(ids)) await Promise.all(ids.filter((id): id is string => typeof id === "string")
+        .map(async (threadId) => { await this.observeReleasedArchiveReference(event.backend, threadId); }));
       // Managed local MCP servers in these threads are told their roots moved.
       const threadIds = readRecord(event.notification.params)?.threadIds;
       if (Array.isArray(threadIds)) {
@@ -51367,6 +51472,9 @@ export class DesktopBackendRegistry {
           threadIds.filter((threadId): threadId is string => typeof threadId === "string"),
         );
       }
+    }
+    if (event.notification.method === "thread/archived" || event.notification.method === "thread/deleted") {
+      await this.observeReleasedArchiveReference(event.backend, event.notification.params.threadId, true);
     }
     if (event.notification.method === "thread/deleted") {
       this.invalidateThreadListCache(event.backend);

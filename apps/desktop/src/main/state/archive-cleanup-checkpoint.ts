@@ -9,6 +9,12 @@ export type ArchiveCleanupIntent = {
   codexRolloutMissing: boolean;
   preserveWorktrees?: boolean;
   messagingCleanup: { error?: string };
+  /** Managed checkouts still awaiting reference release or a successful retry. */
+  deferredWorktrees?: Array<{
+    repositoryPath?: string;
+    worktreePath: string;
+    blockers: string[];
+  }>;
 };
 
 const PREFIX = "archive_cleanup_checkpoint_v1:";
@@ -25,6 +31,11 @@ function parseCheckpoint(value: string): { ownerPid: number; intents: ArchiveCle
       || typeof item.archivedAt !== "number" || !Number.isFinite(item.archivedAt)
       || typeof item.codexRolloutMissing !== "boolean"
       || (item.preserveWorktrees !== undefined && typeof item.preserveWorktrees !== "boolean")
+      || (item.deferredWorktrees !== undefined && (!Array.isArray(item.deferredWorktrees)
+        || item.deferredWorktrees.some((worktree: NonNullable<ArchiveCleanupIntent["deferredWorktrees"]>[number]) =>
+          !worktree || typeof worktree.worktreePath !== "string" || !worktree.worktreePath.trim()
+          || (worktree.repositoryPath !== undefined && typeof worktree.repositoryPath !== "string")
+          || !Array.isArray(worktree.blockers) || worktree.blockers.some((key: unknown) => typeof key !== "string" || !key))))
       || !item.messagingCleanup || typeof item.messagingCleanup !== "object"
       || (item.messagingCleanup.error !== undefined && typeof item.messagingCleanup.error !== "string")) {
       throw new Error("Invalid archive cleanup intent.");

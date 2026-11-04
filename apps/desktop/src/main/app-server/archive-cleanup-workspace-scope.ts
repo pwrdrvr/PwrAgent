@@ -96,6 +96,10 @@ export class ArchiveWorkspaceAdmission {
     this.observeThread(key, paths);
   }
 
+  changedThreadKeys(): string[] {
+    return [...this.threads].filter(([key, state]) => key && state.changed).map(([key]) => key);
+  }
+
   invalidateOwnership(key: string): number {
     const state = this.thread(key);
     state.generation += 1;
