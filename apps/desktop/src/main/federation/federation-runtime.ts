@@ -8031,56 +8031,58 @@ function localBackendOperations(): FederationBackendOperations {
       request: AttachDirectoryToThreadRequest,
     ): Promise<AttachDirectoryToThreadResponse> {
       const backend = request.backend ?? "codex";
-      const bridge = new DesktopMessagingBackendBridge();
-      const registered = await registerDirectoryFromDisk(
-        {
-          path: request.path,
-          preferredBackend: request.preferredBackend ?? backend,
-        },
-        {
-          ensureDirectoryLaunchpad: (ensureRequest) =>
-            bridge.ensureDirectoryLaunchpad(ensureRequest),
-        },
-      );
-      if (!registered.ok) {
-        return {
-          ok: false,
+      return await getDesktopBackendRegistry().withThreadWorkspaceMutation({ backend, threadId: request.threadId }, async () => {
+        const bridge = new DesktopMessagingBackendBridge();
+        const registered = await registerDirectoryFromDisk(
+          {
+            path: request.path,
+            preferredBackend: request.preferredBackend ?? backend,
+          },
+          {
+            ensureDirectoryLaunchpad: (ensureRequest) =>
+              bridge.ensureDirectoryLaunchpad(ensureRequest),
+          },
+        );
+        if (!registered.ok) {
+          return {
+            ok: false,
+            backend,
+            threadId: request.threadId,
+            reason: registered.reason,
+            message: registered.message,
+          };
+        }
+        const directoryPath = path
+          .resolve(registered.directoryPath)
+          .replace(/\\/g, "/");
+        const directory = {
+          id: directoryPath,
+          kind: "local" as const,
+          label: registered.directoryLabel,
+          path: directoryPath,
+        };
+        await getDesktopOverlayStore().addLinkedDirectory({
           backend,
           threadId: request.threadId,
-          reason: registered.reason,
-          message: registered.message,
-        };
-      }
-      const directoryPath = path
-        .resolve(registered.directoryPath)
-        .replace(/\\/g, "/");
-      const directory = {
-        id: directoryPath,
-        kind: "local" as const,
-        label: registered.directoryLabel,
-        path: directoryPath,
-      };
-      await getDesktopOverlayStore().addLinkedDirectory({
-        backend,
-        threadId: request.threadId,
-        directory,
-      });
-      await getDesktopBackendRegistry().publishLocalEvent({
-        backend,
-        notification: {
-          method: "navigation/threadDirectories/updated",
-          params: {
-            reason: "selected-thread",
-            threadIds: [request.threadId],
+          directory,
+        });
+        await getDesktopBackendRegistry().publishLocalEvent({
+          backend,
+          notification: {
+            method: "navigation/threadDirectories/updated",
+            params: {
+              reason: "selected-thread",
+              threadIds: [request.threadId],
+            },
           },
-        },
+        });
+        return {
+          ok: true,
+          backend,
+          threadId: request.threadId,
+          directory,
+        };
       });
-      return {
-        ok: true,
-        backend,
-        threadId: request.threadId,
-        directory,
-      };
     },
     async detachDirectoryFromThread(
       request: DetachDirectoryFromThreadRequest,

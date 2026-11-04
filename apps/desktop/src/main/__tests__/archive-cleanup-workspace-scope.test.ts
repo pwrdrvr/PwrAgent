@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ArchiveWorkspaceAdmission, archiveCleanupWorkspaceFilter } from "../app-server/archive-cleanup-workspace-scope";
+import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter } from "../app-server/archive-cleanup-workspace-scope";
 
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof import("node:fs/promises")>();
@@ -51,12 +51,76 @@ describe("archive admission workspace scope", () => {
 
   it("keeps removal fenced until a new checkout user's overlay is known", async () => {
     const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
-    scope.changed("codex:new", ["/fixture/other"]);
-    const release = scope.holdObservation();
+    const token = scope.invalidateOwnership("codex:new");
     await scope.prepare([]);
     expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
-    release();
+    await scope.completeOwnership("codex:new", token, ["/fixture/other"]);
     expect(() => scope.assertCurrent([])).not.toThrow();
+  });
+
+  it("does not let an older observation validate a newer ownership change", async () => {
+    const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    scope.observeThread("codex:other", ["/fixture/other"]);
+    await scope.prepare([]);
+    const ownership = new ArchiveWorkspaceOwnership(() => [scope]);
+    let release!: (paths: string[]) => void;
+    const old = ownership.refresh(ownership.invalidate("codex:other"), () => new Promise((resolve) => { release = resolve; }));
+    const current = ownership.invalidate("codex:other");
+    release(["/fixture/other"]);
+    await old;
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+    await ownership.refresh(current, async () => ["/fixture/target"]);
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+  });
+
+  it("does not let an older canonicalization complete a newer generation", async () => {
+    const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    let release!: (value: string) => void;
+    vi.mocked(realpath).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = scope.completeOwnership("codex:other", scope.invalidateOwnership("codex:other"), ["/fixture/other"]);
+    const current = scope.invalidateOwnership("codex:other");
+    release("/fixture/target");
+    await old;
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+    await scope.completeOwnership("codex:other", current, ["/fixture/unrelated"]);
+    expect(() => scope.assertCurrent([])).not.toThrow();
+  });
+
+  it("inherits active writers and keeps identities fenced independently", async () => {
+    const scopes: ArchiveWorkspaceAdmission[] = [];
+    const ownership = new ArchiveWorkspaceOwnership(() => scopes);
+    const finish = ownership.beginMutation("codex:first");
+    const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    scopes.push(scope);
+    ownership.beginAdmission(scope);
+    scope.observeThread("codex:first", ["/fixture/first"]);
+    await scope.prepare([]);
+    await ownership.refresh(ownership.invalidate("codex:first"), async () => ["/fixture/first"]);
+    await ownership.refresh(ownership.invalidate("codex:second"), async () => ["/fixture/second"]);
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+    await ownership.refresh(finish(), async () => ["/fixture/first"]);
+    expect(() => scope.assertCurrent([])).not.toThrow();
+  });
+
+  it("renews canonical evidence when directory ownership changes through an alias", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "archive-ownership-alias-"));
+    roots.push(root);
+    const target = path.join(root, "target");
+    const other = path.join(root, "other");
+    const alias = path.join(root, "alias");
+    await mkdir(target);
+    await mkdir(other);
+    await symlink(other, alias, process.platform === "win32" ? "junction" : "dir");
+    const scope = new ArchiveWorkspaceAdmission("codex:target", target);
+    scope.observeThread("codex:other", [alias]);
+    scope.changed("codex:other");
+    await scope.prepare([]);
+    expect(() => scope.assertCurrent([])).not.toThrow();
+    const token = scope.invalidateOwnership("codex:other");
+    await rm(alias);
+    await symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
+    await scope.completeOwnership("codex:other", token, [alias]);
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
   });
 
   it("keeps ambiguous aliases without interrupting lifecycle event delivery", async () => {
