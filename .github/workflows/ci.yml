@@ -749,11 +749,19 @@ jobs:
       fail-fast: false
       matrix:
         lane: [1, 2, 3, 4]
-    # One budget for setup, build, tests, and reporting. Green hosted lanes
-    # take 5 to 10.5 minutes (2026-11-01), so the cap leaves about 4.5 minutes
-    # of headroom.
+    # One budget for setup, build, tests, and reporting. Disable the measured
+    # indexing contention below rather than extending this deadline.
     timeout-minutes: 15
     steps:
+      # Indexing competes with dependency extraction and Electron startup on
+      # fresh hosted VMs. Stop it before checkout can enqueue more work. The
+      # same-run comparison and per-spec timings are recorded in
+      # docs/macos-desktop-e2e-timings.md.
+      - name: Disable Spotlight indexing on the hosted VM
+        run: |
+          sudo mdutil -a -i off
+          mdutil -a -s
+
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
