@@ -493,12 +493,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // A peer's thread whose project has no row here lands in a placeholder
   // project that main adds when the thread arrives. Draw that row while the
   // thread starts, so the starting row is already where the thread lands.
+  // The filter is its own step: starting rows update on every setup tick,
+  // and the list must keep its identity unless a placeholder joins it.
+  const listedDirectories = useMemo(
+    () =>
+      props.directories.filter(
+        (directory) => !isSubthreadLaunchpadKey(directory.key),
+      ),
+    [props.directories],
+  );
   const visibleDirectories = useMemo(
     () =>
       withStartingPlaceholderDirectories(
-        props.directories.filter(
-          (directory) => !isSubthreadLaunchpadKey(directory.key),
-        ),
+        listedDirectories,
         props.startingThreads,
         windowFederationTarget,
         ({ key, kind, label, localAvailability, repositoryKey, repositoryKeys }) => ({
@@ -507,7 +514,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
           ...(repositoryKeys ? { repositoryKeys } : {}),
         }),
       ),
-    [props.directories, props.startingThreads, windowFederationTarget],
+    [listedDirectories, props.startingThreads, windowFederationTarget],
   );
   // The projects a starting thread will render in: the row its thread lands
   // in. For a peer's thread that is the local project main files it under.
