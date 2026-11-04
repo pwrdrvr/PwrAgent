@@ -7,6 +7,11 @@ export type DeferredArchiveWorktree = NonNullable<ArchiveCleanupIntent["deferred
 
 type PendingWorktree = DeferredArchiveWorktree & { phase: "waiting" | "ready" | "checking" | "retry" };
 
+function referencePath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 /** Resolve aliases, including a missing checkout under an existing symlinked
  * root. Each observation owns its cache; directory mutations renew evidence. */
 export function canonicalWorktreePaths(): (value: string) => Promise<string> {
@@ -43,18 +48,25 @@ export class ArchiveWorktreeReferences {
 
   async retain(intent: ArchiveCleanupIntent, worktree: DeferredArchiveWorktree): Promise<void> {
     for (const blocker of worktree.blockers) if (this.observations.has(blocker)) this.beginObservation(blocker);
-    const canonical = await canonicalWorktreePaths()(worktree.worktreePath).catch(() => path.resolve(worktree.worktreePath));
+    const resolved = await canonicalWorktreePaths()(worktree.worktreePath).catch(() => referencePath(worktree.worktreePath));
+    // Removal can leave the supplied symlink dangling. Updates to its pending
+    // row must retain the identity observed while the checkout still existed.
+    const canonical = this.retainedKeys(worktree.worktreePath).values().next().value ?? resolved;
     const key = buildThreadIdentityKey(intent.backend, intent.threadId);
     const owner = this.owners.get(key) ?? { intent, worktrees: new Map<string, PendingWorktree>() };
-    owner.worktrees.set(canonical, { ...worktree, blockers: [...new Set(worktree.blockers)], phase: worktree.blockers.length ? "waiting" : "retry" });
+    const previous = owner.worktrees.get(canonical);
+    owner.worktrees.set(canonical, { ...previous, ...worktree, snapshot: worktree.snapshot ?? previous?.snapshot,
+      blockers: [...new Set(worktree.blockers)], phase: worktree.blockers.length ? "waiting" : "retry" });
     this.owners.set(key, owner);
     this.reindex();
   }
 
   async fulfilled(worktreePath: string): Promise<void> {
     const canonical = await canonicalWorktreePaths()(worktreePath);
+    const fulfilled = this.retainedKeys(worktreePath);
+    fulfilled.add(canonical);
     for (const [key, owner] of this.owners) {
-      owner.worktrees.delete(canonical);
+      for (const checkout of fulfilled) owner.worktrees.delete(checkout);
       if (!owner.worktrees.size) this.owners.delete(key);
     }
     this.reindex();
@@ -67,11 +79,13 @@ export class ArchiveWorktreeReferences {
   }
 
   recoveryIntents(): ArchiveCleanupIntent[] { return this.selectOwners([...this.owners.keys()], false); }
-  readyIntents(key: string): ArchiveCleanupIntent[] { return this.selectOwners([key], true); }
+  readyIntents(key?: string): ArchiveCleanupIntent[] { return this.selectOwners(key ? [key] : [...this.owners.keys()], true); }
   scheduled(intent: ArchiveCleanupIntent): void {
     const owner = this.owners.get(buildThreadIdentityKey(intent.backend, intent.threadId));
-    for (const row of intent.deferredWorktrees ?? []) for (const current of owner?.worktrees.values() ?? []) {
-      if (row.worktreePath === current.worktreePath) current.phase = "checking";
+    const selected = new Set([...owner?.worktrees ?? []].filter(([, current]) =>
+      intent.deferredWorktrees?.some((row) => row.worktreePath === current.worktreePath)).map(([checkout]) => checkout));
+    for (const current of this.owners.values()) for (const [checkout, row] of current.worktrees) {
+      if (selected.has(checkout)) row.phase = "checking";
     }
   }
   pending(intent: ArchiveCleanupIntent): DeferredArchiveWorktree[] {
@@ -129,6 +143,15 @@ export class ArchiveWorktreeReferences {
   private record(worktree: PendingWorktree): DeferredArchiveWorktree {
     const { phase: _phase, ...record } = worktree;
     return record;
+  }
+
+  private retainedKeys(worktreePath: string): Set<string> {
+    const supplied = referencePath(worktreePath);
+    const keys = new Set<string>();
+    for (const owner of this.owners.values()) for (const [checkout, row] of owner.worktrees) {
+      if (referencePath(row.worktreePath) === supplied) keys.add(checkout);
+    }
+    return keys;
   }
 
   private reindex(): void {

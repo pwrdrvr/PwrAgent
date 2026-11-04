@@ -360,6 +360,36 @@ describe("ACP snapshot archive and restoration", () => {
 });
 
 describe("archive worktrees across a desktop restart", () => {
+  it("restores dirty contents after a deferred removal loses its snapshot-store write and restarts", async () => {
+    const fixture = await createFixture(true);
+    ArchiveWorktreeTransport.threads = [
+      { id: "target", cwd: fixture.worktree, source: "cli" },
+      { id: "owner", cwd: fixture.repo, source: "cli" },
+    ];
+    const first = fixture.reopen(fixture.directory, true);
+    await first.store.addLinkedDirectory({ backend: "codex", threadId: "owner", directory: fixture.directory });
+    await writeFile(path.join(fixture.worktree, "file.txt"), "deferred dirty edit\n");
+    expect((await first.registry.archiveThread({ backend: "codex", threadId: "target" })).cleanup[0]?.removedWorktree).toBe(false);
+    vi.spyOn(first.store, "upsertWorktreeSnapshot").mockRejectedValueOnce(new Error("Snapshot store unavailable"));
+    const completed = new Promise<void>((resolve) => first.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "target") resolve();
+    }));
+    await first.store.removeLinkedDirectory({ backend: "codex", threadId: "owner", directory: fixture.directory });
+    await first.registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["owner"] },
+    } });
+    await completed;
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await first.store.getThreadOverlayState({ backend: "codex", threadId: "target" }))?.worktreeSnapshots ?? []).toEqual([]);
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const resumed = fixture.reopen(fixture.directory, true);
+    await resumed.registry.resumeArchiveCleanupsAtStartup();
+    await resumed.registry.restoreThread({ backend: "codex", threadId: "target" });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("deferred dirty edit\n");
+  });
+
   it.each([
     ["claude", "archive", "claude"], ["claude", "repair", "claude"],
     ["codex", "archive", "claude"], ["codex", "archive", "codex"],

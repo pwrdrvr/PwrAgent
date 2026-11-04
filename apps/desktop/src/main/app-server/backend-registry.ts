@@ -9491,7 +9491,8 @@ export class DesktopBackendRegistry {
   );
   private readonly archiveLifecycleMutationPaths = new Map<string, Set<readonly string[]>>();
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
-  private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>();
+  private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>(undefined,
+    () => this.dispatchReleasedArchiveCleanups(this.archiveWorktreeReferences.readyIntents()));
   private readonly archiveRepairOwners = new Map<string, string>();
   private readonly archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">;
   private readonly projectHeldWakeupStore?: ProjectHeldWakeupStoreLike;
@@ -39483,7 +39484,7 @@ export class DesktopBackendRegistry {
           };
         }
         const changed = removalAdmission?.scope.changedThreadKeys() ?? [];
-        if (changed.length || !this.archiveWorktreeReferences.intents().some((intent) => intent.backend === params.backend && intent.threadId === params.thread.id
+        if (removedSnapshot || changed.length || !this.archiveWorktreeReferences.intents().some((intent) => intent.backend === params.backend && intent.threadId === params.thread.id
           && intent.deferredWorktrees?.some((row) => row.worktreePath === candidate.worktreePath))) {
           await this.retainDeferredArchiveWorktree(params, candidate, changed, removedSnapshot);
         }
@@ -39555,6 +39556,9 @@ export class DesktopBackendRegistry {
   private dispatchReleasedArchiveCleanups(ready: ArchiveCleanupIntent[]): void {
     if (this.closed) return;
     for (const intent of ready) {
+      // Ready rows are the durable backlog. Leave them ready until a physical
+      // queue slot is available; slot release resumes dispatch without polling.
+      if (this.archiveCleanupQueue.availableSlots === 0) break;
       if (this.archiveCleanupQueue.pending(buildThreadIdentityKey(intent.backend, intent.threadId))) continue;
       this.archiveWorktreeReferences.scheduled(intent);
       const completion = this.enqueueArchiveCleanup(intent, true);
