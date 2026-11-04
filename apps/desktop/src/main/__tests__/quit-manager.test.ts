@@ -780,7 +780,8 @@ describe("createQuitManager", () => {
     });
 
     it("offers no quiet restart without a handler", async () => {
-      const confirm = vi.fn(async () => "manual-cancel" as const);
+      const confirm = vi.fn(async (_options: Parameters<NonNullable<QuitManagerDependencies["confirm"]>>[0]) =>
+        "manual-cancel" as const);
       const manager = createQuitManager({
         getConfirmationEnabled: () => true,
         getQuitBlockers: blockers,
