@@ -4730,7 +4730,7 @@ describe("DesktopBackendRegistry", () => {
       });
       expectSqliteWriteBudget({
         scenario: "restart-continuation-cycle",
-        note: "one quiet restart with one running thread and one queued message: one commit for each save, one startup claim, one delete as each entry starts. Restarts are rare, so even 10 a day is a few dozen commits. Idle and per-turn writes are 0.",
+        note: "one quiet restart with one running thread and one queued message: one commit saves both, one startup claim, one delete as each entry starts (~29 KB). Restarts are rare: 10 a day is ~0.3 MB/day. Idle and per-turn writes are 0.",
         writes,
       });
     });
