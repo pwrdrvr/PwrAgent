@@ -179,6 +179,28 @@ describe("a thread that is still starting", () => {
     expect(screen.queryByText("No threads in this directory yet.")).not.toBeInTheDocument();
   });
 
+  it("starts a peer's thread in the local project its row lands in", () => {
+    // The peer keeps its checkout at another path, so its launchpad's key
+    // names no row here. Main files the landed thread under this machine's
+    // PwrSnap by project name, and the starting row is already there.
+    const peerPath = "/Users/peer-user/github/PwrSnap";
+    const starting = creation({
+      directoryKey: `directory:${peerPath}`,
+      target: { scope: "remote", instanceId: "pwr_peer" },
+      launchpad: { ...creation().launchpad, directoryKey: `directory:${peerPath}`, directoryPath: peerPath },
+    });
+    renderSidebar({
+      browseMode: "directories",
+      threads: [],
+      creations: [starting],
+      selectedItemKey: starting.selectionKey,
+    });
+
+    expect(screen.getByRole("list", { name: "Threads in PwrSnap" }))
+      .toContainElement(screen.getByRole("button", { name: "Add a crop tool, starting in PwrSnap" }));
+    expect(screen.queryByRole("list", { name: "Starting threads" })).not.toBeInTheDocument();
+  });
+
   it("still shows the first thread starting before any project is indexed", () => {
     // An empty index is when navigation shows Directories in place of the
     // thread lenses, so the operator's first thread has to surface here.
@@ -202,8 +224,11 @@ describe("a thread that is still starting", () => {
       />,
     );
 
-    expect(within(screen.getByRole("list", { name: "Starting threads" }))
-      .getByRole("button", { name: /^Add a crop tool, starting/ })).toBeInTheDocument();
+    const waiting = screen.getByRole("list", { name: "Starting threads" });
+    expect(within(waiting).getByRole("button", { name: /^Add a crop tool, starting/ })).toBeInTheDocument();
+    // The class that stacks its cards as a project's are stacked. Without it
+    // a long title ran off the sidebar unwrapped.
+    expect(waiting).toHaveClass("directory-list__starting");
     expect(screen.queryByText("No directory-linked threads.")).not.toBeInTheDocument();
   });
 
