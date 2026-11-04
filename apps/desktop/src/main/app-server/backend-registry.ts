@@ -859,6 +859,7 @@ import {
   withCodexEnvironmentOptions,
 } from "./codex-environment-config";
 import { describeCreatedThreadEnvironment } from "./created-thread-environment";
+import { assertThreadModelSettingsAvailable } from "./thread-model-admission";
 import { setupVariablesForAgent } from "./agent-setup-variables";
 import {
   applyLocalCodexEnvironmentSelection,
@@ -13087,7 +13088,7 @@ export class DesktopBackendRegistry {
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const approvalPolicy = executionMode === "auto" ? "on-request" : "never";
     const sandbox = modeSettings.sandbox;
-    const modelSettings = await this.resolveModelSettings(params.backend, {
+    const modelSettings = await this.admitNewThreadModelSettings(params.backend, {
       model: params.model ?? overlay?.model,
       serviceTier: params.serviceTier ?? overlay?.serviceTier,
       reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
@@ -20208,7 +20209,7 @@ export class DesktopBackendRegistry {
     // profile defaults here too, while preserving an explicit empty selection.
     const mcpConnectionIds = requestedMcpConnectionIds
       ?? await this.resolveNewThreadMcpConnectionIds();
-    const modelSettings = await this.resolveModelSettings(backend, request);
+    const modelSettings = await this.admitNewThreadModelSettings(backend, request);
     let cwd: string | undefined =
       !request.cwd?.trim()
         ? await this.createScratchProjectDirectory()
@@ -20886,7 +20887,7 @@ export class DesktopBackendRegistry {
 
     const executionMode = request.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
-    const modelSettings = await this.resolveModelSettings(backend, request);
+    const modelSettings = await this.admitNewThreadModelSettings(backend, request);
     const directoryKind =
       request.directoryKind ?? (request.directoryPath?.trim() ? "directory" : "workspace");
     const directoryLabel =
@@ -21251,6 +21252,7 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
   }): Promise<ThreadTurnQueueSubmissionResult> {
+    await this.assertRequestedThreadModelAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", queueEntryId, delivery, ...entry } = params;
@@ -22721,6 +22723,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    await this.assertRequestedThreadModelAvailable(params);
     const result = await this.startTurnNow(params);
     await this.publishIncomingWork({ ...params, threadId: result.threadId }, result.turnId);
     return result;
@@ -27576,9 +27579,7 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
-    if (params.backend === "codex" && params.model) {
-      this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
-    }
+    await this.assertRequestedThreadModelAvailable(params);
     const modelSettingsManuallyUpdatedAt =
       "model" in params || "reasoningEffort" in params
         ? Date.now()
@@ -28671,10 +28672,15 @@ export class DesktopBackendRegistry {
       const registeredAt = existing.registeredAt ?? request.registeredAt;
       const existingLaunchpad = projectNavigationLaunchpadProviderSettings(existing);
       const backend = await this.resolveLaunchpadBackend(existingLaunchpad.backend);
-      const modelSettings = await this.resolveLaunchpadModelSettings(
-        backend,
-        existingLaunchpad,
-      );
+      const modelSettings = (owner?.scope === "remote" || isRemoteLaunchpadStorageKey(request.directoryKey))
+        && backend.kind === existingLaunchpad.backend
+        ? {
+            model: existingLaunchpad.model,
+            reasoningEffort: existingLaunchpad.reasoningEffort,
+            serviceTier: existingLaunchpad.serviceTier,
+            fastMode: existingLaunchpad.fastMode,
+          }
+        : await this.resolveLaunchpadModelSettings(backend, existingLaunchpad);
       const executionMode = getAvailableExecutionMode(
         backend,
         existingLaunchpad.executionMode,
@@ -28923,11 +28929,17 @@ export class DesktopBackendRegistry {
       updatedAt: Date.now(),
     };
     let nextLaunchpad = patchedLaunchpad;
+    // A peer's draft carries the owner's model choices. The viewer's catalog
+    // cannot normalize them; the owner validates them when creating the thread.
     if (
-      "model" in patch ||
-      "reasoningEffort" in patch ||
-      "serviceTier" in patch ||
-      "fastMode" in patch
+      owner?.scope !== "remote"
+      && !isRemoteLaunchpadStorageKey(request.directoryKey)
+      && (
+        "model" in patch
+        || "reasoningEffort" in patch
+        || "serviceTier" in patch
+        || "fastMode" in patch
+      )
     ) {
       const projectedLaunchpad =
         projectNavigationLaunchpadProviderSettings(patchedLaunchpad);
@@ -29887,6 +29899,8 @@ export class DesktopBackendRegistry {
     if (!draft) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
+    const projectedDraft = projectNavigationLaunchpadProviderSettings(draft);
+    await this.admitNewThreadModelSettings(projectedDraft.backend, projectedDraft);
     let launchpad = options?.sourceInstanceId
       ? await this.resolveRemoteLaunchpadModelSettings(draft)
       : draft;
@@ -30693,6 +30707,58 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async assertRequestedThreadModelAvailable(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    model?: string;
+  }): Promise<void> {
+    if (params.model === undefined) return;
+    assertThreadModelSettingsAvailable(params.backend,
+      await this.getBackendLaunchpadOptions(params.backend, "model-override-admission"),
+      { model: params.model });
+    if (params.backend === "codex") {
+      if (this.resolveCodexModelProvidersFn().length > 0
+        && this.codexClient.reportedModelProviderForThread
+        && !this.codexClient.reportedModelProviderForThread(params.threadId)) {
+        await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId });
+      }
+      this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
+    }
+  }
+
+  private async admitNewThreadModelSettings(
+    backend: AppServerBackendKind,
+    settings: ModelSettings & { acpRuntime?: BackendAcpSessionRuntimeState },
+  ): Promise<ModelSettings> {
+    if (!isAppServerBackendKind(backend)) {
+      throw new Error(`backend="${backend}" is not available.`);
+    }
+    const capabilities = isAcpBackendId(backend)
+      ? this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities
+      : undefined;
+    const modelOption = findAcpModelConfigOption(capabilities);
+    const effortOption = findAcpThoughtLevelConfigOption(capabilities);
+    const runtimeEffort = (effortOption ? settings.acpRuntime?.configValues?.[effortOption.id] : undefined)
+      ?? settings.acpRuntime?.reasoningEffort;
+    // A single advertised thought level is fixed runtime state, not an
+    // adjustable reasoning override. Preserve it in acpRuntime; explicit
+    // overrides and values outside that menu still require admission.
+    const fixedRuntimeEffort = effortOption?.values.length === 1
+      && effortOption.values[0]?.value === runtimeEffort;
+    const requested = {
+      ...settings,
+      model: settings.model
+        ?? (modelOption ? settings.acpRuntime?.configValues?.[modelOption.id] : undefined)
+        ?? settings.acpRuntime?.currentModelId,
+      reasoningEffort: settings.reasoningEffort
+        ?? (fixedRuntimeEffort ? undefined : runtimeEffort),
+    };
+    const options = await this.getBackendLaunchpadOptions(backend, "thread-admission");
+    const resolved = resolveModelSettingsFromOptions(backend, options, requested);
+    assertThreadModelSettingsAvailable(backend, options, requested, resolved.model);
+    return this.applyCodexFastPolicy(backend, resolved);
+  }
+
   private async resolveModelSettings(
     backend: AppServerBackendKind,
     settings: ModelSettings,
@@ -30703,6 +30769,10 @@ export class DesktopBackendRegistry {
       await this.getBackendLaunchpadOptions(backend, callerReason),
       settings,
     );
+    return this.applyCodexFastPolicy(backend, resolved);
+  }
+
+  private applyCodexFastPolicy(backend: AppServerBackendKind, resolved: ModelSettings): ModelSettings {
     if (backend !== "codex" || this.resolveCodexFastAllowedFn()) {
       return resolved;
     }
@@ -31280,14 +31350,8 @@ export class DesktopBackendRegistry {
    * Resolve a draft that another instance composed against this instance's
    * provider catalog.
    *
-   * A remote viewer composes and stores the draft for a thread that runs
-   * here, and the viewer fills its model settings from the viewer's own
-   * provider. A viewer with its own Codex therefore sends its own default
-   * model, which this Codex may not have. The remote window shows this
-   * instance's catalog and draws such a model as the provider default, so
-   * resolving it here starts the thread with the model the operator saw.
-   * A review could not start at all: review/start rejects a model the
-   * catalog lacks.
+   * Admission has checked explicit choices against the owner's catalog.
+   * Resolve omitted choices using that same owner's provider defaults.
    */
   private async resolveRemoteLaunchpadModelSettings(
     launchpad: NavigationLaunchpadDraft,
@@ -45026,6 +45090,25 @@ export class DesktopBackendRegistry {
         extraLinkedDirectories: [],
       } satisfies ThreadOverlayState);
 
+    let handoffModelSettings: ModelSettings;
+    try {
+      // Inherited effort and speed are preferences for the source model.
+      // Adapt them to the destination before layering on explicit arguments,
+      // which must pass admission without silent correction.
+      const inherited = await this.resolveModelSettings(backend, {
+        ...(backend === sourceBackend ? sourceOverlay : {}),
+        model: request.args.model ?? (backend === sourceBackend ? sourceOverlay.model : undefined),
+      }, "agent-handoff");
+      handoffModelSettings = await this.admitNewThreadModelSettings(backend, {
+        model: request.args.model ?? inherited.model,
+        reasoningEffort: request.args.reasoningEffort ?? inherited.reasoningEffort,
+        serviceTier: request.args.serviceTier ?? inherited.serviceTier,
+        fastMode: request.args.fastMode ?? inherited.fastMode,
+      });
+    } catch (error) {
+      return threadOrchestrationFailure("invalid_arguments", error instanceof Error ? error.message : String(error));
+    }
+
     const task = request.args.task.trim();
     if (!task) {
       return threadOrchestrationFailure(
@@ -45233,20 +45316,7 @@ export class DesktopBackendRegistry {
     const inheritedSettings: HandoffTaskInheritedSettings = {
       backend,
       executionMode,
-      model:
-        request.args.model ??
-        (backend === sourceBackend ? sourceOverlay.model : undefined),
-      reasoningEffort:
-        request.args.reasoningEffort ??
-        (backend === sourceBackend
-          ? sourceOverlay.reasoningEffort
-          : undefined),
-      serviceTier:
-        request.args.serviceTier ??
-        (backend === sourceBackend ? sourceOverlay.serviceTier : undefined),
-      fastMode:
-        request.args.fastMode ??
-        (backend === sourceBackend ? sourceOverlay.fastMode : undefined),
+      ...handoffModelSettings,
       approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
       codexEnvironmentRuntime:

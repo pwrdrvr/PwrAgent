@@ -6252,6 +6252,49 @@ describe("Composer", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("shows the stored model when it is absent from the provider catalog", () => {
+    render(<Composer backends={[backendSummary("claude", { models: [{ id: "opus", label: "Opus 5.5", current: true }] })]}
+      thread={{ id: "invalid-model", source: "claude", title: "Fixture", titleSource: "explicit", model: "gpt-6.1-terra",
+        linkedDirectories: [], inbox: { inInbox: false } }} skills={[]} />);
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-6.1-terra");
+    expect(screen.getByRole("button", { name: "Model: gpt-6.1-terra" })).toBeVisible();
+    openDropdown("Model");
+    expect(screen.getByRole("option", { name: "Opus 5.5" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it.each([false, true])("selects an owner model when switching a remote draft's provider (remembered=%s)", async (remembered) => {
+    const onUpdateLaunchpad = vi.fn();
+    function RemoteDraft() {
+      const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>({
+        directoryKey: "directory:/owner/repo", directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo",
+        federationTarget: { scope: "remote", instanceId: "owner" }, backend: "acp:kimi", executionMode: "default",
+        model: "kimi-owner", prompt: "Review this", workMode: "local", createdAt: 1, updatedAt: 1,
+        providerSettings: { codex: { model: remembered ? "owner-saved" : "viewer-only" } },
+      });
+      return <Composer backends={[
+        backendSummary("acp:kimi", { models: [{ id: "kimi-owner" }] }),
+        { ...backendSummary("codex", { models: [
+          { id: "owner-default", label: "Owner default", current: true, supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+          { id: "owner-saved", label: "Owner saved", supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+          { id: "owner-plain", label: "Owner plain", supportsReasoning: false, supportsFast: false },
+        ] }), label: "OpenAI", modelDefaults: { model: "owner-default", reasoningEffortsByModel: { "owner-default": "high" } } },
+      ]} launchpad={launchpad} providerModelDefaults={{ codex: { model: "viewer-only", reasoningEffortsByModel: {} } }}
+        onUpdateLaunchpad={async (_key, patch) => {
+          onUpdateLaunchpad(patch);
+          setLaunchpad((current) => applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(current, patch));
+        }} skills={[]} />;
+    }
+    render(<RemoteDraft />);
+    chooseDropdownOption("Provider", "OpenAI");
+    const model = remembered ? "owner-saved" : "owner-default";
+    await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue(model));
+    expect(onUpdateLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", model }));
+    if (!remembered) expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
+    chooseDropdownOption("Model", "Owner plain");
+    await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("owner-plain"));
+    expect(onUpdateLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ model: "owner-plain", reasoningEffort: undefined, serviceTier: undefined }));
+  });
+
   it("shows OpenAI model and reasoning defaults without a Default option", () => {
     render(
       <Composer

@@ -779,28 +779,25 @@ function preferredBackendFallback(
  * A provider the owner can start stays. So does a draft whose settings the
  * operator picked (`settingsTouchedAt`): that choice is theirs to change.
  */
-async function resolveRemoteLaunchpadBackend(params: {
+async function resolveRemoteLaunchpadSettings(params: {
   localResponse: EnsureDirectoryLaunchpadResponse;
   ownerResponse: EnsureDirectoryLaunchpadResponse;
   preferredBackend: AppServerBackendKind | undefined;
   listOwnerBackends: () => Promise<BackendSummary[]>;
-  /** Switches the stored draft only while it still holds `from`, untouched. */
-  switchDraftBackend: (
+  /** Seeds the stored draft only while it still holds `from`, untouched. */
+  updateDraftSettings: (
     from: AppServerBackendKind,
-    to: AppServerBackendKind,
+    patch: Partial<NavigationLaunchpadDraft>,
   ) => Promise<NavigationLaunchpadDraft>;
 }): Promise<EnsureDirectoryLaunchpadResponse> {
   const { localResponse, ownerResponse } = params;
   const draftBackend = localResponse.launchpad.backend;
-  if (
-    localResponse.launchpad.settingsTouchedAt !== undefined
-    || ownerResponse.defaults.backend === draftBackend
-  ) {
+  if (localResponse.launchpad.settingsTouchedAt !== undefined) {
     return localResponse;
   }
   let ownerBackend: AppServerBackendKind | undefined =
     ownerResponse.defaults.backend;
-  if (params.preferredBackend !== draftBackend) {
+  if (ownerBackend !== draftBackend && params.preferredBackend !== draftBackend) {
     try {
       // Undefined while the owner can start nothing (discovery still
       // running): keep the draft rather than guess.
@@ -817,12 +814,31 @@ async function resolveRemoteLaunchpadBackend(params: {
       return localResponse;
     }
   }
-  if (!ownerBackend || ownerBackend === draftBackend) {
+  if (!ownerBackend) {
+    return localResponse;
+  }
+  // The viewer stores the prompt, but automatic model settings belong to the
+  // owner. Its independent draft may have edits, so take resolved defaults.
+  // For another supported provider, omit viewer preferences and let the owner
+  // resolve that provider's defaults when the draft is sent.
+  const defaults = ownerResponse.defaults.backend === ownerBackend
+    ? ownerResponse.defaults
+    : undefined;
+  const patch: Partial<NavigationLaunchpadDraft> = {
+    ...(ownerBackend !== draftBackend ? { backend: ownerBackend } : {}),
+    model: defaults?.model,
+    reasoningEffort: defaults?.reasoningEffort,
+    serviceTier: defaults?.serviceTier,
+    fastMode: defaults?.fastMode,
+    acpRuntime: defaults?.acpRuntime,
+  };
+  if (Object.entries(patch).every(([key, value]) =>
+    isDeepStrictEqual(localResponse.launchpad[key as keyof NavigationLaunchpadDraft], value))) {
     return localResponse;
   }
   return {
     ...localResponse,
-    launchpad: await params.switchDraftBackend(draftBackend, ownerBackend),
+    launchpad: await params.updateDraftSettings(draftBackend, patch),
   };
 }
 
@@ -9617,7 +9633,7 @@ class DesktopAppServerService {
         },
       );
       const resolvedLocalResponse = ownerResponse
-        ? await resolveRemoteLaunchpadBackend({
+        ? await resolveRemoteLaunchpadSettings({
             localResponse,
             ownerResponse,
             preferredBackend: request.preferredBackend,
@@ -9625,9 +9641,9 @@ class DesktopAppServerService {
               (await federationRuntime
                 .remoteBackend(federationTarget)
                 .listBackends({ includeUnavailable: true })).backends,
-            switchDraftBackend: async (from, to) =>
+            updateDraftSettings: async (from, patch) =>
               (await registry.updateDirectoryLaunchpad(
-                { directoryKey: request.directoryKey, patch: { backend: to } },
+                { directoryKey: request.directoryKey, patch },
                 {
                   skipFilesystemInspection: true,
                   // The owner was asked over the wire; an operator pick made

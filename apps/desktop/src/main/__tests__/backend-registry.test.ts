@@ -101,7 +101,6 @@ import type {
   DesktopProviderThreadModelMigration,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
-  FederationInstanceId,
   MarkThreadSeenRequest,
   SetThreadParentRequest,
   SetThreadPinRequest,
@@ -3107,6 +3106,7 @@ async function callRegistryMcpTool(params: {
   threadId: string;
   turnId: string;
   tool: string;
+  callId?: string;
   args: Record<string, unknown>;
 }) {
   const internal = params.registry as unknown as {
@@ -3134,7 +3134,7 @@ async function callRegistryMcpTool(params: {
     backend: params.backend,
     threadId: params.threadId,
     turnId: params.turnId,
-    callId: `mcp:${params.tool}`,
+    callId: params.callId ?? `mcp:${params.tool}`,
     tool: params.tool,
     args: params.args,
   });
@@ -3453,6 +3453,8 @@ describe("DesktopBackendRegistry", () => {
         inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
         discoverModels: async () => [
           { id: "fable", label: "Fable 5.1", current: true },
+          { id: "claude-custom-fixture", label: "Custom fixture", supportsReasoning: true,
+            reasoningEfforts: ["default", "max"], defaultReasoningEffort: "default" },
           { id: "claude-opus-4-8", label: "Opus 4.8", other: true, supportsReasoning: true,
             reasoningEfforts: ["default", "max"], defaultReasoningEffort: "default" },
         ],
@@ -16277,7 +16279,9 @@ describe("DesktopBackendRegistry", () => {
     ) => {
       const overlayStore = createOverlayStoreMock();
       const registry = new DesktopBackendRegistry({
-        codexClient: new MockBackendClient({ threads: [] }),
+        codexClient: new MockBackendClient({ threads: [], models: [
+          { id: "gpt-5.5", current: true }, { id: "project-model" },
+        ] }),
         overlayStore,
         gitDirectoryService: {
           prepareLaunchpadWorkspace: vi.fn(() => prepareLaunchpadWorkspace(overlayStore)),
@@ -16906,6 +16910,8 @@ script = "echo setup"
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const { acpBackendId, registry, sendControlPrompt, sessions } =
       createKimiAcpRegistry({
+        runtimeCapabilities: { schemaVersion: 1, status: "discovered", checkedAt: 1,
+          models: { availableModels: [{ id: "kimi-for-coding", label: "Kimi" }] } },
         codexEnvironmentCommandRunner: commandRunner,
         gitDirectoryService: {
           prepareLaunchpadWorkspace: vi.fn(async () => ({
@@ -22622,7 +22628,6 @@ script = "echo setup"
       backend: "codex",
       threadId: "turn-thread",
       input: [{ type: "text", text: "Use the migrated model" }],
-      model: "gpt-5.5",
       reasoningEffort: "low",
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
@@ -23951,11 +23956,7 @@ command = "pnpm grok"
     await registry.close();
   });
 
-  it("resolves a remote viewer's launchpad model against this instance's catalog", async () => {
-    // A remote viewer with its own Codex composes the draft against its own
-    // catalog and sends its own default model. The owner must start the
-    // thread and the review with a model it has, the one the remote window
-    // showed as the provider default.
+  it("refuses a viewer-only launchpad model before creating a thread or review", async () => {
     const launchpad = {
       directoryKey: "directory:/repo/app",
       directoryKind: "directory" as const,
@@ -23993,38 +23994,41 @@ command = "pnpm grok"
       };
     };
 
-    const remote = createRegistry();
-    const response = await remote.registry.materializeDirectoryLaunchpad(
-      {
-        directoryKey: launchpad.directoryKey,
-        reviewTarget: { type: "baseBranch", branch: "main" },
-        launchpad,
-      },
-      { sourceInstanceId: "pwr_viewer" as FederationInstanceId },
-    );
-    expect(response.turnStartFailure).toBeUndefined();
-    expect(remote.codexClient.lastStartThreadParams).toMatchObject({
-      model: "gpt-5.4",
-    });
-    expect(remote.codexClient.lastStartReviewParams).toMatchObject({
-      target: { type: "baseBranch", branch: "main" },
-      model: "gpt-5.4",
-    });
-    await remote.registry.close();
+    for (const sourceInstanceId of [undefined, "pwr_viewer"]) {
+      const { registry, codexClient } = createRegistry();
+      try {
+        await expect(registry.materializeDirectoryLaunchpad({
+          directoryKey: launchpad.directoryKey,
+          reviewTarget: { type: "baseBranch", branch: "main" },
+          launchpad,
+        }, { sourceInstanceId })).rejects.toThrow('model="gpt-viewer-only" is not available for backend="codex"');
+        expect(codexClient.lastStartThreadParams).toBeUndefined();
+        expect(codexClient.lastStartReviewParams).toBeUndefined();
+      } finally {
+        await registry.close();
+      }
+    }
+  });
 
-    // The same draft from this instance's own window keeps the model it
-    // names, so the review refuses it as before.
-    const local = createRegistry();
-    const localResponse = await local.registry.materializeDirectoryLaunchpad({
-      directoryKey: launchpad.directoryKey,
-      reviewTarget: { type: "baseBranch", branch: "main" },
-      launchpad,
-    });
-    expect(localResponse.turnStartFailure).toMatchObject({
-      phase: "review",
-      message: expect.stringContaining("gpt-viewer-only"),
-    });
-    await local.registry.close();
+  it.each(["directory:/owner/repo", "subthread:acp%3Akimi:parent:same-worktree"])("stores remote model choices without resolving them against this viewer's catalog: %s", async (directoryKey) => {
+    const codexClient = new MockBackendClient({ models: [{ id: "viewer-only", current: true }] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const owner = { scope: "remote" as const, instanceId: "owner" };
+    try {
+      await registry.ensureDirectoryLaunchpad({ directoryKey, directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo" },
+        { owner, skipFilesystemInspection: true, skipMcpConnectionDefaults: true });
+      const result = await registry.updateDirectoryLaunchpad({ directoryKey,
+        patch: { backend: "codex", model: "owner-only", reasoningEffort: "high", fastMode: true, serviceTier: "priority" },
+      }, { owner });
+      expect(result.launchpad).toMatchObject({ backend: "codex", model: "owner-only", reasoningEffort: "high", fastMode: true, serviceTier: "priority" });
+      const saved = await registry.updateDirectoryLaunchpad({ directoryKey, patch: { prompt: "Review on the owner" } }, { owner });
+      expect(saved.launchpad).toMatchObject({ model: "owner-only", reasoningEffort: "high", prompt: "Review on the owner" });
+      const reopened = await registry.ensureDirectoryLaunchpad({ directoryKey, directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo" },
+        { owner, skipFilesystemInspection: true, skipMcpConnectionDefaults: true });
+      expect(reopened.launchpad).toMatchObject({ model: "owner-only", reasoningEffort: "high", fastMode: true, serviceTier: "priority" });
+    } finally {
+      await registry.close();
+    }
   });
 
   it("names a thread launched straight into a review", async () => {
@@ -27977,6 +27981,220 @@ command = "pnpm dev"
 
     await registry.close();
   });
+  it.each([
+    { backend: "claude", model: "gpt-6.1-terra" },
+    { backend: "codex", model: "opus" },
+    { backend: "codex", model: "gpt-5.5", reasoningEffort: "ultra" },
+    { backend: "codex", model: "fixture-no-reasoning", reasoningEffort: "high" },
+    { backend: "codex", model: "fixture-no-reasoning", fastMode: true },
+    { backend: "codex", model: "gpt-5.5", serviceTier: "invented-tier" },
+    { backend: "claude", model: "opus", serviceTier: "priority" },
+    { backend: "claude", model: "opus", fastMode: true },
+  ] as const)("refuses invalid creation parameters before workspace preparation: %j", async (settings) => {
+    const codexClient = new MockBackendClient({ models: [
+      { id: "gpt-5.5", supportsReasoning: true, reasoningEfforts: ["medium", "high"], supportsFast: true },
+      { id: "fixture-no-reasoning", supportsReasoning: false, supportsFast: false },
+    ] });
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({ cwd: "/fixture/worktree", workMode: "worktree" as const }));
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null, pdfToolMcpServer: null,
+      claudeBackendOptions: { inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }) },
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never });
+    try {
+      await expect(registry.startThread({ ...settings, cwd: "/fixture/repo", workMode: "worktree" }))
+        .rejects.toThrow(/not available|not supported/);
+      expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses a federated Claude/Terra creation at the owner", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, pdfToolMcpServer: null });
+    const replies: import("@pwragent/shared").FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    router.registerConnection({ peerId: "viewer", capabilities: ["turn_control"], sendEnvelope: (envelope) => { replies.push(envelope); } });
+    registerFederationBackendHandlers({ router, backend: registry as unknown as FederationBackendOperations });
+    try {
+      await router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
+        id: "invalid-model", method: FEDERATION_BACKEND_METHODS.startThread,
+        params: { backend: "claude", model: "gpt-6.1-terra", cwd: "/fixture/repo" },
+        kind: "request", protocolVersion: 1, sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 100,
+      } });
+      expect(replies).toContainEqual(expect.objectContaining({ requestId: "invalid-model", kind: "error",
+        error: expect.objectContaining({ message: expect.stringContaining('model="gpt-6.1-terra" is not available for backend="claude"') }) }));
+      expect(await registry.listThreads({ backend: "claude" })).toEqual([]);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses invalid launchpad models before workspace preparation on local and remote sends", async () => {
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({ cwd: "/fixture/worktree", workMode: "worktree" as const }));
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, pdfToolMcpServer: null,
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never });
+    try {
+      for (const sourceInstanceId of [undefined, "viewer"]) {
+        await expect(registry.materializeDirectoryLaunchpad({ directoryKey: "fixture", input: [{ type: "text", text: "Investigate" }],
+          launchpad: { directoryKey: "fixture", directoryKind: "directory", directoryLabel: "Fixture", directoryPath: "/fixture/repo",
+            backend: "claude", model: "gpt-6.1-terra", executionMode: "default", workMode: "worktree", prompt: "", createdAt: 1, updatedAt: 1 },
+        }, { sourceInstanceId })).rejects.toThrow('model="gpt-6.1-terra" is not available for backend="claude"');
+      }
+      expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([true, false])("refuses invalid ACP creation models with a populated catalog=%s", async (populated) => {
+    const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({ runtimeCapabilities: {
+      schemaVersion: 1, status: "discovered", checkedAt: 1,
+      models: { availableModels: populated ? [{ id: "kimi-fixture", label: "Kimi" }] : [] },
+    } });
+    try {
+      await expect(registry.startThread({ backend: acpBackendId, model: "gpt-6.1-terra", cwd: "/fixture/repo" }))
+        .rejects.toThrow('model="gpt-6.1-terra" is not available');
+      expect(acpClient.startSession).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each(["config", "legacy"] as const)("preserves a fixed ACP thought level carried by %s runtime", async (source) => {
+    const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({ runtimeCapabilities: {
+      schemaVersion: 1, status: "discovered", checkedAt: 1,
+      models: { availableModels: [{ id: "kimi-fixed", supportsReasoning: false }] },
+      configOptions: [{ id: "thinking", label: "Thinking", type: "select", category: "thought_level",
+        currentValue: "on", values: [{ value: "on" }] }],
+    } });
+    const runtime = source === "config"
+      ? { configValues: { thinking: "on" } }
+      : { reasoningEffort: "on" };
+    try {
+      await registry.startThread({ backend: acpBackendId, model: "kimi-fixed", cwd: "/fixture/repo", acpRuntime: runtime });
+      expect(acpClient.startSession).toHaveBeenCalledWith(expect.objectContaining({
+        acpRuntime: expect.objectContaining(runtime),
+      }));
+      acpClient.startSession.mockClear();
+      await expect(registry.startThread({ backend: acpBackendId, model: "kimi-fixed", cwd: "/fixture/repo",
+        acpRuntime: { configValues: { thinking: "invented" } } })).rejects.toThrow(/reasoningEffort|thinking/);
+      await expect(registry.startThread({ backend: acpBackendId, model: "kimi-fixed", cwd: "/fixture/repo",
+        reasoningEffort: "on", acpRuntime: runtime })).rejects.toThrow('reasoningEffort="on"');
+      expect(acpClient.startSession).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses invalid fork models before workspace preparation", async () => {
+    const prepareLaunchpadWorkspace = vi.fn();
+    const codexClient = new MockBackendClient({ models: [{ id: "gpt-5.5" }] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never });
+    try {
+      await expect(registry.forkThread({ backend: "codex", sourceThreadId: "parent", model: "opus", directoryPath: "/fixture/repo" }))
+        .rejects.toThrow('model="opus" is not available');
+      expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+      expect(codexClient.lastForkThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses invalid automation models before creating a headless thread", async () => {
+    const codexClient = new MockBackendClient({ models: [{ id: "gpt-6.1-terra" }] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await expect(registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "fixture", automationRunId: "fixture-run",
+        model: "opus", input: [{ type: "text", text: "Inspect" }] }))
+        .rejects.toThrow('model="opus" is not available');
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses an invalid model carried only in ACP runtime settings", async () => {
+    const { registry, acpClient, acpBackendId } = createKimiAcpRegistry();
+    try {
+      await expect(registry.startThread({ backend: acpBackendId, cwd: "/fixture/repo",
+        acpRuntime: { currentModelId: "gpt-6.1-terra" } }))
+        .rejects.toThrow('model="gpt-6.1-terra" is not available');
+      expect(acpClient.startSession).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses cross-provider model overrides before saving or queueing them", async () => {
+    const codexClient = new MockBackendClient({ models: [{ id: "gpt-6.1-terra" }] });
+    const overlayStore = createOverlayStoreMock();
+    const save = vi.spyOn(overlayStore, "setThreadModelSettings");
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const settings = { backend: "claude" as const, threadId: "fixture", model: "gpt-6.1-terra" };
+    try {
+      for (const result of [
+        () => registry.setThreadModelSettings(settings),
+        () => registry.startTurn({ ...settings, input: [{ type: "text", text: "Continue" }] }),
+        () => registry.submitTurn({ ...settings, input: [{ type: "text", text: "Continue" }] }),
+      ]) {
+        await expect(result()).rejects.toThrow('model="gpt-6.1-terra" is not available for backend="claude"');
+      }
+      expect(save).not.toHaveBeenCalled();
+      expect(codexClient.lastStartTurnParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses an OpenAI model override on a Codex thread bound to another model provider", async () => {
+    const codexClient = Object.assign(new MockBackendClient({ models: [{ id: "gpt-6.1-terra" }] }), {
+      modelProviderForThread: () => "fixture-provider",
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const settings = { backend: "codex" as const, threadId: "fixture", model: "gpt-6.1-terra" };
+    try {
+      for (const result of [
+        () => registry.setThreadModelSettings(settings),
+        () => registry.startTurn({ ...settings, input: [{ type: "text", text: "Continue" }] }),
+        () => registry.submitTurn({ ...settings, input: [{ type: "text", text: "Continue" }] }),
+      ]) {
+        await expect(result()).rejects.toThrow("Hand the thread off to a new thread");
+      }
+      expect(codexClient.lastStartTurnParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("reads unknown Codex provider ownership before admitting a matching model override", async () => {
+    let provider: string | undefined;
+    const model = "@fixture-provider/custom";
+    const readThreadModelSettings = vi.fn(async () => {
+      provider = "fixture-provider";
+      return { model };
+    });
+    const codexClient = Object.assign(new MockBackendClient({ models: [{ id: model }] }), {
+      modelProviderForThread: () => provider,
+      reportedModelProviderForThread: () => provider,
+      readThreadModelSettings,
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+      resolveCodexModelProviders: () => [{ id: "fixture-provider", name: "Fixture", baseUrl: "http://localhost:9999/v1", models: ["custom"], discoverModels: false }] });
+    try {
+      await expect(registry.setThreadModelSettings({ backend: "codex", threadId: "fixture", model }))
+        .resolves.toMatchObject({ model });
+      expect(readThreadModelSettings).toHaveBeenCalledOnce();
+      await registry.setThreadModelSettings({ backend: "codex", threadId: "fixture", model });
+      expect(readThreadModelSettings).toHaveBeenCalledOnce();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("applies model settings from the selected thread overlay when starting turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -41572,6 +41790,50 @@ command = "pnpm dev"
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it.each([false, true])("normalizes inherited handoff settings for a new model with reasoning=%s", async (supportsReasoning) => {
+    const codexClient = new MockBackendClient({
+      models: [
+        { id: "source-model", supportsReasoning: true, reasoningEfforts: ["high"], supportsFast: true },
+        { id: "child-model", supportsReasoning, reasoningEfforts: supportsReasoning ? ["low"] : [], supportsFast: false },
+      ],
+      threads: [{ id: "parent", title: "Parent", titleSource: "explicit", source: "codex", linkedDirectories: [], updatedAt: 1000 }],
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      "codex:parent": { backend: "codex", threadId: "parent", extraLinkedDirectories: [],
+        model: "source-model", reasoningEffort: "high", fastMode: true, serviceTier: "priority" },
+    } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore,
+      threadTitleGenerationService: null, createScratchProjectDirectory: async () => "/fixture/child" });
+    try {
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "parent", turnId: "parent-turn", turn: { id: "parent-turn" } },
+      } });
+      const handoff = (settings: { reasoningEffort?: string; fastMode?: boolean; serviceTier?: string }) => callRegistryMcpTool({
+        registry, backend: "codex", threadId: "parent", turnId: "parent-turn", tool: "handoff_task",
+        callId: `model-settings:${JSON.stringify(settings)}`,
+        args: { task: "Inspect the fixture", model: "child-model", workspaceMode: "none", ...settings },
+      });
+      for (const explicit of [{ reasoningEffort: "high" }, { fastMode: true }, { serviceTier: "priority" }]) {
+        expect(await handoff(explicit)).toMatchObject({ isError: true, structuredContent: {
+          code: "invalid_arguments", message: expect.stringContaining(Object.keys(explicit)[0]!),
+        } });
+        expect(codexClient.lastStartThreadParams).toBeUndefined();
+      }
+      const child = await handoff({});
+      expect(child).toMatchObject({ structuredContent: { inheritedSettings: { model: "child-model" } } });
+      expect(codexClient.lastStartThreadParams).toMatchObject({
+        model: "child-model", reasoningEffort: supportsReasoning ? "low" : undefined,
+        fastMode: false, serviceTier: undefined,
+      });
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        model: "child-model", reasoningEffort: supportsReasoning ? "low" : undefined,
+        fastMode: false, serviceTier: undefined,
+      });
+    } finally {
+      await registry.close();
+    }
   });
 
   it("rejects a Grok model on an inherited Codex backend and accepts an explicit Grok backend", async () => {

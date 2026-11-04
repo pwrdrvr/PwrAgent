@@ -1,5 +1,5 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
-import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
+import { codexProviderIdOfModel, formatModelOptionLabel, type BackendModelOption } from "@pwragent/shared";
 import { splitModelMenuOptions } from "../../lib/model-menu-options";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
@@ -10874,9 +10874,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     backend?.kind,
     ownModelOptions,
   );
-  const selectedModelOption =
+  const selectedModelOption: BackendModelOption | undefined =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
-    getDefaultModelOption(backend);
+    (currentSettings?.model
+      ? { id: currentSettings.model, label: currentSettings.model }
+      : getDefaultModelOption(backend));
   // Image attachments are allowed unless the active model explicitly reports
   // no image support (Codex Spark) or the ACP agent advertises
   // `prompt.image: false`. `undefined` on either signal means "assume
@@ -14272,8 +14274,30 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     filesystemFederationTarget,
                   );
                 }
+                const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
+                const remembered = props.launchpad.providerSettings?.[nextBackend];
+                const ownerModels = nextSummary?.launchpadOptions?.models ?? [];
+                const ownerModel = ownerModels.find((candidate) => candidate.id === remembered?.model)
+                  ?? ownerModels.find((candidate) => candidate.id === nextSummary?.modelDefaults?.model)
+                  ?? getDefaultModelOption(nextSummary);
+                const ownerEffort = ownerModel
+                  ? remembered?.reasoningEffortsByModel?.[ownerModel.id]
+                    ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
+                    ?? nextSummary?.modelDefaults?.reasoningEffortsByModel[ownerModel.id]
+                  : undefined;
                 handleLaunchpadPatch({
                   backend: nextBackend,
+                  ...(filesystemFederationTarget?.scope === "remote" ? {
+                    model: ownerModel?.id,
+                    reasoningEffort: ownerModel?.supportsReasoning
+                      ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)
+                      : undefined,
+                    fastMode: ownerModel?.supportsFast ? remembered?.fastMode : undefined,
+                    serviceTier: ownerModel?.serviceTiers?.includes(remembered?.serviceTier ?? "")
+                      || (ownerModel?.supportsFast && ["fast", "priority"].includes(remembered?.serviceTier ?? ""))
+                      ? remembered?.serviceTier
+                      : undefined,
+                  } : {}),
                 });
               }}
             />
@@ -14588,7 +14612,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               ariaLabel="Model"
               disabled={launchpadSubmitting}
               value={selectedModelOption?.id ?? ""}
-              options={visibleModelOptions.map(toModelDropdownOption)}
+              options={[
+                ...(selectedModelOption && !modelOptions.some((option) => option.id === selectedModelOption.id)
+                  ? [{ value: selectedModelOption.id, label: selectedModelOption.id, disabled: true,
+                      description: "This model is absent from this provider's catalog. Choose an available model." }]
+                  : []),
+                ...visibleModelOptions.map(toModelDropdownOption),
+              ]}
               optionsLabel={formatBackendLabel(backend.kind)}
               groups={providerModelGroups}
               footnote={modelMenuFootnote}
@@ -14612,6 +14642,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   handleLaunchpadPatch({
                     model,
                     ...(nextSupportsFast ? {} : { fastMode: undefined }),
+                    ...(filesystemFederationTarget?.scope === "remote" ? {
+                      reasoningEffort: nextSupportsReasoning
+                        ? getReasoningEffortValue(backend, nextModelOption,
+                            props.launchpad.providerSettings?.[backend.kind]?.reasoningEffortsByModel?.[model]
+                              ?? props.launchpad.reasoningEffort)
+                        : undefined,
+                      serviceTier: nextModelOption?.serviceTiers?.includes(props.launchpad.serviceTier ?? "")
+                        || (nextSupportsFast && ["fast", "priority"].includes(props.launchpad.serviceTier ?? ""))
+                        ? props.launchpad.serviceTier
+                        : undefined,
+                    } : {}),
                   });
                   return;
                 }
