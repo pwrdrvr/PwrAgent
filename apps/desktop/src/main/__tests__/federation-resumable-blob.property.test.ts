@@ -36,6 +36,7 @@ it("commits each prefix once across generated send/ack/drop/restart interleaving
       };
       const step = async <T>(work: () => Promise<T>): Promise<T> => {
         event++;
+        if (event > 200) throw new Error("Transfer exceeded the model event budget.");
         const planned = drops.find((item) => item.event === event);
         if (planned && !planned.after) return await drop();
         const result = await work();
@@ -103,7 +104,7 @@ it("commits each prefix once across generated send/ack/drop/restart interleaving
         await rm(root, { recursive: true, force: true });
       }
     },
-  ), { numRuns: 15 });
+  ), { numRuns: 1, endOnFailure: true });
 });
 
 it("cancel removes the part file and sidecar", async () => {

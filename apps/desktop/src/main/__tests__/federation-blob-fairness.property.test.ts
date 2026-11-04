@@ -7,7 +7,7 @@ import { FederationRouter } from "../federation/federation-router";
 
 it("a bulk sender waits when even one chunk is buffered", async () => {
   const raw = new EventEmitter();
-  const socket = { bufferedAmount: 256 * 1024, readyState: 1, _socket: raw };
+  const socket = { bufferedAmount: 256 * 1024, readyState: 1 as const, _socket: raw };
   let sent = false;
   const waiting = waitForFederationSendCapacity(socket, 0).then(() => { sent = true; });
   await Promise.resolve();
@@ -24,7 +24,7 @@ it("a bulk sender waits when even one chunk is buffered", async () => {
 it("control queueing stays within one chunk throughout a 100 MiB transfer", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 400 }), async (controlAfterChunk) => {
     const raw = new EventEmitter();
-    const socket = { bufferedAmount: 0, readyState: 1, _socket: raw };
+    const socket = { bufferedAmount: 0, readyState: 1 as const, _socket: raw };
     let chunks = 0;
     let controlDelayBytes = Infinity;
     const writes = Array.from({ length: 400 }, () => scheduleFederationBlob(socket, async () => {
