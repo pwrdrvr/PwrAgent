@@ -29725,7 +29725,11 @@ export class DesktopBackendRegistry {
 
     const storedDefaults =
       Object.keys(stickyPatch).length > 0
-        ? await this.overlayStore.setLaunchpadDefaults(stickyPatch)
+        // These settings are this launchpad's provider's. Filed under the
+        // defaults' provider instead, a Codex model became the Claude default.
+        ? await this.overlayStore.setLaunchpadDefaults(stickyPatch, {
+            provider: persisted.backend,
+          })
         : await this.overlayStore.getLaunchpadDefaults();
     const shouldResolveStickyModelSettings =
       "model" in stickyPatch ||

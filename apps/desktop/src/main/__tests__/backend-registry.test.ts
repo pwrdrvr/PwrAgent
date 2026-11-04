@@ -54,7 +54,7 @@ import {
   type MockInstance,
 } from "vitest";
 import {
-  applyNavigationLaunchpadProviderSettingsPatch,
+  applyNavigationLaunchpadDefaultsPatch,
   buildFederatedThreadRef,
   buildNavigationSnapshot,
   buildPricingSpendByModel,
@@ -1463,10 +1463,14 @@ function createOverlayStoreMock(params?: {
       return next;
     },
     getLaunchpadDefaults: async () => launchpadDefaults,
-    setLaunchpadDefaults: async (patch: Partial<NavigationLaunchpadDefaults>) => {
-      launchpadDefaults = applyNavigationLaunchpadProviderSettingsPatch(
+    setLaunchpadDefaults: async (
+      patch: Partial<NavigationLaunchpadDefaults>,
+      options?: { provider?: AppServerBackendKind },
+    ) => {
+      launchpadDefaults = applyNavigationLaunchpadDefaultsPatch(
         launchpadDefaults,
         patch,
+        options?.provider ?? launchpadDefaults.backend,
       );
       return launchpadDefaults;
     },
@@ -22837,6 +22841,70 @@ script = "echo setup"
     });
 
     await registry.close();
+  });
+
+  it("saves a sticky model under the launchpad's provider, not the defaults' provider", async () => {
+    const overlayStore = createOverlayStoreMock({
+      launchpadDefaults: {
+        backend: "claude",
+        executionMode: "auto",
+        workMode: "local",
+        model: "opus",
+        providerSettings: {
+          claude: { executionMode: "auto", model: "opus" },
+          codex: { executionMode: "auto", model: "gpt-5.4" },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+        models: [
+          { id: "gpt-5.4", label: "GPT-5.4", supportsReasoning: true },
+          { id: "gpt-5.5", label: "GPT-5.5", supportsReasoning: true },
+        ],
+      }),
+      overlayStore,
+      claudeBackendOptions: {
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [{ id: "opus", label: "Opus", current: true }],
+      },
+    });
+
+    try {
+      await registry.ensureDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        directoryKind: "directory",
+        directoryLabel: "Repo A",
+        directoryPath: "/repo-a",
+      });
+      // Not sticky: this launchpad runs Codex while the defaults stay on Claude.
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        patch: { backend: "codex" },
+      });
+      expect((await overlayStore.getLaunchpadDefaults()).backend).toBe("claude");
+
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        patch: { model: "gpt-5.5" },
+        stickySettingsChanged: true,
+      });
+
+      const stored = await overlayStore.getLaunchpadDefaults();
+      expect(stored.providerSettings?.claude?.model).toBe("opus");
+      expect(stored.providerSettings?.codex?.model).toBe("gpt-5.5");
+
+      // A later sticky switch to Claude must not seed the Codex pick.
+      const claude = await registry.updateDirectoryLaunchpad({
+        directoryKey: "directory:/repo-b",
+        patch: { backend: "claude" },
+        stickySettingsChanged: true,
+      });
+      expect(claude.defaults).toMatchObject({ backend: "claude", model: "opus" });
+    } finally {
+      await registry.close();
+    }
   });
 
   it("restores sticky launchpad reasoning when switching back to a model", async () => {

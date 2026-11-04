@@ -1045,6 +1045,27 @@ export function applyNavigationLaunchpadProviderSettingsPatch<
   return projectNavigationLaunchpadProviderSettings(base as T);
 }
 
+/**
+ * Apply a defaults patch whose provider settings belong to `provider`. They
+ * are filed under that provider while the defaults keep their own, unless
+ * the patch names a backend. Without this, a patch with no backend lands
+ * under whichever provider the defaults hold.
+ */
+export function applyNavigationLaunchpadDefaultsPatch<
+  T extends NavigationLaunchpadDefaults,
+>(defaults: T, patch: Partial<T>, provider: AppServerBackendKind): T {
+  if (patch.backend !== undefined || provider === defaults.backend) {
+    return applyNavigationLaunchpadProviderSettingsPatch(defaults, patch);
+  }
+  const filed = applyNavigationLaunchpadProviderSettingsPatch(defaults, {
+    ...patch,
+    backend: provider,
+  });
+  return applyNavigationLaunchpadProviderSettingsPatch(filed, {
+    backend: defaults.backend,
+  } as Partial<T>);
+}
+
 export function changedProviderModelDefaultBackends(
   previous: Record<string, DesktopProviderModelDefaults>,
   next: Record<string, DesktopProviderModelDefaults>,
