@@ -9,6 +9,39 @@ const component = fc.array(fc.constantFrom("a", "B", "0", " ", "é"), {
 }).map((chars) => chars.join(""));
 const segments = fc.array(component, { maxLength: 5 });
 
+describe("shortenCodexHome regressions", () => {
+  it("keeps the shrunk nested .codex counterexample unchanged", () => {
+    expect(shortenCodexHome("/Users/a/projects/.codex", "/Users/a"))
+      .toBe("/Users/a/projects/.codex");
+  });
+
+  it("keeps the shrunk other-user counterexample unchanged", () => {
+    expect(shortenCodexHome("/Users/other/.codex", "/Users/a"))
+      .toBe("/Users/other/.codex");
+  });
+
+  it.each([
+    ["/Users/a/.codex/", "/Users/a/", "~/.codex/"],
+    ["/Users/a/.codex/.codex", "/Users/a/.codex", "~/.codex"],
+    ["/.codex/profiles/work", "/", "~/.codex/profiles/work"],
+    ["C:\\Users\\a\\.codex\\", "C:\\Users\\a\\", "~\\.codex\\"],
+    ["/Users/A/.codex", "/Users/a", "/Users/A/.codex"],
+    ["/Users/a/.CODEX", "/Users/a", "/Users/a/.CODEX"],
+    ["/Users/a/.codex", "relative", "/Users/a/.codex"],
+    ["/Users/a\\folder/.codex", "/Users/a\\folder", "~/.codex"],
+    ["C:\\Users\\a", "C:\\Users\\a", "C:\\Users\\a"],
+  ])("formats %s with home %s as %s", (value, home, expected) => {
+    expect(shortenCodexHome(value, home)).toBe(expected);
+  });
+
+  it("leaves every path unchanged when the OS home is unknown", () => {
+    fc.assert(fc.property(fc.string(), (value) => {
+      expect(shortenCodexHome(value, undefined)).toBe(value);
+      expect(shortenCodexHome(value, "")).toBe(value);
+    }));
+  });
+});
+
 describe.each([
   { label: "POSIX", root: "/Users", separator: "/", windows: false },
   { label: "Windows native", root: "C:\\Users", separator: "\\", windows: true },
@@ -61,6 +94,8 @@ describe.each([
         const value = home.toUpperCase() + suffix;
         expect(shortenCodexHome(value, home.toLowerCase().replaceAll("\\", "/")))
           .toBe(`~${suffix}`);
+        const expanded = home + shortenCodexHome(value, home).slice(1);
+        expect(win32.relative(value, expanded)).toBe("");
       }));
     });
   }
