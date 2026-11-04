@@ -4,6 +4,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { call } from "../src/client.js";
+import { ACTIVE } from "../src/store.js";
 
 const cli = process.env.PWRAGENT_TEST_CLI || fileURLToPath(new URL("../bin/pwragent.js", import.meta.url));
 const fixture = fileURLToPath(new URL("./fixtures/codex.js", import.meta.url));
@@ -19,7 +20,15 @@ export async function eventually(check, waitMs = timeout) {
   throw new Error("Condition did not become true");
 }
 
-export async function restartAfterCompletedTurn(h, _turn, _wait = eventually) {
+export async function restartAfterCompletedTurn(h, turn, wait = eventually) {
+  // A workspace write can precede saved provider history and turn/completed.
+  // The owning runtime's completed job is the restart readiness boundary.
+  await wait(async () => {
+    const job = (await h.rpc("list")).find((job) => job.threadId === turn.threadId && job.turnId === turn.turnId);
+    if (!job || ACTIVE.has(job.status)) return false;
+    if (job.status !== "completed") throw new Error(`Expected a completed turn before restart; got ${job.status}`);
+    return true;
+  });
   await h.stop(h.daemon);
   return h.start();
 }
