@@ -13,7 +13,7 @@ function* interleave(left, right) {
 
 async function runRestartModel(commands, outcome = "completed") {
   const turn = { threadId: "owner-thread", turnId: "owner-turn" };
-  const model = { resultVisible: false, historySaved: false, completionReceived: false, stopped: false, started: false };
+  const model = { resultVisible: false, historySaved: false, completionReceived: false, stopRequested: false, stopped: false, started: false };
   const daemon = {};
   const h = {
     daemon,
@@ -26,6 +26,8 @@ async function runRestartModel(commands, outcome = "completed") {
       ];
     },
     stop: async (child) => {
+      // Record the attempted effect even if the safety oracle rejects it.
+      model.stopRequested = true;
       assert.equal(child, daemon);
       // Rule: a completed-turn restart cannot stop its owner until the
       // provider has saved history and the owner has received completion.
@@ -46,14 +48,14 @@ async function runRestartModel(commands, outcome = "completed") {
       if (command === "persist") model.historySaved = true;
       if (command === "complete") model.completionReceived = true;
       if (command === "poll" && await check()) return;
-      assert.equal(model.stopped, false);
+      assert.equal(model.stopRequested, false);
     }
     assert.fail("restart never observed the completed turn");
   };
   const restarted = restartAfterCompletedTurn(h, turn, wait);
   if (outcome !== "completed") {
     await assert.rejects(restarted, /completed/);
-    assert.equal(model.stopped, false);
+    assert.equal(model.stopRequested, false);
   } else {
     assert.equal(await restarted, "replacement daemon");
     assert.ok(model.resultVisible && model.started);
