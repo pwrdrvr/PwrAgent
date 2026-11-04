@@ -83,6 +83,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
       return { threadId };
     }),
     listThreads: vi.fn(async (): Promise<AppServerThreadSummary[]> => { counts.aggregateLists += 1; throw new Error("Broad discovery is outside the archive budget."); }),
+    readArchiveCleanupThreadSummary: vi.fn(async (threadId: string) => [...active, target].find((thread) => thread.id === threadId)),
     listArchiveCleanupThreadsPage: vi.fn(async (params: { archived: boolean; cursor?: string; limit: number }) => {
       counts.providerPages += 1;
       counts.largestProviderPage = Math.max(counts.largestProviderPage, params.limit);
@@ -1349,6 +1350,66 @@ describe("archive cleanup pipeline", () => {
 
     expect(removalAdmitted).toBe(false);
     expect(result.cleanup[0]?.error).toContain("workspace state changed");
+  });
+
+  it.each(["shared", "unrelated", "multiple", "failed-read"] as const)("refreshes overlay-only %s attachments notified after beforeRemove", async (scenario) => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const owners = ["first", "second"].map((id) => codexThread({ id, projectKey: `/contrived/${id}`, linkedDirectories: [] }));
+    const fixture = build(owners, target);
+    const archive = fixture.archiveWorktree.getMockImplementation()!;
+    fixture.archiveWorktree.mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
+      const assertRemoval = await params.beforeRemove!();
+      const changedIds = scenario === "multiple" ? ["first", "second"] : ["first"];
+      for (const id of changedIds) fixture.overlays.set(id, { backend: "codex", threadId: id, extraLinkedDirectories:
+        scenario === "unrelated" || (scenario === "multiple" && id === "first")
+          ? [{ id: "extra", kind: "local", label: "extra", path: "/contrived/unrelated" }]
+          : target.linkedDirectories });
+      if (scenario === "failed-read") fixture.store.getArchiveCleanupOverlayStates.mockRejectedValueOnce(new Error("Overlay unavailable"));
+      await publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated", params: {
+        reason: "selected-thread", threadIds: changedIds,
+      } });
+      return assertRemoval;
+    } }));
+
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(result.cleanup[0]?.removedWorktree).toBe(scenario === "unrelated");
+    if (scenario !== "unrelated") expect(result.cleanup[0]?.error).toContain("workspace state changed");
+    expect(fixture.client.listThreads).not.toHaveBeenCalled();
+  });
+
+  it("fences removal synchronously while a directory notification's overlay read is held", async () => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([codexThread({ id: "owner", projectKey: "/contrived/other", linkedDirectories: [] })], target);
+    let fencedWhileHeld = false;
+    const archive = fixture.archiveWorktree.getMockImplementation()!;
+    fixture.archiveWorktree.mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
+      const assertRemoval = await params.beforeRemove!();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      fixture.store.getArchiveCleanupOverlayStates.mockImplementationOnce(async () => {
+        await held;
+        return { owner: { backend: "codex", threadId: "owner", extraLinkedDirectories: target.linkedDirectories } };
+      });
+      const notification = publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated", params: {
+        reason: "selected-thread", threadIds: ["owner"],
+      } });
+      try {
+        try { assertRemoval(); } catch { fencedWhileHeld = true; }
+      } finally {
+        release();
+        await notification;
+      }
+      return assertRemoval;
+    } }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(fencedWhileHeld).toBe(true);
+    expect(result.cleanup[0]?.removedWorktree).toBe(false);
   });
 
   it("removes the worktree when an unenriched refresh preserves an existing owner's workspace", async () => {

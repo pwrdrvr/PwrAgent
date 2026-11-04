@@ -748,6 +748,7 @@ function emitRegistryEvent(event: unknown): void {
   }
 }
 const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
+const withThreadWorkspaceMutation = vi.fn(async (_identity: unknown, work: () => Promise<unknown>) => await work());
 const setForgeReadHandlers = vi.fn();
 const setForgePrToolHandler = vi.fn();
 const setForgeToolPolicyResolver = vi.fn();
@@ -1239,6 +1240,7 @@ vi.mock("../app-server/backend-registry", () => {
     resolveEditCommitStates,
     onEvent,
     publishLocalEvent,
+    withThreadWorkspaceMutation,
     setForgeReadHandlers,
     setForgePrToolHandler,
     setForgeToolPolicyResolver,
@@ -1556,6 +1558,7 @@ describe("app server ipc", () => {
     onEvent.mockClear();
     registryEventListeners.length = 0;
     publishLocalEvent.mockClear();
+    withThreadWorkspaceMutation.mockClear();
     setThreadPullRequestStatusToolHandler.mockClear();
     setThreadPullRequestCanonicalizer.mockClear();
     setLocalPullRequestAuthorityResolver.mockClear();
@@ -13916,6 +13919,8 @@ describe("app server ipc", () => {
         path: directoryPathId,
       },
     });
+    expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" }, expect.any(Function));
+    expect(withThreadWorkspaceMutation.mock.invocationCallOrder[0]).toBeLessThan(registerDirectoryFromDiskService.mock.invocationCallOrder[0]!);
     expect(response).toEqual({
       ok: true,
       backend: "codex",

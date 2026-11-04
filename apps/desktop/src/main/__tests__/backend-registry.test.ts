@@ -52153,6 +52153,19 @@ script = "printf setup"
       },
     });
 
+    let fenced = false;
+    const withThreadWorkspaceMutation = vi.fn(async (_identity: unknown, work: () => Promise<unknown>) => {
+      fenced = true;
+      try { return await work(); } finally { fenced = false; }
+    });
+    Object.assign(registry, { withThreadWorkspaceMutation });
+    let fencedAtFirstOverlayRead: boolean | undefined;
+    const readOverlay = overlayStore.getThreadOverlayState.bind(overlayStore);
+    vi.spyOn(overlayStore, "getThreadOverlayState").mockImplementation(async (identity) => {
+      fencedAtFirstOverlayRead ??= fenced;
+      return await readOverlay(identity);
+    });
+
     const response = await codexClient.emitRequest({
       method: "item/tool/call",
       params: {
@@ -52171,6 +52184,8 @@ script = "printf setup"
     } as AppServerPendingRequestNotification);
 
     expect(response).toMatchObject({ success: true });
+    expect(fencedAtFirstOverlayRead).toBe(true);
+    expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "agent-thread" }, expect.any(Function));
     expect(prepareLaunchpadWorkspace).toHaveBeenCalledWith({
       backend: "codex",
       branchName: "origin/main",
