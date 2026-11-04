@@ -713,7 +713,7 @@ function shortAgentId(agentId: string): string {
   return shortSubAgentThreadId(agentId);
 }
 
-function truncateActivityText(text: string, maxLength: number): string {
+export function truncateActivityText(text: string, maxLength: number): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
 }

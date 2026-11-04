@@ -211,7 +211,7 @@ function cleanThreadTitle(value: string): string {
   return title;
 }
 
-function truncateThreadTitle(value: string): string {
+export function truncateThreadTitle(value: string): string {
   const words = value.split(/\s+/u);
   const wordTruncated = words
     .slice(0, ACCEPTED_MAX_TITLE_WORDS)

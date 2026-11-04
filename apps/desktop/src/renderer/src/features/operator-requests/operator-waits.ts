@@ -226,7 +226,7 @@ function firstLine(text: string): string {
   return truncate(line);
 }
 
-function truncate(text: string): string {
+export function truncate(text: string): string {
   return text.length > MAX_TITLE_LENGTH ? `${text.slice(0, MAX_TITLE_LENGTH - 1)}…` : text;
 }
 

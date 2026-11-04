@@ -722,7 +722,7 @@ function creatorLabel(createdBy: ThreadPendingWake["createdBy"], ownerLabel: str
   return "Agent";
 }
 
-function clipText(text: string, max: number): string {
+export function clipText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 

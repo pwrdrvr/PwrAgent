@@ -1053,7 +1053,7 @@ function BindingChip(props: {
 
 const CHIP_LEAF_MAX_CHARS = 20;
 
-function elide(value: string, max = CHIP_LEAF_MAX_CHARS): string {
+export function elide(value: string, max = CHIP_LEAF_MAX_CHARS): string {
   const trimmed = value.trim();
   if (trimmed.length <= max) return trimmed;
   return `${trimmed.slice(0, max - 1)}…`;

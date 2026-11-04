@@ -89,6 +89,7 @@ export * from "./thread-lock";
 export * from "./project-forge-automation";
 export * from "./thread-terminal";
 export * from "./thread-titles";
+export * from "./text-graphemes";
 export * from "./tool-activity-burst";
 export * from "./turn-output";
 export * from "./token-usage-pricing";
