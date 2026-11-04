@@ -280,11 +280,11 @@ export class ThreadTurnQueue {
   /**
    * Why each held FIFO is held, oldest first. Kinds of hold release
    * differently: unlocking drops only a lock's refusal, and Retry drops
-   * them all. Each held entry keeps the reason it was held for.
+   * them all. Each held entry keeps the reason it was held for. `revision`
+   * changes with each hold, so a start in flight can tell one arrived.
    */
-  private readonly heldQueues = new Map<string, string[]>();
-  /** Counts holds per FIFO, so a start in flight can tell a hold arrived. */
-  private readonly holdRevisions = new Map<string, number>();
+  private readonly heldQueues = new Map<string, { reasons: string[]; revision: number }>();
+  private holdRevision = 0;
   private readonly dispatchSuspensions = new Map<string, number>();
   private readonly mutationTails = new Map<string, Promise<void>>();
   private readonly drainTimers = new Map<string, ReturnType<typeof setImmediate>>();
@@ -649,10 +649,8 @@ export class ThreadTurnQueue {
       const index = queue.findIndex((entry) => entry.id === entryId);
       if (index === -1) continue;
       const [entry] = queue.splice(index, 1);
-      if (queue.length === 0) {
-        this.queuedEntries.delete(key);
-        this.heldQueues.delete(key);
-      }
+      if (queue.length === 0) this.queuedEntries.delete(key);
+      this.dropSpentHold(key);
       if (entry) {
         void this.emit({ type: "cancelled", entry, reason });
       }
@@ -871,8 +869,8 @@ export class ThreadTurnQueue {
     shouldRelease: (reason: string) => boolean,
   ): Promise<boolean> {
     const key = this.keyFor(params);
-    const reasons = this.heldQueues.get(key);
-    if (!reasons?.some(shouldRelease)) return false;
+    const hold = this.heldQueues.get(key);
+    if (!hold?.reasons.some(shouldRelease)) return false;
     const queue = this.queuedEntries.get(key) ?? [];
     const kept = new Set<string>();
     let ahead: string | undefined;
@@ -893,8 +891,8 @@ export class ThreadTurnQueue {
         : { type: "queued", entry: updated, position: index + 1 });
     }
     // A reason no held entry carries any more has nothing left to hold.
-    const remaining = reasons.filter((reason) => kept.has(reason));
-    if (remaining.length > 0) this.heldQueues.set(key, remaining);
+    const reasons = hold.reasons.filter((reason) => kept.has(reason));
+    if (reasons.length > 0) this.heldQueues.set(key, { ...hold, reasons });
     else this.heldQueues.delete(key);
     this.scheduleDrain(key);
     return true;
@@ -913,7 +911,9 @@ export class ThreadTurnQueue {
     if (queue[nextWaitingIndex(queue)]?.id !== entryId) {
       return { disposition: "not_head", entryId };
     }
-    if (!this.heldQueues.has(found.key)) {
+    // An entry an unlock already released is not held, though entries
+    // behind it may be, and its Retry must not release theirs.
+    if (!this.heldQueues.has(found.key) || !found.entry.manualReleaseRequired) {
       return { disposition: "not_held", entryId };
     }
     if (
@@ -1035,11 +1035,9 @@ export class ThreadTurnQueue {
     const previousId = queue[index - 1]?.id;
     const [next] = queue.splice(index, 1);
     if (!next) return "none";
-    if (queue.length === 0) {
-      this.queuedEntries.delete(key);
-      this.heldQueues.delete(key);
-    }
-    const holdRevision = this.holdRevisions.get(key);
+    if (queue.length === 0) this.queuedEntries.delete(key);
+    this.dropSpentHold(key);
+    const holdRevision = this.heldQueues.get(key)?.revision;
     try {
       if (steer && this.options.steerTurn) {
         // Shift and claim synchronously. The backend now owns this immutable
@@ -1057,7 +1055,7 @@ export class ThreadTurnQueue {
             restoreAfter(this.queueFor(key), next, previousId);
             // A hold that arrived while it was out covers it too.
             const reason = this.holdReasonFor(key);
-            if (reason && this.holdRevisions.get(key) !== holdRevision) {
+            if (reason && this.heldQueues.get(key)?.revision !== holdRevision) {
               await this.holdQueue(key, reason, { keepHeld: true });
             }
             if (result === "retry") this.scheduleDrain(key);
@@ -1088,7 +1086,10 @@ export class ThreadTurnQueue {
         entry: next,
         error: normalized,
       });
-      await this.holdQueue(key, normalized.message);
+      // It holds the entry it could not start and anything not yet held.
+      // Entries behind it keep their own reasons: a lock's refusal must not
+      // turn a stale steer's hold into one that unlocking releases.
+      await this.holdQueue(key, normalized.message, { keepHeld: true });
       return "blocked";
     }
   }
@@ -1259,13 +1260,23 @@ export class ThreadTurnQueue {
 
   /** The newest reason a FIFO is held for: what an entry joining it waits on. */
   private holdReasonFor(key: string): string | undefined {
-    return this.heldQueues.get(key)?.at(-1);
+    return this.heldQueues.get(key)?.reasons.at(-1);
   }
 
   private addHoldReason(key: string, reason: string): void {
-    const reasons = (this.heldQueues.get(key) ?? []).filter((current) => current !== reason);
-    this.heldQueues.set(key, [...reasons, reason]);
-    this.holdRevisions.set(key, (this.holdRevisions.get(key) ?? 0) + 1);
+    const reasons = (this.heldQueues.get(key)?.reasons ?? []).filter((current) => current !== reason);
+    this.holdRevision += 1;
+    this.heldQueues.set(key, { reasons: [...reasons, reason], revision: this.holdRevision });
+  }
+
+  /**
+   * Ends a FIFO's hold once no entry in it is held: after an unlock released
+   * the front, the held ones behind can start, finish or be cancelled.
+   */
+  private dropSpentHold(key: string): void {
+    if (!this.heldQueues.has(key)) return;
+    const queue = this.queuedEntries.get(key) ?? [];
+    if (!queue.some((entry) => entry.manualReleaseRequired)) this.heldQueues.delete(key);
   }
 
   /** Holds an entry joining a held FIFO, keeping a reason it already has. */

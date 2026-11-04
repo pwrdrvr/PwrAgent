@@ -985,12 +985,14 @@ describe("ThreadTurnQueue", () => {
     const STALE_STEER = "This steering message was held after its target turn ended.";
     const isLock = (reason: string) => reason === LOCKED;
 
-    function recordingQueue() {
-      let active = false;
+    function recordingQueue(options: { busy?: boolean } = {}) {
+      let active = options.busy ?? false;
+      let refusal: string | undefined;
       const started: string[] = [];
       const queue = new ThreadTurnQueue({
         isThreadActive: () => active,
         startTurn: async (entry) => {
+          if (refusal) throw new Error(refusal);
           started.push(entry.id);
           active = true;
           return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
@@ -1003,7 +1005,13 @@ describe("ThreadTurnQueue", () => {
       };
       const holds = () => queue.getQueuedEntries(thread)
         .map((entry) => [entry.id, entry.manualReleaseRequired ? entry.holdReason : "not held"]);
-      return { queue, started, finish, holds };
+      const refuse = (reason: string | undefined) => {
+        refusal = reason;
+      };
+      const idle = () => {
+        active = false;
+      };
+      return { queue, started, finish, holds, refuse, idle };
     }
 
     it("keeps a failure's hold when a lock holds a delivery and is then lifted", async () => {
@@ -1052,6 +1060,45 @@ describe("ThreadTurnQueue", () => {
       await new Promise((resolve) => setImmediate(resolve));
       expect(started).toEqual([]);
       expect(holds()).toEqual([["monitor-result", FAILED]]);
+    });
+
+    it("keeps a stale steer's own hold when a released entry's start is refused", async () => {
+      const { queue, started, holds, refuse } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.submitHeld(buildEntry({ id: "stale-steer" }), STALE_STEER);
+      // Locked again before the released entry could start.
+      refuse(LOCKED);
+      await queue.releaseHold(thread, isLock);
+      await vi.waitFor(() => expect(holds()).toEqual([["monitor-result", LOCKED], ["stale-steer", STALE_STEER]]));
+
+      refuse(undefined);
+      await queue.releaseHold(thread, isLock);
+      await vi.waitFor(() => expect(started).toEqual(["monitor-result"]));
+      expect(holds()).toEqual([["stale-steer", STALE_STEER]]);
+    });
+
+    it("ends the hold when the last held entry is cancelled after an unlock", async () => {
+      const { queue, holds } = recordingQueue({ busy: true });
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.submitHeld(buildEntry({ id: "stale-steer" }), STALE_STEER);
+      await queue.releaseHold(thread, isLock);
+      queue.cancelEntry("stale-steer");
+
+      await queue.submit(buildEntry({ id: "next-message" }));
+      // Nothing is left for the stale steer's reason to hold.
+      expect(holds()).toEqual([["monitor-result", "not held"], ["next-message", "not held"]]);
+    });
+
+    it("refuses Retry on an entry an unlock released, leaving later holds alone", async () => {
+      const { queue, holds, idle } = recordingQueue({ busy: true });
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.submitHeld(buildEntry({ id: "stale-steer" }), STALE_STEER);
+      await queue.releaseHold(thread, isLock);
+      idle();
+
+      await expect(queue.releaseEntryWithDisposition("monitor-result"))
+        .resolves.toEqual({ disposition: "not_held", entryId: "monitor-result" });
+      expect(holds()).toEqual([["monitor-result", "not held"], ["stale-steer", STALE_STEER]]);
     });
 
     it("clears the hold when unlock releases the last held entry", async () => {
