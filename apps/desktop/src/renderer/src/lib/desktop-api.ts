@@ -101,6 +101,7 @@ import type {
   RevealQuitBlockerRequest,
   RevealQuitBlockerResponse,
 } from "../../../shared/quit-blockers";
+import type { RestartGateStatus } from "../../../shared/restart-gate";
 import type {
   AgentEvent,
   AuthorizeMcpConnectionRequest,
@@ -1006,6 +1007,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   resumePrAutoDispatchBudget?: () => Promise<PrAutoDispatchBudgetStatus>;
   getCodexRestartStatus?: () => Promise<CodexAppServerRestartStatus>;
   restartCodex?: () => Promise<CodexAppServerRestartResult>;
+  /** This machine's quiet-restart gate. Local windows only. */
+  getRestartGateStatus?: () => Promise<RestartGateStatus>;
+  /** Start every waiting restart continuation and held work now. */
+  releaseRestartGate?: () => Promise<RestartGateStatus>;
   getThreadArchiveSweepStatus?: () => Promise<DesktopThreadArchiveSweepStatus>;
   /** Resolves with the status of the finished sweep, joining a running one. */
   runThreadArchiveSweep?: () => Promise<DesktopThreadArchiveSweepStatus>;
@@ -1775,6 +1780,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => () => void;
   onCodexRestartStatusChanged?: (
     callback: (status: CodexAppServerRestartStatus) => void,
+  ) => () => void;
+  onRestartGateStatusChanged?: (
+    callback: (status: RestartGateStatus) => void,
   ) => () => void;
   onThreadArchiveSweepStatusChanged?: (
     callback: (status: DesktopThreadArchiveSweepStatus) => void,

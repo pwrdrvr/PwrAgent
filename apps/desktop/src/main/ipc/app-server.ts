@@ -1820,6 +1820,7 @@ class DesktopAppServerService {
   private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
+  private unsubscribeRestartGate?: () => void;
   private ownerNavigationMetadataVersion = 0;
   private ownerNavigationMetadataRead: Promise<void> | undefined;
   private ownerNavigationMetadataAbort: AbortController | undefined;
@@ -4284,6 +4285,16 @@ class DesktopAppServerService {
 
   async startOwnerNavigation(): Promise<void> {
     this.ownerNavigationActive = true;
+    // Continue After waits while a quiet restart's continuations go first.
+    this.unsubscribeRestartGate ??= getDesktopBackendRegistry().onRestartGateChanged?.((closed) => {
+      if (!closed && this.ownerNavigationActive) {
+        void this.reconcileThreadDependencies().catch((error: unknown) => {
+          appServerLog.warn("dependency reconcile after restart gate failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    });
     // Gates read Forge Automation from memory; load it before polling starts.
     await this.hydrateProjectForgeAutomation();
     this.syncPrPollingSchedulerState();
@@ -10073,6 +10084,8 @@ class DesktopAppServerService {
   }
 
   async close(): Promise<void> {
+    this.unsubscribeRestartGate?.();
+    this.unsubscribeRestartGate = undefined;
     this.pendingWakesCache.clear();
     this.ownerNavigationActive = false;
     this.ownerNavigationMetadataVersion += 1;
@@ -10240,7 +10253,10 @@ class DesktopAppServerService {
         // PR conditions also wait while the consumer's project holds PR
         // watches. A paused project's turn-only wake is held or discarded
         // in submit, by its wake-up policy.
+        // A quiet restart's continuations go first; the gate opening
+        // reconciles again (see `startAppServerOwnerNavigation`).
         canDispatch: (dependency) => this.ownerNavigationActive
+          && !getDesktopBackendRegistry().isRestartGateClosed?.()
           && (dependency.conditions.every((condition) => condition.when === "turn_completed")
             || (this.backgroundPrPollingEnabled
               && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),

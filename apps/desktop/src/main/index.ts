@@ -141,6 +141,10 @@ import {
   registerQuitBlockerIpcHandlers,
 } from "./ipc/quit-blockers";
 import {
+  disposeRestartGateIpcHandlers,
+  registerRestartGateIpcHandlers,
+} from "./ipc/restart-gate";
+import {
   disposeProfilesIpcHandlers,
   listDesktopPwrAgentProfiles,
   openDesktopPwrAgentProfile,
@@ -572,6 +576,15 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
       error: error instanceof Error ? error.message : String(error),
     });
   });
+  // Continuations a quiet restart left start once providers can take a
+  // turn, a few threads at a time.
+  void startupProviderRefresh.then(() => {
+    getExistingDesktopBackendRegistry()?.beginRestartContinuationDispatch();
+  }).catch((error) => {
+    mainLog.warn("restart continuation dispatch failed to start", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   void startupProviderRefresh.then(() => {
     getExistingDesktopBackendRegistry()?.startThreadArchiveSweeper();
   }).catch((error) => {
@@ -702,6 +715,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposePreloadLogIpcHandlers();
   disposeBootInfoIpcHandlers();
   disposeQuitBlockerIpcHandlers();
+  disposeRestartGateIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
   disposeKeybindingsIpcHandlers();
@@ -1852,6 +1866,7 @@ export function bootstrapApp(): void {
       },
     });
     registerQuitBlockerIpcHandlers();
+    registerRestartGateIpcHandlers();
     registerAppIconDragIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch, previousProviderDefaults) => {

@@ -135,6 +135,7 @@ import {
   buildCodexFastModeMismatchNotificationParams,
   CODEX_MISSING_THREAD_EVALUATION_DELAY_MS,
   DesktopBackendRegistry,
+  QUIET_RESTART_STEER_TEXT,
   getCodexFastModeMismatchWarning,
   reviewStartFailureFingerprint,
   withTokenMiserBridgeDescriptorEnv,
@@ -173,6 +174,8 @@ import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
+import { RestartContinuationStore, type StoredRestartContinuation } from "../state/restart-continuation-store";
+import type { RestartDispatchPlanOptions } from "../app-server/restart-continuation-gate";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -4636,6 +4639,272 @@ describe("DesktopBackendRegistry", () => {
         expect(second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })[0])
           .toMatchObject({ displayText: "Edited wake", paused: true });
       });
+    });
+  });
+
+  describe("quiet restart continuations", () => {
+    const durableStore = () => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const temp = createTempStateDb("pwragent-restart-continuations-");
+      const db = StateDb.open(temp.dbPath);
+      onTestFinished(() => {
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+        vi.unstubAllEnvs();
+      });
+      const rows = () => db.raw.prepare(
+        "SELECT owner_instance_id FROM restart_continuations ORDER BY created_at, entry_id",
+      ).all() as { owner_instance_id: string }[];
+      const payloads = () => (db.raw.prepare(
+        "SELECT payload FROM restart_continuations ORDER BY created_at, entry_id",
+      ).all() as { payload: string }[]).map((row) => JSON.parse(row.payload) as StoredRestartContinuation);
+      return { payloads, rows, store: new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false }) };
+    };
+    const launch = (
+      store: RestartContinuationStore,
+      instanceId: string,
+      live: string[] = [],
+      plan: Omit<RestartDispatchPlanOptions, "now"> = {},
+    ) => {
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+        projectHeldWakeupStore: null,
+        restartContinuationStore: store,
+        restartDispatchPlan: { firstDelayMs: 0, intervalMs: 0, jitterMs: 0, releaseGraceMs: 60_000, ...plan },
+        runtimeInstanceId: instanceId,
+        resolveLiveProfileRuntimeInstanceIds: () => live,
+      });
+      onTestFinished(() => registry.close());
+      return { codexClient, registry };
+    };
+    const text = (value: string) => [{ type: "text" as const, text: value }];
+    const startRunningTurn = async (registry: DesktopBackendRegistry, threadId: string) => {
+      const started = await registry.submitTurn({ backend: "codex", threadId, input: text("Long task") });
+      expect(started).toMatchObject({ status: "started" });
+      if (started.status !== "started") throw new Error("expected a started turn");
+      await emitStartedTurn(registry, "codex", threadId, started.turnId);
+    };
+
+    it("steers the running turn, then continues it first after a restart while other work waits", async () => {
+      const { rows, store } = durableStore();
+      const { writes } = await measureSqliteWrites(async () => {
+        const first = launch(store, "instance-a");
+        await startRunningTurn(first.registry, "busy");
+
+        const targets = first.registry.beginQuietRestart();
+        expect(targets).toEqual([expect.objectContaining({ backend: "codex", threadId: "busy" })]);
+        expect(first.registry.isRestartGateClosed()).toBe(true);
+        // Nothing new starts on the way down.
+        await expect(first.registry.submitTurn({ backend: "codex", threadId: "idle", input: text("Later") }))
+          .resolves.toMatchObject({ status: "queued" });
+        expect(first.codexClient.startTurnCallCount).toBe(1);
+
+        await expect(first.registry.steerTurnsForQuietRestart(targets)).resolves.toBe(1);
+        expect(first.codexClient.lastSteerTurnParams).toMatchObject({
+          threadId: "busy",
+          input: [{ type: "text", text: expect.stringContaining("PwrAgent is restarting") }],
+        });
+        expect(first.registry.saveRestartContinuations(targets, Date.UTC(2026, 10, 4))).toBe(1);
+        // A second quiet restart does not add a second continuation.
+        expect(first.registry.saveRestartContinuations(targets)).toBe(0);
+        // The continuation and the message that queued on the way down.
+        expect(rows()).toEqual([{ owner_instance_id: "instance-a" }, { owner_instance_id: "instance-a" }]);
+        await first.registry.close();
+
+        const second = launch(store, "instance-b", ["instance-b"]);
+        expect(rows()).toEqual([{ owner_instance_id: "instance-b" }, { owner_instance_id: "instance-b" }]);
+        expect(second.registry.isRestartGateClosed()).toBe(true);
+        await expect(second.registry.submitTurn({ backend: "codex", threadId: "elsewhere", input: text("Queued reply") }))
+          .resolves.toMatchObject({ status: "queued" });
+        await expect(second.registry.submitTurnIfIdle({ backend: "codex", threadId: "watcher", input: text("PR"), origin: "automation" }))
+          .resolves.toEqual({ status: "busy" });
+        // Nothing starts until providers are ready and the schedule begins.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(second.codexClient.startTurnCallCount).toBe(0);
+
+        second.registry.beginRestartContinuationDispatch();
+        await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(3));
+        expect(second.codexClient.startTurnCalls[0]).toMatchObject({
+          threadId: "busy",
+          input: [{ type: "text", text: expect.stringContaining("PwrAgent restarted. Your previous turn was stopped at 2026-11-04T00:00:00.000Z") }],
+        });
+        expect(second.codexClient.startTurnCalls.slice(1).map((call) => call.threadId).sort()).toEqual(["elsewhere", "idle"]);
+        expect(second.registry.isRestartGateClosed()).toBe(false);
+        await vi.waitFor(() => expect(rows()).toEqual([]));
+      });
+      expectSqliteWriteBudget({
+        scenario: "restart-continuation-cycle",
+        note: "one quiet restart with one running thread and one queued message: one commit saves both, one startup claim, one delete as each entry starts (~29 KB). Restarts are rare: 10 a day is ~0.3 MB/day. Idle and per-turn writes are 0.",
+        writes,
+      });
+    });
+
+    it("opens the gate when a continuation is discarded", async () => {
+      const { rows, store } = durableStore();
+      const first = launch(store, "instance-a");
+      await startRunningTurn(first.registry, "busy");
+      first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
+      await first.registry.close();
+
+      const second = launch(store, "instance-b", ["instance-b"]);
+      const [entry] = second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" });
+      expect(entry).toBeDefined();
+      expect(second.registry.cancelQueuedTurn(entry!.queueEntryId)).toBe(true);
+      expect(second.registry.isRestartGateClosed()).toBe(false);
+      expect(rows()).toEqual([]);
+      expect(second.codexClient.startTurnCallCount).toBe(0);
+    });
+
+    it("queues a messaging steer while the gate is shut and lets the restart's own steer through", async () => {
+      const { store } = durableStore();
+      const { codexClient, registry } = launch(store, "instance-a");
+      await startRunningTurn(registry, "busy");
+      const [target] = registry.beginQuietRestart();
+      expect(target).toBeDefined();
+
+      const deferred = await registry.steerTurn(
+        {
+          backend: "codex",
+          threadId: "busy",
+          expectedTurnId: target!.turnId,
+          requestId: "telegram-steer",
+          input: text("From Telegram"),
+        },
+        { kind: "messaging" },
+      );
+      expect(deferred).toMatchObject({ disposition: "queued", turnId: target!.turnId });
+      expect(codexClient.lastSteerTurnParams).toBeUndefined();
+      expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" }))
+        .toEqual([expect.objectContaining({ queueEntryId: (deferred as { queueEntryId: string }).queueEntryId })]);
+
+      await expect(registry.steerTurnsForQuietRestart([target!])).resolves.toBe(1);
+      expect(codexClient.lastSteerTurnParams).toMatchObject({
+        threadId: "busy",
+        input: [{ type: "text", text: QUIET_RESTART_STEER_TEXT }],
+      });
+    });
+
+    it("carries queued messages across a restart behind the continuation, in queue order, paused ones still paused", async () => {
+      const { payloads, store } = durableStore();
+      const first = launch(store, "instance-a");
+      await startRunningTurn(first.registry, "busy");
+      // Each message gets its own time, so only the queue order can explain
+      // the order they come back in.
+      let clock = Date.now();
+      const now = vi.spyOn(Date, "now").mockImplementation(() => clock++);
+      onTestFinished(() => now.mockRestore());
+      const queue = async (value: string) => {
+        const result = await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text(value) });
+        if (result.status !== "queued") throw new Error("expected a queued turn");
+        return result.entry.id;
+      };
+      const one = await queue("Queued one");
+      const two = await queue("Queued two");
+      const three = await queue("Queued three");
+      // The operator moves the newest to the front and pauses another.
+      await first.registry.moveQueuedTurn({ queueEntryId: three, beforeQueueEntryId: one });
+      await first.registry.setQueuedTurnPaused({ queueEntryId: two, paused: true });
+
+      expect(first.registry.saveRestartContinuations(first.registry.beginQuietRestart())).toBe(1);
+      // An edit after the save replaces the saved copy.
+      first.registry.updateQueuedTurnInput(one, text("Queued one, edited"));
+      expect(payloads().find((row) => row.id === one)?.input).toEqual(text("Queued one, edited"));
+      await first.registry.close();
+      now.mockRestore();
+
+      const second = launch(store, "instance-b", ["instance-b"]);
+      const restored = second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" });
+      expect(restored.map((entry) => entry.displayText)).toEqual([
+        expect.stringContaining("PwrAgent restarted."),
+        "Queued three",
+        "Queued one, edited",
+        "Queued two",
+      ]);
+      expect(restored.map((entry) => entry.queueEntryId).slice(1)).toEqual([three, one, two]);
+      expect(restored.map((entry) => entry.paused ?? false)).toEqual([false, false, false, true]);
+
+      second.registry.beginRestartContinuationDispatch();
+      await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(1));
+      expect(second.codexClient.startTurnCalls[0]).toMatchObject({
+        threadId: "busy",
+        input: [{ type: "text", text: expect.stringContaining("PwrAgent restarted.") }],
+      });
+      // The queued messages wait for the continuation's turn, as on any thread.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(second.codexClient.startTurnCallCount).toBe(1);
+      expect(payloads().map((row) => row.kind)).toEqual(["queued", "queued", "queued"]);
+
+      // The operator resumes the paused one and moves it to the front: the
+      // saved copies follow, so a second restart brings back this queue.
+      const { writes } = await measureSqliteWrites(async () => {
+        await second.registry.setQueuedTurnPaused({ queueEntryId: two, paused: false });
+        await second.registry.moveQueuedTurn({ queueEntryId: two, beforeQueueEntryId: three });
+      });
+      expectSqliteWriteBudget({
+        scenario: "restart-queued-refresh",
+        note: "an operator pause and a reorder of restored queued messages: one commit each, only while saved messages wait (~8 KB). Per operator action after a restart, so a few a day.",
+        writes,
+      });
+      const saved = payloads().sort((left, right) => (left.queued?.position ?? 0) - (right.queued?.position ?? 0));
+      expect(saved.map((row) => [row.id, row.queued?.paused ?? false])).toEqual([
+        [two, false],
+        [three, false],
+        [one, false],
+      ]);
+    });
+
+    it("gives a discarded continuation no place in the stagger", async () => {
+      const { store } = durableStore();
+      const first = launch(store, "instance-a");
+      await startRunningTurn(first.registry, "first");
+      await startRunningTurn(first.registry, "second");
+      first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
+      await first.registry.close();
+
+      const second = launch(store, "instance-b", ["instance-b"], { batchSize: 1, intervalMs: 600_000 });
+      const [discarded] = second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "first" });
+      expect(second.registry.cancelQueuedTurn(discarded!.queueEntryId)).toBe(true);
+      second.registry.beginRestartContinuationDispatch();
+      // The remaining continuation takes the first slot, not the second, ten minutes on.
+      await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(1));
+      expect(second.codexClient.startTurnCalls[0]).toMatchObject({ threadId: "second" });
+    });
+
+    it("reports the gate while it waits and opens it when the operator starts everything now", async () => {
+      const { store } = durableStore();
+      const first = launch(store, "instance-a");
+      await startRunningTurn(first.registry, "busy");
+      first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
+      expect(first.registry.getRestartGateStatus()).toEqual({ phase: "quieting" });
+      // A quiet restart under way cannot be released.
+      expect(first.registry.releaseRestartGate()).toEqual({ phase: "quieting" });
+      await first.registry.close();
+
+      const second = launch(store, "instance-b", ["instance-b"]);
+      expect(second.registry.getRestartGateStatus()).toEqual({ phase: "resuming", waiting: 1 });
+      await expect(second.registry.submitTurn({ backend: "codex", threadId: "elsewhere", input: text("Reply") }))
+        .resolves.toMatchObject({ status: "queued" });
+      const published: unknown[] = [];
+      onTestFinished(second.registry.onRestartGateStatusChanged((status) => published.push(status)));
+
+      expect(second.registry.releaseRestartGate()).toEqual({ phase: "open" });
+      expect(published).toEqual([{ phase: "open" }]);
+      await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(2));
+      // The continuation still goes first on its thread.
+      expect(second.codexClient.startTurnCalls.map((call) => call.threadId).sort()).toEqual(["busy", "elsewhere"]);
+    });
+
+    it("leaves a live sibling instance's continuations with that instance", async () => {
+      const { rows, store } = durableStore();
+      const first = launch(store, "instance-a");
+      await startRunningTurn(first.registry, "busy");
+      first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
+
+      const sibling = launch(store, "instance-b", ["instance-a", "instance-b"]);
+      expect(sibling.registry.isRestartGateClosed()).toBe(false);
+      expect(rows()).toEqual([{ owner_instance_id: "instance-a" }]);
     });
   });
 

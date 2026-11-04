@@ -1567,6 +1567,9 @@ function labelForMessage(message: AppServerThreadMessageEntry): string {
 }
 
 function labelForOrigin(origin: AppServerThreadMessageOrigin): string {
+  if (origin.kind === "pwragent" && origin.systemReason === "app-restart") {
+    return "PwrAgent System - Restart";
+  }
   if (origin.kind === "pwragent" && origin.systemReason === "monitor-job-suggestion") {
     return "PwrAgent System - Monitor Job Suggestion";
   }

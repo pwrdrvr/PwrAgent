@@ -3,6 +3,7 @@ import {
   AGENT_EVENT_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+  RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL,
   THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   THREAD_TODOS_DELTA_EVENT_CHANNEL,
@@ -55,6 +56,8 @@ export function mainWindowEventChannels(
     // This machine's Codex process; a remote peer's window must not offer to
     // restart it.
     ...(viewer ? [] : [CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL]),
+    // This machine's quiet-restart gate; a peer's window cannot open it.
+    ...(viewer ? [] : [RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL]),
     ...(viewer ? [] : [THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL]),
     // To-dos and operator requests live on the owner, but a viewer lists the
     // owner's queue and must hear when it changes, or a question answered

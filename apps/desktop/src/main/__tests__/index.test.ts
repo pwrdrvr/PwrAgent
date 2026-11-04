@@ -547,6 +547,11 @@ vi.mock("../ipc/quit-blockers", () => ({
   disposeQuitBlockerIpcHandlers: disposeQuitBlockerIpcHandlersMock,
 }));
 
+vi.mock("../ipc/restart-gate", () => ({
+  registerRestartGateIpcHandlers: vi.fn(),
+  disposeRestartGateIpcHandlers: vi.fn(),
+}));
+
 vi.mock("../ipc/launchpad-access-notice", () => ({
   registerLaunchpadAccessNoticeIpcHandlers: vi.fn(),
   disposeLaunchpadAccessNoticeIpcHandlers: vi.fn(),
