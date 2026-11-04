@@ -134,6 +134,52 @@ class ArchiveAcpTransport extends FakeAcpAgentTransport {
 }
 
 describe("ACP snapshot archive and restoration", () => {
+  it("preserves archive metadata when an earlier replay read resumes between cleanup inventories", async () => {
+    const fixture = await createFixture("claude");
+    const transport = new ArchiveAcpTransport();
+    let releaseInitialize!: () => void;
+    let initializeStarted!: () => void;
+    const initializeBarrier = new Promise<void>((resolve) => { releaseInitialize = resolve; });
+    const initializing = new Promise<void>((resolve) => { initializeStarted = resolve; });
+    const request = transport.request.bind(transport);
+    vi.spyOn(transport, "request").mockImplementation(async (method, params) => {
+      if (method === "initialize") {
+        initializeStarted();
+        await initializeBarrier;
+      }
+      return await request(method, params);
+    });
+    const instance = fixture.reopen(fixture.directory, false, () => transport);
+    seedAcpOwner(instance, fixture.worktree);
+    // Replay-backed E2E uses the aggregate inventory instead of the paged
+    // Codex cleanup API. Hold initialization until its active pass completes.
+    Object.defineProperty(instance.client, "listArchiveCleanupThreadsPage", { value: undefined });
+    const read = instance.registry.readThread(acpOwner);
+    await initializing;
+    const listThreads = instance.registry.listThreads.bind(instance.registry);
+    let resumedRead = false;
+    vi.spyOn(instance.registry, "listThreads").mockImplementation(async (params) => {
+      const threads = await listThreads(params);
+      if (!resumedRead && params?.callerReason === "archive-cleanup" && params.archived === false) {
+        resumedRead = true;
+        expect(instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+        releaseInitialize();
+        await read;
+      }
+      return threads;
+    });
+    try {
+      const result = await instance.registry.archiveThread(acpOwner);
+      expect(resumedRead).toBe(true);
+      expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      expect(instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+      await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      releaseInitialize();
+      await read;
+    }
+  });
+
   it.each([false, true])("restores dirty files, unpublished commits and original protocol identity across restart (repair=%s)", async (repair) => {
     vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
     const fixture = await createFixture("claude");
