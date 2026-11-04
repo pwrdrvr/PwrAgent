@@ -87,7 +87,8 @@ export class RestartContinuationStore {
   /**
    * Records what one quiet restart carries, in one commit. A thread that
    * already has a stored continuation keeps it and gets no second one. A
-   * queued message replaces its earlier copy, so the latest edit wins.
+   * queued message replaces its earlier copy when it changed, so the latest
+   * edit wins and an unchanged one costs no write.
    * Returns the continuations written.
    */
   saveAll(
@@ -112,7 +113,7 @@ export class RestartContinuationStore {
         "INSERT INTO restart_continuations(entry_id, owner_instance_id, owner_pid, created_at, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO NOTHING",
       );
       const upsert = this.db.prepare(
-        "INSERT INTO restart_continuations(entry_id, owner_instance_id, owner_pid, created_at, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET payload = excluded.payload",
+        "INSERT INTO restart_continuations(entry_id, owner_instance_id, owner_pid, created_at, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET payload = excluded.payload WHERE payload <> excluded.payload",
       );
       const saved: StoredRestartContinuation[] = [];
       for (const continuation of continuations) {

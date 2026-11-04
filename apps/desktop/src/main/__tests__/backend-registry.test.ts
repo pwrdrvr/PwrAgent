@@ -4759,7 +4759,13 @@ describe("DesktopBackendRegistry", () => {
       expect(target).toBeDefined();
 
       const deferred = await registry.steerTurn(
-        { backend: "codex", threadId: "busy", expectedTurnId: target!.turnId, input: text("From Telegram") },
+        {
+          backend: "codex",
+          threadId: "busy",
+          expectedTurnId: target!.turnId,
+          requestId: "telegram-steer",
+          input: text("From Telegram"),
+        },
         { kind: "messaging" },
       );
       expect(deferred).toMatchObject({ disposition: "queued", turnId: target!.turnId });
