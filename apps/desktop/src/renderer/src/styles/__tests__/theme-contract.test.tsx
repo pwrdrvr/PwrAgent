@@ -2973,7 +2973,6 @@ describe("color theme contract", () => {
         "accent-strong",
         "accent-bright",
         "status-ok",
-        "status-warning",
         "status-warning-text",
         "status-error",
         "info-teal",
@@ -3298,6 +3297,7 @@ describe("color theme contract", () => {
         "brand-purple": "#8839ef",
         "status-ok": "#40a02b",
         "status-warning": "#df8e1d",
+        "status-warning-text": "#df8e1d",
         "status-error": "#e64553",
         "status-suspended": "#9ca0b0",
         "usage-series-2": "#1e66f5",
@@ -3306,7 +3306,7 @@ describe("color theme contract", () => {
         "usage-series-5": "#df8e1d",
       },
     };
-    const MARKS = ["danger-base", "status-suspended", "usage-series-2", "usage-series-3", "usage-series-4", "usage-series-5"];
+    const MARKS = ["danger-base", "status-suspended", "status-warning", "usage-series-2", "usage-series-3", "usage-series-4", "usage-series-5"];
     const SOFT: Record<string, string> = {
       "danger-text": "danger-soft",
       "success-text": "success-soft",
@@ -3394,9 +3394,12 @@ describe("color theme contract", () => {
         "bg-panel-hover",
         "bg-input",
       ].map((token) => paint(theme, theme[token], "#000000"));
+      // --status-warning draws dots, strokes, and meters; its text twin is
+      // measured at the text floor above.
       for (const token of [
         "danger-base",
         "status-suspended",
+        "status-warning",
         "usage-series-1",
         "usage-series-2",
         "usage-series-3",

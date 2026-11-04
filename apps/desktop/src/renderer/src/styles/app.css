@@ -798,11 +798,14 @@
 
   /* Status */
   --status-ok: #28631b;
-  --status-warning: #7d4c00;
+  /* Dots, strokes, and meters take Catppuccin's yellow at the 3:1 mark floor.
+     Warning text keeps the darker amber. At text strength the PR chip's
+     pending dot read as the closed dot. */
+  --status-warning: #bf7000;
   --status-error: #b1012b;
   --status-suspended: #7c8297;
-  --status-warning-text: var(--status-warning);
-  --savings-over: var(--status-warning);
+  --status-warning-text: #7d4c00;
+  --savings-over: var(--status-warning-text);
   --usage-series-1: var(--accent);
   --usage-series-2: #1e66f5;
   --usage-series-3: #179097;
@@ -969,11 +972,14 @@
 
   /* Status */
   --status-ok: #525e00;
-  --status-warning: #6b5100;
+  /* Dots, strokes, and meters take Solarized yellow at the 3:1 mark floor.
+     Warning text keeps the darker amber. At text strength the PR chip's
+     pending dot read as the closed dot. */
+  --status-warning: #a87d00;
   --status-error: #86320f;
   --status-suspended: #768787;
-  --status-warning-text: var(--status-warning);
-  --savings-over: var(--status-warning);
+  --status-warning-text: #6b5100;
+  --savings-over: var(--status-warning-text);
   --usage-series-1: var(--accent);
   --usage-series-2: #2689cf;
   --usage-series-3: #26928a;
@@ -1131,11 +1137,14 @@
 
   /* Status */
   --status-ok: #1a5c2e;
-  --status-warning: #6c4300;
+  /* Dots, strokes, and meters take Tangerine light's amber, which already
+     clears the 3:1 mark floor here. Warning text keeps the darker amber.
+     At text strength the PR chip's pending dot read as the closed dot. */
+  --status-warning: #a86b00;
   --status-error: #75321d;
   --status-suspended: #7b7b82;
-  --status-warning-text: var(--status-warning);
-  --savings-over: var(--status-warning);
+  --status-warning-text: #6c4300;
+  --savings-over: var(--status-warning-text);
   --usage-series-1: var(--accent);
   --usage-series-2: #2f64a8;
   --usage-series-3: #11806f;
@@ -1293,11 +1302,14 @@
 
   /* Status */
   --status-ok: #1a5c2e;
-  --status-warning: #744800;
+  /* Dots, strokes, and meters take Tangerine light's amber, which already
+     clears the 3:1 mark floor here. Warning text keeps the darker amber.
+     At text strength the PR chip's pending dot read as the closed dot. */
+  --status-warning: #a86b00;
   --status-error: #7e3520;
   --status-suspended: #77859c;
-  --status-warning-text: var(--status-warning);
-  --savings-over: var(--status-warning);
+  --status-warning-text: #744800;
+  --savings-over: var(--status-warning-text);
   --usage-series-1: var(--accent);
   --usage-series-2: #2f64a8;
   --usage-series-3: #11806f;
