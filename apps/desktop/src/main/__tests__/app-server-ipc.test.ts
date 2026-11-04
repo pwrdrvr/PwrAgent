@@ -13377,6 +13377,46 @@ describe("app server ipc", () => {
     });
   });
 
+  it.each(["directory:/repo/app", "subthread:codex:parent:new-worktree:owner_one"])(
+    "seeds untouched remote model settings from the owner for %s", async (directoryKey) => {
+      const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+      const federationTarget = { scope: "remote" as const, instanceId: "owner_one" };
+      const request = { federationTarget, directoryKey, directoryKind: "directory", directoryLabel: "app",
+        directoryPath: "/repo/app", preferredBackend: "codex" };
+      const local = { launchpad: { directoryKey, directoryKind: "directory", directoryLabel: "app", directoryPath: "/repo/app",
+        backend: "codex", executionMode: "default", prompt: "Investigate", model: "viewer-only", reasoningEffort: "high",
+        fastMode: true, serviceTier: "priority", createdAt: 100, updatedAt: 100 },
+        defaults: { backend: "codex", executionMode: "default" } };
+      const defaults = { backend: "codex", executionMode: "default", model: "owner-model", reasoningEffort: "low",
+        fastMode: false, serviceTier: undefined, acpRuntime: undefined };
+      // The owner's independent draft is not the viewer's source of defaults.
+      const owner = { launchpad: { ...local.launchpad, model: "owner-draft-model" }, defaults };
+      federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValue(owner);
+      ensureDirectoryLaunchpad.mockResolvedValueOnce(local);
+      updateDirectoryLaunchpad.mockImplementationOnce(async (update) => ({
+        ...local, launchpad: { ...local.launchpad, ...update.patch },
+      }));
+      registerAppServerIpcHandlers();
+      const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+      expect(await ensure({}, request)).toMatchObject({ launchpad: {
+        model: "owner-model", reasoningEffort: "low", fastMode: false, serviceTier: undefined, prompt: "Investigate",
+      } });
+      expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({ directoryKey, patch: {
+        model: "owner-model", reasoningEffort: "low", fastMode: false, serviceTier: undefined, acpRuntime: undefined,
+      } }, expect.objectContaining({ owner: federationTarget, onlyIf: expect.any(Function) }));
+      const onlyIf = (updateDirectoryLaunchpad.mock.calls[0] as unknown as [unknown,
+        { onlyIf: (current: object) => boolean }])[1].onlyIf;
+      expect(onlyIf({ ...local.launchpad, settingsTouchedAt: 200 })).toBe(false);
+      updateDirectoryLaunchpad.mockClear();
+      ensureDirectoryLaunchpad.mockResolvedValueOnce({ ...local, launchpad: { ...local.launchpad, ...defaults } });
+      await ensure({}, request);
+      expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+      ensureDirectoryLaunchpad.mockResolvedValueOnce({ ...local, launchpad: { ...local.launchpad, settingsTouchedAt: 200 } });
+      expect(await ensure({}, request)).toMatchObject({ launchpad: { model: "viewer-only" } });
+      expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+    },
+  );
+
   it("resolves a remote draft's provider against the owner's providers", async () => {
     const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = { scope: "remote" as const, instanceId: "owner_one" };

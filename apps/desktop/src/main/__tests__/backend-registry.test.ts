@@ -28012,6 +28012,32 @@ command = "pnpm dev"
     }
   });
 
+  it.each(["config", "legacy"] as const)("preserves a fixed ACP thought level carried by %s runtime", async (source) => {
+    const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({ runtimeCapabilities: {
+      schemaVersion: 1, status: "discovered", checkedAt: 1,
+      models: { availableModels: [{ id: "kimi-fixed", supportsReasoning: false }] },
+      configOptions: [{ id: "thinking", label: "Thinking", type: "select", category: "thought_level",
+        currentValue: "on", values: [{ value: "on" }] }],
+    } });
+    const runtime = source === "config"
+      ? { configValues: { thinking: "on" } }
+      : { reasoningEffort: "on" };
+    try {
+      await registry.startThread({ backend: acpBackendId, model: "kimi-fixed", cwd: "/fixture/repo", acpRuntime: runtime });
+      expect(acpClient.startSession).toHaveBeenCalledWith(expect.objectContaining({
+        acpRuntime: expect.objectContaining(runtime),
+      }));
+      acpClient.startSession.mockClear();
+      await expect(registry.startThread({ backend: acpBackendId, model: "kimi-fixed", cwd: "/fixture/repo",
+        acpRuntime: { configValues: { thinking: "invented" } } })).rejects.toThrow(/reasoningEffort|thinking/);
+      await expect(registry.startThread({ backend: acpBackendId, model: "kimi-fixed", cwd: "/fixture/repo",
+        reasoningEffort: "on", acpRuntime: runtime })).rejects.toThrow('reasoningEffort="on"');
+      expect(acpClient.startSession).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("refuses invalid fork models before workspace preparation", async () => {
     const prepareLaunchpadWorkspace = vi.fn();
     const codexClient = new MockBackendClient({ models: [{ id: "gpt-5.5" }] });
@@ -41713,6 +41739,46 @@ command = "pnpm dev"
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it.each([false, true])("normalizes inherited handoff settings for a new model with reasoning=%s", async (supportsReasoning) => {
+    const codexClient = new MockBackendClient({
+      models: [
+        { id: "source-model", supportsReasoning: true, reasoningEfforts: ["high"], supportsFast: true },
+        { id: "child-model", supportsReasoning, reasoningEfforts: supportsReasoning ? ["low"] : [], supportsFast: false },
+      ],
+      threads: [{ id: "parent", title: "Parent", source: "codex", linkedDirectories: [], updatedAt: 1000 }],
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      "codex:parent": { backend: "codex", threadId: "parent", extraLinkedDirectories: [],
+        model: "source-model", reasoningEffort: "high", fastMode: true, serviceTier: "priority" },
+    } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore,
+      threadTitleGenerationService: null, createScratchProjectDirectory: async () => "/fixture/child" });
+    try {
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "parent", turnId: "parent-turn", turn: { id: "parent-turn" } },
+      } });
+      const handoff = (settings: { reasoningEffort?: string; fastMode?: boolean; serviceTier?: string }) => callRegistryMcpTool({
+        registry, backend: "codex", threadId: "parent", turnId: "parent-turn", tool: "handoff_task",
+        args: { task: "Inspect the fixture", model: "child-model", workspaceMode: "none", ...settings },
+      });
+      for (const explicit of [{ reasoningEffort: "high" }, { fastMode: true }, { serviceTier: "priority" }]) {
+        expect(await handoff(explicit)).toMatchObject({ isError: true, structuredContent: { code: "invalid_arguments" } });
+        expect(codexClient.lastStartThreadParams).toBeUndefined();
+      }
+      expect(await handoff({})).not.toMatchObject({ isError: true });
+      expect(codexClient.lastStartThreadParams).toMatchObject({
+        model: "child-model", reasoningEffort: supportsReasoning ? "low" : undefined,
+        fastMode: false, serviceTier: undefined,
+      });
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        model: "child-model", reasoningEffort: supportsReasoning ? "low" : undefined,
+        fastMode: false, serviceTier: undefined,
+      });
+    } finally {
+      await registry.close();
+    }
   });
 
   it("rejects a Grok model on an inherited Codex backend and accepts an explicit Grok backend", async () => {
