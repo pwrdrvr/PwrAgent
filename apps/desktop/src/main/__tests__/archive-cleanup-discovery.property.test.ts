@@ -349,7 +349,8 @@ it("automatically completes once after the last owner releases while unrelated e
       const completed = new Promise<void>((resolve) => { finish = resolve; });
       run.registry.onEvent((event) => {
         if (event.notification.method === "thread/archiveCleanup/completed"
-          && event.notification.params.cleanup.some((item) => item.removedWorktree)) { completions += 1; finish(); }
+          && Array.isArray(event.notification.params.cleanup)
+          && event.notification.params.cleanup.some((item: { removedWorktree?: boolean }) => item.removedWorktree)) { completions += 1; finish(); }
       });
       const notify = async (owner: number) => {
         await run.registry.publishLocalEvent({ backend: "codex", notification: { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: [`owner-${owner}`] } } });
@@ -383,6 +384,6 @@ it("automatically completes once after the last owner releases while unrelated e
         await scheduler.waitAll();
         expect(run.removed).toBe(1);
         expect(completions).toBe(1);
-      } finally { await run.registry.close(); }
+      } finally { await scheduler.waitFor(run.registry.close()); }
     }), { numRuns: 25 });
 });
