@@ -843,7 +843,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       case "start_thread":
       case "send_message": {
         const entries: TodoSplitMenuEntry[] = [];
-        if (canSendMessage && dispatch.api?.searchThreads) {
+        if (canSendMessage && dispatch.api?.getNavigationQueryPage) {
           entries.push({
             kind: "item", id: "message", label: "Send to thread…", checked: sendingMessage,
             onSelect: () => chooseMessage({ dispatchMode: "message" }),
