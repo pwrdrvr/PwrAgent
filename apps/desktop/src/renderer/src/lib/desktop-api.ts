@@ -36,7 +36,13 @@ import type {
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
-import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
+import type {
+  CancelThreadHandoffRequest,
+  HandoffInstanceThreadRequest,
+  HandoffInstanceThreadResult,
+  RetryThreadHandoffNowRequest,
+  ThreadHandoffProgress,
+} from "@pwragent/shared";
 import type {
   CancelComposerFilePushRequest,
   ComposerFilePushProgress,
@@ -896,6 +902,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   handoffThreadToInstance?: (
     request: HandoffInstanceThreadRequest,
   ) => Promise<HandoffInstanceThreadResult>;
+  /** Cancels a handoff this window started, while it can still be taken back. */
+  cancelThreadHandoff?: (request: CancelThreadHandoffRequest) => Promise<void>;
+  /** Asks a handoff held by a dropped connection to reconnect now. */
+  retryThreadHandoffNow?: (request: RetryThreadHandoffNowRequest) => Promise<void>;
+  /** Progress of handoffs this window started. Returns an unsubscribe. */
+  onThreadHandoffProgress?: (
+    callback: (progress: ThreadHandoffProgress) => void,
+  ) => () => void;
   /**
    * Copy a file from this machine to the owner of a remote thread, for a
    * composer attachment. Resolves with the owner's path to the copy.

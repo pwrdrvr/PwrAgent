@@ -557,6 +557,9 @@ import type {
   HandoffInstanceThreadResult,
   CancelComposerFilePushRequest,
   ComposerFilePushProgress,
+  CancelThreadHandoffRequest,
+  RetryThreadHandoffNowRequest,
+  ThreadHandoffProgress,
   PushComposerFileRequest,
   PushComposerFileResult,
   SetCelestialIconRequest,
@@ -894,6 +897,9 @@ import {
   FEDERATION_PUSH_COMPOSER_FILE_CHANNEL,
   FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL,
   FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL,
+  FEDERATION_CANCEL_HANDOFF_THREAD_CHANNEL,
+  FEDERATION_HANDOFF_THREAD_PROGRESS_CHANNEL,
+  FEDERATION_RETRY_HANDOFF_THREAD_NOW_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_SHORT_NAME_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
@@ -1674,6 +1680,22 @@ const desktopApi = Object.freeze({
     request: HandoffInstanceThreadRequest,
   ): Promise<HandoffInstanceThreadResult> =>
     await ipcRenderer.invoke(FEDERATION_HANDOFF_THREAD_CHANNEL, request),
+  cancelThreadHandoff: async (request: CancelThreadHandoffRequest): Promise<void> =>
+    await ipcRenderer.invoke(FEDERATION_CANCEL_HANDOFF_THREAD_CHANNEL, request),
+  retryThreadHandoffNow: async (request: RetryThreadHandoffNowRequest): Promise<void> =>
+    await ipcRenderer.invoke(FEDERATION_RETRY_HANDOFF_THREAD_NOW_CHANNEL, request),
+  onThreadHandoffProgress: (
+    callback: (progress: ThreadHandoffProgress) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ThreadHandoffProgress,
+    ) => callback(payload);
+    ipcRenderer.on(FEDERATION_HANDOFF_THREAD_PROGRESS_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(FEDERATION_HANDOFF_THREAD_PROGRESS_CHANNEL, listener);
+    };
+  },
   pushComposerFile: async (
     request: PushComposerFileRequest,
   ): Promise<PushComposerFileResult> =>

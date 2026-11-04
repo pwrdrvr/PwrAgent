@@ -1,17 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ThreadGitWorkingState } from "@pwragent/shared";
-import { CelestialIcon } from "../../icons";
+import { CelestialIcon, MinimizeIcon } from "../../icons";
+import { flyBetween } from "../../lib/fly-between";
 import type { ProjectIdentity } from "../../lib/federation-project-match";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { InstanceGlyph } from "./InstanceGlyph";
+import { threadHandoffCancelBlockedReason, threadHandoffVerb } from "./thread-handoff-copy";
+import type {
+  ThreadHandoffChoice,
+  ThreadHandoffOperation,
+  ThreadHandoffTransfer,
+} from "./thread-handoff-transfer";
+import { ThreadHandoffSteps } from "./ThreadHandoffProgress";
 import {
   describeThreadHandoffTargetAvailability,
   THREAD_HANDOFF_TARGET_STATE_LABEL,
   type ThreadHandoffTarget,
 } from "./thread-handoff-targets";
 
-export type ThreadHandoffOperation = "copy" | "move";
+export type { ThreadHandoffOperation } from "./thread-handoff-transfer";
 
 /** The receiver's checkout for this thread's project, as its index reports it. */
 export type ThreadHandoffRepositoryMatch = {
@@ -25,11 +33,7 @@ export type FindThreadHandoffRepository = (
   project: ProjectIdentity,
 ) => Promise<ThreadHandoffRepositoryMatch | undefined>;
 
-export type SendThreadToMachineRequest = {
-  targetInstanceId: string;
-  operation: ThreadHandoffOperation;
-  targetRepositoryPath?: string;
-};
+export type SendThreadToMachineRequest = ThreadHandoffChoice;
 
 export type SendThreadToMachineSource = {
   title: string;
@@ -94,28 +98,47 @@ function TargetMark(props: { target: ThreadHandoffTarget }) {
  * machine, repository and operation picked from what this window already
  * knows instead of instance ids and native paths typed into a prompt.
  *
- * The request has no progress events and cannot be aborted once the package
- * is pushed, so the dialog holds one pending state and refuses to close until
- * the call returns. A dialog closed mid-transfer would report nothing.
+ * The transfer itself lives above the dialog, in the window. While it runs,
+ * the dialog lists its steps, and Minimise, Escape and a click outside all
+ * send it to the toast stack instead of closing: closing would hide a
+ * transfer that is still holding the thread. Once it settles, a failure or a
+ * cancel comes back here with the operator's choices kept for a retry.
  */
 export function SendThreadToMachineDialog(props: {
   source: SendThreadToMachineSource;
   targets: readonly ThreadHandoffTarget[];
   findRepository?: FindThreadHandoffRepository;
-  onSend: (request: SendThreadToMachineRequest) => Promise<void>;
+  /** This thread's latest handoff from this window, running or settled. */
+  transfer?: ThreadHandoffTransfer;
+  /** Choices to start from, as when Retry reopens a failed send. */
+  initialChoice?: ThreadHandoffChoice;
+  /** The rect to fly in from, when the dialog reopens from a toast. */
+  flyFrom?: DOMRect;
+  onSend: (request: SendThreadToMachineRequest) => void;
+  /** Sends a running transfer to the toast stack, from this rect. */
+  onMinimise?: (from: DOMRect | undefined) => void;
+  onCancelTransfer?: () => void;
+  onRetryNow?: () => void;
   onClose: () => void;
 }) {
-  const { source, targets, findRepository } = props;
+  const { source, targets, findRepository, transfer } = props;
   const project = source.project;
+  const startChoice = transfer?.choice ?? props.initialChoice;
   const [targetId, setTargetId] = useState<string | undefined>(
-    () => targets.find((target) => target.availability === "available")?.instanceId,
+    () => startChoice?.targetInstanceId
+      ?? targets.find((target) => target.availability === "available")?.instanceId,
   );
-  const [operation, setOperation] = useState<ThreadHandoffOperation>("copy");
+  const [operation, setOperation] = useState<ThreadHandoffOperation>(
+    () => startChoice?.operation ?? "copy",
+  );
   const [lookups, setLookups] = useState<Record<string, RepositoryLookup>>({});
   // Paths the operator typed, per machine, so a late lookup never overwrites one.
-  const [typedPaths, setTypedPaths] = useState<Record<string, string>>({});
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string>();
+  const [typedPaths, setTypedPaths] = useState<Record<string, string>>(() =>
+    startChoice?.targetRepositoryPath
+      ? { [startChoice.targetInstanceId]: startChoice.targetRepositoryPath }
+      : {});
+  const sending = transfer?.status === "running";
+  const error = transfer?.status === "failed" ? transfer.error : undefined;
 
   const availableIds = useMemo(
     () => targets
@@ -157,11 +180,25 @@ export function SendThreadToMachineDialog(props: {
     };
   }, [availableIds, findRepository, projectKind, projectLabel, projectPath, projectRepositoryKey, projectRepositoryKeys]);
 
+  const minimise = (): void => {
+    props.onMinimise?.(dialogRef.current?.getBoundingClientRect());
+  };
   const dialogRef = useModalDialog({
     onClose: () => {
-      if (!sending) props.onClose();
+      if (sending) minimise();
+      else props.onClose();
     },
   });
+  const flyFrom = props.flyFrom;
+  useLayoutEffect(() => {
+    if (flyFrom && dialogRef.current) flyBetween(flyFrom, dialogRef.current);
+  }, [dialogRef, flyFrom]);
+  // Starting or settling a send swaps the dialog's contents, and the control
+  // that held focus goes with them. Keep focus inside, on the dialog itself.
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
+  }, [dialogRef, sending]);
 
   const target = targets.find((candidate) => candidate.instanceId === targetId);
   const lookup = targetId ? lookups[targetId] : undefined;
@@ -176,20 +213,13 @@ export function SendThreadToMachineDialog(props: {
     && target?.availability === "available"
     && (!project || repositoryPath.trim().length > 0);
 
-  const send = async (): Promise<void> => {
+  const send = (): void => {
     if (!canSend || !targetId) return;
-    setSending(true);
-    setError(undefined);
-    try {
-      await props.onSend({
-        targetInstanceId: targetId,
-        operation,
-        ...(project ? { targetRepositoryPath: repositoryPath.trim() } : {}),
-      });
-    } catch (sendError) {
-      setError(sendError instanceof Error ? sendError.message : String(sendError));
-      setSending(false);
-    }
+    props.onSend({
+      targetInstanceId: targetId,
+      operation,
+      ...(project ? { targetRepositoryPath: repositoryPath.trim() } : {}),
+    });
   };
 
   const describeRow = (candidate: ThreadHandoffTarget): string | undefined => {
@@ -218,151 +248,216 @@ export function SendThreadToMachineDialog(props: {
           project?.repositoryKey ? "with this origin" : `named ${project?.label ?? "like this one"}`
         }. Enter the path of a clone there that shares this repository's history.`;
 
+  if (sending && transfer) {
+    const noun = transfer.choice.operation === "move" ? "Move" : "Copy";
+    const blocked = threadHandoffCancelBlockedReason(transfer);
+    return createPortal(
+      <div
+        className="workspace-handoff-modal"
+        onMouseDown={(event) => {
+          // A click on the scrim minimises; the dialog keeps its own clicks.
+          if (event.target === event.currentTarget) minimise();
+        }}
+      >
+        <div
+          ref={dialogRef}
+          aria-label="Send to Another Machine"
+          aria-modal="true"
+          aria-busy="true"
+          className="workspace-handoff-dialog thread-handoff-dialog"
+          role="dialog"
+          tabIndex={-1}
+        >
+          <div className="thread-handoff-dialog__head">
+            <h2>{threadHandoffVerb(transfer)} to {transfer.targetLabel}</h2>
+            <button
+              aria-label="Minimise"
+              className="thread-handoff-dialog__minimise tooltip-target"
+              data-tooltip={`Keep working. The ${noun.toLowerCase()} continues in a toast.`}
+              type="button"
+              onClick={minimise}
+            >
+              <MinimizeIcon size={14} />
+            </button>
+          </div>
+          <p>
+            &ldquo;{source.title}&rdquo; continues there with its history
+            {project ? " and published commit" : ""}. This thread takes no new turns
+            until the {noun.toLowerCase()} finishes.
+          </p>
+          <div role="status" aria-live="polite">
+            <ThreadHandoffSteps transfer={transfer} />
+          </div>
+          {transfer.link === "waiting" ? (
+            <p className="workspace-handoff-dialog__note">
+              The connection to {transfer.targetLabel} dropped. The {noun.toLowerCase()}{" "}
+              continues when it reconnects, and nothing it already has is sent again.
+            </p>
+          ) : null}
+          <div className="workspace-handoff-dialog__actions thread-handoff-dialog__actions">
+            <button className="button button--ghost" type="button" onClick={minimise}>
+              Run in Background
+            </button>
+            {transfer.link === "waiting" ? (
+              <button className="button button--ghost" type="button" onClick={props.onRetryNow}>
+                Retry Now
+              </button>
+            ) : null}
+            <button
+              className={`button button--ghost${blocked ? " tooltip-target" : ""}`}
+              data-tooltip={blocked}
+              disabled={!transfer.cancelable || transfer.cancelRequested}
+              type="button"
+              onClick={props.onCancelTransfer}
+            >
+              {transfer.cancelRequested ? "Cancelling…" : `Cancel ${noun}`}
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
   return createPortal(
     <div className="workspace-handoff-modal">
       <div
         ref={dialogRef}
         aria-label="Send to Another Machine"
         aria-modal="true"
-        aria-busy={sending || undefined}
         className="workspace-handoff-dialog thread-handoff-dialog"
         role="dialog"
+        tabIndex={-1}
       >
         <h2>Send to Another Machine</h2>
         <p>
           Continue &ldquo;{source.title}&rdquo; on another PwrAgent with its history
           {project ? " and published commit" : ""}.
         </p>
-        {sending ? (
-          <p className="workspace-handoff-dialog__note" role="status">
-            Sending to {target?.label}. This thread cannot take new turns until the
-            transfer finishes. Large workspaces can take a few minutes.
-          </p>
-        ) : (
-          <>
-            <div className="workspace-handoff-dialog__field">
-              <span id="thread-handoff-machine-label">Machine</span>
-              <div
-                aria-labelledby="thread-handoff-machine-label"
-                className="thread-handoff-dialog__machines"
-                role="radiogroup"
-              >
-                {targets.map((candidate) => {
-                  const state = describeRow(candidate);
-                  const unavailable = candidate.availability !== "available";
-                  return (
-                    <button
-                      key={candidate.instanceId}
-                      aria-checked={candidate.instanceId === targetId}
-                      className="thread-handoff-dialog__machine"
-                      disabled={unavailable}
-                      role="radio"
-                      title={[candidate.shortLabel ? candidate.label : undefined,
-                        describeThreadHandoffTargetAvailability(candidate)].filter(Boolean).join(" · ") || undefined}
-                      type="button"
-                      onClick={() => {
-                        setTargetId(candidate.instanceId);
-                        setError(undefined);
-                      }}
-                    >
-                      <span aria-hidden="true" className="thread-handoff-dialog__machine-mark">
-                        <TargetMark target={candidate} />
-                      </span>
-                      <span className="thread-handoff-dialog__machine-label">
-                        {candidate.shortLabel ?? candidate.label}
-                      </span>
-                      {state ? (
-                        <span className="thread-handoff-dialog__machine-state">{state}</span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            {project && target ? (
-              <div className="workspace-handoff-dialog__field">
-                <label htmlFor="thread-handoff-repository">
-                  Repository on {target.label}
-                </label>
-                <input
-                  aria-describedby={repositoryHint ? "thread-handoff-repository-hint" : undefined}
-                  className="workspace-handoff-dialog__text-input thread-handoff-dialog__path"
-                  disabled={target.availability !== "available"}
-                  id="thread-handoff-repository"
-                  placeholder={`Absolute path to an existing clone on ${target.label}`}
-                  spellCheck={false}
-                  type="text"
-                  value={repositoryPath}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setTypedPaths((current) => ({ ...current, [target.instanceId]: value }));
-                  }}
-                />
-                {repositoryHint ? (
-                  <span
-                    className="thread-handoff-dialog__hint"
-                    id="thread-handoff-repository-hint"
-                  >
-                    {repositoryHint}
+        <div className="workspace-handoff-dialog__field">
+          <span id="thread-handoff-machine-label">Machine</span>
+          <div
+            aria-labelledby="thread-handoff-machine-label"
+            className="thread-handoff-dialog__machines"
+            role="radiogroup"
+          >
+            {targets.map((candidate) => {
+              const state = describeRow(candidate);
+              const unavailable = candidate.availability !== "available";
+              return (
+                <button
+                  key={candidate.instanceId}
+                  aria-checked={candidate.instanceId === targetId}
+                  className="thread-handoff-dialog__machine"
+                  disabled={unavailable}
+                  role="radio"
+                  title={[candidate.shortLabel ? candidate.label : undefined,
+                    describeThreadHandoffTargetAvailability(candidate)].filter(Boolean).join(" · ") || undefined}
+                  type="button"
+                  onClick={() => setTargetId(candidate.instanceId)}
+                >
+                  <span aria-hidden="true" className="thread-handoff-dialog__machine-mark">
+                    <TargetMark target={candidate} />
                   </span>
-                ) : null}
-              </div>
-            ) : null}
-            {!project ? (
-              <p className="workspace-handoff-dialog__note">
-                This thread has no Git project. Its history starts in a new workspace
-                {target ? ` on ${target.label}` : ""}. Any available workspace is also
-                copied, including hidden files. Remove sensitive files before sending.
-                Symlinks pointing outside the workspace are omitted; all symlinks are
-                omitted when Windows is involved.
-              </p>
-            ) : null}
-            <div
-              aria-label="Copy or move"
-              className="workspace-handoff-dialog__strategy-list thread-handoff-dialog__operations"
-              role="radiogroup"
-            >
-              <button
-                aria-checked={operation === "copy"}
-                className="workspace-handoff-dialog__strategy"
-                role="radio"
-                type="button"
-                onClick={() => setOperation("copy")}
+                  <span className="thread-handoff-dialog__machine-label">
+                    {candidate.shortLabel ?? candidate.label}
+                  </span>
+                  {state ? (
+                    <span className="thread-handoff-dialog__machine-state">{state}</span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {project && target ? (
+          <div className="workspace-handoff-dialog__field">
+            <label htmlFor="thread-handoff-repository">
+              Repository on {target.label}
+            </label>
+            <input
+              aria-describedby={repositoryHint ? "thread-handoff-repository-hint" : undefined}
+              className="workspace-handoff-dialog__text-input thread-handoff-dialog__path"
+              disabled={target.availability !== "available"}
+              id="thread-handoff-repository"
+              placeholder={`Absolute path to an existing clone on ${target.label}`}
+              spellCheck={false}
+              type="text"
+              value={repositoryPath}
+              onChange={(event) => {
+                const value = event.target.value;
+                setTypedPaths((current) => ({ ...current, [target.instanceId]: value }));
+              }}
+            />
+            {repositoryHint ? (
+              <span
+                className="thread-handoff-dialog__hint"
+                id="thread-handoff-repository-hint"
               >
-                <span className="workspace-handoff-dialog__strategy-title">Copy</span>
-                <span>
-                  Keep this thread. A new thread continues on {target?.label ?? "the other machine"}.
-                </span>
-              </button>
-              <button
-                aria-checked={operation === "move"}
-                className="workspace-handoff-dialog__strategy"
-                role="radio"
-                type="button"
-                onClick={() => setOperation("move")}
-              >
-                <span className="workspace-handoff-dialog__strategy-title">Move</span>
-                <span>
-                  Archive this thread after the copy is verified.
-                  {project ? " Its worktree stays on disk." : ""}
-                </span>
-              </button>
+                {repositoryHint}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        {!project ? (
+          <p className="workspace-handoff-dialog__note">
+            This thread has no Git project. Its history starts in a new workspace
+            {target ? ` on ${target.label}` : ""}. Any available workspace is also
+            copied, including hidden files. Remove sensitive files before sending.
+            Symlinks pointing outside the workspace are omitted; all symlinks are
+            omitted when Windows is involved.
+          </p>
+        ) : null}
+        <div
+          aria-label="Copy or move"
+          className="workspace-handoff-dialog__strategy-list thread-handoff-dialog__operations"
+          role="radiogroup"
+        >
+          <button
+            aria-checked={operation === "copy"}
+            className="workspace-handoff-dialog__strategy"
+            role="radio"
+            type="button"
+            onClick={() => setOperation("copy")}
+          >
+            <span className="workspace-handoff-dialog__strategy-title">Copy</span>
+            <span>
+              Keep this thread. A new thread continues on {target?.label ?? "the other machine"}.
+            </span>
+          </button>
+          <button
+            aria-checked={operation === "move"}
+            className="workspace-handoff-dialog__strategy"
+            role="radio"
+            type="button"
+            onClick={() => setOperation("move")}
+          >
+            <span className="workspace-handoff-dialog__strategy-title">Move</span>
+            <span>
+              Archive this thread after the copy is verified.
+              {project ? " Its worktree stays on disk." : ""}
+            </span>
+          </button>
+        </div>
+        {project ? (
+          <dl className="thread-handoff-dialog__carry">
+            <div>
+              <dt>Sent</dt>
+              <dd>{describeSent(source)}</dd>
             </div>
-            {project ? (
-              <dl className="thread-handoff-dialog__carry">
-                <div>
-                  <dt>Sent</dt>
-                  <dd>{describeSent(source)}</dd>
-                </div>
-                <div>
-                  <dt>Stays here</dt>
-                  <dd>Pull request link, schedules, messaging bindings, ignored files</dd>
-                </div>
-              </dl>
-            ) : null}
-          </>
-        )}
-        {source.busy && !sending ? (
+            <div>
+              <dt>Stays here</dt>
+              <dd>Pull request link, schedules, messaging bindings, ignored files</dd>
+            </div>
+          </dl>
+        ) : null}
+        {transfer?.status === "cancelled" ? (
+          <p className="workspace-handoff-dialog__note" role="status">
+            {transfer.choice.operation === "move" ? "Move" : "Copy"} cancelled. Nothing
+            was created on {transfer.targetLabel}.
+          </p>
+        ) : null}
+        {source.busy ? (
           <p className="workspace-handoff-dialog__note" role="status">
             This thread is running. Sending becomes available when the current turn
             finishes.
@@ -374,7 +469,6 @@ export function SendThreadToMachineDialog(props: {
         <div className="workspace-handoff-dialog__actions">
           <button
             className="button button--ghost"
-            disabled={sending}
             type="button"
             onClick={props.onClose}
           >
@@ -384,15 +478,9 @@ export function SendThreadToMachineDialog(props: {
             className="button button--primary"
             disabled={!canSend}
             type="button"
-            onClick={() => {
-              void send();
-            }}
+            onClick={send}
           >
-            {sending
-              ? `${operation === "copy" ? "Copying" : "Moving"}…`
-              : target
-                ? `${verb} to ${target.label}`
-                : verb}
+            {target ? `${verb} to ${target.label}` : verb}
           </button>
         </div>
       </div>

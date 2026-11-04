@@ -1,6 +1,8 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { codexProviderIdOfModel, type BackendModelOption } from "@pwragent/shared";
 import { ModelDropdown } from "./ModelDropdown";
+import { ThreadHandoffComposerBand } from "../federation/ThreadHandoffProgress";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
@@ -12769,7 +12771,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           push the input or its toolbar off the window. See
           `composer-band-bounds.test.ts`. */}
       <div className="composer__band">
-      {/* Topmost in the band: ambient agent work the operator did not just
+      {/* A send to another machine holds this thread; say so above all else,
+          since the input below cannot start a turn until it finishes. */}
+      <ThreadHandoffComposerBand
+        threadKey={props.thread ? threadSummaryIdentityKey(props.thread) : undefined}
+      />
+      {/* Topmost in the band after that: ambient agent work the operator did not just
           launch. Env action rows sit below it, nearer the input, because they
           carry the Stop the operator is most likely to reach for. */}
       <ActiveSubAgentsStrip

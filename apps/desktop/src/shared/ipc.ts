@@ -18,6 +18,12 @@ export const FEDERATION_GENERATE_INVITE_CHANNEL = "federation:generate-invite";
 export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";
 export const FEDERATION_REVOKE_PEER_CHANNEL = "federation:revoke-peer";
 export const FEDERATION_HANDOFF_THREAD_CHANNEL = "federation:handoff-thread";
+export const FEDERATION_CANCEL_HANDOFF_THREAD_CHANNEL =
+  "federation:handoff-thread-cancel";
+export const FEDERATION_RETRY_HANDOFF_THREAD_NOW_CHANNEL =
+  "federation:handoff-thread-retry-now";
+export const FEDERATION_HANDOFF_THREAD_PROGRESS_CHANNEL =
+  "federation:handoff-thread-progress";
 export const FEDERATION_PUSH_COMPOSER_FILE_CHANNEL =
   "federation:push-composer-file";
 export const FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL =
