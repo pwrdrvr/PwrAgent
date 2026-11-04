@@ -24677,8 +24677,8 @@ a.button {
   opacity: 0.45;
 }
 
-/* The column's own overlays (the to-do stack at 29, the find bar at 30)
-   outrank the context rail (10) beside it. Isolating a locked column keeps
+/* The column's own overlays (`.thread-todo-stack`, `.thread-find`) outrank
+   `.context-rail` beside it. Isolating a locked column keeps
    them, and the lock layer, inside it, so the lock layer can top them
    without also covering the rail's flyout. */
 .thread-view__primary--locked {

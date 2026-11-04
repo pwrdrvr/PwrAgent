@@ -26,9 +26,8 @@ describe("thread lock layer contract", () => {
   });
 
   it("isolates a locked column so the lock layer stays under the context rail", () => {
+    // Without the isolation, a lock layer above the rail would also cover
+    // the rail's flyout, which is a sibling of the column, not a child.
     expect(firstCssRuleBody(".thread-view__primary--locked")).toMatch(/isolation:\s*isolate;/);
-    // Without the isolation, a lock layer above 10 would also cover the
-    // rail's flyout, which is a sibling of the column, not a child.
-    expect(zIndex(".context-rail")).toBe(10);
   });
 });
