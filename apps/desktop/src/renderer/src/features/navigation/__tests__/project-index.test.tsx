@@ -314,7 +314,10 @@ describe("Sidebar project index", () => {
       threads,
       inboxThreads: threads,
       directories: [
-        { ...directory("quill", "t-quill"), threadKeys: [threadSummaryIdentityKey(peerTurn)] },
+        {
+          ...directory("quill", "t-quill"),
+          threadKeys: [threadSummaryIdentityKey(peerTurn)],
+        } as NavigationDirectorySummary,
         directory("relay", "t-relay"),
       ],
     });
