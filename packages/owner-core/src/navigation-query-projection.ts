@@ -43,6 +43,7 @@ export type NavigationQueryMaterialization = {
   selectionDirectory?: NavigationDirectoryRow;
   facets?: NavigationStarMapFacetCounts;
   directories: NavigationDirectoryRow[];
+  collectionKind?: "directories";
   entries: NavigationQueryEntry[];
   modelGroups?: NavigationModelInventoryRow[];
   queryKey: string;
@@ -1029,7 +1030,7 @@ export function projectNavigationQuery(params: {
       .sort((left, right) => (query.scratchpadFirst ? Number(right.kind === "workspace") - Number(left.kind === "workspace") : 0)
         || (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0) || left.label.localeCompare(right.label));
     return { coverage: params.index.coverage ?? { state: "complete" }, counts: countsForThreads(selectedThreads),
-      collectionSize: directories.length, directories, entries: [], queryKey: navigationQueryKey(params.request) };
+      collectionSize: directories.length, collectionKind: "directories", directories, entries: [], queryKey: navigationQueryKey(params.request) };
   }
   // Attention can include a child while excluding its idle/read parent. Base
   // placement on the current filtered membership, before pagination: such a
@@ -1096,6 +1097,11 @@ export function projectNavigationQuery(params: {
       backends: query.kind === "directory-index"
         || (query.kind === "star-map" && query.projectKey === undefined),
     }),
+    ...(query.kind === "directory" ? {
+      selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index,
+        directories: params.index.directories.filter((directory) => directory.key === query.directoryKey),
+      }, threadsByLegacyKey, parentCandidates })[0],
+    } : {}),
     ...(query.kind === "exact" && selectedThreads.length ? {
       // Resolve the canonical home from the complete compact index. A linked
       // worktree path is not necessarily the directory key shown by the viewer.
@@ -1118,6 +1124,7 @@ export function projectNavigationQuery(params: {
         query.filters,
       ),
     } : {}),
+    ...(includeDirectories ? { collectionKind: "directories" as const } : {}),
     directories: includeDirectories
       ? (query.kind === "star-map-geometry" ? buildProjectGeometry(params.index)
         : buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey, parentCandidates }))

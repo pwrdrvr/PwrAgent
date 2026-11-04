@@ -57,6 +57,20 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
+  it.each([
+    { kind: "directory-index" },
+    { kind: "star-map-geometry" },
+    { kind: "messaging-projects" },
+  ] satisfies NavigationQueryRequest["query"][])("returns an empty directory collection for $kind", async (query) => {
+    const page = await new NavigationQueryStore().readPage({
+      scopeKey: "viewer", request: request({ query }), loadIndex: async () => snapshot([]),
+    });
+    expect(page.directories).toEqual([]);
+    expect(page.entries).toEqual([]);
+    expect(page.complete).toBe(true);
+    expect(page.nextCursor).toBeUndefined();
+  });
+
   it.each(["checking", "degraded", "complete"] as const)("pages visible Attention children without loading their idle parents or the whole inventory during %s discovery", async (state) => {
     const children = Array.from({ length: 23 }, (_, index) => ({ ...thread(`child-${index}`),
       createdAt: index + 1, updatedAt: index + 1,
