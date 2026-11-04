@@ -376,6 +376,131 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
+  it("shows Claude's own sub-agents as harness cards and in the thread list's tray, never in Actions", async () => {
+    const run = gitCommand.getMockImplementation()!;
+    // This fixture is not a Git repository; keep native Git startup out of the turn.
+    gitCommand.mockImplementation(async (cwd, args, options) => {
+      if (cwd === tempDir && args.join(" ") === "rev-parse --abbrev-ref HEAD") {
+        return { stdout: "", stderr: "" };
+      }
+      return await run(cwd, args, options);
+    });
+    const progressGate = Promise.withResolvers<void>();
+    const progressDone = Promise.withResolvers<void>();
+    const finishGate = Promise.withResolvers<void>();
+    const events: AgentEvent[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        getSessionInfo: async () => undefined,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+        query: ({ prompt, options = {} }) => {
+          if (typeof prompt === "string") throw new Error("Expected streaming input");
+          const input = prompt[Symbol.asyncIterator]();
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            await input.next();
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            yield { type: "assistant", parent_tool_use_id: null, message: {
+              id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+            } } as ClaudeMessage;
+            yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent",
+              description: "Audit the SDK", task_type: "local_agent", subagent_type: "general-purpose",
+              is_backgrounded: true } as ClaudeMessage;
+            yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+              message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as ClaudeMessage;
+            yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as ClaudeMessage;
+            await progressGate.promise;
+            for (let index = 0; index < 20; index += 1) {
+              yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent",
+                description: "Audit the SDK", usage: { total_tokens: index, tool_uses: index, duration_ms: index },
+                last_tool_name: "Grep" } as ClaudeMessage;
+            }
+            progressDone.resolve();
+            await finishGate.promise;
+            yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
+              status: "completed", output_file: "", summary: "Audit done" } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: () => { finishGate.resolve(); } }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    registry.onEvent((event) => { events.push(event); });
+    const panel = async (threadId: string) => ({
+      counts: await store.readThreadSubAgentLensCounts({ backend: "claude", threadId, visibleSince: 0 }),
+      cards: await store.listThreadSubAgentLensPage({
+        backend: "claude", threadId, lens: "harness", limit: 20, offset: 0, visibleSince: 0,
+      }),
+    });
+    const tray = async (threadId: string) =>
+      (await registry.listThreads({ backend: "claude", forceRefresh: true }))
+        .find((thread) => thread.id === threadId)?.codexNativeSubAgents;
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" });
+      await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Audit" }] });
+      await vi.waitFor(async () => expect((await panel(threadId)).cards).toHaveLength(1));
+
+      // Running: a harness card, a working tray row, and no Actions row.
+      expect(await panel(threadId)).toMatchObject({
+        counts: { harness: 1, pwragent: 0, "token-miser": 0 },
+        cards: [{ monitorId: "claude-native:agent-1", task: "Audit the SDK", status: "running",
+          backend: "claude", agentName: "general-purpose" }],
+      });
+      expect(await tray(threadId)).toEqual([expect.objectContaining({
+        threadId: "claude-native:agent-1", title: "Audit the SDK", threadStatus: "active", agentNickname: "general-purpose",
+      })]);
+      expect((await registry.listBackgroundTerminals({ backend: "claude", threadId })).terminals).toEqual([]);
+      expect(events.filter((event) => event.notification.method === "thread/backgroundTasks/updated")
+        .flatMap((event) => (event.notification.params as { tasks: unknown[] }).tasks)).toEqual([]);
+      expect(events.some((event) => event.notification.method === "thread/subAgents/updated")).toBe(true);
+
+      // Progress is a live view; it never writes the card.
+      const progress = await measureSqliteWrites(async () => {
+        progressGate.resolve();
+        await progressDone.promise;
+      });
+      expectSqliteWriteBudget({ scenario: "claude-subagent-progress",
+        note: "20 progress reports from one running Claude sub-agent; progress stays in memory, zero commits", writes: progress.writes });
+
+      finishGate.resolve();
+      await vi.waitFor(async () => expect((await panel(threadId)).cards[0]?.status).toBe("success"));
+      expect((await panel(threadId)).cards[0]).toMatchObject({
+        monitorId: "claude-native:agent-1", outcome: "success", lastMessage: "Audit done", completedAt: expect.any(Number),
+      });
+      expect(await tray(threadId)).toEqual([expect.objectContaining({
+        threadId: "claude-native:agent-1", threadStatus: "idle",
+      })]);
+    } finally { await registry.close(); }
+  });
+
+  it("budgets one commit when a Claude sub-agent starts and one when it ends", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      recordClaudeSubAgents(params: { threadId: string; subAgents: Array<{
+        monitorId: string; taskId: string; task: string; status: ThreadSubAgentSummary["status"];
+        agentName?: string; lastMessage?: string; startedAt?: number;
+      }> }): Promise<void>;
+    };
+    const card = { monitorId: "claude-native:agent-1", taskId: "agent-1", task: "Audit the SDK", agentName: "Explore", startedAt: 1 };
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await internal.recordClaudeSubAgents({ threadId: "claude-thread", subAgents: [{ ...card, status: "running" }] });
+        await internal.recordClaudeSubAgents({ threadId: "claude-thread", subAgents: [{ ...card, status: "success", lastMessage: "Done" }] });
+        // A card that ended keeps its end; a late report writes nothing.
+        await internal.recordClaudeSubAgents({ threadId: "claude-thread", subAgents: [{ ...card, status: "running" }] });
+      });
+      expect(await store.getThreadSubAgent({ backend: "claude", threadId: "claude-thread", monitorId: card.monitorId }))
+        .toMatchObject({ status: "success", outcome: "success", lastMessage: "Done" });
+      expectSqliteWriteBudget({ scenario: "claude-subagent-cards",
+        note: "one Claude sub-agent's start and end, then a late report: 2 commits per sub-agent; at 200 sub-agents/day ~25 KB WAL each, ~10 MB/day; zero idle", writes });
+    } finally { await registry.close(); }
+  });
+
   it("budgets the origin a to-do card's Start thread records on its first prompt", async () => {
     const run = gitCommand.getMockImplementation()!;
     // This fixture is not a Git repository; keep native Git startup out of the budget.
