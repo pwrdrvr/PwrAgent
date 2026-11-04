@@ -86,6 +86,7 @@ describe("AgentToolMcpServer", () => {
         "search_mcp_tools", "search_token_miser_output", "read_token_miser_output",
         "read_token_miser_output_batch", "read_all_token_miser_output", "read_token_miser_segment",
         "read_tool_guide",
+        "scan_thread_maintenance",
       ].sort();
       expect(tools.filter((tool) => tool.annotations?.readOnlyHint).map((tool) => tool.name).sort()).toEqual(readOnlyNames);
       // Every advertised tool has an explicit classification, including mixed tools

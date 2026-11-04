@@ -233,7 +233,7 @@ export type ThreadMaintenanceScanToolResult = {
       idleCount: number;
       kept: Record<string, number>;
       idle: Array<{
-        backend: AppServerBackendKind;
+        backend: string;
         threadId: ThreadIdentifier;
         title: string;
         lastActivityAt: number;
@@ -248,7 +248,7 @@ export type ThreadMaintenanceScanToolResult = {
     truncated: boolean;
   };
   checkouts: {
-    removable: Array<{ backend: AppServerBackendKind; threadId: ThreadIdentifier; worktreePath: string; workspace?: string }>;
+    removable: Array<{ backend: string; threadId: ThreadIdentifier; worktreePath: string; workspace?: string }>;
     repositoryGone: Array<{ worktreePath: string; missingRepositoryPath?: string }>;
     kept: Record<string, number>;
     emptyFolders: number;

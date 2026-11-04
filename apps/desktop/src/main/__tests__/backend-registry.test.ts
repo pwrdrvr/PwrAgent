@@ -72627,7 +72627,7 @@ describe("thread maintenance agent tools", () => {
       trashCheckouts: [{ worktreePath: "/wt/b/kit" }] });
     const card = await answer("Run maintenance");
     expect(card.itemId).toBe("maint-call");
-    expect(card.questions[0]!.question).toContain("archive 1 thread, remove 1 archived checkout and move 1 orphaned checkout to the Trash");
+    expect((card.questions as Array<{ question: string }>)[0]!.question).toContain("archive 1 thread, remove 1 archived checkout and move 1 orphaned checkout to the Trash");
     const response = await pending;
     expect(response.success).toBe(true);
     expect(handler.start).toHaveBeenCalledExactlyOnceWith({ scanId: "scan-1",
