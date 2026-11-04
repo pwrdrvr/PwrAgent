@@ -1317,7 +1317,7 @@ export async function closeElectronWithSessionDrain(
   };
   child.stderr?.on("data", onStderr);
   try {
-    await electronApp.evaluate(async ({ session, webContents }, errorPrefix) => {
+    await electronApp.evaluate(async ({ app, session, webContents }, errorPrefix) => {
       const record = (stage: string, index?: number) => {
         process.stderr.write(`${errorPrefix}${JSON.stringify({
           stage, index, at: Date.now(), pid: process.pid,
@@ -1341,6 +1341,9 @@ export async function closeElectronWithSessionDrain(
         record("clear-cache-complete", index);
       }));
       record("released");
+      app.once("before-quit", () => record("before-quit"));
+      app.once("will-quit", () => record("will-quit"));
+      app.once("quit", () => record("quit"));
     }, errorPrefix);
     // Session preparation and application disposal share the close deadline.
     await electronApp.close();
