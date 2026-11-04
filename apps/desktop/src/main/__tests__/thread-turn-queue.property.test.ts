@@ -18,6 +18,7 @@ type Model = {
   // existing entries keep their cause, even when another kind arrives.
   holdOrder: string[];
   active?: string;
+  awaitingTerminal: string[];
   finished: string[];
   started: string[];
 };
@@ -30,16 +31,17 @@ type Real = {
 };
 type Operation =
   | { kind: "submit" }
+  | { kind: "idle" }
   | { kind: "submitHeld"; reason: string }
   | { kind: "releaseHold"; reason: string }
-  | { kind: "releaseThread" | "staleRelease"; status: "turn/completed" | "turn/failed" }
+  | { kind: "releaseThread" | "staleRelease" | "lateTerminal"; status: "turn/completed" | "turn/failed" }
   | { kind: "retry"; index: number }
   | { kind: "pause"; index: number; paused: boolean }
   | { kind: "move"; index: number; before?: number };
 
 function setup(): { model: Model; real: Real } {
   const model: Model = {
-    arrivals: [], waiting: [], holdOrder: [], finished: [], started: [],
+    arrivals: [], waiting: [], holdOrder: [], awaitingTerminal: [], finished: [], started: [],
   };
   const real: Real = {
     queue: new ThreadTurnQueue({
@@ -106,7 +108,11 @@ class QueueCommand implements fc.AsyncCommand<Model, Real> {
 
   check(model: Readonly<Model>): boolean {
     switch (this.operation.kind) {
+      case "idle":
       case "releaseThread": return model.active !== undefined;
+      // An idle notification may end occupancy before the provider reports
+      // the outcome, while paused or held successors still wait.
+      case "lateTerminal": return model.awaitingTerminal.length > 0 && model.active === undefined;
       case "staleRelease": return model.finished.length > 0;
       case "retry":
       case "move":
@@ -166,8 +172,18 @@ class QueueCommand implements fc.AsyncCommand<Model, Real> {
           .toBe(released);
         break;
       }
-      case "releaseThread": {
-        const turnId = model.active!;
+      case "idle": {
+        model.awaitingTerminal.push(model.active!);
+        model.active = undefined;
+        advance(model);
+        real.active = undefined;
+        await real.queue.releaseThread({ ...THREAD, status: "idle" });
+        break;
+      }
+      case "releaseThread":
+      case "lateTerminal": {
+        const turnId = operation.kind === "lateTerminal"
+          ? model.awaitingTerminal.shift()! : model.active!;
         model.finished.push(turnId);
         model.active = undefined;
         if (operation.status === "turn/failed" && model.waiting.length > 0) {
@@ -266,6 +282,8 @@ const commands = fc.commands([
   fc.constant(new QueueCommand({ kind: "submit" })),
   ...holdCommands,
   terminal.map((status) => new QueueCommand({ kind: "releaseThread", status })),
+  fc.constant(new QueueCommand({ kind: "idle" })),
+  terminal.map((status) => new QueueCommand({ kind: "lateTerminal", status })),
   terminal.map((status) => new QueueCommand({ kind: "staleRelease", status })),
   fc.nat({ max: 10 }).map((index) => new QueueCommand({ kind: "retry", index })),
   fc.tuple(fc.nat({ max: 10 }), fc.boolean())
@@ -284,6 +302,22 @@ async function runModel(sequence: Iterable<fc.AsyncCommand<Model, Real>>): Promi
 }
 
 describe("ThreadTurnQueue model", () => {
+  it.each(["paused", "locked"])("requires review when idle precedes failure with a %s successor", async (blocked) => {
+    await runModel([
+      new QueueCommand({ kind: "submit" }),
+      ...(blocked === "paused" ? [
+        new QueueCommand({ kind: "submit" }),
+        new QueueCommand({ kind: "pause", index: 0, paused: true }),
+      ] : [new QueueCommand({ kind: "submitHeld", reason: "locked" })]),
+      new QueueCommand({ kind: "idle" }),
+      new QueueCommand({ kind: "lateTerminal", status: "turn/failed" }),
+      blocked === "paused"
+        ? new QueueCommand({ kind: "pause", index: 0, paused: false })
+        : new QueueCommand({ kind: "releaseHold", reason: "locked" }),
+      new QueueCommand({ kind: "retry", index: 0 }),
+    ]);
+  });
+
   it("handles an external turn's terminal after acknowledging steer deliveries into it", async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), terminal, async (deliveries, status) => {
       let active = true;
