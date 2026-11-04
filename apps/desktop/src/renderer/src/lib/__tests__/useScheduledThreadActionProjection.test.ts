@@ -219,6 +219,24 @@ describe("scheduled thread action projections", () => {
     ).toBeUndefined();
   });
 
+  it("drops a dismissed failure and does not place it again on a fresh sync", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    applyScheduledActionProjection(store, scheduledAction({
+      status: "failed",
+      errorMessage: "backend offline",
+    }));
+
+    // The owner publishes the dismissal as a cancelled action.
+    applyScheduledActionProjection(store, scheduledAction({ status: "cancelled" }));
+    expect(store.getQueuedTurns(scopeKey)).toEqual([]);
+
+    // A new projection (reload, restart) reads the owner's list again.
+    syncScheduledActionProjections(store, [scheduledAction({ status: "cancelled" })]);
+    expect(store.getQueuedTurns(scopeKey)).toEqual([]);
+  });
+
   it("reconciles compact invalidations without idle full-list polling", async () => {
     let listener!: (event: AgentEvent) => void;
     vi.useFakeTimers();

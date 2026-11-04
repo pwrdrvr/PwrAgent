@@ -5042,6 +5042,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     return { queueEntryId: queued.id, contentHash: "", input: payload.input };
   };
 
+  // A failed row is a local copy of a failed scheduled action. Removing it
+  // here alone lasts until the next projection reads the owner's failures,
+  // so the operator's delete, edit, or send also dismisses it on the owner.
+  const dismissFailedScheduledAction = async (
+    queued: QueuedTurnDraft,
+  ): Promise<void> => {
+    if (!queued.failedScheduledActionId || !props.desktopApi?.cancelScheduledThreadAction) {
+      return;
+    }
+    try {
+      await props.desktopApi.cancelScheduledThreadAction({
+        federationTarget: props.thread?.federation?.ref.target
+          ?? rendererFederationTarget,
+        id: queued.failedScheduledActionId,
+      });
+    } catch {
+      // An owner that predates dismissal refuses a failed action. The row
+      // still leaves this window, as it always did.
+    }
+  };
+
   const cancelServerManagedQueuedTurn = async (
     queued: QueuedTurnDraft,
     scopeKey = composerScopeKey,
@@ -5068,6 +5089,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         reportError(error instanceof Error ? error.message : String(error));
         return "failed";
       }
+    }
+    if (queued.failedScheduledActionId) {
+      // Steering a failed row delivers it, so its failure is settled too.
+      await dismissFailedScheduledAction(queued);
+      return "cancelled";
     }
     if (!queued.queueEntryId) {
       return "cancelled";
@@ -12998,6 +13024,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   disabled={props.disabled || sending}
                   type="button"
                   onClick={() => {
+                    void dismissFailedScheduledAction(queued);
                     sendQueuedTurnNow(queued);
                   }}
                 >
@@ -13050,6 +13077,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     requestAnimationFrame(() => inputRef.current?.focus());
                   };
                   if (!backendOwned) {
+                    void dismissFailedScheduledAction(queued);
                     editQueuedTurn();
                     return;
                   }
@@ -13084,6 +13112,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 disabled={queued.backendQueuePending}
                 onClick={() => {
                   if (!backendOwned) {
+                    void dismissFailedScheduledAction(queued);
                     acknowledgeQueuedFailure(queued);
                     removeQueuedTurnAt(index);
                     return;
