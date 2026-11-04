@@ -149,12 +149,12 @@ class QueueCommand implements fc.AsyncCommand<Model, Real> {
         if (released) {
           // The multiset of earlier surviving causes is a barrier: removing
           // X cannot let a later entry pass a predecessor still held for Y.
-          const ahead: string[] = [];
+          const ahead = new Set<string>();
           for (const entry of model.waiting) {
             if (entry.holds.length === 0) continue;
             entry.holds = entry.holds.filter((reason) => reason !== operation.reason);
             if (entry.holds.length === 0) entry.holds = [...ahead];
-            ahead.push(...entry.holds);
+            for (const reason of entry.holds) ahead.add(reason);
           }
           model.holdOrder = model.holdOrder.filter((reason) =>
             model.waiting.some((entry) => entry.holds.includes(reason)));
@@ -243,6 +243,21 @@ const commands = fc.commands([
 ], { maxCommands: 40, size: "+1" });
 
 describe("ThreadTurnQueue model", () => {
+  it("ignores an old failure after a newer entry is held", async () => {
+    const state = setup();
+    try {
+      await fc.asyncModelRun(() => state, [
+        new QueueCommand({ kind: "submitHeld", reason: "locked" }),
+        new QueueCommand({ kind: "retry", index: 0 }),
+        new QueueCommand({ kind: "releaseThread", status: "turn/completed" }),
+        new QueueCommand({ kind: "submitHeld", reason: "locked" }),
+        new QueueCommand({ kind: "staleRelease", status: "turn/failed" }),
+      ]);
+    } finally {
+      state.real.queue.close();
+    }
+  });
+
   it("preserves admission order, hold causes, single occupancy and progress", async () => {
     await fc.assert(fc.asyncProperty(commands, async (sequence) => {
       const state = setup();

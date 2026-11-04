@@ -237,6 +237,7 @@ type ThreadTurnQueueReleaseParams = {
 };
 
 type AdmittedEntry = {
+  key: string;
   entryId: string;
   turnId?: string;
 };
@@ -1043,6 +1044,16 @@ export class ThreadTurnQueue {
       });
       return;
     }
+    const running = this.runningEntries.get(key);
+    if (params.turnId !== undefined && (running?.turnId !== undefined
+      ? running.turnId !== params.turnId
+      : [...this.recentlyAdmittedEntries.values()].some((entry) =>
+        entry.key === key && entry.turnId === params.turnId))) {
+      // A terminal for an older admission must not hold newer work, even
+      // when that older turn ended before the current FIFO was submitted.
+      // Unknown external turns still release and hold their waiting FIFO.
+      return;
+    }
     if (this.releasingKeys.has(key)) {
       // Codex commonly follows a terminal event with a status→idle event.
       // Keep only that no-turn-id release if it lands while we are awaiting a
@@ -1119,7 +1130,7 @@ export class ThreadTurnQueue {
         // batch; new senders can only append to the next queued steer.
         const attempt = Symbol("queue admission");
         this.applyAdmission(key, { type: "begin", attempt, kind: "steer" });
-        this.rememberAdmittedEntry({ entryId: next.id });
+        this.rememberAdmittedEntry({ key, entryId: next.id });
         let delivered = false;
         try {
           const result = await this.options.steerTurn(next);
@@ -1137,7 +1148,7 @@ export class ThreadTurnQueue {
             return "none";
           }
           this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
-          this.rememberAdmittedEntry({ entryId: next.id, turnId: result.turnId });
+          this.rememberAdmittedEntry({ key, entryId: next.id, turnId: result.turnId });
           delivered = true;
           await this.emit({ type: "started", entry: next, turnId: result.turnId });
           return "started";
@@ -1192,7 +1203,7 @@ export class ThreadTurnQueue {
     const key = this.keyFor(entry);
     const attempt = Symbol("queue admission");
     this.applyAdmission(key, { type: "begin", attempt });
-    this.rememberAdmittedEntry({ entryId: entry.id });
+    this.rememberAdmittedEntry({ key, entryId: entry.id });
     try {
       const result = await this.options.startTurn(entry);
       const admission = this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
@@ -1201,6 +1212,7 @@ export class ThreadTurnQueue {
       // without resurrecting a running entry for the already completed turn.
       if (!admission.terminal) this.runningEntries.set(key, { entry, turnId: result.turnId });
       this.rememberAdmittedEntry({
+        key,
         entryId: entry.id,
         turnId: result.turnId,
       });
