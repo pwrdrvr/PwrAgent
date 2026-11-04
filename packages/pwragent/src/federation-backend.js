@@ -192,7 +192,7 @@ export class HeadlessBackend {
           && (!params.afterKey || project.path > params.afterKey)).map((project) => ({ key: project.path, kind: "directory", path: project.path, label: project.label, threadKeys: [] })) };
       case "readTurnAssistantReply": {
         const history = await this.readThread(params.threadId);
-        const messages = history.replay.messages.filter((message) => message.role === "assistant" && message.turn?.id === params.turnId);
+        const messages = history.replay.entries.filter((entry) => entry.type === "message" && entry.role === "assistant" && entry.turn?.id === params.turnId);
         return { message: messages.find((message) => params.itemId ? message.id === params.itemId : message.text === params.text) || null };
       }
       case "readThread": {

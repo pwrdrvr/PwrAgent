@@ -86,7 +86,7 @@ test("replay normalizes turn status on messages and activities for mid-turn hydr
     assert.equal(entry.turn.status, expected);
   }
   assert.deepEqual(result.replay.entries.at(-1).turn, { id: "turn-inProgress", status: "in_progress" });
-  assert.equal(result.replay.messages.find((message) => message.id === "message-inProgress").text, "Working");
+  assert.deepEqual(result.replay.messages.map((message) => message.text), ["Working"], "the shared client deduplicates repeated message summaries");
 });
 
 test("federated transcript reads return the newest page and page back by cursor", async (t) => {
