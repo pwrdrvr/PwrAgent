@@ -494,6 +494,10 @@ import {
   type PwrAgentThreadInspectionErrorCode,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
+  type ThreadMaintenanceApplyRequest,
+  type ThreadMaintenanceRules,
+  type ThreadMaintenanceRun,
+  type ThreadMaintenanceScan,
   type ThreadReadEntrySummary,
   type ThreadReadMessageSummary,
   type ThreadMutationAppliedChange,
@@ -842,6 +846,12 @@ import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-sessi
 import { ensureAcpHelperWorkspace } from "../acp/acp-capability-probe";
 import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
 import { getMainLogger } from "../log";
+import {
+  planThreadMaintenanceApply,
+  summarizeThreadMaintenanceRun,
+  summarizeThreadMaintenanceScan,
+  threadMaintenanceConfirmationQuestion,
+} from "../agent-tools/thread-maintenance-tool-results";
 import {
   getDesktopConfigStore,
   getDesktopSettingsService,
@@ -8909,6 +8919,21 @@ export type AgentThreadActions = {
   ) => Promise<SetThreadParentResponse>;
 };
 
+/** The app-level Thread maintenance service, injected so the registry never
+ * imports the runtime that constructs it. */
+export type ThreadMaintenanceToolHandler = {
+  scan: (request: { rules?: Partial<ThreadMaintenanceRules>; projectKey?: string }) => Promise<ThreadMaintenanceScan>;
+  getScan: (scanId: string) => ThreadMaintenanceScan | undefined;
+  getRun: () => ThreadMaintenanceRun | undefined;
+  start: (request: ThreadMaintenanceApplyRequest) => { run: ThreadMaintenanceRun; done: Promise<ThreadMaintenanceRun> };
+  open: (request: { projectKey?: string }) => boolean;
+};
+
+/** How long apply_thread_maintenance waits before it returns a running run. */
+const THREAD_MAINTENANCE_TOOL_WAIT_MS = 4 * 60_000;
+const THREAD_MAINTENANCE_CONFIRM_QUESTION_ID = "thread_maintenance";
+const THREAD_MAINTENANCE_CONFIRM_APPROVE_LABEL = "Run maintenance";
+
 function threadInspectionFailure(
   code: PwrAgentThreadInspectionErrorCode,
   message: string,
@@ -10867,6 +10892,7 @@ export class DesktopBackendRegistry {
   private threadPullRequestWatchToolHandler:
     | ThreadPullRequestWatchToolHandler
     | undefined;
+  private threadMaintenanceToolHandler: ThreadMaintenanceToolHandler | undefined;
   private threadDependencyToolHandler:
     | ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">) => Promise<PwrAgentThreadInspectionResponse>)
     | undefined;
@@ -13145,6 +13171,10 @@ export class DesktopBackendRegistry {
       dependents: request.includeDependents === false ? [] : all.filter((hold) => hold.dependency?.target.scope === "local"
         && hold.dependency.backend === normalized.backend && hold.dependency.threadId === normalized.threadId).map((hold) => ({ hold })),
     };
+  }
+
+  setThreadMaintenanceToolHandler(handler: ThreadMaintenanceToolHandler | undefined): void {
+    this.threadMaintenanceToolHandler = handler;
   }
 
   setThreadDependencyToolHandler(
@@ -50329,6 +50359,12 @@ export class DesktopBackendRegistry {
       }
     }
 
+    if (request.operation === "scan_thread_maintenance"
+      || request.operation === "apply_thread_maintenance"
+      || request.operation === "open_thread_maintenance") {
+      return await this.handleThreadMaintenanceToolRequest(request);
+    }
+
     if (request.operation === "rename_current_thread") {
       const args = request.args;
       if (typeof args.title !== "string" || !args.title.trim() || args.title.length > 200
@@ -50357,6 +50393,128 @@ export class DesktopBackendRegistry {
         message: "Unsupported PwrAgent thread inspection operation.",
       },
     };
+  }
+
+  private async handleThreadMaintenanceToolRequest(
+    request: Extract<PwrAgentThreadInspectionRequest, {
+      operation: "scan_thread_maintenance" | "apply_thread_maintenance" | "open_thread_maintenance";
+    }>,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    const handler = this.threadMaintenanceToolHandler;
+    if (!handler) return threadInspectionFailure("unsupported_operation", "Thread maintenance is unavailable on this instance.");
+    const args = (request.args ?? {}) as Record<string, unknown>;
+    const allowed = (keys: string[]) => Object.keys(args).every((key) => keys.includes(key));
+    const projectKey = args.projectKey;
+    if (projectKey !== undefined && (typeof projectKey !== "string" || !projectKey.trim())) {
+      return threadInspectionFailure("invalid_arguments", "projectKey must be a nonempty project path.");
+    }
+    try {
+      if (request.operation === "open_thread_maintenance") {
+        if (!allowed(["projectKey"])) return threadInspectionFailure("invalid_arguments", "Pass only an optional projectKey.");
+        const opened = handler.open(typeof projectKey === "string" ? { projectKey: projectKey.trim() } : {});
+        return { ok: true, data: { maintenanceDialog: { opened } } };
+      }
+      if (request.operation === "scan_thread_maintenance") {
+        if (!allowed(["projectKey", "rules"])) return threadInspectionFailure("invalid_arguments", "Pass only projectKey and rules.");
+        const rules = args.rules;
+        if (rules !== undefined && (!rules || typeof rules !== "object" || Array.isArray(rules))) {
+          return threadInspectionFailure("invalid_arguments", "rules must be an object.");
+        }
+        const scan = await handler.scan({
+          ...(typeof projectKey === "string" ? { projectKey: projectKey.trim() } : {}),
+          ...(rules ? { rules: rules as Partial<ThreadMaintenanceRules> } : {}),
+        });
+        return { ok: true, data: { maintenanceScan: summarizeThreadMaintenanceScan(scan, handler.getRun()) } };
+      }
+      if (!allowed(["scanId", "archive", "removeCheckouts", "trashCheckouts", "removeEmptyFolders", "dryRun"])) {
+        return threadInspectionFailure("invalid_arguments", "Pass only scanId, archive, removeCheckouts, trashCheckouts, removeEmptyFolders and dryRun.");
+      }
+      const applyArgs = request.args as import("@pwragent/shared").ApplyThreadMaintenanceToolArgs;
+      if (typeof applyArgs.scanId !== "string" || !applyArgs.scanId.trim()) {
+        return threadInspectionFailure("invalid_arguments", "Pass the scanId from scan_thread_maintenance.");
+      }
+      for (const key of ["archive", "removeCheckouts", "trashCheckouts"] as const) {
+        if (applyArgs[key] !== undefined && !Array.isArray(applyArgs[key])) {
+          return threadInspectionFailure("invalid_arguments", `${key} must be an array.`);
+        }
+      }
+      const scan = handler.getScan(applyArgs.scanId.trim());
+      if (!scan) return threadInspectionFailure("not_found", "That scan is no longer available. Call scan_thread_maintenance again.");
+      const plan = planThreadMaintenanceApply(applyArgs, scan, {
+        backend: request.context.backend, threadId: request.context.threadId,
+      });
+      if ("error" in plan) return threadInspectionFailure("invalid_arguments", plan.error);
+      if (applyArgs.dryRun === true) return { ok: true, data: { maintenancePlan: plan.summary, dryRun: true } };
+      if (handler.getRun()?.running) {
+        return threadInspectionFailure("forbidden", "Thread maintenance is already running. Wait for it, then scan again.");
+      }
+      const approved = await this.requestThreadMaintenanceConfirmation({
+        backend: request.context.backend,
+        threadId: request.context.threadId,
+        turnId: request.context.turnId,
+        itemId: request.context.callId,
+        requestId: `thread-maintenance:${scan.scanId}:${request.context.callId?.trim() || randomUUID()}`,
+        question: threadMaintenanceConfirmationQuestion(plan.summary),
+      });
+      if (!approved) {
+        return threadInspectionFailure("forbidden", "The operator declined this thread maintenance run. Do not retry it. Ask the operator what to change.");
+      }
+      const { done } = handler.start(plan.request);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waited = await Promise.race([
+        done,
+        new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), THREAD_MAINTENANCE_TOOL_WAIT_MS); }),
+      ]).finally(() => clearTimeout(timer));
+      const run = waited ?? handler.getRun();
+      if (!run) return threadInspectionFailure("internal_error", "Thread maintenance did not report a run.");
+      return { ok: true, data: { maintenanceRun: summarizeThreadMaintenanceRun(run) } };
+    } catch (error) {
+      return threadInspectionFailure("internal_error", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /** One approve-or-cancel card on the calling thread. Resolves false on
+   * anything but an explicit approval. */
+  private async requestThreadMaintenanceConfirmation(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId?: string;
+    itemId?: string;
+    requestId: string;
+    question: string;
+  }): Promise<boolean> {
+    const key = buildPendingRequestKey({ backend: params.backend, threadId: params.threadId, requestId: params.requestId });
+    const notification: AppServerPendingRequestNotification = {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: params.threadId,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+        ...(params.itemId ? { itemId: params.itemId } : {}),
+        requestId: params.requestId,
+        questions: [{
+          id: THREAD_MAINTENANCE_CONFIRM_QUESTION_ID,
+          header: "Thread maintenance",
+          question: params.question,
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: THREAD_MAINTENANCE_CONFIRM_APPROVE_LABEL, description: "Run exactly these changes. Each item is checked again first." },
+            { label: "Cancel", description: "Change nothing." },
+          ],
+        }],
+      },
+    };
+    const response = await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
+      this.pendingServerRequests.set(key, { backend: params.backend, notification, resolve, reject });
+      void this.emit({ backend: params.backend, notification }).catch((error) => {
+        backendRegistryLog.error("failed to publish thread maintenance confirmation; keeping request pending", {
+          backend: params.backend, threadId: params.threadId, requestId: params.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
+    const answers = (response as AppServerToolRequestUserInputResponse)?.answers?.[THREAD_MAINTENANCE_CONFIRM_QUESTION_ID]?.answers;
+    return Array.isArray(answers) && answers.includes(THREAD_MAINTENANCE_CONFIRM_APPROVE_LABEL);
   }
 
   private async mergeFederatedThreadSearchResults(params: {

@@ -475,7 +475,8 @@ import {
 import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
 import { registerThreadMaintenanceIpc, unregisterThreadMaintenanceIpc } from "./thread-maintenance-ipc";
-import { disposeThreadMaintenanceService } from "../thread-maintenance-runtime";
+import { disposeThreadMaintenanceService, getThreadMaintenanceService } from "../thread-maintenance-runtime";
+import { requestOpenThreadMaintenance } from "../window-open-thread-maintenance";
 import {
   federationWindowTargetForWebContents,
   isFederationWindowWebContents,
@@ -10861,6 +10862,13 @@ export function registerAppServerIpcHandlers(): void {
     const federationTarget = federationWindowTargetForWebContents(event.sender);
     return await appServerService.manageThreadMergeHolds({ ...request, ...(!request.federationTarget && federationTarget ? { federationTarget } : {}) });
   });
+  getDesktopBackendRegistry().setThreadMaintenanceToolHandler({
+    scan: async (request) => await getThreadMaintenanceService().scan(request),
+    getScan: (scanId) => getThreadMaintenanceService().getScan(scanId),
+    getRun: () => getThreadMaintenanceService().getRun(),
+    start: (request) => getThreadMaintenanceService().start(request),
+    open: (request) => requestOpenThreadMaintenance(request),
+  });
   getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request, provenance) => {
     try {
       const threadDependencies = await appServerService.manageThreadDependencies(request, provenance);
@@ -12367,6 +12375,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setThreadDependencyToolHandler(undefined);
   registry?.setThreadMergeHoldToolHandler(undefined);
   registry?.setMergeHoldReminderDelivery(undefined);
+  registry?.setThreadMaintenanceToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setPullRequestReferenceResolver(undefined);

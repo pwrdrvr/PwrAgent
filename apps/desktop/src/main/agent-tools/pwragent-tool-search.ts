@@ -6,7 +6,7 @@ import type { TokenMiserStore } from "../token-miser/token-miser-store";
 
 export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
 Search when the user wants to:
-- Find, read, inspect, open/mount/navigate to threads in the graphical UI, rename, pin, lock/unlock, archive/close, restore, or change settings on threads; mark projects read in bulk; check status, activity, usage, model, fast mode, or reasoning effort; list which threads need attention on every machine.
+- Find, read, inspect, open/mount/navigate to threads in the graphical UI, rename, pin, lock/unlock, archive/close, restore, or change settings on threads; mark projects read in bulk; clean up old threads, archived worktrees and their disk space; check status, activity, usage, model, fast mode, or reasoning effort; list which threads need attention on every machine.
 - Delegate or hand off work to child threads, split work into parallel tasks, create a Job Monitor for a long command or repeated checks, collect results, send follow-ups, steer active work, or urgently stop a thread.
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
@@ -59,6 +59,10 @@ const SEARCH_ALIASES: Record<string, string> = {
   mutate_thread: "close closing archive restore rename pin lock unlock park freeze model fast priority mode settings",
   rename_current_thread: "rename name title this thread conversation self",
   mark_project_read: "bulk batch clear dismiss unread read project folder directory repository all",
+  // A single-thread archive stays with mutate_thread; these cover bulk cleanup.
+  scan_thread_maintenance: "find clean cleanup old stale idle inactive unused worktrees checkouts disk space free maintenance bulk",
+  apply_thread_maintenance: "run apply selected bulk archiving cleanup remove worktrees checkouts maintenance",
+  open_thread_maintenance: "open show dialog window review cleanup maintenance",
   attach_thread_directory: "link repository project folder worktree",
   move_thread_workspace: "move project folder checkout worktree",
   list_federation_instances: "federation machines computers hosts load capacity",
