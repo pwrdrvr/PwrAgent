@@ -213,8 +213,8 @@ describe("to-do dispatch target", () => {
     setup({
       recentRows: [row("recent", "Rebalance desktop E2E shard durations", {
         gitBranch: "ci/refit-desktop-e2e-shards",
-        linkedDirectories: [{ key: "directory:/src/pwragent", label: "PwrAgnt", path: "/src/pwragent" }],
-      } as Partial<NavigationThreadSummary>)],
+        linkedDirectories: [{ id: "pwragent", label: "PwrAgnt", path: "/src/pwragent", kind: "local" }],
+      })],
       ownerRows: [PR_OWNER, row("bench", "Benchmark the limiter under load")],
     });
     await openPicker();
