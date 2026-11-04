@@ -11,7 +11,7 @@ import type { AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState
 import type { ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 import type { ArchiveCleanupContext } from "../app-server/archive-cleanup-queue";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { CodexAppServerClient } from "../codex-app-server/client";
+import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";
 
 vi.mock("../codex-app-server/stdio-transport", async () => ({
