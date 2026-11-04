@@ -70,6 +70,9 @@ test("captures the review card's model menu", async ({}, testInfo) => {
 
     const reviewTarget = app.window.getByRole("group", { name: "Review target" });
     await expect(reviewTarget).toBeVisible();
+    // The replay has no answer for every startup call; its notice is noise here.
+    const dismiss = app.window.getByRole("button", { name: "Dismiss", exact: true });
+    for (const button of await dismiss.all()) await button.click();
     await reviewTarget.getByRole("button", { name: /^Review model(?::|$)/ }).click();
     const list = app.window.getByRole("listbox", { name: /^Review model/ }).first();
     await expect(list).toBeVisible();
