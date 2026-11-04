@@ -29,6 +29,7 @@ type Scenario = {
   delayMs: number;
   outcome: "started" | "queued" | "failed";
   overlap?: boolean;
+  requestFails?: boolean;
 };
 
 const scenario = fc.record({
@@ -37,6 +38,7 @@ const scenario = fc.record({
   delayMs: fc.integer({ min: FIRST_TYPING_BUDGET_MS + 1, max: 30_000 }),
   outcome: fc.constantFrom("started" as const, "queued" as const, "failed" as const),
   overlap: fc.boolean(),
+  requestFails: fc.boolean(),
 // Default Agent support for ACP requires a negotiated capability report, and
 // Claude is not a supported Default Agent. This fixture supplies neither;
 // bound replies exercise both backends without inventing an accepted route.
@@ -60,6 +62,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
       sendChatAction: async (request) => {
         requests.push({ at: now, chatId: request.chat_id, topicId: request.message_thread_id });
         await scheduler.schedule(response.promise, "Telegram response");
+        if (input.requestFails && requests.length === 1) throw new Error("Fixture typing request failure");
         return true;
       },
     } as TelegramBotApi,
@@ -155,6 +158,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
   // Reference lifecycle: a started turn keeps activity; a failed or queued
   // attempt on this idle thread must not leave a preparation lease running.
   expect(states.at(-1)).toBe(input.outcome === "started" ? "active" : "idle");
+  if (input.outcome === "started" && input.requestFails) expect(requests).toHaveLength(2);
 }
 
 describe("first typing request (property)", () => {

@@ -5308,8 +5308,11 @@ export class MessagingController {
         ?? startingOrigin?.binding
         ?? params.binding;
       this.setActiveTurn(deliveryBinding, activeTurn);
+      // Preserve the accepted turn's normal signal (including a retry after a
+      // failed preparation request). This wait is after backend acceptance.
+      await preparingActivity?.settled;
       await this.signalTurnActivity(deliveryBinding, activeTurn, {
-        force: !preparingActivity.signaled,
+        force: true,
       });
       await this.renderAutomaticBindingStatus(
         deliveryBinding,
@@ -17155,7 +17158,7 @@ export class MessagingController {
   }
 
   private beginTurnPreparationActivity(binding: MessagingBindingRecord): {
-    signaled: boolean;
+    settled: Promise<void>;
     finish: (started: boolean) => Promise<void>;
   } {
     let group = this.preparingTurnActivity.get(binding.id);
@@ -17184,7 +17187,7 @@ export class MessagingController {
       : Promise.resolve();
     const ownedGroup = group;
     return {
-      signaled: ownedGroup.signaled,
+      settled: delivery,
       finish: async (started) => {
         ownedGroup.attempts.delete(attempt);
         if (ownedGroup.attempts.size === 0) {
