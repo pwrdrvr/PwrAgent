@@ -79,11 +79,22 @@ async function captureRegion(page: Page, file: string, anchors: Locator[]): Prom
 }
 
 /** Run one surface's capture; a surface that cannot be reached is noted, not fatal. */
-async function surface(failures: string[], name: string, run: () => Promise<void>): Promise<void> {
+async function surface(
+  page: Page,
+  failures: string[],
+  name: string,
+  run: () => Promise<void>,
+  cleanup?: () => Promise<void>,
+): Promise<void> {
   try {
     await run();
   } catch (error) {
     failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    await page.screenshot({
+      path: test.info().outputPath(`failed-${name.replace(/\W+/g, "-")}.png`),
+    }).catch(() => undefined);
+  } finally {
+    await cleanup?.().catch(() => undefined);
   }
 }
 
@@ -111,7 +122,7 @@ test("captures the model pickers this change touched", async () => {
       for (const button of await dismiss.all()) await button.click().catch(() => undefined);
     };
 
-    await surface(failures, "review card", async () => {
+    await surface(page, failures, "review card", async () => {
       await page.getByRole("button", { name: /Review command flow/i }).first().click();
       const reply = page.getByRole("textbox", { name: "Reply", exact: true });
       await reply.fill("/review");
@@ -135,9 +146,10 @@ test("captures the model pickers this change touched", async () => {
       await page.keyboard.press("Escape");
     });
 
-    await surface(failures, "automation editor", async () => {
+    await surface(page, failures, "automation editor", async () => {
       await page.getByRole("button", { name: "Open automations" }).first().click();
       await page.getByRole("button", { name: /New Automation/ }).click();
+      await expect(page.getByText("New automation", { exact: true })).toBeVisible();
       await dismissNotices();
       const provider = page.getByRole("button", { name: /^Automation model provider/ });
       await provider.scrollIntoViewIfNeeded();
@@ -148,11 +160,12 @@ test("captures the model pickers this change touched", async () => {
       const list = page.getByRole("listbox", { name: /^Automation model(?! provider)/ }).first();
       await expect(list).toBeVisible();
       await captureRegion(page, "automation-model.png", [provider, chip, list]);
+    }, async () => {
       await page.keyboard.press("Escape");
-      await page.getByRole("button", { name: /Exit Automations/ }).click();
+      await page.getByRole("button", { name: /Exit Automations/ }).click({ timeout: 5_000 });
     });
 
-    await surface(failures, "settings helper model", async () => {
+    await surface(page, failures, "settings helper model", async () => {
       await page.getByRole("button", { name: "Open settings" }).click();
       await page
         .getByRole("navigation", { name: "Settings sections" })
