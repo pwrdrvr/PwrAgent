@@ -1,7 +1,6 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -86,11 +85,7 @@ export async function startOutpostDaemon(options: {
       if (daemon.exitCode !== null || attempt >= 200) throw new Error(`Outpost startup failed: ${errors}`);
       await delay(20);
     }
-    const reserve = net.createServer();
-    await new Promise<void>((resolve) => reserve.listen(0, "127.0.0.1", resolve));
-    const port = (reserve.address() as net.AddressInfo).port;
-    await new Promise<void>((resolve) => reserve.close(() => resolve()));
-    const issued = await promisify(execFile)(process.execPath, [cli, "federation-invite", "--port", String(port)], { env });
+    const issued = await promisify(execFile)(process.execPath, [cli, "federation-invite", "--port", "0"], { env });
     const invite = decodeFederationInvite(JSON.parse(issued.stdout).invite);
     const identity = generateFederationIdentityKeyPair();
     const viewerId = randomUUID();

@@ -42,6 +42,25 @@ async function viewer(invite, identity = { id: randomUUID(), ...generateFederati
   };
 }
 
+test("the invite CLI binds an available port and retains it for later invites", { timeout: 20000 }, async (t) => {
+  const h = await setup(t);
+  const command = h.launch(["federation-invite", "--port", "0"]);
+  assert.equal((await command.done).code, 0, command.errors);
+  const invite = decodeFederationInvite(JSON.parse(command.output).invite);
+  const assignedPort = Number(new URL(invite.gatewayUrl).port);
+  assert.ok(assignedPort > 0 && assignedPort <= 65535);
+  assert.equal(JSON.parse(readFileSync(path.join(h.directory, "federation.json"), "utf8")).listenPort, assignedPort);
+  const next = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
+  assert.equal(next.gatewayUrl, invite.gatewayUrl);
+  const v = await viewer(next);
+  t.after(() => v.connection.close());
+  assert.ok((await v.call("listBackends")).backends.length);
+  await assert.rejects(h.rpc("federation-invite", { port: assignedPort === 65535 ? 65534 : assignedPort + 1 }), /existing listener port/);
+  for (const invalid of [-1, 65536, 1.5]) {
+    await assert.rejects(h.rpc("federation-invite", { port: invalid }), /Federation port must be/);
+  }
+});
+
 test("encrypted desktop protocol enrolls, browses, runs, reconnects and reads while owner remains alive", { timeout: 20000 }, async (t) => {
   const h = await setup(t);
   const issued = await h.rpc("federation-invite", { port: await port(), label: "Fixture outpost" });

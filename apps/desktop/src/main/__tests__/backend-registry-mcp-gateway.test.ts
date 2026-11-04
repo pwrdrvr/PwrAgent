@@ -1,4 +1,8 @@
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { DEFAULT_FORGE_AGENT_TOOL_POLICY } from "@pwragent/shared";
+import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
 import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -36,6 +40,7 @@ describe("backend MCP gateway dispatch", () => {
   let internals: {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
+    claudeAgentToolMcpServer: AgentToolMcpServerLike;
     acpBackend: AcpBackendAdapter;
     approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations?: McpGatewayTool["definition"]["annotations"], catalogRevision?: string): Promise<McpGatewayApproval>;
     headlessAutomationTurns: Map<string, {
@@ -237,10 +242,81 @@ describe("backend MCP gateway dispatch", () => {
     };
   }
 
-  it("advertises MCP discovery and invocation to a delegated monitor", async () => {
+  it("advertises MCP gateway and read-only forge tools to a delegated monitor", async () => {
     await createMonitor();
     const tools = startThread.mock.calls[0][0].dynamicTools?.flatMap((spec) => spec.type === "namespace" ? spec.tools.map((tool) => tool.name) : [spec.name]);
-    expect(tools).toEqual(["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool"]);
+    expect(tools).toEqual([
+      "inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool",
+      "get_forge_status", "list_ci_runs", "get_ci_run", "get_ci_job", "read_ci_job_log", "get_commit_checks", "list_ci_artifacts", "download_ci_artifact",
+      "get_pull_request", "list_pull_requests", "list_pull_request_files", "get_pull_request_diff", "list_pull_request_reviews", "list_pull_request_review_threads", "get_issue", "list_issue_comments", "search_issues",
+    ]);
+  });
+
+  it("reads CI, artifacts and PRs in the parent's context after its turn ends", async () => {
+    const read = vi.fn(async () => ({ status: "in_progress" }));
+    const pr = vi.fn(async () => ({ state: "open" }));
+    registry.setForgeReadHandlers(read, read);
+    registry.setForgePrToolHandler(pr);
+    const call = await createMonitor();
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    for (const [tool, arguments_] of [
+      ["get_ci_run", { runId: 42 }],
+      ["list_ci_artifacts", { runId: 42 }],
+      ["download_ci_artifact", { runId: 42, artifactId: 7 }],
+    ] as const) {
+      expect((await call(tool, arguments_)).success).toBe(true);
+      expect(read).toHaveBeenLastCalledWith(tool, arguments_, expect.objectContaining({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }));
+    }
+    expect((await call("get_pull_request", {})).success).toBe(true);
+    expect(pr).toHaveBeenCalledWith("get_pull_request", {}, expect.objectContaining({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }));
+  });
+
+  it("enforces forge settings and rejects guessed monitor writes even in Full Access", async () => {
+    const policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
+    const read = vi.fn(async () => ({}));
+    const pr = vi.fn(async () => ({}));
+    registry.setForgeReadHandlers(read, read);
+    registry.setForgePrToolHandler(pr);
+    registry.setForgeToolPolicyResolver(() => policy);
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    const call = await createMonitor();
+    policy.access.read = "off";
+    expect((await call("get_ci_run", { runId: 42 })).success).toBe(false);
+    expect((await call("get_pull_request", {})).success).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+    policy.access.read = "allow";
+    for (const tool of ["rerun_failed_ci_jobs", "merge_pull_request", "add_issue_comment", "update_pull_request", "submit_pull_request_review"]) {
+      expect((await call(tool, {})).success).toBe(false);
+    }
+    expect(pr).not.toHaveBeenCalled();
+    policy.enabled = false;
+    expect((await call("get_ci_run", { runId: 42 })).success).toBe(false);
+  });
+
+  it("serves the same read-only forge access over the monitor MCP catalog", async () => {
+    const policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
+    registry.setForgeToolPolicyResolver(() => policy);
+    const read = vi.fn(async () => ({ status: "completed" }));
+    registry.setForgeReadHandlers(read, read);
+    await createMonitor();
+    const registration = await internals.claudeAgentToolMcpServer.registerClient({ backend: "codex", threadId: "headless-1" });
+    const client = new Client({ name: "monitor-forge-fixture", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
+      requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
+    }));
+    try {
+      const tools = (await client.listTools()).tools;
+      expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["get_ci_run", "get_pull_request", "download_ci_artifact"]));
+      expect(tools.map((tool) => tool.name)).not.toContain("rerun_failed_ci_jobs");
+      expect((await client.callTool({ name: "get_ci_run", arguments: { runId: 42 } })).isError).not.toBe(true);
+      expect(read).toHaveBeenCalledWith("get_ci_run", { runId: 42 }, expect.objectContaining({ threadId: "thread-1" }));
+      expect((await client.callTool({ name: "rerun_failed_ci_jobs", arguments: { runId: 42 } })).isError).toBe(true);
+      policy.access.read = "off";
+      expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain("get_ci_run");
+      expect((await client.callTool({ name: "get_ci_run", arguments: { runId: 42 } })).isError).toBe(true);
+    } finally {
+      await client.close();
+    }
   });
 
   it("disables inherited native MCP servers so they cannot bypass the monitor gateway", async () => {

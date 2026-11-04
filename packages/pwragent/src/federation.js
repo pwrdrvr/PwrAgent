@@ -142,12 +142,12 @@ export class HeadlessFederation {
   }
 
   async invite({ port = 47831, label }) {
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Federation port must be between 1 and 65535");
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Federation port must be between 0 and 65535 (0 chooses an available port)");
     this.ensureIdentity(label);
     if (!this.router) this.setupRouter();
-    if (this.state.listenPort !== undefined && this.state.listenPort !== port) throw new Error("Restart with the existing listener port; it cannot change while serving");
+    if (port !== 0 && this.state.listenPort !== undefined && this.state.listenPort !== port) throw new Error("Restart with the existing listener port; it cannot change while serving");
     await this.listen(port);
-    this.state.listenPort = port;
+    this.state.listenPort = this.listenerAddress.port;
     const token = randomBytes(32).toString("base64url");
     const now = Date.now();
     const entry = { id: randomUUID(), status: "pending", generatedAt: now, expiresAt: now + 15 * 60_000,
