@@ -12,6 +12,7 @@ it("commits each prefix once across generated send/ack/drop/restart interleaving
   await fc.assert(fc.asyncProperty(
     fc.array(fc.record({ event: fc.integer({ min: 1, max: 50 }), after: fc.boolean() }), { maxLength: 4 }),
     async (drops) => {
+      console.error("blob-model-start", JSON.stringify(drops));
       const root = await mkdtemp(path.join(os.tmpdir(), "blob-model-"));
       const data = Buffer.alloc(BLOB_COMMIT_BYTES + BLOB_CHUNK_BYTES + 3, 0x57);
       const source = path.join(root, "source");
@@ -36,10 +37,12 @@ it("commits each prefix once across generated send/ack/drop/restart interleaving
       };
       const step = async <T>(work: () => Promise<T>): Promise<T> => {
         event++;
+        console.error("blob-model-event", event);
         if (event > 200) throw new Error("Transfer exceeded the model event budget.");
         const planned = drops.find((item) => item.event === event);
         if (planned && !planned.after) return await drop();
         const result = await work();
+        console.error("blob-model-work-done", event);
         if (planned?.after) return await drop();
         return result;
       };
@@ -84,6 +87,7 @@ it("commits each prefix once across generated send/ack/drop/restart interleaving
       };
       try {
         await writeFile(source, data);
+        console.error("blob-model-source-ready");
         const result = await pushResumableBlob(transport, source, "fixture", {
           onTransferProgress: (progress) => {
             expect(progress.bytesCommitted).toBeGreaterThanOrEqual(observedPrefix);
