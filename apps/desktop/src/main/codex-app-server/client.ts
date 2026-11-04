@@ -9884,6 +9884,8 @@ export class CodexAppServerClient {
     limit: number;
     checkpoint: () => Promise<void>;
     directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+    /** Admission still reads every identity; only disjoint Git probes skip. */
+    directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
   }): Promise<{ threads: AppServerThreadSummary[]; nextCursor?: string }> {
     await this.ensureInitialized();
     const result = await requestWithFallbacks({
@@ -9916,6 +9918,7 @@ export class CodexAppServerClient {
       strict: true,
       concurrency: 1,
       directoryObservations: params.directoryObservations,
+      directoryFilter: params.directoryFilter,
     });
     return { threads: hydrateMissingLinkedDirectoriesFromSiblingRepos(threads), nextCursor: page.nextCursor };
   }
@@ -9968,6 +9971,7 @@ export class CodexAppServerClient {
     background?: {
       checkpoint: () => Promise<void>; strict: boolean; concurrency: number;
       directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+      directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
     },
   ): Promise<EnrichedCodexThread[]> {
     const enrichedThreads: Array<EnrichedCodexThread | undefined> = [];
@@ -9986,15 +9990,19 @@ export class CodexAppServerClient {
         const projectKey = await resolveThreadProjectKey(thread);
         let enrichment: ThreadDirectoryEnrichment;
         try {
-          const directoryKey = projectKey ? path.resolve(projectKey) : "";
-          let pending = directories.get(directoryKey);
-          if (!pending) {
-            await background?.checkpoint();
-            pending = this.threadDirectoryEnricher(projectKey, caller);
-            directories.set(directoryKey, pending);
+          if (background?.directoryFilter && !await background.directoryFilter(projectKey)) {
+            enrichment = { linkedDirectories: buildProjectKeyLinkedDirectories(projectKey) };
+          } else {
+            const directoryKey = projectKey ? path.resolve(projectKey) : "";
+            let pending = directories.get(directoryKey);
+            if (!pending) {
+              await background?.checkpoint();
+              pending = this.threadDirectoryEnricher(projectKey, caller);
+              directories.set(directoryKey, pending);
+            }
+            enrichment = await pending;
+            if (projectKey) this.lastDirectoryEnrichment.set(path.resolve(projectKey), enrichment);
           }
-          enrichment = await pending;
-          if (projectKey) this.lastDirectoryEnrichment.set(path.resolve(projectKey), enrichment);
         } catch (error) {
           if (background?.strict) throw error;
           codexClientLog.warn("thread directory enrichment failed", {

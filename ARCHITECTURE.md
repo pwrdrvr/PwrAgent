@@ -124,6 +124,25 @@ does not spend the user allowance.
 - Thread history archival and worktree snapshot archival use distinct APIs and
   provider-specific restore paths.
 
+### Archived worktree removal admission
+
+Discovery identifies candidates, while every removal and empty-container repair
+obtains a fresh complete membership/overlay inventory across Codex, Claude and
+ACP. Admission requests at most 100 Codex metadata rows per page and reads
+overlays in 25-row slices. It resolves cwd aliases through the filesystem and
+limits Git enrichment to workspaces that overlap the checkout or its container.
+Unrelated identities still contribute their current linked and retained
+worktrees and external ownership markers. Missing suffixes resolve through their
+nearest existing ancestor; ambiguous filesystem errors fail admission.
+
+Only one physical cleanup runs at a time. Lifecycle intent and settlement,
+workspace observations and provider notifications fence removal through a
+revision checked again at destructive dispatch. In-flight lifecycle mutations
+also block admission. These checks add no persistent state or SQLite writes.
+The scan-local filesystem observations never authorize a later removal. The
+scaling and ownership-race budgets live in `archive-cleanup-provider.test.ts`,
+`archive-cleanup-pipeline.test.ts` and `archive-cleanup-budgets.json`.
+
 ### Display reads and federation
 
 - Desktop transcripts use `readThread` with `display.resource = "transcript"`.
