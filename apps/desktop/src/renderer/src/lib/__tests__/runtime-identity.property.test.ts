@@ -24,4 +24,9 @@ describe("formatRuntimeBranch properties", () => {
     expect(hasLoneSurrogate(label)).toBe(false);
     expect(label).toBe(`${"a".repeat(15)}...${"b".repeat(15)}`);
   });
+
+  it("keeps every cluster whole at both cuts (shrunk counterexample)", () => {
+    const branch = "a👨\u200d👩\u200d👧\u200d👦日本a😀👨\u200d👩\u200d👧\u200d👦a🇺🇸e\u0301";
+    expect(formatRuntimeBranch(branch)).toBe("a👨\u200d👩\u200d👧\u200d👦日本a...a🇺🇸e\u0301");
+  });
 });

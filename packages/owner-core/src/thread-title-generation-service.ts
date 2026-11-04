@@ -1,4 +1,4 @@
-import type { AppServerBackendKind } from "@pwragent/shared";
+import { splitGraphemes, type AppServerBackendKind } from "@pwragent/shared";
 import { buildThreadTitlePrompt } from "./thread-title-prompt";
 
 export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v3";
@@ -216,13 +216,23 @@ export function truncateThreadTitle(value: string): string {
   const wordTruncated = words
     .slice(0, ACCEPTED_MAX_TITLE_WORDS)
     .join(" ");
-  const characters = Array.from(wordTruncated);
-  if (characters.length <= ACCEPTED_MAX_TITLE_CHARACTERS) {
+  if (Array.from(wordTruncated).length <= ACCEPTED_MAX_TITLE_CHARACTERS) {
     return wordTruncated;
   }
-  return cleanThreadTitle(
-    characters.slice(0, ACCEPTED_MAX_TITLE_CHARACTERS).join(""),
-  );
+  // Count code points, as the limit does, but keep or drop each grapheme
+  // cluster whole: a cut inside one leaves half a ZWJ emoji or a letter
+  // without its NFD accent.
+  let kept = "";
+  let codePoints = 0;
+  for (const cluster of splitGraphemes(wordTruncated)) {
+    const size = Array.from(cluster).length;
+    if (codePoints + size > ACCEPTED_MAX_TITLE_CHARACTERS) {
+      break;
+    }
+    kept += cluster;
+    codePoints += size;
+  }
+  return cleanThreadTitle(kept);
 }
 
 function stripMatchingQuotes(value: string): string {

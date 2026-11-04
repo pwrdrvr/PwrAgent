@@ -22,4 +22,8 @@ describe("operator wait title properties", () => {
     expect(hasLoneSurrogate(title)).toBe(false);
     expect(title).toBe(`${"x".repeat(158)}…`);
   });
+
+  it("does not keep half of an astral letter (shrunk counterexample)", () => {
+    expect(truncate(`${"a".repeat(158)}𝒳a`)).toBe(`${"a".repeat(158)}…`);
+  });
 });

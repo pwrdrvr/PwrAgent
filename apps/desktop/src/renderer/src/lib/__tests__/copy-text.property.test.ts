@@ -29,4 +29,8 @@ describe("formatCopyTooltip properties", () => {
     expect(hasLoneSurrogate(shown)).toBe(false);
     expect(shown).toBe(`/${"a".repeat(8)}…${"b".repeat(10)}`);
   });
+
+  it("drops a family emoji whole when it does not fit (shrunk counterexample)", () => {
+    expect(formatCopyTooltip("👨\u200d👩\u200d👧\u200d👦", 9)).toBe(`…${COPY_HINT}`);
+  });
 });

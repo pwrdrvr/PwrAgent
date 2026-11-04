@@ -38,4 +38,13 @@ describe("truncateThreadTitle properties", () => {
     const title = `${"x".repeat(63)}👩\u200d💻`;
     expect(truncateThreadTitle(title)).toBe("x".repeat(63));
   });
+
+  it("does not keep half of a flag (shrunk counterexample)", () => {
+    expect(truncateThreadTitle(`${"a".repeat(64)}🇺🇸`)).toBe("a".repeat(64));
+  });
+
+  it("keeps the last NFD accent (shrunk counterexample)", () => {
+    const title = `${"a".repeat(59)}n\u0303an\u0303n\u0303`;
+    expect(truncateThreadTitle(title)).toBe(`${"a".repeat(59)}n\u0303an\u0303`);
+  });
 });

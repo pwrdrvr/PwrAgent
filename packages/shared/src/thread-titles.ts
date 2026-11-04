@@ -1,3 +1,5 @@
+import { graphemePrefix } from "./text-graphemes";
+
 const MAX_DERIVED_THREAD_TITLE_LENGTH = 72;
 const MIN_PREFERRED_BREAK_INDEX = 36;
 
@@ -64,5 +66,5 @@ export function shortenDerivedThreadTitle(value: string | undefined): string | u
     return `${trimTrailingPunctuation(candidate.slice(0, wordBreak))}...`;
   }
 
-  return `${trimTrailingPunctuation(candidate.slice(0, MAX_DERIVED_THREAD_TITLE_LENGTH))}...`;
+  return `${trimTrailingPunctuation(graphemePrefix(candidate, MAX_DERIVED_THREAD_TITLE_LENGTH))}...`;
 }

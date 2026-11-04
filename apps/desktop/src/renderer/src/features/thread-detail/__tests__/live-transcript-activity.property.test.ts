@@ -24,4 +24,8 @@ describe("truncateActivityText properties", () => {
     expect(hasLoneSurrogate(shown)).toBe(false);
     expect(shown).toBe(`${"x".repeat(16)}...`);
   });
+
+  it("drops a family emoji whole when it does not fit (shrunk counterexample)", () => {
+    expect(truncateActivityText("👨\u200d👩\u200d👧\u200d👦", 4)).toBe("...");
+  });
 });

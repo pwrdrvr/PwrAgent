@@ -3,6 +3,7 @@ import {
   THREAD_DEPENDENCY_CONDITION_PHRASES,
   THREAD_PR_WATCH_CONTROL_CAPABILITY,
   buildPullRequestStatusKey,
+  graphemePrefix,
   isThreadPendingWakeLive,
   type NavigationThreadSummary,
   type ThreadPendingWake,
@@ -723,7 +724,7 @@ function creatorLabel(createdBy: ThreadPendingWake["createdBy"], ownerLabel: str
 }
 
 export function clipText(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+  return text.length > max ? `${graphemePrefix(text, max - 1).trimEnd()}…` : text;
 }
 
 function formatInterval(seconds: number): string {

@@ -27,4 +27,8 @@ describe("WaitingForPanel clipText properties", () => {
     expect(hasLoneSurrogate(clipped)).toBe(false);
     expect(clipped).toBe(`${"x".repeat(58)}…`);
   });
+
+  it("drops a skin-toned emoji whole when it does not fit (shrunk counterexample)", () => {
+    expect(clipText("👍🏽", 2)).toBe("…");
+  });
 });

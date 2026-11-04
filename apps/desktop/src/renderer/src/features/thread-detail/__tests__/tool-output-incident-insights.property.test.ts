@@ -28,4 +28,8 @@ describe("formatInvocationIdentity properties", () => {
     const { detail } = formatInvocationIdentity(`${"x".repeat(14)}👩\u200d💻${"y".repeat(40)}`, 38);
     expect(detail).toBe(`${"x".repeat(14)}…${"y".repeat(22)}`);
   });
+
+  it("keeps whole emoji at both cuts (shrunk counterexample)", () => {
+    expect(formatInvocationIdentity("fix👩\u200d💻👨\u200d👩\u200d👧\u200d👦", 12)).toEqual({ detail: "fix…", lead: "" });
+  });
 });

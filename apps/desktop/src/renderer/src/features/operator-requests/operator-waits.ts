@@ -8,6 +8,7 @@ import type {
   OperatorAsyncQuestion,
 } from "@pwragent/shared";
 import {
+  graphemePrefix,
   threadTodoThreadKey,
   operatorQuestionItemKey,
   operatorServerRequestItemKey,
@@ -227,7 +228,7 @@ function firstLine(text: string): string {
 }
 
 export function truncate(text: string): string {
-  return text.length > MAX_TITLE_LENGTH ? `${text.slice(0, MAX_TITLE_LENGTH - 1)}…` : text;
+  return text.length > MAX_TITLE_LENGTH ? `${graphemePrefix(text, MAX_TITLE_LENGTH - 1)}…` : text;
 }
 
 function urlHost(url: string | undefined): string | undefined {

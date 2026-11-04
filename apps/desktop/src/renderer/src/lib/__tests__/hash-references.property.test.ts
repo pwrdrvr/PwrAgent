@@ -57,4 +57,14 @@ describe("hash reference label properties", () => {
     expect(hasLoneSurrogate(label)).toBe(false);
     expect(label).toBe(`ab ${"x".repeat(68)}…`);
   });
+
+  it("keeps the last NFD accent in a label (shrunk counterexample)", () => {
+    const title = `${"a".repeat(67)}de\u0301ja\u0300`;
+    expect(formatHashReferenceThreadLabel({ id: "thread-1", title })).toBe(`${"a".repeat(67)}de\u0301j…`);
+  });
+
+  it("does not keep half of a flag in a tooltip (shrunk counterexample)", () => {
+    const title = `${"a".repeat(297)}🇺🇸`;
+    expect(formatHashReferenceThreadTooltip({ id: "thread-1", title })).toBe(`${"a".repeat(297)}…`);
+  });
 });

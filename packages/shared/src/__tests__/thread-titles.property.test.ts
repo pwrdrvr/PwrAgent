@@ -35,4 +35,9 @@ describe("shortenDerivedThreadTitle properties", () => {
     expect(hasLoneSurrogate(title)).toBe(false);
     expect(title).toBe(`${"x".repeat(71)}...`);
   });
+
+  it("does not keep half of a flag (shrunk counterexample)", () => {
+    const prompt = `${"a".repeat(66)}𝒳a🇺🇸`;
+    expect(shortenDerivedThreadTitle(prompt)).toBe(`${"a".repeat(66)}𝒳a...`);
+  });
 });

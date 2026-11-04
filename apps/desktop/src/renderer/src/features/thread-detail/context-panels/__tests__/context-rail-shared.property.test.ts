@@ -23,4 +23,8 @@ describe("context rail elideMiddle properties", () => {
     const shown = elideMiddle(value, 21);
     expect(shown).toBe(`${"a".repeat(9)}…${"b".repeat(10)}`);
   });
+
+  it("keeps both accents of NFD déjàdéjà (shrunk counterexample)", () => {
+    expect(elideMiddle("de\u0301ja\u0300de\u0301ja\u0300", 9)).toBe("de\u0301j…ja\u0300");
+  });
 });

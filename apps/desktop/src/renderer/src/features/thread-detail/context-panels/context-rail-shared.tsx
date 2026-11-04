@@ -4,7 +4,7 @@ import type {
   MouseEvent,
   ReactNode,
 } from "react";
-import type { WorktreeSnapshotSummary } from "@pwragent/shared";
+import { graphemePrefix, graphemeSuffix, type WorktreeSnapshotSummary } from "@pwragent/shared";
 import { CopyIcon } from "../../../icons";
 import { copyText, formatCopyTooltip } from "../../../lib/copy-text";
 
@@ -114,7 +114,7 @@ export function elideMiddle(text: string, maxLength: number): string {
   const visible = Math.max(8, maxLength - 1);
   const left = Math.ceil(visible / 2);
   const right = Math.floor(visible / 2);
-  return `${text.slice(0, left)}…${text.slice(-right)}`;
+  return `${graphemePrefix(text, left)}…${graphemeSuffix(text, right)}`;
 }
 
 export function buildRailTooltipText(

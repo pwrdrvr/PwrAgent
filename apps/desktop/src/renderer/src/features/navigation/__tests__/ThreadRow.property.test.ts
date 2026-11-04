@@ -24,4 +24,8 @@ describe("thread row chip leaf elision properties", () => {
     expect(hasLoneSurrogate(label)).toBe(false);
     expect(label).toBe(`${"x".repeat(18)}…`);
   });
+
+  it("does not keep half of an astral letter (shrunk counterexample)", () => {
+    expect(elide("𝒳a", 2)).toBe("…");
+  });
 });
