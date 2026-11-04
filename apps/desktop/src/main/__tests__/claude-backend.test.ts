@@ -239,6 +239,7 @@ describe("Claude SDK backend", () => {
     // Builds before this one stored a refusal on every Claude thread.
     const stored = await f.store.read(threadId);
     await f.store.save({ ...stored, thread: { ...stored.thread, workspaceHandoff: { available: false, unavailableReason: "old" } } });
+    expect((await f.backend.listThreads())[0]).toMatchObject({ projectKey: previous });
     expect((await f.backend.listThreads())[0]?.workspaceHandoff).toBeUndefined();
 
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Remember PINEAPPLE" }] });
@@ -258,6 +259,8 @@ describe("Claude SDK backend", () => {
       { id: secondary, kind: "local", label: "other-repo", path: secondary },
     ]);
     expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    // The thread's projectKey follows its working directory.
+    expect((await f.backend.listThreads())[0]).toMatchObject({ projectKey: worktree });
 
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Where are you?" }] });
     await f.waitForTurn();

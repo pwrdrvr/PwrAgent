@@ -732,9 +732,12 @@ export class ClaudeBackend {
   async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {
     const filter = params.filter?.toLowerCase();
     // Metadata from builds that could not move a Claude thread still carries
-    // their refusal; this build can, so drop it.
-    return (await this.store.list()).map(({ thread: { workspaceHandoff: _refusal, ...thread } }) => ({
-      ...thread, threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
+    // their refusal; this build can, so drop it. The working directory is the
+    // thread's `projectKey`, as Codex reports it: it names which linked
+    // directory is the thread's home once `@`-referenced ones join it.
+    return (await this.store.list()).map(({ cwd, thread: { workspaceHandoff: _refusal, ...thread } }) => ({
+      ...thread, projectKey: cwd,
+      threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
     })).filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
       && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
   }

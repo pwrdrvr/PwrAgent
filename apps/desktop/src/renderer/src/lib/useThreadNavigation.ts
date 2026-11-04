@@ -2897,8 +2897,6 @@ export type PendingLaunchpadCreation = {
   directoryLabel: string;
   /** The submitted draft, which the starting view renders from. */
   launchpad: NavigationLaunchpadDraft;
-  /** Composer `@`-referenced directories, linked once the thread exists. */
-  extraDirectoryPaths?: string[];
   /**
    * Draft scope for follow-ups typed while the thread starts. Absent when the
    * creation still occupies the directory's own launchpad (federated).
@@ -8088,7 +8086,6 @@ export function useThreadNavigation(
         directoryKey,
         directoryLabel: directory?.label ?? launchpad.directoryLabel,
         launchpad,
-        ...(extraDirectoryPaths?.length ? { extraDirectoryPaths } : {}),
         composerScopeKey,
         setupProgressKey,
         parentThreadKey: buildLaunchpadRelativeThreadKey(
