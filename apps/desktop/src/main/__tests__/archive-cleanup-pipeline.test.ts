@@ -1158,6 +1158,7 @@ describe("archive cleanup pipeline", () => {
       await publishNotification(fixture.registry, { method: "thread/started", params: { thread: codexThread({
         id: "new-thread", projectKey: workspace === "unknown" ? undefined : `/contrived/${workspace === "shared" ? "worktree" : "new-other"}`,
       }) } });
+      await publishNotification(fixture.registry, { method: "thread/status/changed", params: { threadId: "new-thread", status: { type: "active" } } });
       return assertRemoval;
     } }));
     const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));

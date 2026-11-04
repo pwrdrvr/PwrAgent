@@ -32709,7 +32709,7 @@ export class DesktopBackendRegistry {
   private invalidateThreadListCache(backend?: AppServerBackendKind, workspaceChanged = false, threadId?: string, paths: readonly string[] = []): void {
     if (workspaceChanged) {
       this.archiveWorkspaceRevision += 1;
-      if (backend) this.recordArchiveWorkspaceChange(threadId ? buildThreadIdentityKey(backend, threadId) : undefined, paths);
+      if (backend) this.recordArchiveWorkspaceChange(threadId ? buildThreadIdentityKey(backend, threadId) : undefined, paths, paths.length > 0);
     }
     if (!backend) {
       this.invalidateArchiveCleanupReads(undefined, undefined, workspaceChanged);
@@ -38734,7 +38734,10 @@ export class DesktopBackendRegistry {
             id: row.id, source: backend, title: "", titleSource: "explicit", linkedDirectories: directories,
             projectKey: row.projectKey, gitBranch: row.gitBranch, observedGitBranch: row.observedGitBranch,
           };
-          params.removalAdmission?.observeThread(buildThreadIdentityKey(backend, row.id), archiveWorkspacePaths(thread));
+          params.removalAdmission?.observeThread(buildThreadIdentityKey(backend, row.id), [
+            ...archiveWorkspacePaths(thread),
+            ...(!row.projectKey && row.linkedDirectories.length === 0 ? [""] : []),
+          ]);
           (archived ? archivedThreads : activeThreads).push(thread);
           if (!archived && overlay?.parentThreadId === params.threadId) activeChildren.push(thread);
           if (row.id === params.threadId) {
@@ -51072,7 +51075,10 @@ export class DesktopBackendRegistry {
 
   private recordArchiveWorkspaceChange(key?: string, paths: readonly string[] = [], observation = false): void {
     for (const scope of new Set([...this.archiveWorktreeRemovalAdmissions].map((admission) => admission.scope))) {
-      if (!observation || key !== scope.ownerKey) scope.changed(key, paths);
+      if (observation && key === scope.ownerKey) continue;
+      const observedPaths = observation && paths.length === 0 ? [""] : paths;
+      if (observation && key) scope.observeThread(key, observedPaths);
+      scope.changed(key, observedPaths);
     }
   }
 
@@ -51090,7 +51096,8 @@ export class DesktopBackendRegistry {
           const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
           const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [threadId] });
           const paths = archiveWorkspacePaths({ linkedDirectories: overlays[threadId]?.extraLinkedDirectories ?? [] });
-          if (paths.length) this.recordArchiveWorkspaceChange(key, paths);
+          const workspacePaths = archiveNotificationWorkspacePaths(started);
+          this.recordArchiveWorkspaceChange(key, [...workspacePaths, ...paths, ...(workspacePaths.length === 0 ? [""] : [])], true);
         } catch {
           this.recordArchiveWorkspaceChange(key, [""]);
         }
