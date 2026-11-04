@@ -62,7 +62,6 @@ type PrRollupChipProps = {
 /** Hover opens a peek; a click or the keyboard keeps it open. */
 type OpenMode = "hover" | "pinned";
 
-
 /**
  * The Minimal density's single PR chip, on the row's title line.
  *
