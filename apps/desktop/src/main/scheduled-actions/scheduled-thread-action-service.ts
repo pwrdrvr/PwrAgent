@@ -232,6 +232,16 @@ export class ScheduledThreadActionService {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
     const current = this.requireAction(request.id);
+    if (current.status === "failed") {
+      // Dismissing a failure only takes its row out of the queue. A thread
+      // born from this action keeps its failed scheduled start.
+      const dismissed = this.options.store.dismissFailed(current.id, this.now());
+      if (!dismissed) {
+        throw new Error("The scheduled action can no longer be cancelled.");
+      }
+      await this.publish(dismissed);
+      return { action: dismissed };
+    }
     let cancelled: ScheduledThreadAction | undefined;
     if (current.status === "held" && current.queueEntryId) {
       const cancelledInRegistry = this.options.registry.cancelQueuedTurn(

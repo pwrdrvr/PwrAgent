@@ -648,6 +648,47 @@ describe("ScheduledThreadActionService", () => {
     ]);
   });
 
+  it("dismisses a failed action so a fresh projection no longer reads it", async () => {
+    const harness = createHarness(5_000);
+    harness.submitTurn.mockRejectedValueOnce(
+      new Error("Thread already has an active turn in progress"),
+    );
+    store.create({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 50_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+      now: 1_000,
+    });
+    await expect(harness.service.sendNow({ id: "scheduled-1" })).rejects.toThrow();
+    // What a projection reads on its first refresh.
+    expect(store.list({ includeFailed: true }).map((action) => action.id))
+      .toEqual(["scheduled-1"]);
+    harness.markScheduledThreadStartTerminal.mockClear();
+    harness.publishLocalEvent.mockClear();
+
+    const response = await harness.service.cancel({ id: "scheduled-1" });
+
+    expect(response.action).toMatchObject({ id: "scheduled-1", status: "cancelled" });
+    expect(store.list({ includeFailed: true })).toEqual([]);
+    // Open windows drop the row from the published update.
+    expect(harness.publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/scheduledAction/updated",
+        params: { action: expect.objectContaining({ status: "cancelled" }) },
+      },
+    });
+    // A thread born from the action keeps its failed scheduled start.
+    expect(harness.markScheduledThreadStartTerminal).not.toHaveBeenCalled();
+    await expect(harness.service.cancel({ id: "scheduled-1" }))
+      .rejects.toThrow("The scheduled action can no longer be cancelled.");
+  });
+
   it("cancels an action already waiting in the registry", async () => {
     const harness = createHarness(20_000);
     store.create({

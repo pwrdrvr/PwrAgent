@@ -11621,6 +11621,60 @@ describe("Composer", () => {
     });
   });
 
+  it.each(["Delete", "Edit"])(
+    "dismisses a failed scheduled row on its owner when the operator chooses %s",
+    async (buttonName) => {
+      const draftStore = createComposerDraftStore();
+      const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+      // The row the scheduled-action projection gives a failed action.
+      draftStore.setQueuedTurn(scopeKey, {
+        id: "scheduled-projection:scheduled-action-1",
+        failedScheduledActionId: "scheduled-action-1",
+        errorMessage: "Thread already has an active turn in progress",
+        text: "Follow up",
+        imageAttachments: [],
+        fileAttachments: [],
+        input: [{ type: "text", text: "Follow up" }],
+      });
+      const cancelScheduledThreadAction = vi.fn(async () => {
+        throw new Error("owner refused");
+      });
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{
+            cancelScheduledThreadAction,
+            onAgentEvent: () => () => undefined,
+          }}
+          disabled={false}
+          draftStore={draftStore}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Idle thread",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: buttonName }));
+      });
+
+      expect(cancelScheduledThreadAction).toHaveBeenCalledWith({
+        federationTarget: undefined,
+        id: "scheduled-action-1",
+      });
+      // An owner that refuses (one that predates dismissal) still lets the
+      // row leave this window.
+      expect(draftStore.getQueuedTurns(scopeKey)).toEqual([]);
+    },
+  );
+
   it("preserves a cancelled queued item when its steer target changes", async () => {
     const draftStore = createComposerDraftStore();
     draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {

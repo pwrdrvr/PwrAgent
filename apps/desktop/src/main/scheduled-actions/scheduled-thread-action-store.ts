@@ -357,6 +357,16 @@ export class ScheduledThreadActionStore {
     return this.transition(id, ["held", "scheduled"], { status: "cancelled" }, now);
   }
 
+  /**
+   * The operator has dealt with a failed action: deleted it, edited it back
+   * into the composer, or sent it again. Without this the failure stays
+   * projectable for the whole history retention, and every fresh projection
+   * puts its row back in the queue.
+   */
+  dismissFailed(id: string, now: number): ScheduledThreadAction | undefined {
+    return this.transition(id, ["failed"], { status: "cancelled" }, now);
+  }
+
   claim(id: string, params: ClaimParams): ScheduledThreadAction | undefined {
     return this.transition(
       id,
