@@ -501,10 +501,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // A sub-thread launchpad's own key names no project; its thread lands
   // under the parent's row.
   const windowFederationTarget = useMemo(readRendererFederationTarget, []);
-  const startingThreadHomeKey = useCallback(
-    (creation: PendingSidebarRow): string | undefined =>
+  // Resolved once per list change: every directory row asks for each one.
+  const startingHomeKeys = useMemo(
+    () => new Map((props.startingThreads ?? []).map((creation) => [
+      creation.selectionKey,
       startingThreadHomeDirectoryKey(creation, visibleDirectories, windowFederationTarget),
-    [visibleDirectories, windowFederationTarget],
+    ])),
+    [props.startingThreads, visibleDirectories, windowFederationTarget],
+  );
+  const startingThreadHomeKey = useCallback(
+    (creation: PendingSidebarRow): string | undefined => startingHomeKeys.get(creation.selectionKey),
+    [startingHomeKeys],
   );
   const startingThreadDirectoryKeys = useCallback((creation: PendingSidebarRow): string[] => {
     const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;

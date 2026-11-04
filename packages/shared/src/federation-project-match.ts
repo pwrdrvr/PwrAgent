@@ -30,7 +30,7 @@ type PeerDirectory = ProjectIdentity & {
  * uses to file a remote thread under a local project group
  * (`findRemoteHomeDirectoryIndex`).
  */
-export function directoryIdentityNames(directory: ProjectIdentity): string[] {
+export function directoryIdentityNames(directory: Pick<ProjectIdentity, "label" | "path">): string[] {
   const basename = directory.path?.split(/[\\/]/).filter(Boolean).pop();
   return [...new Set(
     [directory.label, basename ?? ""]
@@ -144,7 +144,7 @@ export function findRemoteHomeDirectoryIndex(
   // is chosen by what the rows are instead.
   const directoryIndexByName = new Map<string, number>();
   directories.forEach((directory, index) => {
-    for (const name of identityNames(directory.label, directory.path)) {
+    for (const name of directoryIdentityNames(directory)) {
       const current = directoryIndexByName.get(name);
       if (current === undefined || compareHomeCandidates(directory, directories[current]!, name) < 0) {
         directoryIndexByName.set(name, index);
@@ -159,7 +159,7 @@ export function findRemoteHomeDirectoryIndex(
     if (classifyDirectory(linked).kind === "workspace") {
       continue;
     }
-    for (const name of identityNames(linked.label, linked.path)) {
+    for (const name of directoryIdentityNames(linked)) {
       const index = directoryIndexByName.get(name);
       if (index !== undefined) {
         return index;
@@ -211,15 +211,6 @@ export function remoteLinkedDirectoriesByHomePreference(
   }
 
   return orderByHomePreference(linkedDirectories, (directory) => classifyDirectory(directory).path);
-}
-
-// The label, then the path's last segment, folded to lower case. Either
-// separator ends a segment: a Windows peer's path reaches a macOS viewer.
-function identityNames(label: string | undefined, path: string | undefined): string[] {
-  const basename = path?.split(/[\\/]/).filter(Boolean).pop();
-  return [label, basename]
-    .map((name) => (name ?? "").trim().toLowerCase())
-    .filter(Boolean);
 }
 
 function linkedDirectoryMatchesProjectKey(
