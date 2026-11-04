@@ -1,5 +1,6 @@
 import type { JsonRpcConnectionOptions, JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import type { LinkedDirectorySummary } from "@pwragent/shared";
+import type { SandboxPolicy } from "@pwrdrvr/codex-app-server-protocol/v2";
 
 export type CodexClientLogger = NonNullable<JsonRpcConnectionOptions["logger"]>;
 export type CodexAppServerExit = {
@@ -56,6 +57,7 @@ export type CodexClientHost = {
   };
   signInRequiredMessage: string;
   buildShellEnvironment: (env: NodeJS.ProcessEnv, bundledToolsDirectory?: string) => NodeJS.ProcessEnv;
+  buildSandboxPolicy?: (sandbox?: string, cwd?: string) => SandboxPolicy | undefined;
   enrichThreadDirectory: (projectKey?: string, caller?: DirectoryEnrichmentCaller) => Promise<ThreadDirectoryEnrichment>;
   sampleAppServerProcessTree: (process: CodexAppServerProcessInfo) => Promise<{
     childProcessCount?: number;

@@ -29,8 +29,11 @@ class OutpostCodexTransport {
     };
     this.child.on("error", () => fail(new Error("Could not start Codex App Server")));
     this.child.on("exit", (code, signal) => {
-      if (!this.stopping) this.onUnexpectedExit({ code, signal, stderrPreview: [] });
+      const unexpected = !this.stopping;
+      // Record the host's uncertain outcome before the shared client emits
+      // synthetic turn failures for a lost process.
       fail(new Error("Codex App Server exited"));
+      if (unexpected) this.onUnexpectedExit({ code, signal, stderrPreview: [] });
     });
     this.child.stdin.on("error", () => fail(new Error("Codex App Server input closed")));
     // Provider diagnostics can contain private text; drain without journaling.
@@ -87,6 +90,13 @@ export class Codex extends CodexAppServerClient {
       authState: { isBlocked: () => false, assertAvailable() {} },
       signInRequiredMessage: "Codex is logged out. Please sign in again to resume operations.",
       buildShellEnvironment: (env) => env,
+      buildSandboxPolicy: (sandbox, cwd = workspace) => {
+        if (sandbox === undefined) return undefined;
+        if (sandbox === "read-only") return { type: "readOnly", networkAccess: false };
+        if (sandbox !== "workspace-write") throw new Error("Unsupported Outpost sandbox policy");
+        return { type: "workspaceWrite", writableRoots: [cwd], networkAccess: false,
+          excludeTmpdirEnvVar: true, excludeSlashTmp: true };
+      },
       enrichThreadDirectory: async () => ({ linkedDirectories: [] }),
       sampleAppServerProcessTree: async () => ({}),
     });

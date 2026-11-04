@@ -141,7 +141,10 @@ export class HeadlessBackend {
     const id = message.params?.threadId || message.params?.thread?.id;
     if (!this.threads.has(id)) return;
     if (message.method === "thread/name/updated") {
-      this.setTitle(this.threads.get(id), message.params.threadName, message.params.titleSource || "explicit");
+      const thread = this.threads.get(id);
+      const source = message.params.titleSource || "explicit";
+      if (thread.titleSource === "explicit" && source !== "explicit") return;
+      this.setTitle(thread, message.params.threadName, source);
       return;
     }
     // The desktop adapter represents failed completions as turn/failed and

@@ -157,6 +157,9 @@ export class Runtime {
   notification({ method, params }) {
     if (method === "thread/closed") this.loadedThreads.delete(params?.threadId);
     if (!["turn/completed", "turn/failed"].includes(method) || !this.active) return;
+    // A process-loss failure is synthesized by the client, not a confirmed
+    // provider result. Shutdown preserves this job as unknown.
+    if (this.codexFailure) return;
     const job = this.store.get(this.active);
     if (params?.threadId !== job.threadId) return;
     if (!job.turnId) this.earlyCompletion = params;

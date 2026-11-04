@@ -95,7 +95,7 @@ test("encrypted desktop protocol enrolls, browses, runs, reconnects and reads wh
 
 test("an explicit title survives the shared client's derived first-turn name and restart", { timeout: 20000 }, async (t) => {
   const h = await setup(t);
-  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: await port() })).invite);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
   let v = await viewer(invite);
   t.after(() => v.connection.close());
   v.subscribe();

@@ -7266,6 +7266,7 @@ function buildTurnStartPayload(params: {
   approvalPolicy?: string;
   approvalsReviewer?: ApprovalsReviewer;
   sandbox?: string;
+  sandboxPolicy?: CodexSandboxPolicy;
   outputSchema?: CodexTurnStartParams["outputSchema"];
   collaborationMode?: AppServerCollaborationModeRequest;
   collaborationFallbackModel?: string;
@@ -7303,7 +7304,7 @@ function buildTurnStartPayload(params: {
     base.approvalPolicy = approvalPolicy;
   }
   applyApprovalReviewer(base, params, compatibility);
-  const sandboxPolicy = buildCodexSandboxPolicy(params.sandbox);
+  const sandboxPolicy = params.sandboxPolicy ?? buildCodexSandboxPolicy(params.sandbox);
   if (sandboxPolicy) {
     base.sandboxPolicy = sandboxPolicy;
   }
@@ -10763,6 +10764,12 @@ export class CodexAppServerClient {
     };
   }
 
+  private buildSandboxPolicy(sandbox?: string, cwd?: string): CodexSandboxPolicy | undefined {
+    return this.host.buildSandboxPolicy
+      ? this.host.buildSandboxPolicy(sandbox, cwd)
+      : buildCodexSandboxPolicy(sandbox);
+  }
+
   /** Drops the captured setup variables when the profile withholds them. */
   private withAgentEnvironmentPolicy<
     T extends { codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime },
@@ -10805,7 +10812,7 @@ export class CodexAppServerClient {
       threadId: params.threadId,
       approvalPolicy: payload.approvalPolicy,
       approvalsReviewer: payload.approvalsReviewer,
-      sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+      sandboxPolicy: this.buildSandboxPolicy(params.sandbox, params.cwd),
     }, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     const current = admitted
       ? this.admittedNativeVoiceThreads.get(params.threadId)
@@ -10868,7 +10875,7 @@ export class CodexAppServerClient {
         ...settings, threadId: params.threadId,
         approvalPolicy: resumePayload.approvalPolicy as CodexThreadSettingsUpdateParams["approvalPolicy"],
         approvalsReviewer: resumePayload.approvalsReviewer,
-        sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+        sandboxPolicy: this.buildSandboxPolicy(params.sandbox, params.cwd),
       };
       await connection.request("thread/settings/update", payload,
         this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
@@ -11146,6 +11153,7 @@ export class CodexAppServerClient {
             approvalPolicy: params.approvalPolicy,
             approvalsReviewer: params.approvalsReviewer,
             sandbox: params.sandbox,
+            sandboxPolicy: this.buildSandboxPolicy(params.sandbox, params.cwd),
             collaborationMode: params.collaborationMode,
             collaborationFallbackModel:
               params.model?.trim() || extractStringProperty(resumeResult, "model"),
@@ -11751,7 +11759,7 @@ export class CodexAppServerClient {
         threadId: params.threadId,
         approvalPolicy: permissions.approvalPolicy as CodexThreadSettingsUpdateParams["approvalPolicy"],
         approvalsReviewer: permissions.approvalsReviewer,
-        sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+        sandboxPolicy: this.buildSandboxPolicy(params.sandbox, params.cwd),
         ...(params.cwd ? { cwd: params.cwd } : {}),
         ...(params.model ? { model: params.model } : {}),
         ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
