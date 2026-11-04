@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
-import { mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
+import { copyFile, link, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { FederationBlobChunkEnvelope } from "@pwragent/shared";
@@ -67,7 +67,7 @@ export class FederationResumableBlobReceiver {
     this.roots.add(root);
     await this.expire(root);
     this.expiry ??= setInterval(() => {
-      // Do not race active transfers. expire only removes folders with no handle.
+      // Maintenance joins the same queue as writes and cancellation.
       this.options.schedule?.(async () => {
         for (const folder of this.roots) await this.expire(folder);
       });
@@ -148,6 +148,7 @@ export class FederationResumableBlobReceiver {
   async finish(peerId: string, id: string): Promise<FilePushResult> {
     const transfer = this.get(peerId, id);
     const { state } = transfer;
+    if (state.result && !(await stat(state.result.path).catch(() => undefined))?.isFile()) state.result = undefined;
     if (!state.result) {
       if (transfer.receivedOffset !== state.sizeBytes) throw new Error("Incomplete blob.");
       await this.commit(transfer);
@@ -160,34 +161,21 @@ export class FederationResumableBlobReceiver {
       const destination = path.join(path.dirname(path.dirname(transfer.folder)),
         `${state.name.slice(0, state.name.length - extension.length)} (${key.slice(0, 16)})${extension}`);
       try {
-        const target = await open(destination, "wx", 0o600);
         try {
-          const buffer = Buffer.alloc(BLOB_CHUNK_BYTES);
-          let offset = 0;
-          while (offset < state.sizeBytes) {
-            const { bytesRead } = await transfer.file.read(buffer, 0, Math.min(buffer.length, state.sizeBytes - offset), offset);
-            if (!bytesRead) throw new Error("Blob changed during publication.");
-            let written = 0;
-            while (written < bytesRead) {
-              const result = await target.write(buffer, written, bytesRead - written, offset + written);
-              if (!result.bytesWritten) throw new Error("Unable to publish blob.");
-              written += result.bytesWritten;
-            }
-            offset += bytesRead;
-          }
-          await target.sync();
+          await link(source, destination);
         } catch (error) {
-          await target.close();
-          await rm(destination, { force: true });
-          throw error;
+          if (!["EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EXDEV", "ENOSYS"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+          await copyFile(source, destination, constants.COPYFILE_EXCL);
+          const target = await open(destination, constants.O_RDONLY | constants.O_NOFOLLOW);
+          try { await target.sync(); } finally { await target.close(); }
         }
-        await target.close();
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         if ((await stat(destination)).size !== state.sizeBytes || await hashBlobFile(destination) !== state.sha256) {
           throw new Error("Blob publication path already contains different bytes.");
         }
       }
+      await syncDirectory(path.dirname(destination));
       state.result = { path: destination, sizeBytes: state.sizeBytes, sha256: state.sha256 };
       await this.persist(transfer);
     }
@@ -245,12 +233,8 @@ export class FederationResumableBlobReceiver {
       await handle.sync();
     } finally { await handle.close(); }
     await rename(temporary, path.join(transfer.folder, "offset.json"));
-    // Windows cannot fsync a directory handle. The part and sidecar themselves
-    // are durable there; on Unix also make the rename durable.
-    if (process.platform !== "win32") {
-      const directory = await open(transfer.folder, "r");
-      try { await directory.sync(); } finally { await directory.close(); }
-    }
+    await syncDirectory(transfer.folder);
+    await syncDirectory(path.dirname(transfer.folder));
   }
 
   private async expire(root: string): Promise<void> {
@@ -270,4 +254,11 @@ export class FederationResumableBlobReceiver {
   }
 
   private now(): number { return this.options.now?.() ?? Date.now(); }
+}
+
+async function syncDirectory(directoryPath: string): Promise<void> {
+  // Windows does not permit fsync on directory handles.
+  if (process.platform === "win32") return;
+  const directory = await open(directoryPath, "r");
+  try { await directory.sync(); } finally { await directory.close(); }
 }

@@ -3006,7 +3006,7 @@ export class DesktopFederationRuntime {
     const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
     if (!peer?.capabilities.includes("file_push")) throw new Error("The target does not support file push.");
     if (peer.receiverPermissions?.filePush !== true) throw new Error("The target does not allow incoming files.");
-    if (this.remotePeerAdvertisesCapability(target.instanceId, "resumable_blobs")) {
+    if (this.supportsResumableBlobs(target.instanceId)) {
       const signal = options?.signal ? AbortSignal.any([options.signal, this.blobLifetime.signal]) : this.blobLifetime.signal;
       return await pushResumableBlob(this.resumableBlobTransport(target), sourcePath, name, { ...options, signal });
     }
@@ -3021,6 +3021,18 @@ export class DesktopFederationRuntime {
     void this.connectToGateway().catch((error) => this.handleClientConnectionFailure(error));
   }
 
+  private supportsResumableBlobs(instanceId: string): boolean {
+    if (!this.remotePeerAdvertisesCapability(instanceId, "resumable_blobs")) return false;
+    const gateway = this.gatewayInstanceId ?? getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
+    const route = this.router?.getConnection(instanceId) ?? (gateway ? this.router?.getConnection(gateway) : undefined);
+    if (route) return route.capabilities.includes("resumable_blobs");
+    // Preserve the negotiated route feature during a drop between packaging
+    // and push. Health still gates begin; a missing live socket is not a reason
+    // to turn a held resumable handoff into a legacy single-shot send.
+    return !gateway || gateway === instanceId
+      || this.visiblePeers().some((peer) => peer.id === gateway && peer.capabilities.includes("resumable_blobs"));
+  }
+
   private resumableBlobTransport(target: FederationRemoteTarget): ResumableBlobTransport {
     const waitForReconnect = async (signal?: AbortSignal): Promise<void> => {
       while (true) {
@@ -3028,7 +3040,7 @@ export class DesktopFederationRuntime {
         if (this.stopping) throw new Error("Federation stopped.");
         const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
         if (peer?.status === "revoked") throw new Error("The receiving peer was revoked.");
-        if (peer?.status === "connected" && this.remotePeerAdvertisesCapability(target.instanceId, "resumable_blobs")) return;
+        if (peer?.status === "connected" && this.supportsResumableBlobs(target.instanceId)) return;
         await new Promise<void>((resolve, reject) => {
           const cleanup = (): void => {
             this.peerStatusListeners.delete(done);
@@ -3044,6 +3056,8 @@ export class DesktopFederationRuntime {
     };
     return {
       localInstanceId: this.ensureLocalInstanceId(), targetInstanceId: target.instanceId,
+      isConnected: () => this.supportsResumableBlobs(target.instanceId)
+        && this.visiblePeers().some((peer) => peer.id === target.instanceId && peer.status === "connected"),
       connection: () => {
         const rpc = this.rpcFor(target);
         const didDisconnect = (): boolean => this.rpcByPeer.get(target.instanceId) !== rpc;
@@ -4036,7 +4050,7 @@ export class DesktopFederationRuntime {
       createHistoryWorkspace: () => createScratchProjectDirectory(),
       localInstanceId: () => this.ensureLocalInstanceId(),
       push: (instanceId, source, options) => this.pushFile({ scope: "remote", instanceId }, source, undefined, options),
-      supportsResumable: (instanceId) => this.remotePeerAdvertisesCapability(instanceId, "resumable_blobs"),
+      supportsResumable: (instanceId) => this.supportsResumableBlobs(instanceId),
       retryNow: () => this.retryHandoffNow(),
       remoteImport: (instanceId, request) => this.rpcFor({ scope: "remote", instanceId }).request({
         method: THREAD_HANDOFF_METHODS.import, params: request, timeoutMs: null,
@@ -6749,6 +6763,9 @@ export class DesktopFederationRuntime {
     if (status !== "connected") {
       this.services?.disconnect(instanceId);
       this.serviceForwarder.disconnectPeer(instanceId);
+      this.rpcByPeer.get(instanceId)?.rejectAll(new FederationPeerUnavailableError(instanceId, unavailableReason));
+      this.rpcByPeer.delete(instanceId);
+      void this.filePushReceiver?.disconnect(instanceId).catch((error) => log.warn("Unable to suspend incoming blobs", { error }));
     }
     const previous = this.publishedPeerStatuses.get(instanceId);
     if (

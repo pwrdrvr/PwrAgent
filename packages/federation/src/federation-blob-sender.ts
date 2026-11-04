@@ -17,6 +17,7 @@ export type ResumableBlobTransport = {
   localInstanceId: string;
   targetInstanceId: string;
   connection: () => BlobConnection;
+  isConnected?: () => boolean;
   waitForReconnect: (signal?: AbortSignal) => Promise<void>;
   cancel: (identity: { sha256: string; sizeBytes: number }) => void;
 };
@@ -50,6 +51,11 @@ export async function pushResumableBlob(
     };
     while (true) {
       signal?.throwIfAborted();
+      if (transport.isConnected?.() === false) {
+        disconnectedAt = new Date().toISOString();
+        progress("waiting");
+        await transport.waitForReconnect(signal);
+      }
       const connection = transport.connection();
       try {
         const begin = await connection.rpc.request<{ transferId: string; committedOffset: number }>({
@@ -60,9 +66,10 @@ export async function pushResumableBlob(
           || (begin.committedOffset !== before.size && begin.committedOffset % (4 * 1024 * 1024) !== 0)) {
           throw new Error("Invalid receiver committed offset.");
         }
-        if (begin.committedOffset > 0) resumedFromBytes = begin.committedOffset;
+        if (begin.committedOffset > 0) resumedFromBytes ??= begin.committedOffset;
         committed = begin.committedOffset;
         progress("connected");
+        disconnectedAt = undefined;
         let offset = committed;
         while (offset < before.size) {
           for (let i = 0; i < BLOB_WINDOW_CHUNKS && offset < before.size; i++) {
@@ -70,14 +77,14 @@ export async function pushResumableBlob(
             const chunk = Buffer.alloc(Math.min(BLOB_CHUNK_BYTES, before.size - offset));
             const { bytesRead } = await file.read(chunk, 0, chunk.length, offset);
             if (bytesRead !== chunk.length) throw new Error("Blob source changed while sending.");
-            await connection.send({
+            await abortableBlobSend(connection.send({
               id: `blob:${begin.transferId}:${offset}`, kind: "blob_chunk", purpose: "file_push",
               protocolVersion: FEDERATION_PROTOCOL_VERSION, sourceInstanceId: transport.localInstanceId,
               targetInstanceId: transport.targetInstanceId, createdAt: Date.now(),
               transferId: begin.transferId, chunkIndex: offset / BLOB_CHUNK_BYTES,
               chunkCount: Math.ceil(before.size / BLOB_CHUNK_BYTES), totalSize: before.size,
               sha256: identity.sha256, name: name ?? path.basename(sourcePath), inputType: "localFile", data: chunk,
-            });
+            }), signal);
             offset += chunk.length;
           }
           const ack = await connection.rpc.request<{ receivedOffset: number; committedOffset: number }>({
@@ -110,4 +117,17 @@ export async function pushResumableBlob(
     await file.close();
     if (!completed && identity) transport.cancel(identity);
   }
+}
+
+// Cancellation need not wait for a slow socket to drain. A queued old session's
+// frame may still leave the socket; cancel/new begin fences its transfer ID.
+async function abortableBlobSend(work: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return await work;
+  await new Promise<void>((resolve, reject) => {
+    const abort = (): void => { signal.removeEventListener("abort", abort); reject(signal.reason); };
+    signal.addEventListener("abort", abort, { once: true });
+    void work.then(() => { signal.removeEventListener("abort", abort); resolve(); },
+      (error: unknown) => { signal.removeEventListener("abort", abort); reject(error); });
+    if (signal.aborted) abort();
+  });
 }
