@@ -30,7 +30,7 @@ type PeerDirectory = ProjectIdentity & {
  * uses to file a remote thread under a local project group
  * (`findRemoteHomeDirectoryIndex`).
  */
-export function directoryIdentityNames(directory: Pick<ProjectIdentity, "label" | "path">): string[] {
+export function directoryIdentityNames(directory: { label: string; path?: string; kind?: string }): string[] {
   const basename = directory.path?.split(/[\\/]/).filter(Boolean).pop();
   return [...new Set(
     [directory.label, basename ?? ""]
