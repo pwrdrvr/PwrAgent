@@ -1111,6 +1111,10 @@ describe("archive cleanup pipeline", () => {
     expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
     expect(fixture.counts.providerPages).toBe(backend === "codex" ? 5 : 4);
     expect(fixture.counts.archiveMutations).toBe(1);
+    for (const thread of others) {
+      await publishNotification(fixture.registry, { method: "turn/completed", params: { threadId: thread.id, turn: { id: `turn-${thread.id}`, status: "completed" } } }, backend);
+      await publishNotification(fixture.registry, { method: "thread/status/changed", params: { threadId: thread.id, status: { type: "idle" } } }, backend);
+    }
   });
 
   it.each([undefined, "/contrived/new-other", "/contrived/worktree"])("checks an unrelated lifecycle mutation's destination %s while it is in flight", async (targetPath) => {

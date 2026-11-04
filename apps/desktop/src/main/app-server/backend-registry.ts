@@ -50444,18 +50444,9 @@ export class DesktopBackendRegistry {
     // the final safety inventory does not. Any positive ownership observation
     // during admission must invalidate that inventory, even if its paths match
     // the older row. Keep the invalidation until the removal attempt settles.
-    const observedAdmissionOwner = [...this.archiveWorktreeRemovalAdmissions].some((admission) =>
-      !(admission.backend === thread.source && admission.threadId === thread.id)
-      && ((admission.containerPath && this.isWorktreeContainerProtected(admission.containerPath, { activeThreads: [thread] }))
-        || projectKey === admission.worktreePath || thread.linkedDirectories.some((directory) => {
-        const worktreePath = linkedDirectoryWorktreePath(directory);
-        return worktreePath !== undefined
-          && normalizeWorktreePathForComparison(worktreePath) === admission.worktreePath;
-      })),
-    );
+    this.recordArchiveWorkspaceChange(key, archiveWorkspacePaths(thread), true);
     if (
-      observedAdmissionOwner
-      || !previous
+      !previous
       || previous.projectKey !== projectKey
       || previous.linkedWorktrees.size !== linkedWorktrees.size
       || [...linkedWorktrees].some((worktree) => !previous.linkedWorktrees.has(worktree))
@@ -51076,9 +51067,9 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private recordArchiveWorkspaceChange(key?: string, paths: readonly string[] = []): void {
+  private recordArchiveWorkspaceChange(key?: string, paths: readonly string[] = [], observation = false): void {
     for (const scope of new Set([...this.archiveWorktreeRemovalAdmissions].map((admission) => admission.scope))) {
-      scope.changed(key, paths);
+      if (!observation || key !== scope.ownerKey) scope.changed(key, paths);
     }
   }
 
