@@ -100,7 +100,7 @@ import {
 import { startingThreadHomeDirectoryKey, withStartingPlaceholderDirectories } from "./starting-thread-home";
 import { PendingThreadRow } from "./SubthreadDraftRow";
 import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
-import { jumpScrollPlan, jumpTailIsOffscreen } from "./project-index";
+import { jumpScrollPlan, jumpTailIsOffscreen, splitProjectTurnCounts } from "./project-index";
 
 /**
  * Scroll a project's section to the top of the lens, expanding it first.
@@ -1138,8 +1138,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const expanded =
       expandedByKey[directory.key] ??
       (selectedLaunchpad || selectedThreadInDirectory || selectedStartingThread);
-    const remoteActiveThreadCount = isFederationViewerWindow() ? 0 : directory.counts?.activeRemote ?? 0;
-    const activeThreadCount = Math.max(0, (directory.counts?.active ?? 0) - remoteActiveThreadCount);
+    const { local: activeThreadCount, remote: remoteActiveThreadCount } =
+      splitProjectTurnCounts(directory.counts, isFederationViewerWindow());
     const activeThreadLabel = remoteActiveThreadCount > 0
       ? formatLocalActiveThreadCount(activeThreadCount) : formatActiveThreadCount(activeThreadCount);
     const reviewThreadCount = directory.counts?.review ?? 0;

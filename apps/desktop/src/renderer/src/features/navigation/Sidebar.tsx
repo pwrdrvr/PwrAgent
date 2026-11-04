@@ -57,6 +57,7 @@ import {
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
+  isFederationViewerWindow,
   readRendererFederationLabel,
   readRendererFederationTarget,
 } from "../../lib/federation-window";
@@ -133,6 +134,7 @@ import {
 } from "./DirectoriesList";
 import { applyDirectoryDrop, type DirectoryDrop } from "./directory-pin-drop";
 import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
+import { projectTurnMarks } from "./project-index";
 import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog";
 import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
 import {
@@ -1045,13 +1047,14 @@ export function Sidebar(props: SidebarProps) {
     );
     const pinned = projects.filter(isPinnedDirectory).sort(comparePinnedDirectories);
     const unpinned = projects.filter((directory) => !isPinnedDirectory(directory));
+    const federationViewer = isFederationViewerWindow();
     return [...pinned, ...unpinned].map((directory) => ({
       key: directory.key,
       label: directory.label,
       containsSelection:
         indexSelectedItemKey === buildLaunchpadSelectionKey(directory.key)
         || (selectedThreadDirectoryKeys?.includes(directory.key) ?? false),
-      active: (directory.counts?.active ?? 0) > 0,
+      ...projectTurnMarks(directory.counts, federationViewer),
       review: (directory.counts?.review ?? 0) > 0,
       ...(isProjectForgeActivityPaused(directory) ? { forgeActivityPaused: true } : {}),
       ...(isPinnedDirectory(directory) ? { pinned: true } : {}),
