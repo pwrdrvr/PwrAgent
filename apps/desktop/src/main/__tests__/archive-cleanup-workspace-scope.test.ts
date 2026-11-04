@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { archiveCleanupWorkspaceFilter } from "../app-server/archive-cleanup-workspace-scope";
+import { ArchiveWorkspaceAdmission, archiveCleanupWorkspaceFilter } from "../app-server/archive-cleanup-workspace-scope";
 
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof import("node:fs/promises")>();
@@ -16,6 +16,39 @@ afterEach(async () => {
 });
 
 describe("archive admission workspace scope", () => {
+  it("ignores unrelated activity but protects shared, unknown and newly assigned checkout users", async () => {
+    const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    scope.observeThread("codex:other", ["/fixture/other"]);
+    scope.observeThread("claude:other", ["/fixture/other-claude"]);
+    scope.changed("codex:other");
+    scope.changed("claude:other");
+    await scope.prepare([{ key: "codex:other", paths: [] }]);
+    expect(() => scope.assertCurrent([{ key: "codex:other", paths: [] }])).not.toThrow();
+    expect(() => scope.assertCurrent([{ key: "codex:other", paths: ["/fixture/target"] }])).toThrow("may use this worktree");
+    scope.changed("codex:other", ["/fixture/target"]);
+    await scope.prepare([]);
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+
+    const unknown = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    unknown.changed("codex:unknown");
+    await unknown.prepare([]);
+    expect(() => unknown.assertCurrent([])).toThrow("workspace state changed");
+  });
+
+  it("classifies lifecycle destinations through symlinks and protects container descendants", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "archive-admission-"));
+    roots.push(root);
+    const container = path.join(root, "container");
+    await mkdir(container);
+    const alias = path.join(root, "alias");
+    await symlink(container, alias, process.platform === "win32" ? "junction" : "dir");
+    const scope = new ArchiveWorkspaceAdmission("codex:target", container);
+    scope.observeThread("codex:moving", [path.join(root, "other")]);
+    const mutation = { key: "codex:moving", paths: [path.join(alias, "checkout")] };
+    await scope.prepare([mutation]);
+    expect(() => scope.assertCurrent([mutation])).toThrow("may use this worktree");
+  });
+
   it("includes checkout roots, descendants, ancestors and aliases, but excludes unrelated and prefix-sibling workspaces", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "archive-scope-"));
     roots.push(root);

@@ -9,6 +9,7 @@ export type ArchiveWorkspaceMutation = { key: string; paths: readonly string[] }
 export class ArchiveWorkspaceAdmission {
   private readonly threads = new Map<string, readonly string[]>();
   private readonly classifiedPaths = new Map<string, boolean>();
+  private readonly unclassifiedPaths = new Set<string>();
   private readonly changes: Array<{ key?: string; paths: readonly string[] }> = [];
   readonly directoryFilter: ReturnType<typeof archiveCleanupWorkspaceFilter>;
 
@@ -17,24 +18,35 @@ export class ArchiveWorkspaceAdmission {
   }
 
   observeThread(key: string, paths: readonly string[]): void {
-    this.threads.set(key, paths);
+    this.threads.set(key, [...new Set([...this.threads.get(key) ?? [], ...paths])]);
+    this.observePaths(paths);
   }
 
   changed(key?: string, paths: readonly string[] = []): void {
     this.changes.push({ key, paths });
+    this.observePaths(paths);
+  }
+
+  private observePaths(paths: readonly string[]): void {
+    for (const value of paths) {
+      if (!this.classifiedPaths.has(value)) this.unclassifiedPaths.add(value);
+    }
   }
 
   async prepare(mutations: readonly ArchiveWorkspaceMutation[]): Promise<void> {
-    const classify = async (paths: readonly string[]) => {
-      for (const value of paths) {
-        if (!this.classifiedPaths.has(value)) this.classifiedPaths.set(value, await this.directoryFilter(value));
+    for (const mutation of mutations) this.observePaths(mutation.paths);
+    // The Set iterator also visits paths appended while an earlier path is
+    // resolving. Classified activity has no filesystem work on later events.
+    for (const value of this.unclassifiedPaths) {
+      try {
+        this.classifiedPaths.set(value, await this.directoryFilter(value));
+      } catch {
+        // An uncertain alias blocks removal without breaking the unrelated
+        // lifecycle notification which supplied the observation.
+        this.classifiedPaths.set(value, true);
       }
-    };
-    for (const paths of this.threads.values()) await classify(paths);
-    // Changes may arrive while canonical paths are resolving. Visit every
-    // observation, including one appended during an earlier await.
-    for (let index = 0; index < this.changes.length; index++) await classify(this.changes[index]!.paths);
-    for (const mutation of mutations) await classify(mutation.paths);
+      this.unclassifiedPaths.delete(value);
+    }
   }
 
   private disjoint(key: string | undefined, extraPaths: readonly string[]): boolean {
@@ -50,7 +62,7 @@ export class ArchiveWorkspaceAdmission {
       throw new Error("Thread workspace state changed during removal admission; the worktree was kept. Retry archive after it settles.");
     }
     if (mutations.some((mutation) => mutation.key !== this.ownerKey && !this.disjoint(mutation.key, mutation.paths))) {
-      throw new Error("Another thread lifecycle mutation may use this worktree; the worktree was kept. Retry archive after it settles.");
+      throw new Error("Another thread lifecycle mutation is still in flight and may use this worktree; the worktree was kept. Retry archive after it settles.");
     }
   }
 }

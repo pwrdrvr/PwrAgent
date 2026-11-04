@@ -2357,6 +2357,14 @@ type ArchiveCleanupDiscoveryRequest = {
   removalAdmission?: ArchiveWorkspaceAdmission;
 };
 
+type ArchiveWorktreeRemovalAdmission = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  worktreePath: string;
+  containerPath?: string;
+  scope: ArchiveWorkspaceAdmission;
+};
+
 type ArchiveCleanupInventory = Pick<ArchiveCleanupMetadata,
   "activeThreads" | "archivedThreads" | "overlaysByThreadKey" | "worktreeEvidence"
 >;
@@ -9456,13 +9464,7 @@ export class DesktopBackendRegistry {
     projectKey: string;
     linkedWorktrees: Set<string>;
   }>();
-  private readonly archiveWorktreeRemovalAdmissions = new Set<{
-    backend: AppServerBackendKind;
-    threadId: string;
-    worktreePath: string;
-    containerPath?: string;
-    scope?: ArchiveWorkspaceAdmission;
-  }>();
+  private readonly archiveWorktreeRemovalAdmissions = new Set<ArchiveWorktreeRemovalAdmission>();
   private readonly archiveLifecycleMutationPaths = new Map<string, Set<readonly string[]>>();
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
   private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>();
@@ -32187,7 +32189,7 @@ export class DesktopBackendRegistry {
             }
           }
         }
-        this.invalidateArchiveCleanupForNotification(backend, notification);
+        if (this.invalidateArchiveCleanupForNotification(backend, notification)) await this.prepareArchiveWorkspaceChanges();
         if (backend === "codex" && notification.method === "account/updated") {
           this.forgetCodexAccountRateLimits();
         }
@@ -39097,7 +39099,7 @@ export class DesktopBackendRegistry {
     }
 
     const cleanupCandidate = async (candidate: WorktreeArchiveCandidate): Promise<ArchiveThreadCleanupResult> => {
-      let removalAdmission: { backend: AppServerBackendKind; threadId: string; worktreePath: string; containerPath?: string; scope?: ArchiveWorkspaceAdmission } | undefined;
+      let removalAdmission: ArchiveWorktreeRemovalAdmission | undefined;
       await params.context?.checkpoint();
       try {
         const acpBlocker = this.archivedAcpWorktreeBlocker(candidate.worktreePath, params);
@@ -51076,8 +51078,14 @@ export class DesktopBackendRegistry {
 
   private recordArchiveWorkspaceChange(key?: string, paths: readonly string[] = []): void {
     for (const scope of new Set([...this.archiveWorktreeRemovalAdmissions].map((admission) => admission.scope))) {
-      scope?.changed(key, paths);
+      scope.changed(key, paths);
     }
+  }
+
+  private async prepareArchiveWorkspaceChanges(): Promise<void> {
+    const mutations = this.archiveWorkspaceMutations();
+    await Promise.all([...new Set([...this.archiveWorktreeRemovalAdmissions].map((admission) => admission.scope))]
+      .map(async (scope) => { await scope.prepare(mutations); }));
   }
 
   private invalidateArchiveCleanupReads(
@@ -51099,7 +51107,7 @@ export class DesktopBackendRegistry {
   private invalidateArchiveCleanupForNotification(
     backend: AppServerBackendKind,
     notification: AppServerNotification,
-  ): void {
+  ): boolean {
     if (notification.method === "thread/parent/set" || notification.method === "thread/parent/cleared") {
       this.invalidateArchiveCleanupInventory();
     }
@@ -51145,7 +51153,9 @@ export class DesktopBackendRegistry {
             ? buildThreadIdentityKey(backend, notification.params.threadId) : undefined);
         }
       }
+      return true;
     }
+    return false;
   }
 
   private isAcknowledgedArchiveCleanupNotification(backend: AppServerBackendKind, notification: AppServerNotification): boolean {
@@ -51194,8 +51204,8 @@ export class DesktopBackendRegistry {
     return work;
   }
 
-  private emit(event: AgentEvent): Promise<void> {
-    this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
+  private async emit(event: AgentEvent): Promise<void> {
+    if (this.invalidateArchiveCleanupForNotification(event.backend, event.notification)) await this.prepareArchiveWorkspaceChanges();
     if (event.notification.method === "navigation/threadDirectories/updated") {
       // Managed local MCP servers in these threads are told their roots moved.
       const threadIds = readRecord(event.notification.params)?.threadIds;
