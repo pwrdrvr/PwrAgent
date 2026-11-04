@@ -928,6 +928,56 @@ describe("ThreadTurnQueue", () => {
     expect(startedEntries).toEqual(["stale-steer"]);
   });
 
+  it("keeps held entries in the order they arrived", async () => {
+    let active = true;
+    const startedEntries: string[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => active,
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        return {
+          backend: entry.backend,
+          threadId: entry.threadId,
+          turnId: `turn-${entry.id}`,
+        };
+      },
+    });
+    const thread = { backend: "codex" as const, threadId: "thread-1" };
+
+    await queue.submit(buildEntry({ id: "already-queued" }));
+    await expect(queue.submitHeld(buildEntry({ id: "first-held" }), "Locked."))
+      .resolves.toMatchObject({ position: 1 });
+    await expect(queue.submitHeld(buildEntry({ id: "second-held" }), "Locked."))
+      .resolves.toMatchObject({ entry: { id: "second-held", manualReleaseRequired: true }, position: 3 });
+    await queue.submit(buildEntry({ id: "queued-while-held" }));
+    await queue.submitHeld(buildEntry({ id: "third-held" }), "Locked.");
+
+    // The first hold goes ahead of the turn that was waiting; later ones
+    // line up behind everything the hold already covers.
+    expect(queue.getQueuedEntries(thread).map((entry) => entry.id)).toEqual([
+      "first-held",
+      "already-queued",
+      "second-held",
+      "queued-while-held",
+      "third-held",
+    ]);
+
+    active = false;
+    await queue.releaseHold(thread, () => true);
+    for (let index = 0; index < 5; index += 1) {
+      await vi.waitFor(() => expect(startedEntries).toHaveLength(index + 1));
+      const turnId = `turn-${startedEntries[index]}`;
+      await queue.releaseThread({ ...thread, turnId, status: "turn/completed" });
+    }
+    expect(startedEntries).toEqual([
+      "first-held",
+      "already-queued",
+      "second-held",
+      "queued-while-held",
+      "third-held",
+    ]);
+  });
+
   it("cancels pending queue entries by id", async () => {
     const queue = new ThreadTurnQueue({
       isThreadActive: () => true,
