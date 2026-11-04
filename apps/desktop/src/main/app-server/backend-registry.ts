@@ -2,9 +2,11 @@ import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-g
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
+import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
+import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
@@ -928,6 +930,15 @@ type InitializeResult = {
 };
 
 const isDevelopment = process.env.NODE_ENV !== "production";
+
+/** The held entry's title, by the first prompt's source; a count once it holds more. */
+function selfStartedTurnTitle(source: ClaudeSelfStartedTurnSource, count: number): string {
+  if (count > 1) return `${count} turns Claude started on its own`;
+  return source === "task_notification" ? "Claude's answer to a finished background task"
+    : source === "loop_wakeup" ? "Claude's /loop wake-up"
+    : "Claude's scheduled task";
+}
+
 const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 // Keep expensive Codex thread-list walks reusable across focus/navigation bursts.
 // Thread lifecycle notifications still invalidate this cache when list metadata
@@ -11723,6 +11734,9 @@ export class DesktopBackendRegistry {
         ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
       }),
       suggestMonitorJob: async (request) => await this.suggestClaudeMonitorJob(request),
+      holdSelfStartedTurn: async ({ threadId, prompt, source }) => await this.holdBackendSelfStartedTurn({
+        backend: "claude", threadId, prompt, source,
+      }),
       planLimits: this.planLimits,
       ...options?.claudeBackendOptions,
     });
@@ -21308,6 +21322,8 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
+    /** Names the entry in the queue and Waiting for, in place of its text. */
+    title?: string;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
     // No lock check: a held entry starts nothing until it is released, and
     // the release is refused while the thread is locked. Holding is how a
@@ -21325,6 +21341,47 @@ export class DesktopBackendRegistry {
       id: queueEntryId,
       origin,
     }, holdReason, { onAdmission }));
+  }
+
+  /**
+   * Holds a turn a backend started inside its own process while the thread
+   * is locked: Claude's answer to a finished background task, a /loop
+   * wake-up, or a session cron's fire. Every prompt the lock holds rides one
+   * held entry, in order, so an unlock sends them as one turn, as Claude
+   * batches what queues while it is busy. A recurring wake that fires again
+   * is kept once. False when no lock holds the thread: the backend runs it.
+   */
+  async holdBackendSelfStartedTurn(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prompt: string;
+    source: ClaudeSelfStartedTurnSource;
+  }): Promise<boolean> {
+    const lock = await this.readThreadLock(params.backend, params.threadId);
+    if (!lock) return false;
+    const identity = { backend: params.backend, threadId: params.threadId };
+    const queueEntryId = `${SELF_STARTED_TURN_ENTRY_PREFIX}${params.threadId}`;
+    let existing: ThreadTurnQueueEntry | undefined;
+    for (const entry of this.threadTurnQueue.iterateQueuedEntries(identity)) {
+      if (entry.id === queueEntryId) existing = entry;
+    }
+    if (existing) {
+      const prompts = existing.input.flatMap((item) => item.type === "text" ? [item.text] : []);
+      if (prompts.includes(params.prompt)) return true;
+      this.threadTurnQueue.updateQueuedEntryInput(queueEntryId, [...existing.input, { type: "text", text: params.prompt }]);
+      const entry = this.threadTurnQueue.setQueuedEntryTitle(queueEntryId, selfStartedTurnTitle(params.source, prompts.length + 1));
+      if (entry) this.emitQueuedTurnInputUpdated(entry);
+      return true;
+    }
+    await this.submitHeldTurn({
+      ...identity,
+      queueEntryId,
+      input: [{ type: "text", text: params.prompt }],
+      holdReason: threadLockRefusalMessage(lock),
+      messageOrigin: { kind: "pwragent" },
+      title: selfStartedTurnTitle(params.source, 1),
+    });
+    return true;
   }
 
   /**

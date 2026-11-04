@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   getSessionInfo, getSessionMessages, query, type AccountInfo, type McpServerStatus, type Options, type Query, type SDKMessage,
-  type SDKResultMessage, type SDKUserMessage, type SlashCommand,
+  type SDKResultMessage, type SDKUserMessage, type SlashCommand, type UserPromptSubmitHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerBackendWake, AppServerBackgroundTask, AppServerCollaborationModeRequest,
@@ -36,6 +36,7 @@ import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity"
 import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./claude-rewind-backup";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeSessionWakeTracker, claudeSessionWakeHooks } from "./claude-session-wakes";
+import { claudeSelfStartedTurn, claudeSelfStartedTurnHooks, type ClaudeSelfStartedTurn } from "./claude-self-started-turns";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
 import {
   CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactAction, claudeArtifactResult, claudeArtifactShowsOutput,
@@ -88,6 +89,13 @@ export type ClaudeBackendOptions = {
   suggestMonitorJob?: (params: ClaudeMonitorSuggestionRequest & {
     threadId: string; turnId: string;
   }) => Promise<string | undefined>;
+  /**
+   * Keeps a turn Claude starts on its own while the thread's lock holds it:
+   * a task follow-up, a /loop wake-up or a session cron's fire. True once
+   * the prompt is held to send at unlock; Claude then drops its turn.
+   * False lets the turn run.
+   */
+  holdSelfStartedTurn?: (params: ClaudeSelfStartedTurn & { threadId: string }) => Promise<boolean>;
 };
 
 const claudeBackendLog = getMainLogger("pwragent:claude-backend");
@@ -382,6 +390,11 @@ type LiveSession = {
   followUpTimer?: ReturnType<typeof setTimeout>;
   /** The message counter at which the follow-up grace expired. */
   followUpWaivedAt?: number;
+  /**
+   * Prompts Claude started on its own that a lock held, each still to end
+   * in its own result. The init and banner a dropped prompt emits open no turn.
+   */
+  heldSelfStarts: number;
   /** Keep only a bounded tail; emit it only when a turn fails. */
   stderr: string;
   /** Protocol features the CLI advertised at init. */
@@ -915,7 +928,8 @@ export class ClaudeBackend {
         config: claudeSessionConfig(params, session), turn, lastTurnId: turn.turnId, onClosed: [],
         tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", toolRows: new Map(), launchedToolUseIds: new Set(),
         sessionWakes: new ClaudeSessionWakeTracker(), publishedWakeKey: "[]",
-        messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0, wake: claudeWakeSignal(), stderr: "",
+        messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0, heldSelfStarts: 0,
+        wake: claudeWakeSignal(), stderr: "",
         accountChecked: settledSignal(),
       };
       this.starting.delete(threadId);
@@ -982,7 +996,9 @@ export class ClaudeBackend {
         // A findings report that leaves findings skipped tells the agent they are still open.
         // A CI wait or polling loop is pointed at PwrAgent's PR watch and monitors.
         // Claude's own wake-ups and crons keep this process, which runs them, open.
+        // A lock holds a turn Claude starts on its own until the thread is unlocked.
         hooks: mergeClaudeHooks(
+          claudeSelfStartedTurnHooks(async (input) => await this.holdSelfStartedTurn(current, input)),
           claudeReportFindingsHooks(),
           claudeMonitorSuggestionHooks(async (request) => {
             const turnId = current.turn?.turnId;
@@ -1075,6 +1091,9 @@ export class ClaudeBackend {
     const turn = claudeTurn(live.session);
     live.turn = turn;
     live.lastTurnId = turn.turnId;
+    // Claude runs prompts in order, so a dropped prompt's result comes before
+    // this turn's own and lands in it. None is left to open no turn after it.
+    live.heldSelfStarts = 0;
     if (live.followUpTimer) clearTimeout(live.followUpTimer);
     live.followUpTimer = undefined;
     // A steer for this turn must follow its prompt into the input stream.
@@ -1314,8 +1333,9 @@ export class ClaudeBackend {
         live.messageSeq += 1;
         const topLevel = (message.type === "assistant" || message.type === "stream_event") && !message.parent_tool_use_id;
         // Claude answers a settled task with a native turn of its own. With no
-        // desktop turn open, that native turn gets one.
-        if (!live.turn && (topLevel || (message.type === "system"
+        // desktop turn open, that native turn gets one. A prompt a lock held
+        // never reaches the model; its init and banner open no turn.
+        if (!live.turn && (topLevel || (live.heldSelfStarts === 0 && message.type === "system"
           && (message.subtype === "init" || message.subtype === "local_command_output")))) {
           await this.startFollowUpTurn(live);
         }
@@ -1419,6 +1439,8 @@ export class ClaudeBackend {
         if (turn && message.type === "assistant") this.scheduleLiveUsage(live, turn);
         if (message.type === "result") {
           live.lastResultSeq = live.messageSeq;
+          // The dropped prompt's own result.
+          if (!turn && live.heldSelfStarts > 0) live.heldSelfStarts -= 1;
           if (turn) {
             // A message arriving near a result boundary may become another
             // native turn. Keep the turn open until a result acknowledges
@@ -1465,6 +1487,43 @@ export class ClaudeBackend {
     } finally {
       await this.finishSession(live, failure);
     }
+  }
+
+  /**
+   * Asked before Claude runs each prompt. A prompt Claude started on its own
+   * is kept to send at unlock, and dropped here, while the thread's lock
+   * holds it. A held wake has fired, so it leaves the session's wakes.
+   */
+  private async holdSelfStartedTurn(live: LiveSession, input: UserPromptSubmitHookInput): Promise<boolean> {
+    const hold = this.options.holdSelfStartedTurn;
+    if (!hold || live.closing) return false;
+    // An init can open the follow-up turn before this asks. Until Claude
+    // writes into it, that turn is still the prompt's own.
+    const openFollowUp = live.turn?.followUp === true && live.turn.entries.size === 0;
+    const selfStarted = claudeSelfStartedTurn(input, Boolean(live.turn) && !openFollowUp);
+    if (!selfStarted) return false;
+    const threadId = live.session.thread.id;
+    let held: boolean;
+    try {
+      held = await hold({ ...selfStarted, threadId });
+    } catch (error) {
+      claudeBackendLog.warn("Could not hold a turn Claude started while the thread is locked; it runs", {
+        threadId, source: selfStarted.source, error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+    if (!held) return false;
+    // An open follow-up turn takes the dropped prompt's result and ends.
+    if (!openFollowUp) live.heldSelfStarts += 1;
+    // A CLI that names no source may be firing a wake; match that by prompt only.
+    const wakeFired = selfStarted.source !== "task_notification"
+      ? live.sessionWakes.fired(selfStarted.prompt)
+      : input.source === undefined && live.sessionWakes.fired(selfStarted.prompt, { dueFallback: false });
+    if (wakeFired) void this.publishSessionWakes(live).catch(() => {});
+    claudeBackendLog.info("Held a turn Claude started on its own while the thread is locked", {
+      threadId, source: selfStarted.source,
+    });
+    return true;
   }
 
   /** Claude answers a settled task on its own; the desktop shows that as a turn. */

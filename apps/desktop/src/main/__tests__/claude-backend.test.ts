@@ -10,6 +10,7 @@ import {
   type ClaudeBackendOptions,
 } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
+import { CLAUDE_SELF_STARTED_TURN_HELD_REASON } from "../claude/claude-self-started-turns";
 import {
   CLAUDE_FORGE_TOOLS, CLAUDE_MCP_GATEWAY_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
   threadExecutionModeForClaudePermission,
@@ -40,6 +41,20 @@ async function runHooks(options: Options, event: HookEvent, input: Record<string
       await hook({ hook_event_name: event, ...input } as unknown as HookInput, undefined, { signal: new AbortController().signal });
     }
   }
+}
+
+const TASK_NOTIFICATION = "<task-notification>\n<task-id>task-1</task-id>\n<status>completed</status>\n<summary>Build passed</summary>\n</task-notification>";
+
+/** Run the query's UserPromptSubmit hooks, as the CLI does before a prompt, and return their answers. */
+async function runPromptSubmit(options: Options, input: { prompt: string; source?: string }): Promise<unknown[]> {
+  const outputs: unknown[] = [];
+  for (const matcher of options.hooks?.UserPromptSubmit ?? []) {
+    for (const hook of matcher.hooks) {
+      outputs.push(await hook({ hook_event_name: "UserPromptSubmit", session_id: "s", transcript_path: "", cwd: "", ...input } as unknown as HookInput,
+        undefined, { signal: new AbortController().signal }));
+    }
+  }
+  return outputs;
 }
 
 async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUserMessage>) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
@@ -2375,6 +2390,182 @@ describe("Claude SDK backend", () => {
       status: "completed", turn: { id: started.turnId, status: "completed" },
     });
     expect(replay.entries.find((entry) => entry.id === "resumed")).toMatchObject({ turn: { id: followUpId, status: "completed" } });
+  });
+
+  describe("a turn Claude starts on its own while the thread is locked", () => {
+    /** A finished background command, then the prompt Claude submits to answer it. */
+    async function lockedFixture(hold: NonNullable<ClaudeBackendOptions["holdSelfStartedTurn"]>, after: "dropped" | "answered") {
+      const commandDone = Promise.withResolvers<void>();
+      const outputs: unknown[] = [];
+      const f = await fixture(async function* (options) {
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "launch", content: [{ type: "tool_use", id: "tool-bash", name: "Bash", input: { command: "pnpm build", run_in_background: true } }],
+        } } as SDKMessage;
+        yield { type: "system", subtype: "background_tasks_changed", tasks: [
+          { task_id: "task-1", task_type: "local_bash", description: "Build" },
+        ] } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+        await commandDone.promise;
+        yield { type: "system", subtype: "task_notification", task_id: "task-1", tool_use_id: "tool-bash",
+          status: "completed", output_file: "", summary: "Build passed" } as SDKMessage;
+        yield { type: "system", subtype: "background_tasks_changed", tasks: [] } as unknown as SDKMessage;
+        outputs.push(...await runPromptSubmit(options, { prompt: TASK_NOTIFICATION, source: "system" }));
+        if (after === "dropped") {
+          // Claude Code drops a blocked prompt without running the model, but
+          // still reports a native turn around its banner.
+          yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+          yield { type: "system", subtype: "informational", level: "warning",
+            content: "UserPromptSubmit operation blocked by hook: held" } as unknown as SDKMessage;
+          yield { type: "result", subtype: "success", is_error: false, result: "UserPromptSubmit operation blocked by hook: held" } as SDKMessage;
+        } else {
+          yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+          yield { type: "assistant", parent_tool_use_id: null, message: {
+            id: "answered", content: [{ type: "text", text: "The build passed." }],
+          } } as SDKMessage;
+          yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+        }
+      });
+      const backend = f.openBackend({ ...f.backendOptions, holdSelfStartedTurn: hold });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Build in the background" }] });
+      await f.waitForTurn();
+      return { ...f, backend, threadId, outputs, finishCommand: () => commandDone.resolve() };
+    }
+    const turnsStarted = (events: AgentEvent[]) => events.filter((event) => event.notification.method === "turn/started");
+
+    it("holds Claude's answer to a finished task, and opens no turn for the dropped prompt", async () => {
+      const hold = vi.fn(async () => true);
+      const f = await lockedFixture(hold, "dropped");
+      expect(turnsStarted(f.events)).toHaveLength(1);
+      f.finishCommand();
+      // The process ends: no task runs and the dropped prompt had its result.
+      await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+      expect(hold).toHaveBeenCalledExactlyOnceWith({ threadId: f.threadId, prompt: TASK_NOTIFICATION, source: "task_notification" });
+      expect(f.outputs).toEqual([{
+        decision: "block",
+        reason: CLAUDE_SELF_STARTED_TURN_HELD_REASON,
+        hookSpecificOutput: { hookEventName: "UserPromptSubmit", suppressOriginalPrompt: true },
+      }]);
+      expect(turnsStarted(f.events)).toHaveLength(1);
+      expect(f.close).toHaveBeenCalled();
+    });
+
+    it("lets Claude answer when no lock holds the thread", async () => {
+      const hold = vi.fn(async () => false);
+      const f = await lockedFixture(hold, "answered");
+      f.finishCommand();
+      await vi.waitFor(() => expect(turnsStarted(f.events)).toHaveLength(2));
+      await f.waitForTurn();
+      expect(hold).toHaveBeenCalledOnce();
+      expect(f.outputs).toEqual([{}]);
+      expect((await f.backend.readThread(f.threadId)).lastAssistantMessage).toBe("The build passed.");
+    });
+
+    it("lets the turn run when holding it fails, so the prompt is not lost", async () => {
+      const hold = vi.fn(async () => { throw new Error("queue closed"); });
+      const f = await lockedFixture(hold, "answered");
+      f.finishCommand();
+      await vi.waitFor(() => expect(turnsStarted(f.events)).toHaveLength(2));
+      await f.waitForTurn();
+      expect(f.outputs).toEqual([{}]);
+    });
+
+    it("never holds the operator's prompt or one that joins an open desktop turn", async () => {
+      const hold = vi.fn(async () => true);
+      const outputs: unknown[] = [];
+      const f = await fixture(async function* (options) {
+        // The operator's own message, then a task notification Claude folds
+        // into the running turn: both were admitted with the desktop turn.
+        outputs.push(...await runPromptSubmit(options, { prompt: "Build it", source: "sdk" }));
+        outputs.push(...await runPromptSubmit(options, { prompt: TASK_NOTIFICATION, source: "system" }));
+        outputs.push(...await runPromptSubmit(options, { prompt: TASK_NOTIFICATION }));
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+      });
+      const backend = f.openBackend({ ...f.backendOptions, holdSelfStartedTurn: hold });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Build it" }] });
+      await f.waitForTurn();
+      expect(hold).not.toHaveBeenCalled();
+      expect(outputs).toEqual([{}, {}, {}]);
+    });
+
+    it("opens a turn for a later fire once a desktop turn has run, though Claude sent no result for a held one", async () => {
+      let locked = true;
+      const hold = vi.fn(async () => locked);
+      const fire = Promise.withResolvers<void>();
+      const f = await fixture(async function* (options, prompt) {
+        const inputs = prompt[Symbol.asyncIterator]();
+        await inputs.next();
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        await runHooks(options, "PostToolUse", {
+          tool_name: "CronCreate", tool_use_id: "tool-cron", tool_input: { cron: "*/5 * * * *", prompt: "/review-ci" },
+          tool_response: { id: "cron-1", recurring: true, nextFireAt: 4_000_000_000_000 },
+        });
+        yield { type: "result", subtype: "success", is_error: false, result: "scheduled" } as SDKMessage;
+        // A fire the lock holds; this CLI reports nothing more for it.
+        await runPromptSubmit(options, { prompt: "/review-ci", source: "schedule_wakeup" });
+        const next = await inputs.next();
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "next", content: [{ type: "text", text: "OK" }] } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "OK",
+          user_message_uuids: [next.value!.uuid] } as unknown as SDKMessage;
+        await fire.promise;
+        // Unlocked, the cron's slash command runs and reports only its output.
+        await runPromptSubmit(options, { prompt: "/review-ci", source: "schedule_wakeup" });
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        yield { type: "system", subtype: "local_command_output", content: "CI is green." } as unknown as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "CI is green." } as SDKMessage;
+      });
+      const backend = f.openBackend({ ...f.backendOptions, holdSelfStartedTurn: hold });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Check CI every five minutes" }] });
+      await f.waitForTurn();
+      await vi.waitFor(() => expect(hold).toHaveBeenCalledOnce());
+      locked = false;
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Next" }] });
+      await f.waitForTurn();
+      fire.resolve();
+      await vi.waitFor(() => expect(turnsStarted(f.events)).toHaveLength(3));
+      await f.waitForTurn();
+      expect(hold).toHaveBeenCalledTimes(2);
+    });
+
+    it("holds a fired /loop wake-up, which then leaves the session's wakes", async () => {
+      const fire = Promise.withResolvers<void>();
+      const hold = vi.fn(async () => true);
+      const outputs: unknown[] = [];
+      const loop = { id: "a1b2c3d4", schedule: "5 14 3 11 *", recurring: false, prompt: "/loop check the deploy" };
+      const f = await fixture(async function* (options) {
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        await runHooks(options, "PostToolUse", {
+          tool_name: "ScheduleWakeup", tool_use_id: "tool-wake",
+          tool_input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt },
+          tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
+        });
+        await runHooks(options, "Stop", { stop_hook_active: false, session_crons: [loop] });
+        yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+        await fire.promise;
+        // The CLI dropped the one-shot as it fired; no Stop hook follows a held fire.
+        outputs.push(...await runPromptSubmit(options, { prompt: loop.prompt, source: "loop_wakeup" }));
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "UserPromptSubmit operation blocked by hook: held" } as SDKMessage;
+      });
+      const backend = f.openBackend({ ...f.backendOptions, holdSelfStartedTurn: hold });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "/loop check the deploy" }] });
+      await f.waitForTurn();
+      expect(backend.listSessionWakes(threadId)).toHaveLength(1);
+      fire.resolve();
+      await vi.waitFor(() => expect(backend.liveSessionThreadIds()).toEqual([]));
+      expect(hold).toHaveBeenCalledExactlyOnceWith({ threadId, prompt: loop.prompt, source: "loop_wakeup" });
+      expect(outputs).toEqual([expect.objectContaining({ decision: "block" })]);
+      expect(turnsStarted(f.events)).toHaveLength(1);
+      expect(backend.listSessionWakes(threadId)).toEqual([]);
+      expect(f.events.filter((event) => event.notification.method === "thread/sessionWakes/updated").at(-1)?.notification.params)
+        .toEqual({ threadId, wakes: [] });
+    });
   });
 
   it("follows Claude Code 2.1.301's captured background-command sequence to its follow-up turn", async () => {

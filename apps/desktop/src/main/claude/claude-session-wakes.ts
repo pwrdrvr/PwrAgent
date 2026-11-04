@@ -25,6 +25,9 @@ const ONE_SHOT_OVERDUE_MS = 60 * 60_000;
  */
 const MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
+/** A fire can come this soon before the time the CLI reported. */
+const FIRE_SKEW_MS = 60_000;
+
 /** The CLI clips `session_crons` prompts with an in-string `… [+N chars]` marker. */
 const CLIPPED_PROMPT_MARKER = /… \[\+\d+ chars\]$/;
 
@@ -142,6 +145,40 @@ export class ClaudeSessionWakeTracker {
     }
     return rows.sort((left, right) => (left.nextFireAt ?? Infinity) - (right.nextFireAt ?? Infinity)
       || (left.createdAt ?? 0) - (right.createdAt ?? 0));
+  }
+
+  /**
+   * A fire PwrAgent held, by its prompt. The CLI drops a one-shot job as it
+   * fires, and no Stop hook follows a held fire to report that, so the
+   * one-shot leaves here. A recurring job stays. A /loop fire can submit
+   * expanded text rather than the scheduled prompt; with no match by prompt,
+   * the soonest one-shot already due leaves, unless `dueFallback` is false.
+   * Returns whether one left.
+   */
+  fired(prompt: string, options: { dueFallback?: boolean } = {}): boolean {
+    const now = this.now();
+    const matches = (scheduled: string) => scheduled === prompt || samePrompt(prompt, scheduled);
+    const loopIndex = this.loopWakeups.findIndex((wakeup) => matches(wakeup.prompt));
+    if (loopIndex >= 0) {
+      this.loopWakeups.splice(loopIndex, 1);
+      return true;
+    }
+    const oneShots = [...this.wakes.values()].filter((wake) => !wake.recurring);
+    const byPrompt = oneShots.find((wake) => matches(wake.prompt));
+    if (byPrompt) return this.wakes.delete(byPrompt.id);
+    if (options.dueFallback === false) return false;
+    if ([...this.wakes.values()].some((wake) => wake.recurring && matches(wake.prompt))) return false;
+    const dueWake = oneShots
+      .filter((wake) => wake.nextFireAt !== undefined && wake.nextFireAt <= now + FIRE_SKEW_MS)
+      .sort((left, right) => left.nextFireAt! - right.nextFireAt!)[0];
+    const dueWakeup = this.loopWakeups
+      .filter((wakeup) => wakeup.scheduledFor <= now + FIRE_SKEW_MS)
+      .sort((left, right) => left.scheduledFor - right.scheduledFor)[0];
+    if (dueWakeup && (!dueWake || dueWakeup.scheduledFor <= dueWake.nextFireAt!)) {
+      this.loopWakeups = this.loopWakeups.filter((wakeup) => wakeup !== dueWakeup);
+      return true;
+    }
+    return dueWake ? this.wakes.delete(dueWake.id) : false;
   }
 
   /** Whether any wake is still to come; cheaper than `pending()`. */

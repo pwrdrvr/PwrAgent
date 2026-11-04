@@ -79,6 +79,11 @@ export type ThreadPendingWakeReaders = {
 };
 
 export const DEFAULT_PENDING_WAKES_ENDED_LIMIT = 8;
+/**
+ * The id of the queue entry that holds the turns a backend started on its
+ * own, such as Claude's task follow-ups and wakes, while the thread is locked.
+ */
+export const SELF_STARTED_TURN_ENTRY_PREFIX = "self-started:";
 const MONITOR_ID_PREFIX = "monitor-";
 const DETAIL_MAX_CHARS = 80;
 
@@ -137,7 +142,7 @@ export async function buildThreadPendingWakes(
       state.backend === thread.backend && state.threadId === thread.threadId)), hold),
     ...withHold(dependencyWakes(dependencies), hold),
     ...withHold(monitors.map(monitorWake).sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)), hold),
-    ...tasks.filter((task) => task.background).map(backendTaskWake),
+    ...withHold(tasks.filter((task) => task.background).map(backendTaskWake), hold),
   ];
   const ended = [
     ...prHistory.flatMap(endedPrWatch),
@@ -237,16 +242,17 @@ function pullRequestWakes(
 
 /**
  * Marks the wakes the thread's hold keeps from starting. A lock holds every
- * turn source. A paused project fetches no PR status, so PR watches wait,
- * and it holds or drops what a dependency or a monitor sends; it leaves
- * scheduled actions alone. Auto-fix is off under either hold, and a
- * backend's own task or scheduled wake is the backend's to start.
+ * turn source, including the turns a backend starts in its own process:
+ * Claude's answer to a finished task and its own wakes are held as they
+ * fire. A paused project fetches no PR status, so PR watches wait, and it
+ * holds or drops what a dependency or a monitor sends; it leaves scheduled
+ * actions and the backend's own turns alone. Auto-fix is off under either hold.
  */
 function withHold(wakes: ThreadPendingWake[], hold: ThreadPendingWakeHold | undefined): ThreadPendingWake[] {
   if (!hold || hold.kind === "queue_held") return wakes;
   return wakes.map((wake) => {
     const holds = hold.kind === "thread_locked"
-      ? wake.kind !== "pr_auto_fix" && wake.kind !== "backend_task" && wake.kind !== "backend_wake"
+      ? wake.kind !== "pr_auto_fix"
       : wake.kind === "pr_watch" || wake.kind === "dependency" || wake.kind === "monitor";
     return holds ? { ...wake, held: hold } : wake;
   });
@@ -255,6 +261,8 @@ function withHold(wakes: ThreadPendingWake[], hold: ThreadPendingWakeHold | unde
 const HELD_ENTRY_ID_SOURCES: Array<[prefix: string, source: ThreadPendingHeldMessageSource]> = [
   ["task-monitor:", "monitor"],
   ["dependency:", "dependency"],
+  // The backend's agent started it; its title says what it is.
+  [SELF_STARTED_TURN_ENTRY_PREFIX, "other"],
 ];
 
 /**
