@@ -328,20 +328,6 @@ rl.on("line", (line) => {
       if (!api.archiveThread) throw new Error("Desktop archive bridge is unavailable.");
       return await api.archiveThread({ ...owner, backgroundCleanup: false });
     }, { backend, threadId });
-    if (!archived.cleanup.some((item) => item.removedWorktree)) {
-      const db = StateDb.open(path.join(app.homeRoot, ".pwragent/profiles/default/state/state.db"), { profileName: "default" });
-      try {
-        await test.info().attach("archive-durable-state.json", {
-          body: JSON.stringify({ session: new AcpSessionStore(db).getSession(backend, threadId),
-            agents: new AcpAgentStore(db).listInstalledAgents() }, null, 2),
-          contentType: "application/json",
-        });
-      } finally {
-        db.close();
-      }
-      const logDirectory = await app.electronApp.evaluate(({ app: electronApp }) => electronApp.getPath("logs"));
-      await test.info().attach("archive-main.log", { path: path.join(logDirectory, "profile-default.main.log") });
-    }
     expect(archived.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
     expect(await pathExists(fixture.worktreePath)).toBe(false);
     const restored = await app.window.evaluate(async (owner) => {
