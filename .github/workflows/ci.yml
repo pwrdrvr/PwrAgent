@@ -749,8 +749,8 @@ jobs:
       fail-fast: false
       matrix:
         lane: [1, 2, 3, 4]
-    # One budget for setup, build, tests, and reporting. Disable the measured
-    # indexing contention below rather than extending this deadline.
+    # One budget for setup, build, tests, and reporting. The measured indexing
+    # contention below is addressed within this deadline.
     timeout-minutes: 15
     steps:
       # Indexing competes with dependency extraction and Electron startup on

@@ -6,7 +6,7 @@ Measurements use GitHub-hosted `macos-26` VMs. The job retains its 15-minute lim
 
 [Experiment run 41769106839](https://github.com/pwrdrvr/PwrAgent/actions/runs/41769106839) ran three baseline and three indexing-disabled lane 4 jobs at commit `1be6898ddf3b84078964e2d711ab642b67f7d49f`. Each used a separate fresh VM with 3 CPUs and 7 GiB RAM, the same dependency cache, build, tests, and production settings. Indexing was disabled before checkout with `sudo mdutil -a -i off`. All six jobs collected 94 tests (91 executable and 3 platform skips).
 
-| Treatment / sample | Job total | Setup | Build / discovery | Completed test time | Initial / pre-test load (1 min) | Result |
+| Treatment / sample | Job total | Setup | Build / bootstrap | Reported test time | Initial / pre-test load (1 min) | Result |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | [Baseline / 1](https://github.com/pwrdrvr/PwrAgent/actions/runs/41769106839/job/126374357351) | 9:21 | 1:25 | 0:33 | 7:07 | 40.86 / 18.17 | 91 passed, 3 skipped |
 | [Disabled / 1](https://github.com/pwrdrvr/PwrAgent/actions/runs/41769106839/job/126374356962) | 8:17 | 1:09 | 0:24 | 6:32 | 16.58 / 7.81 | 91 passed, 3 skipped |
@@ -19,8 +19,8 @@ Measurements use GitHub-hosted `macos-26` VMs. The job retains its 15-minute lim
 | --- | ---: | ---: | ---: |
 | Total job | 10:05 | 8:17 | -17.9% |
 | Setup | 1:25 | 1:11 | -16.5% |
-| Build / discovery | 0:33 | 0:29 | -12.0% |
-| Completed tests | 8:02 | 6:32 | -18.7% |
+| Build / bootstrap | 0:33 | 0:29 | -12.0% |
+| Reported tests | 8:02 | 6:32 | -18.7% |
 
 Spotlight processes were still present among the highest-CPU processes immediately before tests in every baseline sample (12, 6, and 9 processes in samples 1–3). All disabled samples had none in that snapshot, and `mdutil -a -s` confirmed indexing disabled. The measured fix disables indexing before checkout in the production macOS E2E job.
 
@@ -41,6 +41,27 @@ These are independent fresh VMs in one workflow, not paired measurements on the 
 
 The baseline four-lane CI run at the same commit, [41769106845](https://github.com/pwrdrvr/PwrAgent/actions/runs/41769106845), finished in **7:49 / 6:40 / 10:34 / 8:42** for lanes 1–4.
 
+## After: three four-lane CI runs
+
+All three runs used production code at `020860d88d35ebbdbd63b9af6c654617502f1422` with indexing disabled before checkout. The two supplemental workflows copied the production macOS E2E steps and matrix, then were removed after measurement. Each run collected the same 320 tests: 313 executable and 7 platform skips. All 12 jobs concluded successfully, and every job log confirmed indexing disabled.
+
+| CI run | Lane 1 | Lane 2 | Lane 3 | Lane 4 |
+| --- | ---: | ---: | ---: | ---: |
+| [41771113480](https://github.com/pwrdrvr/PwrAgent/actions/runs/41771113480) | 6:10 | 5:46 | 9:09 | 9:52 |
+| [41771113530](https://github.com/pwrdrvr/PwrAgent/actions/runs/41771113530) | 7:13 | 7:41 | 13:23 | 9:49 |
+| [41771113522](https://github.com/pwrdrvr/PwrAgent/actions/runs/41771113522) | 7:52 | 7:34 | 10:24 | 7:00 |
+
+Lane 4 finished in **7:00–9:52**, leaving at least **5:08** inside its 15-minute limit. The slowest overall sample was lane 3 at **13:23**; it spent **1:22** in setup, **0:37** in build/bootstrap, and **11:10** in reported tests. Its three largest spec totals were `federation-remote-window.spec.ts` (167.8s), `rendering-diagnostics.spec.ts` (91.2s), and `onboarding-wizard.spec.ts` (66.6s).
+
+Supplemental run 41771113522 exercised the existing retry for `thread-archive-worktree-cleanup.spec.ts:276`; its final result was 90 passed, 1 flaky, and 3 skipped in lane 4. The other 11 macOS jobs had no flaky results. All retry time is included.
+
+The normal CI run’s advisory Windows E2E lane 2 failed with the existing open-launcher-pipe-after-quit error in `directory-launchpad-skills.spec.ts:461` and `:617` ([job 126381196338](https://github.com/pwrdrvr/PwrAgent/actions/runs/41771113480/job/126381196338)). This is separate from the successful macOS timing jobs.
+
+## Static verification
+
+- `actionlint .github/workflows/ci.yml`: exit 0.
+- Sandbox `sb_crisp29ch2`, commit `2aad6f62b04c9855bc2b388b0bbe3228176a0312`: `verify.sh setup` exit 0 (10s), `verify.sh lint` exit 0 (72s). The latter runs `pnpm lint`, including syntax/typed Oxlint and typecheck. The sandbox was stopped after the run.
+
 ## Before: job duration across runs
 
 | Commit / CI run | Lane 1 | Lane 2 | Lane 3 | Lane 4 |
@@ -57,9 +78,9 @@ The baseline four-lane CI run at the same commit, [41769106845](https://github.c
 
 ## Setup, build, and tests
 
-The latest baseline run separates into these phases. Test duration is the sum of displayed Playwright result durations; build includes test discovery up to `Running N tests`. The difference from total duration covers global setup/teardown, reporting, artifact upload, and rounding.
+The latest baseline run separates into these phases. Test duration is the sum of displayed Playwright result durations. Build/bootstrap spans the test step’s start through `Running N tests`, including compilation, test discovery, and the global Electron canary. The difference from total duration covers worker startup, global teardown, reporting, artifact upload, and rounding.
 
-| Run / lane | Total job | Setup | Build / discovery | Completed test time |
+| Run / lane | Total job | Setup | Build / bootstrap | Reported test time |
 | --- | ---: | ---: | ---: | ---: |
 | [41759033869 / 1](https://github.com/pwrdrvr/PwrAgent/actions/runs/41759033869/job/126342144547) | 5:13 | 0:47 | 0:23 | 3:54 |
 | [41759033869 / 2](https://github.com/pwrdrvr/PwrAgent/actions/runs/41759033869/job/126342144525) | 5:47 | 0:54 | 0:25 | 4:18 |
@@ -68,7 +89,7 @@ The latest baseline run separates into these phases. Test duration is the sum of
 | [41736725228 / 4](https://github.com/pwrdrvr/PwrAgent/actions/runs/41736725228/job/126267899094) | 15:14 | 1:24 | 0:51 | 12:38 |
 | [41713710197 / 4](https://github.com/pwrdrvr/PwrAgent/actions/runs/41713710197/job/126188453645) | 15:13 | 1:59 | 1:20 | 11:31 |
 
-The seven recent main runs have median completed test times of **5:51**, **6:08**, **7:29**, **7:40** for lanes 1–4. The failed lane 3 is excluded from medians. Lane 4 collected 94 tests, compared with 62, 85, and 79 in the other lanes. Counts include platform-skipped tests because Playwright includes them when allocating shards.
+The seven recent main runs have median reported test times of **5:51**, **6:08**, **7:29**, **7:40** for lanes 1–4. The failed lane 3 is excluded from medians. Lane 4 collected 94 tests, compared with 62, 85, and 79 in the other lanes. Counts include platform-skipped tests because Playwright includes them when allocating shards.
 
 ## Per-spec durations by lane
 
@@ -183,7 +204,7 @@ These are medians of completed spec totals from the seven main runs above, exclu
 
 - Fetch raw job metadata with `gh api repos/pwrdrvr/PwrAgent/actions/jobs/JOB_ID` and logs with `gh api --allow-escape-sequences repos/pwrdrvr/PwrAgent/actions/jobs/JOB_ID/logs`. Keep raw logs outside the repository.
 - Total job time is `completed_at - started_at`; setup ends when `Run desktop replay-backed Electron tests` starts.
-- Build/discovery ends at the timestamp of `Running N tests using 1 worker, shard K of 4`.
-- Extract the final parenthesized duration from each completed `✓` or `✘` test-result line, group by spec and lane, then take medians across successful lanes. Include retry attempts when present.
+- Build/bootstrap ends at the timestamp of `Running N tests using 1 worker, shard K of 4`; this includes the global Electron canary.
+- Extract the final parenthesized duration from each completed `✓` or `✘` test-result line, group by spec and lane, then take medians across successful lanes. Include retry attempts and reported interrupted partial attempts when present.
 - Cancelled jobs provide partial test totals; their unfinished work is not a successful sample.
 - The HTML Playwright artifacts retain the full test results and exact millisecond durations for successful jobs. Log-derived durations are rounded by the list reporter.
