@@ -258,10 +258,13 @@ class QueueCommand implements fc.AsyncCommand<Model, Real> {
 
 const reason = fc.constantFrom(...REASONS, FAILURE);
 const terminal = fc.constantFrom("turn/completed" as const, "turn/failed" as const);
-const commands = fc.commands([
-  fc.constant(new QueueCommand({ kind: "submit" })),
+const holdCommands = [
   reason.map((reason) => new QueueCommand({ kind: "submitHeld", reason })),
   reason.map((reason) => new QueueCommand({ kind: "releaseHold", reason })),
+];
+const commands = fc.commands([
+  fc.constant(new QueueCommand({ kind: "submit" })),
+  ...holdCommands,
   terminal.map((status) => new QueueCommand({ kind: "releaseThread", status })),
   terminal.map((status) => new QueueCommand({ kind: "staleRelease", status })),
   fc.nat({ max: 10 }).map((index) => new QueueCommand({ kind: "retry", index })),
@@ -271,46 +274,46 @@ const commands = fc.commands([
     .map(([index, before]) => new QueueCommand({ kind: "move", index, before })),
 ], { maxCommands: 40, size: "+1" });
 
+async function runModel(sequence: Iterable<fc.AsyncCommand<Model, Real>>): Promise<void> {
+  const state = setup();
+  try {
+    await fc.asyncModelRun(() => state, sequence);
+  } finally {
+    state.real.queue.close();
+  }
+}
+
 describe("ThreadTurnQueue model", () => {
   it("holds every waiting entry after failure even if the newest hold already has that reason", async () => {
-    const state = setup();
-    try {
-      await fc.asyncModelRun(() => state, [
-        new QueueCommand({ kind: "submit" }),
-        new QueueCommand({ kind: "submitHeld", reason: "locked" }),
-        new QueueCommand({ kind: "submitHeld", reason: FAILURE }),
-        new QueueCommand({ kind: "releaseThread", status: "turn/failed" }),
-        new QueueCommand({ kind: "releaseHold", reason: "locked" }),
-      ]);
-    } finally {
-      state.real.queue.close();
-    }
+    await runModel([
+      new QueueCommand({ kind: "submit" }),
+      new QueueCommand({ kind: "submitHeld", reason: "locked" }),
+      new QueueCommand({ kind: "submitHeld", reason: FAILURE }),
+      new QueueCommand({ kind: "releaseThread", status: "turn/failed" }),
+      new QueueCommand({ kind: "releaseHold", reason: "locked" }),
+    ]);
   });
 
   it("ignores an old failure after a newer entry is held", async () => {
-    const state = setup();
-    try {
-      await fc.asyncModelRun(() => state, [
-        new QueueCommand({ kind: "submitHeld", reason: "locked" }),
-        new QueueCommand({ kind: "retry", index: 0 }),
-        new QueueCommand({ kind: "releaseThread", status: "turn/completed" }),
-        new QueueCommand({ kind: "submitHeld", reason: "locked" }),
-        new QueueCommand({ kind: "staleRelease", status: "turn/failed" }),
-      ]);
-    } finally {
-      state.real.queue.close();
-    }
+    await runModel([
+      new QueueCommand({ kind: "submitHeld", reason: "locked" }),
+      new QueueCommand({ kind: "retry", index: 0 }),
+      new QueueCommand({ kind: "releaseThread", status: "turn/completed" }),
+      new QueueCommand({ kind: "submitHeld", reason: "locked" }),
+      new QueueCommand({ kind: "staleRelease", status: "turn/failed" }),
+    ]);
+  });
+
+  it("preserves FIFO and independent causes through repeated holds and releases", async () => {
+    // Exercise hold composition densely as well as in the full state machine.
+    await fc.assert(fc.asyncProperty(
+      fc.commands(holdCommands, { maxCommands: 40, size: "+1" }),
+      runModel,
+    ), { numRuns: 100 });
   });
 
   it("preserves admission order, hold causes, single occupancy and progress", async () => {
-    await fc.assert(fc.asyncProperty(commands, async (sequence) => {
-      const state = setup();
-      try {
-        await fc.asyncModelRun(() => state, sequence);
-      } finally {
-        state.real.queue.close();
-      }
-    }), { numRuns: 200 });
+    await fc.assert(fc.asyncProperty(commands, runModel), { numRuns: 200 });
     // fc.assert includes the seed, path, shrunk commands and replayPath in
     // its failure, so CI failures can be replayed without pinning a seed here.
   });
