@@ -1,4 +1,9 @@
-import type { AppServerReviewTarget, PrSummary } from "@pwragent/shared";
+import {
+  findPrimaryReviewWorkspaceCwd,
+  type AppServerReviewTarget,
+  type NavigationThreadSummary,
+  type PrSummary,
+} from "@pwragent/shared";
 
 /**
  * The one pull request URL shape an explicit review target accepts. The owner
@@ -33,6 +38,8 @@ export function attachedPullRequestsForWorkspace(params: {
   cwd?: string;
   repositoryPath?: string;
   repository?: string;
+  /** More `host/owner/repo` identities of the same checkout. */
+  repositories?: string[];
 }): PrSummary[] {
   if (!params.cwd) return [];
   const normalizePath = (value: string): string => {
@@ -48,10 +55,86 @@ export function attachedPullRequestsForWorkspace(params: {
       || (params.repositoryPath && normalizePath(path) === normalizePath(params.repositoryPath)),
   ));
   const repositories = new Set([
-    ...(params.repository ? [params.repository.toLowerCase()] : []),
+    ...[params.repository, ...(params.repositories ?? [])]
+      .map((value) => value?.trim().toLowerCase())
+      .filter((value): value is string => Boolean(value)),
     ...scoped.map(repository).filter(Boolean),
   ]);
   return params.prs.filter((pr) => repositories.has(repository(pr)));
+}
+
+function sameReviewWorkspacePath(left?: string, right?: string): boolean {
+  const normalize = (value?: string): string =>
+    value?.trim().replace(/\\/g, "/").replace(/\/+$/, "") ?? "";
+  return Boolean(normalize(left)) && normalize(left) === normalize(right);
+}
+
+function findReviewLinkedDirectory(
+  thread: NavigationThreadSummary | undefined,
+  cwd: string | undefined,
+): NavigationThreadSummary["linkedDirectories"][number] | undefined {
+  return thread?.linkedDirectories.find((directory) =>
+    sameReviewWorkspacePath(directory.worktreePath ?? directory.path, cwd)
+  );
+}
+
+type ReviewWorkspaceScope = {
+  cwd?: string;
+  directory?: { gitStatus?: { originRepository?: string } };
+  thread?: NavigationThreadSummary;
+};
+
+/**
+ * The thread's attached PRs that belong to one review workspace's repository.
+ * A linked worktree often has no directory row of its own, so its linked
+ * directory's repository identity counts as much as a directory's origin.
+ */
+export function reviewWorkspacePullRequests(params: ReviewWorkspaceScope): PrSummary[] {
+  const linkedDirectory = findReviewLinkedDirectory(params.thread, params.cwd);
+  return attachedPullRequestsForWorkspace({
+    cwd: params.cwd,
+    prs: params.thread?.prs ?? [],
+    repository: params.directory?.gitStatus?.originRepository,
+    repositories: linkedDirectory?.repositoryKey
+      ? [linkedDirectory.repositoryKey]
+      : [],
+    repositoryPath: linkedDirectory?.path,
+  });
+}
+
+/**
+ * The thread as seen from one review workspace. The thread's branch, working
+ * state and PR list describe its primary checkout and every repository it
+ * touched. A base branch inferred from them for another project compares
+ * that project with the wrong repository's branch.
+ */
+export function reviewThreadForWorkspace(
+  params: ReviewWorkspaceScope,
+): NavigationThreadSummary | undefined {
+  const { thread } = params;
+  if (!thread || !params.cwd) {
+    return thread;
+  }
+  const linkedDirectory = findReviewLinkedDirectory(thread, params.cwd);
+  const prs = reviewWorkspacePullRequests(params);
+  if (sameReviewWorkspacePath(params.cwd, findPrimaryReviewWorkspaceCwd(thread))) {
+    // With no repository identity for the primary checkout, every attached
+    // PR stays a hint, as it was before workspaces were told apart.
+    const identified = prs.length > 0
+      || Boolean(params.directory?.gitStatus?.originRepository)
+      || Boolean(linkedDirectory?.repositoryKey);
+    return identified ? { ...thread, prs } : thread;
+  }
+  const secondary: NavigationThreadSummary = { ...thread, prs };
+  delete secondary.gitWorkingState;
+  delete secondary.observedGitBranch;
+  const gitBranch = linkedDirectory?.gitBranch?.trim();
+  if (gitBranch) {
+    secondary.gitBranch = gitBranch;
+  } else {
+    delete secondary.gitBranch;
+  }
+  return secondary;
 }
 
 /** Translate only at the engine boundary; retain the original target in state. */
