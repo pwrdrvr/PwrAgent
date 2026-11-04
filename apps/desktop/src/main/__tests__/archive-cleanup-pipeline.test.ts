@@ -844,22 +844,53 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.counts.providerPages).toBe(4);
   });
 
-  it("retains an inaccessible historical path while discovering other repair candidates", async () => {
+  it.each([false, true])("retains supplied historical repair paths when canonical keys differ (%s)", async (differentKeys) => {
     vi.useFakeTimers();
     const fixture = build([]);
+    const canonical = differentKeys ? vi.spyOn(await import("../app-server/archive-worktree-references"), "canonicalWorktreePaths")
+      .mockImplementation(() => async (value) => path.resolve(value).toLowerCase()) : undefined;
     const rows = ["denied", "valid"].map((id) => codexThread({ id, linkedDirectories: [{
-      id, kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: `/contrived/${id}`,
+      id, kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: `/contrived/Mixed-${id}`,
     }] }));
     fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => ({ threads: params.archived ? rows : [], nextCursor: undefined }));
     vi.mocked(stat).mockImplementation(async (filePath) => {
-      if (filePath === path.normalize("/contrived/denied")) throw Object.assign(new Error("Access denied"), { code: "EACCES" });
+      if (filePath === path.normalize("/contrived/Mixed-denied")) throw Object.assign(new Error("Access denied"), { code: "EACCES" });
       return { isDirectory: () => true } as Awaited<ReturnType<typeof stat>>;
     });
-    const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
-    await vi.advanceTimersByTimeAsync(10_000);
-    const result = await drivePacer(fixture.registry, scan);
-    expect(result.cleanup).toEqual([expect.objectContaining({ worktreePath: path.normalize("/contrived/denied"), removedWorktree: false, error: "Access denied" })]);
-    expect(result.candidates).toEqual([{ backend: "codex", threadId: "valid", worktreePath: path.normalize("/contrived/valid") }]);
+    try {
+      const result = await drivePacer(fixture.registry, fixture.registry.repairArchivedThreadWorktrees({ dryRun: true }));
+      expect(result.cleanup).toEqual([expect.objectContaining({ worktreePath: path.normalize("/contrived/Mixed-denied"), removedWorktree: false, error: "Access denied" })]);
+      expect(result.candidates).toEqual([{ backend: "codex", threadId: "valid", worktreePath: path.normalize("/contrived/Mixed-valid") }]);
+    } finally { canonical?.mockRestore(); }
+  });
+
+  it("keeps empty-container repair paths separate from canonical comparison keys", async () => {
+    vi.useFakeTimers();
+    const fixture = buildRepair();
+    const canonical = vi.spyOn(await import("../app-server/archive-worktree-references"), "canonicalWorktreePaths")
+      .mockImplementation(() => async (value) => `${path.resolve(value)}.canonical`);
+    const paths = fixture.archived.map((row) => {
+      row.linkedDirectories[0]!.worktreePath += "/repo";
+      row.projectKey = row.linkedDirectories[0]!.worktreePath;
+      return path.normalize(row.projectKey!);
+    });
+    vi.mocked(stat).mockRejectedValue(Object.assign(new Error("Missing checkout"), { code: "ENOENT" }));
+    const prune = vi.fn(async (worktreePath: string, check: () => void) => {
+      check();
+      return { worktreePath, containerPath: path.dirname(worktreePath), removed: true };
+    });
+    Object.assign(fixture.registry, { worktreeContainerService: {
+      containerPath: async (worktreePath: string) => paths.includes(worktreePath) ? path.dirname(worktreePath) : undefined,
+      comparisonPaths: (value: string) => [value], worktreeComparisonPaths: (value: string) => [value],
+      inspect: async (worktreePath: string) => ({ worktreePath, containerPath: path.dirname(worktreePath), identity: { dev: "1", ino: "2" } }),
+      prune,
+    } });
+    try {
+      const result = await drivePacer(fixture.registry, fixture.registry.repairArchivedThreadWorktrees());
+      expect(result.emptyContainerCandidates.map((candidate) => candidate.worktreePath)).toEqual(paths);
+      expect(prune.mock.calls.map(([worktreePath]) => worktreePath)).toEqual(paths);
+      expect(result.containerCleanup.every((item) => item.removed)).toBe(true);
+    } finally { canonical.mockRestore(); }
   });
 
   it("bounds fresh removal admission pages for Harold's 399 active and 1477 archived threads", async () => {
