@@ -672,17 +672,18 @@ jobs:
           lookup-only: "true"
 
   test-macos:
-    name: macOS unit tests (lane ${{ matrix.lane }} of 2)
+    name: macOS unit tests (lane ${{ matrix.lane }} of 4)
     runs-on: macos-26
     needs: [changes, macos-install-deps]
     # Exercise the release unit-test platform before a tag is cut.
     if: needs.changes.outputs.code_impacting == 'true'
-    # Green hosted lanes take 3.5 to 11 minutes (2026-11-01).
+    # Two lanes exhausted this deadline while still running tests. Four keep
+    # native-module process isolation and the deadline with less work per VM.
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        lane: [1, 2]
+        lane: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
@@ -709,10 +710,20 @@ jobs:
           # Require the icon compile check wherever Vitest assigns its suite.
           DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
           PWRAGENT_REQUIRE_ACTOOL: "1"
-        run: pnpm test --shard=${{ matrix.lane }}/2
+        run: pnpm test --shard=${{ matrix.lane }}/4 --reporter=default --reporter=json --outputFile=.local/ci/macos-unit-results.json
+
+      - name: Upload unit timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-unit-timings-lane-${{ matrix.lane }}
+          path: .local/ci/macos-unit-results.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload failed unit shutdown probes
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: macos-unit-shutdown-probes-lane-${{ matrix.lane }}

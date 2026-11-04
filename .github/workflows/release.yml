@@ -187,7 +187,7 @@ jobs:
         run: pnpm lint
 
   test:
-    name: macOS unit tests (lane ${{ matrix.lane }} of 2)
+    name: macOS unit tests (lane ${{ matrix.lane }} of 4)
     runs-on: macos-26
     needs:
       - install-deps
@@ -195,7 +195,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [1, 2]
+        lane: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
@@ -223,7 +223,17 @@ jobs:
           # Require the icon compile check wherever Vitest assigns its suite.
           DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
           PWRAGENT_REQUIRE_ACTOOL: "1"
-        run: pnpm test --shard=${{ matrix.lane }}/2
+        run: pnpm test --shard=${{ matrix.lane }}/4 --reporter=default --reporter=json --outputFile=.local/ci/macos-unit-results.json
+
+      - name: Upload unit timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-unit-timings-lane-${{ matrix.lane }}
+          path: .local/ci/macos-unit-results.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
 
   prepare:
     name: Prepare macOS signing input
