@@ -22,6 +22,7 @@ import {
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
+  type PrSummary,
   type StartReviewRequest,
   type ModelSettingsRecent,
   type FederationCapability,
@@ -7998,15 +7999,17 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     const picker = screen.getByLabelText("Attached pull request");
-    expect(within(picker).getByRole("option", { name: /^project#1 Stack 1/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: /^#1 Stack 1/ })).toBeInTheDocument();
     expect(within(picker).getByRole("option", { name: /#2/ })).toBeInTheDocument();
-    expect(within(picker).getByRole("option", { name: /^other#1 Other change/ })).toBeInTheDocument();
+    expect(within(picker).queryByRole("option", { name: /Other change/ })).not.toBeInTheDocument();
     expect(within(picker).queryByRole("option", { name: /unattached/ })).not.toBeInTheDocument();
     fireEvent.change(picker, { target: { value: prs[0].url } });
     expect(screen.getByText(/stack-1 . main/)).toHaveTextContent("at 1111111");
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/other" } });
-    expect(screen.getByLabelText("Attached pull request")).toHaveValue("");
-    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
+    // The project's sole PR is picked, as it is when the target is chosen.
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue(secondaryPr.url);
+    expect(within(picker).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Choose pull request", "#1 Other change — stack-1"]);
     fireEvent.change(picker, { target: { value: secondaryPr.url } });
     expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/other");
     expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("PwrAgent Sub Agent");
@@ -8015,6 +8018,8 @@ describe("Composer", () => {
       "Reviews in Other. PwrAgent Sub Agent is required because the selected project is not this thread's primary workspace.",
     )).toBeInTheDocument();
     if (project === "primary") {
+      fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
+      expect(picker).toHaveValue("");
       fireEvent.change(picker, { target: { value: prs[0].url } });
       expect(screen.getByLabelText("Review project")).toHaveValue("/repo/project");
       expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("Codex Sub Agent");
@@ -8079,7 +8084,7 @@ describe("Composer", () => {
       ],
       prs,
     });
-    const { rerender } = render(<Composer
+    const { unmount } = render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("alpha", "tool", 2, "/repo/tool")])}
@@ -8093,15 +8098,185 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/tool-fix" } });
     expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/alpha/tool/pull/2");
 
-    rerender(<Composer
+    unmount();
+    render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("beta", "tool", 2, "/repo/fork")])}
     />);
+    // No project is chosen yet, so the list spans both repositories.
+    await openReviewComposer();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     const options = within(screen.getByLabelText("Attached pull request")).getAllByRole("option");
     expect(options.map((option) => option.textContent)).toEqual([
       "Choose pull request", "alpha/tool#1 Change 1", "beta/tool#2 Change 2",
     ]);
+  });
+
+  const reviewProjectBackend = (): BackendSummary => {
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexSubAgent: true };
+    return backend;
+  };
+  const reviewProjectPr = (repo: string, number: number, extra: Partial<PrSummary>): PrSummary => ({
+    provider: "github.com", org: "fixture", repo, number, title: `${repo} change ${number}`,
+    url: `https://github.com/fixture/${repo}/pull/${number}`, state: "passing",
+    lifecycleState: "open", headSha: String(number % 10).repeat(40), ...extra,
+  });
+  const reviewProjectDirectory = (
+    name: string,
+    branch: string,
+  ): NavigationDirectorySummary => ({
+    key: `directory:/repo/${name}`, kind: "directory", label: name, path: `/repo/${name}`,
+    threadKeys: [], needsAttentionCount: 0,
+    gitStatus: {
+      originRepository: `github.com/fixture/${name}`, currentBranch: branch,
+      defaultBranch: branch, branches: [branch], baseBranches: [`origin/${branch}`, branch],
+      syncState: "untracked",
+    },
+  });
+  // A primary checkout of a fork whose PRs target `pwrgit`, plus a linked
+  // worktree of another repository that has no directory row of its own.
+  const gitRuntimePrs = [
+    reviewProjectPr("git", 4, { headRefName: "feat/portable-runtime", baseRefName: "pwrgit", linkedDirectoryPaths: ["/worktrees/git"] }),
+    reviewProjectPr("git", 8, { headRefName: "feat/runtime-reshare", baseRefName: "pwrgit", linkedDirectoryPaths: ["/worktrees/git"] }),
+    reviewProjectPr("PwrGit", 546, { headRefName: "feat/runtime-pin", baseRefName: "main", explicitlyAttached: true }),
+  ];
+
+  it("lists the chosen project's PRs and infers that project's base branch", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend, threadId: request.threadId, reviewThreadId: request.threadId, turnId: "review",
+    }));
+    const gitDirectory = reviewProjectDirectory("git", "pwrgit");
+    render(<Composer
+      backends={[reviewProjectBackend()]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      directory={gitDirectory}
+      directories={[gitDirectory]}
+      disabled={false} skills={[]}
+      thread={{
+        id: "thread-1", title: "Ship runtime", titleSource: "explicit", source: "codex",
+        executionMode: "default", inbox: { inInbox: false }, projectKey: "/worktrees/git",
+        gitBranch: "feat/runtime-reshare",
+        gitWorkingState: {
+          baseBranch: "origin/pwrgit", baseAheadCommitCount: 2, dirtyFiles: 0, untrackedFiles: 0,
+          unpushedCommits: 0, dirtyAdditions: 0, dirtyDeletions: 0,
+        },
+        linkedDirectories: [
+          { id: "git", kind: "worktree", label: "git", path: "/repo/git", worktreePath: "/worktrees/git" },
+          {
+            id: "pwrgit", kind: "local", label: "PwrGit", path: "/worktrees/PwrGit",
+            gitBranch: "feat/runtime-pin", repositoryKey: "github.com/fixture/PwrGit",
+          },
+        ],
+        prs: gitRuntimePrs,
+      }}
+    />);
+    await openReviewComposer();
+    expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/git");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/pwrgit");
+
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/PwrGit" } });
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
+
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    const picker = screen.getByLabelText("Attached pull request");
+    expect(within(picker).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Choose pull request", "#546 PwrGit change 546 — feat/runtime-pin"]);
+    expect(picker).toHaveValue(gitRuntimePrs[2].url);
+
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/git" } });
+    expect(picker).toHaveValue("");
+    expect(within(picker).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Choose pull request",
+      "#4 git change 4 — feat/portable-runtime",
+      "#8 git change 8 — feat/runtime-reshare",
+    ]);
+
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/PwrGit" } });
+    expect(picker).toHaveValue(gitRuntimePrs[2].url);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: "/worktrees/PwrGit",
+      target: { type: "pullRequest", url: gitRuntimePrs[2].url },
+      runMode: "pwragent-sub-agent",
+    }));
+  });
+
+  it("offers a local checkout for an attached PR whose project is not linked", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend, threadId: request.threadId, reviewThreadId: request.threadId, turnId: "review",
+    }));
+    const gitDirectory = reviewProjectDirectory("git", "pwrgit");
+    const thread: NavigationThreadSummary = {
+      id: "thread-1", title: "Ship runtime", titleSource: "explicit", source: "codex",
+      executionMode: "default", inbox: { inInbox: false }, projectKey: "/worktrees/git",
+      gitBranch: "feat/runtime-reshare",
+      linkedDirectories: [
+        { id: "git", kind: "worktree", label: "git", path: "/repo/git", worktreePath: "/worktrees/git" },
+      ],
+      prs: gitRuntimePrs,
+    };
+    const { unmount } = render(<Composer
+      backends={[reviewProjectBackend()]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      directory={gitDirectory}
+      directories={[gitDirectory, reviewProjectDirectory("PwrGit", "main"), reviewProjectDirectory("unrelated", "main")]}
+      disabled={false} skills={[]}
+      thread={thread}
+    />);
+    await openReviewComposer();
+    const project = screen.getByLabelText("Review project");
+    expect(project).toHaveValue("/worktrees/git");
+    expect(within(project).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Choose project", "git - /worktrees/git", "PwrGit - /repo/PwrGit",
+    ]);
+
+    fireEvent.change(project, { target: { value: "/repo/PwrGit" } });
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue(gitRuntimePrs[2].url);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: "/repo/PwrGit",
+      target: { type: "pullRequest", url: gitRuntimePrs[2].url },
+      runMode: "pwragent-sub-agent",
+    }));
+    unmount();
+
+    // A pinned peer thread's checkouts live on the peer; local rows are not them.
+    render(<Composer
+      backends={[reviewProjectBackend()]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      directory={gitDirectory}
+      directories={[gitDirectory, reviewProjectDirectory("PwrGit", "main")]}
+      disabled={false} skills={[]}
+      thread={{
+        ...thread,
+        federation: {
+          instanceLabel: "Peer",
+          ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "peer-1" } },
+        },
+      }}
+    />);
+    await openReviewComposer();
+    expect(screen.queryByLabelText("Review project")).not.toBeInTheDocument();
+    cleanup();
+
+    // A remote execution workspace reviews on its host, not in a local checkout.
+    render(<Composer
+      backends={[reviewProjectBackend()]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      directory={gitDirectory}
+      directories={[gitDirectory, reviewProjectDirectory("PwrGit", "main")]}
+      disabled={false} skills={[]}
+      thread={{
+        ...thread,
+        codexEnvironmentRuntime: { environmentId: "remote-env", executionTarget: "remote" },
+      } as NavigationThreadSummary}
+    />);
+    await openReviewComposer();
+    expect(screen.queryByLabelText("Review project")).not.toBeInTheDocument();
   });
 
   const reviewTargetThread = (params: {

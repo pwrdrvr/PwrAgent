@@ -1,4 +1,9 @@
-import type { AppServerReviewTarget, PrSummary } from "@pwragent/shared";
+import {
+  findPrimaryReviewWorkspaceCwd,
+  type AppServerReviewTarget,
+  type NavigationThreadSummary,
+  type PrSummary,
+} from "@pwragent/shared";
 
 /**
  * The one pull request URL shape an explicit review target accepts. The owner
@@ -27,31 +32,111 @@ export function pullRequestReviewPromptUrl(value: string): string | undefined {
   return EXPLICIT_REVIEW_PULL_REQUEST_URL.test(url) ? url : undefined;
 }
 
+function normalizeReviewWorkspacePath(value: string): string {
+  const path = value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^[a-z]:\//i.test(path) ? path.toLowerCase() : path;
+}
+
+/** A PR's `host/owner/repo`, lowercased, or "" for a URL that names none. */
+export function pullRequestRepositoryKey(pr: Pick<PrSummary, "url">): string {
+  const match = /^https:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\//.exec(pr.url);
+  return match ? `${match[1]}/${match[2]}/${match[3]}`.toLowerCase() : "";
+}
+
 /** Navigation filtering is advisory; the owner verifies fresh Git remotes. */
 export function attachedPullRequestsForWorkspace(params: {
   prs: PrSummary[];
   cwd?: string;
   repositoryPath?: string;
   repository?: string;
+  /** More `host/owner/repo` identities of the same checkout. */
+  repositories?: string[];
 }): PrSummary[] {
   if (!params.cwd) return [];
-  const normalizePath = (value: string): string => {
-    const path = value.replace(/\\/g, "/").replace(/\/+$/, "");
-    return /^[a-z]:\//i.test(path) ? path.toLowerCase() : path;
-  };
-  const repository = (pr: PrSummary): string => {
-    const match = /^https:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\//.exec(pr.url);
-    return match ? `${match[1]}/${match[2]}/${match[3]}`.toLowerCase() : "";
-  };
   const scoped = params.prs.filter((pr) => pr.linkedDirectoryPaths?.some(
-    (path) => normalizePath(path) === normalizePath(params.cwd!)
-      || (params.repositoryPath && normalizePath(path) === normalizePath(params.repositoryPath)),
+    (path) => normalizeReviewWorkspacePath(path) === normalizeReviewWorkspacePath(params.cwd!)
+      || (params.repositoryPath && normalizeReviewWorkspacePath(path) === normalizeReviewWorkspacePath(params.repositoryPath)),
   ));
   const repositories = new Set([
-    ...(params.repository ? [params.repository.toLowerCase()] : []),
-    ...scoped.map(repository).filter(Boolean),
+    ...[params.repository, ...(params.repositories ?? [])]
+      .map((value) => value?.trim().toLowerCase())
+      .filter((value): value is string => Boolean(value)),
+    ...scoped.map(pullRequestRepositoryKey).filter(Boolean),
   ]);
-  return params.prs.filter((pr) => repositories.has(repository(pr)));
+  return params.prs.filter((pr) => repositories.has(pullRequestRepositoryKey(pr)));
+}
+
+function sameReviewWorkspacePath(left?: string, right?: string): boolean {
+  const normalizedLeft = left ? normalizeReviewWorkspacePath(left) : "";
+  return Boolean(normalizedLeft)
+    && normalizedLeft === (right ? normalizeReviewWorkspacePath(right) : "");
+}
+
+function findReviewLinkedDirectory(
+  thread: NavigationThreadSummary | undefined,
+  cwd: string | undefined,
+): NavigationThreadSummary["linkedDirectories"][number] | undefined {
+  return thread?.linkedDirectories.find((directory) =>
+    sameReviewWorkspacePath(directory.worktreePath ?? directory.path, cwd)
+  );
+}
+
+type ReviewWorkspaceScope = {
+  cwd?: string;
+  directory?: { gitStatus?: { originRepository?: string } };
+  thread?: NavigationThreadSummary;
+};
+
+/**
+ * The thread's attached PRs that belong to one review workspace's repository.
+ * A linked worktree often has no directory row of its own, so its linked
+ * directory's repository identity counts as much as a directory's origin.
+ */
+export function reviewWorkspacePullRequests(params: ReviewWorkspaceScope): PrSummary[] {
+  const linkedDirectory = findReviewLinkedDirectory(params.thread, params.cwd);
+  return attachedPullRequestsForWorkspace({
+    cwd: params.cwd,
+    prs: params.thread?.prs ?? [],
+    repository: params.directory?.gitStatus?.originRepository,
+    repositories: linkedDirectory?.repositoryKey
+      ? [linkedDirectory.repositoryKey]
+      : [],
+    repositoryPath: linkedDirectory?.path,
+  });
+}
+
+/**
+ * The thread as seen from one review workspace. The thread's branch, working
+ * state and PR list describe its primary checkout and every repository it
+ * touched. A base branch inferred from them for another project compares
+ * that project with the wrong repository's branch.
+ */
+export function reviewThreadForWorkspace(
+  params: ReviewWorkspaceScope,
+): NavigationThreadSummary | undefined {
+  const { thread } = params;
+  if (!thread || !params.cwd) {
+    return thread;
+  }
+  const linkedDirectory = findReviewLinkedDirectory(thread, params.cwd);
+  const prs = reviewWorkspacePullRequests(params);
+  if (sameReviewWorkspacePath(params.cwd, findPrimaryReviewWorkspaceCwd(thread))) {
+    // The thread's own fields describe the primary checkout. When none of its
+    // PRs match by repository (no identity yet, or an origin that still names
+    // a renamed repository), every attached PR stays a hint, as it was before
+    // workspaces were told apart.
+    return prs.length > 0 ? { ...thread, prs } : thread;
+  }
+  const secondary: NavigationThreadSummary = { ...thread, prs };
+  delete secondary.gitWorkingState;
+  delete secondary.observedGitBranch;
+  const gitBranch = linkedDirectory?.gitBranch?.trim();
+  if (gitBranch) {
+    secondary.gitBranch = gitBranch;
+  } else {
+    delete secondary.gitBranch;
+  }
+  return secondary;
 }
 
 /** Translate only at the engine boundary; retain the original target in state. */

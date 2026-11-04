@@ -1,5 +1,6 @@
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { ReviewLocationDropdown } from "../composer/ReviewLocationDropdown";
+import { reviewThreadForWorkspace } from "../../../../shared/pull-request-review";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   useEffect,
@@ -190,8 +191,15 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     [props.directories, props.thread, workspaceCwd],
   );
   const branchOptions = useMemo(
-    () => buildReviewBranchOptions({ directory: selectedDirectory, thread: props.thread }),
-    [props.thread, selectedDirectory],
+    () => buildReviewBranchOptions({
+      directory: selectedDirectory,
+      thread: reviewThreadForWorkspace({
+        cwd: workspaceCwd,
+        directory: selectedDirectory,
+        thread: props.thread,
+      }),
+    }),
+    [props.thread, selectedDirectory, workspaceCwd],
   );
   const [target, setTarget] = useState<ReviewTargetChoice>("baseBranch");
   const [branch, setBranch] = useState(branchOptions[0] ?? "main");
