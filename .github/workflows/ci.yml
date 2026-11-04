@@ -491,7 +491,7 @@ jobs:
       # Playwright weights test counts, then assigns each indivisible group
       # by its first test's position. Files stay together except a11y's
       # parallel groups; workers remain at 1. Include platform-skipped tests
-      # in the allocation even though they have no execution cost there.
+      # in the allocation even though their execution cost is negligible.
       #
       # Fit 83:82:67:88 to current spec durations on all three platforms.
       # At 320 collected tests this moves federation-remote-window to lane 2,
