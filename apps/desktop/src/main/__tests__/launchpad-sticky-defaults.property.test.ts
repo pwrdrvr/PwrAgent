@@ -196,6 +196,17 @@ class EditPeerLaunchpad implements fc.AsyncCommand<Model, Real> {
     return true;
   }
   async run(model: Model, real: Real): Promise<void> {
+    // Opened first, as the app does. Opening fills in the defaults' own
+    // settings from this machine's catalog; the edit must change nothing.
+    await real.registry.ensureDirectoryLaunchpad(
+      {
+        directoryKey: this.directoryKey,
+        directoryKind: "directory",
+        directoryLabel: this.directoryKey,
+        directoryPath: "/peer",
+      },
+      { skipFilesystemInspection: true, skipMcpConnectionDefaults: true, owner: PEER },
+    );
     const before = await real.store.getLaunchpadDefaults();
     const { launchpad } = await real.registry.updateDirectoryLaunchpad(
       {
