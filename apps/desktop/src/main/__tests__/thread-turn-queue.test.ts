@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
@@ -976,6 +976,92 @@ describe("ThreadTurnQueue", () => {
       "queued-while-held",
       "third-held",
     ]);
+  });
+
+  describe("when a second kind of hold arrives", () => {
+    const thread = { backend: "codex" as const, threadId: "thread-1" };
+    const LOCKED = "This thread is locked. Unlock it before starting a turn.";
+    const FAILED = "The previous turn failed. Review the error before retrying queued messages.";
+    const STALE_STEER = "This steering message was held after its target turn ended.";
+    const isLock = (reason: string) => reason === LOCKED;
+
+    function recordingQueue() {
+      let active = false;
+      const started: string[] = [];
+      const queue = new ThreadTurnQueue({
+        isThreadActive: () => active,
+        startTurn: async (entry) => {
+          started.push(entry.id);
+          active = true;
+          return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+        },
+      });
+      onTestFinished(() => queue.close());
+      const finish = async (id: string) => {
+        active = false;
+        await queue.releaseThread({ ...thread, turnId: `turn-${id}`, status: "turn/completed" });
+      };
+      const holds = () => queue.getQueuedEntries(thread)
+        .map((entry) => [entry.id, entry.manualReleaseRequired ? entry.holdReason : "not held"]);
+      return { queue, started, finish, holds };
+    }
+
+    it("keeps a failure's hold when a lock holds a delivery and is then lifted", async () => {
+      const { queue, started, holds } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "failed-retry" }), FAILED);
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      expect(holds()).toEqual([["failed-retry", FAILED], ["monitor-result", LOCKED]]);
+
+      await queue.releaseHold(thread, isLock);
+      // The delivery now waits behind the failure, for the same Retry.
+      expect(holds()).toEqual([["failed-retry", FAILED], ["monitor-result", FAILED]]);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(started).toEqual([]);
+      expect(queue.canStartImmediately(thread)).toBe(false);
+
+      await expect(queue.releaseEntryWithDisposition("failed-retry"))
+        .resolves.toMatchObject({ disposition: "started" });
+      expect(started).toEqual(["failed-retry"]);
+    });
+
+    it("starts what a lock held on unlock and leaves a later stale steer held", async () => {
+      const { queue, started, finish, holds } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.submitHeld(buildEntry({ id: "stale-steer" }), STALE_STEER);
+      expect(holds()).toEqual([["monitor-result", LOCKED], ["stale-steer", STALE_STEER]]);
+
+      await queue.releaseHold(thread, isLock);
+      await vi.waitFor(() => expect(started).toEqual(["monitor-result"]));
+      expect(holds()).toEqual([["stale-steer", STALE_STEER]]);
+
+      // The stale steer still waits for Retry once the thread is idle.
+      await finish("monitor-result");
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(started).toEqual(["monitor-result"]);
+      expect(holds()).toEqual([["stale-steer", STALE_STEER]]);
+    });
+
+    it("holds what a lock held for review when a turn fails", async () => {
+      const { queue, started, holds } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.releaseThread({ ...thread, status: "turn/failed", errorMessage: FAILED });
+      expect(holds()).toEqual([["monitor-result", FAILED]]);
+
+      // Unlocking does not stand in for reviewing the failure.
+      await expect(queue.releaseHold(thread, isLock)).resolves.toBe(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(started).toEqual([]);
+      expect(holds()).toEqual([["monitor-result", FAILED]]);
+    });
+
+    it("clears the hold when unlock releases the last held entry", async () => {
+      const { queue, started, finish } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.releaseHold(thread, isLock);
+      await vi.waitFor(() => expect(started).toEqual(["monitor-result"]));
+      await finish("monitor-result");
+      expect(queue.canStartImmediately(thread)).toBe(true);
+    });
   });
 
   it("cancels pending queue entries by id", async () => {
