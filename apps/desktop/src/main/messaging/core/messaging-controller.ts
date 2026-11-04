@@ -1108,6 +1108,10 @@ export class MessagingController {
   private readonly markdownFileAttachmentSelector =
     new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
+  private readonly preparingTurnActivity = new Map<string, {
+    attempts: Set<symbol>;
+    signaled: boolean;
+  }>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
   private readonly showStreamingOptionConfig:
@@ -5069,6 +5073,7 @@ export class MessagingController {
     this.turnAdmission.markStarting(params.threadKey);
     let turnStarted = false;
     let startingOrigin: ActiveAgentMessagingOrigin | undefined;
+    let preparingActivity: ReturnType<MessagingController["beginTurnPreparationActivity"]> | undefined;
     const startingThreadKey = agentMessagingThreadKey(
       params.binding.backend,
       params.binding.threadId,
@@ -5180,6 +5185,12 @@ export class MessagingController {
       } else {
         this.markAdmissionStage(params.event, "policyResolved");
       }
+      // Permission and routing are settled. Backend startup may still wait on
+      // MCP discovery, runtime setup or a cold provider. Request typing now;
+      // neither those waits nor the activity API response may gate the other.
+      preparingActivity = this.beginTurnPreparationActivity(
+        startingOrigin?.deliveryBinding ?? startingOrigin?.binding ?? params.binding,
+      );
       // Diagnostic for #203-class regressions: a turn that the UI shows
       // as Default Access but routes to the Full Access codex client is
       // a silent security bug — the user thinks they're sandboxed but
@@ -5296,7 +5307,7 @@ export class MessagingController {
         ?? params.binding;
       this.setActiveTurn(deliveryBinding, activeTurn);
       await this.signalTurnActivity(deliveryBinding, activeTurn, {
-        force: true,
+        force: !preparingActivity.signaled,
       });
       await this.renderAutomaticBindingStatus(
         deliveryBinding,
@@ -5355,6 +5366,7 @@ export class MessagingController {
       );
       return "failed";
     } finally {
+      await preparingActivity?.finish(turnStarted);
       this.turnAdmission.clearStarting(params.threadKey);
       if (
         startingOrigin
@@ -17136,6 +17148,62 @@ export class MessagingController {
       },
       binding,
     );
+  }
+
+  private beginTurnPreparationActivity(binding: MessagingBindingRecord): {
+    signaled: boolean;
+    finish: (started: boolean) => Promise<void>;
+  } {
+    let group = this.preparingTurnActivity.get(binding.id);
+    if (!group) {
+      group = { attempts: new Set(), signaled: false };
+      this.preparingTurnActivity.set(binding.id, group);
+    }
+    const attempt = Symbol();
+    group.attempts.add(attempt);
+    const current = this.getActiveTurn(binding);
+    const shouldSignal = group.attempts.size === 1
+      && current?.status !== "working"
+      && current?.status !== "waiting";
+    if (shouldSignal) group.signaled = true;
+    const delivery = shouldSignal
+      ? this.signalTurnActivity(binding, {
+          turnId: `preparing:${binding.id}`,
+          status: "working",
+          updatedAt: this.now(),
+        }, { force: true, reason: "turn_preparation" }).catch((error: unknown) => {
+          this.logger.debug?.("messaging preparation activity failed", {
+            bindingId: binding.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+      : Promise.resolve();
+    const ownedGroup = group;
+    return {
+      signaled: ownedGroup.signaled,
+      finish: async (started) => {
+        ownedGroup.attempts.delete(attempt);
+        if (ownedGroup.attempts.size === 0) {
+          this.preparingTurnActivity.delete(binding.id);
+          const active = this.getActiveTurn(binding);
+          // Another attempt or a real lifecycle event may own this surface by
+          // now. A failed/queued start cannot cancel that owner's typing.
+          if (!started && ownedGroup.signaled && active?.status !== "working") {
+            await this.signalTurnActivity(binding, active ?? {
+              turnId: `preparing:${binding.id}`,
+              status: "completed",
+              updatedAt: this.now(),
+            }, { force: true, reason: "turn_preparation_finished" }).catch((error: unknown) => {
+              this.logger.debug?.("messaging preparation activity cleanup failed", {
+                bindingId: binding.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          }
+        }
+        await delivery;
+      },
+    };
   }
 
   private async signalTurnActivity(
