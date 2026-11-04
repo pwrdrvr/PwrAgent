@@ -33,17 +33,22 @@ jobs:
         shell: bash
         run: |
           mkdir -p .local/macos-restart-diagnostics
-          set +e
-          bash ./scripts/ci/macos-e2e-run-lane.sh pnpm --filter @pwragent/desktop test:e2e e2e/codex-environment-setup.spec.ts --grep 'directory launchpad keeps selected environment controls after restart' --trace on > .local/macos-restart-diagnostics/restart.log 2>&1
-          status=$?
-          tail -n 80 .local/macos-restart-diagnostics/restart.log
-          exit "$status"
+          exec bash ./scripts/ci/macos-e2e-run-lane.sh pnpm --filter @pwragent/desktop test:e2e e2e/codex-environment-setup.spec.ts --grep 'directory launchpad keeps selected environment controls after restart' --trace on > .local/macos-restart-diagnostics/restart.log 2>&1
+
+      - name: Show restart diagnostic log tail
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f .local/macos-restart-diagnostics/restart.log ]]; then
+            tail -n 80 .local/macos-restart-diagnostics/restart.log
+          fi
 
       - name: Upload restart evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: macos-restart-diagnostics
+          include-hidden-files: true
           path: |
             .local/macos-restart-diagnostics/
             apps/desktop/playwright-report/
