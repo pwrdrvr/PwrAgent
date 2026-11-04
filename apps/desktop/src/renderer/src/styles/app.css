@@ -2729,6 +2729,13 @@ textarea,
   white-space: nowrap;
 }
 
+/* Everything after the title. It adds no box in the palette's one-line row;
+   a narrow host such as the to-do destination picker lays it out as the
+   row's second line. */
+.jump-palette__row-meta {
+  display: contents;
+}
+
 .jump-palette__row-prs {
   flex: none;
   display: inline-flex;
@@ -25579,12 +25586,13 @@ a.button {
 /* The Markdown prompt rests at three lines; its own control opens it. */
 .todo-message-destination {
   display: grid;
+  /* A track sized to content would let a nowrap row widen the card. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   font-size: 12px;
 }
 
-.todo-message-destination__heading,
-.todo-message-destination__search {
+.todo-message-destination__heading {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -25631,42 +25639,114 @@ a.button {
   overflow-wrap: anywhere;
 }
 
-.todo-message-destination input {
-  flex: 1;
+/* The jump palette's search inside the to-do card: the field, the palette's
+   rows, and a footer. The card is ~340px wide, so each row stacks: the title,
+   then its metadata on one line (`.jump-palette__row-meta`). */
+.todo-destination-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.todo-destination-picker__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 0 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--bg-input);
-  color: var(--text-primary);
-  font: inherit;
+  color: var(--text-muted);
 }
 
-.todo-message-destination input:focus-visible {
-  outline: 1px solid var(--focus-ring);
+.todo-destination-picker__field:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 1px var(--accent-border);
 }
 
-.todo-message-destination__results {
-  display: grid;
-  max-height: 160px;
-  overflow-y: auto;
-}
-
-.todo-message-destination__results button {
-  padding: 6px 8px;
+.todo-destination-picker__field input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
   border: 0;
-  border-radius: 6px;
   background: transparent;
   color: var(--text-primary);
-  text-align: left;
   font: inherit;
-  cursor: pointer;
+  outline: none;
 }
 
-.todo-message-destination__results button:hover,
-.todo-message-destination__results button:focus-visible {
-  background: var(--bg-panel-hover);
-  outline: 1px solid var(--focus-ring);
+.todo-destination-picker__results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 268px;
+  min-width: 0;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  list-style: none;
+}
+
+.todo-destination-picker .jump-palette__row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.todo-destination-picker .jump-palette__row-title {
+  font-size: 12.5px;
+}
+
+.todo-destination-picker .jump-palette__row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The branch takes what the chips leave; it no longer competes with the
+   title, which has its own line. */
+.todo-destination-picker .jump-palette__row-branch {
+  flex: 1 1 auto;
+  max-width: none;
+  text-align: left;
+}
+
+.todo-destination-picker .jump-palette__section-divider {
+  padding: 8px 8px 4px;
+}
+
+.todo-destination-picker__empty {
+  margin: 0;
+  padding: 14px 0;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.todo-destination-picker__foot {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.todo-destination-picker__foot-spacer {
+  flex: 1;
+}
+
+.todo-destination-picker__status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .todo-split__primary:disabled {

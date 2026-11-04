@@ -6,7 +6,9 @@ import type {
   ListBackendsRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
-  ThreadSearchResponse,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationThreadSummary,
   ThreadTodo,
 } from "@pwragent/shared";
 import { ThreadTodoCard } from "../ThreadTodoCard";
@@ -53,6 +55,21 @@ const ENVIRONMENTS: Record<string, ListThreadTodoDispatchEnvironmentsResponse> =
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+function row(id: string, title: string, overrides: Partial<NavigationThreadSummary> = {}): NavigationThreadSummary {
+  return {
+    id, title, titleSource: "generated", source: "codex", linkedDirectories: [], inbox: { unread: false },
+    updatedAt: 1, ...overrides,
+  } as NavigationThreadSummary;
+}
+
+function onPeer(thread: NavigationThreadSummary, instanceId: string, instanceLabel: string): NavigationThreadSummary {
+  return { ...thread, federation: {
+    ref: { backend: thread.source, threadId: thread.id, target: { scope: "remote", instanceId } }, instanceLabel,
+  } } as NavigationThreadSummary;
+}
+
+const PR_OWNER = row("pr-owner", "Refresh PR #42");
+
 function setup(options: {
   todo?: ThreadTodo;
   local?: BackendSummary[];
@@ -63,16 +80,29 @@ function setup(options: {
   /** Mounted copies of the card, as the stack and the To-dos panel both show it. */
   copies?: number;
   onDoHere?: (todo: ThreadTodo) => void;
+  /** What this machine's owner search answers; filtered by title. */
+  ownerRows?: NavigationThreadSummary[];
+  /** The Updated lens page an empty field lists. */
+  recentRows?: NavigationThreadSummary[];
+  /** What connected peers answer. */
+  peerRows?: NavigationThreadSummary[];
 } = {}) {
   const todo = options.todo ?? card;
   const onRun = vi.fn();
   const api = {
-    searchThreads: vi.fn(async (): Promise<ThreadSearchResponse> => ({
-      backend: "all", fetchedAt: 0, query: "42", filters: {}, contentMode: "metadata", semanticMode: "disabled",
-      searchedScopes: ["metadata"], unavailableScopes: [], results: [{
-        backend: "codex", threadId: "pr-owner", identityKey: "codex:pr-owner", title: "Refresh PR #42", linkedDirectories: [],
-        source: "codex", score: 1, confidence: "high", matchReasons: [], snippets: [],
-      }],
+    getNavigationQueryPage: vi.fn(async (request: NavigationQueryRequest) => {
+      const query = request.query;
+      const rows = query.kind === "search"
+        ? (options.ownerRows ?? [PR_OWNER]).filter((thread) => thread.title.toLowerCase().includes(query.text.toLowerCase()))
+        : options.recentRows ?? [];
+      return {
+        protocol: 2, queryKey: query.kind, generation: "generation", ownerEpoch: "owner", countsRevision: "counts",
+        counts: { total: rows.length, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+        entries: rows.map((thread) => ({ row: thread })),
+      } as unknown as NavigationQueryPage;
+    }),
+    jumpSearchRemoteThreads: vi.fn(async (request: { query: string }) => ({
+      results: (options.peerRows ?? []).filter((thread) => thread.title.toLowerCase().includes(request.query.toLowerCase())),
     })),
     listBackends: vi.fn(async (request?: ListBackendsRequest) => ({
       fetchedAt: 0,
@@ -113,6 +143,23 @@ async function settle() {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
+const field = () => screen.getByRole("combobox", { name: "Find destination thread" });
+
+/** Type into the destination field and let the palette's 200 ms debounce answer. */
+async function search(text: string) {
+  fireEvent.change(field(), { target: { value: text } });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 260)); });
+  await settle();
+}
+
+async function openPicker() {
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Handoff options" })); });
+  await act(async () => { fireEvent.click(screen.getByRole("menuitemradio", { name: "Send to thread…" })); });
+  await settle();
+}
+
+const optionNames = () => screen.queryAllByRole("option").map((option) => option.querySelector(".jump-palette__row-title")?.textContent);
+
 describe("to-do dispatch target", () => {
   it("previews an existing thread request without sending until the operator clicks Send", async () => {
     const { onRun, api } = setup();
@@ -120,11 +167,12 @@ describe("to-do dispatch target", () => {
     await act(async () => { fireEvent.click(screen.getByRole("menuitemradio", { name: "Send to thread…" })); });
     expect((screen.getByRole("button", { name: "Send request" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: /^Machine:/ })).toBeNull();
-    fireEvent.change(screen.getByRole("textbox", { name: "Find destination thread" }), { target: { value: "42" } });
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Search" })); });
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Refresh PR #42/ })); });
+    expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
+    await search("42");
+    await act(async () => { fireEvent.click(within(screen.getByRole("option")).getByRole("button", { name: /Refresh PR #42/ })); });
     expect(onRun).not.toHaveBeenCalled();
-    expect(api.searchThreads).toHaveBeenCalledWith(expect.objectContaining({ query: "42", contentMode: "metadata" }));
+    expect(api.getNavigationQueryPage).toHaveBeenCalledWith(
+      expect.objectContaining({ inventory: "owner", query: { kind: "search", text: "42" } }), expect.any(String));
     fireEvent.click(screen.getByRole("button", { name: "Show the whole proposed prompt" }));
     expect(screen.getByRole("region", { name: "Proposed prompt" }).textContent).toContain("Run the focused suite");
     fireEvent.click(screen.getByRole("button", { name: "Send request" }));
@@ -161,23 +209,92 @@ describe("to-do dispatch target", () => {
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ action: { type: "send_message", prompt: "Refresh the PR", target } }), { messageTarget: target });
   });
 
+  it("lists recent threads before any text, then searches as you type", async () => {
+    setup({
+      recentRows: [row("recent", "Rebalance desktop E2E shard durations", {
+        gitBranch: "ci/refit-desktop-e2e-shards",
+        linkedDirectories: [{ key: "directory:/src/pwragent", label: "PwrAgnt", path: "/src/pwragent" }],
+      } as Partial<NavigationThreadSummary>)],
+      ownerRows: [PR_OWNER, row("bench", "Benchmark the limiter under load")],
+    });
+    await openPicker();
+    expect(optionNames()).toEqual(["Rebalance desktop E2E shard durations"]);
+    expect(within(screen.getByRole("option")).getByText("ci/refit-desktop-e2e-shards")).toBeTruthy();
+    expect(within(screen.getByRole("option")).getByText("PwrAgnt")).toBeTruthy();
+    await search("bench");
+    expect(optionNames()).toEqual(["Benchmark the limiter under load"]);
+    await search("refresh");
+    expect(optionNames()).toEqual(["Refresh PR #42"]);
+    await search("quarterly forecast");
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(screen.getByText("No threads match")).toBeTruthy();
+  });
+
+  it("moves with the arrows, wraps, and picks with Enter", async () => {
+    const { onRun } = setup({ ownerRows: [row("a", "Rate limits A"), row("b", "Rate limits B"), row("c", "Rate limits C")] });
+    await openPicker();
+    await search("rate");
+    const active = () => document.getElementById(field().getAttribute("aria-activedescendant") ?? "")?.textContent;
+    expect(active()).toContain("Rate limits A");
+    fireEvent.keyDown(field(), { key: "ArrowUp" });
+    expect(active()).toContain("Rate limits C");
+    fireEvent.keyDown(field(), { key: "ArrowDown" });
+    fireEvent.keyDown(field(), { key: "ArrowDown" });
+    expect(active()).toContain("Rate limits B");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.queryByRole("combobox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    expect(onRun).toHaveBeenCalledWith(card, { messageTarget: {
+      backend: "codex", threadId: "b", title: "Rate limits B", instanceLabel: "studio",
+    } });
+  });
+
+  it("cancels a change with Escape and keeps the destination", async () => {
+    const target = { backend: "codex" as const, threadId: "owner", title: "Existing PR owner" };
+    const { onRun } = setup({ todo: { ...card, action: { type: "send_message", prompt: "Refresh the PR", target } } });
+    const change = screen.getByRole("button", { name: "Change" });
+    fireEvent.click(change);
+    expect(document.activeElement).toBe(field());
+    await search("42");
+    expect(optionNames()).toEqual(["Refresh PR #42"]);
+    fireEvent.keyDown(field(), { key: "Escape" });
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(document.activeElement).toBe(change);
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    expect(onRun).toHaveBeenCalledWith(expect.anything(), { messageTarget: target });
+  });
+
+  it("lists peers' threads under Other instances and addresses them on their machine", async () => {
+    const { onRun } = setup({
+      // The card's own thread (claude thread-a) is never offered.
+      ownerRows: [PR_OWNER, row("thread-a", "Refresh PR #42 from here", { source: "claude" })],
+      peerRows: [onPeer(row("lab-thread", "Refresh PR #42 on the lab"), "lab", "lab-mini / default")],
+    });
+    await openPicker();
+    await search("refresh pr");
+    expect(optionNames()).toEqual(["Refresh PR #42", "Refresh PR #42 on the lab"]);
+    expect(screen.getByText("Other instances")).toBeTruthy();
+    const peer = screen.getAllByRole("option")[1]!;
+    expect(peer.textContent).toContain("lab-mini / default");
+    fireEvent.click(within(peer).getByRole("button", { name: /Refresh PR #42 on the lab/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    expect(onRun).toHaveBeenCalledWith(card, { messageTarget: {
+      backend: "codex", threadId: "lab-thread", title: "Refresh PR #42 on the lab",
+      instanceId: "lab", instanceLabel: "lab-mini / default",
+    } });
+  });
+
   it.each([false, true])("addresses a remote card's search result relative to its owner (result on owner: %s)", async (onOwner) => {
     const remote = { ...card, id: "remote-todo:win:card", federationTarget: { scope: "remote" as const, instanceId: "win" } };
-    const { api, onRun } = setup({ todo: remote, instances: [{ ...WIN, messageTarget: true }] });
+    const { onRun } = setup({
+      todo: remote, instances: [{ ...WIN, messageTarget: true }],
+      ownerRows: [onOwner ? onPeer(PR_OWNER, "win", "win-lab / dev") : PR_OWNER],
+    });
     await settle();
-    const response = await api.searchThreads();
-    api.searchThreads.mockResolvedValueOnce({ ...response, results: response.results.map((result) => ({
-      ...result,
-      ...(onOwner ? { federation: {
-        ref: { backend: result.backend, threadId: result.threadId, target: { scope: "remote" as const, instanceId: "win" } },
-        instanceLabel: "win-lab / dev",
-      } } : {}),
-    })) });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Handoff options" })); });
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Send to thread…" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Find destination thread" }), { target: { value: "42" } });
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Search" })); });
-    fireEvent.click(screen.getByRole("button", { name: /Refresh PR #42/ }));
+    await search("42");
+    fireEvent.click(within(screen.getByRole("option")).getByRole("button", { name: /Refresh PR #42/ }));
     expect(onRun).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Send request" }));
     const selected = onRun.mock.calls[0]?.[1]?.messageTarget;

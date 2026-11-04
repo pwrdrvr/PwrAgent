@@ -67,6 +67,8 @@ export type ThreadLinkContextValue = {
   readSummary?: (
     link: Pick<ResolvedThreadLink, "backend" | "instanceId" | "threadId">,
   ) => NavigationThreadSummary | undefined;
+  /** Every loaded navigation row, read when it is called, as `readSummary` is. */
+  readLoadedThreads?: () => readonly NavigationThreadSummary[];
 };
 
 export type ThreadLinkHoverTarget = Pick<
@@ -682,6 +684,9 @@ export function ThreadLinkProvider(props: {
         const instanceId = link.instanceId === localInstanceId ? undefined : link.instanceId;
         const key = threadLinkKey({ backend: link.backend, instanceId, threadId: link.threadId });
         return threadsRef.current.find((thread) => threadLinkKey(threadSummaryLink(thread)) === key);
+      },
+      readLoadedThreads() {
+        return threadsRef.current;
       },
     };
     // Rebuild when membership or the viewer identity changes; refs carry
