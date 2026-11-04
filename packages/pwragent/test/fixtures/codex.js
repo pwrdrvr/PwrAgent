@@ -99,7 +99,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       }
       if (prompt === "early") { complete("completed"); reply(initial); continue; }
       reply(initial);
-      if (prompt === "crash") { setTimeout(() => process.exit(7), 30); continue; }
+      if (prompt === "crash") {
+        process.once("SIGUSR1", () => process.exit(7));
+        send({ method: "turn/started", params: { threadId: active.threadId, turn: initial.turn } });
+        writeFileSync(path.join(directory, "crash.ready"), active.id);
+        continue;
+      }
       if (prompt === "descendant") {
         const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setInterval(()=>{},1000)", path.join(directory, "descendant.ready")], { stdio: "ignore" });
         writeFileSync(path.join(directory, "descendant.pid"), String(child.pid));

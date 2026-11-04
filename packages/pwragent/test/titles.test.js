@@ -75,6 +75,9 @@ test("an explicit rename is never replaced, and an empty prompt leaves the place
   assert.deepEqual(published[0], { eventClass: "transcript", method: "thread/name/updated",
     params: { threadId: "named", threadName: "Release checklist", titleSource: "explicit" } });
   backend.event({ method: "headless/turnStarted", params: { threadId: "named", jobId: "named", prompt: "Rewrite everything" } });
+  const beforeDerived = published.length;
+  backend.event({ method: "thread/name/updated", params: { threadId: "named", threadName: "Rewrite everything", titleSource: "derived" } });
+  assert.equal(published.length, beforeDerived, "a rejected derived title is not published");
   await backend.readThread("named");
   assert.equal(backend.owned("named").title, "Release checklist");
   assert.equal(backend.owned("named").titleSource, "explicit");
