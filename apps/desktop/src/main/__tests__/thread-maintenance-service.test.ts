@@ -9,6 +9,7 @@ import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweepe
 import {
   missingRepositoryFor,
   ThreadMaintenanceService,
+  type ArchivedCheckoutRemoval,
   type ThreadMaintenanceDeps,
 } from "../app-server/thread-maintenance-service";
 import { inspectMaintenanceWorkspace, rebuildableOutputFolder } from "../app-server/thread-maintenance-workspace";
@@ -250,7 +251,7 @@ describe("ThreadMaintenanceService.apply", () => {
     const scan = await service.scan();
     let release!: () => void;
     const { service: blocked } = harness([], {
-      removeArchivedCheckouts: vi.fn(() => new Promise((resolve) => {
+      removeArchivedCheckouts: vi.fn(() => new Promise<ArchivedCheckoutRemoval>((resolve) => {
         release = () => resolve({ removed: [], kept: [], failed: [], emptyFoldersRemoved: 1, emptyFoldersFailed: [] });
       })),
     });

@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   buildThreadIdentityKey,
+  type AppServerBackendKind,
   defaultThreadMaintenanceRules,
   type DesktopThreadArchivePolicy,
   type ThreadMaintenanceApplyRequest,
@@ -214,7 +215,7 @@ export class ThreadMaintenanceService {
       if (listed) return { root, family, project, reason: listed };
       try {
         const inspection = await this.inspectFamily(family, rules);
-        if ("keep" in inspection && inspection.keep) return { root, family, project, reason: inspection.keep };
+        if (inspection.keep !== undefined) return { root, family, project, reason: inspection.keep };
         return { root, family, project, workspace: inspection.workspace, worktreePath: inspection.worktreePath };
       } catch (error) {
         fail("threads", error, { threadId: root.thread.id });
@@ -254,7 +255,7 @@ export class ThreadMaintenanceService {
           workspace: item.workspace!,
         };
         project.idle.push(row);
-        retained.families.set(buildThreadIdentityKey(row.backend, row.threadId), { family: item.family, row });
+        retained.families.set(buildThreadIdentityKey(row.backend as AppServerBackendKind, row.threadId), { family: item.family, row });
       }
     }
     result.projects = [...projects.values()]
@@ -282,7 +283,7 @@ export class ThreadMaintenanceService {
         signal: this.abort.signal, limitBytes: this.deps.snapshotLimitBytes,
         rebuildableOutputIsClean: rules.rebuildableOutputIsClean,
       });
-      if (inspection.keep) return { keep: inspection.keep };
+      if (inspection.keep !== undefined) return { keep: inspection.keep };
       if (!worst || workspaceRank(inspection.workspace) > workspaceRank(worst.workspace)) {
         worst = { workspace: inspection.workspace, worktreePath: cwd };
       }
@@ -304,7 +305,7 @@ export class ThreadMaintenanceService {
     }
     const inspect = this.deps.inspectWorkspace ?? inspectMaintenanceWorkspace;
     const kept = { ...audit.kept };
-    const items = await mapLimit(audit.candidates, INSPECT_CONCURRENCY, async (candidate) => {
+    const items = await mapLimit(audit.candidates, INSPECT_CONCURRENCY, async (candidate): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
       if (this.abort.signal.aborted) return undefined;
       if (projectFilter && !candidate.worktreePath.includes(`${path.sep}${path.basename(projectFilter)}`)) return undefined;
       try {
@@ -316,7 +317,7 @@ export class ThreadMaintenanceService {
           signal: this.abort.signal, limitBytes: this.deps.snapshotLimitBytes,
           rebuildableOutputIsClean: rules.rebuildableOutputIsClean,
         });
-        if (inspection.keep) {
+        if (inspection.keep !== undefined) {
           kept[inspection.keep] = (kept[inspection.keep] ?? 0) + 1;
           return undefined;
         }
@@ -348,7 +349,7 @@ export class ThreadMaintenanceService {
     const threadStep: ThreadMaintenanceStepResult = { step: "threads", ran: request.archive.length > 0, done: 0, kept: 0, failed: 0 };
     steps.push(threadStep);
     for (const [index, item] of request.archive.entries()) {
-      const entry = retained.families.get(buildThreadIdentityKey(item.backend, item.threadId));
+      const entry = retained.families.get(buildThreadIdentityKey(item.backend as AppServerBackendKind, item.threadId));
       const object = entry ? entry.row.title : item.threadId;
       update({ current: { step: "threads", processed: index, total: request.archive.length, object } });
       if (!entry) {
@@ -462,7 +463,7 @@ export class ThreadMaintenanceService {
     const reason = familyKeepReason(refreshed, this.now(), policy, this.deps.isBusy);
     if (reason) return reason;
     const inspection = await this.inspectFamily(refreshed, rules);
-    if (inspection.keep) return inspection.keep;
+    if (inspection.keep !== undefined) return inspection.keep;
     const workspace = inspection.workspace;
     if (workspace.kind === "overLimit") {
       if (!overLimit) return "Changes are over the snapshot limit";
