@@ -54,7 +54,7 @@ import {
   type MockInstance,
 } from "vitest";
 import {
-  applyNavigationLaunchpadProviderSettingsPatch,
+  applyNavigationLaunchpadDefaultsPatch,
   buildFederatedThreadRef,
   buildNavigationSnapshot,
   buildPricingSpendByModel,
@@ -1460,10 +1460,14 @@ function createOverlayStoreMock(params?: {
       return next;
     },
     getLaunchpadDefaults: async () => launchpadDefaults,
-    setLaunchpadDefaults: async (patch: Partial<NavigationLaunchpadDefaults>) => {
-      launchpadDefaults = applyNavigationLaunchpadProviderSettingsPatch(
+    setLaunchpadDefaults: async (
+      patch: Partial<NavigationLaunchpadDefaults>,
+      options?: { provider?: AppServerBackendKind },
+    ) => {
+      launchpadDefaults = applyNavigationLaunchpadDefaultsPatch(
         launchpadDefaults,
         patch,
+        options?.provider ?? launchpadDefaults.backend,
       );
       return launchpadDefaults;
     },

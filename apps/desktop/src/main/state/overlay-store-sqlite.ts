@@ -105,6 +105,7 @@ import {
   buildDirectorySummaries,
   materializeNavigationThreads,
   serializeNavigationSnapshotForHash,
+  applyNavigationLaunchpadDefaultsPatch,
   applyNavigationLaunchpadProviderSettingsPatch,
   applyNavigationLaunchpadProviderExecutionModeDefaults,
   applyNavigationLaunchpadProviderModelDefaults,
@@ -9369,12 +9370,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return this.readLaunchpadDefaults();
   }
 
+  /** `provider` names whose settings the patch holds; it defaults to the defaults' own. */
   async setLaunchpadDefaults(
     patch: Partial<NavigationLaunchpadDefaults>,
+    options?: { provider?: AppServerBackendKind },
   ): Promise<NavigationLaunchpadDefaults> {
     const current = this.readLaunchpadDefaults();
     const next = normalizeLaunchpadDefaults(
-      applyNavigationLaunchpadProviderSettingsPatch(current, patch),
+      applyNavigationLaunchpadDefaultsPatch(
+        current,
+        patch,
+        options?.provider ?? current.backend,
+      ),
     );
     this.writeLaunchpadDefaults(next);
     return next;

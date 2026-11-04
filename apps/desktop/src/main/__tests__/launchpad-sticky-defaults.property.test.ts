@@ -18,8 +18,10 @@ vi.mock("../acp/acp-instance-discovery", () => ({
  * Rule: a sticky launchpad choice is saved under the launchpad's own
  * provider. A provider's saved defaults only ever hold that provider's
  * models, so switching any launchpad to a provider never brings in another
- * provider's model. Broken before #3354: a Codex pick was saved as the
- * Claude default, and new Claude launchpads started on `gpt-6.1-terra`.
+ * provider's model. Access is filed the same way and never changes the
+ * provider new launchpads start on. Broken before #3354: a Codex pick was
+ * saved as the Claude default, and new Claude launchpads started on
+ * `gpt-6.1-terra`.
  *
  * Oracle: each provider's model catalog, plus a model of the last sticky
  * pick per provider and the provider the defaults follow.
@@ -38,6 +40,8 @@ type Model = {
   launchpadBackend: Record<string, Provider>;
   /** The last sticky model chosen for each provider. */
   stickyModel: Record<Provider, string>;
+  /** The last sticky access chosen for each provider. */
+  stickyAccess: Record<Provider, string | undefined>;
   /** The provider new launchpads start on. */
   defaultsBackend: Provider;
 };
@@ -52,6 +56,10 @@ async function expectAgreement(model: Model, real: Real): Promise<void> {
   for (const provider of PROVIDERS) {
     const saved = defaults.providerSettings?.[provider]?.model;
     expect(saved, `saved ${provider} default`).toBe(model.stickyModel[provider]);
+    expect(
+      defaults.providerSettings?.[provider]?.executionMode,
+      `saved ${provider} access`,
+    ).toBe(model.stickyAccess[provider]);
   }
   expect(defaults.backend).toBe(model.defaultsBackend);
   expect(CATALOGS[defaults.backend as Provider]).toContain(defaults.model);
@@ -117,12 +125,41 @@ class PickModel implements fc.AsyncCommand<Model, Real> {
   }
 }
 
+/** Access is per provider too, and choosing it does not change the default provider. */
+class SetAccess implements fc.AsyncCommand<Model, Real> {
+  constructor(
+    readonly directoryKey: string,
+    readonly executionMode: "auto" | "full-access",
+    readonly sticky: boolean,
+  ) {}
+  check(): boolean {
+    return true;
+  }
+  async run(model: Model, real: Real): Promise<void> {
+    const { launchpad } = await real.registry.updateDirectoryLaunchpad({
+      directoryKey: this.directoryKey,
+      patch: { executionMode: this.executionMode },
+      stickySettingsChanged: this.sticky,
+    });
+    if (this.sticky) {
+      // The launchpad's own access, as its provider allows it.
+      model.stickyAccess[model.launchpadBackend[this.directoryKey]] = launchpad.executionMode;
+    }
+    await expectAgreement(model, real);
+  }
+  toString(): string {
+    return `access(${this.directoryKey}, ${this.executionMode}${this.sticky ? ", sticky" : ""})`;
+  }
+}
+
 const directory = fc.constantFrom(...DIRECTORIES);
 const commands = [
   fc.tuple(directory, fc.constantFrom(...PROVIDERS), fc.boolean())
     .map(([key, provider, sticky]) => new SwitchProvider(key, provider, sticky)),
   fc.tuple(directory, fc.nat({ max: 3 }), fc.boolean())
     .map(([key, choice, sticky]) => new PickModel(key, choice, sticky)),
+  fc.tuple(directory, fc.constantFrom("auto" as const, "full-access" as const), fc.boolean())
+    .map(([key, mode, sticky]) => new SetAccess(key, mode, sticky)),
 ];
 
 async function setup(): Promise<{ model: Model; real: Real; dispose: () => Promise<void> }> {
@@ -157,9 +194,14 @@ async function setup(): Promise<{ model: Model; real: Real; dispose: () => Promi
       directoryPath: directoryKey.slice("directory:".length),
     });
   }
+  const seeded = await store.getLaunchpadDefaults();
   const model: Model = {
     launchpadBackend: Object.fromEntries(DIRECTORIES.map((key) => [key, "claude"])),
     stickyModel: { codex: "gpt-5.4", claude: "opus" },
+    stickyAccess: {
+      codex: seeded.providerSettings?.codex?.executionMode,
+      claude: seeded.providerSettings?.claude?.executionMode,
+    },
     defaultsBackend: "claude",
   };
   const real = { registry, store };

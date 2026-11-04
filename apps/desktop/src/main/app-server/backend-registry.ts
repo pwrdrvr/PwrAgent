@@ -29137,21 +29137,6 @@ export class DesktopBackendRegistry {
     const stickyPatch: Partial<NavigationLaunchpadDefaults> = {};
     if (request.stickySettingsChanged && request.patch.backend) {
       stickyPatch.backend = request.patch.backend;
-    } else if (
-      request.stickySettingsChanged
-      && (
-        "executionMode" in patch
-        || "model" in patch
-        || "reasoningEffort" in patch
-        || "serviceTier" in patch
-        || "fastMode" in patch
-        || "acpRuntime" in patch
-      )
-    ) {
-      // These settings belong to this launchpad's provider. Without it, the
-      // defaults file them under whichever provider they last held, and a
-      // Codex model became the Claude default.
-      stickyPatch.backend = persisted.backend;
     }
     if (request.stickySettingsChanged && patch.executionMode) {
       stickyPatch.executionMode = patch.executionMode;
@@ -29180,7 +29165,11 @@ export class DesktopBackendRegistry {
 
     const storedDefaults =
       Object.keys(stickyPatch).length > 0
-        ? await this.overlayStore.setLaunchpadDefaults(stickyPatch)
+        // These settings are this launchpad's provider's. Filed under the
+        // defaults' provider instead, a Codex model became the Claude default.
+        ? await this.overlayStore.setLaunchpadDefaults(stickyPatch, {
+            provider: persisted.backend,
+          })
         : await this.overlayStore.getLaunchpadDefaults();
     const shouldResolveStickyModelSettings =
       "model" in stickyPatch ||
