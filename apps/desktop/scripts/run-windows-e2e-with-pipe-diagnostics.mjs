@@ -4,7 +4,7 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSyn
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, launcherParentMatches, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
 import { nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 import { childProcessLocations } from "./windows-child-process-locations.mjs";
 
@@ -113,8 +113,8 @@ async function inventory(event) {
   const result = await namedInventory(event.pid);
   const source = result.source;
   const sourceRow = source && rows.get(source.pid + ":" + source.created);
-  const correctParent = sourceRow?.ppid === event.workerPid && sourceRow.name.toLowerCase() === "electron.exe"
-    && BigInt(source.created) <= (BigInt(event.at) + 1n) * 10000n + 116444736000000000n;
+  const parentRow = sourceRow?.parentCreated && rows.get(event.workerPid + ":" + sourceRow.parentCreated);
+  const correctParent = launcherParentMatches(event, source, sourceRow, parentRow);
   const endpoints = !result.error && correctParent && !event.omittedCandidates
     ? exactLauncherPipes(event.candidates, source)
     : { error: "Main query failed, ancestry was not observed, or candidate pool was incomplete." };
