@@ -182,7 +182,8 @@ describe("starting row placement for a peer's thread", () => {
             extraDirectoryPaths: project.extraPaths,
             target: { scope: "remote" as const, instanceId: PEER },
           };
-          const rendered = withStartingPlaceholderDirectories(shuffled(before, order), [creation], undefined);
+          const rendered = withStartingPlaceholderDirectories(
+            shuffled(before, order), [creation], undefined, (placeholder) => placeholder);
           expect(startingThreadHomeDirectoryKey(creation, rendered)).toBe(landedIn);
         },
       ),

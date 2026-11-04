@@ -108,19 +108,21 @@ export function startingThreadHomeDirectoryKey(
  * puts the starting row where its thread lands. Once the thread lands, main's
  * own placeholder has the same key and this one steps aside.
  */
-export function withStartingPlaceholderDirectories(
-  directories: readonly NavigationDirectorySummary[],
+export function withStartingPlaceholderDirectories<Directory extends HomeCandidate>(
+  directories: readonly Directory[],
   creations: readonly StartingThreadPlacement[] | undefined,
   windowTarget: FederationRemoteTarget | undefined,
-): readonly NavigationDirectorySummary[] {
-  let merged: NavigationDirectorySummary[] | undefined;
+  /** The list's own row for main's placeholder summary. */
+  toDirectory: (placeholder: NavigationDirectorySummary) => Directory,
+): readonly Directory[] {
+  let merged: Directory[] | undefined;
   for (const creation of creations ?? []) {
     if (!isPeerThreadInLocalList(creation, windowTarget)) continue;
     const current = merged ?? directories;
     if (startingThreadHomeDirectoryKey(creation, current, windowTarget)) continue;
     const placeholder = remoteThreadPlaceholderDirectory(startingPeerThread(creation));
     if (!placeholder || current.some((directory) => directory.key === placeholder.key)) continue;
-    merged = [...current, placeholder];
+    merged = [...current, toDirectory(placeholder)];
   }
   return merged ?? directories;
 }

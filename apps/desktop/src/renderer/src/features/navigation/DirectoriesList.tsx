@@ -501,6 +501,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
         ),
         props.startingThreads,
         windowFederationTarget,
+        ({ key, kind, label, localAvailability, repositoryKey, repositoryKeys }) => ({
+          key, kind, label, localAvailability,
+          ...(repositoryKey ? { repositoryKey } : {}),
+          ...(repositoryKeys ? { repositoryKeys } : {}),
+        }),
       ),
     [props.directories, props.startingThreads, windowFederationTarget],
   );
