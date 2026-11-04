@@ -53567,8 +53567,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .thread-maintenance__rail-step.is-active .thread-maintenance__num {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: var(--accent-on);
 }
 
