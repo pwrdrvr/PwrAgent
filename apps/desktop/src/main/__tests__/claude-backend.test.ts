@@ -57,6 +57,18 @@ async function runPromptSubmit(options: Options, input: { prompt: string; source
   return outputs;
 }
 
+/** Claude's ScheduleWakeup call, and the PostToolUse hook that records it. */
+async function* scheduleLoopWakeup(options: Options, prompt: string): AsyncGenerator<SDKMessage> {
+  const input = { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt };
+  yield { type: "assistant", parent_tool_use_id: null, message: {
+    id: "schedule", content: [{ type: "tool_use", id: "tool-wake", name: "ScheduleWakeup", input }],
+  } } as SDKMessage;
+  await runHooks(options, "PostToolUse", {
+    tool_name: "ScheduleWakeup", tool_use_id: "tool-wake", tool_input: input,
+    tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
+  });
+}
+
 async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUserMessage>) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
   generateSessionTitle?: (description: string, options?: { persist?: boolean }) => Promise<string | null>;
 } = {}) {
@@ -2202,15 +2214,7 @@ describe("Claude SDK backend", () => {
     const loop = { id: "a1b2c3d4", schedule: "5 14 3 11 *", recurring: false, prompt: "/loop check the deploy" };
     const f = await fixture(async function* (options) {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
-      yield { type: "assistant", parent_tool_use_id: null, message: {
-        id: "schedule", content: [{ type: "tool_use", id: "tool-wake", name: "ScheduleWakeup",
-          input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt } }],
-      } } as SDKMessage;
-      await runHooks(options, "PostToolUse", {
-        tool_name: "ScheduleWakeup", tool_use_id: "tool-wake",
-        tool_input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt },
-        tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
-      });
+      yield* scheduleLoopWakeup(options, loop.prompt);
       yield { type: "assistant", parent_tool_use_id: null, message: {
         id: "waiting", content: [{ type: "text", text: "I'll check again in ten minutes." }],
       } } as SDKMessage;
@@ -2947,15 +2951,7 @@ describe("Claude SDK backend", () => {
         }
         const input = prompt[Symbol.asyncIterator]();
         await input.next();
-        yield { type: "assistant", parent_tool_use_id: null, message: {
-          id: "schedule", content: [{ type: "tool_use", id: "tool-wake", name: "ScheduleWakeup",
-            input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt } }],
-        } } as SDKMessage;
-        await runHooks(options, "PostToolUse", {
-          tool_name: "ScheduleWakeup", tool_use_id: "tool-wake",
-          tool_input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt },
-          tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
-        });
+        yield* scheduleLoopWakeup(options, loop.prompt);
         await runHooks(options, "Stop", { stop_hook_active: false, session_crons: [loop] });
         yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
         const next = await input.next();
@@ -3195,7 +3191,7 @@ describe("Claude SDK backend", () => {
 
   describe("stopping a turn while Claude's own wake is pending", () => {
     const capabilities = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"];
-    async function stoppable(params: { wake: boolean }) {
+    async function stoppable(params: { wake?: "loop" | "cron" }) {
       const interrupted = Promise.withResolvers<void>();
       const interrupt = vi.fn(async () => {
         interrupted.resolve();
@@ -3207,15 +3203,11 @@ describe("Claude SDK backend", () => {
           options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
         });
         yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", capabilities } as SDKMessage;
-        if (params.wake) {
-          yield { type: "assistant", parent_tool_use_id: null, message: {
-            id: "schedule", content: [{ type: "tool_use", id: "tool-wake", name: "ScheduleWakeup",
-              input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt } }],
-          } } as SDKMessage;
+        if (params.wake === "loop") yield* scheduleLoopWakeup(options, prompt);
+        if (params.wake === "cron") {
           await runHooks(options, "PostToolUse", {
-            tool_name: "ScheduleWakeup", tool_use_id: "tool-wake",
-            tool_input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt },
-            tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
+            tool_name: "CronCreate", tool_use_id: "tool-cron", tool_input: { cron: "*/5 * * * *", prompt: "Check CI" },
+            tool_response: { id: "e5f6a7b8", humanSchedule: "Every 5 minutes", recurring: true, nextFireAt: 4_000_000_000_000 },
           });
         }
         yield { type: "assistant", parent_tool_use_id: null, message: { id: "reading", content: [{ type: "text", text: "Reading the logs." }] } } as SDKMessage;
@@ -3231,8 +3223,11 @@ describe("Claude SDK backend", () => {
       return { ...f, threadId, turn, interrupt };
     }
 
-    it("interrupts Claude and keeps the process for the wake", async () => {
-      const f = await stoppable({ wake: true });
+    it.each([
+      { wake: "loop" as const, held: { origin: "loop_wakeup", prompt: "/loop check the deploy", nextFireAt: 4_000_000_000_000 } },
+      { wake: "cron" as const, held: { id: "e5f6a7b8", origin: "cron", recurring: true, prompt: "Check CI" } },
+    ])("interrupts Claude and keeps the process for a $wake wake", async ({ wake, held }) => {
+      const f = await stoppable({ wake });
       // No task holds the process; only the wake does.
       expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
       expect(f.backend.listSessionWakes(f.threadId)).toHaveLength(1);
@@ -3242,14 +3237,12 @@ describe("Claude SDK backend", () => {
       // Ending the process would end the wake with it.
       expect(f.close).not.toHaveBeenCalled();
       expect(f.backend.liveSessionThreadIds()).toEqual([f.threadId]);
-      expect(f.backend.listSessionWakes(f.threadId)).toEqual([expect.objectContaining({
-        origin: "loop_wakeup", prompt: "/loop check the deploy", nextFireAt: 4_000_000_000_000,
-      })]);
+      expect(f.backend.listSessionWakes(f.threadId)).toEqual([expect.objectContaining(held)]);
       await f.backend.close();
     });
 
     it("ends the query when neither a wake nor a task would stop with it", async () => {
-      const f = await stoppable({ wake: false });
+      const f = await stoppable({});
       expect(f.backend.listSessionWakes(f.threadId)).toEqual([]);
       await f.backend.interruptTurn(f.turn);
       expect(f.interrupt).not.toHaveBeenCalled();
