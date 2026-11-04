@@ -5254,6 +5254,8 @@ export class MessagingController {
             startTurnAcceptedAt,
           };
       if (started.queueStatus === "queued") {
+        await preparingActivity?.finish(false);
+        preparingActivity = undefined;
         this.rememberQueuedAgentMessagingOrigin({
           binding: params.binding,
           event: params.event,
@@ -5316,6 +5318,8 @@ export class MessagingController {
       );
       return "started";
     } catch (error) {
+      await preparingActivity?.finish(turnStarted);
+      preparingActivity = undefined;
       if (turnStarted) {
         this.logger.debug?.("messaging post-start update failed", {
           error: error instanceof Error ? error.message : String(error),

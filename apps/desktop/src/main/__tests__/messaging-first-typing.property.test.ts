@@ -2,12 +2,11 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import type { StartTurnRequest } from "@pwragent/shared";
 import type {
-  MessagingAdapter,
   MessagingInboundTextEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { TelegramAdapter, type TelegramBotApi } from "@pwragent/messaging-provider-telegram";
-import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
+import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingController } from "../messaging/core/messaging-controller";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -25,18 +24,21 @@ function gate() {
 }
 
 type Scenario = {
-  backend: "codex" | "claude";
+  backend: "codex" | "claude" | "acp:grok";
   route: "binding" | "default-agent";
   delayMs: number;
   outcome: "started" | "queued" | "failed";
 };
 
 const scenario = fc.record({
-  backend: fc.constantFrom("codex" as const, "claude" as const),
+  backend: fc.constantFrom("codex" as const, "claude" as const, "acp:grok" as const),
   route: fc.constantFrom("binding" as const, "default-agent" as const),
   delayMs: fc.integer({ min: FIRST_TYPING_BUDGET_MS + 1, max: 30_000 }),
   outcome: fc.constantFrom("started" as const, "queued" as const, "failed" as const),
-});
+// Default Agent support for ACP requires a negotiated capability report, and
+// Claude is not a supported Default Agent. This fixture supplies neither;
+// bound replies exercise both backends without inventing an accepted route.
+}).filter((value) => value.backend === "codex" || value.route === "binding");
 
 async function runScenario(input: Scenario, scheduler: fc.Scheduler): Promise<void> {
   let now = 1_000;
@@ -115,7 +117,10 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler): Promise<vo
     // A provider has begun accepting the turn, while its preparation and the
     // Telegram response are both unresolved. The clock advances only here;
     // no real sleep, timer, or model inference participates in this test.
-    await startupEntered.promise;
+    await Promise.race([
+      startupEntered.promise,
+      handling.then(() => { throw new Error("Input completed before backend startup was reached"); }),
+    ]);
     now += input.delayMs;
     expect(requests[0], "first typing request must precede blocked backend preparation").toBeDefined();
     expect(requests[0]!.at - receivedAt).toBeLessThanOrEqual(FIRST_TYPING_BUDGET_MS);

@@ -196,6 +196,51 @@ function boundedPeerBrowseFixture(local: NavigationSnapshot, remote: NavigationS
 }
 
 describe("MessagingController", () => {
+  it("budgets the first typing delivery while backend preparation remains blocked", async () => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const { tempDir, dbPath } = createTempStateDb("pwragent-first-typing-writes-");
+    tempDirs.push(tempDir);
+    const db = StateDb.open(dbPath);
+    const startupEntered = createDeferred<void>();
+    const startup = createDeferred<void>();
+    const activityRecorded = createDeferred<void>();
+    let handling: Promise<void> | undefined;
+    try {
+      const store = new SqliteMessagingStore(db);
+      const harness = await createHarness({
+        store,
+        startTurn: async (request) => {
+          startupEntered.resolve();
+          await startup.promise;
+          return { backend: request.backend, threadId: request.threadId, turnId: "turn-1" };
+        },
+      });
+      await bindThread(harness);
+      const recordDelivery = store.recordDelivery.bind(store);
+      vi.spyOn(store, "recordDelivery").mockImplementation(async (record) => {
+        await recordDelivery(record);
+        if (record.intentId.startsWith("activity:")) activityRecorded.resolve();
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        handling = harness.controller.handleInboundEvent(buildTextEvent("Fixture request"));
+        await Promise.all([startupEntered.promise, activityRecorded.promise]);
+      });
+      expectSqliteWriteBudget({
+        scenario: "messaging-first-typing-before-startup",
+        note: "One admitted reply through its first activity delivery with backend startup blocked; one boundary delivery commit, no timer persistence.",
+        writes,
+      });
+    } finally {
+      startup.resolve();
+      await handling;
+      await settleHarnessWork();
+      db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
+  });
+
   it("logs provider-neutral ingress stages through startTurn acceptance", async () => {
     let clock = 2_000;
     const info = vi.fn();
