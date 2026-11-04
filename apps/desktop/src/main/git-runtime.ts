@@ -6,7 +6,7 @@ import {
   bundledGitDirectory,
   bundledGitEnvironment,
   isInsideDirectory,
-  isOwnSystemConfig,
+  operatorSystemConfig,
   validateBundledGit,
 } from "./bundled-git";
 import { getConfiguredGitCommand } from "./git-command";
@@ -29,11 +29,15 @@ export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string)
       inheritedPath = env[key] ?? "";
       delete env[key];
     } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR"].includes(upper)
-      || (["PREFIX", "GIT_SSL_CAINFO"].includes(upper) && env[key] && inBundle(env[key]!))
-      // The system config PwrAgent generates for the bundle includes the
-      // bundle's; an installed Git reads its own. An operator's own stays.
-      || (upper === "GIT_CONFIG_SYSTEM" && isOwnSystemConfig(root, env[key]))) {
+      || (["PREFIX", "GIT_SSL_CAINFO"].includes(upper) && env[key] && inBundle(env[key]!))) {
       delete env[key];
+    } else if (upper === "GIT_CONFIG_SYSTEM") {
+      // The system config PwrAgent generates for the bundle includes the
+      // bundle's; an installed Git reads its own. An operator's own stays,
+      // even from inside a generated one.
+      const operatorConfig = operatorSystemConfig(root, env[key]);
+      if (operatorConfig) env[key] = operatorConfig;
+      else delete env[key];
     }
   }
   env.PATH = [...new Set([

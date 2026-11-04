@@ -14,6 +14,7 @@ import {
   operatorSearchPath,
 } from "../bundled-git";
 import { resolveGitExecutable, runGitCommand, streamGitCommand } from "../app-server/git-executable";
+import { customGitEnvironment } from "../git-runtime";
 
 afterEach(() => {
   configureBundledGit();
@@ -387,6 +388,23 @@ describe.skipIf(process.platform === "win32")("bundled Git system config visibil
       expect(configGet(env, "pwragent.fixture")).toBe("own");
       // PwrAgent's defaults still sit beneath it.
       expect(configGet(env, "filter.lfs.required")).toBe("true");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an operator's GIT_CONFIG_SYSTEM when the environment is built twice", async () => {
+    const { root, source } = await fixture();
+    try {
+      const own = path.join(root, "own-system-config");
+      await writeFile(own, "[pwragent]\n\tfixture = own\n");
+      // The terminal and Codex environments are built from a built one.
+      const once = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: own }, { platform: "linux" });
+      const twice = bundledGitEnvironment(once, { platform: "linux" });
+      expect(twice.GIT_CONFIG_SYSTEM).toBe(once.GIT_CONFIG_SYSTEM);
+      expect(configGet(twice, "pwragent.fixture")).toBe("own");
+      // An installed Git chosen afterwards reads the operator's file itself.
+      expect(customGitEnvironment(twice, "/usr/bin/git").GIT_CONFIG_SYSTEM).toBe(own);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -65,9 +65,12 @@ export function bundledGitEnvironment(
     if (upper === "PATH") {
       inheritedPath = clean[key] ?? "";
       delete clean[key];
-    } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "PWRAGENT_GIT_PATH"].includes(upper)
-      || (upper === "GIT_CONFIG_SYSTEM" && isOwnSystemConfig(root, clean[key]))) {
+    } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "PWRAGENT_GIT_PATH"].includes(upper)) {
       delete clean[key];
+    } else if (upper === "GIT_CONFIG_SYSTEM") {
+      const operatorConfig = operatorSystemConfig(root, clean[key]);
+      if (operatorConfig) clean[key] = operatorConfig;
+      else delete clean[key];
     }
   }
   // An omitted helper override makes Dugite read process.env.GIT_EXEC_PATH
@@ -308,25 +311,58 @@ const GENERATED_CONFIG_MARKER = "# Written by PwrAgent:";
 const PWR_GENERATED_CONFIG = /^# Written by Pwr[A-Za-z]+:/;
 
 /**
- * Whether an inherited GIT_CONFIG_SYSTEM was set by an app, not the operator:
- * the bundle's own file, or a config PwrAgent or another Pwr app generated.
- * A shell in PwrAgent's terminal carries PwrAgent's generated file. One under
- * another PwrAgent root (a dev profile launched from that terminal) or from
- * PwrGit is recognized by its first line. Those are rebuilt rather than
- * included, so app defaults and another bundle's config are not stacked
- * beneath ours. Anything else is the operator's own system config and must
- * stay visible.
+ * The operator's own system config that an inherited GIT_CONFIG_SYSTEM stands
+ * for, or undefined when it names none.
+ *
+ * Apps set the variable too. Dugite points it at a bundled Git's own
+ * etc/gitconfig, and PwrAgent and PwrGit point it at a config they generated
+ * (by directory, or by its first line), which includes the system config
+ * underneath. A shell in PwrAgent's terminal, a dev profile started from it,
+ * and PwrGit all pass theirs on, and PwrAgent applies its own environment to
+ * one it already built. A generated config is followed to the file it
+ * includes, so the operator's config stays visible however many times it was
+ * wrapped. A bundled Git's own config means the operator set none. Neither is
+ * included as is, so app defaults and another bundle's config are not
+ * stacked beneath ours.
  */
-export function isOwnSystemConfig(bundleRoot: string, value: string | undefined): boolean {
-  if (!value) return false;
-  const file = path.resolve(value);
-  if (isInsideDirectory(path.resolve(bundleRoot), file)) return true;
-  if (isInsideDirectory(path.resolve(bundledGitConfigDirectory()), file)) return true;
-  try {
-    return PWR_GENERATED_CONFIG.test(readFileSync(file, "utf8"));
-  } catch {
-    return false;
+export function operatorSystemConfig(bundleRoot: string, value: string | undefined): string | undefined {
+  let file = value ? path.resolve(value) : undefined;
+  for (let depth = 0; file && depth < 8; depth += 1) {
+    if (isBundledGitSystemConfig(bundleRoot, file)) return undefined;
+    const included = generatedConfigInclude(file);
+    if (included === null) return file;
+    file = included;
   }
+  return undefined;
+}
+
+/** Our bundle's files, or another Dugite layout's `git/etc/gitconfig`. */
+function isBundledGitSystemConfig(bundleRoot: string, file: string): boolean {
+  if (isInsideDirectory(path.resolve(bundleRoot), file)) return true;
+  const gitDirectory = path.dirname(path.dirname(file));
+  return path.basename(file) === "gitconfig"
+    && path.basename(path.dirname(file)) === "etc"
+    && path.basename(gitDirectory) === "git"
+    && existsSync(path.join(gitDirectory, "libexec", "git-core"));
+}
+
+/**
+ * For a config a Pwr app generated, the system config it includes, or
+ * undefined when it includes none. Null for any other file.
+ */
+function generatedConfigInclude(file: string): string | undefined | null {
+  const ours = isInsideDirectory(path.resolve(bundledGitConfigDirectory()), file);
+  let content: string;
+  try {
+    content = readFileSync(file, "utf8");
+  } catch {
+    return ours ? undefined : null;
+  }
+  if (!ours && !PWR_GENERATED_CONFIG.test(content)) return null;
+  const include = content.lastIndexOf("[include]");
+  if (include < 0) return undefined;
+  const value = /^\s*path\s*=\s*(.*?)\s*$/m.exec(content.slice(include))?.[1];
+  return value ? path.resolve(path.dirname(file), unquoteConfigValue(value)) : undefined;
 }
 
 /**
@@ -401,4 +437,9 @@ function bundledSystemConfig(
 
 function quoteConfigValue(value: string): string {
   return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
+}
+
+function unquoteConfigValue(value: string): string {
+  if (!value.startsWith("\"") || !value.endsWith("\"") || value.length < 2) return value;
+  return value.slice(1, -1).replace(/\\(["\\])/g, "$1");
 }
