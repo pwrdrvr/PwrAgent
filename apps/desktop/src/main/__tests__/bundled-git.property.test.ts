@@ -19,7 +19,7 @@ type Scenario = {
   global: Entry[];
   local: Entry[];
   // Who set GIT_CONFIG_SYSTEM before this environment was built.
-  inheritedFrom: "nothing" | "pwrgit";
+  inheritedFrom: "nothing" | "pwrgit" | "pwrgit-reflink";
   // How many times PwrAgent builds the environment.
   builds: number;
 };
@@ -30,7 +30,7 @@ const scenario: fc.Arbitrary<Scenario> = fc.record({
   operatorSystem: fc.option(fc.array(entry, { maxLength: 4 }), { nil: null }),
   global: fc.array(entry, { maxLength: 3 }),
   local: fc.array(entry, { maxLength: 3 }),
-  inheritedFrom: fc.constantFrom("nothing", "pwrgit"),
+  inheritedFrom: fc.constantFrom("nothing", "pwrgit", "pwrgit-reflink"),
   builds: fc.integer({ min: 1, max: 3 }),
 });
 
@@ -96,8 +96,9 @@ describe.skipIf(process.platform === "win32")("bundled Git system config, agains
       writeFileSync(operatorConfig, configText(s.operatorSystem));
     }
     const source: NodeJS.ProcessEnv = { ...base, GIT_CONFIG_GLOBAL: globalConfig };
-    if (s.inheritedFrom === "pwrgit") {
-      // PwrGit's generated config: defaults, then the system config it read.
+    if (s.inheritedFrom !== "nothing") {
+      // PwrGit's generated config: defaults, then the system config it read,
+      // then (with its reflink setting) a section that outranks that config.
       const pwrgit = path.join(dir, "pwrgit-gitconfig");
       writeFileSync(pwrgit, [
         "# Written by PwrGit: defaults for its bundled Git, then the system",
@@ -105,6 +106,7 @@ describe.skipIf(process.platform === "win32")("bundled Git system config, agains
         "\thelper = pwrgit",
         "[include]",
         `\tpath = "${operatorConfig ?? otherBundleConfig}"`,
+        ...(s.inheritedFrom === "pwrgit-reflink" ? ["[checkout]", "\treflink = false"] : []),
         "",
       ].join("\n"));
       source.GIT_CONFIG_SYSTEM = pwrgit;
