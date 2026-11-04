@@ -9,6 +9,7 @@ import type {
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import {
+  SELF_STARTED_TURN_ENTRY_PREFIX,
   buildThreadPendingWakes,
   stopRemoteThreadPendingWake,
   stopThreadPendingWake,
@@ -186,7 +187,6 @@ describe("buildThreadPendingWakes", () => {
 
   it("lists Claude's own wakes with the scheduled actions by time, with no stop", async () => {
     const list = await buildThreadPendingWakes(readers({
-      hold: async () => LOCKED,
       scheduledActions: () => ({ actions: [
         scheduled({ id: "scheduled-held", status: "held" }),
         scheduled(),
@@ -219,10 +219,17 @@ describe("buildThreadPendingWakes", () => {
     const cron = list.wakes[3]!;
     expect(cron).not.toHaveProperty("wakesAt");
     expect(cron.kind === "backend_wake" && cron.wake.prompt.length).toBe(600);
-    // Claude starts it in its own process, so a lock cannot hold it.
-    expect(list.wakes.filter((wake) => wake.held).map((wake) => wake.key)).toEqual([
-      "scheduled_action:scheduled-action:1",
-      "scheduled_action:scheduled-held",
+  });
+
+  it("holds Claude's own wakes under a lock, which blocks the turn each starts", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      hold: async () => LOCKED,
+      scheduledActions: () => ({ actions: [scheduled()] }),
+      backendWakes: () => [claudeWake()],
+    }), THREAD);
+    expect(list.wakes.map((wake) => [wake.key, wake.held])).toEqual([
+      ["backend_wake:a1b2c3d4", LOCKED],
+      ["scheduled_action:scheduled-action:1", LOCKED],
     ]);
   });
 
@@ -320,11 +327,13 @@ describe("held wakes", () => {
       autoFix: async () => [{ backend: "claude", threadId: "waiting", prKey: "github/acme/widgets#3174", state: "active" }],
       dependencies: async () => [dependency({ status: "ready" })],
       backendTasks: async () => [task()],
+      backendWakes: () => [claudeWake()],
     }), THREAD);
 
     expect(list.wakes.map((wake) => wake.key)).toEqual([
       "held_message:thread-turn:1",
       "held_message:task-monitor:monitor-9",
+      "backend_wake:a1b2c3d4",
       "scheduled_action:scheduled-2",
       "scheduled_action:scheduled-1",
       "pr_watch:watch-ci",
@@ -337,9 +346,11 @@ describe("held wakes", () => {
     expect(held["scheduled_action:scheduled-2"]).toEqual(LOCKED);
     expect(held["pr_watch:watch-ci"]).toEqual(LOCKED);
     expect(held["dependency:dep-1"]).toEqual(LOCKED);
-    // Auto-fix is off while locked, and a backend continues its own task.
+    // Claude's task runs on and its wake is due; the turn either starts waits.
+    expect(held["backend_task:task-1"]).toEqual(LOCKED);
+    expect(held["backend_wake:a1b2c3d4"]).toEqual(LOCKED);
+    // Auto-fix is off while locked.
     expect(held["pr_auto_fix:github/acme/widgets#3174"]).toBeUndefined();
-    expect(held["backend_task:task-1"]).toBeUndefined();
     expect(list.wakes[0]).toMatchObject({
       kind: "held_message", entryId: "thread-turn:1", source: "operator", displayText: "Rebase on main.",
       createdBy: "operator", durable: false, stop: "discard",
@@ -359,6 +370,8 @@ describe("held wakes", () => {
       scheduledActions: () => ({ actions: [scheduled()] }),
       prWatches: async () => [prWatch()],
       dependencies: async () => [dependency()],
+      backendTasks: async () => [task()],
+      backendWakes: () => [claudeWake()],
     }), THREAD);
 
     expect(list.wakes[0]).toMatchObject({
@@ -367,8 +380,26 @@ describe("held wakes", () => {
     });
     const held = Object.fromEntries(list.wakes.map((wake) => [wake.kind, wake.held]));
     expect(held.scheduled_action).toBeUndefined();
+    // A pause does not hold the turns Claude starts on its own.
+    expect(held.backend_task).toBeUndefined();
+    expect(held.backend_wake).toBeUndefined();
     expect(held.pr_watch).toEqual({ ...PAUSED, discardsWakeups: true });
     expect(held.dependency).toEqual({ ...PAUSED, discardsWakeups: true });
+  });
+
+  it("lists Claude's held turns as an agent's, named by their title", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      hold: async () => LOCKED,
+      heldEntries: () => [heldEntry({
+        entryId: `${SELF_STARTED_TURN_ENTRY_PREFIX}waiting`, origin: "manual",
+        text: "Claude's answer to a finished background task",
+      })],
+    }), THREAD);
+    expect(list.wakes).toEqual([expect.objectContaining({
+      kind: "held_message", source: "other", displayText: "Claude's answer to a finished background task",
+      held: LOCKED, stop: "discard",
+    })]);
+    expect(list.wakes[0]).not.toHaveProperty("createdBy");
   });
 
   it("says why a queue waits after a failed turn", async () => {

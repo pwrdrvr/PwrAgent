@@ -362,6 +362,41 @@ allowed while only wakes keep the session. A durable `CronCreate` job is saved
 in the project's `.claude/scheduled_tasks.json`, outside any one session, and
 is not listed.
 
+## Locked threads
+
+A lock keeps every turn source from starting a turn, including the turns
+Claude starts in its own process: its answer to a finished task, a `/loop`
+wake-up, and a session cron's fire. PwrAgent's turn queue never sees those
+turns, so the registry's lock check at turn admission cannot refuse them.
+`claude-self-started-turns.ts` holds them with a `UserPromptSubmit` hook
+instead. The hook runs before Claude starts any prompt. Its `source` field
+names the author: `loop_wakeup`, `schedule_wakeup` (a cron), or `system` (a
+task notification, among others). A prompt counts as Claude's own only when
+no desktop turn is open, because a task notification can also fold into a
+running turn. A CLI that omits `source` is judged by that rule alone, since
+every desktop message opens its turn before its prompt is written.
+
+When the thread is locked, the registry's `holdBackendSelfStartedTurn` keeps
+the prompt in a held queue entry (`self-started:<threadId>`), and the hook
+answers `decision: "block"`. The CLI then drops the prompt without running
+the model. The `init`, banner and `result` it still emits open no desktop
+turn. Unlocking releases the entry with the lock's other held entries, and
+the prompt runs as a normal turn, resuming the session if its process has
+ended. Every prompt held while locked rides that one entry, in order, so
+they run as one turn, the way Claude batches what queues while it is busy.
+A recurring cron that fires again while locked is kept once.
+
+- The CLI drops a one-shot job as it fires, and a held fire is followed by
+  no `Stop` hook, so the held wake leaves the tracked set. A recurring job
+  stays listed and fires again later.
+- The held entry lives in memory, like the lock's other held entries, so
+  quitting PwrAgent ends it.
+- The background task itself keeps running under a lock; only Claude's
+  answer waits. Waiting for marks Claude's tasks and wakes with that.
+- If holding fails, the hook lets the turn run, so a prompt is never lost.
+- A paused project does not hold these turns. Its notice names what it
+  holds: PR checks and monitor and Continue After results.
+
 ## Usage, context, and MCP
 
 The Pricing rail uses the SDK's per-model result totals, including cache

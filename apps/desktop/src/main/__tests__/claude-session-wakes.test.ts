@@ -1,6 +1,7 @@
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { ClaudeSessionWakeTracker, claudeSessionWakeHooks } from "../claude/claude-session-wakes";
+import { claudeSelfStartedTurn } from "../claude/claude-self-started-turns";
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -117,6 +118,63 @@ describe("ClaudeSessionWakeTracker", () => {
     // A loop's stop leaves a reminder alone.
     wakes.applyToolResult("ScheduleWakeup", { stop: true }, { scheduledFor: start, clampedDelaySeconds: 0, wasClamped: false, stopped: true });
     expect(wakes.pending().map((wake) => wake.id)).toEqual(["remind", "never"]);
+  });
+});
+
+describe("ClaudeSessionWakeTracker.fired", () => {
+  it("drops a held one-shot by its prompt, and keeps a recurring job that fires again", () => {
+    const { wakes, now } = tracker();
+    wakes.applyToolResult("CronCreate", { cron: "*/5 * * * *", prompt: "Check CI" },
+      { id: "cron-1", recurring: true, nextFireAt: now() + 5 * MINUTE });
+    wakes.applyToolResult("CronCreate", { cron: "30 9 * * *", prompt: "Post the summary", recurring: false },
+      { id: "cron-2", recurring: false, nextFireAt: now() + 30 * MINUTE });
+    expect(wakes.fired("Check CI")).toBe(false);
+    expect(wakes.fired("Post the summary")).toBe(true);
+    expect(wakes.pending().map((wake) => wake.id)).toEqual(["cron-1"]);
+  });
+
+  it("drops a /loop wake-up recorded before its Stop hook named it", () => {
+    const { wakes, now } = tracker();
+    wakes.applyToolResult("ScheduleWakeup", { prompt: "/loop check the deploy", delaySeconds: 60, reason: "Soon." },
+      { scheduledFor: now() + MINUTE });
+    expect(wakes.fired("/loop check the deploy")).toBe(true);
+    expect(wakes.hasPending()).toBe(false);
+  });
+
+  it("drops the soonest due one-shot when the fire submits expanded text", () => {
+    const { wakes, now, advance } = tracker();
+    wakes.applyToolResult("CronCreate", { cron: "0 0 1 1 *", prompt: "Remind me", recurring: false },
+      { id: "later", recurring: false, nextFireAt: now() + 20 * MINUTE });
+    wakes.applyToolResult("ScheduleWakeup", { prompt: "<<autonomous-loop-dynamic>>", delaySeconds: 600 },
+      { scheduledFor: now() + 10 * MINUTE });
+    // Nothing is due yet, so an unknown prompt drops nothing.
+    expect(wakes.fired("Continue the autonomous loop.")).toBe(false);
+    advance(10 * MINUTE);
+    expect(wakes.fired("Continue the autonomous loop.")).toBe(true);
+    expect(wakes.pending().map((wake) => wake.id)).toEqual(["later"]);
+  });
+});
+
+describe("claudeSelfStartedTurn", () => {
+  it("names a prompt Claude started on its own by the CLI's source", () => {
+    expect(claudeSelfStartedTurn({ prompt: "/loop check", source: "loop_wakeup" }, false))
+      .toEqual({ prompt: "/loop check", source: "loop_wakeup" });
+    expect(claudeSelfStartedTurn({ prompt: "Check CI", source: "schedule_wakeup" }, false))
+      .toEqual({ prompt: "Check CI", source: "cron" });
+    expect(claudeSelfStartedTurn({ prompt: "<task-notification/>", source: "system" }, false))
+      .toEqual({ prompt: "<task-notification/>", source: "task_notification" });
+    // A CLI that does not report a source starts its own prompts only between desktop turns.
+    expect(claudeSelfStartedTurn({ prompt: "<task-notification/>" }, false))
+      .toEqual({ prompt: "<task-notification/>", source: "task_notification" });
+  });
+
+  it("never names the operator's prompt, a host event, or one that joins an open desktop turn", () => {
+    expect(claudeSelfStartedTurn({ prompt: "Build it", source: "sdk" }, false)).toBeUndefined();
+    expect(claudeSelfStartedTurn({ prompt: "Build it", source: "user" }, false)).toBeUndefined();
+    expect(claudeSelfStartedTurn({ prompt: "event", source: "poll_event" }, false)).toBeUndefined();
+    expect(claudeSelfStartedTurn({ prompt: "<task-notification/>", source: "system" }, true)).toBeUndefined();
+    expect(claudeSelfStartedTurn({ prompt: "Check CI", source: "schedule_wakeup" }, true)).toBeUndefined();
+    expect(claudeSelfStartedTurn({ prompt: "  ", source: "system" }, false)).toBeUndefined();
   });
 });
 

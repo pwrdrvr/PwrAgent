@@ -346,7 +346,11 @@ function describeRowHold(wake: ThreadPendingWake, canSend: boolean): string | un
   const hold = wake.held;
   if (!hold) return undefined;
   if (hold.kind === "thread_locked") {
-    return wake.kind === "held_message" ? "Held while this thread is locked; unlocking sends it." : "Held while this thread is locked.";
+    if (wake.kind === "held_message") return "Held while this thread is locked; unlocking sends it.";
+    // Claude's own task and wakes run on; the turn each would start waits.
+    if (wake.kind === "backend_task") return "It keeps running. Claude's answer waits until the thread is unlocked.";
+    if (wake.kind === "backend_wake") return "If it fires while this thread is locked, Claude's turn waits until it is unlocked.";
+    return "Held while this thread is locked.";
   }
   if (hold.kind === "queue_held") return `Held: ${clipText(hold.reason, 160)} Send it again from the queue above the composer.`;
   if (wake.kind === "held_message") {

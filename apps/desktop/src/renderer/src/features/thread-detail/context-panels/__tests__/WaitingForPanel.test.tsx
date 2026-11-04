@@ -340,6 +340,25 @@ describe("WaitingForPanel", () => {
       expect(unlock).toHaveBeenCalledTimes(1);
     });
 
+    it("says Claude's own task runs on and its wake's turn waits while locked", () => {
+      const locked: NavigationThreadSummary = {
+        ...thread,
+        lock: { lockedAt: at(15), source: "operator" },
+      };
+      const claudeTask = WAKES.find((wake) => wake.kind === "backend_task")!;
+      render(
+        <WaitingForPanel thread={locked} now={NOW} onUnlockThread={vi.fn()}
+          controller={controller(ready([{ ...CLAUDE_WAKES[0]!, held: LOCKED }, { ...claudeTask, held: LOCKED }], []), vi.fn())} />,
+      );
+      expect(screen.getByRole("note")).toHaveTextContent("Nothing starts a turn until it is unlocked.");
+      const scheduled = screen.getByRole("group", { name: "Scheduled" });
+      expect(within(scheduled).getByText("If it fires while this thread is locked, Claude's turn waits until it is unlocked."))
+        .toBeInTheDocument();
+      const running = screen.getByRole("group", { name: "Running" });
+      expect(within(running).getByText("It keeps running. Claude's answer waits until the thread is unlocked."))
+        .toBeInTheDocument();
+    });
+
     it("sends a paused project's held wake-up through the project, and says what the pause holds", async () => {
       const sendHeld = vi.fn(async () => {});
       const ended = vi.fn();
