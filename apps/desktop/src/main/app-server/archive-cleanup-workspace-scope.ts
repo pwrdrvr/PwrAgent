@@ -119,6 +119,21 @@ export class ArchiveWorkspaceAdmission {
     return state;
   }
 
+  /** True once this admission holds any workspace evidence for the identity. */
+  hasObserved(key: string): boolean {
+    return this.threads.has(key);
+  }
+
+  /**
+   * Record an identity whose every path batch evidence already proved
+   * unrelated to this scope. A later change that reports only these paths
+   * stays proven; any new path must be proven again by `prepare`.
+   */
+  observeDisjoint(key: string, paths: readonly string[]): void {
+    if (!key || key === this.ownerKey || this.threads.has(key) || paths.length === 0) return;
+    this.threads.set(key, { generation: 0, phase: "disjoint", changed: false, paths: new Map(paths.map((value) => [value, false])) });
+  }
+
   observeThread(key: string, paths: readonly string[]): void {
     const state = this.thread(key);
     for (const value of paths) {

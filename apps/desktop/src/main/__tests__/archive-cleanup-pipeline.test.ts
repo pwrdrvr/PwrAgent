@@ -215,7 +215,7 @@ describe("archive cleanup pipeline", () => {
       });
       expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
       expectSqliteWriteBudget({ scenario: "archive-worktree-100-reference-wait-release",
-        note: "100 archived owners of one checkout: one queue-drain checkpoint, one non-final release, one final drain deletion; 3 commits, zero idle writes. At 10 batches/day and 128 KiB/commit, at most 3.75 MB/day.", writes });
+        note: "100 archived owners of one checkout: one queue-drain checkpoint writing one row per intent, a non-final release that only shrinks the backlog and writes nothing, and one final drain deletion; 2 commits, zero idle writes. At 10 batches/day and about 128 KB WAL per batch, about 1.3 MB/day.", writes });
     } finally {
       await fixture.registry.close();
       db.close();
@@ -620,8 +620,10 @@ describe("archive cleanup pipeline", () => {
     expect(readSummary).toHaveBeenCalledTimes(1);
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
     expect(fixture.completions).toHaveLength(30);
-    expect(fixture.counts.providerPages).toBe(3);
-    expect(registryLog.info.mock.calls.filter(([message]) => message === "archive cleanup inventory reused")).toHaveLength(29);
+    // One identity read of 100-row pages builds the batch's fleet index; the
+    // other 29 jobs reuse it.
+    expect(fixture.counts.providerPages).toBe(2);
+    expect(registryLog.info.mock.calls.filter(([message]) => message === "archive cleanup fleet index built")).toHaveLength(1);
   });
 
   it("logs request, queue wait, stages, shared-worktree outcome and publication after a 30-minute backlog", async () => {
@@ -726,7 +728,8 @@ describe("archive cleanup pipeline", () => {
     await drivePacer(fixture.registry, resumption);
     expect(fixture.client.archiveThread).not.toHaveBeenCalled();
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
-    expect(fixture.counts.providerPages).toBe(7);
+    // One identity read of 100-row pages for the whole resumed batch.
+    expect(fixture.counts.providerPages).toBe(3);
     expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(0);
     await fixture.registry.resumeArchiveCleanupsAtStartup();
     expect(checkpoint.recover).toHaveBeenCalledOnce();
@@ -799,9 +802,9 @@ describe("archive cleanup pipeline", () => {
       expect(event.notification.params).toMatchObject({ cleanup: [expect.objectContaining({ skippedReason: expect.stringContaining("shared-user") })] });
     }
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
-    // One inventory: 40 active pages and 26 archived pages, rather than
-    // rebuilding those 66 pages for each of the 130 queued threads.
-    expect(fixture.counts.providerPages).toBe(66);
+    // One inventory of 100-row pages: 10 active and 7 archived, rather than
+    // rebuilding them for each of the 130 queued threads.
+    expect(fixture.counts.providerPages).toBe(17);
   });
 
   it.each(["during discovery", "between jobs"])("refreshes batch discovery after a workspace change %s", async (timing) => {
@@ -836,7 +839,9 @@ describe("archive cleanup pipeline", () => {
     await drivePacer(fixture.registry, fixture.finished);
     expect(fixture.completions[1]?.notification.params).toMatchObject({ cleanup: [expect.objectContaining({ skippedReason: expect.stringContaining("new-user") })] });
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
-    expect(fixture.counts.providerPages).toBe(4);
+    // The batch reads the fleet once; the workspace change rereads only the
+    // identity it names.
+    expect(fixture.counts.providerPages).toBe(2);
     expect(readSummary).toHaveBeenCalledTimes(2);
   });
 
@@ -888,7 +893,8 @@ describe("archive cleanup pipeline", () => {
     await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
     await drivePacer(fixture.registry, fixture.finished);
     expect(fixture.store.setThreadParent).toHaveBeenCalledTimes(2);
-    expect(fixture.counts.providerPages).toBe(4);
+    // The regrouping rereads the child's overlay, not the fleet.
+    expect(fixture.counts.providerPages).toBe(2);
   });
 
   it.each([false, true])("retains supplied historical repair paths when canonical keys differ (%s)", async (differentKeys) => {
@@ -1347,7 +1353,8 @@ describe("archive cleanup pipeline", () => {
     } finally { release(); }
     const responses = await drivePacer(fixture.registry, results);
     expect(responses[0].cleanup[0]?.removedWorktree).toBe(true);
-    expect(fixture.counts.providerPages).toBe(6);
+    // The second job reuses the batch's fleet index and removes nothing.
+    expect(fixture.counts.providerPages).toBe(4);
   });
 
   it("keeps rejecting active target metadata without confirmed missing-rollout recovery", async () => {
@@ -1466,7 +1473,8 @@ describe("archive cleanup pipeline", () => {
     try {
       const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
       expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
-      expect(fixture.counts.providerPages).toBe(backend === "codex" ? 5 : 4);
+      // Activity on unrelated threads rereads those identities, not the fleet.
+      expect(fixture.counts.providerPages).toBe(4);
       expect(fixture.counts.archiveMutations).toBe(1);
     } finally {
       for (const thread of others) {
@@ -1975,8 +1983,9 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
     expect(fixture.archiveWorktree).toHaveBeenCalledWith(expect.objectContaining({ threadId: "second" }));
     expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledTimes(2);
-    // Rebuild discovery after the first tombstone, then scan again at removal.
-    expect(fixture.counts.providerPages).toBe(6);
+    // The tombstone rereads its identity's overlay; removal admission reads
+    // the fleet afresh because this provider cannot order by updated_at.
+    expect(fixture.counts.providerPages).toBe(4);
   });
 
   it("cancels missing-rollout recovery on genuine restore intent before removal", async () => {
@@ -2030,7 +2039,9 @@ describe("archive cleanup pipeline", () => {
     await drivePacer(fixture.registry, result);
     expect((await result).cleanup).toEqual([]);
     expect(read).toHaveBeenCalledOnce();
-    expect(fixture.client.listArchiveCleanupThreadsPage.mock.calls.map(([params]) => params.archived)).toEqual([false]);
+    // The batch's fleet index reads active and archived identities once, and
+    // every later job in the batch reuses it instead of rereading either list.
+    expect(fixture.client.listArchiveCleanupThreadsPage.mock.calls.map(([params]) => params.archived)).toEqual([false, true]);
   });
 
   it("exposes delayed metadata failure on the background completion event", async () => {

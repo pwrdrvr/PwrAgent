@@ -1,6 +1,6 @@
 import type { ClaudeUsageTotals } from "./claude-usage";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   AppServerThreadEntry, AppServerThreadSummary, AppServerThreadTurnMetadata, BackendRateLimitSummary,
@@ -282,6 +282,21 @@ export class ClaudeSessionStore {
       await rename(temporary, destination);
     } finally {
       await rm(temporary, { force: true });
+    }
+  }
+
+  /**
+   * Moves whenever a session file is created, replaced or removed: every write
+   * here renames a temporary file into the directory. Archive cleanup uses it
+   * to notice a writer outside this process without rereading every session.
+   */
+  async changeToken(): Promise<string> {
+    try {
+      const entry = await stat(this.root, { bigint: true });
+      return `${entry.ino}:${entry.mtimeNs}:${entry.ctimeNs}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+      throw error;
     }
   }
 

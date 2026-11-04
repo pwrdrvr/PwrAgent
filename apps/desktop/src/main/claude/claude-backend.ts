@@ -729,6 +729,11 @@ export class ClaudeBackend {
     return live ? threadExecutionModeForClaudePermission(live.config.permissionMode) : undefined;
   }
 
+  /** See `ClaudeSessionStore.changeToken`. */
+  async archiveCleanupChangeToken(): Promise<string> {
+    return await this.store.changeToken();
+  }
+
   async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {
     const filter = params.filter?.toLowerCase();
     // Metadata from builds that could not move a Claude thread still carries

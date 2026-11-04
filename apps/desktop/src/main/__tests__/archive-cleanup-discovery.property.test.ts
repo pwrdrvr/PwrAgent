@@ -154,9 +154,12 @@ it("shares identities across candidate roots without reusing another root's enri
     expect(first.thread.id).toBe("target");
     expect(second.thread.linkedDirectories).toContainEqual(worktree("/fixture/second"));
     // A directory write invalidates the identity proof too, even in one batch.
+    // The batch's fleet index reads that identity's provider row again rather
+    // than every identity: the write names the thread it changed.
+    const reads = vi.spyOn(run.client, "readArchiveCleanupThreadSummary");
     await run.registry.withThreadWorkspaceMutation({ backend: "codex", threadId: "second" }, async () => {});
     await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "second", context: run.context, reuseInventory: true });
-    expect(run.transport.listings.length).toBeGreaterThan(pages);
+    expect(reads).toHaveBeenCalledWith("second", expect.any(Function));
   } finally { await run.registry.close(); }
 });
 
