@@ -2729,6 +2729,11 @@ textarea,
   white-space: nowrap;
 }
 
+.jump-palette__row-title > .thread-row__status-indicator {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
 /* Everything after the title. It adds no box in the palette's one-line row;
    a narrow host such as the to-do destination picker lays it out as the
    row's second line. */

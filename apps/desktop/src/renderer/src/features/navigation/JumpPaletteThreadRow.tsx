@@ -13,6 +13,7 @@ import { AgentThreadChip } from "./AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { PrChip } from "../pr-status/PrChip";
 import { formatFullTimestamp, formatRelativeTime } from "./thread-time";
+import { isThreadActive, isThreadRemoteWorkHere, ThreadRowStatus } from "./ThreadRowStatus";
 
 /**
  * One thread result of the jump palette (⌘K), shared with every picker that
@@ -26,6 +27,7 @@ import { formatFullTimestamp, formatRelativeTime } from "./thread-time";
  */
 export function JumpPaletteThreadRow(props: {
   thread: NavigationThreadSummary;
+  thinkingThreadKeys?: Record<string, boolean>;
   id: string;
   active: boolean;
   /** The query's free text, which puts an exactly matching PR first. */
@@ -54,7 +56,12 @@ export function JumpPaletteThreadRow(props: {
         onMouseMove={props.onPoint}
         onClick={props.onChoose}
       >
-        <span className="jump-palette__row-title">{thread.title}</span>
+        <span className="jump-palette__row-title">
+          {isThreadActive(thread, props.thinkingThreadKeys) ? (
+            <ThreadRowStatus status="thinking" remoteWork={isThreadRemoteWorkHere(thread)} />
+          ) : null}
+          {thread.title}
+        </span>
         <span className="jump-palette__row-meta">
           {thread.federation ? (
             <InstanceChip

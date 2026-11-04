@@ -6619,6 +6619,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         // window should not find it means something else in the other.
         <SidebarSearchPopup
           threads={searchThreads}
+          thinkingThreadKeys={props.sessionKeys?.thinkingThreadKeys}
           label="Fly to thread"
           placeholder="Fly to thread, PR #, branch · @project to narrow"
           onJumpToThread={flyToThread}

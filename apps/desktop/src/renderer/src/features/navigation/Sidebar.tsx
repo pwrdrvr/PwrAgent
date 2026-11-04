@@ -3185,6 +3185,7 @@ export function Sidebar(props: SidebarProps) {
       {props.threadJumpOpen ? (
         <SidebarSearchPopup
           threads={props.threads}
+          thinkingThreadKeys={props.thinkingThreadKeys}
           projects={props.directories}
           onJumpToProject={(directory) => {
             props.onBrowseModeChange("directories");

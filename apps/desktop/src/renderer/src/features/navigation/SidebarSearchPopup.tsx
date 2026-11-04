@@ -48,6 +48,7 @@ function jumpResultKey(row: JumpResult): string {
 
 type SidebarSearchPopupProps = {
   threads: readonly NavigationThreadSummary[];
+  thinkingThreadKeys?: Record<string, boolean>;
   projects?: readonly NavigationDirectoryView[];
   onJumpToProject?: (directory: NavigationDirectoryView) => void;
   onJumpToThread: (thread: NavigationThreadSummary) => void;
@@ -366,6 +367,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     <JumpPaletteThreadRow
       key={threadSummaryIdentityKey(thread)}
       thread={thread}
+      thinkingThreadKeys={props.thinkingThreadKeys}
       id={rowId(index)}
       active={index === activeIndex}
       query={jumpText}
