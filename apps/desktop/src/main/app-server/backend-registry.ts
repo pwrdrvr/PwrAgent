@@ -11607,6 +11607,7 @@ export class DesktopBackendRegistry {
             grantedConnectionIds: access.automation?.grantedConnectionIds, readOnly: true,
           }] : [])]);
         },
+        serverNameInAgent: (connectionId, context) => this.threadMcpServerNameInAgent(connectionId, context),
         toolAllowed: (tool, context) => !this.isTaskMonitorThread(context)
           || (tool.definition.annotations?.readOnlyHint === true && tool.definition.annotations.destructiveHint !== true),
         approve: (invocation, context, signal, annotations, catalogRevision, consentRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision, consentRevision),
@@ -27471,13 +27472,7 @@ export class DesktopBackendRegistry {
     const connections: ThreadMcpConnectionReport[] = selection.connectionIds
       .map((connectionId) => {
         const status = byId.get(connectionId);
-        const bridge = service?.peekThreadBridge?.(
-          connectionId,
-          request.threadId,
-        );
-        const serverNameInAgent = bridge
-          ? buildCodexConnectionMcpServerName(bridge)
-          : undefined;
+        const serverNameInAgent = this.threadMcpServerNameInAgent(connectionId, request);
         const toolCount = serverNameInAgent
           ? toolCounts.get(serverNameInAgent)
           : undefined;
@@ -27501,6 +27496,17 @@ export class DesktopBackendRegistry {
       ...(handedOverAt === undefined ? {} : { handedOverAt }),
       agentInventoryAvailable,
     };
+  }
+
+  private threadMcpServerNameInAgent(
+    connectionId: string,
+    context: { backend: AppServerBackendKind; threadId: string },
+  ): string | undefined {
+    const bridge = this.mcpConnectionService?.peekThreadBridge?.(connectionId, context.threadId);
+    if (!bridge) return undefined;
+    // ACP receives the bridge name verbatim; Codex and Claude receive the
+    // hashed configuration alias. Gateway discovery has a separate session.
+    return isAcpBackendId(context.backend) ? bridge.name : buildCodexConnectionMcpServerName(bridge);
   }
 
   /**

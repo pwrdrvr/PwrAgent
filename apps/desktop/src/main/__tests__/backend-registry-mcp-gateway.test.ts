@@ -102,6 +102,46 @@ describe("backend MCP gateway dispatch", () => {
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
   }
 
+  it("uses the native thread bridge for search resources and describe_thread across reconnects", async () => {
+    await registry.close();
+    let bridge: Awaited<ReturnType<McpConnectionGatewayService["registerBridge"]>>["server"] | undefined = {
+      name: "one", command: "fixture", args: [], env: { FIXTURE_TOKEN: "native-session-1" },
+    };
+    const peekThreadBridge = vi.fn((id: string, threadId: string) => id === "one" && threadId === "thread-1" ? bridge : undefined);
+    createRegistry({ registerBridge, requestGatewayToolOperation: operation, peekThreadBridge } as unknown as McpConnectionGatewayService);
+    vi.spyOn(registry, "listThreadMcpServers").mockResolvedValue({ backend: "codex", threadId: "thread-1", detail: "toolsAndAuthOnly", servers: [] });
+    let searchIndex = 0;
+    const search = async () => {
+      const response = await internals.handleServerRequest("codex", request("search_mcp_tools", { query: "lookup" }, `search-${searchIndex++}`));
+      expect(response.success).toBe(true);
+      return JSON.parse((response.contentItems[0] as { text: string }).text);
+    };
+    const firstAlias = buildCodexConnectionMcpServerName(bridge);
+    expect((await search()).servers[0]).toMatchObject({ serverNameInAgent: firstAlias, resourceDiscovery: { server: firstAlias } });
+    expect((await registry.describeThreadMcpConnections({ backend: "codex", threadId: "thread-1" })).connections[0].serverNameInAgent).toBe(firstAlias);
+    bridge = { ...bridge, env: { FIXTURE_TOKEN: "native-session-2" } };
+    const nextAlias = buildCodexConnectionMcpServerName(bridge);
+    expect(nextAlias).not.toBe(firstAlias);
+    expect((await search()).servers[0].resourceDiscovery.server).toBe(nextAlias);
+    expect((await registry.describeThreadMcpConnections({ backend: "codex", threadId: "thread-1" })).connections[0].serverNameInAgent).toBe(nextAlias);
+    bridge = undefined;
+    expect((await search()).servers).toBeUndefined();
+    expect((await registry.describeThreadMcpConnections({ backend: "codex", threadId: "thread-1" })).connections[0].serverNameInAgent).toBeUndefined();
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    expect((await search()).tools).toEqual([]);
+    expect(operation.mock.calls.every(([entry]) => entry.operation === "gateway/tools/list")).toBe(true);
+  });
+
+  it.each(["codex", "claude", "acp:fixture"] as const)("reports the configured resource alias for %s", async (backend) => {
+    await registry.close();
+    const bridge = { name: "one", command: "fixture", args: [], env: {} };
+    createRegistry({ registerBridge, requestGatewayToolOperation: operation, peekThreadBridge: () => bridge } as unknown as McpConnectionGatewayService);
+    vi.spyOn(registry, "readThreadMcpConnections").mockResolvedValue({ connectionIds: ["one"], providerServersEnabled: true });
+    vi.spyOn(registry, "listThreadMcpServers").mockResolvedValue({ backend, threadId: "thread-1", detail: "toolsAndAuthOnly", servers: [] });
+    const report = await registry.describeThreadMcpConnections({ backend, threadId: "thread-1" });
+    expect(report.connections[0].serverNameInAgent).toBe(backend === "acp:fixture" ? bridge.name : buildCodexConnectionMcpServerName(bridge));
+  });
+
   it("bounds bridge registration, retains selected order and starts cwd inventory while bridges wait", async () => {
     const ids = Array.from({ length: 7 }, (_, index) => `selected-${index}`);
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-2", connectionIds: ids });
