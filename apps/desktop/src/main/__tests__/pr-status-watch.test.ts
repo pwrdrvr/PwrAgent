@@ -340,7 +340,8 @@ describe("PrStatusWatchCoordinator", () => {
       checksAllSkipped: true,
     }), now)).resolves.toBe(1);
 
-    const text = (harness.submitTurnIfIdle.mock.calls[0]?.[0].input[0] as { text: string }).text;
+    const input = harness.submitTurnIfIdle.mock.calls[0]![0].input[0];
+    const text = input?.type === "text" ? input.text : "";
     expect(text).toContain("- Outcome: success");
     expect(text).toContain(
       "- Checks: every check at this head was skipped, so nothing was tested",
