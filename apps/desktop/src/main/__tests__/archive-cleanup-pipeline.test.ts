@@ -372,6 +372,55 @@ describe("archive cleanup pipeline", () => {
     expect(saved).toEqual([]);
   });
 
+  it("finishes snapshot persistence after a failed write and restart without removing the checkout twice", async () => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{ id: "worktree", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" }] });
+    let saved: ArchiveCleanupIntent[] = [];
+    const checkpoint = { save: vi.fn((_id: string, intents: ArchiveCleanupIntent[]) => { saved = structuredClone(intents); }), recover: vi.fn(() => saved) };
+    const first = build([], target, checkpoint);
+    Object.assign(first.store, { upsertWorktreeSnapshot: vi.fn(async () => { throw new Error("Snapshot store unavailable"); }) });
+    const result = await drivePacer(first.registry, first.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(result.cleanup[0]?.error).toContain("Snapshot store unavailable");
+    expect(saved[0]?.deferredWorktrees?.[0]?.snapshot?.snapshotCommit).toBe("abc");
+    await first.registry.close();
+    const resumed = build([], target, checkpoint);
+    const persist = vi.fn(async () => {});
+    Object.assign(resumed.store, { upsertWorktreeSnapshot: persist });
+    resumed.client.listArchiveCleanupThreadsPage.mockImplementation(async ({ archived }) => ({ threads: archived ? [target] : [], nextCursor: undefined }));
+    const completed = new Promise<AgentEvent>((resolve) => resumed.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed") resolve(event);
+    }));
+    await drivePacer(resumed.registry, Promise.all([resumed.registry.resumeArchiveCleanupsAtStartup(), completed]));
+    expect(persist).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ snapshot: expect.objectContaining({ snapshotCommit: "abc" }) }));
+    expect(resumed.archiveWorktree).not.toHaveBeenCalled();
+    expect(resumed.client.archiveThread).not.toHaveBeenCalled();
+    expect(saved).toEqual([]);
+  });
+
+  it("does not lose a final-reference release received before stale inventory records its waiter", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "shared", kind: "worktree" as const, label: "shared", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const fixture = build([codexThread({ id: "owner", projectKey: "/contrived/other", linkedDirectories: [] })], codexThread({ id: "target", linkedDirectories: [directory] }));
+    fixture.overlays.set("owner", { backend: "codex", threadId: "owner", extraLinkedDirectories: [directory] });
+    const read = fixture.store.getArchiveCleanupOverlayStates.getMockImplementation()!;
+    let released = false;
+    fixture.store.getArchiveCleanupOverlayStates.mockImplementation(async (params) => {
+      const states = await read(params);
+      if (!released && params.threadIds.includes("owner")) {
+        released = true;
+        fixture.overlays.set("owner", { backend: "codex", threadId: "owner", extraLinkedDirectories: [] });
+        await publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["owner"] } });
+      }
+      return states;
+    });
+    const completed = new Promise<AgentEvent>((resolve) => fixture.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.cleanup.some((item) => item.removedWorktree)) resolve(event);
+    }));
+    await drivePacer(fixture.registry, Promise.all([fixture.registry.archiveThread({ backend: "codex", threadId: "target" }), completed]));
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+    expect(fixture.client.archiveThread).toHaveBeenCalledOnce();
+  });
+
   it.each(["provider", "overlay"] as const)("retains pending ownership when the final-release %s read fails", async (read) => {
     vi.useFakeTimers();
     const directory = { id: "shared", kind: "worktree" as const, label: "shared", path: "/contrived/repo", worktreePath: "/contrived/worktree" };

@@ -17050,6 +17050,7 @@ export class DesktopBackendRegistry {
         continue;
       }
       await Promise.allSettled(remaining.splice(0, room).map((intent) => {
+        this.archiveWorktreeReferences.scheduled(intent);
         const completion = this.enqueueArchiveCleanup(intent, true);
         return this.observeArchiveCleanupCompletion(completion, { ...intent, backgroundCleanup: true });
       }));

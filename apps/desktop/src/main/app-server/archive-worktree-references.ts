@@ -5,6 +5,8 @@ import type { ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 
 export type DeferredArchiveWorktree = NonNullable<ArchiveCleanupIntent["deferredWorktrees"]>[number];
 
+type PendingWorktree = DeferredArchiveWorktree & { phase: "waiting" | "ready" | "checking" | "retry" };
+
 /** Resolve aliases, including a missing checkout under an existing symlinked
  * root. Each observation owns its cache; directory mutations renew evidence. */
 export function canonicalWorktreePaths(): (value: string) => Promise<string> {
@@ -33,10 +35,9 @@ export function canonicalWorktreePaths(): (value: string) => Promise<string> {
  * The reverse index makes unrelated activity a no-op. A ready entry is merely
  * a scheduling hint; the physical queue still obtains fresh removal admission. */
 export class ArchiveWorktreeReferences {
-  private readonly owners = new Map<string, { intent: ArchiveCleanupIntent; worktrees: Map<string, DeferredArchiveWorktree> }>();
+  private readonly owners = new Map<string, { intent: ArchiveCleanupIntent; worktrees: Map<string, PendingWorktree> }>();
   private readonly watchers = new Map<string, Set<string>>();
   private readonly observations = new Map<string, number>();
-  private readonly eligible = new WeakSet<DeferredArchiveWorktree>();
 
   hasReference(key: string): boolean { return this.watchers.has(key); }
 
@@ -44,8 +45,8 @@ export class ArchiveWorktreeReferences {
     for (const blocker of worktree.blockers) if (this.observations.has(blocker)) this.beginObservation(blocker);
     const canonical = await canonicalWorktreePaths()(worktree.worktreePath).catch(() => path.resolve(worktree.worktreePath));
     const key = buildThreadIdentityKey(intent.backend, intent.threadId);
-    const owner = this.owners.get(key) ?? { intent, worktrees: new Map<string, DeferredArchiveWorktree>() };
-    owner.worktrees.set(canonical, { ...worktree, blockers: [...new Set(worktree.blockers)] });
+    const owner = this.owners.get(key) ?? { intent, worktrees: new Map<string, PendingWorktree>() };
+    owner.worktrees.set(canonical, { ...worktree, blockers: [...new Set(worktree.blockers)], phase: worktree.blockers.length ? "waiting" : "retry" });
     this.owners.set(key, owner);
     this.reindex();
   }
@@ -62,13 +63,16 @@ export class ArchiveWorktreeReferences {
   forgetOwner(key: string): void { this.owners.delete(key); this.reindex(); }
 
   intents(): ArchiveCleanupIntent[] {
-    return [...this.owners.values()].map(({ intent, worktrees }) => ({ ...intent, deferredWorktrees: [...worktrees.values()] }));
+    return [...this.owners.values()].map(({ intent, worktrees }) => ({ ...intent, deferredWorktrees: [...worktrees.values()].map((row) => this.record(row)) }));
   }
 
   recoveryIntents(): ArchiveCleanupIntent[] { return this.selectOwners([...this.owners.keys()], false); }
   readyIntents(key: string): ArchiveCleanupIntent[] { return this.selectOwners([key], true); }
   scheduled(intent: ArchiveCleanupIntent): void {
-    for (const row of intent.deferredWorktrees ?? []) this.eligible.delete(row);
+    const owner = this.owners.get(buildThreadIdentityKey(intent.backend, intent.threadId));
+    for (const row of intent.deferredWorktrees ?? []) for (const current of owner?.worktrees.values() ?? []) {
+      if (row.worktreePath === current.worktreePath) current.phase = "checking";
+    }
   }
   pending(intent: ArchiveCleanupIntent): DeferredArchiveWorktree[] {
     const owner = this.owners.get(buildThreadIdentityKey(intent.backend, intent.threadId));
@@ -98,7 +102,7 @@ export class ArchiveWorktreeReferences {
         if (observed.some((value) => value === checkout || value.startsWith(checkout + path.sep))) continue;
         const owned = worktree.blockers.includes(key);
         worktree.blockers = worktree.blockers.filter((blocker) => blocker !== key);
-        if (owned && !worktree.blockers.length) this.eligible.add(worktree);
+        if (owned && !worktree.blockers.length) worktree.phase = "ready";
       }
     }
     this.reindex();
@@ -113,13 +117,18 @@ export class ArchiveWorktreeReferences {
       if (!owner) continue;
       const worktrees: DeferredArchiveWorktree[] = [];
       for (const [checkout, worktree] of owner.worktrees) {
-        if (selected.has(checkout) || (readyOnly && (!this.eligible.has(worktree) || worktree.blockers.length))) continue;
+        if (selected.has(checkout) || (readyOnly && (worktree.phase !== "ready" || worktree.blockers.length))) continue;
         selected.add(checkout);
-        worktrees.push(worktree);
+        worktrees.push(this.record(worktree));
       }
       if (worktrees.length) requests.push({ ...owner.intent, deferredWorktrees: worktrees });
     }
     return requests;
+  }
+
+  private record(worktree: PendingWorktree): DeferredArchiveWorktree {
+    const { phase: _phase, ...record } = worktree;
+    return record;
   }
 
   private reindex(): void {
