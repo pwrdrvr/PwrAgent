@@ -201,6 +201,33 @@ describe("a thread that is still starting", () => {
     expect(screen.queryByRole("list", { name: "Starting threads" })).not.toBeInTheDocument();
   });
 
+  it("starts a peer's thread in the placeholder project its row lands in", () => {
+    // No project here answers to PwrRoute, so main will add a placeholder
+    // project when the thread lands. The starting row draws it first.
+    const peerPath = "/Users/peer-user/github/PwrRoute";
+    const starting = creation({
+      directoryKey: `directory:${peerPath}`,
+      directoryLabel: "PwrRoute",
+      target: { scope: "remote", instanceId: "pwr_peer" },
+      launchpad: {
+        ...creation().launchpad,
+        directoryKey: `directory:${peerPath}`,
+        directoryLabel: "PwrRoute",
+        directoryPath: peerPath,
+      },
+    });
+    renderSidebar({
+      browseMode: "directories",
+      threads: [],
+      creations: [starting],
+      selectedItemKey: starting.selectionKey,
+    });
+
+    expect(screen.getByRole("list", { name: "Threads in PwrRoute" }))
+      .toContainElement(screen.getByRole("button", { name: "Add a crop tool, starting in PwrRoute" }));
+    expect(screen.queryByRole("list", { name: "Starting threads" })).not.toBeInTheDocument();
+  });
+
   it("still shows the first thread starting before any project is indexed", () => {
     // An empty index is when navigation shows Directories in place of the
     // thread lenses, so the operator's first thread has to surface here.

@@ -1,6 +1,5 @@
-import path from "node:path";
-import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey,
-  findRemoteHomeDirectoryIndex, remoteLinkedDirectoriesByHomePreference } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey,
+  findRemoteHomeDirectoryIndex, remoteThreadPlaceholderDirectory } from "@pwragent/shared";
 import type { FederationRemoteTarget, NavigationDirectorySummary, NavigationIdentity,
   NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
@@ -51,46 +50,6 @@ export function loadViewerWatchedNavigationRows(
 export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: readonly NavigationThreadSummary[]): NavigationQueryIndex {
   return { ...index, directories: attachRemoteThreadsToLocalDirectories(index.directories, [...pins]),
     threads: [...index.threads, ...pins] };
-}
-
-function remoteDirectoryPlaceholder(
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
-): NavigationDirectorySummary | undefined {
-  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
-  if (!home) {
-    return undefined;
-  }
-  const descriptor = classifyDirectory(home);
-  if (descriptor.kind === "workspace") {
-    // Never expose a peer path as a launchable local directory. All remote
-    // scratch mounts share this group until a local Workspaces row exists.
-    return {
-      key: "unconfigured-workspace",
-      kind: "workspace",
-      label: descriptor.label,
-      localAvailability: "unconfigured",
-      threadKeys: [],
-      needsAttentionCount: 0,
-    };
-  }
-  const label = home.label.trim() || path.basename(home.path).trim();
-  if (!label) {
-    return undefined;
-  }
-
-  // The key stays name-based so existing rows keep their grouping. The
-  // owner's repository identity rides along, so the row's New chat menu
-  // matches peers by origin rather than by folder name alone.
-  return {
-    key: `unconfigured-directory:${encodeURIComponent(label.toLowerCase())}`,
-    kind: "directory",
-    label,
-    localAvailability: "unconfigured",
-    ...(home.repositoryKey ? { repositoryKey: home.repositoryKey } : {}),
-    ...(home.repositoryKeys?.length ? { repositoryKeys: [...home.repositoryKeys] } : {}),
-    threadKeys: [],
-    needsAttentionCount: 0,
-  };
 }
 
 /**
@@ -166,7 +125,7 @@ export function attachRemoteThreadsToLocalDirectories(
       thread,
     );
     if (homeIndex === undefined) {
-      const placeholder = remoteDirectoryPlaceholder(thread);
+      const placeholder = remoteThreadPlaceholderDirectory(thread);
       if (!placeholder) {
         continue;
       }
@@ -180,7 +139,7 @@ export function attachRemoteThreadsToLocalDirectories(
       // A later thread finds an earlier thread's placeholder by name. Only
       // its home project's identity belongs there: a secondary link's name
       // can match too, and the home repository is a different project.
-      const placeholder = remoteDirectoryPlaceholder(thread);
+      const placeholder = remoteThreadPlaceholderDirectory(thread);
       if (placeholder?.key === mergedDirectories[homeIndex]!.key) {
         mergedDirectories[homeIndex] = mergePlaceholderRepositories(mergedDirectories[homeIndex]!, placeholder);
       }

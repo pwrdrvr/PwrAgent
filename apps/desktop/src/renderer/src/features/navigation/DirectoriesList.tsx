@@ -97,7 +97,7 @@ import {
   selectUnlandedStartingThreads,
   type PendingSidebarRow,
 } from "./StartingThreadRow";
-import { startingThreadHomeDirectoryKey } from "./starting-thread-home";
+import { startingThreadHomeDirectoryKey, withStartingPlaceholderDirectories } from "./starting-thread-home";
 import { PendingThreadRow } from "./SubthreadDraftRow";
 import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
 import { jumpScrollPlan, jumpTailIsOffscreen } from "./project-index";
@@ -489,18 +489,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
    * (having no threads) it would be offered the "Remove Directory" action — which
    * would delete the overlay row of the sub-thread being composed.
    */
+  const windowFederationTarget = useMemo(readRendererFederationTarget, []);
+  // A peer's thread whose project has no row here lands in a placeholder
+  // project that main adds when the thread arrives. Draw that row while the
+  // thread starts, so the starting row is already where the thread lands.
   const visibleDirectories = useMemo(
     () =>
-      props.directories.filter(
-        (directory) => !isSubthreadLaunchpadKey(directory.key),
+      withStartingPlaceholderDirectories(
+        props.directories.filter(
+          (directory) => !isSubthreadLaunchpadKey(directory.key),
+        ),
+        props.startingThreads,
+        windowFederationTarget,
       ),
-    [props.directories],
+    [props.directories, props.startingThreads, windowFederationTarget],
   );
   // The projects a starting thread will render in: the row its thread lands
   // in. For a peer's thread that is the local project main files it under.
   // A sub-thread launchpad's own key names no project; its thread lands
   // under the parent's row.
-  const windowFederationTarget = useMemo(readRendererFederationTarget, []);
   // Resolved once per list change: every directory row asks for each one.
   const startingHomeKeys = useMemo(
     () => new Map((props.startingThreads ?? []).map((creation) => [

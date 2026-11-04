@@ -8,20 +8,27 @@ import {
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { attachRemoteThreadsToLocalDirectories } from "../app-server/navigation-viewer-pins";
-import { startingThreadHomeDirectoryKey } from "../../renderer/src/features/navigation/starting-thread-home";
+import {
+  startingThreadHomeDirectoryKey,
+  withStartingPlaceholderDirectories,
+} from "../../renderer/src/features/navigation/starting-thread-home";
 
 /*
  * The rule a starting row promises:
  *
  *   A thread started on a peer from this machine's window renders its
- *   starting row in the project group its thread's row will land in. When
- *   the thread arrives nothing moves. Only when no group here will take the
- *   thread does the row wait above the projects.
+ *   starting row in the project group its thread's row will land in, and
+ *   nothing moves when the thread arrives. That includes the placeholder
+ *   project main adds for a peer project with no row here: the starting row
+ *   draws it first.
  *
  * The oracle is main: `attachRemoteThreadsToLocalDirectories` files the
- * landed thread, and the group it picks is the right answer. The renderer
- * sees the list main sent before the thread landed, in whatever order it
- * rendered it, so the generated list is shuffled before the renderer reads it.
+ * landed thread, and the group it picks is the right answer. The landed
+ * thread is what the owner reports: the launchpad's directory, then each
+ * `@`-referenced directory attached after it, with the working directory as
+ * `projectKey` from Codex and none from Claude or ACP. The renderer sees the
+ * list main sent before the thread landed, in whatever order it rendered it,
+ * so the generated list is shuffled before the renderer reads it.
  */
 
 const PEER = "pwr_peer";
@@ -36,6 +43,8 @@ const PEER_PARENTS = [
   "C:\\src",
   // The same home layout on both machines: a peer key can equal a local one.
   "/Users/me/github",
+  // A tool-managed worktree, which home preference puts last.
+  "/Users/peer/.codex/worktrees/cd34",
 ] as const;
 const LOCAL_WORKSPACE_ROOT = "/Users/me/.pwragent/profiles/default/projects";
 const PEER_WORKSPACE_ROOT = "/Users/peer/.pwragent/profiles/default/projects";
@@ -45,7 +54,15 @@ type PeerProject = {
   label: string;
   path: string;
   workMode: "local" | "worktree";
+  backend: "codex" | "claude";
+  extraPaths: string[];
 };
+
+const peerPath = fc
+  .record({ folder: fc.constantFrom(...NAMES), parent: fc.constantFrom(...PEER_PARENTS) })
+  .map(({ folder, parent }) => parent.includes("\\") ? `${parent}\\${folder}` : `${parent}/${folder}`);
+const backend = fc.constantFrom("codex" as const, "claude" as const);
+const extraPaths = fc.array(peerPath, { maxLength: 2 });
 
 const localDirectory = fc
   .record({
@@ -81,45 +98,54 @@ const localDirectories = fc
 const peerProject: fc.Arbitrary<PeerProject> = fc.oneof(
   fc
     .record({
-      folder: fc.constantFrom(...NAMES),
       label: fc.constantFrom(...NAMES),
-      parent: fc.constantFrom(...PEER_PARENTS),
+      path: peerPath,
       workMode: fc.constantFrom("local" as const, "worktree" as const),
+      backend,
+      extraPaths,
     })
-    .map(({ folder, label, parent, workMode }) => ({
-      kind: "directory" as const,
-      label,
-      path: parent.includes("\\") ? `${parent}\\${folder}` : `${parent}/${folder}`,
-      workMode,
+    .map((project) => ({ kind: "directory" as const, ...project })),
+  fc
+    .record({ backend, extraPaths })
+    .map((project) => ({
+      kind: "workspace" as const,
+      label: "Workspaces",
+      path: PEER_WORKSPACE_ROOT,
+      workMode: "local" as const,
+      ...project,
     })),
-  fc.constant({
-    kind: "workspace" as const,
-    label: "Workspaces",
-    path: PEER_WORKSPACE_ROOT,
-    workMode: "local" as const,
-  }),
 );
 
 /** What the owner reports for a thread started from `project`'s launchpad. */
-function landedThread(project: PeerProject, threadId: string, withProjectKey: boolean): NavigationThreadSummary {
-  const linked: LinkedDirectorySummary = project.kind === "workspace"
+function landedThread(project: PeerProject, threadId: string): NavigationThreadSummary {
+  const worktreePath = `/Users/peer/.pwragent/worktrees/${threadId}/${project.label}`;
+  const launchpadDirectory: LinkedDirectorySummary = project.kind === "workspace"
     ? { id: threadId, kind: "local", label: threadId, path: `${PEER_WORKSPACE_ROOT}/${threadId}` }
     : project.workMode === "worktree"
-      ? {
-        id: threadId,
-        kind: "worktree",
-        label: project.label,
-        path: project.path,
-        worktreePath: `/Users/peer/.pwragent/worktrees/${threadId}/${project.label}`,
-      }
+      ? { id: threadId, kind: "worktree", label: project.label, path: project.path, worktreePath }
       : { id: threadId, kind: "local", label: project.label, path: project.path };
+  const linkedDirectories = [launchpadDirectory];
+  for (const extra of project.extraPaths) {
+    if (linkedDirectories.some((linked) => linked.path === extra)) continue;
+    linkedDirectories.push({
+      id: `${threadId}-${extra}`,
+      kind: "local",
+      label: extra.split(/[\\/]/).filter(Boolean).pop()!,
+      path: extra,
+    });
+  }
+  // The registry records the working directory as `projectKey`. Codex keeps
+  // reporting it; Claude and ACP summaries carry none.
+  const cwd = project.kind === "workspace"
+    ? launchpadDirectory.path
+    : project.workMode === "worktree" ? worktreePath : project.path;
   return {
     id: threadId,
-    source: "codex",
-    linkedDirectories: [linked],
-    ...(withProjectKey && project.kind === "directory" ? { projectKey: project.path } : {}),
+    source: project.backend,
+    linkedDirectories,
+    ...(project.backend === "codex" ? { projectKey: cwd } : {}),
     federation: {
-      ref: buildFederatedThreadRef({ backend: "codex", instanceId: PEER, threadId }),
+      ref: buildFederatedThreadRef({ backend: project.backend, instanceId: PEER, threadId }),
       instanceLabel: "Peer",
     },
   } as unknown as NavigationThreadSummary;
@@ -139,28 +165,25 @@ describe("starting row placement for a peer's thread", () => {
         localDirectories,
         fc.array(peerProject, { maxLength: 3 }),
         peerProject,
-        fc.boolean(),
         fc.array(fc.integer(), { minLength: 12, maxLength: 12 }),
-        (local, otherProjects, project, withProjectKey, order) => {
-          const others = otherProjects.map((other, index) => landedThread(other, `other-${index}`, withProjectKey));
+        (local, otherProjects, project, order) => {
+          const others = otherProjects.map((other, index) => landedThread(other, `other-${index}`));
           // The list the window has while the thread starts.
           const before = attachRemoteThreadsToLocalDirectories(local, others);
-          const thread = landedThread(project, "started", withProjectKey);
+          const thread = landedThread(project, "started");
           const after = attachRemoteThreadsToLocalDirectories(local, [...others, thread]);
           const threadKey = federatedThreadIdentityKey(thread.federation!.ref);
           const landedIn = after.find((directory) => directory.threadKeys.includes(threadKey))?.key;
-          const expected = before.some((directory) => directory.key === landedIn) ? landedIn : undefined;
 
-          const placed = startingThreadHomeDirectoryKey(
-            {
-              directoryKey: `${project.kind}:${project.path}`,
-              directoryLabel: project.label,
-              launchpad: { directoryKind: project.kind, directoryPath: project.path },
-              target: { scope: "remote", instanceId: PEER },
-            },
-            shuffled(before, order),
-          );
-          expect(placed).toBe(expected);
+          const creation = {
+            directoryKey: `${project.kind}:${project.path}`,
+            directoryLabel: project.label,
+            launchpad: { backend: project.backend, directoryPath: project.path },
+            extraDirectoryPaths: project.extraPaths,
+            target: { scope: "remote" as const, instanceId: PEER },
+          };
+          const rendered = withStartingPlaceholderDirectories(shuffled(before, order), [creation], undefined);
+          expect(startingThreadHomeDirectoryKey(creation, rendered)).toBe(landedIn);
         },
       ),
       { numRuns: 2_000 },
@@ -183,7 +206,7 @@ describe("starting row placement for a peer's thread", () => {
       {
         directoryKey: peerDirectory.key,
         directoryLabel: "PwrAgnt",
-        launchpad: { directoryKind: "directory", directoryPath: peerDirectory.path },
+        launchpad: { backend: "codex", directoryPath: peerDirectory.path },
         target: { scope: "remote", instanceId: PEER },
       },
       [sameName, peerDirectory],

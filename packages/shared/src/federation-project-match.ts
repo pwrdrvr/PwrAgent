@@ -1,4 +1,4 @@
-import type { DirectorySummaryKind, NavigationThreadSummary } from "./contracts/navigation";
+import type { DirectorySummaryKind, NavigationDirectorySummary, NavigationThreadSummary } from "./contracts/navigation";
 import type { LinkedDirectorySummary } from "./contracts/normalized-app-server";
 import { classifyDirectory, orderByHomePreference } from "./directory-navigation";
 import { isToolManagedWorktreePath } from "./worktree-paths";
@@ -178,6 +178,52 @@ export type RemoteHomeCandidate = {
   localAvailability?: "unconfigured";
 };
 
+/**
+ * The placeholder project main adds for a remote thread whose project has no
+ * local row, so the Directories lens still shows it until Add Directory
+ * registers a matching checkout. The renderer draws the same row under a
+ * peer's starting thread, so the thread lands where it started.
+ */
+export function remoteThreadPlaceholderDirectory(
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+): NavigationDirectorySummary | undefined {
+  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
+  if (!home) {
+    return undefined;
+  }
+  const descriptor = classifyDirectory(home);
+  if (descriptor.kind === "workspace") {
+    // Never expose a peer path as a launchable local directory. All remote
+    // scratch mounts share this group until a local Workspaces row exists.
+    return {
+      key: "unconfigured-workspace",
+      kind: "workspace",
+      label: descriptor.label,
+      localAvailability: "unconfigured",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+  }
+  const label = home.label.trim() || (home.path.split(/[\\/]/).filter(Boolean).pop() ?? "").trim();
+  if (!label) {
+    return undefined;
+  }
+
+  // The key stays name-based so existing rows keep their grouping. The
+  // owner's repository identity rides along, so the row's New chat menu
+  // matches peers by origin rather than by folder name alone.
+  return {
+    key: `unconfigured-directory:${encodeURIComponent(label.toLowerCase())}`,
+    kind: "directory",
+    label,
+    localAvailability: "unconfigured",
+    ...(home.repositoryKey ? { repositoryKey: home.repositoryKey } : {}),
+    ...(home.repositoryKeys?.length ? { repositoryKeys: [...home.repositoryKeys] } : {}),
+    threadKeys: [],
+    needsAttentionCount: 0,
+  };
+}
+
 // Below zero when `a` is the better home for a thread named `name`: a
 // configured row before a placeholder, a checkout before a tool-managed
 // worktree folder, a label match before a folder-name match, then by key.
@@ -196,7 +242,7 @@ function compareHomeCandidates(a: RemoteHomeCandidate, b: RemoteHomeCandidate, n
 }
 
 /** A remote thread's linked directories, home first. */
-export function remoteLinkedDirectoriesByHomePreference(
+function remoteLinkedDirectoriesByHomePreference(
   thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
 ): LinkedDirectorySummary[] {
   const linkedDirectories = thread.linkedDirectories ?? [];
