@@ -12,6 +12,8 @@ import {
   deriveReviewState,
   findFailedCheckUrl,
   hasChecksStillRunning,
+  hasWorkflowRunsStillRunning,
+  isSkippedOnlyCheckSetSettling,
   normalizeCommitShas,
   parsePullRequestProvider,
 } from "./pr-derivations";
@@ -48,6 +50,12 @@ const graphqlLog = getMainLogger("pwragent:pr-graphql");
 
 /** How many aliased PR lookups go into one GraphQL request. */
 const DEFAULT_BATCH_SIZE = 40;
+/**
+ * Check suites read per head commit. A commit carries one suite per workflow
+ * run plus one per installed checks app; PwrAgent's own heads carry at most 9.
+ */
+const CHECK_SUITE_PAGE_SIZE = 50;
+
 /** GitHub's maximum page size for status check contexts. */
 const STATUS_CONTEXT_PAGE_SIZE = 100;
 /** Retries per request before giving up on a batch. */
@@ -199,7 +207,9 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
  * checks still run. Failed destinations are retained for the auto-fix card;
  * names and output remain deliberately excluded.
  * Later pages are fetched only when this page cannot already prove a check is
- * running.
+ * running. `checkSuites` shows a workflow run that has no check runs yet, and
+ * `completedAt` dates a head whose every check was skipped; see
+ * `mapGraphqlPrNode`.
  *
  * The diff/commit/timestamp block feeding the chip hover card is free: GitHub
  * prices GraphQL by connection, so plain scalars add no rate-limit points, and
@@ -239,10 +249,13 @@ fragment PrStatus on PullRequest {
             pageInfo { hasNextPage endCursor }
             nodes {
               __typename
-              ... on CheckRun { conclusion detailsUrl status }
+              ... on CheckRun { conclusion detailsUrl status completedAt }
               ... on StatusContext { state targetUrl }
             }
           }
+        }
+        checkSuites(first: ${CHECK_SUITE_PAGE_SIZE}) {
+          nodes { status workflowRun { id } }
         }
       }
     }
@@ -252,6 +265,7 @@ fragment PrStatus on PullRequest {
 type GraphqlCheckContext = {
   __typename?: string;
   conclusion?: string | null;
+  completedAt?: string | null;
   detailsUrl?: string | null;
   status?: string | null;
   state?: string | null;
@@ -277,6 +291,12 @@ type GraphqlCommit = {
   statusCheckRollup?: {
     state?: string | null;
     contexts?: GraphqlStatusContextPage | null;
+  } | null;
+  checkSuites?: {
+    nodes?: ({
+      status?: string | null;
+      workflowRun?: { id?: string | null } | null;
+    } | null)[] | null;
   } | null;
 };
 
@@ -577,26 +597,37 @@ const REPOSITORY_NAME_TOKEN_RETRY_MS = 60_000;
 export function mapGraphqlPrNode(
   node: GraphqlPrNode,
   checkResolution?: PrCheckResolution,
+  now = Date.now(),
 ): PrSummary {
   const headCommit = getHeadCommit(node);
   const checkContexts = headCommit?.statusCheckRollup?.contexts?.nodes ?? [];
-  const checkState = deriveChipStateFromRollup(
+  const contexts = checkContexts.filter(
+    (context): context is GraphqlCheckContext => context !== null,
+  );
+  // GitHub's rollup only sees check runs that exist. It reports SUCCESS for a
+  // head whose every job was skipped, and for one whose real workflow is still
+  // queued with no jobs yet. Neither has tested anything.
+  const workflowsPending = hasWorkflowRunsStillRunning(
+    (headCommit?.checkSuites?.nodes ?? []).filter((suite) => suite !== null),
+  );
+  const skippedOnlySettling =
+    headCommit?.statusCheckRollup?.contexts?.pageInfo?.hasNextPage !== true
+    && isSkippedOnlyCheckSetSettling(contexts, now);
+  const rollupCheckState = deriveChipStateFromRollup(
     headCommit?.statusCheckRollup?.state,
   );
+  const checkState =
+    (workflowsPending && (rollupCheckState === "passing" || rollupCheckState === "unknown"))
+    || (skippedOnlySettling && rollupCheckState === "passing")
+      ? "pending"
+      : rollupCheckState;
   const checksStillRunning =
-    checkResolution?.checksStillRunning
-    ?? hasChecksStillRunning(
-      checkContexts.filter(
-        (context): context is GraphqlCheckContext => context !== null,
-      ),
-    );
+    (checkResolution?.checksStillRunning ?? hasChecksStillRunning(contexts))
+    || workflowsPending
+    || skippedOnlySettling;
   const failedCheckUrl =
     checkResolution?.failedCheckUrl
-    ?? findFailedCheckUrl(
-      checkContexts.filter(
-        (context): context is GraphqlCheckContext => context !== null,
-      ),
-    );
+    ?? findFailedCheckUrl(contexts);
   // `mergeStateStatus` is deliberately absent: GraphQL gates it behind a preview
   // Accept header, and `mergeable` alone already answers mergeable/conflicting.
   const shaped = {
@@ -1133,7 +1164,9 @@ export class GithubGraphqlPrClient {
         }
         results.set(
           params.keyFor(ref),
-          nodes.map((node) => mapGraphqlPrNode(node, checkResolutions.get(node)!)),
+          nodes.map((node) =>
+            mapGraphqlPrNode(node, checkResolutions.get(node)!, this.now())
+          ),
         );
       });
     }
@@ -1410,7 +1443,7 @@ export class GithubGraphqlPrClient {
         incompleteContexts += 1;
         return;
       }
-      prs.push(mapGraphqlPrNode(node, checkResolutions.get(node)!));
+      prs.push(mapGraphqlPrNode(node, checkResolutions.get(node)!, this.now()));
     });
 
     if (dropped > 0 || incompleteContexts > 0) {

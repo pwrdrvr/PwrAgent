@@ -48,12 +48,30 @@ export type GhPrPayload = {
 export type GhCheckRunPayload = {
   __typename?: string;
   conclusion?: string | null;
+  /** ISO-8601; check runs only. */
+  completedAt?: string | null;
   detailsUrl?: string | null;
   status?: string | null;
   state?: string | null;
   name?: string;
   targetUrl?: string | null;
 };
+
+/** A head commit's check suite, as the GraphQL poller reads it. */
+export type GhCheckSuitePayload = {
+  status?: string | null;
+  /** Present only for a GitHub Actions workflow run. */
+  workflowRun?: { id?: string | null } | null;
+};
+
+/**
+ * How long a head whose every check was skipped keeps counting as still
+ * running, measured from the newest skipped check's completion.
+ */
+export const SKIPPED_ONLY_CHECKS_SETTLE_MS = 2 * 60_000;
+
+/** Conclusions that report no test result: the check did not judge the head. */
+const NO_RESULT_CHECK_CONCLUSIONS = new Set(["SKIPPED", "NEUTRAL", "STALE"]);
 
 const FAILING_CHECK_CONCLUSIONS = new Set([
   "FAILURE",
@@ -207,6 +225,53 @@ export function hasChecksStillRunning(
   checks: readonly GhCheckRunPayload[],
 ): boolean {
   return checks.some(isCheckStillRunning);
+}
+
+/**
+ * True while a GitHub Actions workflow run on the head commit has not
+ * finished. A run waiting on a concurrency group has a check suite but no
+ * check runs yet, so the status rollup cannot see it and reports SUCCESS for
+ * whatever finished first (pwrdrvr/PwrAgent#3346: three skipped jobs).
+ *
+ * Suites without a workflow run are ignored. GitHub creates a suite for every
+ * installed app with checks access on each push, and an app that never
+ * reports (the Claude app, here) leaves its suite QUEUED forever.
+ */
+export function hasWorkflowRunsStillRunning(
+  suites: readonly GhCheckSuitePayload[],
+): boolean {
+  return suites.some((suite) => {
+    const status = suite.status?.trim();
+    return Boolean(suite.workflowRun && status && status !== "COMPLETED");
+  });
+}
+
+/**
+ * True when every check on the head was skipped or neutral and the newest
+ * finished less than `SKIPPED_ONLY_CHECKS_SETTLE_MS` before `now`. A skipped
+ * job tests nothing, and the workflow that does may not have registered yet.
+ * After the settle window the head counts as passing, so a PR whose
+ * workflows are all filtered out still resolves.
+ */
+export function isSkippedOnlyCheckSetSettling(
+  checks: readonly GhCheckRunPayload[],
+  now: number,
+): boolean {
+  let newestCompletedAt: number | undefined;
+  for (const check of checks) {
+    const conclusion = check.conclusion?.trim();
+    // A commit status (`state`) is a reported result, never a skip.
+    if (check.state || !conclusion || !NO_RESULT_CHECK_CONCLUSIONS.has(conclusion)) {
+      return false;
+    }
+    const completedAt = Date.parse(check.completedAt ?? "");
+    if (Number.isFinite(completedAt)) {
+      newestCompletedAt = Math.max(newestCompletedAt ?? completedAt, completedAt);
+    }
+  }
+  // No checks, or no completion time to measure from: nothing to wait out.
+  return newestCompletedAt !== undefined
+    && now - newestCompletedAt < SKIPPED_ONLY_CHECKS_SETTLE_MS;
 }
 
 /** Return the first safe destination attached to a failed check or status. */
