@@ -297,10 +297,13 @@ function unnamedGitHubRepositories(repos: GitHubRepoRef[]): GitHubRepoRef[] {
 function readStoredDiscoveryContext(cwd: string): Promise<StoredDiscoveryContext> {
   const cached = storedDiscoveryContexts.get(cwd);
   if (cached && cached.expiresAt > Date.now()) return cached.pending;
-  const pending = Promise.all([
-    resolveForgeReposForDirectory(cwd),
-    readDefaultBranchInfo(cwd),
-  ]).then(([repos, defaults]) => {
+  const pending = resolveForgeReposForDirectory(cwd).then(async (repos) => {
+    // An inconclusive repository identity keeps the attachment. Reading its
+    // default branch cannot change that decision, and missing/local-only
+    // paths would otherwise repeat Git probes on every navigation read.
+    const defaults = repos.length > 0
+      ? await readDefaultBranchInfo(cwd)
+      : { defaultsByRemote: new Map<string, string>(), names: new Set<string>(), remotes: new Set<string>() };
     // Failed metadata probes are inconclusive, and must be retried rather
     // than extend the lifetime of a known-invalid attachment.
     if ((repos.length === 0 || defaults.remotes.size === 0)
@@ -332,6 +335,7 @@ async function readTrackedRemoteBranch(params: {
         `refs/heads/${params.localBranch}`,
       ],
       {
+        purpose: "pr-discovery",
         env: buildPwrAgentChildProcessEnv(process.env),
         maxBuffer: 64 * 1024,
         timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
@@ -385,6 +389,7 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
   remotes: Set<string>;
 }> {
   const { stdout } = await runGitCommand(cwd, ["remote"], {
+    purpose: "pr-discovery",
     env: buildPwrAgentChildProcessEnv(process.env),
     maxBuffer: 64 * 1024,
     timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
@@ -417,17 +422,13 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
 async function readFallbackDefaultBranchName(
   cwd: string,
 ): Promise<string | undefined> {
-  for (const branch of FALLBACK_DEFAULT_BRANCHES) {
-    const localBranch = await readGitLine(cwd, [
-      "for-each-ref",
-      "--format=%(refname:short)",
-      `refs/heads/${branch}`,
-    ]);
-    if (localBranch === branch) {
-      return branch;
-    }
-  }
-  return undefined;
+  const refs = await readGitLine(cwd, [
+    "for-each-ref",
+    "--format=%(refname)",
+    ...FALLBACK_DEFAULT_BRANCHES.map((branch) => `refs/heads/${branch}`),
+  ]);
+  const names = new Set(refs?.split(/\r?\n/));
+  return FALLBACK_DEFAULT_BRANCHES.find((branch) => names.has(`refs/heads/${branch}`));
 }
 
 async function readGitLine(
@@ -436,6 +437,7 @@ async function readGitLine(
 ): Promise<string | undefined> {
   try {
     const { stdout } = await runGitCommand(cwd, args, {
+      purpose: "pr-discovery",
       env: buildPwrAgentChildProcessEnv(process.env),
       maxBuffer: 64 * 1024,
       timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,

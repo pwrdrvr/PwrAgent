@@ -24,6 +24,7 @@ import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { runGitCommand } from "./git-executable";
+import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 
 type GitCommandRunner = (
   cwd: string,
@@ -79,7 +80,7 @@ async function defaultRunGit(
   args: string[],
   env?: NodeJS.ProcessEnv,
 ): Promise<string> {
-  return (await runGitCommand(cwd, args, { env })).stdout.trim();
+  return (await runGitCommand(cwd, args, { env, purpose: "directory-status" })).stdout.trim();
 }
 
 function errorText(error: unknown): string {
@@ -876,6 +877,7 @@ export class GitDirectoryService {
     }
 
     this.statusCache.invalidate(normalizedPath);
+    gitSubprocessDiagnostics.observeRepository(normalizedPath);
     const commonGitDir = this.commonGitDirByCwd.get(normalizedPath);
     if (commonGitDir) {
       this.branchInventoryCache.delete(commonGitDir);
@@ -900,6 +902,8 @@ export class GitDirectoryService {
       env: gitEnv,
     });
     this.commonGitDirByCwd.set(cwd, commonGitDir);
+    gitSubprocessDiagnostics.observeRepository(cwd, commonGitDir);
+    gitSubprocessDiagnostics.observeRepository(repoRoot, commonGitDir);
 
     const [
       rawCurrentBranch,
