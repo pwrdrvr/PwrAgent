@@ -39,6 +39,7 @@ import {
   codexCatalogArbitrary,
   codexCatalogModels,
   expectedModelSelectSections,
+  selectSections,
 } from "../../../test/model-catalog";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { AppearanceController } from "../../../lib/useAppearance";
@@ -1044,18 +1045,8 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const select = screen.getByLabelText("OpenAI default model");
-    const labels = (parent: Element) =>
-      [...parent.children].filter((child) => child.tagName === "OPTION")
-        .map((option) => option.textContent);
-    expect(labels(select)).toEqual([
-      "Provider advertised default",
-      ...CURRENT_CODEX_MODEL_LABELS,
-    ]);
-    expect([...select.querySelectorAll("optgroup")].map((group) => ({
-      group: group.label,
-      labels: labels(group),
-    }))).toEqual([
+    expect(selectSections(screen.getByLabelText("OpenAI default model"))).toEqual([
+      { labels: ["Provider advertised default", ...CURRENT_CODEX_MODEL_LABELS] },
       { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
       { group: PROVIDER_MODEL.providerLabel, labels: [PROVIDER_MODEL.label] },
     ]);
@@ -1091,19 +1082,9 @@ describe("SettingsScreen", () => {
             onClose={() => undefined}
           />,
         );
-        const select = screen.getByLabelText("OpenAI default model");
-        const labels = (parent: Element) =>
-          [...parent.children].filter((child) => child.tagName === "OPTION")
-            .map((option) => option.textContent ?? "");
-        // A native select has no submenu: the first run of rows, then one optgroup per heading.
-        const shown = [
-          { labels: labels(select) },
-          ...[...select.querySelectorAll("optgroup")].map((group) => ({
-            group: group.label,
-            labels: labels(group),
-          })),
-        ];
-        expect(shown).toEqual(expectedModelSelectSections({
+        expect(
+          selectSections(screen.getByLabelText("OpenAI default model")),
+        ).toEqual(expectedModelSelectSections({
           kind: "codex",
           models,
           leading: ["Provider advertised default"],
@@ -1114,6 +1095,58 @@ describe("SettingsScreen", () => {
         cleanup();
       }
     }), { numRuns: 10 });
+  });
+
+  it("saves a chosen default model with that model's default reasoning", async () => {
+    const cachedBackends = [{
+      kind: "codex",
+      label: "OpenAI",
+      available: true,
+      methods: [],
+      capabilities: { createThread: true },
+      executionModes: [],
+      launchpadOptions: {
+        models: [{
+          id: "gpt-6-astra",
+          label: "GPT-6-Astra",
+          supportsReasoning: true,
+          reasoningEfforts: ["low", "medium", "high"],
+          defaultReasoningEffort: "medium",
+        }],
+      },
+    }] as unknown as BackendSummary[];
+    const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+      async () => ({ fetchedAt: 1, entries: [] }),
+    );
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        cachedBackends={cachedBackends}
+        desktopApi={{
+          listAcpAgents,
+          listBackends: async () => await new Promise<never>(() => undefined),
+        }}
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    chooseSelectOption(screen.getByLabelText("OpenAI default model"), "GPT-6-Astra");
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "gpt-6-astra",
+              reasoningEffortsByModel: { "gpt-6-astra": "medium" },
+            },
+          },
+        },
+      });
+    });
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+    await act(async () => undefined);
   });
 
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
@@ -1193,10 +1226,8 @@ describe("SettingsScreen", () => {
 
     expect(screen.getByText("1 discovered model")).toBeInTheDocument();
     expect(
-      within(screen.getByLabelText("OpenAI default model")).getByRole("option", {
-        name: "GPT-5.6-Sol",
-      }),
-    ).toBeInTheDocument();
+      selectOptionLabels(screen.getByLabelText("OpenAI default model")),
+    ).toContain("GPT-5.6-Sol");
     expect(screen.queryByText("No provider has reported a model catalog yet."))
       .not.toBeInTheDocument();
     await waitFor(() => {
@@ -4346,7 +4377,7 @@ describe("SettingsScreen", () => {
     );
 
     const reasoning = await screen.findByLabelText("Codex default reasoning");
-    fireEvent.change(reasoning, { target: { value: "xhigh" } });
+    chooseSelectOption(reasoning, "xhigh");
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {
