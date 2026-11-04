@@ -20,6 +20,13 @@ describe("model menu options", () => {
     expect(splitModelMenuOptions("codex", models)).toEqual({ primary: models, other: [] });
   });
 
+  // Shrunk from the picker properties, which found the review card and the
+  // automation editor listing GPT-5.5-Codex beside GPT-6-Astra.
+  it("moves a GPT-5.5 variant under Other once a GPT-6 model is offered", () => {
+    const models = [{ id: "gpt-6-astra" }, { id: "gpt-5.5-codex" }];
+    expect(splitModelMenuOptions("codex", models)).toEqual({ primary: [models[0]], other: [models[1]] });
+  });
+
   it("does not apply Codex grouping to custom providers or ACP models", () => {
     const models = [{ id: "gpt-6.1-terra", providerId: "local" }, { id: "gpt-6-sol", providerId: "local" }];
     expect(splitModelMenuOptions("codex", models)).toEqual({ primary: models, other: [] });

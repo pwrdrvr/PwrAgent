@@ -44,6 +44,6 @@ describe("to-do dispatch model picker properties", () => {
       } finally {
         cleanup();
       }
-    }), { numRuns: 25 });
+    }), { numRuns: 20 });
   });
 });

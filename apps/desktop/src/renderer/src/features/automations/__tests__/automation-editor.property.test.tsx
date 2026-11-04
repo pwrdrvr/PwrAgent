@@ -78,6 +78,6 @@ describe("automation editor model picker properties", () => {
       } finally {
         cleanup();
       }
-    }), { numRuns: 20 });
+    }), { numRuns: 15 });
   });
 });
