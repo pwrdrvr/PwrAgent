@@ -74,6 +74,7 @@ afterEach(() => {
     value: undefined,
   });
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 /**
@@ -10924,6 +10925,8 @@ describe("SettingsScreen", () => {
   });
 
   it("disables MCP mutations when the selected Codex profile changed after startup", async () => {
+    // Match the OS home that preload supplies for this fixture's Codex paths.
+    vi.stubGlobal("__pwragentHomeDir", "/home/example");
     const base = createSnapshot();
     const workCodexHome = "/home/example/.codex/profiles/work";
     const snapshot = createSnapshot({
