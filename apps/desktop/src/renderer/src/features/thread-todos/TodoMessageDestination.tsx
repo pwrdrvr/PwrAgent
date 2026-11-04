@@ -19,6 +19,14 @@ import { useThreadJumpSearch, type ThreadJumpSearchApi } from "../navigation/use
 import { ThreadChip } from "../thread-detail/ThreadChip";
 import { useTodoDispatchContext } from "./TodoDispatchProvider";
 import type { ThreadTodoLocalMachine } from "./thread-todos-view";
+import { addressableTodoDestinations, type TodoDestinationCandidate } from "./todo-destination-addressing";
+import {
+  activeDestinationIndex,
+  DESTINATION_CURSOR_START,
+  pointDestinationCursor,
+  settleDestinationCursor,
+  stepDestinationCursor,
+} from "./todo-destination-cursor";
 
 const NO_THREADS: readonly NavigationThreadSummary[] = [];
 
@@ -91,45 +99,6 @@ export function TodoMessageDestination(props: {
   );
 }
 
-type Candidate = { thread: NavigationThreadSummary; target: ThreadTodoMessageTarget };
-
-/**
- * The card's destination for a search result, relative to the card's owner,
- * or nothing when the card cannot address it: its own thread, or a thread on
- * this machine from a peer's card while this window does not know its own
- * machine id.
- */
-function destination(
-  thread: NavigationThreadSummary,
-  todo: ThreadTodo,
-  localMachine: ThreadTodoLocalMachine | undefined,
-): ThreadTodoMessageTarget | undefined {
-  const owner = todo.federationTarget?.instanceId;
-  const ref = thread.federation?.ref.target;
-  const resultIsRemote = ref?.scope === "remote";
-  const instanceId = ref?.scope === "remote" ? ref.instanceId : localMachine?.instanceId;
-  if (owner && !instanceId) return undefined;
-  const remote = instanceId !== owner && (owner !== undefined || resultIsRemote);
-  if (!remote && thread.source === todo.backend && thread.id === todo.threadId) return undefined;
-  return {
-    backend: thread.source, threadId: thread.id, title: thread.title,
-    ...(remote && instanceId ? { instanceId } : {}),
-    ...(thread.federation?.instanceLabel ? { instanceLabel: thread.federation.instanceLabel }
-      : localMachine?.label ? { instanceLabel: localMachine.label } : {}),
-  };
-}
-
-function addressable(
-  threads: readonly NavigationThreadSummary[],
-  todo: ThreadTodo,
-  localMachine: ThreadTodoLocalMachine | undefined,
-): Candidate[] {
-  return threads.flatMap((thread) => {
-    const target = destination(thread, todo, localMachine);
-    return target ? [{ thread, target }] : [];
-  });
-}
-
 /**
  * The jump palette's search (⌘K) inside the card: results as you type, the
  * palette's rows, and peers below "Other instances". Focus stays in the field;
@@ -149,10 +118,8 @@ function TodoDestinationPicker(props: {
   onPick: (target: ThreadTodoMessageTarget) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
-  // The row the operator chose with an arrow or the pointer. Rows can be
-  // replaced under it as searches answer, and Enter must still pick it.
-  const pickedKey = useRef<string | undefined>(undefined);
+  // Rows are replaced as searches answer; the cursor keeps the operator's row.
+  const [cursor, setCursor] = useState(DESTINATION_CURSOR_START);
   // Chromium re-runs hover when rows appear under a still pointer. Only a
   // move to new coordinates is the operator pointing at a row.
   const lastPointer = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -165,32 +132,31 @@ function TodoDestinationPicker(props: {
   const search = useThreadJumpSearch({ query, threads: props.threads, desktopApi: props.api });
 
   const localRows = useMemo(
-    () => addressable(search.results, props.todo, props.localMachine),
+    () => addressableTodoDestinations(search.results, props.todo, props.localMachine),
     [search.results, props.todo, props.localMachine],
   );
   const remoteRows = useMemo(
-    () => addressable(search.remoteRows, props.todo, props.localMachine),
+    () => addressableTodoDestinations(search.remoteRows, props.todo, props.localMachine),
     [search.remoteRows, props.todo, props.localMachine],
   );
   const rows = useMemo(() => [...localRows, ...remoteRows], [localRows, remoteRows]);
+  const rowKeys = useMemo(() => rows.map((row) => threadSummaryIdentityKey(row.thread)), [rows]);
+  // Read from the rows on screen, so the active row always exists.
+  const activeIndex = activeDestinationIndex(cursor, rowKeys);
 
   useEffect(() => {
     if (props.focusOnOpen) inputRef.current?.focus();
   }, [props.focusOnOpen]);
 
+  // Later rows start from where the highlight is now.
   useEffect(() => {
-    pickedKey.current = undefined;
-    setActiveIndex(0);
-  }, [query]);
+    setCursor((current) => settleDestinationCursor(current, rowKeys));
+  }, [rowKeys]);
 
-  useEffect(() => {
-    const picked = pickedKey.current;
-    const pickedIndex = picked === undefined
-      ? -1
-      : rows.findIndex((row) => threadSummaryIdentityKey(row.thread) === picked);
-    setActiveIndex((index) =>
-      pickedIndex >= 0 ? pickedIndex : rows.length === 0 ? 0 : Math.min(index, rows.length - 1));
-  }, [rows]);
+  const changeQuery = (next: string): void => {
+    setQuery(next);
+    setCursor(DESTINATION_CURSOR_START);
+  };
 
   useEffect(() => {
     const row = listRef.current?.querySelector(".jump-palette__row.is-active");
@@ -201,25 +167,19 @@ function TodoDestinationPicker(props: {
   // Escape cancels the change, or clears a field there is no change to cancel.
   useDismissableLayer({
     open: Boolean(props.onCancel) || query !== "",
-    onDismiss: () => props.onCancel ? props.onCancel() : setQuery(""),
+    onDismiss: () => props.onCancel ? props.onCancel() : changeQuery(""),
     surfaceRef,
     ...(props.triggerRef ? { triggerRef: props.triggerRef } : {}),
   });
-
-  const pickRow = (index: number): void => {
-    const row = rows[index];
-    pickedKey.current = row ? threadSummaryIdentityKey(row.thread) : undefined;
-    setActiveIndex(index);
-  };
 
   const pointAtRow = (event: ReactMouseEvent<HTMLButtonElement>, index: number): void => {
     const previous = lastPointer.current;
     lastPointer.current = { x: event.clientX, y: event.clientY };
     if (!previous || (previous.x === event.clientX && previous.y === event.clientY)) return;
-    if (index !== activeIndex) pickRow(index);
+    if (index !== activeIndex) setCursor(pointDestinationCursor(rowKeys, index));
   };
 
-  const choose = (row: Candidate | undefined): void => {
+  const choose = (row: TodoDestinationCandidate | undefined): void => {
     if (row && !props.disabled) props.onPick(row.target);
   };
 
@@ -227,9 +187,7 @@ function TodoDestinationPicker(props: {
     // The arrows wrap, so the bottom row is one ArrowUp away from the top.
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      if (rows.length === 0) return;
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      pickRow((activeIndex + step + rows.length) % rows.length);
+      setCursor(stepDestinationCursor(cursor, rowKeys, event.key === "ArrowDown" ? 1 : -1));
       return;
     }
     if (event.key === "Enter") {
@@ -269,7 +227,7 @@ function TodoDestinationPicker(props: {
           placeholder="Thread title, PR #, or branch"
           value={query}
           disabled={props.disabled}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => changeQuery(event.target.value)}
           onKeyDown={handleKeyDown}
         />
       </div>
