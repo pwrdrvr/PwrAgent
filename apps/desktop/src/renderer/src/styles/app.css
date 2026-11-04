@@ -46121,11 +46121,6 @@ button.composer__subthread-source-parent:hover {
   }
 }
 
-:root[data-motion="calm"] .thread-handoff-steps__step--now .thread-handoff-steps__mark {
-  animation: none;
-  border-color: var(--accent);
-}
-
 .workspace-handoff-dialog__actions {
   display: flex;
   flex-wrap: wrap;
@@ -48117,6 +48112,12 @@ button.composer__subthread-source-parent:hover {
     animation:
       pending-spinner-spin 0.8s linear 2,
       calm-motion-spinner-rest 0s 1.6s forwards;
+  }
+
+  :root[data-motion="calm"] .thread-handoff-steps__step--now .thread-handoff-steps__mark {
+    animation:
+      thread-handoff-step-spin 700ms linear 2,
+      calm-motion-spinner-rest 0s 1.4s forwards;
   }
 
   :root[data-motion="calm"] .missing-worktree-card--busy::before,
