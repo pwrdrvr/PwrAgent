@@ -4200,6 +4200,18 @@ function codexNativeSubAgentOutcome(
   return undefined;
 }
 
+/** The thread list's tray row for a stored native sub-agent card. */
+function nativeSubAgentRowFromCard(card: ThreadSubAgentSummary, threadId: string): CodexNativeSubAgentSummary {
+  return {
+    threadId,
+    title: card.task,
+    createdAt: card.createdAt,
+    updatedAt: card.updatedAt,
+    threadStatus: codexNativeSubAgentIsTerminal(card.status) ? "idle" : "active",
+    ...(card.agentName ? { agentNickname: card.agentName } : {}),
+  };
+}
+
 function codexNativeSubAgentIsTerminal(status: ThreadSubAgentSummary["status"]): boolean {
   return status === "success" || status === "failure" || status === "cancelled";
 }
@@ -26120,11 +26132,19 @@ export class DesktopBackendRegistry {
     }
 
     if (isClaudeNativeSubAgent(subAgent)) {
-      // Claude stops the task; its notification then settles the card.
-      await this.claudeBackend.stopBackgroundTask(
-        params.threadId,
-        subAgent.monitorId.slice(CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX.length),
-      );
+      const taskId = subAgent.monitorId.slice(CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX.length);
+      if (this.claudeBackend.runsTask(params.threadId, taskId)) {
+        // Claude stops the task; its notification then settles the card.
+        await this.claudeBackend.stopBackgroundTask(params.threadId, taskId);
+      } else {
+        // Claude's process is gone and the card missed its end. Nothing runs
+        // to stop, so end the card here rather than refuse forever.
+        await this.recordClaudeSubAgents({ threadId: params.threadId, subAgents: [{
+          monitorId: subAgent.monitorId, taskId, task: subAgent.task, status: "cancelled",
+          lastMessage: "Stopped by user.",
+          ...(subAgent.agentName ? { agentName: subAgent.agentName } : {}),
+        }] });
+      }
       return {
         backend: params.backend,
         threadId: params.threadId,
@@ -34219,14 +34239,7 @@ export class DesktopBackendRegistry {
       ) {
         continue;
       }
-      const agent: CodexNativeSubAgentSummary = {
-        threadId: card.monitorThreadId,
-        title: card.task,
-        createdAt: card.createdAt,
-        updatedAt: card.updatedAt,
-        threadStatus: codexNativeSubAgentIsTerminal(card.status) ? "idle" : "active",
-        agentNickname: card.agentName,
-      };
+      const agent = nativeSubAgentRowFromCard(card, card.monitorThreadId);
       if (isCodexNativeSubAgentVisibleInNavigation(agent, Date.now())) {
         agents.set(agent.threadId, agent);
       }
@@ -37191,15 +37204,9 @@ export class DesktopBackendRegistry {
     });
     const now = Date.now();
     return threads.map((thread) => {
+      // A Claude sub-agent has no thread; its row is keyed by its card.
       const agents = (cardsByThreadId[thread.id] ?? [])
-        .map((card): CodexNativeSubAgentSummary => ({
-          threadId: card.monitorId,
-          title: card.task,
-          createdAt: card.createdAt,
-          updatedAt: card.updatedAt,
-          threadStatus: codexNativeSubAgentIsTerminal(card.status) ? "idle" : "active",
-          ...(card.agentName ? { agentNickname: card.agentName } : {}),
-        }))
+        .map((card) => nativeSubAgentRowFromCard(card, card.monitorId))
         .filter((agent) => isCodexNativeSubAgentVisibleInNavigation(agent, now))
         .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)
           || left.threadId.localeCompare(right.threadId));

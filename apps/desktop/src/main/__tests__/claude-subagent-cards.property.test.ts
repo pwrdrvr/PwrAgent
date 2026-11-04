@@ -72,6 +72,22 @@ describe("Claude sub-agent cards", () => {
   });
   afterAll(async () => { await registry.close(); });
 
+  it("ends a running card on Stop when Claude no longer runs its task", async () => {
+    const record = (registry as unknown as {
+      recordClaudeSubAgents(params: { threadId: string; subAgents: ClaudeSubAgentCard[] }): Promise<void>;
+    }).recordClaudeSubAgents.bind(registry);
+    const threadId = "claude-orphaned-card";
+    const monitorId = "claude-native:agent-9";
+    await record({ threadId, subAgents: [cardFor(9, { card: 9, status: "running", task: "Audit the SDK" })] });
+
+    // No Claude session runs agent-9, so there is nothing to stop. The card
+    // must not stay "running" with a Stop that always fails.
+    await registry.stopSubAgent({ backend: "claude", threadId, monitorId });
+
+    expect(await store.getThreadSubAgent({ backend: "claude", threadId, monitorId }))
+      .toMatchObject({ status: "cancelled", outcome: "cancelled", lastMessage: "Stopped by user." });
+  });
+
   it("keeps an ended card's end and notifies only real changes", async () => {
     const record = (registry as unknown as {
       recordClaudeSubAgents(params: { threadId: string; subAgents: ClaudeSubAgentCard[] }): Promise<void>;

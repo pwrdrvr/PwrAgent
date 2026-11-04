@@ -3362,6 +3362,39 @@ describe("Claude SDK backend", () => {
       .toMatchObject({ turnId: started.turnId, item: { status: "cancelled" } });
   });
 
+  it("retries a sub-agent card whose write failed", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        task_type: "local_agent", subagent_type: "Explore", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
+        status: "completed", output_file: "", summary: "Audit done" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const saved: string[] = [];
+    let attempts = 0;
+    const backend = f.openBackend({
+      ...f.backendOptions,
+      recordSubAgents: async ({ subAgents }) => {
+        attempts += 1;
+        // The first write fails, as a busy or closing database would.
+        if (attempts === 1) throw new Error("database is locked");
+        saved.push(...subAgents.map((card) => card.status));
+      },
+    });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    await vi.waitFor(() => expect(backend.liveSessionThreadIds()).toEqual([]));
+    // The running card failed once, was written on the next event, then ended.
+    expect(saved).toEqual(["running", "success"]);
+  });
+
   it("ends a running sub-agent's card when Claude's process ends without settling it", async () => {
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;

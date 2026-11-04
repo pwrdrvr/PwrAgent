@@ -1856,18 +1856,23 @@ export class ClaudeBackend {
     await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId: live.session.thread.id, tasks } });
   }
 
-  /** Records the sub-agent cards that changed since the last record. */
+  /**
+   * Records the sub-agent cards that changed since the last record. A card
+   * counts as recorded only once its write succeeds, so a failed write is
+   * retried with the next task event or when the session closes.
+   */
   private async recordSubAgents(live: LiveSession): Promise<void> {
     if (!this.options.recordSubAgents) return;
-    const changed = live.tasks.subAgentCards().filter((card) => {
+    const changed = live.tasks.subAgentCards().flatMap((card) => {
       const key = JSON.stringify(card);
-      if (live.recordedSubAgentKeys.get(card.monitorId) === key) return false;
-      live.recordedSubAgentKeys.set(card.monitorId, key);
-      return true;
+      return live.recordedSubAgentKeys.get(card.monitorId) === key ? [] : [{ card, key }];
     });
     if (changed.length === 0) return;
     try {
-      await this.options.recordSubAgents({ threadId: live.session.thread.id, subAgents: changed });
+      await this.options.recordSubAgents({
+        threadId: live.session.thread.id, subAgents: changed.map(({ card }) => card),
+      });
+      for (const { card, key } of changed) live.recordedSubAgentKeys.set(card.monitorId, key);
     } catch (error) {
       // A card is a view of the task; the task itself goes on.
       claudeBackendLog.warn("Could not record Claude sub-agents", { threadId: live.session.thread.id, error });
@@ -1970,6 +1975,11 @@ export class ClaudeBackend {
   listWaitingTasks(threadId: string): AppServerBackgroundTask[] {
     const live = this.sessions.get(threadId);
     return live ? this.taskRows(live, live.tasks.active()) : [];
+  }
+
+  /** Whether Claude's live process is running the task. */
+  runsTask(threadId: string, taskId: string): boolean {
+    return this.sessions.get(threadId)?.tasks.active().some((task) => task.taskId === taskId) ?? false;
   }
 
   /** Stops one task. Claude reports the stop through the task's notification. */

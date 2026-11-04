@@ -1,11 +1,8 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import {
-  CLAUDE_SUB_AGENT_MONITOR_ID_PREFIX,
-  ClaudeTaskTracker,
-  claudeTaskRow,
-} from "../claude/claude-tasks";
+import { CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX } from "@pwragent/shared";
+import { ClaudeTaskTracker, claudeTaskRow } from "../claude/claude-tasks";
 
 /**
  * Rules, from what the operator sees:
@@ -207,7 +204,7 @@ describe("Claude sub-agent projection", () => {
         const agents = started.filter((task) => plans[task].kind === "agent");
         const cards = tracker.subAgentCards();
         expect(cards.map((card) => card.monitorId))
-          .toEqual(agents.map((task) => `${CLAUDE_SUB_AGENT_MONITOR_ID_PREFIX}${taskId(task)}`));
+          .toEqual(agents.map((task) => `${CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${taskId(task)}`));
         cards.forEach((card, index) => {
           const task = agents[index];
           const ended = settled.get(task);

@@ -5,8 +5,6 @@ import {
   type ThreadSubAgentStatus,
 } from "@pwragent/shared";
 
-export { CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX as CLAUDE_SUB_AGENT_MONITOR_ID_PREFIX };
-
 export type ClaudeTaskStatus = "running" | "completed" | "failed" | "stopped";
 
 export type ClaudeTask = {
@@ -160,7 +158,7 @@ export class ClaudeTaskTracker {
       const dropped = task.status === "running" && task.backgrounded && task.namedLive === true
         && this.liveBackground?.has(task.taskId) === false;
       const status = dropped ? "success" : CLAUDE_SUB_AGENT_STATUS[task.status];
-      const lastMessage = task.summary ?? undefined;
+      const lastMessage = task.summary;
       return [{
         monitorId: `${CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${task.taskId}`,
         taskId: task.taskId,
