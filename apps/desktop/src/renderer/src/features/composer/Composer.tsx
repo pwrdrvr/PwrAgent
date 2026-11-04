@@ -2,7 +2,6 @@ import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCode
 import { codexProviderIdOfModel, type BackendModelOption } from "@pwragent/shared";
 import { ModelDropdown } from "./ModelDropdown";
 import { ThreadHandoffComposerBand } from "../federation/ThreadHandoffProgress";
-import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
