@@ -45,6 +45,8 @@ const CATALOGS: Record<Provider, string[]> = {
 };
 const DIRECTORIES = ["directory:/repo-a", "directory:/repo-b"];
 const PEER: FederationTarget = { scope: "remote", instanceId: "peer-1" };
+/** A peer's drafts: its directories, and a sub-thread draft, kept under its plain key. */
+const PEER_DRAFT_KEYS = [...DIRECTORIES, "subthread:peer-parent"];
 /** The owner's models: some this machine's catalogs lack. */
 const OWNER_MODELS = ["gpt-owner-only", "opus", "claude-owner-only", "gpt-5.5"];
 
@@ -172,6 +174,14 @@ class SetAccess implements fc.AsyncCommand<Model, Real> {
   }
 }
 
+type PeerPatch =
+  | { backend: Provider }
+  | { model: string }
+  | { reasoningEffort: "low" | "high" }
+  | { fastMode: boolean }
+  | { executionMode: "auto" | "full-access" }
+  | { workMode: "local" | "worktree" };
+
 /**
  * An edit to a peer's launchpad. Its draft keeps the edit; this machine's
  * defaults stay as they were.
@@ -179,20 +189,18 @@ class SetAccess implements fc.AsyncCommand<Model, Real> {
 class EditPeerLaunchpad implements fc.AsyncCommand<Model, Real> {
   constructor(
     readonly directoryKey: string,
-    readonly patch:
-      | { backend: Provider }
-      | { model: string }
-      | { executionMode: "auto" | "full-access" },
+    readonly patch: PeerPatch,
     readonly sticky: boolean,
   ) {}
   check(): boolean {
     return true;
   }
   async run(model: Model, real: Real): Promise<void> {
+    const before = await real.store.getLaunchpadDefaults();
     const { launchpad } = await real.registry.updateDirectoryLaunchpad(
       {
         directoryKey: this.directoryKey,
-        patch: this.patch as never,
+        patch: this.patch,
         stickySettingsChanged: this.sticky,
       },
       { owner: PEER },
@@ -204,7 +212,11 @@ class EditPeerLaunchpad implements fc.AsyncCommand<Model, Real> {
     const stored = await real.store.getDirectoryLaunchpad({
       directoryKey: launchpadStorageKey(this.directoryKey, PEER),
     });
-    expect(stored?.settingsTouchedAt !== undefined || !this.sticky).toBe(true);
+    if (this.sticky) {
+      // The draft keeps the pick, so the owner's defaults do not re-seed it.
+      expect(stored?.settingsTouchedAt, "peer draft touched").toBeDefined();
+    }
+    expect(await real.store.getLaunchpadDefaults(), "local defaults").toEqual(before);
     await expectAgreement(model, real);
   }
   toString(): string {
@@ -221,12 +233,17 @@ const commands = [
   fc.tuple(directory, fc.constantFrom("auto" as const, "full-access" as const), fc.boolean())
     .map(([key, mode, sticky]) => new SetAccess(key, mode, sticky)),
   fc.tuple(
-    directory,
+    fc.constantFrom(...PEER_DRAFT_KEYS),
     fc.oneof(
-      fc.constantFrom(...PROVIDERS).map((backend) => ({ backend })),
-      fc.constantFrom(...OWNER_MODELS).map((model) => ({ model })),
+      fc.constantFrom(...PROVIDERS).map((backend): PeerPatch => ({ backend })),
+      fc.constantFrom(...OWNER_MODELS).map((model): PeerPatch => ({ model })),
+      fc.constantFrom("low" as const, "high" as const)
+        .map((reasoningEffort): PeerPatch => ({ reasoningEffort })),
+      fc.boolean().map((fastMode): PeerPatch => ({ fastMode })),
       fc.constantFrom("auto" as const, "full-access" as const)
-        .map((executionMode) => ({ executionMode })),
+        .map((executionMode): PeerPatch => ({ executionMode })),
+      fc.constantFrom("local" as const, "worktree" as const)
+        .map((workMode): PeerPatch => ({ workMode })),
     ),
     fc.boolean(),
   ).map(([key, patch, sticky]) => new EditPeerLaunchpad(key, patch, sticky)),
