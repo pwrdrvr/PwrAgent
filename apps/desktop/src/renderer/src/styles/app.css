@@ -798,10 +798,11 @@
 
   /* Status */
   --status-ok: #28631b;
-  /* Dots, strokes, and meters take Catppuccin's yellow at the 3:1 mark floor.
-     Warning text keeps the darker amber. At text strength the PR chip's
-     pending dot read as the closed dot. */
-  --status-warning: #bf7000;
+  /* Dots, strokes, and meters take Catppuccin's yellow at the 3:1 mark floor,
+     measured against the selected row (#f1e3de) as well. Warning text keeps
+     the darker amber. At text strength the PR chip's pending dot read as the
+     closed dot. */
+  --status-warning: #be6f00;
   --status-error: #b1012b;
   --status-suspended: #7c8297;
   --status-warning-text: #7d4c00;
