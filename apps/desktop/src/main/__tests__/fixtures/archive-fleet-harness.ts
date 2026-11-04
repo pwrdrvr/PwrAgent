@@ -23,6 +23,12 @@ export type ArchiveFleetFs = {
   realpathCalls: number;
 };
 
+/** The POSIX model form of a path the registry resolved natively; on Windows
+ * it arrives as a drive path in lower case. */
+export function toModelPath(value: string): string {
+  return process.platform === "win32" ? value.replace(/^[A-Za-z]:/, "").replace(/\\/g, "/").toLowerCase() : value;
+}
+
 export function resolveFleetAlias(fs: ArchiveFleetFs, value: string): string {
   for (const [alias, target] of fs.aliases) {
     if (value === alias || value.startsWith(alias + "/")) return target + value.slice(alias.length);
@@ -192,7 +198,7 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
         throw new Error("Snapshot persistence failed.");
       }
       counts.overlayWrites += 1;
-      options.onSnapshot?.(params.threadId, params.snapshot);
+      options.onSnapshot?.(params.threadId, { ...params.snapshot, worktreePath: toModelPath(params.snapshot.worktreePath) });
     }),
     observeArchivedThreads: write("observeArchivedThreads"),
     setThreadParent: write("setThreadParent"),
@@ -202,10 +208,12 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
     return vi.fn(async () => String(key).startsWith("list") ? [] : undefined);
   } });
   const archive = vi.fn(async (params: { backend: string; threadId: string; worktreePath: string; beforeRemove?: () => Promise<() => void> }) => {
-    const canonical = await realpath(params.worktreePath).catch((error: NodeJS.ErrnoException) => {
+    const resolved = await realpath(params.worktreePath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") throw new MissingArchiveWorktreeError(params.worktreePath);
       throw error;
     });
+    // Report checkouts in the model's POSIX form; hand the registry its own.
+    const canonical = toModelPath(resolved);
     counts.snapshots += 1;
     await options.beforeAdmission?.(params);
     const assertRemoval = await params.beforeRemove?.();
@@ -217,7 +225,7 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
     options.onRemove?.(canonical, params);
     counts.removals += 1;
     fs.removed.add(canonical);
-    return { id: `snapshot:${canonical}`, backend: params.backend, threadId: params.threadId, worktreePath: canonical,
+    return { id: `snapshot:${canonical}`, backend: params.backend, threadId: params.threadId, worktreePath: resolved,
       repositoryPath: REPO, snapshotRef: "refs/pwragent/snapshots/test", snapshotCommit: "abc",
       createdAt: 1, archivedAt: 2, state: "archived", ignoredFilesExcluded: true };
   });

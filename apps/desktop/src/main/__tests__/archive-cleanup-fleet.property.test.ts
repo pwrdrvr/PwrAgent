@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import path from "node:path";
 import type { LinkedDirectorySummary } from "@pwragent/shared";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -33,6 +32,12 @@ const fsModel = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const path = await import("node:path");
+  // Production resolves paths natively: on Windows "/contrived/x" arrives as
+  // "D:\\contrived\\x". Map into this POSIX model, and answer natively.
+  const toModel = (value: string) => process.platform === "win32"
+    ? value.replace(/^[A-Za-z]:/, "").replace(/\\/g, "/").toLowerCase() : value;
+  const toNative = (value: string) => process.platform === "win32" ? path.resolve(value) : value;
   // Mirrors resolveFleetAlias; a mock factory cannot import the harness.
   const resolveAlias = (value: string) => {
     for (const [alias, target] of fsModel.aliases) {
@@ -43,17 +48,17 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return {
     ...actual,
     realpath: vi.fn(async (filePath: Parameters<typeof actual.realpath>[0]) => {
-      if (typeof filePath === "string" && filePath.startsWith("/contrived")) {
+      if (typeof filePath === "string" && toModel(filePath).startsWith("/contrived")) {
         fsModel.realpathCalls += 1;
-        const resolved = resolveAlias(filePath);
+        const resolved = resolveAlias(toModel(filePath));
         if (fsModel.removed.has(resolved)) throw Object.assign(new Error("Removed"), { code: "ENOENT" });
-        return resolved;
+        return toNative(resolved);
       }
       return await actual.realpath(filePath);
     }),
     stat: vi.fn(async (filePath: Parameters<typeof actual.stat>[0], options?: Parameters<typeof actual.stat>[1]) => {
-      if (typeof filePath === "string" && filePath.startsWith("/contrived")) {
-        if (fsModel.removed.has(resolveAlias(filePath))) throw Object.assign(new Error("Removed"), { code: "ENOENT" });
+      if (typeof filePath === "string" && toModel(filePath).startsWith("/contrived")) {
+        if (fsModel.removed.has(resolveAlias(toModel(filePath)))) throw Object.assign(new Error("Removed"), { code: "ENOENT" });
         return { isDirectory: () => true } as Awaited<ReturnType<typeof actual.stat>>;
       }
       return await actual.stat(filePath, options);
@@ -104,7 +109,7 @@ function canonicalUses(world: World, threadId: string): string[] {
 }
 
 function uses(world: World, threadId: string, checkout: string): boolean {
-  return canonicalUses(world, threadId).some((value) => value === checkout || value.startsWith(checkout + path.sep));
+  return canonicalUses(world, threadId).some((value) => value === checkout || value.startsWith(`${checkout}/`));
 }
 
 /** The oracle: active provider threads whose cwd or overlay link is in the checkout. */
@@ -331,6 +336,11 @@ describe("bulk archive cleanup model", () => {
         vi.useRealTimers();
       }), { numRuns: 30 });
     } finally {
+      // A failed run leaves its world open; Windows cannot remove an open database.
+      for (const world of worlds.splice(0)) {
+        await drive(world.registry.close()).catch(() => {});
+        world.db.close();
+      }
       removeTempStateDbDir(temp.tempDir);
     }
   }, 60_000);

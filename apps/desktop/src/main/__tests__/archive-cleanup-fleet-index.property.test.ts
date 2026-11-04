@@ -15,15 +15,21 @@ import { ArchiveFleetIndex, type FleetRow } from "../app-server/archive-cleanup-
 const aliases = vi.hoisted(() => new Map<string, string>());
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const path = await import("node:path");
+  // Production resolves natively: on Windows "/model/a" arrives as "D:\\model\\a".
+  const toModel = (value: string) => process.platform === "win32"
+    ? value.replace(/^[A-Za-z]:/, "").replace(/\\/g, "/").toLowerCase() : value;
+  const toNative = (value: string) => process.platform === "win32" ? path.resolve(value) : value;
   return {
     ...actual,
-    realpath: vi.fn(async (value: string) => {
-      if (!value.startsWith("/model")) return await actual.realpath(value);
+    realpath: vi.fn(async (input: string) => {
+      const value = toModel(input);
+      if (!value.startsWith("/model")) return await actual.realpath(input);
       if (value.includes("unreadable")) throw Object.assign(new Error("denied"), { code: "EACCES" });
       for (const [alias, target] of aliases) {
-        if (value === alias || value.startsWith(alias + "/")) return target + value.slice(alias.length);
+        if (value === alias || value.startsWith(alias + "/")) return toNative(target + value.slice(alias.length));
       }
-      return value;
+      return toNative(value);
     }),
   };
 });
