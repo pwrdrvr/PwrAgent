@@ -5311,9 +5311,12 @@ export class MessagingController {
       // Preserve the accepted turn's normal signal (including a retry after a
       // failed preparation request). This wait is after backend acceptance.
       await preparingActivity?.settled;
-      await this.signalTurnActivity(deliveryBinding, activeTurn, {
-        force: true,
-      });
+      const currentTurn = this.getActiveTurn(deliveryBinding);
+      if (currentTurn?.turnId === started.turnId && currentTurn.status === "working") {
+        await this.signalTurnActivity(deliveryBinding, currentTurn, {
+          force: true,
+        });
+      }
       await this.renderAutomaticBindingStatus(
         deliveryBinding,
         undefined,
