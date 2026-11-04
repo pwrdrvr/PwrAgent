@@ -59,6 +59,19 @@ describe("ClaudeSessionWakeTracker", () => {
     expect(wakes.pending()).toEqual([]);
   });
 
+  it("lists a durable request the CLI kept in the session", () => {
+    // CLI 2.1.310 with durable crons off for the account: the input asks for
+    // durable, and the result says the job stays in this process.
+    const { wakes, now } = tracker();
+    wakes.applyToolResult("CronCreate", { cron: "* * * * *", prompt: "Say TICK", recurring: true, durable: true },
+      { id: "86a173fc", humanSchedule: "Every minute", recurring: true, durable: false, nextFireAt: now() + MINUTE });
+    expect(wakes.pending()).toEqual([{
+      id: "86a173fc", origin: "cron", schedule: "* * * * *", humanSchedule: "Every minute", recurring: true,
+      prompt: "Say TICK", nextFireAt: now() + MINUTE, createdAt: now(),
+    }]);
+    expect(wakes.hasPending()).toBe(true);
+  });
+
   it("follows deletes and a loop's stop between Stop hooks", () => {
     const { wakes, now } = tracker();
     wakes.applyToolResult("ScheduleWakeup", { prompt: "/loop", delaySeconds: 60, reason: "Soon." }, { scheduledFor: now() + MINUTE });

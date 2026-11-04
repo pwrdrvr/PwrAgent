@@ -4,9 +4,11 @@ import type { AppServerBackendWake } from "@pwragent/shared";
 /**
  * A wake Claude Code scheduled inside its own session: a dynamic /loop
  * wake-up (`ScheduleWakeup`) or a session cron (`CronCreate`). Both live in
- * the CLI process's memory and end with it. A durable `CronCreate` job is
- * written to the project's `.claude/scheduled_tasks.json` instead, belongs to
- * no one session, and is not tracked here.
+ * the CLI process's memory and end with it. A `CronCreate` result with
+ * `durable: true` went to the project's `.claude/scheduled_tasks.json`
+ * instead. Any Claude session in that folder can run it, so it is not tracked
+ * here; docs/claude-provider.md says why. When durable jobs are off for the
+ * account, the CLI answers `durable: false` and the job is a session cron.
  */
 export type ClaudeSessionWake = AppServerBackendWake & {
   /** When this process first saw the wake; held in memory only. */
