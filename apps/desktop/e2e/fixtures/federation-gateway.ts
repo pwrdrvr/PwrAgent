@@ -1,4 +1,6 @@
 import type { AdvertiseServiceArgs } from "@pwragent/shared";
+import type { LaunchpadCreationRequest, MaterializeDirectoryLaunchpadOptions } from "@pwragent/shared";
+import { LaunchpadCreationOperations } from "../../src/main/app-server/launchpad-creation-operations";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../../src/main/federation/federation-services";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
@@ -246,6 +248,7 @@ export async function startInProcessFederationGateway(params: {
   threadServices?: Array<{ threadId: string; args: AdvertiseServiceArgs }>;
   /** The providers this owner can start. Defaults to OpenAI and Kimi Code. */
   backendKinds?: readonly AppServerBackendKind[];
+  holdLaunchpadSetup?: boolean;
 }): Promise<InProcessFederationGateway> {
   const stateRoot = await mkdtemp(
     path.join(os.tmpdir(), "pwragent-e2e-federation-gateway-"),
@@ -391,7 +394,12 @@ export async function startInProcessFederationGateway(params: {
   const revision = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
   const navigationQueries = new NavigationQueryStore();
   const launchpads = new Map<string, EnsureDirectoryLaunchpadResponse>();
+  const startupOperations = new LaunchpadCreationOperations();
   const backend = {
+    async manageLaunchpadCreation(request: LaunchpadCreationRequest, sourceInstanceId?: string) {
+      calls.push({ method: "manageLaunchpadCreation", params: request });
+      return startupOperations.manage(request, sourceInstanceId);
+    },
     async getNavigationQueryPage(request: NavigationQueryRequest, options?: { requesterInstanceId?: string }) {
       calls.push({ method: "getNavigationQueryPage", params: request });
       return navigationQueries.readPage({
@@ -568,29 +576,48 @@ export async function startInProcessFederationGateway(params: {
     },
     async materializeDirectoryLaunchpad(
       request: MaterializeDirectoryLaunchpadRequest,
+      options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: string },
     ): Promise<MaterializeDirectoryLaunchpadResponse> {
       calls.push({ method: "materializeDirectoryLaunchpad", params: request });
-      const threadId = `remote-created-${threads.length + 1}`;
-      const directory = directories.find((entry) => entry.key === request.directoryKey
-        || entry.path === request.launchpad?.directoryPath);
-      directory?.threadIds?.push(threadId);
-      const prompt =
-        request.input?.find((item) => item.type === "text")?.text.trim()
-        ?? request.launchpad?.prompt.trim()
-        ?? "";
-      threads.unshift({
-        id: threadId,
-        title: prompt || "Remote created thread",
-        updatedAt: Date.now(),
-        source: request.launchpad?.backend ?? "codex",
-      });
-      return {
-        backend: request.launchpad?.backend ?? "codex",
-        threadId,
-        executionMode: request.launchpad?.executionMode ?? "default",
-        workMode: request.launchpad?.workMode ?? "local",
-        turnId: `turn-${threadId}`,
+      const complete = async (): Promise<MaterializeDirectoryLaunchpadResponse> => {
+        const threadId = `remote-created-${threads.length + 1}`;
+        const directory = directories.find((entry) => entry.key === request.directoryKey
+          || entry.path === request.launchpad?.directoryPath);
+        directory?.threadIds?.push(threadId);
+        const prompt =
+          request.input?.find((item) => item.type === "text")?.text.trim()
+          ?? request.launchpad?.prompt.trim()
+          ?? "";
+        threads.unshift({
+          id: threadId,
+          title: prompt || "Remote created thread",
+          updatedAt: Date.now(),
+          source: request.launchpad?.backend ?? "codex",
+        });
+        return {
+          backend: request.launchpad?.backend ?? "codex",
+          threadId,
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+          turnId: `turn-${threadId}`,
+        };
       };
+      if (!request.operationId) return await complete();
+      return await startupOperations.run(request, options?.sourceInstanceId, async (operation) => {
+        if (params.holdLaunchpadSetup) {
+          const startedAt = Date.now() - 65_000;
+          const progress = { operationId: request.operationId, directoryKey: request.codexEnvironmentSetupProgressKey ?? request.directoryKey,
+            environmentId: "fixture", environmentName: "Fixture environment", command: "pnpm install", cwd: "/fixture/worktree",
+            startedAt, at: Date.now(), sequence: 1, phase: "started" as const, output: "Installing fixture dependencies…" };
+          operation.update({ phase: "setup", cwd: progress.cwd, setupProgress: progress });
+          options?.onCodexEnvironmentSetupProgress?.(progress);
+          await new Promise<void>((_resolve, reject) => {
+            operation.controller.signal.addEventListener("abort", () => reject(operation.controller.signal.reason), { once: true });
+          }).catch(() => operation.check());
+        }
+        operation.commit();
+        return await complete();
+      });
     },
   } as unknown as FederationBackendOperations;
 
@@ -603,7 +630,11 @@ export async function startInProcessFederationGateway(params: {
     },
     additionalRequiredCapabilities: additionalFederationBackendCapabilities,
   });
-  registerFederationBackendHandlers({ router, backend });
+  registerFederationBackendHandlers({ router, backend, onEnvironmentSetupProgress: (event, targetInstanceId) => {
+    router.sendToPeer(targetInstanceId, { id: `setup:${randomBytes(4).toString("hex")}`, kind: "notification",
+      method: "backend.environmentSetupProgress", params: event, protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: gatewayInstanceId, targetInstanceId, createdAt: Date.now() });
+  } });
   const threadServices = new FederationServices({
     instanceId: gatewayInstanceId,
     allowForwarding: () => true,
@@ -783,6 +814,7 @@ export async function startInProcessFederationGateway(params: {
       await server.start();
     },
     close: async () => {
+      startupOperations.cancelAll();
       threadServices.dispose();
       ptyService?.disposeAll();
       await server.stop();

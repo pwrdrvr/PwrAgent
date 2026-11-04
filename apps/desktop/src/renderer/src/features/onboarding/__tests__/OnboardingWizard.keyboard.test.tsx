@@ -18,6 +18,7 @@ const appearanceController = {
   setDensity: vi.fn(),
   setSidebarTextSize: vi.fn(),
   setTranscriptTextSize: vi.fn(),
+  setCalmMotion: vi.fn(),
   setAppearance: vi.fn(),
 } as unknown as AppearanceController;
 

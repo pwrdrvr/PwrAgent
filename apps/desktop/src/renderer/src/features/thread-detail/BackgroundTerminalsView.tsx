@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { EnvActionControlButton, EnvActionStopIcon } from "./EnvActionRunsView";
 import type { BackgroundTerminalView } from "../../lib/useCodexBackgroundTerminals";
+import { statusPulseRef } from "../../lib/status-pulse";
 
 export type BackgroundTerminalsViewProps = {
   terminals?: BackgroundTerminalView[];
@@ -79,7 +80,7 @@ export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
               aria-label={`${kindLabel ?? "Agent command"}: ${preview.text}`}>
               <summary className="composer__queued-env-action-summary">
                 <span className="composer__queued-env-action-chevron" aria-hidden="true" />
-                <span className="status-dot status-dot--active status-dot--blink" aria-hidden="true" />
+                <span className="status-dot status-dot--active status-dot--blink" aria-hidden="true" ref={statusPulseRef} />
                 <span className="composer__queued-env-action-summary-text">
                   <span className="composer__queued-label">{stopping ? "Stopping" : "Running"}</span>
                   <code className="agent-command-run__command">{preview.text}</code>

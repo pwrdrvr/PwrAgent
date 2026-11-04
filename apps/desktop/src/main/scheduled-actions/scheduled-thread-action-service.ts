@@ -232,6 +232,19 @@ export class ScheduledThreadActionService {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
     const current = this.requireAction(request.id);
+    // A repeated cancel, such as a second window deleting the same failed
+    // row, changes nothing. The first cancel already settled everything.
+    if (current.status === "cancelled") return { action: current };
+    if (current.status === "failed") {
+      // Dismissing a failure only takes its row out of the queue. A thread
+      // born from this action keeps its failed scheduled start.
+      const dismissed = this.options.store.dismissFailed(current.id, this.now());
+      if (!dismissed) {
+        throw new Error("The scheduled action can no longer be cancelled.");
+      }
+      await this.publish(dismissed);
+      return { action: dismissed };
+    }
     let cancelled: ScheduledThreadAction | undefined;
     if (current.status === "held" && current.queueEntryId) {
       const cancelledInRegistry = this.options.registry.cancelQueuedTurn(

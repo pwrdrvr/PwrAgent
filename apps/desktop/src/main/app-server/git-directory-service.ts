@@ -8,6 +8,7 @@ import type {
   ArchiveThreadCleanupResult,
   DesktopWorktreeStorageLocation,
   LaunchpadWorkMode,
+  LaunchpadWorktreeBase,
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
   NavigationGitBranchDetail,
@@ -623,7 +624,7 @@ function isProtectedBranch(branch?: string): boolean {
  * `default_branch` skips it: a source worktree's branch can hold another
  * thread's unpublished work, which a standalone follow-up must not inherit.
  */
-export type WorktreeBaseSource = "current_branch" | "default_branch";
+export type WorktreeBaseSource = LaunchpadWorktreeBase;
 
 async function resolveVerifiedWorktreeBaseBranch(params: {
   repoRoot: string;
@@ -1243,7 +1244,10 @@ export class GitDirectoryService {
     };
   }
 
-  async resolvePrimaryWorkspacePath(cwd: string | undefined): Promise<string | undefined> {
+  async resolvePrimaryWorkspacePath(
+    cwd: string | undefined,
+    options: { requireRegisteredWorktree?: boolean } = {},
+  ): Promise<string | undefined> {
     const directoryPath = cwd?.trim();
     if (!directoryPath) {
       return undefined;
@@ -1254,6 +1258,32 @@ export class GitDirectoryService {
       this.gitEnv,
     );
     if (!sourceRoot) {
+      return undefined;
+    }
+    if (options.requireRegisteredWorktree) {
+      const worktrees = parseGitWorktreeEntries(
+        await this.runGitCommand(sourceRoot, ["worktree", "list", "--porcelain"], this.gitEnv),
+      );
+      const [resolvedRoot, resolvedDirectory] = await Promise.all([
+        realpath(sourceRoot),
+        realpath(directoryPath),
+      ]);
+      // core.worktree can make rev-parse name a root outside the requested
+      // directory. Such a root cannot establish trust for the destination.
+      const relativeDirectory = path.relative(resolvedRoot, resolvedDirectory);
+      if (
+        relativeDirectory === ".."
+        || relativeDirectory.startsWith(`..${path.sep}`)
+        || path.isAbsolute(relativeDirectory)
+      ) {
+        return undefined;
+      }
+      for (const worktree of worktrees) {
+        const registeredPath = await realpath(worktree.path).catch(() => undefined);
+        if (registeredPath && path.relative(registeredPath, resolvedRoot) === "") {
+          return worktrees[0]?.path ? toForwardSlashes(worktrees[0].path) : undefined;
+        }
+      }
       return undefined;
     }
     const primary =

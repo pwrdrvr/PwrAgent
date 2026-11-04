@@ -1,6 +1,7 @@
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildPwrAgentChildProcessEnv } from "./child-process-env";
+import { snapshotWindowsProcessTreeIds } from "./windows-process-tree";
 
 export type OwnedChildProcess = {
   pid?: number;
@@ -53,22 +54,7 @@ export function collectProcessTreeIds(rootPid: number): number[] {
     return [...tracked];
   }
 
-  let added = true;
-  while (added) {
-    added = false;
-    for (const pid of [...tracked]) {
-      if (!isProcessIdAlive(pid)) {
-        continue;
-      }
-      for (const childPid of listWindowsChildProcessIds(pid)) {
-        if (!tracked.has(childPid)) {
-          tracked.add(childPid);
-          added = true;
-        }
-      }
-    }
-  }
-  return [...tracked];
+  return snapshotWindowsProcessTreeIds(resolveWindowsPowerShell(), rootPid);
 }
 
 /**
@@ -203,38 +189,6 @@ function resolveWindowsPowerShell(): string {
         "powershell.exe",
       )
     : "powershell.exe";
-}
-
-function listWindowsChildProcessIds(pid: number): number[] {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return [];
-  }
-  const result = spawnSync(
-    resolveWindowsPowerShell(),
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`,
-    ],
-    {
-      encoding: "utf8",
-      env: buildPwrAgentChildProcessEnv(process.env),
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 5_000,
-      windowsHide: true,
-    },
-  );
-  if (result.status !== 0) {
-    return [];
-  }
-  return String(result.stdout ?? "")
-    .split(/\r?\n/)
-    .map((line) => Number(line.trim()))
-    .filter((childPid) => Number.isInteger(childPid) && childPid > 0);
 }
 
 function terminateWindowsTree(

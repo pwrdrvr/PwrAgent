@@ -1,4 +1,5 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
 import type {
@@ -292,6 +293,12 @@ import type {
   SetDirectoryPinResponse,
   SetDirectoryThreadsCollapsedRequest,
   SetDirectoryThreadsCollapsedResponse,
+  SetProjectForgeAutomationRequest,
+  SetProjectForgeAutomationResponse,
+  ListProjectHeldWakeupsRequest,
+  ListProjectHeldWakeupsResponse,
+  ResolveProjectHeldWakeupsRequest,
+  ResolveProjectHeldWakeupsResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   SetThreadLockRequest,
@@ -300,6 +307,8 @@ import type {
   ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
+  ContinueThreadEnvironmentStartupRequest,
+  ContinueThreadEnvironmentStartupResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
   AcknowledgeThreadEnvironmentFailureResponse,
   ListPendingThreadSpendAlertsRequest,
@@ -611,6 +620,7 @@ import type {
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
   SetNavigationBrowseModeRequest,
+  NavigationResumeState,
   SetNavigationBrowseModeResponse,
   SetPinnedGroupCollapsedRequest,
   SetPinnedGroupCollapsedResponse,
@@ -1008,6 +1018,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   manageThreadDependencies?: (
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
+  /** List, read the history of, or stop the PR watches that wake local threads. */
+  manageThreadPrWatches?: (
+    request: import("@pwragent/shared").ThreadPrWatchesRequest,
+  ) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
+  /** List or stop what will wake a thread later, on the instance that owns it. */
+  manageThreadPendingWakes?: (
+    request: import("@pwragent/shared").ThreadPendingWakesRequest,
+  ) => Promise<import("@pwragent/shared").ThreadPendingWakesResponse>;
   readUsageActivity?: (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
   /** Stored totals for a local thread and every sub-thread under it. */
   readThreadFamilyPricing?: (request: ReadThreadFamilyPricingRequest) => Promise<ReadThreadFamilyPricingResponse>;
@@ -1222,6 +1240,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   materializeDirectoryLaunchpad?: (
     request: MaterializeDirectoryLaunchpadRequest
   ) => Promise<MaterializeDirectoryLaunchpadResponse>;
+  manageLaunchpadCreation?: (request: LaunchpadCreationRequest) => Promise<LaunchpadCreationResponse>;
   runCodexEnvironmentAction?: (
     request: RunCodexEnvironmentActionRequest,
   ) => Promise<RunCodexEnvironmentActionResponse>;
@@ -1279,6 +1298,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onNavigationMentionSourcesChanged?: (
     callback: () => void,
   ) => () => void;
+  setNavigationResumeState?: (state: NavigationResumeState) => Promise<void>;
   setNavigationBrowseMode?: (
     request: SetNavigationBrowseModeRequest,
   ) => Promise<SetNavigationBrowseModeResponse>;
@@ -1519,6 +1539,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   acknowledgeThreadSpendAlert?: (
     request: AcknowledgeThreadSpendAlertRequest,
   ) => Promise<AcknowledgeThreadSpendAlertResponse>;
+  continueThreadEnvironmentStartup?: (
+    request: ContinueThreadEnvironmentStartupRequest,
+  ) => Promise<ContinueThreadEnvironmentStartupResponse>;
   acknowledgeThreadEnvironmentFailure?: (
     request: AcknowledgeThreadEnvironmentFailureRequest,
   ) => Promise<AcknowledgeThreadEnvironmentFailureResponse>;
@@ -1594,6 +1617,16 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setDirectoryThreadsCollapsed?: (
     request: SetDirectoryThreadsCollapsedRequest
   ) => Promise<SetDirectoryThreadsCollapsedResponse>;
+  /** Owner-scoped per-project Forge Automation; local `directory:` keys only. */
+  setProjectForgeAutomation?: (
+    request: SetProjectForgeAutomationRequest
+  ) => Promise<SetProjectForgeAutomationResponse>;
+  listProjectHeldWakeups?: (
+    request: ListProjectHeldWakeupsRequest
+  ) => Promise<ListProjectHeldWakeupsResponse>;
+  resolveProjectHeldWakeups?: (
+    request: ResolveProjectHeldWakeupsRequest
+  ) => Promise<ResolveProjectHeldWakeupsResponse>;
   refreshThreadPullRequests?: (
     request: RefreshThreadPullRequestsRequest
   ) => Promise<RefreshThreadPullRequestsResponse>;
@@ -1782,6 +1815,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
+      calmMotion: boolean;
     }) => void,
   ) => () => void;
   onSettingsRuntimeChanged?: (

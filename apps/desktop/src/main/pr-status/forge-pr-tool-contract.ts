@@ -2,7 +2,7 @@ import { FORGE_AGENT_WRITE_TOOL_GROUPS, type ForgeAgentToolGroup, type ForgeAgen
 import { ForgeReadError, type ForgeRepository } from "./forge-tool-contract";
 
 /**
- * Pull request (GitLab merge request) and issue tools for GitHub and GitLab.
+ * Pull request (GitLab merge request), issue and CI write tools for GitHub and GitLab.
  * Each acts in the calling thread's own repository (the `repository` argument
  * only chooses among its linked remotes), so no tool here accepts a thread or
  * Federation target. Names say "pull request" for both providers.
@@ -27,6 +27,7 @@ export type ForgeAttachment = { path: string; alt?: string };
 export type ForgeReviewComment = { path: string; line: number; side?: "LEFT" | "RIGHT"; startLine?: number; startSide?: "LEFT" | "RIGHT"; body: string };
 export type ForgePrToolArgs = {
   repository?: ForgeRepository;
+  runId?: number;
   number?: number;
   url?: string;
   branch?: string;
@@ -88,6 +89,7 @@ const FIELDS: Record<ForgePrToolOperation, string[]> = {
   create_issue: ["title", "body", "attachments", "addLabels"],
   update_issue: ["number", "title", "body", "state", "stateReason", "attachments", "addLabels", "removeLabels"],
   merge_pull_request: ["number", "method", "expectedHeadSha", "commitTitle", "commitMessage"],
+  rerun_failed_ci_jobs: ["runId"],
 };
 const REQUIRED: Partial<Record<ForgePrToolOperation, string[]>> = {
   list_pull_request_files: ["number"],
@@ -97,7 +99,7 @@ const REQUIRED: Partial<Record<ForgePrToolOperation, string[]>> = {
   get_issue: ["number"],
   list_issue_comments: ["number"],
   search_issues: ["query"],
-  create_pull_request: ["title"],
+  create_pull_request: ["title", "head"],
   update_pull_request: ["number"],
   add_issue_comment: ["number", "body"],
   reply_to_review_comment: ["number", "body"],
@@ -106,6 +108,7 @@ const REQUIRED: Partial<Record<ForgePrToolOperation, string[]>> = {
   create_issue: ["title"],
   update_issue: ["number"],
   merge_pull_request: ["number", "expectedHeadSha"],
+  rerun_failed_ci_jobs: ["runId"],
 };
 
 export function forgePrToolRequiredFields(operation: ForgePrToolOperation): string[] {
@@ -161,6 +164,7 @@ export function validateForgePrToolArgs(operation: string, value: unknown): asse
   if (unknown) fail(`Unknown argument for ${operation}: ${unknown}.`);
   for (const key of forgePrToolRequiredFields(operation)) if (args[key] === undefined) fail(`${operation} requires ${key}.`);
   integer(args, "number", 1, Number.MAX_SAFE_INTEGER);
+  integer(args, "runId", 1, Number.MAX_SAFE_INTEGER);
   integer(args, "commentId", 1, Number.MAX_SAFE_INTEGER);
   integer(args, "page", 1, 1000);
   integer(args, "perPage", 1, operation === "list_pull_request_review_threads" ? 50 : 100);

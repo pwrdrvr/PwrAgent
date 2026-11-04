@@ -4,7 +4,8 @@ import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, 
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { releaseMetadata } from "./release.mjs";
+import { checkPublicRegistry, releaseMetadata } from "./release.mjs";
+import { currentReleaseSource } from "./release-context.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 // macOS TMPDIR can leave too few bytes for the daemon's Unix socket path.
@@ -17,7 +18,10 @@ const run = (command, args, options = {}) => execFileSync(command, args, {
 try {
   mkdirSync(output, { recursive: true });
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-  releaseMetadata(pkg);
+  const desktop = JSON.parse(readFileSync(new URL("../../../apps/desktop/package.json", import.meta.url), "utf8"));
+  const metadata = releaseMetadata(pkg, { desktopVersion: desktop.version });
+  const context = process.env.RELEASE_TAG ? currentReleaseSource() : undefined;
+  const source = context ? { tag: context.tag, commit: context.commit } : undefined;
   const require = createRequire(import.meta.url);
   const ptyRequire = createRequire(require.resolve("node-pty/package.json"));
   const nativePackages = [["node-pty", require], ["node-addon-api", ptyRequire]];
@@ -29,6 +33,7 @@ try {
   for (const file of ["package.json", "bin", "src", "examples", "README.md", "LICENSE", "dist", "licenses"]) {
     cpSync(path.join(root, file), path.join(staging, file), { recursive: true, dereference: true });
   }
+  if (source) writeFileSync(path.join(staging, "package.json"), JSON.stringify({ ...pkg, pwragentRelease: source }, null, 2) + "\n");
   for (const [name, resolver] of nativePackages) {
     cpSync(path.dirname(resolver.resolve(`${name}/package.json`)), path.join(staging, "node_modules", name), { recursive: true, dereference: true });
   }
@@ -48,6 +53,7 @@ try {
   const unpacked = (file) => run("tar", ["-xOf", tarball, `package/${file}`]);
   const packedPackage = JSON.parse(unpacked("package.json"));
   assert.deepEqual(releaseMetadata(packedPackage), releaseMetadata(pkg));
+  assert.deepEqual(packedPackage.pwragentRelease, source);
   assert.equal(unpacked("LICENSE"), readFileSync(path.join(root, "LICENSE"), "utf8"));
   const federationRequire = createRequire(require.resolve("@pwragent/federation/federation-transport"));
   const wsPackage = federationRequire.resolve("ws/package.json");
@@ -88,6 +94,10 @@ try {
   run(process.execPath, [path.join(root, "scripts/smoke-installed.mjs"), path.join(prefix, "bin/pwragent"), fixture, temporary],
     { cwd: temporary, env, stdio: "inherit" });
   copyFileSync(tarball, path.join(output, packed.filename));
+  if (source) {
+    packed.release = source;
+    await checkPublicRegistry(metadata, { integrity: packed.integrity, source, branch: context.branch });
+  }
   writeFileSync(path.join(output, "pack.json"), JSON.stringify(packed, null, 2) + "\n");
   console.log(`Validated ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes, ${packed.integrity}`);
 } finally {

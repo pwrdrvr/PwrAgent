@@ -12,6 +12,7 @@ const electronMocks = vi.hoisted(() => ({
 
 const appearanceMocks = vi.hoisted(() => ({
   appearance: {
+    calmMotion: false,
     density: "mission-control" as const,
     darkTheme: "tangerine-dark" as DesktopDarkTheme,
     lightTheme: "tangerine-light" as DesktopLightTheme,

@@ -17,19 +17,21 @@ The daemon owns its execution lifetime; an SSH forward only provides access.
 
 ## Install and update
 
-The first headless npm release is prepared as `0.1.0-alpha.1`; these commands
-become available after an operator publishes it. The existing npm `0.0.0`
-placeholder does not provide this implementation. Use the explicit prerelease
-channel rather than a bare `npm install pwragent` while `latest` is still the
-placeholder:
+Outpost ships with every desktop release, using the exact desktop version and
+source commit. Suffix-free versions use npm `latest`; alpha, beta, prerelease
+and rc versions use `next`. The existing npm `0.0.0` placeholder does not
+provide this implementation; these commands require a successful paired release.
+Use an exact version to match a desktop installation. See the
+[release contract](../../docs/headless-npm-release.md) for maintenance channels
+and publication verification.
 
 ```sh
-npm install --global pwragent@next
+npm install --global pwragent@latest
 pwragent --help
-# Update to the newest headless prerelease:
+# Or choose a reproducible version that matches your desktop:
+npm install --global pwragent@1.3.7
+# Prerelease desktop versions publish to next, once one has shipped:
 npm install --global pwragent@next
-# Or choose a reproducible version:
-npm install --global pwragent@0.1.0-alpha.1
 ```
 
 Provide **Node >=22 and npm separately**, on Linux (macOS is also supported for
@@ -47,6 +49,19 @@ does not upgrade an already running process: finish or interrupt active work,
 stop the daemon, install the selected version, and start it again. Do not remove
 the PwrAgent root, Codex home or workspace during updates. There is no automatic
 CLI updater or automatic systemd enablement.
+
+`pwragent --version` prints the installed package version. A published package
+also prints its release tag and source commit, for example
+`pwragent 1.3.8 (v1.3.8, commit 0123…)`. `pwragent version` prints the same
+fields as JSON. Neither needs a running daemon.
+
+`pwragent status` reports the daemon's version as `running`, read when that
+daemon started, and the package files as `installed`. `restartRequired` is
+`true` when they differ, so the update has not taken effect yet. A daemon
+started before version reporting has no `running` field and also reports
+`true`. Run `status` from the same installation as the daemon, such as the
+`/opt/pwragent` path in the systemd example; another installation compares its
+own files.
 
 ## systemd installation example
 
@@ -68,7 +83,7 @@ shell's Node version-manager initialization does not run under systemd.
 After publication, install a pinned version into the service prefix:
 
 ```sh
-sudo npm install --prefix /opt/pwragent --omit=dev --ignore-scripts pwragent@0.1.0-alpha.1
+sudo npm install --prefix /opt/pwragent --omit=dev --ignore-scripts pwragent@1.3.7
 sudo install -m 0644 /opt/pwragent/node_modules/pwragent/examples/pwragent-headless.service /etc/systemd/system/pwragent-headless.service
 # Review the account, paths, profile and Codex configuration before enabling:
 sudo systemctl daemon-reload
@@ -88,8 +103,9 @@ sudo -u pwragent env PWRAGENT_HOME=/var/lib/pwragent PWRAGENT_PROFILE=outpost \
 
 For a service update, finish or interrupt active work, run
 `sudo systemctl stop pwragent-headless.service`, repeat the prefix installation
-with the chosen new version (or `pwragent@next`), then run
-`sudo systemctl start pwragent-headless.service`. Compare the new example unit
+with the chosen new version (or `pwragent@latest`), then run
+`sudo systemctl start pwragent-headless.service`. Run the `status` command above
+and check that `restartRequired` is `false`. Compare the new example unit
 with the installed one before deliberately updating it; npm does not overwrite
 `/etc/systemd/system`. Stopping during a turn can leave its outcome `unknown`.
 
@@ -278,6 +294,15 @@ its `directoryKey`/`cwd`; omitting it selects the configured workspace root. Sel
 the defaults remain local and read-only. Launchpad requests for worktrees,
 grouping, environments or provider extensions are rejected before creation.
 
+A new thread is named from its first user message, shortened the way desktop
+names a thread before any helper-model title. The outpost has no helper model.
+The name is stored in `threads.json`, and subscribed viewers receive
+`thread/name/updated` with `titleSource: derived`, followed by a navigation
+invalidation. A later turn never renames a thread. An explicit `renameThread`
+always wins and is never replaced. A thread that still has a placeholder name,
+such as one created before this release, takes Codex's `preview` the next time
+it is read. The outpost does not set the Codex thread name.
+
 ## Identity, compute lifetime and remaining scope
 
 The private `federation.json` stores the retained peer ID, signing/Noise keys,
@@ -347,6 +372,7 @@ register a project. Enrollment and Git intake do not import the sender's Git or 
 
 | Service | Required grants | Supported behavior |
 | --- | --- | --- |
+| `backend.*` | Per method, from desktop's owner table in `@pwragent/federation` | Navigation reads need `thread_navigation`; thread detail, queue projection, launchpad config and `listBackends` need `thread_detail`; turns need `turn_control`; launchpads need `environment_actions` |
 | `outpost.projects.list` | `thread_navigation` | Owner project inventory |
 | `outpost.projects.create/add/remove` | `environment_actions` | Create/clone, register and unregister projects |
 | `pty.*` | `remote_pty` | Input, resize, ack flow control, snapshots, history and close |
@@ -462,6 +488,18 @@ desktop Vitest integration test runs its real `FederationRemoteBackendClient`
 against the daemon. External providers and Codex are mocked; no live peers,
 operator projects, credentials or compute machines are used. Ubuntu CI runs the
 Node suite; the desktop contract test runs on POSIX lanes.
+
+The owner conformance suite
+(`apps/desktop/src/main/__tests__/owner-conformance.test.ts`) runs one thread's
+life through the owner methods both hosts implement. It runs on this daemon and
+on desktop's real owner, and compares each response and event. Each known
+difference is a line in `owner-conformance-baseline.json` beside it, so the
+suite fails on any new difference and names its method. After fixing a
+difference, or changing the contract on purpose, record the result:
+
+```sh
+UPDATE_OWNER_CONFORMANCE=1 pnpm test apps/desktop/src/main/__tests__/owner-conformance.test.ts
+```
 
 A separate live smoke test installed the packed tarball and official Codex
 0.159.2 in a Node 24 Debian Linux arm64 Docker image. It used an unprivileged

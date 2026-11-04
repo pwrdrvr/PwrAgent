@@ -6,6 +6,10 @@ const fixture = vi.hoisted(() => ({
   listThreads: vi.fn(async (_params: Record<string, unknown>): Promise<AppServerThreadSummary[]> => []),
   managed: new Set<string>(),
   loadIndex: vi.fn(),
+  raisePlan: vi.fn(async (_registry: unknown, thread: { threadId: string }, plan: { title: string }) => ({
+    id: "plan-card", backend: "codex", threadId: thread.threadId, key: "plan", kind: "reminder", status: "open",
+    title: `Plan: ${plan.title}`, createdAt: 1, updatedAt: 1,
+  })),
 }));
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -22,6 +26,7 @@ vi.mock("../thread-todos/thread-todo-runtime", () => ({
     mergeMethodPreferences: () => ({}),
   }),
   listThreadTodoProjects: vi.fn(),
+  raiseThreadTodoPlan: fixture.raisePlan,
   setThreadTodoProject: vi.fn(),
 }));
 vi.mock("../thread-reviews/thread-review-runtime", () => ({ getThreadReviewService: () => ({ list: () => [] }) }));
@@ -61,5 +66,33 @@ describe("listing To-dos on their owner", () => {
     fixture.listThreads.mockClear();
     expect((await localThreadTodoOperations.listTodos({ status: "open" })).todos).toEqual([]);
     expect(fixture.listThreads).not.toHaveBeenCalled();
+  });
+});
+
+describe("raising a started thread's plan for a peer", () => {
+  const valid = { backend: "codex" as const, threadId: "peer-child", title: "Smoke test", items: [" Run lint ", "Ship"] };
+
+  it("raises the trimmed steps on the named thread", async () => {
+    await expect(localThreadTodoOperations.raisePlan(valid)).resolves.toMatchObject({ todo: { key: "plan" } });
+    expect(fixture.raisePlan).toHaveBeenLastCalledWith(expect.anything(), { backend: "codex", threadId: "peer-child" },
+      { title: "Smoke test", items: ["Run lint", "Ship"] });
+  });
+
+  it("clips an overlong title instead of refusing a plan the thread was already told about", async () => {
+    await localThreadTodoOperations.raisePlan({ ...valid, title: "x".repeat(200) });
+    expect(fixture.raisePlan.mock.lastCall?.[2]).toMatchObject({ title: "x".repeat(120) });
+  });
+
+  it.each([
+    ["an unknown backend", { backend: "other" }],
+    ["no thread", { threadId: " " }],
+    ["no title", { title: "" }],
+    ["no steps", { items: [] }],
+    ["a blank step", { items: ["Run lint", " "] }],
+    ["too many steps", { items: Array.from({ length: 21 }, (_, index) => `Step ${index}`) }],
+  ])("refuses %s", async (_name, change) => {
+    fixture.raisePlan.mockClear();
+    await expect(localThreadTodoOperations.raisePlan({ ...valid, ...change } as never)).rejects.toThrow();
+    expect(fixture.raisePlan).not.toHaveBeenCalled();
   });
 });

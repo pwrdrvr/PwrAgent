@@ -104,6 +104,7 @@ async function createThreadTitleRevealFixture(): Promise<{
             id: "thread-read-anchor",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-anchor",
             result: {
               entries: [
                 {
@@ -131,6 +132,7 @@ async function createThreadTitleRevealFixture(): Promise<{
             id: "thread-read-parent",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-parent",
             result: {
               entries: [
                 {
@@ -158,6 +160,7 @@ async function createThreadTitleRevealFixture(): Promise<{
             id: "thread-read-child",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-child",
             result: {
               entries: [
                 {
@@ -230,6 +233,39 @@ async function launchThreadTitleRevealApp() {
     .toContainText("Pin this thread before exercising the reveal.");
   return { app, fixture };
 }
+
+test("quick jump opens with ten recent threads and restores them after searching", async () => {
+  const { app, fixture } = await launchThreadTitleRevealApp();
+
+  try {
+    await app.window.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K");
+    const dialog = app.window.getByRole("dialog", { name: "Jump to thread" });
+    const input = dialog.getByRole("textbox");
+    const titles = dialog.locator(".jump-palette__row-title");
+    const recentTitles = [
+      "Pinned anchor thread",
+      ...Array.from({ length: 8 }, (_, index) => `Filler thread ${index + 1}`),
+      "Parent thread with child link",
+    ];
+    await expect(titles).toHaveText(recentTitles);
+    await expect(input).toBeFocused();
+    await dialog.screenshot({ path: test.info().outputPath("jump-recent-threads.png") });
+
+    await input.fill("Hidden linked child thread");
+    await expect(titles).toHaveText(["Hidden linked child thread"]);
+    await input.fill("");
+    await expect(titles).toHaveText(recentTitles);
+    await expect(dialog.getByRole("option", { selected: true })).toContainText("Pinned anchor thread");
+    await input.press("ArrowUp");
+    await expect(dialog.getByRole("option", { selected: true })).toContainText("Parent thread with child link");
+    await input.press("Enter");
+    await expect(dialog).toBeHidden();
+    await expect(app.window.getByRole("heading", { level: 2, name: "Parent thread with child link" })).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
 
 test("thread title reveals a linked child hidden by collapsed directory sections", async () => {
   const { app, fixture } = await launchThreadTitleRevealApp();

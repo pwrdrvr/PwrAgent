@@ -1,4 +1,10 @@
-import type { ThreadToolInvocationRecord } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE, type ThreadToolInvocationRecord } from "@pwragent/shared";
+
+/** What the deterministic detector reads from an invocation. */
+export type MonitorJobObservation = Pick<
+  ThreadToolInvocationRecord,
+  "backend" | "threadId" | "turnId" | "invocationId" | "toolName" | "category" | "normalizedCommand" | "observedAt"
+>;
 
 const HEURISTIC_LOOKBACK_MS = 5 * 60_000;
 const HEURISTIC_MIN_INVOCATIONS = 5;
@@ -63,12 +69,41 @@ export const MONITOR_JOB_SUGGESTION =
   "PwrAgent System - Monitor Job Suggestion: You appear to be repeatedly checking a long-running task. "
   + "Consider using create_monitor_delegation to avoid repeatedly waking this parent model and paying for its accumulated context. "
   + "Give the monitor the target, check interval, completion conditions, and problems to watch for. "
+  + "For a cloud task, include the selected MCP connectionId, sandbox/process IDs, durable paths, and exact read-only status tools (Sandboxer command_status/read_file, never exec). The worker uses search_mcp_tools/call_mcp_tool for those selected connections; verify that the needed tools are discoverable before delegating. "
   + "It will stop and report back when the task finishes or a specified problem occurs. "
   + "For an attached PR, first check PwrAgent's PR automation guidance and use watch_thread_pull_request when applicable. "
   + "For another thread's turn completion or PR prerequisite, use manage_thread_dependencies instead of polling or creating a monitor; it can wait before the PR exists. "
   + "After the monitor, PR watch, or dependency starts, end this turn if no unrelated work remains. "
   + "A monitor cannot inherit a parent-local session or cell ID; give it durable process, log, or status identifiers. "
   + "This is an automatic reminder, sent at most once this turn.";
+
+/**
+ * The Claude form. Claude waits in a background shell or a Monitor watcher
+ * rather than in repeated tool calls, so one CI wait is the signal.
+ */
+export const CLAUDE_MONITOR_JOB_SUGGESTION =
+  "PwrAgent System - Monitor Job Suggestion: This command waits on CI or polls a long-running task. "
+  + "Each Monitor event or background-task notification wakes this model with its whole context. "
+  + "For this thread's PR, call PwrAgent's watch_thread_pull_request instead; it wakes this thread once, on success or failure. "
+  + "For any other long wait, call create_monitor_delegation; a lightweight monitor polls and reports back. For cloud work, first verify read-only status tools through search_mcp_tools (Sandboxer command_status/read_file, never exec), then include the selected connectionId and durable cloud identifiers in the task. "
+  + `Load them with ToolSearch: select:mcp__${PWRAGENT_TOOL_NAMESPACE}__watch_thread_pull_request,`
+  + `mcp__${PWRAGENT_TOOL_NAMESPACE}__create_monitor_delegation. `
+  + "Then stop the watcher you started (TaskStop) and end this turn if no unrelated work remains. "
+  + "This is an automatic reminder, sent at most once this turn.";
+
+/**
+ * A command that blocks until CI finishes: a `gh` watch, or a shell loop
+ * that sleeps between CI status reads.
+ */
+export function isCiWaitCommand(command: string): boolean {
+  const text = command.replace(/\s+/g, " ");
+  if (/(?:^|[;&|])\s*gh\s+pr\s+checks\b[^|;&]*\s--watch(?:\s|$|=true(?:\s|$))/.test(text)) return true;
+  if (/(?:^|[;&|])\s*gh\s+run\s+watch(?:\s|$)/.test(text)) return true;
+  return /\b(?:while|until)\b/.test(text)
+    && /\bsleep\s+\d/.test(text)
+    && (/\bgh\s+(?:pr\s+(?:checks|view)|run\s+(?:view|list))\b/.test(text)
+      || /\bgh\s+api\s+\S*(?:check-runs|check-suites|actions\/runs|\/status)\b/.test(text));
+}
 
 /** Observe protocol boundaries only. No timers, model calls, or per-poll writes. */
 export class MonitorJobSuggestionDetector {
@@ -83,10 +118,11 @@ export class MonitorJobSuggestionDetector {
     this.turns.delete(`${backend}:${threadId}`);
   }
 
-  observe(record: ThreadToolInvocationRecord): boolean {
+  observe(record: MonitorJobObservation): boolean {
     if (!record.turnId) return false;
+    const ciWait = isCiWaitCommand(record.normalizedCommand ?? "");
     const signal = pollingSignal(record);
-    if (!signal) return false;
+    if (!signal && !ciWait) return false;
     const threadKey = `${record.backend}:${record.threadId}`;
     const key = `${record.turnId}:${signal}`;
     let state = this.turns.get(threadKey);
@@ -95,6 +131,10 @@ export class MonitorJobSuggestionDetector {
       this.turns.set(threadKey, state);
     }
     if (state.suggested || state.seen.has(record.invocationId)) return false;
+    if (ciWait) {
+      state.suggested = true;
+      return true;
+    }
     state.seen.add(record.invocationId);
     // Bound retained evidence even if a provider never emits turn completion.
     if (state.seen.size > 100) state.seen.delete(state.seen.values().next().value!);
@@ -262,13 +302,15 @@ export function parseMonitorJobHeuristicDecision(
   };
 }
 
-function pollingSignal(record: ThreadToolInvocationRecord): string | undefined {
+function pollingSignal(record: MonitorJobObservation): string | undefined {
   const tool = record.toolName.split(/[./]/).pop() ?? record.toolName;
   if (record.category === "polling" && record.normalizedCommand) {
     return record.normalizedCommand;
   }
   if (tool === "sleep" || tool.endsWith("__sleep")) return "sleep";
-  const command = record.normalizedCommand ?? "";
+  // `cd <dir> && gh pr checks 8` is the same check as `gh pr checks 8`.
+  const command = (record.normalizedCommand ?? "")
+    .replace(/^(?:cd\s+(?:"[^"]*"|'[^']*'|[^\s;&]+)\s*(?:;|&&)\s*)+/, "");
   if (/^sleep\s+\d/.test(command)) return "sleep";
   // Group only repeated read-only status queries. Logs, mutations, and PR
   // metadata reads are investigation/work, not evidence of a polling loop.

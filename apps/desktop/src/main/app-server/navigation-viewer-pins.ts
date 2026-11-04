@@ -1,8 +1,9 @@
 import path from "node:path";
 import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey,
   orderByHomePreference } from "@pwragent/shared";
-import type { LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared";
-import type { NavigationQueryIndex } from "./navigation-query-projection";
+import type { FederationRemoteTarget, LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity,
+  NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import type { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 
@@ -169,14 +170,50 @@ function remoteDirectoryPlaceholder(
     return undefined;
   }
 
+  // The key stays name-based so existing rows keep their grouping. The
+  // owner's repository identity rides along, so the row's New chat menu
+  // matches peers by origin rather than by folder name alone.
   return {
     key: `unconfigured-directory:${encodeURIComponent(label.toLowerCase())}`,
     kind: "directory",
     label,
     localAvailability: "unconfigured",
+    ...(home.repositoryKey ? { repositoryKey: home.repositoryKey } : {}),
+    ...(home.repositoryKeys?.length ? { repositoryKeys: [...home.repositoryKeys] } : {}),
     threadKeys: [],
     needsAttentionCount: 0,
   };
+}
+
+/**
+ * One placeholder can hold threads from two repositories that share a
+ * folder name. It then stands for both, so a peer with either counts as
+ * having the project. A thread whose owner sent no identity adds nothing:
+ * it cannot say which repository it is in.
+ */
+function mergePlaceholderRepositories(
+  existing: NavigationDirectorySummary,
+  incoming: NavigationDirectorySummary,
+): NavigationDirectorySummary {
+  const incomingRepositories = repositoriesOf(incoming);
+  if (!incomingRepositories.length) return existing;
+  const existingRepositories = repositoriesOf(existing);
+  if (!existingRepositories.length) {
+    return {
+      ...existing,
+      ...(incoming.repositoryKey ? { repositoryKey: incoming.repositoryKey } : {}),
+      ...(incoming.repositoryKeys ? { repositoryKeys: incoming.repositoryKeys } : {}),
+    };
+  }
+  const added = incomingRepositories.filter((repository) => !existingRepositories.includes(repository));
+  return added.length
+    ? { ...existing, repositoryKeys: [...existing.repositoryKeys ?? [], ...added] }
+    : existing;
+}
+
+function repositoriesOf(directory: NavigationDirectorySummary): string[] {
+  return [directory.repositoryKey, ...directory.repositoryKeys ?? []]
+    .filter((repository): repository is string => Boolean(repository));
 }
 
 function linkedDirectoryMatchesProjectKey(
@@ -209,6 +246,7 @@ export function attachRemoteThreadsToLocalDirectories(
     number,
     Array<{ threadKey: string; inInbox: boolean }>
   >();
+  const placeholderThreads = new Map<number, NavigationThreadSummary[]>();
   for (const thread of remoteThreads) {
     const threadKey = thread.federation?.ref
       ? federatedThreadIdentityKey(thread.federation.ref)
@@ -228,6 +266,21 @@ export function attachRemoteThreadsToLocalDirectories(
       if (homeIndex === -1) {
         homeIndex = mergedDirectories.push(placeholder) - 1;
       }
+    } else if (mergedDirectories[homeIndex]!.localAvailability === "unconfigured") {
+      // A later thread finds an earlier thread's placeholder by name. Only
+      // its home project's identity belongs there: a secondary link's name
+      // can match too, and the home repository is a different project.
+      const placeholder = remoteDirectoryPlaceholder(thread);
+      if (placeholder?.key === mergedDirectories[homeIndex]!.key) {
+        mergedDirectories[homeIndex] = mergePlaceholderRepositories(mergedDirectories[homeIndex]!, placeholder);
+      }
+    }
+    // Every member counts, including one that found the placeholder by
+    // name after an earlier thread created it.
+    if (mergedDirectories[homeIndex]?.localAvailability === "unconfigured") {
+      const members = placeholderThreads.get(homeIndex) ?? [];
+      members.push(thread);
+      placeholderThreads.set(homeIndex, members);
     }
     const added = addedByDirectoryIndex.get(homeIndex) ?? [];
     added.push({ threadKey, inInbox: Boolean(thread.inbox?.inInbox) });
@@ -243,8 +296,10 @@ export function attachRemoteThreadsToLocalDirectories(
     if (!added?.length) {
       return directory;
     }
+    const peerProject = placeholderPeerProject(directory, placeholderThreads.get(index));
     return {
       ...directory,
+      ...peerProject,
       threadKeys: [
         ...directory.threadKeys,
         ...added.map((entry) => entry.threadKey),
@@ -258,3 +313,34 @@ export function attachRemoteThreadsToLocalDirectories(
   });
 }
 
+
+/**
+ * The one peer project a placeholder's threads live in, with that project's
+ * Forge Automation as its owner reported it on the rows. None when the
+ * threads come from more than one peer or project, or no row names its
+ * project (an owner that predates `homeProject`): the row then shows no
+ * setting rather than one that covers only some of its threads.
+ */
+function placeholderPeerProject(
+  directory: NavigationDirectorySummary,
+  threads: readonly NavigationThreadSummary[] | undefined,
+): Pick<NavigationDirectorySummary, "peerProject" | "forgeAutomation"> {
+  if (directory.kind !== "directory" || directory.localAvailability !== "unconfigured" || !threads?.length) {
+    return {};
+  }
+  let target: FederationRemoteTarget | undefined;
+  let home: NavigationThreadSummary["homeProject"];
+  for (const thread of threads) {
+    const owner = thread.federation?.ref.target;
+    if (owner?.scope !== "remote" || (target && owner.instanceId !== target.instanceId)) return {};
+    target ??= owner;
+    if (!thread.homeProject) continue;
+    if (home && home.directoryKey !== thread.homeProject.directoryKey) return {};
+    home ??= thread.homeProject;
+  }
+  if (!target || !home) return {};
+  return {
+    peerProject: { target: { scope: "remote", instanceId: target.instanceId }, directoryKey: home.directoryKey },
+    ...(home.forgeAutomation ? { forgeAutomation: home.forgeAutomation } : {}),
+  };
+}

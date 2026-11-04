@@ -100,6 +100,19 @@ describe("PwrGit OAuth connection", () => {
     });
   });
 
+  it("requires a running desktop without launching an installed PwrGit", async () => {
+    const openPath = vi.fn(async () => "");
+    const service = create({
+      resolveInstallPaths: () => [fileURLToPath(import.meta.url)],
+      fetchFn: async () => { throw new Error("ECONNREFUSED"); },
+      openPath,
+    });
+    await expect(service.connect()).resolves.toMatchObject({
+      outcome: "needs_local_agent_access", status: { availability: "installed" },
+    });
+    expect(openPath).not.toHaveBeenCalled();
+  });
+
   it("does not treat a legacy direct-launch token as an OAuth authorization", async () => {
     await expect(create({ settings: settings(JSON.stringify({ token: "legacy" })) }).readStatus())
       .resolves.toMatchObject({ configured: false, availability: "running" });

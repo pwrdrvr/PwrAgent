@@ -78,6 +78,8 @@ vi.mock("@pwrdrvr/agent-transport", async (importOriginal) => ({
   JsonRpcConnection: class {
     setNotificationHandler(handler: typeof connection.notify) { connection.notify = handler; }
     setRequestHandler() {}
+    // The client wraps request at construction; this test sends none.
+    request() { return Promise.reject(new Error("no Codex requests in this test")); }
   },
 }));
 

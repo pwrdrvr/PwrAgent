@@ -42,6 +42,9 @@ export class TerminalReplay {
   private parsedTail = "";
   private seq = 0;
   private updatedAt = 0;
+  /** The last serialized screen, until a write or resize changes it. A thread
+   *  view remount attaches every pane at once, and most panes are idle. */
+  private serialized: TerminalSnapshot | undefined;
   pendingCharacters = 0;
 
   whenDrained(): Promise<void> { return this.queue; }
@@ -75,6 +78,7 @@ export class TerminalReplay {
     }
     this.queue = this.queue.then(() => new Promise<void>((resolve) => {
       this.terminal.write(data, () => {
+        this.serialized = undefined;
         this.pendingCharacters -= data.length;
         this.parsedTail = tail;
         this.parsedSeq = frame.seq;
@@ -87,7 +91,9 @@ export class TerminalReplay {
 
   resize(cols: number, rows: number): void {
     this.queue = this.queue.then(() => {
+      const { cols: beforeCols, rows: beforeRows } = this.terminal;
       this.terminal.resize(clampTerminalColumns(cols), clampTerminalRows(rows));
+      if (this.terminal.cols !== beforeCols || this.terminal.rows !== beforeRows) this.serialized = undefined;
     });
   }
 
@@ -95,25 +101,35 @@ export class TerminalReplay {
     // Insert serialization into the same queue as parsing. Later writes must
     // not advance the screen past the watermark while serialization awaits.
     const result = this.queue.then(() => {
-      let scrollback = 2_000;
-      let data = this.serializer.serialize({ scrollback });
-      while (Buffer.byteLength(data) > TERMINAL_SNAPSHOT_LIMIT && scrollback > 0) {
-        scrollback = Math.floor(scrollback / 2);
-        data = this.serializer.serialize({ scrollback });
-      }
-      const truncated = scrollback < 2_000;
-      if (Buffer.byteLength(data) > TERMINAL_SNAPSHOT_LIMIT) {
-        // A pathological screen with an SGR change per cell can exceed the
-        // byte cap even without scrollback. Keep safe text, never cut ANSI.
-        data = this.plainText().slice(-64 * 1024).replace(/\n/g, "\r\n");
-      }
-      return {
-        data, pendingEscape: this.parsedTail || undefined, seq: this.parsedSeq, timestamp: this.updatedAt,
-        cols: this.terminal.cols, rows: this.terminal.rows, truncated,
-      };
+      // Serializing a full scrollback costs main 10-25 ms. Reuse it while the
+      // screen is unchanged.
+      this.serialized ??= this.serialize();
+      return { ...this.serialized };
     });
-    this.queue = result.then(() => undefined);
+    // A failed snapshot must not stop later output from being parsed.
+    this.queue = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  private serialize(): TerminalSnapshot {
+    let scrollback = 2_000;
+    let data = this.serializer.serialize({ scrollback });
+    let bytes = Buffer.byteLength(data);
+    while (bytes > TERMINAL_SNAPSHOT_LIMIT && scrollback > 0) {
+      scrollback = Math.floor(scrollback / 2);
+      data = this.serializer.serialize({ scrollback });
+      bytes = Buffer.byteLength(data);
+    }
+    const truncated = scrollback < 2_000;
+    if (bytes > TERMINAL_SNAPSHOT_LIMIT) {
+      // A pathological screen with an SGR change per cell can exceed the
+      // byte cap even without scrollback. Keep safe text, never cut ANSI.
+      data = this.plainText().slice(-64 * 1024).replace(/\n/g, "\r\n");
+    }
+    return {
+      data, pendingEscape: this.parsedTail || undefined, seq: this.parsedSeq, timestamp: this.updatedAt,
+      cols: this.terminal.cols, rows: this.terminal.rows, truncated,
+    };
   }
 
   /** Raw reads are event deltas. Plain reads are screen snapshots, not deltas. */
@@ -149,7 +165,7 @@ export class TerminalReplay {
       seq: this.parsedSeq,
       timestamp: this.updatedAt,
     }));
-    this.queue = result.then(() => undefined);
+    this.queue = result.then(() => undefined, () => undefined);
     return result;
   }
 

@@ -7,6 +7,7 @@ import type {
   ThreadTodoItem,
   ThreadTodoMergeMethod,
   ThreadTodoModelSettings,
+  ThreadTodoMessageTarget,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoProject,
   ThreadTodoResolution,
@@ -26,8 +27,15 @@ import {
   threadTodoKindForAction,
   threadTodoBlockingItems,
   threadTodoItemNoun,
+  threadTodoSteps,
 } from "@pwragent/shared";
 import type { ThreadTodoStore } from "./thread-todo-store.js";
+import {
+  THREAD_TODO_PLAN_DETAIL,
+  THREAD_TODO_PLAN_KEY,
+  threadTodoPlanTitle,
+  type ThreadTodoPlan,
+} from "./thread-todo-plan.js";
 
 type StartThreadAction = Extract<ThreadTodoAction, { type: "start_thread" }>;
 
@@ -38,6 +46,13 @@ type StartThreadAction = Extract<ThreadTodoAction, { type: "start_thread" }>;
  * once the review starts.
  */
 export type ThreadTodoActionRunners = {
+  sendMessage?: (params: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    target: ThreadTodoMessageTarget;
+    prompt: string;
+    todo: ThreadTodoDispatchCard;
+  }) => Promise<{ summary: string }>;
   mergePullRequest: (params: {
     cwd?: string;
     pullRequest: string;
@@ -54,7 +69,10 @@ export type ThreadTodoActionRunners = {
     cwd?: string;
     crossProject: boolean;
     action: StartThreadAction;
+    todo: ThreadTodoDispatchCard;
     modelSettings?: ThreadTodoModelSettings;
+    /** The card's plain steps, raised as the new thread's own card. */
+    plan?: ThreadTodoPlan;
   } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread & {
     dispatchSettings?: { settings: ThreadTodoModelSettings; source: ThreadTodoModelSettings };
   }>;
@@ -66,10 +84,24 @@ export type ThreadTodoActionRunners = {
     project?: ThreadTodoProject;
     crossProject: boolean;
     action: StartThreadAction;
+    todo: ThreadTodoDispatchCard;
     /** Checked against the peer's catalog; absent uses the peer's defaults. */
     modelSettings?: ThreadTodoModelSettings;
-  } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread>;
+    /** Raised on the peer when it answers `threadTodos.raisePlan`. */
+    plan?: ThreadTodoPlan;
+  } & ThreadTodoStartChoices) => Promise<ThreadTodoInstanceStartedThread>;
 };
+
+export type ThreadTodoInstanceStartedThread = ThreadTodoStartedThread & {
+  /** Added to the card's result, as when the peer could not honor its Where. */
+  notice?: string;
+};
+
+/**
+ * The card whose action sent a prompt, recorded on the message's origin. The
+ * card is resolved by then, so this is display text, never a link.
+ */
+export type ThreadTodoDispatchCard = { id: string; title?: string };
 
 /** What the operator chose on a handoff card besides its model. */
 export type ThreadTodoStartChoices = {
@@ -342,6 +374,34 @@ export class ThreadTodoService {
     return { todo, created: true };
   }
 
+  /**
+   * The checklist a thread started from a card works through: that card's
+   * plain steps, as the new thread's own card keyed `plan`. One commit. The
+   * card is a reminder, so the thread ticks its steps with update_todo and
+   * can restate or resolve it; a repeat for the same thread merges into the
+   * open card instead of adding one.
+   */
+  raisePlan(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    cwd?: string;
+    sourceProject?: ThreadTodoProject;
+    plan: ThreadTodoPlan;
+  }): ThreadTodo {
+    return this.add({
+      backend: params.backend,
+      threadId: params.threadId,
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      ...(params.sourceProject ? { sourceProject: params.sourceProject } : {}),
+      input: {
+        title: threadTodoPlanTitle(params.plan.title),
+        detail: THREAD_TODO_PLAN_DETAIL,
+        key: THREAD_TODO_PLAN_KEY,
+        items: params.plan.items,
+      },
+    }).todo;
+  }
+
   /** Announce a card written outside the service's own mutations. */
   publish(todo: ThreadTodo): void {
     this.emit(todo);
@@ -597,6 +657,7 @@ export class ThreadTodoService {
       mergeMethod?: ThreadTodoMergeMethod;
       rememberMergeMethod?: boolean;
       startOnInstanceId?: string;
+      messageTarget?: ThreadTodoMessageTarget;
       modelSettings?: ThreadTodoModelSettings;
       /** A run that succeeds marks the card done, so it asks the same. */
       allowOpenItems?: boolean;
@@ -634,8 +695,25 @@ export class ThreadTodoService {
     // raising thread's workspace.
     const cwd = todo.targetProject ? todo.targetProject.path : todo.cwd;
     const crossProject = todo.targetProject !== undefined;
+    // The card's own title: the action's names the new thread, which shows it.
+    const dispatchCard: ThreadTodoDispatchCard = { id: todo.id, title: todo.title };
     this.running.add(id);
     try {
+      if (action.type === "send_message" || options.messageTarget) {
+        if (action.type !== "send_message" && action.type !== "start_thread") {
+          throw new ThreadTodoError("invalid_arguments", "Only a handoff can be sent to another thread.");
+        }
+        const target = options.messageTarget ?? (action.type === "send_message" ? action.target : undefined);
+        if (!target || !runners.sendMessage) throw new Error("Sending a message is not available.");
+        if (!target.instanceId && target.backend === todo.backend && target.threadId === todo.threadId) {
+          throw new ThreadTodoError("invalid_arguments", "Use Do it here for this card's own thread.");
+        }
+        const sent = await runners.sendMessage({
+          sourceBackend: todo.backend, sourceThreadId: todo.threadId, target, prompt: action.prompt,
+          todo: dispatchCard,
+        });
+        return this.finish(id, { result: sent.summary });
+      }
       if (action.type === "merge_pull_request") {
         const method = options.mergeMethod
           ?? (project ? this.store.getProjectMergeMethod(project.key) : undefined)
@@ -656,12 +734,19 @@ export class ThreadTodoService {
         });
         return this.finish(id, { result: merged.summary });
       }
+      if (action.type !== "start_thread") throw new Error("Unsupported to-do action.");
       const choices: ThreadTodoStartChoices = {
         ...(options.workMode ? { workMode: options.workMode } : {}),
         ...(options.environment ? { environment: options.environment } : {}),
         ...(options.speed ? { speed: options.speed } : {}),
       };
-      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> = startOnInstance && options.startOnInstanceId
+      // Prerequisites were the operator's; the plain steps are the new
+      // thread's work, so only those go along.
+      const steps = threadTodoSteps(todo).map((item) => item.text);
+      const plan: ThreadTodoPlan | undefined = steps.length > 0
+        ? { title: action.title ?? todo.title, items: steps }
+        : undefined;
+      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> & Pick<ThreadTodoInstanceStartedThread, "notice"> = startOnInstance && options.startOnInstanceId
         ? await startOnInstance({
             instanceId: options.startOnInstanceId,
             sourceBackend: todo.backend,
@@ -669,9 +754,11 @@ export class ThreadTodoService {
             project,
             crossProject,
             action,
+            todo: dispatchCard,
             // The thread's remembered dispatch was checked against this
             // machine's catalog, so only an explicit pick goes to a peer.
             ...(options.modelSettings ? { modelSettings: options.modelSettings } : {}),
+            ...(plan ? { plan } : {}),
             ...choices,
           })
         : await runners.startThread({
@@ -680,8 +767,10 @@ export class ThreadTodoService {
             cwd,
             crossProject,
             action,
+            todo: dispatchCard,
             modelSettings: options.modelSettings
               ?? this.store.getThreadModelSettings(todo.backend, todo.threadId),
+            ...(plan ? { plan } : {}),
             ...choices,
           });
       if (started.dispatchSettings) {
@@ -689,10 +778,11 @@ export class ThreadTodoService {
           started.dispatchSettings.settings, started.dispatchSettings.source);
       }
       const { backend, threadId, instanceId, instanceLabel } = started;
+      const result = started.instanceLabel
+        ? `Started thread on ${started.instanceLabel}`
+        : "Started thread";
       return this.finish(id, {
-        result: started.instanceLabel
-          ? `Started thread on ${started.instanceLabel}`
-          : "Started thread",
+        result: started.notice ? `${result}. ${started.notice}` : result,
         startedThread: { backend, threadId, ...(instanceId ? { instanceId } : {}), ...(instanceLabel ? { instanceLabel } : {}) },
       });
     } catch (error) {
@@ -797,6 +887,12 @@ function patchAction(
     return action;
   }
   const fields = Object.keys(patch);
+  if (action?.type === "send_message") {
+    if (fields.some((field) => field !== "prompt")) {
+      throw new ThreadTodoError("invalid_arguments", "A message card takes only prompt updates. Raise it again with the same key to change its destination.");
+    }
+    return patch.prompt ? { ...action, prompt: patch.prompt } : action;
+  }
   if (action?.type === "merge_pull_request") {
     const misplaced = fields.filter((field) => field !== "pullRequest");
     if (misplaced.length > 0) {

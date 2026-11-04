@@ -9,7 +9,7 @@ import type {
   ThreadDependencyCondition,
   ThreadDependencyDeliveryTarget,
 } from "@pwragent/shared";
-import { THREAD_DEPENDENCY_CONDITION_PHRASES, threadDependencyDeliveryTarget } from "@pwragent/shared";
+import { THREAD_DEPENDENCY_CONDITION_PHRASES, pullRequestMatchesRepositoryKey, threadDependencyDeliveryTarget } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { Select } from "../../components/Select";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -59,12 +59,8 @@ const messageFrom = (reason: unknown): string => reason instanceof Error ? reaso
 
 /** Main follows only primary-workspace PRs, keyed like `collectPrPollTargets`. */
 function primaryPullRequests(row: NavigationRow): PrSummary[] {
-  return (row.prs ?? []).filter((pr) => {
-    const repository = pr.sourceRepository ?? pr;
-    const repositoryKey = [repository.provider, repository.org, repository.repo]
-      .map((part) => part.trim().toLowerCase()).join("/");
-    return Boolean(pr.url) && row.primaryGitRepository === repositoryKey;
-  });
+  return (row.prs ?? []).filter((pr) =>
+    Boolean(pr.url) && pullRequestMatchesRepositoryKey(pr, row.primaryGitRepository));
 }
 
 export type ContinueAfterDialogProps = {

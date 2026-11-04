@@ -59,6 +59,7 @@ export type CompleteMonitoringToolArgs = {
 export type TaskMonitorUsageSnapshot = {
   cost?: {
     model: string;
+    pricingBasis?: "provider-reported";
     totalUsd: number;
   };
   fastMode?: boolean;

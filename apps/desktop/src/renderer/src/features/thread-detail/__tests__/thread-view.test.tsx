@@ -482,6 +482,143 @@ describe("ThreadView", () => {
     expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
   });
 
+  it.each(["submitted", "edited"] as const)(
+    "does not restore a rewound prompt again after it is %s and the composer remounts",
+    async (action) => {
+      const thread = rewindThread("claude");
+      const startTurn = vi.fn(async () => ({ backend: "claude" as const, threadId: thread.id, turnId: "resubmitted" }));
+      const { result } = renderHook(() => useComposerDraftStore());
+      const props: Omit<ThreadViewProps, "terminals"> = {
+        addOptimisticUserMessage: () => "optimistic-1",
+        backends: [rewindBackend("claude", "Claude")],
+        clearPendingRequest: () => undefined,
+        composerDisabled: false,
+        composerDraftStore: result.current,
+        desktopApi: {
+          startTurn,
+          rewindThread: async () => ({
+            backend: "claude", threadId: thread.id,
+            target: { messageId: "prompt-2", turnId: "turn-2" },
+            mode: "conversation", updatedAt: 2000,
+          }),
+        },
+        loading: false,
+        loadingMore: false,
+        messageCount: 4,
+        onLoadOlder: async () => undefined,
+        removeOptimisticMessage: () => undefined,
+        selectedThread: thread,
+        skills: [],
+        transcriptEntries: rewindTranscript,
+      };
+      const view = render(<ThreadView {...props} />);
+      const prompt = screen.getByText("Try holding the lock until the child exits instead.")
+        .closest(".transcript-list__item") as HTMLElement;
+      fireEvent.click(within(prompt).getByRole("button", { name: "Rewind to before this message" }));
+      const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+      fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
+      const reply = screen.getByRole("textbox", { name: "Reply" });
+      await waitFor(() => expect(reply).toHaveTextContent("Try holding the lock until the child exits instead."));
+
+      if (action === "submitted") {
+        fireEvent.keyDown(reply, { key: "Enter" });
+        await waitFor(() => {
+          expect(startTurn).toHaveBeenCalledOnce();
+          expect(reply.textContent).toBe("");
+        });
+      } else {
+        fireEvent.change(reply, { target: { value: "Keep this edited draft" } });
+      }
+
+      view.rerender(<ThreadView {...props} selectedThread={undefined} />);
+      expect(screen.queryByRole("textbox", { name: "Reply" })).not.toBeInTheDocument();
+      view.rerender(<ThreadView {...props} />);
+      const reopenedReply = screen.getByRole("textbox", { name: "Reply" });
+      expect(reopenedReply).not.toBe(reply);
+      await waitFor(() => {
+        if (action === "submitted") expect(reopenedReply.textContent).toBe("");
+        else expect(reopenedReply).toHaveTextContent("Keep this edited draft");
+      });
+      if (action === "edited") expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
+      else expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["restored", "edited", "replaced"] as const)(
+    "recognizes a %s rewound draft when Undo follows a launchpad visit",
+    async (draftState) => {
+      const thread = rewindThread("claude");
+      const undoThreadRewind = vi.fn(async () => ({
+        backend: "claude" as const, threadId: thread.id, rewindId: "rewind-1", updatedAt: 4000,
+      }));
+      const { result } = renderHook(() => useComposerDraftStore());
+      const props: Omit<ThreadViewProps, "terminals"> = {
+        addOptimisticUserMessage: () => "optimistic-1",
+        backends: [rewindBackend("claude", "Claude", { files: false, undo: true })],
+        clearPendingRequest: () => undefined,
+        composerDisabled: false,
+        composerDraftStore: result.current,
+        desktopApi: {
+          undoThreadRewind,
+          rewindThread: async () => ({
+            backend: "claude", threadId: thread.id, rewindId: "rewind-1",
+            target: { messageId: "prompt-2", turnId: "turn-2" },
+            mode: "conversation", updatedAt: 2000,
+          }),
+        },
+        loading: false,
+        loadingMore: false,
+        messageCount: 4,
+        onLoadOlder: async () => undefined,
+        removeOptimisticMessage: () => undefined,
+        selectedThread: thread,
+        skills: [],
+        transcriptEntries: rewindTranscript,
+      };
+      const view = render(<ThreadView {...props} />);
+      const prompt = screen.getByText("Try holding the lock until the child exits instead.")
+        .closest(".transcript-list__item") as HTMLElement;
+      fireEvent.click(within(prompt).getByRole("button", { name: "Rewind to before this message" }));
+      const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+      fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
+      const reply = screen.getByRole("textbox", { name: "Reply" });
+      await waitFor(() => expect(reply).toHaveTextContent("Try holding the lock until the child exits instead."));
+      if (draftState === "edited") {
+        fireEvent.change(reply, { target: { value: "Keep holding the lock" } });
+      } else if (draftState === "replaced") {
+        fireEvent.change(reply, { target: { value: "Discard this edited draft" } });
+        fireEvent.change(reply, { target: { value: "" } });
+        await waitFor(() => expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument());
+        fireEvent.change(reply, { target: { value: "Unrelated draft" } });
+      }
+
+      view.rerender(<ThreadView
+        {...props}
+        selectedThread={undefined}
+        selectedDirectory={{ key: "directory:/repo", kind: "directory", label: "Example", path: "/repo" }}
+        selectedLaunchpad={{
+          backend: "claude", directoryKey: "directory:/repo", directoryKind: "directory",
+          directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+          prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+        }}
+      />);
+      expect(screen.getByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+      view.rerender(<ThreadView
+        {...props}
+        selectedThread={{ ...thread, rewindLog: [{ id: "rewind-1", occurredAt: 2000, undoable: true }] }}
+        transcriptEntries={rewindTranscript.slice(0, 2).map((entry, index) => ({ ...entry, createdAt: 1000 + index }))}
+      />);
+      const reopenedReply = screen.getByRole("textbox", { name: "Reply" });
+      expect(reopenedReply).not.toBe(reply);
+      fireEvent.click(screen.getByRole("button", { name: "Undo rewind" }));
+      await waitFor(() => {
+        expect(undoThreadRewind).toHaveBeenCalledOnce();
+        expect(reopenedReply.textContent).toBe(draftState === "replaced" ? "Unrelated draft" : "");
+      });
+      expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+    },
+  );
+
   function renderGrokDialogThread(desktopApi: ThreadViewProps["desktopApi"]) {
     return render(
       <ThreadView
@@ -3054,7 +3191,7 @@ describe("ThreadView", () => {
     expect(screen.getByLabelText("Preparing transcript")).toHaveTextContent(
       "Running the PwrSnap setup first.",
     );
-    const setupRow = screen.getByLabelText("Env setup running");
+    const setupRow = screen.getByLabelText("Thread startup running");
     expect(setupRow.closest(".composer__band")).not.toBeNull();
     expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
     fireEvent.click(within(setupRow).getByRole("button", { expanded: false }));
@@ -3882,6 +4019,7 @@ describe("ThreadView", () => {
       },
       selectedLaunchpad: launchpad,
       pendingLaunchpadCreation: {
+        operationId: "startup-1", submittedAt: 1_000,
         selectionKey: "starting-launchpad:1", directoryKey: launchpad.directoryKey,
         directoryLabel: launchpad.directoryLabel, launchpad, composerScopeKey,
         setupProgressKey: "starting-launchpad:1",
@@ -4099,6 +4237,7 @@ describe("ThreadView", () => {
           prompt: "Inspect this screenshot", workMode: "worktree", createdAt: 1, updatedAt: 1,
         }}
         pendingLaunchpadCreation={{
+          operationId: "startup-1", submittedAt: 1_000,
           selectionKey: "starting-launchpad:1", directoryKey: "directory:/repo",
           directoryLabel: "Example",
           launchpad: {
@@ -7906,19 +8045,26 @@ describe("ThreadView", () => {
     }
   });
 
-  it("persists the environment failure dismissal when continuing anyway", async () => {
+  it.each(["owner-turn", undefined])("continues a remote environment launch without a viewer-local prompt (turn: %s)", async (turnId) => {
     const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({
       acknowledged: true,
       backend: "codex" as const,
       threadId: "thread-env-failure",
     }));
 
+    const continueThreadEnvironmentStartup = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-env-failure", turnId,
+    }));
+    const onActiveTurnIdChange = vi.fn();
+    const onPendingStatusChange = vi.fn();
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[]}
         composerDisabled={false}
-        desktopApi={{ acknowledgeThreadEnvironmentFailure }}
+        desktopApi={{ acknowledgeThreadEnvironmentFailure, continueThreadEnvironmentStartup }}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        onPendingStatusChange={onPendingStatusChange}
         loading={false}
         loadingMore={false}
         messageCount={0}
@@ -7935,6 +8081,7 @@ describe("ThreadView", () => {
             executionTarget: "local",
             setupStatus: "failed",
           },
+          federation: { ref: { backend: "codex", threadId: "thread-env-failure", target: { scope: "remote", instanceId: "windows-owner" } }, instanceLabel: "Windows" },
           linkedDirectories: [],
           inbox: { inInbox: true, reason: "new-thread" },
         }}
@@ -7946,18 +8093,77 @@ describe("ThreadView", () => {
       />
     );
 
-    // No optimistic prompt to send, so this is the pure-dismissal branch.
+    // Another viewer does not have the creating window's optimistic prompt.
     fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
 
     await waitFor(() => {
-      expect(acknowledgeThreadEnvironmentFailure).toHaveBeenCalledWith({
+      expect(continueThreadEnvironmentStartup).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-env-failure",
+        federationTarget: { scope: "remote", instanceId: "windows-owner" },
       });
+      expect(onActiveTurnIdChange).toHaveBeenCalledWith(turnId);
+      if (!turnId) expect(onPendingStatusChange).toHaveBeenLastCalledWith(undefined);
     });
+    expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", { name: "Continue anyway" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps the startup decision visible when the original request is unavailable", async () => {
+    const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({
+      acknowledged: true,
+      backend: "codex" as const,
+      threadId: "thread-env-failure",
+    }));
+
+    const continueThreadEnvironmentStartup = vi.fn(async () => {
+      throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
+    });
+    const onActiveTurnIdChange = vi.fn();
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ acknowledgeThreadEnvironmentFailure, continueThreadEnvironmentStartup }}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          executionMode: "full-access",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupStatus: "failed",
+          },
+          federation: { ref: { backend: "codex", threadId: "thread-env-failure", target: { scope: "remote", instanceId: "windows-owner" } }, instanceLabel: "Windows" },
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    // Another viewer does not have the creating window's optimistic prompt.
+    fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
+
+    await screen.findByText("The original request is unavailable. Send your prompt again to start this thread.");
+    expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Continue anyway" })).toBeInTheDocument();
+    expect(onActiveTurnIdChange).not.toHaveBeenCalledWith("owner-turn");
   });
 
   it("retires a stale environment failure once the thread's transcript has loaded", async () => {

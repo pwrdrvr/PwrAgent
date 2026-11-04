@@ -171,8 +171,11 @@ describe("Continue After dialog", () => {
   it("requires a PR choice among the primary-workspace PRs only", async () => {
     const withPrs = { ...target, primaryGitRepository: "github.com/acme/widgets", prs: [
       { provider: "github.com", org: "acme", repo: "widgets", number: 4127, url: "https://github.com/acme/widgets/pull/4127" },
-      { provider: "github.com", org: "acme", repo: "widgets", number: 4131, url: "https://github.com/acme/widgets/pull/4131" },
-      { provider: "github.com", org: "acme", repo: "docs", number: 77, url: "https://github.com/acme/docs/pull/77" },
+      { provider: "github.com", org: "acme", repo: "widgets", number: 4131, url: "https://github.com/acme/widgets/pull/4131",
+        explicitlyAttached: true, sourceRepository: { provider: "github.com", org: "contributor", repo: "widgets" } },
+      { provider: "github.com", org: "acme", repo: "docs", number: 77, url: "https://github.com/acme/docs/pull/77", explicitlyAttached: true },
+      { provider: "github.com", org: "acme", repo: "widgets", number: 78, url: "https://github.com/acme/widgets/pull/78",
+        sourceRepository: { provider: "github.com", org: "unrelated", repo: "widgets" } },
     ] } as unknown as NavigationThreadSummary;
     const manage = vi.fn(async () => ({ dependencies: [] }));
     const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([withPrs]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;

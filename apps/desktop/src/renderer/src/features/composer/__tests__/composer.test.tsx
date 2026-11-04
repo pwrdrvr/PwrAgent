@@ -3,6 +3,7 @@ import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
+import * as rateLimitSchedule from "../rate-limit-schedule";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "../../../test/phase-probes";
@@ -11,7 +12,9 @@ import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "re
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
   type BackendSummary,
+  type ProjectForgeAutomation,
   type AgentEvent,
   type CompactThreadRequest,
   type ComposerDraftRecoveryCandidate,
@@ -1027,6 +1030,93 @@ describe("Composer", () => {
     expect(onMaterializeLaunchpad).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["slash", false],
+    ["slash", true],
+    ["panel", false],
+    ["panel", true],
+  ] as const)("keeps a %s review behind the first launchpad message (starting scope: %s)", async (entry, startingScope) => {
+    const draftStore = createComposerDraftStore();
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "Check out PR #42 and attach it");
+    const materialization = createDeferred<void>();
+    const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(() => materialization.promise);
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend, threadId: request.threadId,
+      reviewThreadId: request.threadId, turnId: "review-turn",
+    }));
+    const startTurn = vi.fn();
+    const createScheduledThreadAction = vi.fn();
+    const steerTurn = vi.fn();
+    const backend = backendSummary("codex");
+    backend.capabilities.steerTurn = true;
+    const baseProps = {
+      backends: [backend], directory: retargetingPwrSnap, draftStore, skills: [],
+      desktopApi: { startReview, startTurn, createScheduledThreadAction, steerTurn },
+      onMaterializeLaunchpad,
+    };
+    const view = render(<Composer {...baseProps} launchpad={launchpad} />);
+    await clickButton("Start thread");
+    await waitFor(() => expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1));
+    expect(onMaterializeLaunchpad.mock.calls[0]?.[1]).toEqual([
+      { type: "text", text: "Check out PR #42 and attach it" },
+    ]);
+    const scopeKey = startingScope
+      ? `launchpad:starting:creation:${launchpad.directoryKey}`
+      : `launchpad:${launchpad.directoryKey}`;
+    const pendingComposer = <Composer {...baseProps} launchpad={launchpad}
+      launchpadMaterializing launchpadComposerScopeKey={scopeKey} />;
+    if (startingScope) view.rerender(pendingComposer);
+
+    const input = screen.getByLabelText("New thread");
+    fireEvent.change(input, { target: { value: entry === "panel" ? "/review" : "/review main" } });
+    await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+    if (entry === "panel") {
+      expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+      await clickButton("Start review");
+    }
+    await waitFor(() => expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main"));
+    expect(within(screen.getByLabelText("Queued message")).queryByRole("button", {
+      name: "Steer when ready",
+    })).not.toBeInTheDocument();
+    expect(draftStore.getQueuedTurns(scopeKey)[0].reviewCommand).toMatchObject({
+      target: { type: "baseBranch", branch: "main" },
+    });
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
+    expect(startReview).not.toHaveBeenCalled();
+    expect(createScheduledThreadAction).not.toHaveBeenCalled();
+    view.unmount();
+    const remounted = render(pendingComposer);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main");
+    expect(within(screen.getByLabelText("Queued message")).queryByRole("button", {
+      name: "Steer when ready",
+    })).not.toBeInTheDocument();
+
+    const thread: NavigationThreadSummary = {
+      id: "checkout-thread", source: "codex", title: "Check out PR #42", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "checkout-turn" },
+    };
+    await act(async () => {
+      handoffLaunchpadComposer(draftStore, scopeKey, thread);
+      materialization.resolve();
+      await materialization.promise;
+    });
+    remounted.rerender(<Composer {...baseProps} thread={thread} activeTurnId="checkout-turn" />);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main");
+    expect(startReview).not.toHaveBeenCalled();
+    expect(draftStore.getQueuedTurns(scopeKey)).toEqual([]);
+    expect(steerTurn).not.toHaveBeenCalled();
+    expect(draftStore.getQueuedTurns(buildThreadComposerScopeKey("codex", thread.id))[0].manualReleaseRequired).not.toBe(true);
+
+    remounted.rerender(<Composer {...baseProps} thread={{ ...thread, optimisticActiveTurn: undefined }} />);
+    await waitFor(() => expect(startReview).toHaveBeenCalledTimes(1));
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: "checkout-thread", target: { type: "baseBranch", branch: "main" },
+    }));
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
+  });
+
   it("shows handoff progress until the provider publishes the steered message", async () => {
     const { result } = renderHook(useComposerDraftStore);
     const store = result.current;
@@ -1236,8 +1326,166 @@ describe("Composer", () => {
 
     expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
       "data-tooltip",
-      "Auto-fix PR — handle new CI failures or merge conflicts",
+      "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
+  });
+
+  it("mutes Auto-fix PR once every linked PR merged or closed, and keeps it on", () => {
+    const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const pr = (number: number, lifecycleState: "open" | "merged" | "closed") => ({
+      provider: "github.com",
+      number,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing" as const,
+      lifecycleState,
+      url: `https://github.com/pwrdrvr/PwrAgent/pull/${number}`,
+    });
+    const thread = (prs: NavigationThreadSummary["prs"]): NavigationThreadSummary => ({
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+      linkedDirectories: [{ id: "directory-1", kind: "local", label: "PwrAgent", path: "/repo/PwrAgent" }],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+      prs,
+    });
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread([pr(3100, "closed"), pr(3204, "merged")])}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    expect(toggle).toHaveClass("is-active", "is-idle");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const idle = "Auto-fix PR is on, but #3204 merged. It starts again when an open PR is linked.";
+    expect(toggle).toHaveAttribute("data-tooltip", idle);
+    expect(toggle).toHaveAttribute("aria-description", idle);
+    fireEvent.click(toggle);
+    expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+
+    // One open PR is enough for Auto-fix to have work.
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread([pr(3204, "merged"), pr(3210, "open")])}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-idle");
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
+  });
+
+  it("mutes Auto-fix PR while its project pauses forge activity, without changing the thread's value", () => {
+    const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      gitOriginUrl: "git@github.com:openclaw/openclaw.git",
+      linkedDirectories: [
+        {
+          id: "directory-1",
+          kind: "local",
+          label: "openclaw",
+          path: "/repo/openclaw",
+        },
+      ],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+    };
+    const project = (forgeAutomation?: ProjectForgeAutomation): NavigationDirectorySummary => ({
+      key: "directory:/repo/openclaw",
+      kind: "directory",
+      label: "openclaw",
+      path: "/repo/openclaw",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      ...(forgeAutomation ? { forgeAutomation } : {}),
+    });
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 })]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    expect(toggle).toHaveClass("is-project-overridden");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix is paused for openclaw. This thread's own setting returns on resume. Change it from the project menu: Forge Automation…",
+    );
+    expect(toggle).toHaveAttribute(
+      "aria-description",
+      "Auto-fix is paused for openclaw. This thread's own setting returns on resume. Change it from the project menu: Forge Automation…",
+    );
+    expect(onSetThreadPrAutoDispatch).not.toHaveBeenCalled();
+
+    // A tool-managed worktree files under the project with its name, as the
+    // sidebar files it.
+    const worktreePath = "/Users/fixture/.pwragent/worktrees/mabc123/openclaw";
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 })]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={{
+          ...thread,
+          linkedDirectories: [{ id: worktreePath, kind: "local", label: "openclaw", path: worktreePath }],
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveClass("is-project-overridden");
+
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, autoFixMergeConflicts: false })]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-project-overridden");
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix skips merge conflicts in openclaw.",
+    );
+
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project()]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — starts when a PR for this workspace is linked",
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
   });
 
   it("shows Auto-fix PR when main resolved the primary repository for a worktree", () => {
@@ -1278,7 +1526,7 @@ describe("Composer", () => {
 
     expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
       "data-tooltip",
-      "Auto-fix PR — handle new CI failures or merge conflicts",
+      "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
   });
 
@@ -4300,6 +4548,64 @@ describe("Composer", () => {
     ).toBeInTheDocument();
   });
 
+  it("appends an insert request to the draft on a new line, focuses, and never sends", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-watch",
+      title: "Watch thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const otherThread: NavigationThreadSummary = { ...thread, id: "thread-other", title: "Other thread" };
+    const startTurn = vi.fn();
+    const onComposerInsertRequestHandled = vi.fn();
+    const props = {
+      desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+      disabled: false,
+      skills: [],
+      threads: [thread, otherThread],
+      onComposerInsertRequestHandled,
+    };
+    const request = {
+      id: 1,
+      threadKey: "codex:thread-watch",
+      text: "Watch CI on #3174 and wake this thread when it finishes, pass or fail.",
+    };
+    // Another thread's composer leaves the request for the composer it names.
+    const { rerender } = render(
+      <Composer {...props} thread={otherThread} composerInsertRequest={request} />,
+    );
+    expect(onComposerInsertRequestHandled).not.toHaveBeenCalled();
+
+    rerender(<Composer {...props} thread={thread} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "The flaky test is fixed." },
+    });
+    rerender(<Composer {...props} thread={thread} composerInsertRequest={request} />);
+
+    await waitFor(() => {
+      expect(onComposerInsertRequestHandled).toHaveBeenCalledWith(1);
+    });
+    const reply = screen.getByRole("textbox", { name: "Reply" }) as HTMLElement & { value?: string };
+    // The request starts a line of its own after the operator's text.
+    await waitFor(() => {
+      expect(reply.value).toBe(
+        "The flaky test is fixed.\nWatch CI on #3174 and wake this thread when it finishes, pass or fail.",
+      );
+    });
+    expect(reply).toHaveTextContent("Watch CI on #3174 and wake this thread when it finishes, pass or fail.");
+    await waitFor(() => expect(reply).toHaveFocus());
+    expect(startTurn).not.toHaveBeenCalled();
+
+    // The same request does not apply twice.
+    rerender(<Composer {...props} thread={thread} composerInsertRequest={{ ...request }} />);
+    expect(onComposerInsertRequestHandled).toHaveBeenCalledTimes(1);
+    expect(reply.value).toBe(
+      "The flaky test is fixed.\nWatch CI on #3174 and wake this thread when it finishes, pass or fail.",
+    );
+  });
+
   it("marks a rewound prompt with a chip until the composer is cleared", async () => {
     const thread: NavigationThreadSummary = {
       id: "thread-rewound",
@@ -5946,6 +6252,49 @@ describe("Composer", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("shows the stored model when it is absent from the provider catalog", () => {
+    render(<Composer backends={[backendSummary("claude", { models: [{ id: "opus", label: "Opus 5.5", current: true }] })]}
+      thread={{ id: "invalid-model", source: "claude", title: "Fixture", titleSource: "explicit", model: "gpt-6.1-terra",
+        linkedDirectories: [], inbox: { inInbox: false } }} skills={[]} />);
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-6.1-terra");
+    expect(screen.getByRole("button", { name: "Model: gpt-6.1-terra" })).toBeVisible();
+    openDropdown("Model");
+    expect(screen.getByRole("option", { name: "Opus 5.5" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it.each([false, true])("selects an owner model when switching a remote draft's provider (remembered=%s)", async (remembered) => {
+    const onUpdateLaunchpad = vi.fn();
+    function RemoteDraft() {
+      const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>({
+        directoryKey: "directory:/owner/repo", directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo",
+        federationTarget: { scope: "remote", instanceId: "owner" }, backend: "acp:kimi", executionMode: "default",
+        model: "kimi-owner", prompt: "Review this", workMode: "local", createdAt: 1, updatedAt: 1,
+        providerSettings: { codex: { model: remembered ? "owner-saved" : "viewer-only" } },
+      });
+      return <Composer backends={[
+        backendSummary("acp:kimi", { models: [{ id: "kimi-owner" }] }),
+        { ...backendSummary("codex", { models: [
+          { id: "owner-default", label: "Owner default", current: true, supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+          { id: "owner-saved", label: "Owner saved", supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+          { id: "owner-plain", label: "Owner plain", supportsReasoning: false, supportsFast: false },
+        ] }), label: "OpenAI", modelDefaults: { model: "owner-default", reasoningEffortsByModel: { "owner-default": "high" } } },
+      ]} launchpad={launchpad} providerModelDefaults={{ codex: { model: "viewer-only", reasoningEffortsByModel: {} } }}
+        onUpdateLaunchpad={async (_key, patch) => {
+          onUpdateLaunchpad(patch);
+          setLaunchpad((current) => applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(current, patch));
+        }} skills={[]} />;
+    }
+    render(<RemoteDraft />);
+    chooseDropdownOption("Provider", "OpenAI");
+    const model = remembered ? "owner-saved" : "owner-default";
+    await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue(model));
+    expect(onUpdateLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", model }));
+    if (!remembered) expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
+    chooseDropdownOption("Model", "Owner plain");
+    await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("owner-plain"));
+    expect(onUpdateLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ model: "owner-plain", reasoningEffort: undefined, serviceTier: undefined }));
+  });
+
   it("shows OpenAI model and reasoning defaults without a Default option", () => {
     render(
       <Composer
@@ -5996,7 +6345,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "Other" })).not.toBeInTheDocument();
   });
 
-  it("keeps GPT-6 choices visible and puts GPT-5.6 and GPT-5.5 under Other", async () => {
+  it("shows Astra, Sol, Terra, Luna and puts superseded models under Other", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
     render(
       <Composer
@@ -6006,6 +6355,7 @@ describe("Composer", () => {
               { id: "gpt-6-astra", label: "GPT-6-Astra" },
               { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", current: true },
               { id: "gpt-6-sol", label: "GPT-6-Sol" },
+              { id: "gpt-6.1-terra", label: "GPT-6.1-Terra" },
               { id: "gpt-6-luna", label: "GPT-6-Luna" },
               { id: "gpt-5.6-sol", label: "GPT-5.6-Sol" },
               { id: "gpt-5.5", label: "GPT-5.5" },
@@ -6035,9 +6385,11 @@ describe("Composer", () => {
     fireEvent.click(modelButton);
     expect(screen.getAllByRole("option").map((option) =>
       option.querySelector(".composer-dropdown__option-label")?.textContent,
-    )).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6-Sol", "GPT-6-Luna", "Other"]);
+    )).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "Other"]);
+    expect(screen.queryByRole("option", { name: "GPT-6-Sol" })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "GPT-5.6-Sol" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: "Other" }));
+    expect(screen.getByRole("option", { name: "GPT-6-Sol" })).toBeVisible();
     fireEvent.click(screen.getByRole("option", { name: "GPT-5.6-Sol" }));
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
@@ -8028,7 +8380,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
-  it("shows a 5h context reset schedule option when the backend exposes a reset", async () => {
+  it("schedules after the actual rate limit reset with a buffer and one jitter sample", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
@@ -8037,6 +8389,9 @@ describe("Composer", () => {
       turnId: "turn-scheduled",
     }));
 
+    const scheduledApi = createScheduledActionApi();
+    const resetAt = Date.now() + 180 * 60_000;
+
     render(
       <Composer
         backends={[
@@ -8044,15 +8399,17 @@ describe("Composer", () => {
             ...backendSummary("codex"),
             rateLimits: [
               {
-                name: "5h limit",
-                resetAt: Date.now() + 154 * 60_000,
+                name: "5-hour limit",
+                limitId: "five_hour",
+                windowMinutes: 300,
+                resetAt,
                 usedPercent: 80,
               },
             ],
           },
         ]}
         desktopApi={{
-          ...createScheduledActionApi(),
+          ...scheduledApi,
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -8073,22 +8430,68 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "After the reset" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole("menuitem", {
-          name: "Send in 2h 34m (5h context reset)",
-        })
-      );
-    });
+    const sample = vi.spyOn(Math, "random").mockReturnValue(0.4);
+    const resetSendAt = vi.spyOn(rateLimitSchedule, "getRateLimitResetSendAt");
+    try {
+      const option = screen.getByRole("menuitem", { name: /Send after rate limit reset/ });
+      expect(option).toHaveTextContent("In 3h 5m–3h 10m · 5–10m buffer");
+      expect(resetSendAt).not.toHaveBeenCalled();
+      await act(async () => { fireEvent.click(option); });
+      expect(resetSendAt).toHaveBeenCalledExactlyOnceWith(resetAt);
+    } finally {
+      resetSendAt.mockRestore();
+      sample.mockRestore();
+    }
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduledFor: resetAt + 7 * 60_000 }),
+    );
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
-      "Scheduled · sends in 2h 34m"
+      "Scheduled · sends in 3h 7m"
     );
     expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
       "After the reset"
     );
   });
+
+  it.each(["no reset", "weekly limit", "remote owner"])(
+    "hides the computed schedule for %s while retaining fixed delays", (scenario) => {
+      render(
+        <Composer
+          backends={[{
+            ...backendSummary("codex"),
+            rateLimits: scenario === "no reset" ? [] : [{
+              name: "Plan limit",
+              resetAt: Date.now() + 3 * 60 * 60_000,
+              windowMinutes: scenario === "weekly limit" ? 10_080 : 300,
+            }],
+          }]}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Schedule availability",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+            ...(scenario === "remote owner" ? {
+              federation: {
+                instanceLabel: "Owner",
+                ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner" } },
+                capabilities: [],
+              },
+            } : {}),
+          }}
+        />,
+      );
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "For later" } });
+      fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+      expect(screen.queryByRole("menuitem", { name: /Send after rate limit reset/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Send in 5h" })).toBeInTheDocument();
+    },
+  );
 
   it("hides the schedule caret on a launchpad where scheduling does not apply", () => {
     render(
@@ -8493,6 +8896,63 @@ describe("Composer", () => {
       }));
       expect(screen.getByLabelText("Queued message")).toHaveTextContent("Answer: Staging");
       expect(screen.getByLabelText("Queued message")).not.toHaveTextContent("send_user_message");
+    });
+
+    it.each([false, true])("honors a to-do's queue choice on a steerable thread (busy: %s)", async (busy) => {
+      const text = "Implement the follow-up task";
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: busy ? "queue-entry-1" : "turn-todo",
+        ...(busy ? { queueStatus: "queued" as const, queueEntryId: "queue-entry-1" } : {}),
+      }));
+      const steerTurn = vi.fn();
+      const onReplySubmissionSettled = vi.fn();
+      const backend = backendSummary("codex");
+      const props = {
+        activeTurnId: busy ? "turn-active" : undefined,
+        threadBusy: busy,
+        backends: [{ ...backend, capabilities: { ...backend.capabilities, steerTurn: true } }],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn, steerTurn },
+        onReplySubmissionSettled,
+        skills: [],
+        thread,
+      };
+      const view = render(<Composer {...props} />);
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "An unrelated draft" } });
+      const submission = { id: 1, threadId: thread.id, backend: "codex" as const, text, busyBehavior: "queue" as const };
+      view.rerender(<Composer {...props} replySubmission={submission} />);
+
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      expect(steerTurn).not.toHaveBeenCalled();
+      expect(startTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        threadId: thread.id, input: [{ type: "text", text }],
+      }));
+      expect(textarea).toHaveValue("An unrelated draft");
+      if (busy) expect(screen.getByLabelText("Queued message")).toHaveTextContent(text);
+      view.rerender(<Composer {...props} replySubmission={submission} />);
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("still steers question replies during an active turn", async () => {
+      const startTurn = vi.fn();
+      const steerTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: thread.id, turnId: "turn-active" }));
+      const onReplySubmissionSettled = vi.fn();
+      const backend = backendSummary("codex");
+      render(<Composer
+        activeTurnId="turn-active"
+        threadBusy
+        backends={[{ ...backend, capabilities: { ...backend.capabilities, steerTurn: true } }]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn, steerTurn }}
+        onReplySubmissionSettled={onReplySubmissionSettled}
+        replySubmission={{ id: 1, threadId: thread.id, backend: "codex", text: reply }}
+        skills={[]}
+        thread={thread}
+      />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledOnce());
+      expect(startTurn).not.toHaveBeenCalled();
     });
 
     it("refuses a reply addressed to another thread", async () => {
@@ -11159,6 +11619,132 @@ describe("Composer", () => {
     expect(draftStore.get(buildThreadComposerScopeKey("codex", "thread-1"))).toMatchObject({
       draft: "Recover for thread A",
     });
+  });
+
+  it.each(["Delete", "Edit"])(
+    "dismisses a failed scheduled row on its owner when the operator chooses %s",
+    async (buttonName) => {
+      const draftStore = createComposerDraftStore();
+      const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+      // The row the scheduled-action projection gives a failed action.
+      draftStore.setQueuedTurn(scopeKey, {
+        id: "scheduled-projection:scheduled-action-1",
+        failedScheduledActionId: "scheduled-action-1",
+        errorMessage: "Thread already has an active turn in progress",
+        text: "Follow up",
+        imageAttachments: [],
+        fileAttachments: [],
+        input: [{ type: "text", text: "Follow up" }],
+      });
+      const cancelScheduledThreadAction = vi.fn(async () => {
+        throw new Error("owner refused");
+      });
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{
+            cancelScheduledThreadAction,
+            onAgentEvent: () => () => undefined,
+          }}
+          disabled={false}
+          draftStore={draftStore}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Idle thread",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: buttonName }));
+      });
+
+      expect(cancelScheduledThreadAction).toHaveBeenCalledWith({
+        federationTarget: undefined,
+        id: "scheduled-action-1",
+      });
+      // An owner that refuses (one that predates dismissal) still lets the
+      // row leave this window.
+      expect(draftStore.getQueuedTurns(scopeKey)).toEqual([]);
+    },
+  );
+
+  it("dismisses a failed scheduled row on its owner when the operator steers it", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
+      id: "scheduled-projection:scheduled-action-1",
+      failedScheduledActionId: "scheduled-action-1",
+      errorMessage: "Thread already has an active turn in progress",
+      text: "Steer the running turn",
+      imageAttachments: [],
+      fileAttachments: [],
+      input: [{ type: "text", text: "Steer the running turn" }],
+    });
+    const cancelScheduledThreadAction = vi.fn(async () => {
+      throw new Error("owner refused");
+    });
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          cancelScheduledThreadAction,
+          onAgentEvent: () => () => undefined,
+          steerTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    });
+
+    expect(cancelScheduledThreadAction).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      id: "scheduled-action-1",
+    });
+    await waitFor(() => expect(steerTurn).toHaveBeenCalled());
   });
 
   it("preserves a cancelled queued item when its steer target changes", async () => {

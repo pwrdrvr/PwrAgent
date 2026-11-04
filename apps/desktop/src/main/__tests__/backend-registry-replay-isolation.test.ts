@@ -206,6 +206,8 @@ describe("DesktopBackendRegistry replay isolation", () => {
       'approval_policy="on-request"',
       "-c",
       'sandbox_mode="workspace-write"',
+      "-c",
+      "thread_unload_delay_secs=0",
     ]);
     expect(constructorState.codexArgs).toEqual([undefined]);
 
@@ -233,6 +235,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
       settingsState.configOverrides = [];
       expect(await resolveArgs({})).toEqual([
         "-c", 'approval_policy="on-request"', "-c", 'sandbox_mode="workspace-write"',
+        "-c", "thread_unload_delay_secs=0",
       ]);
     } finally {
       await registry.close();

@@ -8,6 +8,37 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("names a status pulse by its script animation id and its dot by source", () => {
+  vi.stubGlobal("CSSAnimation", class {});
+  const chip = document.createElement("span");
+  chip.className = "pr-chip pr-chip--checks-running";
+  const dot = document.createElement("span");
+  dot.className = "pr-chip__dot";
+  chip.append(dot);
+  const railChip = document.createElement("span");
+  railChip.className = "rail-chip";
+  const rail = document.createElement("span");
+  rail.className = "rail-chip__dot rail-chip__dot--blink";
+  railChip.append(rail);
+  document.body.append(chip, railChip);
+  const pulse = (target: Element, id: string) => ({
+    id,
+    playState: "running",
+    effect: { target, getTiming: () => ({ iterations: 1 }) },
+  });
+  Object.defineProperty(document, "getAnimations", {
+    configurable: true,
+    value: () => [pulse(dot, "status-blink"), pulse(rail, "status-blink"), pulse(dot, "private-id")],
+  });
+  const result = readRenderingSnapshot();
+  expect(result.animations.map((group) => group.state)).toEqual([
+    ["status-blink", ".pr-chip", "running", false, false],
+    ["status-blink", ".rail-chip", "running", false, false],
+    ["other", ".pr-chip", "running", false, false],
+  ]);
+  expect(JSON.stringify(result)).not.toContain("private");
+});
+
 it("exports only fixed animation and view labels, bounded counts and geometric visibility", () => {
   class FakeCSSAnimation {
     animationName = "pending-spinner-spin";

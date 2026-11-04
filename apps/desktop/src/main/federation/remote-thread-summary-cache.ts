@@ -284,11 +284,22 @@ export class RemoteThreadSummaryCache {
 
   invalidate(instanceId?: string, event?: AgentEvent): void {
     if (instanceId && event) {
-      const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown };
+      const params = event.notification.params as {
+        sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown;
+      };
       const sourceMethod = event.notification.method === "navigation/invalidated"
         ? params?.sourceMethod : event.notification.method;
       // Directory Git chips are not part of pinned thread rows or membership.
       if (sourceMethod === "navigation/directoryGitStatus/updated") return;
+      // A project's Forge Automation rides on its threads' rows, for the
+      // placeholder row standing for the project. Re-read only when a held
+      // row is in that project. An owner that names no project on the event
+      // names none on its rows either.
+      if (sourceMethod === "directory/forgeAutomation/updated") {
+        const directoryKey = typeof params?.directoryKey === "string" ? params.directoryKey : undefined;
+        if (!directoryKey || !this.cache.get(instanceId)?.threads.some((thread) =>
+          thread.homeProject?.directoryKey === directoryKey)) return;
+      }
       if (sourceMethod === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string"
         && this.hasCompletePinnedMembership(instanceId)
         && !this.cache.get(instanceId)?.threads.some((thread) => navigationWorkingStatePath(thread) === params.worktreePath)) return;

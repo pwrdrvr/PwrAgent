@@ -26,6 +26,7 @@ import {
   ToggleField,
 } from "./SettingsLayout";
 import { SettingsCopyValue } from "./SettingsCopyValue";
+import { RenderingDiagnosticsSettings } from "./RenderingDiagnosticsSettings";
 import { formatProcessIds, sourceBadge } from "./settings-fields";
 
 const HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS: Array<{
@@ -377,6 +378,11 @@ export function TroubleshootingSettings(props: {
           />
         </div>
       </SettingsSection>
+
+      <RenderingDiagnosticsSettings
+        desktopApi={props.desktopApi}
+        onShowNotice={props.onShowNotice}
+      />
 
       <SettingsSection
         eyebrow="Troubleshooting"

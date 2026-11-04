@@ -175,6 +175,7 @@ function createSnapshot(
         lightTheme: { value: "tangerine-light", source: "default" },
         themedDockIcon: { value: true, source: "default" },
         terminalMinimumContrast: { value: false, source: "default" },
+        calmMotion: { value: false, source: "default" },
         density: { value: "mission-control", source: "default" },
         sidebarTextSize: { value: "md", source: "default" },
         transcriptTextSize: { value: "md", source: "default" },
@@ -499,6 +500,7 @@ function createSnapshot(
           pull_requests: { value: "auto", source: "default" },
           comments: { value: "auto", source: "default" },
           issues: { value: "auto", source: "default" },
+          ci: { value: "auto", source: "default" },
           approve_merge: { value: "ask", source: "default" },
         },
       },
@@ -588,11 +590,43 @@ describe("SettingsScreen agent forge tools", () => {
     render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
     const section = screen.getByRole("heading", { name: "Agent forge tools" }).closest("section")!;
     expect(within(section).getByRole("combobox", { name: "Approve and merge access" })).toHaveTextContent("Ask");
+    expect(within(section).getByRole("combobox", { name: "CI reruns access" })).toHaveTextContent("Auto");
+    chooseSelectOption(within(section).getByRole("combobox", { name: "CI reruns access" }), "Off");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { access: { ci: "off" } } } }));
     expect(selectOptionLabels(within(section).getByRole("combobox", { name: "Read access" }))).toEqual(["Allow", "Off"]);
     chooseSelectOption(within(section).getByRole("combobox", { name: "Pull requests access" }), "Ask");
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { access: { pull_requests: "ask" } } } }));
     fireEvent.click(within(section).getByRole("switch", { name: /Offer forge tools to threads/ }));
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { enabled: false } } }));
+  });
+
+  it("opens a project's rules from a deep link and writes the whole list", async () => {
+    const snapshot = createSnapshot();
+    const claudeRule = {
+      repository: "github.com/pwrdrvr/pwragent",
+      agent: { backend: "claude" as const },
+      access: { pull_requests: "allow" as const },
+    };
+    snapshot.git.agentTools.rules = [claudeRule];
+    const settings = createSettingsState(snapshot);
+    render(
+      <SettingsScreen
+        initialSection="git"
+        initialSubsection="agent-forge-tools:github.com/pwrdrvr/pwragent"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    const table = screen.getByRole("table", { name: "Rules for pwrdrvr/pwragent" });
+    expect(within(table).getByRole("combobox", { name: "Comments for Claude" })).toHaveTextContent("Inherit (Auto)");
+    chooseSelectOption(within(table).getByRole("combobox", { name: "Comments for Claude" }), "Allow");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      git: {
+        agentTools: {
+          rules: [{ ...claudeRule, access: { pull_requests: "allow", comments: "allow" } }],
+        },
+      },
+    }));
   });
 });
 
@@ -679,6 +713,7 @@ describe("SettingsScreen color themes", () => {
         density: "mission-control",
         sidebarTextSize: "md",
         transcriptTextSize: "md",
+        calmMotion: false,
         resolvedTheme: "dark",
       },
       setTheme: vi.fn(),
@@ -687,6 +722,7 @@ describe("SettingsScreen color themes", () => {
       setDensity: vi.fn(),
       setSidebarTextSize: vi.fn(),
       setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
       setAppearance: vi.fn(),
     };
     render(
@@ -735,6 +771,7 @@ describe("SettingsScreen color themes", () => {
         density: "mission-control",
         sidebarTextSize: "md",
         transcriptTextSize: "md",
+        calmMotion: false,
         resolvedTheme: "dark",
       },
       setTheme: vi.fn(),
@@ -743,6 +780,7 @@ describe("SettingsScreen color themes", () => {
       setDensity: vi.fn(),
       setSidebarTextSize: vi.fn(),
       setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
       setAppearance: vi.fn(),
     };
     render(
@@ -1525,6 +1563,7 @@ describe("SettingsScreen", () => {
         density: "mission-control",
         sidebarTextSize: "md",
         transcriptTextSize: "md",
+        calmMotion: false,
         resolvedTheme: "dark",
       },
       setTheme: vi.fn(),
@@ -1533,6 +1572,7 @@ describe("SettingsScreen", () => {
       setDensity: vi.fn(),
       setSidebarTextSize: vi.fn(),
       setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
       setAppearance: vi.fn(),
     };
     const settings = createSettingsState();
@@ -1555,6 +1595,46 @@ describe("SettingsScreen", () => {
         general: { appearance: { terminalMinimumContrast: true } },
       });
     });
+  });
+
+  it("leaves calm motion off by default and switches it through the appearance controller", async () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        calmMotion: false,
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        initialSection="general"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const toggle = screen.getByRole("switch", { name: "Calm motion" });
+    expect(toggle).not.toBeChecked();
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    // The controller owns the write and the live `<html data-motion>`
+    // flip, like every other appearance axis.
+    expect(controller.setCalmMotion).toHaveBeenCalledWith(true);
   });
 
   it("saves the HTML preview scripts setting", async () => {

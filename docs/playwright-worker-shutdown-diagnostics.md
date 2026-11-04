@@ -15,6 +15,19 @@ cleanup phase takes five seconds, it captures a snapshot before Playwright's
 three snapshots per worker). The existing CI artifact upload includes these
 files under `test-results/worker-shutdown/worker-<index>-<pid>/`.
 
+If cancellation skips that upload, search the job log for
+`[worker-shutdown-evidence]`. Each failure snapshot synchronously emits a compact
+JSON record with pending process owners, exit/close and stdio state, and
+referenced native handles. The ancestry query also logs its result or explicit
+failure/interruption. Each record is capped at 16 KiB of JSON; snapshots include
+at most 16 pending processes, eight stdio entries per process and 32 handles;
+trees include at most 64 processes. Total counts expose omitted entries, and
+`byteLimitReached` marks further clipping to the byte cap. There are at most
+three snapshots and one query result per worker. Full artifacts retain their
+existing detail. This adds no wait or cancellation handler and cannot preserve
+evidence if the worker never reaches capture or the runner stops forwarding its
+output.
+
 ## Reading a failure
 
 Start with `snapshot-1.json`, then use `timeline.jsonl` to reconstruct events:
@@ -43,8 +56,10 @@ Start with `snapshot-1.json`, then use `timeline.jsonl` to reconstruct events:
   cleanup, and entry into each worker cleanup phase. It includes healthy
   launches so an earlier test's leftover process can be identified.
 
-A Windows Electron launcher can be `cmd.exe`; its exit is not the Electron
-tree's completion. Fixture teardown treats an unresolved `electronApp.close()`
+Windows native Electron executables launch directly, so Playwright owns the
+Electron main process and its stdio. Explicit `.cmd` or `.bat` executable
+wrappers still use `cmd.exe`; that shell's exit is not the Electron tree's
+completion. Fixture teardown treats an unresolved `electronApp.close()`
 as abnormal even after that launcher exits. It captures the Electron main PID
 before quit and, on the abnormal path, checks process creation times before
 terminating that process or its direct surviving children. It rejects a
@@ -64,14 +79,60 @@ holds `Local Storage/leveldb/LOCK`; the Electron main process then keeps the
 launcher alive after `quit`. The fixture removes the Chromium directories only
 after closing the app and cleaning up its profile helpers.
 
-On Windows, fixture close also drains each live Electron session before asking
-Playwright to quit: it closes connections and awaits the cookie store flush.
+On Windows, fixture close also drains each live Electron session during
+graceful close: it closes connections, awaits the cookie store flush, and
+disposes the fixture session cache with `clearData({ dataTypes: ["cache"] })`.
 This preparation shares the existing six-second graceful-close deadline.
+An app-owned `before-quit` barrier retains Chromium's contexts until every
+session callback finishes, including after Playwright detaches its inspector.
+Application resource disposal and session preparation run concurrently inside
+that deadline. Holding `will-quit` instead allowed session cleanup to race
+Chromium's native context shutdown. In CI run
+41482286163, the stalled-close snapshot verified that Electron main PID 7876
+still held all four launcher pipe names while cache cleanup was pending; its
+two observed Chromium children held none of them. An unfinished drain still
+fails under the same deadline and is cleaned up by the owning test.
 Chromium's native `BrowserProcessIOThread::ProcessHostCleanUp` otherwise waits
 for the network service to flush cookies and cache after JavaScript quit has
 finished. That service can retain the launcher's pipes while native storage
-work is still pending. The fixture must await that work while the sessions
-are still reachable over RPC; storage isolation alone does not drain it.
+work is still pending. The fixture must await that work while the session
+contexts remain alive; storage isolation alone does not drain it.
+
+The cache operation also waits for Chromium's network-history completion.
+Unlike `clearCache()`, this reaches `HttpServerProperties::Clear` and the
+`Network/Network Persistent State` preference write. A matching Electron native
+snapshot retained that write and its initial preference read as queued
+`BLOCK_SHUTDOWN` work after the network service entered shutdown. Awaiting the
+cache completion keeps its main-process owner alive until the write finishes. Cache
+disposal applies only to the Playwright-owned fixture sessions. A failed or
+stalled completion still fails teardown under the existing close deadline.
+
+The three full Windows samples in CI run 41491462986 passed their jobs but
+retained two forced closes through test retries. Both roots reached `quit`;
+native exit and pipe close then occurred together, with no surviving-pipe gap.
+The barrier alone therefore does not establish complete ownership of native
+shutdown. For further attribution, the controller samples a root still alive
+five seconds into close using CDB's noninvasive, non-suspending `-pvr` mode.
+It omits `-pd`: the controlled Windows probe found that combining it with
+`-pvr` exits before readiness with "The system does not support detach on exit".
+Frames are attributed only when live native creation FILETIMEs match the
+original launch before and after capture, and every debugger thread's process
+ID matches that root. A changed or exited identity omits the frames. Capture
+start/end and result are recorded. A running target can change during unwind;
+these stacks are best-effort observations, not atomic snapshots or unbiased
+shutdown-rate measurements.
+
+Opt-in CI verifies the installed Microsoft CDB signature. Live capture uses an
+empty local symbol directory with network symbols disabled. It retains bounded
+module-relative code offsets and the Electron image SHA-256 for separate offline
+symbolization against the matching image and PDB. CI does not download PDBs or
+perform post-test symbolization. A controlled child probe must produce frames and keep its
+heartbeat advancing while attached and after debugger cancellation before
+sampling is enabled. The controller never creates minidumps or clones the
+target. Artifacts retain only bounded thread IDs and parsed call-site offsets,
+plus explicit missing-symbol/capture status. Raw debugger output, arguments,
+memory and environment are never uploaded. At most four roots are
+sampled per lane; the owning close's deadline remains unchanged.
 
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
@@ -109,11 +170,56 @@ artifacts. No Electron window, display server, or browser download is needed.
 The suite also runs Playwright's `--list` mode with an inherited worker index
 to verify that a controller cannot emit a false readiness marker.
 
-Two small versioned pnpm patches emit observations from Playwright's worker
-and process launcher. They leave the original promises, cleanup, error handling
-and deadlines in place. The hooks are inert outside the instrumented E2E
-workers. When upgrading Playwright, port both patches and run the real-worker
-tests: a green ordinary E2E run does not validate failure capture.
+Two versioned pnpm patches emit observations from Playwright's worker and
+process launcher. The core patch also bypasses the Windows shell for native
+Electron executables, preserving shell launch only for `.cmd` and `.bat`
+wrappers. The original close promises, cleanup, error handling and deadlines
+remain in place. Diagnostic hooks are inert outside instrumented E2E workers.
+When upgrading Playwright, port both patches and run the real-worker tests and
+`e2e/electron-launcher-ownership.spec.ts` on Windows. A green ordinary E2E run
+does not validate failure capture or native launcher ownership.
+
+## Controlled native Windows pipe inheritance
+
+To reproduce an exited native Electron process whose launcher pipes remain open,
+run this manual probe from the repository root on Windows:
+
+```powershell
+node apps/desktop/scripts/probe-windows-electron-pipe-inheritance.mjs
+```
+
+It loads a minimal Electron entry, without the product or a user profile. Electron
+starts a Node intermediate, which starts a detached Node retainer. Both launches
+request ignored stdio. The probe records all three Windows creation times and
+parent PIDs while they are alive, lets the intermediate exit, and quits Electron.
+The retainer exits on its own after twelve seconds. No surviving descendant is
+terminated by PID. On an error, only the exact Playwright-owned Electron process
+handle may be stopped.
+
+`summary.json`, `events.jsonl`, and process snapshots are retained under
+`apps/desktop/test-results/windows-pipe-inheritance/<timestamp>/`. Use
+`--output-dir <new-directory>` to preserve a run elsewhere. For native handle
+evidence, optionally pass `--handle-exe <path-to-handle64.exe>` using Microsoft's
+[Sysinternals Handle](https://learn.microsoft.com/en-us/sysinternals/downloads/handle).
+The probe uses bounded, read-only queries for its identified PIDs and records
+query errors. It does not download Handle or scan every process.
+
+On Electron 44.9.3 (embedded Node 24.22.0, libuv 1.52.1), the control reproduced
+exit code zero with fd 1–4 still open. The retainer held the same four launcher
+pipe names before and after Electron exited; launcher close followed the
+retainer's natural exit. Electron explicitly enables stdio inheritance in its
+[browser process](https://github.com/electron/electron/blob/v44.9.3/shell/common/node_bindings.cc#L638),
+and this runtime's libuv uses unrestricted handle inheritance when spawning a
+[Windows child](https://github.com/nodejs/node/blob/v24.22.0/deps/uv/src/win/process.c).
+Ignored stdio does not exclude inherited handles outside the child's new stdio
+mapping. A grandchild can outlive both its intermediate parent and Electron.
+
+This is a positive control for the failure mechanism. It does not identify the
+historical retaining process in CI job 124557904187: that artifact has no earlier
+ancestry trace or native handle inventory. A healthy natural run, a late process
+tree, or this control alone cannot establish that process's identity. Preserve
+creation-time ancestry from before quit and matching pipe handles in a natural
+failure before changing product ownership or cleanup.
 
 ## Unit probe timeouts
 
@@ -175,3 +281,104 @@ to approximately twenty launches; pending launches remain tracked.
 
 Set `PWRAGENT_E2E_WORKER_DIAGNOSTICS=0` only to compare instrumentation overhead.
 Failure semantics stay unchanged when capture is disabled.
+
+## Opt-in hosted Windows pipe evidence
+
+By default, Windows CI runs `pnpm test:desktop-e2e` once across four lanes.
+The ordinary shutdown reports remain available without native observation.
+For an ownership investigation, add `ci:windows-shutdown-diagnostics` before
+opening the PR, pushing a commit, or rerunning CI. Adding the label alone does
+not start CI. The label runs three complete samples across the usual four lanes
+(12 jobs) using `pnpm test:desktop-e2e:windows-diagnostics`. It prepares signed
+Handle/CDB tools and enables the external controller described below. Removing
+the label restores the default on the next CI run.
+
+The diagnostic entry point forwards the same desktop build, test arguments,
+shards, workers, retries and deadlines. No Electron close promise or cleanup
+phase waits for this recorder. PDBs are not downloaded in either mode.
+
+The controller also enables `worker-shutdown/main-children.jsonl` in each
+Electron main process. Node's child-process constructor channel captures up to
+128 launch call sites per main, with at most eight app-relative frames each.
+The record omits arguments, environment, output and absolute call-site paths.
+Only a fixed set of diagnostic executable names is retained; others are `other`.
+Synchronous launches and children created outside Node's child-process API are
+not covered by this trace; the native journal remains the process-tree source.
+
+Each main has an `ownerPid` and fixture `launchId`. A local `childId` joins the
+synchronous `launch` record to the later `spawn` event, when Node has assigned
+the child's PID. Separate `exit` and `close` events distinguish process exit
+from final stdio closure. Snapshots at shutdown start/completion, `will-quit`
+and the JavaScript process-exit hook retain children whose `close` callback has
+not run, plus an omitted-launch count. These observations do not delay shutdown
+or stop children.
+
+The exit hook also records synchronous-cleanup start, state-database close
+start, and state-database close completion. Join a native capture's interval to
+these markers to distinguish final SQLite closure from the preceding cleanup;
+a missing completion marker alone does not identify a blocked operation.
+
+Join those records to native PID **and creation FILETIME**, using the verified
+root lifetime and parent creation. A PID or missing JavaScript `close` event
+alone does not establish a surviving process. Native and fixture launch UUIDs
+are different namespaces. Call-site and Node event times identify the launch
+path and callback timing; they do not replace the native identity/exit checks.
+
+After tests and observation finish, `native-controller/main-child-locations.json`
+resolves observed minified positions through the same build's hidden JavaScript
+source maps. It retains only app-relative source locations and bundle, source-map
+and journal hashes. Raw maps, source contents and external source paths are not
+copied. Resolution reads files capped at 32 MiB and retains at most 4,096 unique
+positions, with explicit unavailable/unmapped results and an omission count.
+
+An external controller starts native process observation before starting pnpm,
+before Electron launcher pipes exist. Native x64 process snapshots are sampled
+with a 50 ms pause. Identities use PID plus creation FILETIME; retained,
+non-inheritable `PROCESS_QUERY_LIMITED_INFORMATION` handles supply native exit
+FILETIMEs. These are 100 ns units since 1601, not CIM/DateTime ticks since year
+0001. A process may begin and end between samples. Missing or ambiguous
+ancestry remains explicit. A sampled disappearance time cannot substitute for
+a native exit time. Executable paths are recorded; command lines are omitted.
+
+The true Playwright worker guard remains. Each direct native Electron launch
+gets a random `launchId` carried through exit, close and stage events. Only
+launch generates a Node report, retaining pipe names rather than the raw
+report. A worker-PID suffix supplies a candidate pool, not a per-launch mapping.
+The controller narrows that pool against the exact live main's handle-name
+inventory and requires four complete exact names. Creation identity is checked
+before and after each scoped name inventory.
+
+On a natural code-zero exit with all four launcher streams still open, the
+worker captures callback-entry time and flags before reports or queries. It
+immediately preserves the trigger. The controller inspects surviving processes
+from the retained ancestry first, requiring all four exact endpoint names and
+the same creation identity before and after inspection. A bounded global search
+supplies fallback candidates; substring matches do not qualify. Query intervals,
+access failures, timeouts, omissions and unavailable mappings remain explicit.
+The result flags a launch inventory that overlaps the exit callback and marks
+known diagnostic processes so their handles cannot be mistaken for an
+uninstrumented holder.
+
+Names come from the official [Sysinternals Handle utility](https://learn.microsoft.com/en-us/sysinternals/downloads/handle),
+downloaded and checked for a valid Microsoft signature by the Windows job.
+Queries use its File-only default and never request handle closure. The custom
+native helper never duplicates remote handles or opens Job handles. Every
+observer and scanner belongs to the controller, not a Playwright worker.
+Diagnostic setup failure is logged and leaves the original test command running.
+
+The normal `test-results/worker-shutdown/native-controller/` artifact contains
+`native-processes.jsonl`, `launch-<launchId>.json`, `trigger-<launchId>.json`,
+`match-<launchId>.json`, tool/source hashes and a summary. The native journal is
+capped at 8 MiB and the observer at 32,768 starts. There are at most two concurrent
+queries and four triggered captures per run; each capture considers at most
+sixteen preserved descendants and eight global candidates within a five-second
+query window after its main mapping is available. Requests, query outputs and
+log records are bounded too. Raw tool output, environments and raw Node reports
+are not uploaded. On cancellation, `[worker-shutdown-evidence]` retains the
+trigger and `[windows-pipe-evidence]` retains bounded results when available.
+
+Diagnostic work can affect scheduling. A source verified against all four exact
+names is an observed holder during that query interval. It does not prove its
+launch cause, missing Job assignment, or the cause of a separate live-main
+native stall. A controlled probe validates instrumentation; a natural failure
+must establish the holder for this investigation.

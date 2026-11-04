@@ -6,6 +6,7 @@ import type {
   ListBackendsRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
+  ThreadSearchResponse,
   ThreadTodo,
 } from "@pwragent/shared";
 import { ThreadTodoCard } from "../ThreadTodoCard";
@@ -59,10 +60,19 @@ function setup(options: {
   instances?: ThreadTodoInstance[];
   localCodexFastAllowed?: boolean;
   backendsTarget?: FederationTarget;
+  /** Mounted copies of the card, as the stack and the To-dos panel both show it. */
+  copies?: number;
 } = {}) {
   const todo = options.todo ?? card;
   const onRun = vi.fn();
   const api = {
+    searchThreads: vi.fn(async (): Promise<ThreadSearchResponse> => ({
+      backend: "all", fetchedAt: 0, query: "42", filters: {}, contentMode: "metadata", semanticMode: "disabled",
+      searchedScopes: ["metadata"], unavailableScopes: [], results: [{
+        backend: "codex", threadId: "pr-owner", identityKey: "codex:pr-owner", title: "Refresh PR #42", linkedDirectories: [],
+        source: "codex", score: 1, confidence: "high", matchReasons: [], snippets: [],
+      }],
+    })),
     listBackends: vi.fn(async (request?: ListBackendsRequest) => ({
       fetchedAt: 0,
       backends: request?.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "win"
@@ -73,14 +83,16 @@ function setup(options: {
     listThreadTodoDispatchEnvironments: vi.fn(async (request: ListThreadTodoDispatchEnvironmentsRequest) =>
       ENVIRONMENTS[request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : "owner"]!),
   };
-  const tree = (value: ThreadTodo) => (
+  const tree = (value: ThreadTodo, visible = true) => (
     <TodoDispatchProvider api={api}
       backends={options.backendsTarget?.scope === "remote" ? options.win ?? [codex()] : options.local ?? [claude, codex()]}
       backendsTarget={options.backendsTarget} todos={[value]}
       {...(options.localCodexFastAllowed === undefined ? {} : { localCodexFastAllowed: options.localCodexFastAllowed })}>
-      <ThreadTodoCard todo={value} running={false} now={0} onRun={onRun} onResolve={vi.fn()}
-        onStartReview={vi.fn()} onSetItemChecked={vi.fn()}
-        instances={options.instances ?? [WIN]} localMachine={MAC} />
+      {visible ? Array.from({ length: options.copies ?? 1 }, (_, index) => (
+        <ThreadTodoCard key={index} todo={value} running={false} now={0} onRun={onRun} onResolve={vi.fn()}
+          onStartReview={vi.fn()} onSetItemChecked={vi.fn()}
+          instances={options.instances ?? [WIN]} localMachine={MAC} />
+      )) : null}
     </TodoDispatchProvider>
   );
   const result = render(tree(todo));
@@ -100,10 +112,106 @@ async function settle() {
 }
 
 describe("to-do dispatch target", () => {
+  it("previews an existing thread request without sending until the operator clicks Send", async () => {
+    const { onRun, api } = setup();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Handoff options" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("menuitemradio", { name: "Send to thread…" })); });
+    expect((screen.getByRole("button", { name: "Send request" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: /^Machine:/ })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Find destination thread" }), { target: { value: "42" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Search" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Refresh PR #42/ })); });
+    expect(onRun).not.toHaveBeenCalled();
+    expect(api.searchThreads).toHaveBeenCalledWith(expect.objectContaining({ query: "42", contentMode: "metadata" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show the whole proposed prompt" }));
+    expect(screen.getByRole("region", { name: "Proposed prompt" }).textContent).toContain("Run the focused suite");
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    expect(onRun).toHaveBeenCalledWith(card, { messageTarget: {
+      backend: "codex", threadId: "pr-owner", title: "Refresh PR #42", instanceLabel: "studio",
+    } });
+  });
+
+  it("shows the agent's proposed destination before sending", async () => {
+    const target = { backend: "codex" as const, threadId: "owner", title: "Existing PR owner" };
+    const { onRun } = setup({ todo: { ...card, action: { type: "send_message", prompt: "Refresh the PR", target } } });
+    expect(screen.getByText("Existing PR owner")).toBeTruthy();
+    expect(onRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ action: { type: "send_message", prompt: "Refresh the PR", target } }), { messageTarget: target });
+  });
+
+  it.each([false, true])("addresses a remote card's search result relative to its owner (result on owner: %s)", async (onOwner) => {
+    const remote = { ...card, id: "remote-todo:win:card", federationTarget: { scope: "remote" as const, instanceId: "win" } };
+    const { api, onRun } = setup({ todo: remote, instances: [{ ...WIN, messageTarget: true }] });
+    await settle();
+    const response = await api.searchThreads();
+    api.searchThreads.mockResolvedValueOnce({ ...response, results: response.results.map((result) => ({
+      ...result,
+      ...(onOwner ? { federation: {
+        ref: { backend: result.backend, threadId: result.threadId, target: { scope: "remote" as const, instanceId: "win" } },
+        instanceLabel: "win-lab / dev",
+      } } : {}),
+    })) });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Handoff options" })); });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Send to thread…" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Find destination thread" }), { target: { value: "42" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Search" })); });
+    fireEvent.click(screen.getByRole("button", { name: /Refresh PR #42/ }));
+    expect(onRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    const selected = onRun.mock.calls[0]?.[1]?.messageTarget;
+    expect(selected).toMatchObject({ backend: "codex", threadId: "pr-owner" });
+    expect(selected?.instanceId).toBe(onOwner ? undefined : "mac");
+  });
+  it("expands the chips to the labelled grid, moves focus with the toggle, and keeps it across a remount", async () => {
+    const { container, rerender, tree } = setup();
+    await settle();
+    const expand = screen.getByRole("button", { name: "Show start settings" });
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => { fireEvent.click(expand); });
+    expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Machine", "Model", "Where", "Env"]);
+    expect(screen.queryByRole("group", { name: "Start settings" })).toBeNull();
+    const collapse = screen.getByRole("button", { name: "Hide start settings labels" });
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(collapse);
+    // The grid names each fact, so its chips carry no icon or name tooltip.
+    expect(chip("Machine for the new thread").hasAttribute("data-tooltip")).toBe(false);
+    expect(chip("Machine for the new thread").querySelector(".todo-model-picker__lead")).toBeNull();
+
+    // Paging away and back, or moving to the To-dos tab, remounts the card.
+    rerender(tree(card, false));
+    rerender(tree(card));
+    expect(screen.getByRole("button", { name: "Hide start settings labels" })).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Hide start settings labels" })); });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Show start settings" }));
+    expect(container.querySelector("dt")).toBeNull();
+  });
+
+  it("keeps the stack's and the To-dos panel's copies of a card in step", async () => {
+    setup({ copies: 2 });
+    await settle();
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Show start settings" })[0]!); });
+    expect(screen.getAllByRole("button", { name: "Hide start settings labels" })).toHaveLength(2);
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Hide start settings labels" })[1]!); });
+    expect(screen.getAllByRole("button", { name: "Show start settings" })).toHaveLength(2);
+  });
+
   it("shows every choice on the card, defaulting to the thread's machine, checkout and environment", async () => {
     const { container, api } = setup();
     await settle();
-    expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Machine", "Model", "Where", "Env"]);
+    // At rest the choices are one row of chips with no labels.
+    const row = screen.getByRole("group", { name: "Start settings" });
+    expect(within(row).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Machine for the new thread: studio",
+      "Model for the new thread: Claude, Opus 5.5, high",
+      "Where the new thread works: This thread's directory",
+      "Environment for the new thread: Dev",
+      "Show start settings",
+    ]);
+    expect(chip("Machine for the new thread").getAttribute("data-tooltip")).toBe("Machine: studio");
+    expect(chip("Where the new thread works").getAttribute("data-tooltip")).toBe("Where: This thread's directory");
+    expect(chip("Environment for the new thread").getAttribute("data-tooltip")).toBe("Environment: Dev");
+    expect(container.querySelector("dt")).toBeNull();
     expect(chip("Machine for the new thread").getAttribute("aria-label")).toBe("Machine for the new thread: studio");
     expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Opus 5.5, high");
     expect(chip("Where the new thread works").textContent).toBe("This thread's directory");
@@ -189,7 +297,10 @@ describe("to-do dispatch target", () => {
     await choose("Machine for the new thread", "win-lab / dev");
     await settle();
     const speed = chip("Speed for the new thread");
-    expect(speed.textContent).toBe("Standard");
+    // Standard is the composer's bare bolt; its name and tooltip say which.
+    expect(speed.getAttribute("aria-label")).toBe("Speed for the new thread: Standard");
+    expect(speed.textContent).toBe("");
+    expect(speed.className).toContain("is-icon-only");
     expect(speed.hasAttribute("disabled")).toBe(true);
     expect(speed.getAttribute("data-tooltip")).toBe("Fast mode is turned off in Settings → Models on win-lab / dev.");
   });
@@ -200,13 +311,15 @@ describe("to-do dispatch target", () => {
     } };
     const { onRun, unmount } = setup({ todo, localCodexFastAllowed: false });
     await settle();
-    expect(chip("Speed for the new thread").textContent).toBe("Standard");
+    expect(chip("Speed for the new thread").getAttribute("aria-label")).toBe("Speed for the new thread: Standard");
     expect(chip("Speed for the new thread").getAttribute("data-tooltip")).toBe("Fast mode is turned off in Settings → Models.");
     unmount();
 
     const allowed = setup({ todo });
     await settle();
     expect(chip("Speed for the new thread").textContent).toBe("Fast");
+    // A paid tier is named and lit, as the composer draws it.
+    expect(chip("Speed for the new thread").className).toContain("is-lit");
     expect(chip("Speed for the new thread").className).not.toContain("is-changed");
     // Ultrafast is offered on the card's own machine.
     await act(async () => { fireEvent.click(chip("Speed for the new thread")); });

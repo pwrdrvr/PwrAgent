@@ -7,13 +7,14 @@
  * through IPC, avoiding an "Inbox first, then jump" startup path.
  */
 
-import type { NavigationBrowseMode } from "@pwragent/shared";
+import { normalizeNavigationResumeState, type NavigationBrowseMode, type NavigationResumeState } from "@pwragent/shared";
 import { getExistingDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";
 import { getAppOverlayStore } from "./state/app-state";
 import { normalizeNavigationBrowseMode } from "./state/overlay-store-sqlite";
 
 export type BootstrapNavigationPreferences = {
   browseMode: NavigationBrowseMode;
+  resumeState?: NavigationResumeState;
   /** The Pinned group's saved disclosure, so it paints closed on frame one. */
   pinnedGroupCollapsed: boolean;
   /**
@@ -32,6 +33,7 @@ export function readBootstrapNavigationPreferences(): BootstrapNavigationPrefere
     const store = getAppOverlayStore();
     return {
       browseMode: store.getNavigationBrowseModeSync(),
+      resumeState: store.getNavigationResumeStateSync(),
       pinnedGroupCollapsed: store.getPinnedGroupCollapsedSync(),
       pinnedThreadsOnTop,
     };
@@ -69,6 +71,7 @@ export function parseBootstrapNavigationPreferencesArg(
       const raw = JSON.parse(arg.slice(BOOTSTRAP_NAVIGATION_ARG_PREFIX.length));
       return {
         browseMode: normalizeNavigationBrowseMode(raw?.browseMode),
+        resumeState: normalizeNavigationResumeState(raw?.resumeState),
         pinnedGroupCollapsed: raw?.pinnedGroupCollapsed === true,
         pinnedThreadsOnTop: raw?.pinnedThreadsOnTop !== false,
       };

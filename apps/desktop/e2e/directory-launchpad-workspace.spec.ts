@@ -209,6 +209,9 @@ async function createDirectoryLaunchpadFixture(): Promise<{
             id: "thread-list-2",
             kind: "response",
             method: "thread/list",
+            // A startup refresh must not list the new thread before the launchpad
+            // creates it.
+            afterResponseId: "thread-start-1",
             result: [
               {
                 id: "thread-new-worktree",
@@ -271,6 +274,8 @@ async function createDirectoryLaunchpadFixture(): Promise<{
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            // The second read belongs to the new thread, not to a startup reread.
+            afterResponseId: "thread-start-1",
             result: {
               entries: [
                 {
@@ -433,12 +438,17 @@ async function createUnbornHeadLaunchpadFixture(): Promise<{
             id: "thread-list-2",
             kind: "response",
             method: "thread/list",
+            // A startup refresh must not list the new thread before the launchpad
+            // creates it.
+            afterResponseId: "thread-start-1",
             result: [newThread, thread],
           },
           {
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            // The second read belongs to the new thread, not to a startup reread.
+            afterResponseId: "thread-start-1",
             result: {
               entries: [
                 {

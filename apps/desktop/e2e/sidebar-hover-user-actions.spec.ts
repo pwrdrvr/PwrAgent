@@ -35,6 +35,7 @@ async function createFixture(): Promise<{
     id: `read-${id}`,
     kind: "response",
     method: "thread/read",
+    threadId: id,
     result: {
       entries: [{ type: "message", id: `${id}-m`, role: "assistant", text: "Hover action fixture." }],
       messages: [{ id: `${id}-m`, role: "assistant", text: "Hover action fixture." }],

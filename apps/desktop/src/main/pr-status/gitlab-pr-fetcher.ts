@@ -426,7 +426,11 @@ export class GitLabPrFetcher {
       }
     }
     const pr = parseGitLabMr(payload, pipelineSourceHeadSha);
-    if (pr.provider !== ref.host || pr.org !== ref.owner || pr.repo !== ref.repo || pr.number !== ref.number) {
+    // A renamed or transferred project's old path redirects to
+    // projects/<id>, and glab follows it, so the MR comes back under the
+    // project's current path. That path is the answer, not a mismatch: the
+    // caller learns the rename from it. Only the host and MR number must hold.
+    if (pr.provider !== ref.host || pr.number !== ref.number) {
       throw new Error("GitLab returned a different merge request identity.");
     }
     this.failures.delete(ref.host);

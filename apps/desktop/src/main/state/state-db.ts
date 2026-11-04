@@ -1,3 +1,4 @@
+import { removeUsageActivityIndex } from "./usage-activity-index";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -17,6 +18,7 @@ import {
 } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { THREAD_DEPENDENCY_SCHEMA } from "./thread-dependency-store.js";
+import { PROJECT_HELD_WAKEUP_SCHEMA } from "./project-held-wakeup-store.js";
 import { MESSAGING_REQUEST_SCHEMA } from "./messaging-request-store.js";
 import { THREAD_SANDBOX_SCHEMA } from "./thread-sandbox-store.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
@@ -2177,6 +2179,7 @@ export class StateDb {
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
       ensureThreadUsageActivitySchema(db);
+      removeUsageActivityIndex(db);
       db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
       // Additive columns on the card tables, with no version of their own so
       // no branch can claim it: one immediate transaction the first time,
@@ -2879,6 +2882,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_STATUS_WATCH_SCHEMA);
     ensurePrStatusWatchTerminalColumns(db);
     db.exec(THREAD_DEPENDENCY_SCHEMA);
+    db.exec(PROJECT_HELD_WAKEUP_SCHEMA);
     db.exec(MESSAGING_REQUEST_SCHEMA);
     db.exec(THREAD_SANDBOX_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);

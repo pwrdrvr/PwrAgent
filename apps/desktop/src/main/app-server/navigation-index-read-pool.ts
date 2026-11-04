@@ -1,5 +1,5 @@
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
-import type { NavigationQueryIndex } from "./navigation-query-projection";
+import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 
 const RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
 

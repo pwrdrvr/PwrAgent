@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   AppServerBackendKind,
+  ThreadPendingWakesList,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
   NavigationLaunchpadConfiguration,
@@ -9,6 +10,7 @@ import type {
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
   ThreadSubAgentSummary,
+  ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import {
   NAVIGATION_DETAIL_COLLECTION_NAMES,
@@ -24,6 +26,9 @@ import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
 import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { readMergedSubAgentPage } from "./thread-display";
+import { collectConcurrent } from "../../shared/concurrent-work";
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
+import { boundThreadPendingWakes } from "./thread-pending-wakes";
 
 /** The most records one selected-collection page holds, before the byte budget. */
 const SELECTED_COLLECTION_PAGE_RECORDS = 100;
@@ -142,6 +147,14 @@ export class NavigationDetailService {
 
   async readSelectedDetail(
     request: NavigationSelectedDetailRequest,
+    options: { includePendingWakes?: boolean } = {},
+  ): Promise<NavigationSelectedDetailResponse> {
+    return await listingDiagnostics.trace("workflow", { query: "selected-detail" }, () => this.readSelectedDetailData(request, options));
+  }
+
+  private async readSelectedDetailData(
+    request: NavigationSelectedDetailRequest,
+    options: { includePendingWakes?: boolean },
   ): Promise<NavigationSelectedDetailResponse> {
     if (request.protocol !== NAVIGATION_QUERY_PROTOCOL_VERSION) {
       throw new NavigationQueryError(
@@ -256,7 +269,31 @@ export class NavigationDetailService {
         identity: "unresolved",
       };
     }
-    const subAgentCollection = await this.subAgentCollectionManifest(request.ref, summary);
+    if (request.includeWorkspaceConfiguration && thread.linkedDirectories.length > 100) {
+      throw new NavigationQueryError("navigation_item_too_large", "Selected workspace configuration exceeds the 100-directory detail budget.");
+    }
+    // Ancillary reads and directory probes overlap. Peer wake projection
+    // reuses the active-watch read. SQLite wrappers still execute synchronously;
+    // GitReadCache continues to own physical Git admission.
+    const activePrWatchesRead = getDesktopOverlayStore().listActiveThreadPrStatusWatches({ backend: summary.source, threadId: summary.id });
+    const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories] = await Promise.all([
+      this.subAgentCollectionManifest(request.ref, summary),
+      detectMissingThreadWorkspace(thread, {
+        readBranch: async (repositoryPath) =>
+          (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
+      }),
+      getDesktopOverlayStore().listActiveThreadSubAgents({ backend: summary.source, threadId: summary.id }),
+      activePrWatchesRead,
+      options.includePendingWakes
+        ? activePrWatchesRead.then((watches) => readPendingWakesForDetail({ backend: summary.source, threadId: summary.id }, watches))
+        : undefined,
+      request.includeWorkspaceConfiguration
+        ? collectConcurrent(thread.linkedDirectories, 4, async (directory) => ({
+            key: directory.id, label: directory.label, path: directory.path,
+            gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined,
+          }))
+        : undefined,
+    ]);
     const collections = NAVIGATION_DETAIL_COLLECTION_NAMES.map((name) => name === "subAgents"
       ? { name, ...subAgentCollection }
       : {
@@ -265,31 +302,28 @@ export class NavigationDetailService {
         });
     // Checked on every detail read, never stored: one stat while the folder
     // exists. Viewers on other instances get the owner's answer.
-    const workspaceMissing = await detectMissingThreadWorkspace(thread, {
-      readBranch: async (repositoryPath) =>
-        (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
-    });
     const configuration = { ...thread, ...(workspaceMissing ? { workspaceMissing } : {}) };
     for (const name of NAVIGATION_DETAIL_COLLECTION_NAMES) delete configuration[name];
     // Live gate events and selected-detail refreshes must expose the same
     // helpers before persistence at turn end; active cards come from the
     // partial index, never from the thread's whole card history.
-    const activeCards = await getDesktopOverlayStore().listActiveThreadSubAgents({
-      backend: summary.source, threadId: summary.id,
-    });
     configuration.activeSubAgents = projectActiveThreadSubAgents(summary.source === "codex"
       ? this.registry.mergeLiveTokenMiserSubAgents(summary.id, activeCards)
       : activeCards);
-    let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];
-    if (request.includeWorkspaceConfiguration) {
-      if (thread.linkedDirectories.length > 100) {
-        throw new NavigationQueryError("navigation_item_too_large", "Selected workspace configuration exceeds the 100-directory detail budget.");
-      }
-      workspaceDirectories = [];
-      for (const directory of thread.linkedDirectories) {
-        workspaceDirectories.push({ key: directory.id, label: directory.label, path: directory.path,
-          gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined });
-      }
+    // The owner's watches, so a peer viewer reads the same list. Detail only:
+    // it is projected per read and never stored with the navigation row.
+    if (activePrWatches.length > 0) configuration.activePrWatches = activePrWatches;
+    // Only peer viewers need this projection; local windows use the pending
+    // wakes IPC channel. Keep its live activity out of local detail revisions.
+    if (pendingWakes) {
+      configuration.pendingWakes = pendingWakes.wakes;
+      if (pendingWakes.incomplete) configuration.pendingWakesIncomplete = true;
+    }
+    if (configuration.pendingWakes) {
+      const baseBytes = responseBytes({ ref: request.ref, thread: { ...configuration, pendingWakes: [] }, collections, workspaceDirectories }) + 512;
+      const bounded = boundThreadPendingWakes({ wakes: configuration.pendingWakes }, Math.max(0, NAVIGATION_QUERY_MAX_RESULT_BYTES - baseBytes));
+      configuration.pendingWakes = bounded.wakes;
+      if (bounded.incomplete) configuration.pendingWakesIncomplete = true;
     }
     const detailRevision = revision({ thread: configuration, workspaceDirectories });
     if (request.knownRevision === detailRevision) {
@@ -466,6 +500,31 @@ export class NavigationDetailService {
       });
     }
     return response;
+  }
+}
+
+type PendingWakesProjector = (thread: {
+  backend: AppServerBackendKind;
+  threadId: string;
+}, activePrWatches: readonly ThreadPullRequestWatchSummary[]) => Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete">>;
+
+let pendingWakesProjector: PendingWakesProjector | undefined;
+
+/** Main's app-server service supplies the list; tests leave it unset. */
+export function setNavigationDetailPendingWakesProjector(projector: PendingWakesProjector | undefined): void {
+  pendingWakesProjector = projector;
+}
+
+/** A failed read leaves the field out rather than failing the detail. */
+async function readPendingWakesForDetail(thread: {
+  backend: AppServerBackendKind;
+  threadId: string;
+}, activePrWatches: readonly ThreadPullRequestWatchSummary[]): Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete"> | undefined> {
+  if (!pendingWakesProjector) return undefined;
+  try {
+    return await pendingWakesProjector(thread, activePrWatches);
+  } catch {
+    return undefined;
   }
 }
 

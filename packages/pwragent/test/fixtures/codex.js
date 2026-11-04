@@ -74,6 +74,11 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       assert.equal(params.sandboxPolicy.networkAccess, false);
       assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const prompt = params.input[0].text;
+      // Codex reports the first user message as the thread's preview.
+      if (threads[params.threadId] && threads[params.threadId].preview === undefined) {
+        threads[params.threadId].preview = prompt;
+        persist();
+      }
       active = { id: `turn-${++sequence}`, threadId: params.threadId };
       const initial = { turn: { id: active.id, status: "inProgress", items: [], error: null } };
       if (prompt.startsWith("tool ")) {

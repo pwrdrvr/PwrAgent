@@ -1,7 +1,7 @@
 import { parseCodexProviderModelId, type CodexModelProviderSettings } from "@pwragent/shared";
 import type { CodexAppServerClient } from "./client";
 
-type Route = "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider";
+type Route = "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "reportedProvider";
 // Exhaustive: adding a public client operation requires choosing its runtime ownership.
 const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   close: "all",
@@ -10,6 +10,13 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   onAppServerUnexpectedExit: "subscribe",
   restartAppServer: "all",
   resetAppServerRestarts: "all",
+  readAppServerProcessSample: "primary",
+  getAppServerRecycleStatus: "primary",
+  // Each runtime owns a process; each decides from its own sample.
+  maybeRecycleIdleAppServer: "all",
+  getSubscribedThreadCount: "primary",
+  // Each runtime keeps its own threads loaded and releases its own.
+  unsubscribeIdleThreads: "all",
   recoverInvalidPersistedResponseMessageIds: "thread",
   onRealtimeEvent: "subscribe",
   onRealtimeDisconnect: "subscribe",
@@ -41,6 +48,7 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   readRateLimits: "primary",
   readAccountUsage: "primary",
   modelProviderForThread: "provider",
+  reportedModelProviderForThread: "reportedProvider",
   readThreadPricingSnapshot: "threadId",
   readThreadTurn: "thread",
   readThreadToolInvocation: "thread",
@@ -68,6 +76,7 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   setTurnApprovalReviewer: "thread",
   setThreadPermissions: "thread",
   archiveThread: "thread",
+  retireReviewThread: "thread",
   deleteThread: "thread",
   restoreThread: "thread",
   renameThread: "thread",
@@ -110,6 +119,11 @@ export function createProviderRuntimeClient(
     return primary.modelProviderForThread?.(threadId)
       ?? [...runtimes.values()].map((client) => client.modelProviderForThread?.(threadId)).find(Boolean);
   };
+  // A runtime's threads run on its provider; the rest are as Codex reported.
+  const reportedProviderForThread = (threadId: string): string | undefined =>
+    owners.get(threadId)
+      ?? primary.reportedModelProviderForThread?.(threadId)
+      ?? [...runtimes.values()].map((client) => client.reportedModelProviderForThread?.(threadId)).find(Boolean);
   const observe = (value: unknown, runtimeProvider?: string): void => {
     const fields = record(value);
     if (!fields) return;
@@ -160,9 +174,15 @@ export function createProviderRuntimeClient(
     const startedAtGeneration = generation;
     const params = record(args[0]);
     const threadId = route === "threadId" ? args[0] : params?.threadId;
+    // A fork from a rollout path reads its history from that file. A thread
+    // handoff passes another machine's thread ID, which this App Server has
+    // never stored, so reading it here fails with "thread not loaded".
+    const forksFromPath = method === "forkThread"
+      && typeof params?.path === "string"
+      && params.path.trim() !== "";
     let owner: string | undefined;
     if (typeof threadId === "string") {
-      if (!owners.has(threadId)) {
+      if (!owners.has(threadId) && !forksFromPath) {
         await primary.readThreadSummary(threadId);
         owners.set(threadId, primary.modelProviderForThread(threadId));
       }
@@ -188,6 +208,7 @@ export function createProviderRuntimeClient(
       const method = property as Method;
       const route = ROUTES[method];
       if (route === "provider") return providerForThread;
+      if (route === "reportedProvider") return reportedProviderForThread;
       if (route === "subscribe") return (...args: unknown[]) => {
         const subscription: Subscription = { method, args, stops: new Map() };
         subscriptions.add(subscription);

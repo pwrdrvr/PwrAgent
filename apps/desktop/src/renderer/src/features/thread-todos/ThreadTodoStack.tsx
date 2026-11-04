@@ -153,7 +153,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
           className="thread-todo-stack__chip"
           aria-expanded={false}
           aria-label={`Show to-dos: ${count} open${
-            progress ? `, ${progress.checked} of ${progress.total} steps checked` : ""
+            progress ? `, ${progress.checked} of ${progress.total} ${progress.noun} checked` : ""
           }`}
           onClick={() => {
             collapsedIdsByThreadKey.delete(threadKey);

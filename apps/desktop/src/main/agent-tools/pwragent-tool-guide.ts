@@ -1,29 +1,9 @@
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
 import { agentToolSuccess, type AgentToolDefinition } from "./agent-tool-definition";
 
-export const PWRAGENT_TOOL_GUIDE = `Use the advertised tool description and input schema for each call.
-Use search_threads to find a thread.
-Use get_thread_status for compact state.
-Use read_thread for transcript detail.
-Use list_federation_instances to find a machine.
-Keep the returned instanceId for remote calls.
-Use handoff_task for local child work.
-Use create_instance_thread for work on a selected machine.
-Pass environment to either tool to pick the child's environment by id or name, or none.
-Use manage_thread_dependencies to wait for a prerequisite.
-Use watch_thread_pull_request to wait for CI on an attached PR.
-Add merged and closed to its notifyOn to clean up after the PR lands, such as a Sandboxer sandbox.
-Use get_forge_status and the CI read tools to inspect forge data.
-Use the PwrAgent forge tools to open, edit, read back, comment on, review and merge GitHub pull requests and GitLab merge requests, and to work with issues.
-Prefer them to the gh and glab CLIs and to GitHub connectors. If one is declined or off, do not work around it.
-Use get_current_messaging_surface before a messaging action.
-For delegated or completion turns without a live inbound origin, use list_messaging_surfaces and attach_thread_to_surface.
-Prefer the causal recommendation over unrelated newer traffic. Sole-surface selection requires complete discovery.
-Send messages or files only when authorized.
-Use search_mcp_tools to find tools on selected connections.
-Use call_mcp_tool with the returned identity and schemaRevision.
-Check status before you retry an action that can change state.
-Treat readOnlyHint as metadata. It does not grant permission.`;
+import { PWRAGENT_COMPATIBILITY_TOOL_GUIDE } from "./pwragent-workflow-skills";
+
+export const PWRAGENT_TOOL_GUIDE = PWRAGENT_COMPATIBILITY_TOOL_GUIDE;
 
 export function buildPwrAgentToolGuideDefinition(): AgentToolDefinition {
   return {

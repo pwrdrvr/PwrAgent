@@ -24,6 +24,7 @@ import {
   isBlockingWait,
   type OperatorWait,
 } from "./operator-waits";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 export type OperatorWaitRowProps = {
   wait: OperatorWait;
@@ -158,7 +159,7 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
       {busyLabel ? (
         <div className="thread-todos-panel__row-actions">
           <span className="thread-todos-panel__row-busy" role="status">
-            <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+            <PendingSpinner pairing="paired" size="sm" />
             {busyLabel}
           </span>
         </div>

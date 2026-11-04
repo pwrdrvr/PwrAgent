@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { DesktopHelperModelSettings } from "@pwragent/shared";
+import type {
+  DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
+} from "@pwragent/shared";
 import {
   desktopSettingsPatchToEdits,
   parseDesktopSettingsToml,
@@ -127,6 +130,66 @@ describe("desktop config helper models", () => {
     expect(written).not.toContain("[[models.helper_models]]");
     expect(parseDesktopSettingsToml(written, "test.toml").models).toEqual({
       codex: { allowFast: false },
+    });
+  });
+});
+
+describe("desktop config task monitor models", () => {
+  const saveMonitors = (
+    existing: string,
+    taskMonitorModels: Record<string, DesktopTaskMonitorModelChoice>,
+  ): string =>
+    applyTomlEdits(
+      existing,
+      desktopSettingsPatchToEdits(
+        { models: { taskMonitorModels } },
+        parseTomlTables(existing, "test.toml"),
+      ),
+    );
+
+  it("writes one row per provider and reads them back", () => {
+    const written = saveMonitors("", {
+      claude: { source: "provider", model: "haiku", reasoningEffort: "low" },
+      "acp:grok": { source: "helper" },
+    });
+
+    expect(written).toBe([
+      "[[models.task_monitor_models]]",
+      "provider = \"acp:grok\"",
+      "source = \"helper\"",
+      "",
+      "[[models.task_monitor_models]]",
+      "provider = \"claude\"",
+      "source = \"provider\"",
+      "model = \"haiku\"",
+      "reasoning_effort = \"low\"",
+      "",
+    ].join("\n"));
+    expect(parseDesktopSettingsToml(written, "test.toml").models?.taskMonitorModels).toEqual({
+      "acp:grok": { source: "helper" },
+      claude: { source: "provider", model: "haiku", reasoningEffort: "low" },
+    });
+  });
+
+  it("removes the rows when every provider is back on Automatic", () => {
+    const written = saveMonitors("", { claude: { source: "helper" } });
+    expect(saveMonitors(written, {})).not.toContain("task_monitor_models");
+  });
+
+  it("skips a malformed row and keeps the rest", () => {
+    const parsed = parseDesktopSettingsToml([
+      "[[models.task_monitor_models]]",
+      "provider = \"claude\"",
+      "source = \"provider\"",
+      "",
+      "[[models.task_monitor_models]]",
+      "provider = \"acp:gemini\"",
+      "source = \"provider\"",
+      "model = \"gemini-3-flash\"",
+      "",
+    ].join("\n"), "test.toml");
+    expect(parsed.models?.taskMonitorModels).toEqual({
+      "acp:gemini": { source: "provider", model: "gemini-3-flash" },
     });
   });
 });

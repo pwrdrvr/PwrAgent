@@ -22,9 +22,9 @@ function fixture(capabilities: FederationCapability[] = ["thread_navigation", "t
   return { readForge, resolveThread, local, store, runtime, handler: createOwnerRoutedForgeReadHandler({ local, runtime: () => runtime, targetStore: store }) };
 }
 describe("forge owner routing", () => {
-  it.each(["get_commit_checks", "list_ci_artifacts"] as const)("routes %s to the owner without local credential access", async (operation) => {
+  it.each(["get_commit_checks", "list_ci_artifacts", "download_ci_artifact"] as const)("routes %s to the owner without local credential access", async (operation) => {
     const h = fixture();
-    const args = operation === "get_commit_checks" ? { headSha: "a".repeat(40) } : { runId: 9 };
+    const args = operation === "get_commit_checks" ? { headSha: "a".repeat(40) } : operation === "download_ci_artifact" ? { runId: 9, artifactId: 12 } : { runId: 9 };
     await h.handler(operation, { ...args, threadId: "remote", instanceId: "owner" }, context);
     expect(h.local).not.toHaveBeenCalled();
     expect(h.readForge).toHaveBeenCalledWith({ operation, backend: "codex", threadId: "remote", args: { ...args, backend: "codex", threadId: "remote" } }, { signal: undefined, deadlineAt: expect.any(Number) });

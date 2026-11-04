@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
   THREAD_TODO_MAX_ITEMS,
+  THREAD_TODO_ORIGIN_ID_MAX_LENGTH,
+  THREAD_TODO_TITLE_MAX_LENGTH,
   mergeThreadTodoItems,
   parseThreadTodoItemTexts,
   threadTodoBlockingItems,
   threadTodoItemNoun,
   threadTodoItemProgress,
+  threadTodoMessageOriginFromUnknown,
   threadTodoOpenItems,
   type ThreadTodoItem,
 } from "../thread-todos";
@@ -88,7 +91,7 @@ describe("checklist progress", () => {
     expect(threadTodoItemProgress({ items: [
       { id: "a", text: "Tests", checked: true },
       { id: "b", text: "Docs", checked: false },
-    ] })).toEqual({ checked: 1, total: 2 });
+    ] })).toEqual({ checked: 1, total: 2, noun: "steps" });
     expect(threadTodoOpenItems({ items: [
       { id: "a", text: "Tests", checked: true },
       { id: "b", text: "Docs", checked: false },
@@ -118,16 +121,46 @@ describe("prerequisites", () => {
     expect(mergeThreadTodoItems(items, ["Test"], counter())).toEqual([items[0], items[2]]);
   });
 
-  it("block a handoff alone, and leave the progress count to the steps", () => {
+  it("block a handoff alone, and are what a handoff's progress counts", () => {
     const handoff = { items, action: { type: "start_thread" as const, prompt: "Go" } };
     expect(threadTodoBlockingItems(handoff)).toEqual([items[0]]);
     expect(threadTodoBlockingItems({ items })).toEqual([items[0], items[1]]);
     expect(threadTodoBlockingItems({ ...handoff, items: items.slice(1) })).toEqual([]);
-    expect(threadTodoItemProgress({ items })).toEqual({ checked: 1, total: 2 });
+    // Any other card counts its steps and leaves prerequisites out.
+    expect(threadTodoItemProgress({ items })).toEqual({ checked: 1, total: 2, noun: "steps" });
     expect(threadTodoItemProgress({ items: [items[0]!] })).toBeUndefined();
+    // A handoff's steps are the new thread's plan, which nothing ticks.
+    expect(threadTodoItemProgress(handoff)).toEqual({ checked: 0, total: 1, noun: "prerequisites" });
+    expect(threadTodoItemProgress({ ...handoff, items: items.slice(1) })).toBeUndefined();
     expect(threadTodoItemNoun([items[0]!])).toBe("prerequisite");
     expect(threadTodoItemNoun([items[0]!, items[0]!])).toBe("prerequisites");
     expect(threadTodoItemNoun([items[0]!, items[1]!])).toBe("steps");
     expect(threadTodoItemNoun([items[1]!])).toBe("step");
+  });
+});
+
+describe("threadTodoMessageOriginFromUnknown", () => {
+  it("reads a card id and its trimmed title", () => {
+    expect(threadTodoMessageOriginFromUnknown({ id: " todo-1 ", title: "  Fix flaky sync test " }))
+      .toEqual({ id: "todo-1", title: "Fix flaky sync test" });
+    expect(threadTodoMessageOriginFromUnknown({ id: "todo-1" })).toEqual({ id: "todo-1" });
+  });
+
+  it("is no marker without a usable id", () => {
+    for (const value of [
+      undefined, null, "todo-1", ["todo-1"], {}, { id: "" }, { id: "   " }, { id: 7 },
+      { id: "x".repeat(THREAD_TODO_ORIGIN_ID_MAX_LENGTH + 1) },
+    ]) {
+      expect(threadTodoMessageOriginFromUnknown(value)).toBeUndefined();
+    }
+    expect(threadTodoMessageOriginFromUnknown({ id: "x".repeat(THREAD_TODO_ORIGIN_ID_MAX_LENGTH) }))
+      .toEqual({ id: "x".repeat(THREAD_TODO_ORIGIN_ID_MAX_LENGTH) });
+  });
+
+  it("drops a title that is not text or is blank, and cuts a long one", () => {
+    expect(threadTodoMessageOriginFromUnknown({ id: "todo-1", title: { text: "Fix" } })).toEqual({ id: "todo-1" });
+    expect(threadTodoMessageOriginFromUnknown({ id: "todo-1", title: "   " })).toEqual({ id: "todo-1" });
+    expect(threadTodoMessageOriginFromUnknown({ id: "todo-1", title: "t".repeat(400) })?.title)
+      .toBe("t".repeat(THREAD_TODO_TITLE_MAX_LENGTH));
   });
 });

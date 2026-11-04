@@ -20,6 +20,7 @@ function operations() {
     listProjects: vi.fn(async (_request?: unknown) => ({ projects: [] })),
     setItemChecked: vi.fn((_request?: unknown) => ({ todo: card })),
     setProject: vi.fn(async (_request?: unknown) => ({ todo: card })),
+    raisePlan: vi.fn(async (_request?: unknown) => ({ todo: card })),
     snapshotFeed: vi.fn(async (_request?: unknown) => ({ epoch: "owner", revision: 0, todos: [card] })),
     listDispatchEnvironments: vi.fn(async (_request?: unknown) => ({
       projectFound: true, environments: [], defaultSource: "none" as const,
@@ -201,7 +202,7 @@ describe("To-do federation protocol", () => {
       id: "request", protocolVersion: 1, createdAt: Date.now(), kind: "request", sourceInstanceId: "viewer", targetInstanceId: "owner", method, params,
     } });
     expect((await send(FEDERATION_THREAD_TODO_METHODS.listTodos, { status: "open" })).status).toBe("handled");
-    for (const operation of ["updateReview", "resolveTodo", "runAction", "setItemChecked", "setProject"] as const) {
+    for (const operation of ["updateReview", "resolveTodo", "runAction", "setItemChecked", "setProject", "raisePlan"] as const) {
       expect((await send(FEDERATION_THREAD_TODO_METHODS[operation], { id: card.id, status: "dismissed" })).status).toBe("rejected");
       expect(local[operation]).not.toHaveBeenCalled();
     }

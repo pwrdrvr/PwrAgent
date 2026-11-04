@@ -39,6 +39,87 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("fixed MCP gateway tools", () => {
+  it.each([
+    { backend: "codex", listTool: "list_mcp_resources", readTool: "read_mcp_resource" },
+    { backend: "claude", listTool: "ListMcpResourcesTool", readTool: "ReadMcpResourceTool" },
+    { backend: "acp:fixture", listTool: undefined, readTool: undefined },
+    { backend: "acp:claude", listTool: undefined, readTool: undefined },
+  ] as const)("advertises only supported resource tools for $backend", async ({ backend, listTool, readTool }) => {
+    const f = fixture();
+    let alias: string | undefined = "native-resource-server";
+    const service = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: f.requestGatewayToolOperation }, approve: f.approve,
+      selectedConnections: async () => ["one"], serverNameInAgent: () => alias,
+    });
+    const found = await service.search({ query: "lookup" }, { ...context, backend });
+    expect(found.servers![0].serverNameInAgent).toBe(alias);
+    expect(found.servers![0].resourceDiscovery).toEqual(listTool ? { server: alias, listTool, readTool } : undefined);
+    alias = undefined;
+    expect((await service.search({ query: "lookup" }, { ...context, backend })).servers).toBeUndefined();
+    expect(f.approve).not.toHaveBeenCalled();
+  });
+
+  it.each(["standalone", "desktop"])("returns a host-resolved resource route for a %s server", async (owner) => {
+    const f = fixture();
+    f.catalog.set("one", [{ ...tool(), serverIdentity: {
+      serverInfo: { name: "pwrdisk", version: "1" },
+      metadata: { interface: { owner }, serverNameInAgent: "untrusted-alias" },
+    } }, tool("one", "lookup_more")]);
+    let alias: string | undefined = "pwragent_one_native-1";
+    const service = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: f.requestGatewayToolOperation }, approve: f.approve,
+      selectedConnections: async () => f.selected.get("thread-a") ?? [],
+      serverNameInAgent: (id, caller) => {
+        expect(id).toBe("one");
+        expect(caller).toBe(context);
+        return alias;
+      },
+    });
+    const found = await service.search({ query: "lookup" }, context);
+    expect(found.servers).toHaveLength(1);
+    expect(found.servers![0]).toMatchObject({
+      serverNameInAgent: alias,
+      resourceDiscovery: { server: alias, listTool: "list_mcp_resources", readTool: "read_mcp_resource" },
+    });
+    expect(found.serverInstructions).toBeUndefined();
+    alias = "pwragent_one_native-2";
+    expect((await service.search({ query: "lookup" }, context)).servers![0].resourceDiscovery?.server).toBe(alias);
+    alias = undefined;
+    const withoutBridge = await service.search({ query: "lookup" }, context);
+    expect(withoutBridge.servers![0].serverNameInAgent).toBeUndefined();
+    expect(withoutBridge.servers![0].resourceDiscovery).toBeUndefined();
+    f.selected.set("thread-a", []);
+    expect(await service.search({ query: "lookup" }, context)).toEqual({ tools: [], unavailable: [] });
+    expect(f.approve).not.toHaveBeenCalled();
+    expect(f.requestGatewayToolOperation.mock.calls.every(([call]) => call.operation === "gateway/tools/list")).toBe(true);
+  });
+
+  it("drops resource routes when selection changes during discovery", async () => {
+    const f = fixture();
+    const serverNameInAgent = vi.fn(() => "pwragent_one_native");
+    f.requestGatewayToolOperation.mockImplementation(async () => {
+      f.selected.set("thread-a", []);
+      return [tool()];
+    });
+    const service = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: f.requestGatewayToolOperation }, approve: f.approve,
+      selectedConnections: async () => f.selected.get("thread-a") ?? [], serverNameInAgent,
+    });
+    const found = await service.search({ query: "lookup" }, context);
+    expect(found.tools).toEqual([]);
+    expect(found.servers).toBeUndefined();
+    expect(serverNameInAgent).not.toHaveBeenCalled();
+  });
+
+  it("reports supplied process identity once without inferring a desktop owner", async () => {
+    const f = fixture();
+    const serverIdentity = { serverInfo: { name: "fixture", version: "3" }, metadata: { interface: { owner: "standalone", relayVersion: null } } };
+    f.catalog.set("one", [{ ...tool(), serverIdentity }, tool("one", "lookup_again")]);
+    const result = await f.service.search({ query: "lookup" }, context);
+    expect(result.servers).toEqual([{ connectionId: "one", serverName: "one", ...serverIdentity }]);
+    expect(result.tools.every((entry) => !("serverIdentity" in entry))).toBe(true);
+  });
+
   it("binds server consent to every tool revision, independent of listing order", () => {
     const first = tool("one", "lookup");
     const second = tool("one", "write");
@@ -266,6 +347,39 @@ describe("fixed MCP gateway tools", () => {
     expect(failed.isError).toBe(true);
     expect(JSON.stringify(failed)).toContain("-32602");
     expect(JSON.stringify(failed)).toContain("bad argument");
+  });
+
+  it("sends upstream forms to the host's form handler for the call only, never to approval", async () => {
+    const f = fixture();
+    const form = { message: "Confirm?", requestedSchema: { type: "object" as const, properties: {} } };
+    const answer = { action: "decline" };
+    const elicit = vi.fn(async () => answer);
+    const service = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: f.requestGatewayToolOperation }, approve: f.approve, elicit,
+      selectedConnections: async (caller) => f.selected.get(caller.threadId) ?? [],
+    });
+    let forwarded: unknown;
+    f.requestGatewayToolOperation.mockImplementation(async (params) => {
+      if (params.operation === "gateway/tools/list") {
+        expect(params.elicit).toBeUndefined();
+        return f.catalog.get(params.connectionId) ?? [];
+      }
+      const formSignal = new AbortController();
+      forwarded = await params.elicit!(form, formSignal.signal);
+      formSignal.abort();
+      return f.result;
+    });
+
+    await service.call(f.args, context);
+
+    expect(forwarded).toBe(answer);
+    expect(f.approve).toHaveBeenCalledTimes(1);
+    expect(elicit).toHaveBeenCalledWith(
+      form,
+      expect.objectContaining({ connectionId: "one", toolName: "lookup", arguments: { id: "record" } }),
+      context,
+      expect.any(AbortSignal),
+    );
   });
 
   it("retains original source attribution without confusing delimiters", () => {

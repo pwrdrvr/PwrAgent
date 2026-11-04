@@ -50,6 +50,7 @@ const desktopApi = (
           density: DesktopAppearanceDensity;
           sidebarTextSize: DesktopTextSize;
           transcriptTextSize: DesktopTextSize;
+          calmMotion?: boolean;
         }) => void,
       ) => () => void;
       onWindowFullscreen?: (
@@ -86,6 +87,7 @@ const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
       appearance.density,
       appearance.sidebarTextSize,
       appearance.transcriptTextSize,
+      appearance.calmMotion === true,
     );
   },
 );

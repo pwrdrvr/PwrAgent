@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -341,6 +342,11 @@ export async function launchElectronApp(
     HOME: homeRoot,
     NODE_ENV: "production",
     PWRAGENT_E2E: "1",
+    // Keep the main window at its 1440x960 default, and let it grow past a
+    // small screen, as on Linux. A hosted macOS runner's 1024x768 display
+    // would otherwise shrink it to 1024x677. A spec that checks the
+    // work-area fit passes this as undefined.
+    PWRAGENT_E2E_LARGER_THAN_SCREEN: "1",
     PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS: "15000",
     ...(params.fixturePath
       ? { PWRAGENT_REPLAY_FIXTURE_PATH: params.fixturePath }
@@ -1219,6 +1225,21 @@ export async function closeElectronApplication(
   await captureElectronMainProcess(electronApp);
   const mainProcess = electronMainProcesses.get(electronApp);
   const quitStartedAt = Date.now();
+  const snapshotDirectory = process.env.PWRAGENT_WINDOWS_PIPE_REQUESTS;
+  const snapshotTimer = process.platform === "win32" && snapshotDirectory
+    ? setTimeout(() => {
+      try {
+        mkdirSync(snapshotDirectory, { recursive: true });
+        const filename = path.join(snapshotDirectory, `${randomUUID()}-stalled`);
+        writeFileSync(`${filename}.tmp`, JSON.stringify({
+          kind: "stalled", workerPid: process.pid, pid: child.pid, at: Date.now(), closeStartedAt: quitStartedAt,
+        }));
+        renameSync(`${filename}.tmp`, `${filename}.json`);
+      } catch {
+        // Diagnostic capture cannot change close ownership or its deadline.
+      }
+    }, 3_000)
+    : undefined;
   const execution = await executeElectronClose({
     now: performance.now.bind(performance),
     requestQuit: async () => {
@@ -1243,7 +1264,7 @@ export async function closeElectronApplication(
     },
     startClose: () => {
       const closePromise = process.platform === "win32" && !hasExited(child)
-        ? closeElectronWithSessionDrain(electronApp)
+        ? closeElectronWithSessionDrain(electronApp, options)
         : electronApp.close();
       closePromise.catch(() => undefined);
       return closePromise;
@@ -1259,29 +1280,101 @@ export async function closeElectronApplication(
       closePromise,
       ELECTRON_FORCE_EXIT_TIMEOUT_MS,
     ),
-  });
+  }).finally(() => clearTimeout(snapshotTimer));
   return recordElectronCloseSummary(execution, options);
 }
 
 export async function closeElectronWithSessionDrain(
   electronApp: ElectronApplication,
+  options: ElectronCloseOptions = {},
 ): Promise<void> {
-  // Chromium waits for its network process after JS quit has completed. Drain
-  // the sessions while their RPC owners are still alive, within the same
-  // graceful-close deadline, instead of leaving cookie writes to native quit.
-  await electronApp.evaluate(async ({ session, webContents }) => {
-    const sessions = new Set([
-      session.defaultSession,
-      ...webContents.getAllWebContents().map((contents) => contents.session),
-    ]);
-    await Promise.all([...sessions].map(async (ownedSession) => {
-      await ownedSession.closeAllConnections();
-      await ownedSession.cookies.flushStore();
-    }));
-  });
-  await electronApp.close();
+  const child = electronApp.process();
+  const errorPrefix = `[pwragent-e2e-session-drain:${randomUUID()}]`;
+  let buffered = "";
+  let rejectDrain: (error: Error) => void = () => undefined;
+  const drainFailed = new Promise<never>((_resolve, reject) => { rejectDrain = reject; });
+  drainFailed.catch(() => undefined);
+  const onStderr = (chunk: Buffer | string) => {
+    buffered += chunk.toString();
+    for (;;) {
+      const start = buffered.indexOf(errorPrefix);
+      const end = start < 0 ? -1 : buffered.indexOf("\n", start);
+      if (end < 0) break;
+      try {
+        const message: unknown = JSON.parse(buffered.slice(start + errorPrefix.length, end));
+        if (typeof message === "object" && message !== null) {
+          if (options.diagnosticsFile) {
+            appendFileSync(options.diagnosticsFile, `${JSON.stringify({
+              kind: "session-drain",
+              launchId: options.launchId,
+              ...message,
+            })}\n`);
+          }
+        } else if (typeof message === "string") {
+          rejectDrain(new Error(`Electron session drain failed: ${message}`));
+        }
+      } catch {
+        // Other app stderr cannot change the owned close result.
+      }
+      buffered = buffered.slice(end + 1);
+    }
+    buffered = buffered.slice(-16_384);
+  };
+  child.stderr?.on("data", onStderr);
+  try {
+    await electronApp.evaluate(({ app, session, webContents }, errorPrefix) => {
+      const record = (stage: string, index?: number) => {
+        process.stderr.write(`${errorPrefix}${JSON.stringify({
+          stage, index, at: Date.now(), pid: process.pid,
+        })}\n`);
+      };
+      record("installed");
+      const sessions = new Set([
+        session.defaultSession,
+        ...webContents.getAllWebContents().map((contents) => contents.session),
+      ]);
+      let quitHeld = false;
+      const holdNativeQuit = (event: Electron.Event) => {
+        record("before-quit");
+        event.preventDefault();
+        quitHeld = true;
+      };
+      // Application disposal can run while sessions drain, but Chromium
+      // must not enter its window/context shutdown until the callbacks finish.
+      // The app owns this before-quit barrier after Playwright detaches its
+      // inspector. A will-quit barrier is too late to preserve those contexts.
+      app.on("before-quit", holdNativeQuit);
+      app.once("will-quit", () => record("will-quit"));
+      app.once("quit", () => record("quit"));
+      void Promise.all([...sessions].map(async (ownedSession, index) => {
+        record("close-connections-start", index);
+        await ownedSession.closeAllConnections();
+        record("close-connections-complete", index);
+        await ownedSession.cookies.flushStore();
+        record("flush-cookies-complete", index);
+        await ownedSession.clearData({ dataTypes: ["cache"] });
+        record("clear-cache-complete", index);
+      })).then(() => {
+        record("released");
+        app.removeListener("before-quit", holdNativeQuit);
+        // Completion can run inside a native before-quit checkpoint. Retry
+        // from a fresh task after that dispatch has settled (quit-retry.ts).
+        if (quitHeld) setImmediate(() => { record("retry-quit"); app.quit(); });
+      }, (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          process.stderr.write(`${errorPrefix}${JSON.stringify(message.slice(0, 2_000))}\n`);
+        } catch {
+          // The unchanged deadline still rejects an unfinished drain.
+        }
+      });
+    }, errorPrefix);
+    // Session preparation and application disposal share the close deadline.
+    await Promise.race([electronApp.close(), drainFailed]);
+  } finally {
+    child.stderr?.removeListener("data", onStderr);
+  }
 }
-
 export async function captureElectronMainProcess(electronApp: ElectronApplication): Promise<void> {
   if (process.platform !== "win32" || electronMainProcesses.has(electronApp)) {
     return;
@@ -1400,7 +1493,7 @@ async function killProcessTree(
       await taskkillTree(pid);
     }
     if (mainProcess && quitStartedAt !== undefined) {
-      // The Playwright child is cmd.exe. Its exit does not prove that Electron
+      // A custom Windows batch launcher can exit before its Electron
       // descendants have released the launcher's inherited pipes.
       const rows = await listWindowsMainAndChildren(mainProcess.pid);
       const pids = selectWindowsElectronCleanupPids(

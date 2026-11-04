@@ -97,6 +97,11 @@
           }
           applyTextSize(bridged.sidebarTextSize, "data-sidebar-text");
           applyTextSize(bridged.transcriptTextSize, "data-transcript-text");
+          // Calm motion: looping status animations settle after two runs.
+          // Full motion is the default, carried by the attribute's absence.
+          if (bridged.calmMotion === true) {
+            document.documentElement.setAttribute("data-motion", "calm");
+          }
         } catch (_) {
           // Bridge unavailable or shape wrong — fall back to dark + mission-
           // control defaults. The useAppearance hook will resync once the

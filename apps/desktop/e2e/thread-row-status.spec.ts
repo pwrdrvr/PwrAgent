@@ -70,6 +70,7 @@ async function createThreadRowStatusFixture(): Promise<{
             id: "thread-read-1",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-initiated",
             result: {
               entries: [
                 {
@@ -106,6 +107,7 @@ async function createThreadRowStatusFixture(): Promise<{
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-reference",
             result: {
               entries: [
                 {

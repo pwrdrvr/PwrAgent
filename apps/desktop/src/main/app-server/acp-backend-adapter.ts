@@ -46,6 +46,7 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
+import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
   stageLocalTurnInputAttachment,
@@ -169,6 +170,8 @@ export type AcpRuntimeClient = Pick<
   Partial<
     Pick<
       AcpAgentClient,
+      | "closeIdleSessions"
+      | "closeSessionForArchive"
       | "didSessionLoadReplayHistory"
       | "configureWorkflowBudget"
       | "hasActiveOperations"
@@ -181,6 +184,7 @@ export type AcpRuntimeClient = Pick<
       | "sendControlPrompt"
       | "setRuntimeOption"
       | "steerSession"
+      | "supportsArchivedSessionRestore"
       | "supportsSessionLoad"
       | "supportsTurnSteering"
       | "rewindSession"
@@ -299,6 +303,8 @@ export type AcpRuntimeCapabilityProbe = (
 ) => Promise<AcpInstalledAgentRecord>;
 
 export type AcpBackendAdapterOptions = {
+  /** Account plan limits shared with the other providers; a private store when absent. */
+  planLimits?: PlanLimitStore;
   acpAgentStore?: Pick<
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
@@ -1235,9 +1241,11 @@ export class AcpBackendAdapter {
   private readonly liveToolUpdateResolver = new AcpLiveToolUpdateResolver();
   private readonly modelRetryTracker = new AcpModelRetryTracker();
   private readonly liveNotificationFingerprints = new Map<string, string>();
-  private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
-  /** When each provider status was read, for Usage Activity's limit history. */
-  private readonly providerStatusObservedAt = new Map<AcpBackendId, number>();
+  /** Each agent's account; its limits live in `planLimits`, keyed by backend. */
+  private readonly providerStatuses = new Map<AcpBackendId, Pick<AcpProviderStatus, "account">>();
+  private readonly planLimits: PlanLimitStore;
+  private readonly ownsPlanLimits: boolean;
+  private readonly unsubscribePlanLimits: () => void;
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
@@ -1260,6 +1268,21 @@ export class AcpBackendAdapter {
   private readonly invalidatedProviderRegistryIds = new Set<string>();
 
   constructor(options: AcpBackendAdapterOptions) {
+    this.ownsPlanLimits = !options.planLimits;
+    this.planLimits = options.planLimits ?? new PlanLimitStore();
+    // A summary hides a window once it resets; tell listeners when it does.
+    this.unsubscribePlanLimits = this.planLimits.subscribe((provider) => {
+      if (!isAcpBackendId(provider) || !this.providerStatuses.has(provider)) return;
+      void this.emit({
+        backend: provider,
+        notification: { method: "backend/providerStatus/updated", params: { backend: provider } },
+      }).catch((error: unknown) => {
+        acpBackendAdapterLog.debug("acp_provider_status_expiry_unreported", {
+          backend: provider,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
     this.captureStores = options.captureStores;
     this.agentToolMcpServer = options.agentToolMcpServer;
     this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
@@ -1335,7 +1358,7 @@ export class AcpBackendAdapter {
         ? {
             ...summary,
             account: providerStatus.account,
-            rateLimits: providerStatus.rateLimits,
+            rateLimits: this.planLimits.limits(agent.backendId),
           }
         : summary;
     });
@@ -1456,12 +1479,21 @@ export class AcpBackendAdapter {
   ): Promise<void> {
     try {
       const client = await clientPromise;
+      // Reads run one at a time, so each answer is newer than the last.
+      let since = this.planLimits.mark(backend);
       const providerStatus = await client.readProviderStatus?.();
       if (!providerStatus || this.closed) {
         return;
       }
-      this.providerStatuses.set(backend, providerStatus);
-      this.providerStatusObservedAt.set(backend, Date.now());
+      this.providerStatuses.set(backend, { account: providerStatus.account });
+      // A new plan changes the allowance and clears the limits; this reading
+      // is the first of the new plan's.
+      if (this.planLimits.setAccount(backend, { plan: providerStatus.account?.planType })) {
+        since = this.planLimits.mark(backend);
+      }
+      this.planLimits.record(backend, {
+        limits: providerStatus.rateLimits ?? [], since, precise: true, dated: true,
+      });
       await this.emit({
         backend,
         notification: {
@@ -1483,16 +1515,16 @@ export class AcpBackendAdapter {
    * stay with the instance that read them.
    */
   limitObservation(backend: AcpBackendId): UsageLimitObservation | undefined {
-    const status = this.providerStatuses.get(backend);
-    const observedAt = this.providerStatusObservedAt.get(backend);
+    const reading = this.planLimits.snapshot(backend);
+    const observedAt = reading?.observedAt;
     const provider = usageLimitProviderForBackend(backend);
-    if (!provider || !status?.rateLimits?.length || observedAt === undefined
+    if (!provider || !reading?.limits.length || observedAt === undefined
       || (this.isAcpAgentEnabled && !this.isAcpAgentEnabled(backend.slice("acp:".length)))) return undefined;
     return {
       observedAt,
       provider,
-      planType: status.account?.planType,
-      limits: status.rateLimits.map((limit) => ({
+      planType: reading.plan,
+      limits: reading.limits.map((limit) => ({
         name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
         resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
       })),
@@ -1549,6 +1581,90 @@ export class AcpBackendAdapter {
 
   upsertSession(session: AcpSessionMetadata): void {
     this.acpSessionStore?.upsertSession?.(session);
+  }
+
+  worktreeArchiveBlockedReason(backend: AcpBackendId, sessionId: string): string | undefined {
+    const session = this.getSession(backend, sessionId);
+    if (!session?.archivedAt || (session.status !== "idle" && session.status !== "failed")) return "ACP session is live; the checkout was kept.";
+    if (session.requiresAgentSessionRebind
+      || this.getInstalledAgent(backend)?.runtimeCapabilities?.agentCapabilities?.loadSession !== true) {
+      return "Archived ACP session cannot reload its original identity through session/load; the checkout was kept.";
+    }
+    const owner = this.findSessionOwner(backend, sessionId);
+    if (owner?.client.supportsArchivedSessionRestore?.() === false) {
+      return "The running ACP provider does not advertise session/load; the checkout was kept.";
+    }
+    if (owner?.client.hasActiveTurns?.() || owner?.client.hasActiveOperations?.()) {
+      return "An ACP operation is still active on the owning process; the checkout was kept.";
+    }
+    return undefined;
+  }
+
+  assertWorktreeArchiveReleased(backend: AcpBackendId, sessionId: string): void {
+    const blocked = this.worktreeArchiveBlockedReason(backend, sessionId);
+    if (blocked) throw new Error(blocked);
+    const owner = this.findSessionOwner(backend, sessionId);
+    if (owner && owner.client.ownsSession?.(sessionId) !== false) {
+      throw new Error("ACP session still owns this checkout; the checkout was kept.");
+    }
+  }
+
+  async prepareWorktreeArchive(backend: AcpBackendId, sessionId: string): Promise<void> {
+    const blocked = this.worktreeArchiveBlockedReason(backend, sessionId);
+    if (blocked) throw new Error(blocked);
+    const owner = this.findSessionOwner(backend, sessionId);
+    if (!owner) return;
+    if (await owner.client.closeSessionForArchive?.(sessionId)) return;
+    // Older ACP agents have no session/close. Stop their process only when it
+    // owns no unarchived sessions, including hidden helpers. Otherwise retain
+    // the checkout until a later startup can recover the archived session.
+    const live = this.acpSessionStore?.listSessions(backend, { includeHidden: true }) ?? [];
+    if (live.some((session) => owner.client.ownsSession?.(session.sessionId) !== false)) {
+      throw new Error("ACP session/close is unavailable and the process owns another live session; the checkout was kept.");
+    }
+    // Remove routing before yielding to process shutdown, so a new session
+    // cannot acquire a client whose transport is being closed.
+    if (this.acpClients.get(backend) === owner) this.acpClients.delete(backend);
+    this.retainedAcpClients.get(backend)?.delete(owner);
+    for (const [key, value] of this.environmentClients) {
+      if (value.entry === owner) this.environmentClients.delete(key);
+    }
+    await this.disposeAcpClient(owner);
+  }
+
+  /** A new process avoids retaining an OS cwd handle to the deleted checkout.
+   * Load the original protocol id at the original cwd; never create a blank
+   * replacement session or edit a provider-owned session file. */
+  async restoreWorktreeSession(backend: AcpBackendId, sessionId: string): Promise<void> {
+    await this.environmentClientLocks.run(JSON.stringify([backend, sessionId]),
+      async () => await this.restoreWorktreeSessionLocked(backend, sessionId));
+  }
+
+  private async restoreWorktreeSessionLocked(backend: AcpBackendId, sessionId: string): Promise<void> {
+    const session = this.getSession(backend, sessionId);
+    if (!session?.archivedAt) throw new Error("Archived ACP session metadata was not found.");
+    if (session.requiresAgentSessionRebind) throw new Error("The original ACP session identity is unavailable.");
+    const key = JSON.stringify([backend, sessionId]);
+    const previous = this.environmentClients.get(key);
+    const agent = await this.resolveInstalledAgent(backend);
+    if (!agent.launchDescriptor) throw new Error(`ACP backend ${backend} has no launch descriptor`);
+    const configuredAgent = { ...agent, launchDescriptor: { ...agent.launchDescriptor,
+      env: { ...agent.launchDescriptor.env, ...previous?.shellEnvironment } } };
+    const client = this.createAcpClient(configuredAgent);
+    const entry: AcpClientEntry = { client, launchIdentity: acpAgentLaunchIdentity(configuredAgent),
+      promise: Promise.resolve(client), supportsSessionLoad: true };
+    try {
+      await client.initialize();
+      if (client.supportsArchivedSessionRestore?.() !== true) throw new Error("This ACP provider cannot reload the archived session.");
+      await client.ensureSession(session);
+      if (this.closed) throw new Error("ACP backend adapter is closed");
+      this.environmentClients.set(key, { backend, environmentKey: previous?.environmentKey ?? "[]",
+        shellEnvironment: previous?.shellEnvironment, entry });
+    } catch (error) {
+      await this.disposeAcpClient(entry);
+      throw error;
+    }
+    if (previous) await this.disposeAcpClient(previous.entry);
   }
 
   persistSyntheticAssistantMessage(params: {
@@ -1625,6 +1741,11 @@ export class AcpBackendAdapter {
       this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend)
     )
       ?.promise.catch(() => undefined);
+    if (session?.archivedAt) {
+      const replay = cachedClient?.readReplay(sessionId);
+      return replay?.entries.length ? this.mergeReplayWithSyntheticHistory(session, replay)
+        : this.readRolloutReplay(session, "archived-rollout");
+    }
     if (cachedClient) {
       const replay = cachedClient.readReplay(sessionId);
       if (
@@ -1971,6 +2092,39 @@ export class AcpBackendAdapter {
     });
     if (previous) {
       await this.disposeAcpClient(previous.entry);
+    }
+  }
+
+  /**
+   * Close sessions idle for `idleMs` on every live ACP process, so each agent
+   * stops their MCP servers (`AcpAgentClient.closeIdleSessions`). The next
+   * request for a closed session reloads it. Never throws.
+   */
+  async closeIdleSessions(params: {
+    idleMs: number;
+    isSessionBusy: (backend: AcpBackendId, sessionId: string) => boolean;
+  }): Promise<void> {
+    if (this.closed) return;
+    const owners = new Map<AcpClientEntry, AcpBackendId>();
+    for (const { backend, entry } of this.environmentClients.values()) owners.set(entry, backend);
+    for (const [backend, entry] of this.acpClients) owners.set(entry, backend);
+    for (const [backend, entries] of this.retainedAcpClients) {
+      for (const entry of entries) owners.set(entry, backend);
+    }
+    for (const [entry, backend] of owners) {
+      if (this.closed) return;
+      if (entry.disposePromise || !entry.client.closeIdleSessions) continue;
+      try {
+        await entry.client.closeIdleSessions({
+          idleMs: params.idleMs,
+          isSessionBusy: (sessionId) => params.isSessionBusy(backend, sessionId),
+        });
+      } catch (error) {
+        acpBackendAdapterLog.warn("acp_idle_session_close_failed", {
+          backend,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
@@ -2688,8 +2842,10 @@ export class AcpBackendAdapter {
     this.acpClientResolutions.clear();
     this.liveToolUpdateResolver.clear();
     this.liveNotificationFingerprints.clear();
+    for (const backend of this.providerStatuses.keys()) this.planLimits.forget(backend);
     this.providerStatuses.clear();
-    this.providerStatusObservedAt.clear();
+    this.unsubscribePlanLimits();
+    if (this.ownsPlanLimits) this.planLimits.close();
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.grokUpdateRefreshes.clear();

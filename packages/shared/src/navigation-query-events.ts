@@ -17,8 +17,10 @@ const ROW_CHANGE_METHODS = new Set([
   "thread/subthreadOrder/updated", "thread/subthreadsCollapsed/updated", "thread/subAgents/updated",
   "thread/backgroundTasks/updated", "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
+  "thread/prWatches/updated",
   "thread/automations/updated", "automation/run/updated",
   "directory/pin/added", "directory/pin/removed", "directory/pin/reordered", "directory/threadsCollapsed/updated",
+  "directory/forgeAutomation/updated",
   "navigation/providerThreads/refreshed", "navigation/remoteThreadPins/changed",
   "navigation/directory/seen", "navigation/directory/removed", "navigation/directoryGitStatus/updated",
   "navigation/threadGitWorkingState/updated", "navigation/threadDirectories/updated",
@@ -37,17 +39,22 @@ export function navigationQueryEventRequiresRefresh(method: string, params?: unk
 // archive, reparenting, provider refreshes and unknown future events retain
 // discovery coverage even when the new child's identity is not subscribed yet.
 const THREAD_ROW_ONLY_METHODS = new Set([
+  "thread/dependencies/updated", "thread/scheduledAction/updated",
   "thread/status/changed", "thread/name/updated", "navigation/thread/seen",
   "thread/pullRequests/updated", "thread/reactions/updated", "thread/lock/updated", "thread/agent/updated",
   "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
   "thread/turnQueue/updated", "thread/turnQueue/reordered",
+  // A row's CI watch marks; watches never move a thread between groups.
+  "thread/prWatches/updated",
   "navigation/threadGitWorkingState/updated", "navigation/directoryGitStatus/updated",
   // Subagent detail and native-group presence belong to the named parent.
   // Ordinary child discovery uses thread/started and thread/parent/set.
   "thread/subAgents/updated",
   // Background tasks only toggle the owning row's working marker.
   "thread/backgroundTasks/updated",
+  // A backend's own scheduled wakes refresh only that thread's Waiting for.
+  "thread/sessionWakes/updated",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
 ]);
 

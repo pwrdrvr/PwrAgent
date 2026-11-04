@@ -24,11 +24,16 @@ Agent forge tools**:
 | `pull_requests` | `allow`, `auto`, `ask`, `off` | `auto` | `create_pull_request`, `update_pull_request` |
 | `comments` | same | `auto` | `add_issue_comment`, `reply_to_review_comment`, `resolve_review_thread`, a `COMMENT` review |
 | `issues` | same | `auto` | `create_issue`, `update_issue` |
+| `ci` | same | `auto` | `rerun_failed_ci_jobs` |
 | `approve_merge` | same | `ask` | `merge_pull_request`, an `APPROVE` or `REQUEST_CHANGES` review |
 
-- `allow` runs without asking. `auto` asks unless the turn has Full Access,
-  the same rule as an MCP connection's Auto tool approval. `ask` always asks.
-  `off` removes the tools.
+- `allow` runs without asking. `ask` always asks. `off` removes the tools.
+- `auto` follows the thread's own approval mode:
+  - Full Access runs every group. For Claude, that is bypass permissions.
+  - A Codex or Claude Auto turn runs every group except `approve_merge`.
+  - Any other mode asks, including Claude's plan and accept-edits modes.
+  - A Claude thread's mode is read from its open Claude process, so a change
+    during the turn applies to the next call.
 - A group that is off, or the family switched off, is not advertised to new
   turns. The main process also checks the policy on every call, so a turn that
   still holds an older schema gets `tools_disabled` naming the setting.
@@ -37,7 +42,20 @@ Agent forge tools**:
   "mcp_tool_call"`), so desktop and messaging draw it the same way. Comments
   and issues also offer a conversation grant, kept in memory until PwrAgent
   restarts or that group's level changes. Opening, editing, approving and
-  merging are granted one call at a time.
+  merging, and rerunning CI jobs are granted one call at a time.
+- This policy is the only prompt for a forge tool, whichever backend runs the
+  thread. Codex does not review PwrAgent's dynamic tools. A Claude query
+  pre-allows every forge tool through `allowedTools` when PwrAgent's own MCP
+  server is attached, so Claude does not ask through `canUseTool` first.
+  Before that, a Claude Default turn showed Claude's generic card for an
+  `ask` write and then this card, and an `allow` group still got Claude's
+  card. In Claude's Auto mode the classifier no longer reviews these calls;
+  `auto` groups run as they do in a Codex Auto turn. `approve_merge` keeps
+  this card in every mode but Full Access. The list covers the whole family,
+  not the levels in effect at launch, so a Settings change applies to the
+  next call without relaunching Claude, and `off` tools stay unadvertised.
+  Claude's `plan` mode and the operator's own Claude `ask` and `deny` rules
+  still apply. See [Claude provider](claude-provider.md).
 - Automations cannot answer a prompt. An `auto` or `ask` write in an
   automation fails with `approval_required` unless the automation runs in
   Full Access and the level is `auto`.
@@ -47,6 +65,51 @@ Agent forge tools**:
   (`tools.thread_inspection`) for reads and **Agent: change GitHub and GitLab**
   (`tools.forge_write`) for writes. `FORGE_AGENT_WRITE_TOOL_GROUPS` in
   `@pwragent/shared` lists every write, and both gates read it.
+
+### Project rules
+
+`[[git.agent_tools.rules]]` entries narrow or widen the write levels above for
+one repository and one agent. **Settings → Git → Agent forge tools → Project
+rules** edits them, and the approval card's **Always allow** menu writes one.
+
+```toml
+[[git.agent_tools.rules]]
+repository = "github.com/pwrdrvr/PwrAgent"
+agent = "claude"
+pull_requests = "allow"
+
+[[git.agent_tools.rules]]
+repository = "github.com/pwrdrvr/PwrAgent"
+agent = "codex"
+codex_model_provider = "llamacpp"
+model = "qwen3-abliterated"
+pull_requests = "ask"
+approve_merge = "off"
+```
+
+- `repository` is the forge repository a call acts in, `host/owner/repo`,
+  compared without regard to case. Every checkout and worktree of that
+  repository uses the same rules.
+- `agent` is `*` (all agents), `claude`, `codex`, or `acp:<registryId>`.
+  `codex_model_provider` and `model` narrow a row. They come from PwrAgent's
+  record of the thread, never from tool arguments.
+- A `codex` row without `codex_model_provider` covers only the default OpenAI
+  provider. A Codex thread on a custom provider needs its own row or `*`.
+  When Codex has not reported a thread's provider, Codex rules can only make
+  the level stricter.
+- Rules set `pull_requests`, `comments`, `issues`, `ci` and `approve_merge`.
+  Reads stay global.
+- For each call the most specific row that sets the group wins: model, then
+  provider, then `*`, then the global level. The master switch and a global
+  `off` still win, because those tools are not advertised to turns.
+- A rule's `off` refuses the call with `tools_disabled` naming the rule. A
+  rule's `allow` also lets an automation make that change.
+- An entry that cannot be read (unknown agent, misspelled key, bad level)
+  is ignored, and its repository asks for every write until it is fixed.
+  Settings shows a warning, and saving keeps the unreadable entry unchanged.
+- The **Always allow** menu appears only for pull requests, comments, issues
+  and CI reruns, never in automations, and never when a rule set `ask`. Main
+  accepts only an option it offered for that request.
 
 ## Pull request, merge request and issue tools
 
@@ -78,9 +141,12 @@ Reads (`read` group):
 
 Writes:
 
-- `create_pull_request`: head defaults to the thread's branch and base to the
-  repository's default branch. Draft, labels and reviewers are optional. The
-  new PR/MR is attached to the calling thread (`attachedToThread`).
+- `create_pull_request`: head is required and must already be pushed. The
+  agent names the branch, so the approval card always shows what opens, and
+  an unpushed branch is refused before the card instead of after approval.
+  Base defaults to the repository's default branch. Draft, labels and
+  reviewers are optional. The new PR/MR is attached to the calling thread
+  (`attachedToThread`).
 - `update_pull_request`: title, body, base, open or closed, draft or ready,
   labels and reviewers.
 - `add_issue_comment`, `reply_to_review_comment` (by `reviewThreadId` or a
@@ -145,6 +211,31 @@ and does not start a provider cooldown.
   do not apply. GitLab's `closed` state excludes merged merge requests.
 - A merge request from a fork cannot be opened here; pass a source branch.
 
+## CI reruns
+
+`rerun_failed_ci_jobs` requests a rerun using a `runId` from `list_ci_runs`
+or `get_ci_run`. It acts in the calling thread's repository, following the
+same repository resolution, provider settings, write approval and messaging
+authorization as the other writes. It accepts no thread or Federation target.
+**Settings → Git → Agent forge tools → CI reruns** controls access separately
+from read access; its default is Auto.
+
+- GitHub and GitHub Enterprise use
+  [`POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs`](https://docs.github.com/en/rest/actions/workflow-runs#re-run-failed-jobs-from-a-workflow-run).
+  GitHub reruns failed jobs and their dependent jobs. Authentication needs
+  Actions write permission.
+- GitLab uses
+  [`POST /projects/:id/pipelines/:pipeline_id/retry`](https://docs.gitlab.com/api/pipelines/#retry-jobs-in-a-pipeline).
+  This retries failed **and canceled** jobs, and has no effect if there are
+  none. The tool description and approval card name this broader behavior.
+
+Success returns `requested: true`, `runId`, the repository, provider request
+count, source URL and a provider-specific `scope`. It means the provider
+accepted the request, not that any job completed or passed. Provider refusals
+are returned through the existing bounded, redacted error path. A timeout or
+disconnect may leave the outcome unknown; inspect the run before requesting
+another retry. This tool does not poll, start a repair turn, or add persistence.
+
 ## CI read contracts
 
 - `get_forge_status`: cache-only by default, with per-observation fetched time,
@@ -170,6 +261,26 @@ and does not start a provider cooldown.
   those contracts. GitLab returns at most 100 artifact records per call and
   explicitly reports truncation. Reduce `perPage` or open the source job URL
   when truncated. Metadata does not guarantee that an artifact is downloadable.
+- `download_ci_artifact`: downloads one GitHub Actions ZIP using the owner's
+  existing forge authentication. Requires `runId` and `artifactId` from
+  `list_ci_artifacts`, and verifies the artifact's run identity before fetching
+  its archive. This is the first-party alternative to the ChatGPT GitHub
+  connector's `download_workflow_artifact` and `gh run download`.
+  GitLab returns `unsupported_provider`. No CI operation is started or rerun.
+  Archives are streamed with a 128 MiB cap to
+  `state/thread-assets/<backend>/<threadId>/ci-artifacts/<runId>-<artifactId>.zip`
+  in the owning profile, beside the thread's other assets. Both segments are
+  URL-encoded, so an ACP backend appears as `acp%3A<name>`. Permanently deleting
+  the thread deletes them; archiving keeps them. A repeat download writes a new
+  partial file and replaces the archive only when it completes. Results include
+  `archivePath`, `sizeBytes`, `sha256` and `pathOwner: "thread_owner"`.
+  Remote paths refer to the owning machine and are not transferred to the
+  caller. Filenames from provider metadata and ZIP entries never choose output
+  paths. Downloads are not extracted or executed, and their contents remain
+  untrusted and unredacted. Agents extract into a temporary directory, so
+  nothing lands in the project. Partial files are removed on failure or
+  cancellation. v1.3.7 and v1.3.8 saved unowned archives under
+  `profiles/<profile>/artifacts/ci/`; startup removes that directory.
 - `read_ci_job_log`: one job's bounded tail and heuristic failure excerpts;
   every log is explicitly untrusted. Logs are defensively redacted and never
   interpreted as instructions. A failed retrieval is an error, never success.
@@ -179,7 +290,7 @@ and does not start a provider cooldown.
   prevents mixing pages when a job appends or replaces output: restart without
   the cursor on `log_changed`. Each page downloads and redacts the source again.
 
-All tools accept an optional thread/backend/instance target. Repository
+The CI read tools accept an optional thread/backend/instance target. Repository
 identities contain the product (`provider`), actual host (`host`), namespace
 (`owner`, including GitLab subgroups), and repository (`repo`). Explicit
 repositories must belong to the target thread's linked remotes or attached
@@ -216,8 +327,8 @@ GitHub Enterprise CI uses `/api/v3` and host-specific CLI authentication.
 The pre-existing GitHub PR status client supports github.com only; Enterprise
 PR refresh returns an explicit unsupported error. GitLab custom hosts and
 nested namespaces use explicit identities or attached MR URL evidence.
-Workflow dispatch, cancellation, reruns, artifact downloads and reviews are
-outside this read-only contract.
+Workflow dispatch, cancellation, reruns and reviews are outside this read-only
+contract. Artifact downloads write only their new archive on the owner.
 
 ## Provider references
 
@@ -229,6 +340,7 @@ Official API references inspected 2026-10-11:
 - [GitHub check runs](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)
 - [GitHub combined commit status contexts](https://docs.github.com/en/rest/commits/statuses#get-the-combined-status-for-a-specific-reference)
 - [GitHub workflow artifact metadata](https://docs.github.com/en/rest/actions/artifacts#list-workflow-run-artifacts)
+- [GitHub artifact downloads](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact) (inspected 2026-10-30)
 - [GitLab pipelines](https://docs.gitlab.com/api/pipelines/)
 - [GitLab jobs and traces](https://docs.gitlab.com/api/jobs/)
 - [GitLab commit statuses](https://docs.gitlab.com/api/commits/#list-commit-statuses)
@@ -237,7 +349,7 @@ The GitHub client pins API version `2022-11-28` for compatibility with existing
 Enterprise deployments; the read contracts used here are also documented by
 the current `2026-03-10` reference.
 
-GitHub job log downloads redirect to a short-lived URL. The redirected request
+GitHub job log and artifact downloads redirect to a short-lived URL. The redirected request
 must not carry authorization. GitLab project paths are encoded as one project
 identifier. Lists are paged, with no implicit drain of all pages.
 
@@ -253,10 +365,12 @@ Pages default to 20 items and are capped at 100. `nextPage` is conservative on
 a full page and may lead to an empty terminal page. Failure summaries cover
 only returned jobs/retained log text. Logs default to 12,000 retained characters
 (maximum 50,000). Log downloads are capped at 16 MiB, while JSON metadata is
-capped at 2 MiB. Larger responses fail with an actionable error. No disk cache,
-unbounded download or automatic page-draining is introduced. CI calls report
+capped at 2 MiB. Artifact ZIPs are capped at 128 MiB, checked against metadata,
+Content-Length and the streamed bytes. Larger responses fail with an actionable
+error. Artifact writes are explicit downloads, with no disk cache or automatic
+page-draining. CI calls report
 their authenticated provider request count; redirects
-can add a credential-free log download. Cache reads do not probe authentication
+can add a credential-free log or artifact download. Cache reads do not probe authentication
 or retain prior refresh errors, and say so in their result.
 
 Cancellation stops new work and aborts direct HTTP/glab CI requests. Federation
@@ -267,7 +381,7 @@ existing host convention; use an explicit MR URL for other hosts. Check output
 is untrusted and redacted, with each text field capped at 2,000 characters.
 GitHub's check-run endpoint only covers the latest 1,000 check suites. Neither
 provider's page can prove the absence of required checks. No check annotations,
-artifact downloads, workflow definitions or review mutations are added.
+workflow definitions or review mutations are added by these read tools.
 
 ## Comparison with the Codex GitHub connector
 
@@ -285,7 +399,7 @@ log pagination.
 | `fetch_workflow_job_logs` | `read_ci_job_log`, bounded redacted pages with snapshot checks |
 | `get_commit_combined_status` | `get_commit_checks`, plus check runs and GitLab commit statuses |
 | `fetch_workflow_run_artifacts` | `list_ci_artifacts`, including GitLab job artifact metadata |
-| `download_workflow_artifact` | Not implemented |
+| `download_workflow_artifact` | `download_ci_artifact`, bounded GitHub ZIP downloads saved on the thread owner |
 | PR info and body (`fetch_pr`, `get_pr_info`) | `get_pull_request`, also for GitLab merge requests |
 | PR diffs and changed files | `get_pull_request_diff`, `list_pull_request_files` |
 | PR comments, reviews and review threads | `list_issue_comments`, `list_pull_request_reviews`, `list_pull_request_review_threads` |
@@ -294,7 +408,7 @@ log pagination.
 | Comments, review replies and reviews | `add_issue_comment`, `reply_to_review_comment`, `submit_pull_request_review`, `resolve_review_thread` |
 | Merge | `merge_pull_request`, with a required head SHA |
 | Repository-wide search, file and commit fetch, branch and commit creation | Not implemented. Threads read and commit through their local checkout |
-| CI reruns, artifact download | Not implemented |
+| CI reruns | Not implemented |
 
 The PwrAgent-specific capabilities remain cache freshness, explicit refresh
 costs, thread/repository authorization, owner routing, Auto-fix guidance, and

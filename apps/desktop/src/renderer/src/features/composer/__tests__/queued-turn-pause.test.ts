@@ -84,6 +84,18 @@ describe("getNextReleasableQueuedTurn", () => {
     expect(getNextReleasableQueuedTurn([{ id: "a", paused: true }])).toBeUndefined();
   });
 
+  it("never releases a failed scheduled action, and passes over it", () => {
+    // The projection re-adds a failed review on every refresh. Releasing it
+    // started the same review again each time the thread went idle.
+    expect(getNextReleasableQueuedTurn([
+      { id: "scheduled-projection:a", failedScheduledActionId: "a" },
+    ])).toBeUndefined();
+    expect(getNextReleasableQueuedTurn([
+      { id: "scheduled-projection:a", failedScheduledActionId: "a" },
+      { id: "b" },
+    ])).toMatchObject({ id: "b" });
+  });
+
   it("still waits behind an owner entry that is not paused", () => {
     expect(getNextReleasableQueuedTurn([
       { id: "a", paused: true, queueEntryId: "a" },

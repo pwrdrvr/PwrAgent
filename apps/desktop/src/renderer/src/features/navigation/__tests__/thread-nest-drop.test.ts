@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { canNestThread } from "../thread-nest-drop";
@@ -32,6 +32,10 @@ function index(...threads: NavigationThreadSummary[]) {
 }
 
 describe("canNestThread", () => {
+  // This machine's own window: no peer target.
+  beforeEach(() => vi.stubGlobal("window", {}));
+  afterEach(() => vi.unstubAllGlobals());
+
   it("nests a root under another root, across providers", () => {
     const child = thread("child");
     const parent = thread("parent", { source: "acp:gemini" } as Partial<NavigationThreadSummary>);
@@ -51,7 +55,7 @@ describe("canNestThread", () => {
     expect(canNestThread(grandchild, root, threads)).toBe(true);
   });
 
-  it("keeps a link on the owner: one instance, one that can group, never a provider sub-agent", () => {
+  it("keeps a link on the owner: one instance or a peer's thread under this machine's, one that can group, never a provider sub-agent", () => {
     const local = thread("local");
     const peerA = remote("peer-a", "pwr_a");
     const peerA2 = remote("peer-a2", "pwr_a");
@@ -62,10 +66,32 @@ describe("canNestThread", () => {
     expect(canNestThread(peerA, peerA2, threads)).toBe(true);
     expect(canNestThread(peerA, peerB, threads)).toBe(false);
     expect(canNestThread(local, peerA, threads)).toBe(false);
-    expect(canNestThread(peerA, local, threads)).toBe(false);
+    // The peer stores a link naming this machine, as a sub-thread started
+    // here on that peer does.
+    expect(canNestThread(peerA, local, threads)).toBe(true);
     expect(canNestThread(older, peerA, threads)).toBe(false);
     expect(canNestThread(peerA, older, threads)).toBe(false);
     expect(canNestThread(worker, local, threads)).toBe(false);
     expect(canNestThread(local, worker, threads)).toBe(false);
+  });
+
+  it("moves a peer's grandchild up to this machine's tray owner", () => {
+    const root = thread("root");
+    const child = thread("child", { parentThreadId: "root", parentThreadBackend: "codex" });
+    const peerGrandchild = thread("windows-e2e", {
+      parentThreadId: "child", parentThreadBackend: "codex", parentThreadInstanceId: "pwr_local",
+      federation: { capabilities: ["thread_grouping"], instanceLabel: "Win PC / dev", peerStatus: "connected",
+        ref: { backend: "codex", target: { scope: "remote", instanceId: "pwr_peer" }, threadId: "windows-e2e" } },
+    } as Partial<NavigationThreadSummary>);
+    const threads = index(root, child, peerGrandchild);
+    expect(canNestThread(peerGrandchild, root, threads)).toBe(true);
+    expect(canNestThread(peerGrandchild, child, threads)).toBe(false);
+  });
+
+  it("never links a peer's thread to this machine from a window fronting a peer", () => {
+    vi.stubGlobal("window", { __pwragentFederationTarget: { scope: "remote", instanceId: "pwr_a" } });
+    const unstamped = thread("unstamped");
+    const peerB = remote("peer-b", "pwr_b");
+    expect(canNestThread(peerB, unstamped, index(unstamped, peerB))).toBe(false);
   });
 });

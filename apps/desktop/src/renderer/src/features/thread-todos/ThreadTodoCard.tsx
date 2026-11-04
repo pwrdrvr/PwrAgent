@@ -1,6 +1,6 @@
 import { TodoDispatchFacts, useTodoDispatchTarget } from "./TodoDispatchFacts";
 import { TodoPullRequestChip } from "./TodoPullRequestChip";
-import { todoDispatchPickKey, useTodoDispatchContext } from "./TodoDispatchProvider";
+import { todoDispatchPickKey, useTodoDispatchContext, type TodoDispatchChoices } from "./TodoDispatchProvider";
 import {
   useEffect,
   useId,
@@ -54,6 +54,7 @@ import {
   type ChipContextMenuPosition,
 } from "../chrome/ChipContextMenu";
 import { TodoProjectPicker } from "./TodoProjectPicker";
+import { TodoMessageDestination } from "./TodoMessageDestination";
 import { ThreadMarkdown } from "../thread-detail/ThreadMarkdown";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "./TodoSplitButton";
 import type {
@@ -76,6 +77,7 @@ import {
   threadTodoStepsMarkdown,
   threadTodosMarkdown,
 } from "./thread-todo-copy";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
   reminder: undefined,
@@ -322,7 +324,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         onClick={() => fix(toSend)}
       >
         {sending || working
-          ? <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+          ? <PendingSpinner pairing="paired" size="sm" />
           : <ArrowUpIcon size={12} />}
         {sending ? "Sending…" : working ? "Working…"
           : selectedItems.length > 0 ? `Fix ${selectedItems.length} selected` : "Fix all"}
@@ -574,6 +576,13 @@ function ThreadTodoCardPager(props: { pager: NonNullable<ThreadTodoCardProps["pa
 function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const { todo } = props;
   const dispatch = useTodoDispatchContext();
+  const [localMessageChoices, setLocalMessageChoices] = useState<TodoDispatchChoices>({});
+  const messageChoices = dispatch.provided
+    ? dispatch.choices.get(todoDispatchPickKey(todo)) ?? {} : localMessageChoices;
+  const chooseMessage = (update: Partial<TodoDispatchChoices>) => {
+    dispatch.choose(todo, (current) => ({ ...current, ...update }));
+    setLocalMessageChoices((current) => ({ ...current, ...update }));
+  };
   const [localPick, setLocalPick] = useState<ThreadTodoModelSettings>();
   const selection = resolveThreadTodoModelSettings({
     thread: todo.dispatchDefaults?.thread ?? { backend: todo.backend },
@@ -609,10 +618,14 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
   const action = todo.action;
+  const sendingMessage = action?.type === "send_message" || messageChoices.dispatchMode === "message";
+  const messageTarget = messageChoices.messageTarget ?? (action?.type === "send_message" ? action.target : undefined);
+  const canSendMessage = !todo.federationTarget
+    || props.instances?.some((instance) => instance.instanceId === todo.federationTarget?.instanceId && instance.messageTarget);
   const titleId = `thread-todo-title-${todo.id}`;
-  const prompt = action?.type === "start_thread" ? action.prompt : undefined;
+  const prompt = action?.type === "start_thread" || action?.type === "send_message" ? action.prompt : undefined;
   const hasFacts = action?.type === "merge_pull_request";
-  const runningLabel = action?.type === "merge_pull_request" ? "Merging…" : "Starting…";
+  const runningLabel = sendingMessage ? "Sending…" : action?.type === "merge_pull_request" ? "Merging…" : "Starting…";
   const progress = threadTodoItemProgress(todo);
   const prerequisites = threadTodoPrerequisites(todo);
   const blocking = threadTodoBlockingItems(todo);
@@ -671,13 +684,14 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     );
   const runAction = (options?: ThreadTodoRunOptions): void =>
     completeCard(
-      { question: "Start the thread anyway?", label: "Start thread" },
+      { question: sendingMessage ? "Send the request anyway?" : "Start the thread anyway?", label: sendingMessage ? "Send request" : "Start thread" },
       (allowOpenItems) => {
+        if (sendingMessage && (!messageTarget || !canSendMessage)) return;
         // Freeze the attempted settings too: a failed start's Retry uses them
         // even if another card changes the thread's memory in the meantime.
-        if (target.onOwner) pickModel(selection.settings);
+        if (!sendingMessage && target.onOwner) pickModel(selection.settings);
         props.onRun(todo, {
-          ...(action?.type === "start_thread" ? target.runOptions() : {}),
+          ...(sendingMessage ? { messageTarget } : action?.type === "start_thread" ? target.runOptions() : {}),
           ...options,
           ...(allowOpenItems ? { allowOpenItems } : {}),
         });
@@ -726,7 +740,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     if (props.running) {
       return (
         <span className="thread-todo-card__button thread-todo-card__button--busy" role="status">
-          <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+          <PendingSpinner pairing="paired" size="sm" />
           {runningLabel}
         </span>
       );
@@ -821,8 +835,21 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           </>
         );
       }
-      case "start_thread": {
+      case "start_thread":
+      case "send_message": {
         const entries: TodoSplitMenuEntry[] = [];
+        if (canSendMessage && dispatch.api?.searchThreads) {
+          entries.push({
+            kind: "item", id: "message", label: "Send to thread…", checked: sendingMessage,
+            onSelect: () => chooseMessage({ dispatchMode: "message" }),
+          });
+        }
+        if (action.type === "start_thread" && sendingMessage) {
+          entries.push({
+            kind: "item", id: "new-thread", label: "Start a new thread", checked: false,
+            onSelect: () => chooseMessage({ dispatchMode: "new_thread" }),
+          });
+        }
         if (props.onDoHere) {
           const doHere = props.onDoHere;
           entries.push({
@@ -846,7 +873,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         });
         return (
           <TodoSplitButton
-            label={todo.error ? "Retry" : "Start thread"}
+            label={sendingMessage ? "Send request" : todo.error ? "Retry" : "Start thread"}
+            disabled={sendingMessage && (!messageTarget || !canSendMessage)}
             Icon={HandoffIcon}
             menuLabel="Handoff options"
             onClick={() => runAction()}
@@ -870,6 +898,11 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     >
       {resting.expanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
       {resting.toggleLabel}
+      {/* The space sits outside the span, where the accessible name keeps it. */}
+      {resting.toggleDetail ? " " : null}
+      {resting.toggleDetail ? (
+        <span className="thread-todo-card__more-detail">{resting.toggleDetail}</span>
+      ) : null}
     </button>
   ) : null;
 
@@ -936,24 +969,27 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               />
             </>
           ) : null}
-          {resting.steps.length > 0 && progress ? (
+          {resting.steps.length > 0 && (action?.type === "start_thread" || action?.type === "send_message") ? (
             <>
-              {action?.type === "start_thread" ? (
-                <p className="thread-todo-card__group-label" aria-hidden="true">
-                  For the new thread
-                </p>
-              ) : null}
-              <ThreadTodoChecklist
-                todo={todo}
-                label={action?.type === "start_thread" ? "Steps for the new thread" : "Steps"}
-                items={resting.steps}
-                progress={progress}
-                onSetItemChecked={props.onSetItemChecked}
-              />
+              <p className="thread-todo-card__group-label" aria-hidden="true">
+                Plan for the new thread
+              </p>
+              <ThreadTodoPlan items={resting.steps} />
             </>
+          ) : resting.steps.length > 0 && progress ? (
+            <ThreadTodoChecklist
+              todo={todo}
+              label="Steps"
+              items={resting.steps}
+              progress={progress}
+              onSetItemChecked={props.onSetItemChecked}
+            />
           ) : null}
           {resting.toggleAfter === "steps" ? restingToggle : null}
-          {action?.type === "start_thread" ? (
+          {sendingMessage ? (
+            <TodoMessageDestination todo={todo} target={messageTarget} localMachine={props.localMachine}
+              disabled={props.running} onSelect={(next) => chooseMessage({ messageTarget: next })} />
+          ) : action?.type === "start_thread" ? (
             <TodoDispatchFacts
               todo={todo}
               target={target}
@@ -969,6 +1005,9 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
                 </dd>
               </div>
             </dl>
+          ) : null}
+          {sendingMessage && !canSendMessage ? (
+            <p role="status">Update the card's PwrAgent owner to send requests to existing threads.</p>
           ) : null}
           {prompt ? (
             <div className="thread-todo-card__prompt-block">
@@ -1175,11 +1214,15 @@ function restingStepStart(items: ThreadTodoItem[]): number {
  * first open one; a toggle under those opens the rest. A tick inside
  * the window leaves it in place, so a mis-click can be undone where it
  * happened, and the window moves on once every step in it is checked.
+ *
+ * A start-thread card's steps are the new thread's plan, which nothing on
+ * this card ticks. They stay behind the toggle, which says they are there.
  */
 function useRestingCard(todo: ThreadTodo) {
   // Prerequisites always show in full above the window; they are few, and
   // they are what holds the card back.
   const items = threadTodoSteps(todo);
+  const plan = todo.action?.type === "start_thread" || todo.action?.type === "send_message";
   const [expanded, setExpanded] = useState(false);
   const [anchor, setAnchor] = useState(() => restingStepStart(items));
   const [detailCut, setDetailCut] = useState(false);
@@ -1194,7 +1237,7 @@ function useRestingCard(todo: ThreadTodo) {
     start = restingStepStart(items);
     if (start !== anchor) setAnchor(start);
   }
-  const hiddenSteps = expanded ? 0 : Math.max(0, items.length - RESTING_STEP_ROWS);
+  const hiddenSteps = expanded ? 0 : plan ? items.length : Math.max(0, items.length - RESTING_STEP_ROWS);
 
   // Measured, not guessed from the length: the clamp cuts at the card's
   // width, which the rail and the transcript corner set differently.
@@ -1222,19 +1265,23 @@ function useRestingCard(todo: ThreadTodo) {
 
   const toggleLabel = expanded
     ? "Show less"
-    : hiddenSteps > 0
-      ? `Show all ${items.length} steps`
-      : detailCut ? "Show more" : undefined;
+    : plan && hiddenSteps > 0
+      ? "Show more"
+      : hiddenSteps > 0
+        ? `Show all ${items.length} steps`
+        : detailCut ? "Show more" : undefined;
+  const toggleDetail = plan && hiddenSteps > 0 ? `· ${items.length}-step plan` : undefined;
   // Set by the step count alone, not by whether the card is open, so Show
-  // less sits where Show more was.
-  const toggleAfter: "steps" | "detail" = items.length > RESTING_STEP_ROWS ? "steps" : "detail";
+  // less sits where Show more was. A plan opens under the description.
+  const toggleAfter: "steps" | "detail" = !plan && items.length > RESTING_STEP_ROWS ? "steps" : "detail";
 
   return {
     expanded,
     bodyId,
     detailRef,
-    steps: expanded ? items : items.slice(start, start + RESTING_STEP_ROWS),
+    steps: expanded ? items : plan ? [] : items.slice(start, start + RESTING_STEP_ROWS),
     toggleLabel,
+    toggleDetail,
     toggleAfter,
     toggleRef,
     toggle: (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1291,6 +1338,27 @@ function ThreadTodoChecklist(props: {
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * A start-thread card's steps: the plan the new thread is asked to carry
+ * out. The start closes this card, so nothing here can be ticked; the new
+ * thread gets the steps as its own `plan` card and ticks them there.
+ */
+function ThreadTodoPlan(props: { items: ThreadTodoItem[] }) {
+  return (
+    <ol className="thread-todo-plan" aria-label="Plan for the new thread">
+      {props.items.map((item) => (
+        <li
+          key={item.id}
+          className={`thread-todo-plan__step${item.checked ? " is-checked" : ""}`}
+          data-todo-item-id={item.id}
+        >
+          {item.text}
+        </li>
+      ))}
+    </ol>
   );
 }
 

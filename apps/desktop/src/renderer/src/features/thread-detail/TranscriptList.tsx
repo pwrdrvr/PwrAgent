@@ -32,6 +32,7 @@ import type {
   ThreadTurnFailure,
   ThreadSubAgentSummary,
   MarkdownFileViewerContext,
+  ForgeApprovalRememberOptionId,
 } from "@pwragent/shared";
 import {
   anchorTurnUsageEntries,
@@ -124,6 +125,7 @@ type TranscriptListProps = {
   entries: AppServerThreadEntry[];
   error?: string;
   expandedActivityIds?: string[];
+  /** Opened group ids, plus `<id>:collapsed` for folded default-open groups. */
   expandedWorkPhaseGroupIds?: string[];
   loading: boolean;
   loadingMore: boolean;
@@ -189,6 +191,7 @@ type TranscriptListProps = {
     state: PendingMcpInteractionState,
     action: "accept" | "decline" | "cancel",
     persist?: McpApprovalPersistence,
+    remember?: ForgeApprovalRememberOptionId,
   ) => Promise<void>;
   onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
   onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
@@ -218,6 +221,16 @@ const LOAD_OLDER_THRESHOLD_PX = 160;
 // Callers that do not need skill links should not invalidate every memoized
 // transcript message on an unrelated live-turn render.
 const EMPTY_SKILLS: AppServerSkillSummary[] = [];
+
+// The key a click toggles in the expanded-group set. A group that starts open
+// records a fold under its own key, so the set keeps meaning "open" for every
+// other group.
+function workPhaseGroupToggleKey(group: {
+  defaultExpanded?: boolean;
+  id: string;
+}): string {
+  return group.defaultExpanded ? `${group.id}:collapsed` : group.id;
+}
 
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
   return (
@@ -1570,7 +1583,10 @@ export function TranscriptList(props: TranscriptListProps) {
                   directoryPaths={stableDirectoryPaths}
                   desktopApi={props.desktopApi}
                   entries={item.entries}
-                  expanded={expandedCommentaryGroupIds.has(item.id)}
+                  expanded={
+                    expandedCommentaryGroupIds.has(workPhaseGroupToggleKey(item))
+                    !== Boolean(item.defaultExpanded)
+                  }
                   expandedActivityIds={controlledExpandedActivityIds}
                   fileViewerContext={props.fileViewerContext}
                   label={item.label}
@@ -1582,7 +1598,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   onActivityExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
                   onToggle={() => {
-                    toggleCommentaryGroup(item.id);
+                    toggleCommentaryGroup(workPhaseGroupToggleKey(item));
                   }}
                 />
               ) : isRewindMarkerEntry(item.entry) && item.entry.type === "activity" ? (
@@ -1767,8 +1783,8 @@ export function TranscriptList(props: TranscriptListProps) {
               onChange={(state) => {
                 props.onPendingMcpInteractionChange?.(state);
               }}
-              onSubmit={async (state, action, persist) => {
-                await props.onSubmitPendingMcpInteraction?.(state, action, persist);
+              onSubmit={async (state, action, persist, remember) => {
+                await props.onSubmitPendingMcpInteraction?.(state, action, persist, remember);
               }}
             />
           ) : null}

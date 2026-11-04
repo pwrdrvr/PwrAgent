@@ -1,7 +1,14 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { appCss as css } from "./css-rule-body";
+import {
+  appStyleRules as rules,
+  hasMotionQuery,
+  PAIRED_RING_CLASS,
+  reducedMotionPairedRingSelectors,
+} from "./css-style-rules";
 
 /**
  * The renderer's `prefers-reduced-motion` contract.
@@ -25,102 +32,6 @@ import { describe, expect, it } from "vitest";
  * in `app.css` and are not worth a blanket gate.
  */
 const testDir = path.dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
-
-type StyleRule = {
-  /** The rule's comma-separated selectors, trimmed. */
-  selectors: string[];
-  /** Declarations directly in this rule, comments and nesting stripped. */
-  body: string;
-  /** Enclosing at-rule preludes, outermost first (e.g. `@media (…)`). */
-  atRules: string[];
-};
-
-/**
- * Walks `app.css` into a flat list of style rules, each tagged with the
- * at-rules it sits inside.
- *
- * Hand-rolled rather than regex-matched because the enclosing at-rule is the
- * whole point here: a rule that neutralizes an animation is only a fix if it
- * is inside a `reduce` query, and a `@media`-nested rule is exactly what the
- * sibling contract tests' `extractRuleBody` warns it cannot see. Comments are
- * stripped first so a selector or a declaration quoted inside prose (this file
- * has neighbours full of it) cannot register as CSS.
- */
-function parseStyleRules(source: string): StyleRule[] {
-  const stripped = source.replace(/\/\*[\s\S]*?\*\//g, "");
-  const rules: StyleRule[] = [];
-  const atRules: string[] = [];
-  // `null` marks an at-rule frame, so a closing brace knows whether it is
-  // ending a block that contributes a rule or one that only nests.
-  const frames: (StyleRule | null)[] = [];
-  let prelude = "";
-
-  for (const char of stripped) {
-    if (char === "{") {
-      const trimmed = prelude.trim();
-      prelude = "";
-      if (trimmed.startsWith("@")) {
-        atRules.push(trimmed);
-        frames.push(null);
-      } else {
-        frames.push({
-          selectors: trimmed.split(",").map((selector) => selector.trim()),
-          body: "",
-          // Snapshotted here rather than referenced: `atRules` is mutated as
-          // the walk continues past this rule.
-          atRules: [...atRules],
-        });
-      }
-      continue;
-    }
-
-    if (char === "}") {
-      const frame = frames.pop();
-      if (frame === null) {
-        atRules.pop();
-      } else if (frame) {
-        // Everything since this frame opened is its declaration list.
-        // `app.css` uses no native nesting (no `&` selectors), so a style
-        // rule's braces contain declarations and nothing else.
-        rules.push({ ...frame, body: prelude.trim() });
-      }
-      prelude = "";
-      continue;
-    }
-
-    prelude += char;
-  }
-
-  if (frames.length > 0) {
-    // An unbalanced walk mis-nests everything after the offending brace, and
-    // the failure mode is silent under-reporting: rules land under the wrong
-    // at-rule stack and the gate stops seeing them. The parser has no string
-    // or `url()` awareness, so a future `content: "{"` would do exactly that.
-    throw new Error(
-      `app.css did not parse into balanced rules (${frames.length} unclosed)`,
-    );
-  }
-
-  return rules;
-}
-
-const rules = parseStyleRules(css);
-
-// Hoisted: `hasMotionQuery` runs once per rule while `reducedSelectors` is
-// built, and recompiling a constant pattern thousands of times buys nothing.
-const MOTION_QUERY_PATTERNS = {
-  "no-preference": /prefers-reduced-motion:\s*no-preference\b/,
-  "reduce": /prefers-reduced-motion:\s*reduce\b/,
-} as const;
-
-/** True when this at-rule stack contains a reduced-motion query of `kind`. */
-function hasMotionQuery(
-  atRules: readonly string[],
-  kind: keyof typeof MOTION_QUERY_PATTERNS,
-): boolean {
-  return atRules.some((atRule) => MOTION_QUERY_PATTERNS[kind].test(atRule));
-}
 
 /**
  * Selectors whose ANIMATION is settled by name inside a `reduce` query.
@@ -161,11 +72,11 @@ const MOTION_EXEMPTIONS: Record<string, string> = {
   // ONLY signal its surface has (the composer's Run button swaps the play
   // glyph for a bare, aria-hidden ring) keeps spinning, because motion that is
   // the sole indication of progress is not the non-essential motion the
-  // preference asks to stop. Rings that sit beside text — `.settings-pending
-  // .pending-spinner` — ARE stopped, which is why the bare selector cannot
-  // inherit that rule's coverage.
+  // preference asks to stop. Rings that sit beside text wear
+  // `.pending-spinner--paired` and ARE stopped, which is why the bare
+  // selector cannot inherit that rule's coverage.
   ".pending-spinner":
-    "standalone busy ring with no text companion; the reduce rules cover the paired `.settings-pending .pending-spinner` and `.composer__send-split-pill .pending-spinner` instead",
+    "standalone busy ring with no text companion; the reduce rule stops the paired rings by their `.pending-spinner--paired` modifier instead",
 };
 
 describe("app.css reduced-motion contract", () => {
@@ -191,7 +102,7 @@ describe("app.css reduced-motion contract", () => {
     expect(reducedSelectors.has(".automations-table__disclosure")).toBe(false);
     expect(reducedSelectors.has(".settings-nav__sublist")).toBe(false);
     // While a rule that does settle the animation still registers.
-    expect(reducedSelectors.has(".status-dot--blink")).toBe(true);
+    expect(reducedSelectors.has(".pending-spinner--paired")).toBe(true);
     expect(reducedSelectors.has(".thinking-scanner__beam")).toBe(true);
   });
 
@@ -355,5 +266,75 @@ describe("thinking scanner under reduced motion", () => {
     // gradient, neither of which mentions the scanner's tint variable at all.
     expect(dormant?.body).toMatch(/background:\s*var\(--bg-panel-hover\);/);
     expect(dormant?.body).not.toMatch(/gradient|--accent/);
+  });
+});
+
+/**
+ * Busy rings that sit beside text naming the work stop under reduced motion;
+ * a ring that is its surface's only signal keeps spinning (see the media query
+ * beside `.pending-spinner` in `app.css`).
+ *
+ * The reduce rule used to list each paired surface by its context, and the
+ * review card's Fix button was missed until #3193 added it. Now every ring
+ * renders through `components/PendingSpinner`, whose required `pairing` prop
+ * makes the caller decide, and a standalone ring states its
+ * `standaloneReason` at the call site. The type checker holds the decision;
+ * this gate holds that no ring bypasses the component.
+ */
+describe("paired busy rings under reduced motion", () => {
+  const rendererRoot = path.resolve(testDir, "../..");
+  const COMPONENT_FILE = "components/PendingSpinner.tsx";
+
+  /** Renderer source files, relative to `renderer/src`, tests excluded. */
+  const sources = readdirSync(rendererRoot, { recursive: true, encoding: "utf8" })
+    .filter((file) => /\.tsx?$/.test(file))
+    .filter((file) => !/(?:^|[\\/])(?:__tests__|test)[\\/]/.test(file))
+    .map((file) => ({
+      file: file.split(path.sep).join("/"),
+      source: readFileSync(path.join(rendererRoot, file), "utf8"),
+    }));
+
+  it("stops a ring by its own modifier, not by the surface around it", () => {
+    // A context selector such as `.settings-pending .pending-spinner` coming
+    // back would cover one surface and not the next, which is the gap the
+    // modifier exists to close.
+    expect(reducedMotionPairedRingSelectors).toEqual([`.${PAIRED_RING_CLASS}`]);
+    const pairedRule = rules.find(
+      (rule) =>
+        hasMotionQuery(rule.atRules, "reduce")
+        && rule.selectors.includes(`.${PAIRED_RING_CLASS}`),
+    );
+    // Uniformly accent-tinted, so the still ring does not read as a stalled
+    // arc.
+    expect(pairedRule?.body).toMatch(/border-color:\s*var\(--accent\);/);
+  });
+
+  it("renders every busy ring through PendingSpinner", () => {
+    // Any `pending-spinner` class, modifiers included. A raw ring skips the
+    // component's `pairing` decision, which is the gap this gate closes.
+    const ringClass = /(?<![\w-])pending-spinner(?![\w])/;
+    const raw = sources
+      .filter(({ file }) => file !== COMPONENT_FILE)
+      .filter(({ source }) => ringClass.test(source))
+      .map(({ file }) => file);
+    // Named by file. Render the ring as `<PendingSpinner pairing=… />`.
+    expect(raw).toEqual([]);
+
+    // Non-vacuous: the component draws the ring, and the surfaces use it.
+    const component = sources.find(({ file }) => file === COMPONENT_FILE);
+    expect(component?.source).toContain(`"${PAIRED_RING_CLASS}"`);
+    const uses = sources
+      .map(({ source }) => source.match(/<PendingSpinner\b/g)?.length ?? 0)
+      .reduce((sum, count) => sum + count, 0);
+    expect(uses).toBeGreaterThanOrEqual(10);
+  });
+
+  it("gives every standalone ring a reason", () => {
+    // The type requires `standaloneReason`, but an empty or blank string
+    // satisfies it.
+    const empty = sources
+      .filter(({ source }) => /standaloneReason=(?:"\s*"|\{\s*(?:"\s*"|'\s*'|`\s*`)\s*\})/.test(source))
+      .map(({ file }) => file);
+    expect(empty).toEqual([]);
   });
 });

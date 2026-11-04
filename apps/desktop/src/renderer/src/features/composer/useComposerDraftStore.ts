@@ -20,6 +20,8 @@ import type { ComposerSkillToken } from "./ComposerInputTypes";
 
 export type ComposerDraftSnapshot = {
   threadOwner?: ComposerThreadOwner;
+  /** Window-local provenance used to remove this draft when its rewind is undone. */
+  rewoundPrompt?: boolean;
   draft: string;
   editorDocument?: JSONContent;
   imageAttachments: NavigationLaunchpadImageAttachment[];
@@ -229,6 +231,7 @@ export function getNextReleasableQueuedTurn<
   T extends Pick<
     ComposerQueuedTurnSnapshot,
     | "backendQueuePending"
+    | "failedScheduledActionId"
     | "queueEntryId"
     | "scheduledActionId"
     | "scheduledSendAt"
@@ -240,6 +243,11 @@ export function getNextReleasableQueuedTurn<
   for (const queuedTurn of queuedTurns) {
     // A paused turn steps out of line; the turns behind it still go.
     if (queuedTurn.paused) continue;
+    // A failed scheduled action is shown so the operator can edit or delete
+    // it. Its row comes back on every projection refresh while the owner
+    // keeps the failure, so releasing it would start the work again each time
+    // the thread goes idle.
+    if (queuedTurn.failedScheduledActionId) continue;
     // A backend-owned entry is already in the authoritative FIFO. Local
     // scheduled turns and reviews behind it must not leapfrog that entry.
     if (

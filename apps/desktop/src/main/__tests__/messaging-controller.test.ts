@@ -13301,7 +13301,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
       ),
       actions: expect.arrayContaining([
         expect.objectContaining({
@@ -13353,7 +13353,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
       ),
     });
 
@@ -13926,6 +13926,135 @@ describe("MessagingController", () => {
       expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("offers Grok's declared permissions when starting a new thread", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "acp:grok",
+      executionMode: "default",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildGrokBackendSummary()],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Permissions: Default Access"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:permissions",
+          label: "Permissions: Default",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:permissions" }),
+    );
+    const picker = harness.delivered.at(-1) as {
+      title?: string;
+      actions?: MessagingSurfaceAction[];
+    };
+    expect(picker.title).toBe("Select permissions");
+    expect(
+      picker.actions
+        ?.filter((action) => action.id === "browse:new:set-permissions")
+        .map((action) => action.value),
+    ).toEqual([
+      { executionMode: "default" },
+      { executionMode: "full-access" },
+    ]);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Permissions: Full Access"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.not.stringContaining("Agent default"),
+    });
+  });
+
+  it("refuses new-thread Full Access for an ACP provider that declares no execution modes", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "acp:gemini",
+      executionMode: "default",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            kind: "acp:gemini",
+            label: "Gemini CLI",
+            source: "acp",
+            executionModes: [],
+          }),
+        ],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Invalid selection",
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("Use Gemini"));
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchpad: expect.objectContaining({
+          backend: "acp:gemini",
+          executionMode: "default",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
   });
 
   it("treats selecting the current new-thread Full Access permission as a no-op", async () => {
@@ -15924,9 +16053,9 @@ describe("MessagingController", () => {
     }
   });
 
-  it("rehydrates enabled Monitor bindings on controller startup", async () => {
+  it("keeps rehydrated binding Monitor reads outside request activity", async () => {
     vi.useFakeTimers();
-    const harness = await createHarness();
+    const harness = await createHarness({ readThreadLastAssistantMessage: async () => "Fixture reply" });
     try {
       await bindThread(harness);
       const binding = await harness.store.findActiveBindingForChannel(
@@ -15939,7 +16068,8 @@ describe("MessagingController", () => {
         ...binding,
         monitor: {
           enabled: true,
-          intervalMs: 1,
+          intervalMs: 60_000,
+          showLastResponseSnippet: true,
           updatedAt: 1000,
         },
         updatedAt: 1000,
@@ -15957,15 +16087,30 @@ describe("MessagingController", () => {
         text: expect.stringContaining("Monitor: Recent threads"),
       });
       expect(vi.getTimerCount()).toBe(1);
+      expect(harness.readThreadStatus).toHaveBeenLastCalledWith(expect.objectContaining({ countsAsActivity: false }));
+      expect(harness.readThreadLastAssistantMessage).toHaveBeenLastCalledWith(expect.objectContaining({ countsAsActivity: false }));
+      harness.readThreadStatus.mockClear();
+      harness.readThreadLastAssistantMessage.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      await vi.waitFor(() => {
+        expect(harness.readThreadStatus).toHaveBeenCalledExactlyOnceWith({
+          backend: "codex", threadId: "thread-1", countsAsActivity: false,
+        });
+        expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledExactlyOnceWith({
+          backend: "codex", threadId: "thread-1", countsAsActivity: false,
+        });
+      });
     } finally {
       harness.controller.dispose();
       vi.useRealTimers();
     }
   });
 
-  it("renders enabled channel Monitor subscriptions immediately on controller startup", async () => {
+  it("keeps rehydrated channel Monitor reads outside request activity", async () => {
     vi.useFakeTimers();
-    const harness = await createHarness({ channel: "telegram" });
+    const harness = await createHarness({ channel: "telegram", readThreadLastAssistantMessage: async () => "Fixture reply" });
     try {
       await harness.store.upsertMonitorSubscription({
         id: "monitor:telegram:dm::chat-1",
@@ -15976,6 +16121,7 @@ describe("MessagingController", () => {
         monitor: {
           enabled: true,
           intervalMs: 60_000,
+          showLastResponseSnippet: true,
           updatedAt: 1000,
         },
       });
@@ -15991,6 +16137,21 @@ describe("MessagingController", () => {
         text: expect.stringContaining("Monitor: Recent threads"),
       });
       expect(vi.getTimerCount()).toBe(1);
+      expect(harness.readThreadStatus).toHaveBeenLastCalledWith(expect.objectContaining({ countsAsActivity: false }));
+      expect(harness.readThreadLastAssistantMessage).toHaveBeenLastCalledWith(expect.objectContaining({ countsAsActivity: false }));
+      harness.readThreadStatus.mockClear();
+      harness.readThreadLastAssistantMessage.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      await vi.waitFor(() => {
+        expect(harness.readThreadStatus).toHaveBeenCalledExactlyOnceWith({
+          backend: "codex", threadId: "thread-1", countsAsActivity: false,
+        });
+        expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledExactlyOnceWith({
+          backend: "codex", threadId: "thread-1", countsAsActivity: false,
+        });
+      });
     } finally {
       harness.controller.dispose();
       vi.useRealTimers();
@@ -16189,6 +16350,87 @@ describe("MessagingController", () => {
     expect(startingTurn?.[1]).not.toHaveProperty(
       "inputPrepPdfToolSupportProbeMs",
     );
+  });
+
+  it.each(["delivered", "missed"] as const)("revalidates admission after media preparation when completion is %s", async (completion) => {
+    let releaseMedia!: () => void;
+    const mediaGate = new Promise<void>((resolve) => { releaseMedia = resolve; });
+    let active = false;
+    const downloadAttachment = vi.fn(async () => {
+      await mediaGate;
+      return { data: new TextEncoder().encode("fixture file"), fileName: "fixture.txt", mimeType: "text/plain", sizeBytes: 12 };
+    });
+    const harness = await createHarness({
+      downloadAttachment,
+      getThreadAdmissionState: async (request) => ({
+        thread: buildNavigationSnapshot().threads[0],
+        threadStatus: active ? "active" : "idle",
+        ...(active ? { activeTurn: { backend: request.backend, threadId: request.threadId, turnId: "turn-1" } } : {}),
+      }),
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
+    active = true;
+    const handling = harness.controller.handleInboundEvent({
+      ...buildTextEvent("Read this file"), id: "completion-during-media", kind: "media", disposition: "available",
+      attachments: [{ id: "fixture-file", kind: "file", name: "fixture.txt", mimeType: "text/plain", disposition: "available", sizeBytes: 12 }],
+    });
+    try {
+      await vi.waitFor(() => expect(downloadAttachment).toHaveBeenCalledOnce());
+      active = false;
+      if (completion === "delivered") {
+        // Completion drains the empty controller queue before media is ready.
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } },
+          },
+        });
+      }
+      expect(harness.startTurn).toHaveBeenCalledOnce();
+    } finally {
+      releaseMedia();
+      await handling;
+    }
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: expect.stringMatching(/Read this file[\s\S]*fixture file/u) }],
+    }));
+    expect(harness.delivered).not.toContainEqual(expect.objectContaining({ kind: "confirmation", title: "Message queued" }));
+  });
+
+  it("reads admission after media preparation and waits for it before dispatch", async () => {
+    let releaseMedia!: () => void;
+    let releaseAdmission!: () => void;
+    const mediaGate = new Promise<void>((resolve) => { releaseMedia = resolve; });
+    const admissionGate = new Promise<void>((resolve) => { releaseAdmission = resolve; });
+    const downloadAttachment = vi.fn(async () => {
+      await mediaGate;
+      return { data: new TextEncoder().encode("fixture file"), fileName: "fixture.txt", mimeType: "text/plain", sizeBytes: 12 };
+    });
+    const harness = await createHarness({ downloadAttachment });
+    await bindThread(harness);
+    const state = await (harness.getThreadAdmissionState as NonNullable<MessagingBackendBridge["getThreadAdmissionState"]>)({ backend: "codex", threadId: "thread-1" });
+    harness.getThreadAdmissionState.mockClear().mockImplementation(async () => { await admissionGate; return state; });
+    const handling = harness.controller.handleInboundEvent({
+      ...buildTextEvent("Read this file"), id: "parallel-media", kind: "media", disposition: "available",
+      attachments: [{ id: "fixture-file", kind: "file", name: "fixture.txt", mimeType: "text/plain", disposition: "available", sizeBytes: 12 }],
+    });
+    try {
+      await vi.waitFor(() => expect(downloadAttachment).toHaveBeenCalled());
+      expect(harness.getThreadAdmissionState).not.toHaveBeenCalled();
+      expect(harness.startTurn).not.toHaveBeenCalled();
+      releaseMedia();
+      await vi.waitFor(() => expect(harness.getThreadAdmissionState).toHaveBeenCalledOnce());
+      expect(harness.startTurn).not.toHaveBeenCalled();
+    } finally {
+      releaseAdmission();
+      releaseMedia();
+      await handling;
+    }
+    expect(harness.startTurn).toHaveBeenCalledOnce();
+    expect(harness.getThreadAdmissionState).toHaveBeenCalledOnce();
   });
 
   it("logs bounded PDF preparation subspans on the start-turn event", async () => {
@@ -24984,6 +25226,135 @@ describe("MessagingController", () => {
     });
   });
 
+  it("lets messaging switch a Grok thread between its declared Default and Full Access modes", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:grok",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildGrokBackendSummary()],
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:acp:grok:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "acp:grok",
+      channel: buildCommandEvent("/status").channel,
+      createdAt: 900,
+      threadId: "thread-1",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Default Access"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:permissions",
+          label: "Permissions: Default",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    const picker = harness.delivered.at(-1) as {
+      kind?: string;
+      choices?: MessagingSurfaceAction[];
+    };
+    expect(picker.kind).toBe("single_select");
+    expect(
+      picker.choices
+        ?.filter((choice) => choice.id === "status:set-permissions")
+        .map((choice) => [choice.label, choice.value]),
+    ).toEqual([
+      ["Default (current)", { executionMode: "default" }],
+      ["Full Access", { executionMode: "full-access" }],
+    ]);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
+    expect(harness.setThreadExecutionMode).toHaveBeenCalledWith({
+      backend: "acp:grok",
+      threadId: "thread-1",
+      executionMode: "full-access",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Full Access"),
+    });
+  });
+
+  it("refuses a Full Access callback for an ACP provider that declares no execution modes", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:gemini",
+      executionMode: "default",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildAcpRuntimeBackendSummary({
+            acp: {
+              registryId: "gemini",
+              distributionKinds: ["local"],
+              installStatus: "installed",
+              authStatus: "authenticated",
+              verificationStatus: "not-applicable",
+            },
+          }),
+        ],
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:acp:gemini:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "acp:gemini",
+      channel: buildCommandEvent("/status").channel,
+      createdAt: 900,
+      threadId: "thread-1",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "status:permissions" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
+    expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Invalid status selection",
+    });
+  });
+
   it("rejects an unresolved bind target without falling back to a population read", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockImplementation(() => { throw new Error("Legacy navigation is forbidden"); });
@@ -28223,6 +28594,45 @@ function buildAcpRuntimeBackendSummary(
       supportsFastMode: false,
     },
     ...overrides,
+  });
+}
+
+/**
+ * Grok as discovered without its own permission selector. Its native modes
+ * control planning, so Permissions must not open them.
+ */
+function buildGrokBackendSummary(): BackendSummary {
+  return buildBackendSummary({
+    kind: "acp:grok",
+    label: "Grok",
+    source: "acp",
+    executionModes: [
+      { mode: "default", label: "Default Access", available: true, isDefault: true },
+      { mode: "full-access", label: "Full Access", available: true },
+    ],
+    acp: {
+      registryId: "grok",
+      distributionKinds: ["local"],
+      installStatus: "installed",
+      authStatus: "authenticated",
+      verificationStatus: "not-applicable",
+      runtime: {
+        schemaVersion: 1,
+        status: "discovered",
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "plan", label: "Plan" },
+          ],
+        },
+      },
+    },
+    launchpadOptions: {
+      models: [{ id: "grok-4.7", label: "Grok 4.7" }],
+      reasoningEfforts: ["low", "medium", "high"],
+      supportsFastMode: false,
+    },
   });
 }
 

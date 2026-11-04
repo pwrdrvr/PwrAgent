@@ -124,6 +124,25 @@ does not spend the user allowance.
 - Thread history archival and worktree snapshot archival use distinct APIs and
   provider-specific restore paths.
 
+### Archived worktree removal admission
+
+Discovery identifies candidates, while every removal and empty-container repair
+obtains a fresh complete membership/overlay inventory across Codex, Claude and
+ACP. Admission requests at most 100 Codex metadata rows per page and reads
+overlays in 25-row slices. It resolves cwd aliases through the filesystem and
+limits Git enrichment to workspaces that overlap the checkout or its container.
+Unrelated identities still contribute their current linked and retained
+worktrees and external ownership markers. Missing suffixes resolve through their
+nearest existing ancestor; ambiguous filesystem errors fail admission.
+
+Only one physical cleanup runs at a time. Lifecycle intent and settlement,
+workspace observations and provider notifications fence removal through a
+revision checked again at destructive dispatch. In-flight lifecycle mutations
+also block admission. These checks add no persistent state or SQLite writes.
+The scan-local filesystem observations never authorize a later removal. The
+scaling and ownership-race budgets live in `archive-cleanup-provider.test.ts`,
+`archive-cleanup-pipeline.test.ts` and `archive-cleanup-budgets.json`.
+
 ### Display reads and federation
 
 - Desktop transcripts use `readThread` with `display.resource = "transcript"`.
@@ -327,6 +346,10 @@ bottom to top — leaves at the bottom import nothing else internal.
 ```mermaid
 graph TB
     DesktopApp["apps/desktop"]
+    Outpost["packages/pwragent · src/federation-core.ts"]
+    OwnerCore["packages/owner-core"]
+    Federation["packages/federation"]
+    AgentTools["packages/agent-tools"]
     MsgProviders["packages/messaging/providers/*"]
     MsgInterface["packages/messaging/interface"]
     Shared["packages/shared"]
@@ -334,7 +357,18 @@ graph TB
     DesktopApp --> MsgProviders
     DesktopApp --> MsgInterface
     DesktopApp --> Shared
+    DesktopApp --> Federation
+    DesktopApp --> AgentTools
+    DesktopApp --> OwnerCore
     DesktopApp --> CodexProto["@pwrdrvr/codex-app-server-protocol"]
+    Outpost --> Federation
+    Outpost --> AgentTools
+    Outpost --> Shared
+    Outpost --> MsgInterface
+    Outpost -.-> OwnerCore
+    OwnerCore --> Shared
+    Federation --> Shared
+    AgentTools --> Shared
     MsgProviders --> MsgInterface
     MsgInterface --> Shared
 ```
@@ -351,17 +385,30 @@ other package access crosses the IPC bridge through the main process.
 Run `pnpm lint:boundaries` locally before pushing; CI fails the build on
 any violation.
 
+Federation, agent-tools, and the messaging interface are independent siblings
+above shared. The owner-core package imports only shared and holds navigation
+projection, Attention ordering, and thread-title policy. The Outpost may use the
+reusable libraries and owner-core through its bundle entry; its JavaScript
+consumes the bundle.
+Every package under `packages/` is forbidden from importing `apps/`.
+
 ## Workspace map
 
 | Path | What's there |
 |---|---|
 | `apps/desktop` | Electron app — main process, renderer, IPC bridge |
 | `packages/shared` | Cross-package types: app-server enums, navigation snapshots, thread identifiers |
+| `packages/federation` | Owner contract, federation transport, enrollment, routing and RPC |
+| `packages/agent-tools` | Agent tool definitions, routing and messaging tool contracts |
+| `packages/owner-core` | Shared navigation projection, Attention ordering, and thread-title policy (`@pwragent/owner-core`) |
+| `packages/pwragent` | Headless Outpost daemon and CLI, with reusable libraries bundled through `src/federation-core.ts` |
 | `packages/messaging/interface` | Generic messaging types, capability profile, layout helpers |
 | `packages/messaging/providers/telegram` | Telegram adapter (`grammy`) |
 | `packages/messaging/providers/discord` | Discord adapter (`discord.js`) |
 | `packages/messaging/providers/mattermost` | Mattermost adapter (`@mattermost/client` + HTTP callback listener) |
 | `packages/messaging/providers/slack` | Slack adapter (`@slack/web-api` + Socket Mode) |
+| `packages/messaging/providers/feishu` | Feishu/Lark adapter |
+| `packages/messaging/providers/line` | LINE adapter |
 
 Codex App Server protocol bindings are consumed from
 `@pwrdrvr/codex-app-server-protocol` on npm instead of checked into this

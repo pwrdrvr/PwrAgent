@@ -23,6 +23,11 @@ type UsagePaceCardProps = {
   ownerLabel?: string;
   /** That instance's id, so the chip can draw its short name. */
   ownerInstanceId?: string;
+  /**
+   * False for a thread whose provider is not the local Codex account. The
+   * card then opens Usage Activity without charting that account's limit.
+   */
+  codexLimit?: boolean;
 };
 
 /** Chart box, in viewBox units; 100% sits `CAP` below the top edge. */
@@ -37,12 +42,14 @@ const CAP = 6;
  * which is exact for the limit (account-wide) and labeled for the spend: this
  * machine's, or the named owner's for a remote thread.
  */
-export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends, ownerLabel, ownerInstanceId }: UsagePaceCardProps) {
+export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends, ownerLabel, ownerInstanceId, codexLimit = true }: UsagePaceCardProps) {
   const owner = useFederationInstanceNames(ownerInstanceId ?? "", ownerLabel ?? "");
   const verdictId = useId();
   const open = desktopApi?.openUsageActivity;
   // Nothing renders without a way to open the window, so nothing is read.
-  const pace = useLocalUsagePace(open ? desktopApi?.readUsageActivity : undefined, usagePaceRefreshKey(backends), usagePaceAccountKey(backends));
+  // Another provider's thread never reads the Codex account at all.
+  const pace = useLocalUsagePace(open && codexLimit ? desktopApi?.readUsageActivity : undefined,
+    usagePaceRefreshKey(backends), usagePaceAccountKey(backends));
   if (!open) return null;
   const series = sinceResetSeries(pace?.account);
   if (!pace || !series) {
@@ -190,11 +197,44 @@ function PaceSpark({ series, start, end, now, projection, short }: {
  * than the pace chart.
  */
 export function ClaudeUsageLimits({ backend }: { backend?: BackendSummary }) {
+  return (
+    <ProviderUsageLimits
+      backend={backend}
+      provider="Claude"
+      empty={backend?.claude?.authMethod === "api-key"
+        ? "API-key usage has no Claude subscription limit."
+        : "Claude has not reported plan limits. They refresh when a turn starts and ends."}
+      footnote="Costs are provider estimates, not subscription charges."
+    />
+  );
+}
+
+/**
+ * An ACP provider's own limits, such as Grok's `x.ai/billing` period. Like
+ * Claude, it is never the local Codex account's.
+ */
+export function AcpUsageLimits({ backend, provider }: { backend?: BackendSummary; provider: string }) {
+  return (
+    <ProviderUsageLimits
+      backend={backend}
+      provider={provider}
+      empty={`${provider} has not reported plan limits.`}
+    />
+  );
+}
+
+function ProviderUsageLimits({ backend, provider, empty, footnote }: {
+  backend?: BackendSummary;
+  provider: string;
+  /** Shown in place of the meters when the provider reported none. */
+  empty: string;
+  footnote?: string;
+}) {
   const limits = backend?.rateLimits;
   const now = Date.now();
   return (
-    <section className="rail-summary-card" aria-label="Claude plan limits">
-      <span className="rail-summary-card__eyebrow">Claude plan limits</span>
+    <section className="rail-summary-card" aria-label={`${provider} plan limits`}>
+      <span className="rail-summary-card__eyebrow">{provider} plan limits</span>
       {limits?.length ? (
         <dl className="backend-status-list__metadata-grid rail-limit-grid">
           {limits.map((limit) => (
@@ -202,18 +242,14 @@ export function ClaudeUsageLimits({ backend }: { backend?: BackendSummary }) {
               key={limit.limitId ?? limit.name}
               limit={limit}
               now={now}
-              labelTooltip={limit.limitName ? `Claude reports this limit as “${limit.limitName}”.` : undefined}
+              labelTooltip={limit.limitName ? `${provider} reports this limit as “${limit.limitName}”.` : undefined}
             />
           ))}
         </dl>
       ) : (
-        <div className="rail-summary-card__caption">
-          {backend?.claude?.authMethod === "api-key"
-            ? "API-key usage has no Claude subscription limit."
-            : "Claude has not reported plan limits. They refresh when a turn starts and ends."}
-        </div>
+        <div className="rail-summary-card__caption">{empty}</div>
       )}
-      <div className="rail-summary-card__caption">Costs are provider estimates, not subscription charges.</div>
+      {footnote ? <div className="rail-summary-card__caption">{footnote}</div> : null}
     </section>
   );
 }

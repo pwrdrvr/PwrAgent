@@ -23,6 +23,8 @@ export const FEDERATION_THREAD_TODO_METHODS = {
   listDispatchEnvironments: "threadTodos.listDispatchEnvironments",
   // Needs `thread_todo_feed` on the owner; viewers fall back to `threadTodos.list`.
   snapshotFeed: "threadTodos.snapshot",
+  // Needs `thread_todo_plan` on the owner; a start there sends the prompt alone.
+  raisePlan: "threadTodos.raisePlan",
 } as const;
 
 export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapability> = {
@@ -36,6 +38,7 @@ export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapab
   [FEDERATION_THREAD_TODO_METHODS.setItemChecked]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.setProject]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.runAction]: "turn_control",
+  [FEDERATION_THREAD_TODO_METHODS.raisePlan]: "turn_control",
 };
 
 export function registerFederationThreadTodoHandlers(router: FederationRouter, operations: Operations): void {

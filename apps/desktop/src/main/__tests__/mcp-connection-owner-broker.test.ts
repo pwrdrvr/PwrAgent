@@ -240,10 +240,11 @@ describe("MCP connection owner broker", () => {
       filePath: path.join(directory, "broker.json"),
     });
     const settings = createSettings();
+    let parentSelected = true;
     const owner = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
       bridgeEntryPath: "/owner/mcp-connection-bridge.js",
-      readGatewaySelection: async () => [id],
+      readGatewaySelection: async (context) => context.threadId === "gateway-fixture" || (context.threadId === "parent" && parentSelected) ? [id] : [],
       brokerDiscovery: discovery,
       leaseManager: new RuntimeLeaseManager({
         cwd: "/tmp/PwrAgnt-owner",
@@ -319,7 +320,10 @@ describe("MCP connection owner broker", () => {
       const callTool = vi.fn(async () => ({ content: [{ type: "text", text: "owner fixture" }] }));
       Object.assign(owner, { connectUpstreamClient: async () => ({
         client: {
-          listTools: async () => ({ tools: [{ name: "late_tool", inputSchema: { type: "object" } }] }),
+          listTools: async () => ({ tools: [
+            { name: "late_tool", annotations: { readOnlyHint: true }, inputSchema: { type: "object" } },
+            { name: "mutate", annotations: { readOnlyHint: false, destructiveHint: true }, inputSchema: { type: "object" } },
+          ] }),
           callTool, close: async () => undefined,
         },
         transport: { close: async () => undefined },
@@ -328,11 +332,26 @@ describe("MCP connection owner broker", () => {
       const catalog = await viewer.requestGatewayToolOperation({ ...gateway, operation: "gateway/tools/list" }) as McpGatewayTool[];
       expect(catalog[0].toolName).toBe("late_tool");
       await viewer.requestGatewayToolOperation({ ...gateway, operation: "gateway/tools/call", invocation: { ...catalog[0], arguments: {} } });
-      expect(callTool).toHaveBeenCalledOnce();
+      const delegated = { ...gateway, scopeKey: JSON.stringify(["gateway", "codex", "ephemeral-worker", {
+        selectionOwner: { backend: "codex", threadId: "parent" }, connectionIds: [connection.id], readOnly: true,
+      }]) };
+      const workerTools = await viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/list" }) as McpGatewayTool[];
+      expect(workerTools[0].schemaRevision).not.toBe(catalog[0].schemaRevision);
+      expect(workerTools[0].consentRevision).toBe(catalog[0].consentRevision);
+      await expect(viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/call", invocation: { ...catalog[0], arguments: {} } })).rejects.toThrow("schema or authorization changed");
+      await expect(viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/call", invocation: { ...workerTools[1], arguments: {} } })).rejects.toThrow("only explicitly read-only");
+      await viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/call", invocation: { ...workerTools[0], arguments: {} } });
+      const calls = callTool.mock.calls.length;
+      parentSelected = false;
+      await expect(viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/list" })).rejects.toThrow("no longer selected");
+      await expect(viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/call", invocation: { ...workerTools[0], arguments: {} } })).rejects.toThrow("no longer selected");
+      expect(callTool).toHaveBeenCalledTimes(calls);
+
+      expect(callTool).toHaveBeenCalledTimes(2);
       await owner.setConnectionEnabled(connection.id, false);
       await expect(viewer.requestGatewayToolOperation({ ...gateway, operation: "gateway/tools/call", invocation: { ...catalog[0], arguments: {} } }))
         .rejects.toThrow("not available");
-      expect(callTool).toHaveBeenCalledOnce();
+      expect(callTool).toHaveBeenCalledTimes(2);
       first.revoke();
     } finally {
       await viewer.close();

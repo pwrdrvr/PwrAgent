@@ -24,6 +24,17 @@ function usernames(value: unknown): string[] {
 function labels(value: unknown): string[] {
   return Array.isArray(value) ? value.map((label) => typeof label === "string" ? label.slice(0, 200) : label && typeof label === "object" ? str((label as Payload).name, 200) : undefined).filter((name): name is string => Boolean(name)) : [];
 }
+/**
+ * A pipeline payload's merge request head commit. Null for a merged-results
+ * or merge-train pipeline: its sha is a merge commit GitLab made, not the
+ * head. Undefined when the payload has no sha.
+ */
+function pipelineHeadSha(value: unknown): string | null | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const ref = str((value as Payload).ref, 300);
+  if (ref && /^refs\/merge-requests\/\d+\/(?:merge|train)$/.test(ref)) return null;
+  return str((value as Payload).sha, 64);
+}
 /** GitLab says "opened"; the shared contract says "open", as GitHub does. */
 function state(value: unknown): string | undefined {
   return value === "opened" ? "open" : str(value, 20);
@@ -94,6 +105,17 @@ export class GitlabPrToolClient {
     tempRoots?: string[];
   }) {}
 
+  /** Whether `head` is a branch of the project. Undefined for a fork's head or when GitLab cannot say. */
+  async headBranchExists(r: ForgeRepository, head: string, signal?: AbortSignal): Promise<boolean | undefined> {
+    if (r.provider !== "gitlab" || head.includes(":")) return undefined;
+    try {
+      await this.options.gitlab.readApi<unknown>(r.host, `projects/${encodeURIComponent(`${r.owner}/${r.repo}`)}/repository/branches/${encodeURIComponent(head)}`, signal);
+      return true;
+    } catch (error) {
+      return error instanceof GitLabReadError && error.status === 404 ? false : undefined;
+    }
+  }
+
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> {
     try {
       return await this.run(operation, args, ctx);
@@ -121,6 +143,23 @@ export class GitlabPrToolClient {
     const paging = new URLSearchParams({ page: String(page), per_page: String(perPage) });
     const done = <T extends Record<string, unknown>>(result: T) => ({ repository: r, source: "provider", fetchedAt: Date.now(), providerRequests, ...result });
     const pageInfo = (rows: unknown[]) => ({ page, perPage, nextPage: rows.length >= perPage ? page + 1 : null });
+
+    if (operation === "rerun_failed_ci_jobs") {
+      const retried = await write("POST", `/pipelines/${args.runId}/retry`);
+      // A retry keeps the pipeline and its head, and GitLab counts no
+      // attempts: the pipeline id is the re-run's identity, so no runAttempt.
+      // The head lets a later watch tell the retry's result from the one it
+      // replaced. Best effort: the retry was accepted either way.
+      let headSha = pipelineHeadSha(retried);
+      if (headSha === undefined) {
+        try {
+          headSha = pipelineHeadSha(await get(`/pipelines/${args.runId}`));
+        } catch (error) {
+          if (ctx.signal?.aborted) throw error;
+        }
+      }
+      return done({ requested: true, runId: args.runId, ...(headSha ? { headSha } : {}), scope: "failed_and_canceled_jobs", url: `${repositoryUrl(r)}/-/pipelines/${args.runId}` });
+    }
     const notes: string[] = [];
     const writeResult = <T extends Record<string, unknown>>(result: T) => done({ ...result, ...(notes.length ? { notes } : {}) });
 

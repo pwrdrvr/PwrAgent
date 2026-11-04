@@ -40,6 +40,7 @@ import { findHashReferenceTrigger } from "../../lib/hash-references";
 import { parsePullRequestUrl } from "../../lib/pull-request-links";
 import { useComposerPullRequestHover } from "./useComposerPullRequestHover";
 import { tildifyPath } from "../../lib/tildify-path";
+import { ensureStatusPulse } from "../../lib/status-pulse";
 import {
   ChipContextMenu,
   type ChipContextMenuPosition,
@@ -257,6 +258,10 @@ const SkillMention = Mention.extend({
       const modifiers = readMentionPrChipModifiers(node.attrs) ?? [
         "pr-chip--unknown",
       ];
+      if (modifiers.includes("pr-chip--checks-running")) {
+        // Tiptap builds this DOM itself, so no React ref can start the pulse.
+        ensureStatusPulse();
+      }
       return [
         "span",
         {

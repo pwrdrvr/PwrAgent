@@ -49,3 +49,14 @@ index 8ed8bb5de1b12c7c050191123b22a119298826bb..7e05995baa038ab3a1af175a72820f25
      options.log(`[pid=${spawnedProcess.pid || "N/A"}] finished temporary directories cleanup`);
    }
    function killAndWait() {
+@@ -44277,9 +44286,9 @@
+           electronArguments.unshift("-r", libPath("server", "electron", "loader.js"));
+         }
+         let shell = false;
+-        if (process.platform === "win32") {
++        if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+           shell = true;
+           command = [command, ...electronArguments].map((arg) => `"${escapeDoubleQuotes(arg)}"`).join(" ");
+           electronArguments = [];
+         }
+         delete env.NODE_OPTIONS;

@@ -34,9 +34,12 @@
   - Out-of-scope gaps.
   - Deferred follow-ups.
   - Code-review findings that you are not fixing but that are still worth doing.
-- Give the card a `start_thread` action.
-  - Its prompt must stand alone. The new thread does not see the original thread.
-  - The operator can then track the item and spawn a thread when ready.
+- If an existing thread owns the work, give the card a `send_message` action
+  with that thread's target and the complete request as its prompt.
+- Otherwise, give the card a `start_thread` action.
+- In either case, its prompt must stand alone. The destination does not see
+  the original card. The operator can preview the request and send it or
+  start a thread when ready.
 - A finding that is not worth doing needs no card.
   - Say so in your reply to the operator instead.
 - Settle every tracked review finding with `update_review_item`:
@@ -139,6 +142,9 @@
 - For PwrSuiteLab Windows probes or headed E2E, read
   `.agents/skills/use-windows-vm-lab/SKILL.md` in the attached lab checkout.
   Do not use the macOS VM skill for Windows work.
+- PwrSuiteLab also manages access to reusable Windows EC2 instances when
+  available. Consult that project's current Windows EC2 skill and documentation
+  for availability and operations.
 - Review the current ownership and readiness constraints before you change:
   - Windows Git or Bash process launch and shutdown.
   - Vitest process isolation.
@@ -149,10 +155,11 @@
 - Optimistic renderer synchronization has caused expensive Windows-only failures.
 - Do not substitute retries, longer timeouts, fewer workers, or serial lanes for an ownership fix.
 - Do not substitute those workarounds for an evidence-based readiness fix.
-- The macOS CI lane uses the selected-repository **PwrDrvr macOS** runner group.
-- Only PwrAgent and PwrSnap share this group.
-- Do not add a repository-scoped runner.
-- Do not give the full organization access to this group.
+- macOS CI and release jobs run on free GitHub-hosted `macos-26` runners.
+  - Use `macos-26`: actool 26 compiles the app icon and needs a macOS 26 host.
+  - Do not use a paid larger size or `macos-26-intel`.
+  - Do not move a CI job onto self-hosted machines. This repository is public,
+    and fork pull requests run every macOS job.
 - For branch-drift dialog screenshots, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`.
 - This command opens a replay-backed Electron fixture.
 - Close the application to end the command.
@@ -801,8 +808,18 @@ Use this dependency order from lowest to highest:
 
 - `packages/shared` imports no internal package.
 - `packages/messaging/interface` imports only `packages/shared`.
-- `packages/messaging/providers/*` imports only `packages/messaging/interface`.
+- `packages/federation` imports only `packages/shared`.
+- `packages/agent-tools` imports only `packages/shared`.
+- The three packages above are independent siblings; none imports another.
+- `packages/owner-core` (`@pwragent/owner-core`) holds shared navigation,
+  Attention ordering, and title policies. It may import only `shared`.
+- `packages/messaging/providers/{discord,feishu,line,mattermost,slack,telegram}`
+  each imports only `packages/messaging/interface`, never another provider.
+- `packages/pwragent` (the Outpost) may import `shared`, `federation`,
+  `agent-tools`, `messaging/interface`, and `owner-core`, only through
+  `src/federation-core.ts`. Its JavaScript consumes the resulting bundle.
 - `apps/desktop` can import any package.
+- No package under `packages/` may import an application under `apps/`.
 
 The renderer has an additional boundary.
 

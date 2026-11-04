@@ -16,6 +16,7 @@ import {
   reportRendererError,
 } from "../../lib/renderer-error-reporting";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 /**
  * Layout primitives for settings screens. Compose `SettingsPanelHead`,
@@ -771,7 +772,7 @@ export function SettingsPendingIndicator(props: {
 
   return (
     <span className="settings-pending" role="status">
-      <span aria-hidden="true" className="pending-spinner pending-spinner--sm" />
+      <PendingSpinner pairing="paired" size="sm" />
       {props.label ?? "Saving…"}
     </span>
   );

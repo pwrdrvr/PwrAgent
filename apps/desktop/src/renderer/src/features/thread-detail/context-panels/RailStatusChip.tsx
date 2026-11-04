@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { statusPulseRef } from "../../../lib/status-pulse";
 
 export type RailChipTone =
   | "ok"
@@ -38,6 +39,7 @@ export function RailStatusChip(props: RailStatusChipProps) {
           `rail-chip__dot--${props.tone}`,
           props.blink ? "rail-chip__dot--blink" : "",
         ].filter(Boolean).join(" ")}
+        ref={props.blink ? statusPulseRef : undefined}
       />
       {props.children}
     </span>

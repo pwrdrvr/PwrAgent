@@ -58,6 +58,7 @@ async function createComposerDraftSettingsFixture(): Promise<{
             id: "thread-read-first",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-first",
             result: {
               entries: [
                 {
@@ -85,6 +86,7 @@ async function createComposerDraftSettingsFixture(): Promise<{
             id: "thread-read-second",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-second",
             result: {
               entries: [
                 {
@@ -112,6 +114,7 @@ async function createComposerDraftSettingsFixture(): Promise<{
             id: "thread-read-first-again",
             kind: "response",
             method: "thread/read",
+            threadId: "thread-first",
             result: {
               entries: [
                 {

@@ -24,6 +24,7 @@ export type ThreadTodoInstance = {
    * applies Where, environment and speed, and it lists its environments.
    */
   dispatchTarget?: boolean;
+  messageTarget?: boolean;
 };
 
 /** This window's own machine. Without an instance id, a card cannot start here from a peer. */

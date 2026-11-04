@@ -88,6 +88,7 @@ import {
   isDesktopLightTheme,
   isDesktopTextSize,
   normalizeNavigationBrowseMode,
+  normalizeNavigationResumeState,
 } from "@pwragent/shared";
 import {
   createEventSubscriptionMultiplexer,
@@ -277,6 +278,7 @@ import type {
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   NavigationBrowseMode,
+  NavigationResumeState,
   AttachDirectoryToThreadRequest,
   AttachDirectoryToThreadResponse,
   DetachDirectoryFromThreadRequest,
@@ -303,6 +305,12 @@ import type {
   SetDirectoryPinResponse,
   SetDirectoryThreadsCollapsedRequest,
   SetDirectoryThreadsCollapsedResponse,
+  SetProjectForgeAutomationRequest,
+  SetProjectForgeAutomationResponse,
+  ListProjectHeldWakeupsRequest,
+  ListProjectHeldWakeupsResponse,
+  ResolveProjectHeldWakeupsRequest,
+  ResolveProjectHeldWakeupsResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetThreadPinRequest,
@@ -315,6 +323,8 @@ import type {
   ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
+  ContinueThreadEnvironmentStartupRequest,
+  ContinueThreadEnvironmentStartupResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
   AcknowledgeThreadEnvironmentFailureResponse,
   ListPendingThreadSpendAlertsRequest,
@@ -726,6 +736,7 @@ import {
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  AGENT_LAUNCHPAD_CREATION_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
@@ -1013,10 +1024,14 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_RESUME_STATE_CHANNEL,
   NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+  NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+  NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+  NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
@@ -1030,6 +1045,7 @@ import {
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
+  NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -1240,6 +1256,10 @@ let threadSearchRequestSequence = 0;
 const desktopApi = Object.freeze({
   manageThreadDependencies: async (request: import("@pwragent/shared").ManageThreadDependenciesRequest): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> =>
     await ipcRenderer.invoke("thread:dependencies", request),
+  manageThreadPrWatches: async (request: import("@pwragent/shared").ThreadPrWatchesRequest): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> =>
+    await ipcRenderer.invoke("thread:prWatches", request),
+  manageThreadPendingWakes: async (request: import("@pwragent/shared").ThreadPendingWakesRequest): Promise<import("@pwragent/shared").ThreadPendingWakesResponse> =>
+    await ipcRenderer.invoke("thread:pendingWakes", request),
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
   stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
@@ -2600,6 +2620,8 @@ const desktopApi = Object.freeze({
     request: MaterializeDirectoryLaunchpadRequest
   ): Promise<MaterializeDirectoryLaunchpadResponse> =>
     await ipcRenderer.invoke(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  manageLaunchpadCreation: async (request: import("@pwragent/shared").LaunchpadCreationRequest) =>
+    await ipcRenderer.invoke(AGENT_LAUNCHPAD_CREATION_CHANNEL, request),
   runCodexEnvironmentAction: async (
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse> =>
@@ -2693,6 +2715,8 @@ const desktopApi = Object.freeze({
       NAVIGATION_SNAPSHOT_CHANNEL,
       request,
     ),
+  setNavigationResumeState: async (state: NavigationResumeState): Promise<void> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_RESUME_STATE_CHANNEL, state),
   setNavigationBrowseMode: async (
     request: SetNavigationBrowseModeRequest,
   ): Promise<SetNavigationBrowseModeResponse> =>
@@ -2739,6 +2763,10 @@ const desktopApi = Object.freeze({
       NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
       request,
     ),
+  continueThreadEnvironmentStartup: async (
+    request: ContinueThreadEnvironmentStartupRequest,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL, request),
   acknowledgeThreadEnvironmentFailure: async (
     request: AcknowledgeThreadEnvironmentFailureRequest,
   ): Promise<AcknowledgeThreadEnvironmentFailureResponse> =>
@@ -2842,6 +2870,27 @@ const desktopApi = Object.freeze({
   ): Promise<SetDirectoryThreadsCollapsedResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+      request,
+    ),
+  setProjectForgeAutomation: async (
+    request: SetProjectForgeAutomationRequest,
+  ): Promise<SetProjectForgeAutomationResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+      request,
+    ),
+  listProjectHeldWakeups: async (
+    request: ListProjectHeldWakeupsRequest,
+  ): Promise<ListProjectHeldWakeupsResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+      request,
+    ),
+  resolveProjectHeldWakeups: async (
+    request: ResolveProjectHeldWakeupsRequest,
+  ): Promise<ResolveProjectHeldWakeupsResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
       request,
     ),
   refreshThreadPullRequests: async (
@@ -3311,6 +3360,7 @@ const desktopApi = Object.freeze({
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
+      calmMotion: boolean;
     }) => void,
   ): (() => void) => {
     const listener = (
@@ -3322,6 +3372,7 @@ const desktopApi = Object.freeze({
         density: DesktopAppearanceDensity;
         sidebarTextSize: DesktopTextSize;
         transcriptTextSize: DesktopTextSize;
+        calmMotion: boolean;
       },
     ) => callback(payload);
     ipcRenderer.on(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
@@ -3532,6 +3583,7 @@ function readBootstrapAppearance(): {
   density: DesktopAppearanceDensity;
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
+  calmMotion: boolean;
 } {
   for (const arg of process.argv) {
     if (!arg.startsWith(APPEARANCE_ARG_PREFIX)) continue;
@@ -3569,6 +3621,7 @@ function readBootstrapAppearance(): {
           && isDesktopTextSize(raw.transcriptTextSize)
           ? raw.transcriptTextSize
           : DESKTOP_TEXT_SIZE_DEFAULT;
+      const calmMotion = raw?.calmMotion === true;
       return {
         theme,
         darkTheme,
@@ -3576,6 +3629,7 @@ function readBootstrapAppearance(): {
         density,
         sidebarTextSize,
         transcriptTextSize,
+        calmMotion,
       };
     } catch {
       break;
@@ -3588,6 +3642,7 @@ function readBootstrapAppearance(): {
     density: "mission-control",
     sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
     transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
+    calmMotion: false,
   };
 }
 const bootstrapAppearance = readBootstrapAppearance();
@@ -3598,6 +3653,7 @@ const bootstrapAppearance = readBootstrapAppearance();
 const NAVIGATION_ARG_PREFIX = "--pwragent-navigation-preferences=";
 function readBootstrapNavigationPreferences(): {
   browseMode: NavigationBrowseMode;
+  resumeState?: NavigationResumeState;
   pinnedGroupCollapsed: boolean;
   pinnedThreadsOnTop: boolean;
 } {
@@ -3611,6 +3667,7 @@ function readBootstrapNavigationPreferences(): {
       // exact flicker this bootstrap hint exists to prevent.
       return {
         browseMode: normalizeNavigationBrowseMode(raw?.browseMode),
+        resumeState: normalizeNavigationResumeState(raw?.resumeState),
         pinnedGroupCollapsed: raw?.pinnedGroupCollapsed === true,
         pinnedThreadsOnTop: raw?.pinnedThreadsOnTop !== false,
       };

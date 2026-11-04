@@ -1591,6 +1591,44 @@ describe("Tangerine Terminal theme contract", () => {
     expect(summaryMetaRule).toContain("flex: 0 0 auto;");
   });
 
+  // The hover "+" cluster overlays the summary's right edge and has no
+  // background. Only the faded count block holds the title back from it, so
+  // a directory with no counts let a long name run under the button. The
+  // faded block now keeps the cluster's width; this ties that width to the
+  // buttons' own, so resizing a button cannot reopen the overlap.
+  it("reserves the launchpad cluster's width beside a long directory name on hover", () => {
+    const pixelWidth = (selector: string) =>
+      Number(extractRuleBody(css, selector).match(/\n\s*width:\s*(\d+)px;/)?.[1]);
+    const buttonWidth = pixelWidth(".directory-row__launchpad-button");
+    const targetsWidth = pixelWidth(".directory-row__launchpad-targets-button");
+    expect(buttonWidth).toBeGreaterThan(0);
+    expect(targetsWidth).toBeGreaterThan(0);
+
+    const loneRule = extractRuleBody(
+      css,
+      ".directory-row__header--with-launchpad:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta",
+    );
+    expect(loneRule).toContain("opacity: 0;");
+    expect(loneRule).toContain(`min-width: ${buttonWidth}px;`);
+
+    const splitRule = extractRuleBody(
+      css,
+      ".directory-row__header--with-launchpad.directory-row__header--split:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta",
+    );
+    expect(splitRule).toContain(`min-width: ${buttonWidth + targetsWidth}px;`);
+
+    // extractRuleBody reads only the selector line before `{`, which is the
+    // keyboard half. Pin the mouse half to the same rules.
+    expect(css).toContain(
+      ".directory-row__header--with-launchpad:hover .directory-row__summary-meta,\n"
+        + ".directory-row__header--with-launchpad:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {",
+    );
+    expect(css).toContain(
+      ".directory-row__header--with-launchpad.directory-row__header--split:hover .directory-row__summary-meta,\n"
+        + ".directory-row__header--with-launchpad.directory-row__header--split:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {",
+    );
+  });
+
   it("marks a selected row with the inset accent edge, not an inner bar", () => {
     // The edge is PwrGit's `.ref-branch-row.is-current` marker: an inset
     // shadow, clipped to the padding box, so it follows the card's corners
@@ -1634,6 +1672,23 @@ describe("Tangerine Terminal theme contract", () => {
       ".thread-context-menu button:disabled",
     );
     expect(disabledRule).toContain("color: var(--text-muted);");
+  });
+
+  it("elides a long Unbind conversation name instead of widening the menu", () => {
+    // The platform never shrinks: it is the part that says what Unbind does.
+    const platform = extractRuleBody(css, ".thread-context-menu__binding-platform");
+    expect(platform).toContain("flex: none;");
+    expect(platform).toContain("white-space: nowrap;");
+    // `contain: inline-size` keeps the name out of the menu's intrinsic
+    // width, so the menu sizes to its other rows and the name fills what is
+    // left, ending in an ellipsis.
+    const name = extractRuleBody(css, ".thread-context-menu__binding-name");
+    expect(name).toContain("contain: inline-size;");
+    expect(name).toContain("flex: 1 1 0;");
+    expect(name).toMatch(/min-width: \d+ch;/);
+    expect(name).toContain("overflow: hidden;");
+    expect(name).toContain("text-overflow: ellipsis;");
+    expect(name).toContain("white-space: nowrap;");
   });
 
   it("layers toast thread-chip menus above the toast stack", () => {
@@ -2680,7 +2735,7 @@ describe("Tangerine Terminal theme contract", () => {
     expect(miniScanner).toMatch(/--thinking-scanner-travel:\s*10px;/);
     expect(miniScanner).toMatch(/width:\s*16px;/);
     expect(extractRuleBody(css, ".thinking-scanner__beam")).toMatch(
-      /animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;/
+      /animation:\s*pwragent-thinking-scanner-sweep 1800ms steps\(27, end\) infinite;/
     );
   });
 
@@ -2918,7 +2973,6 @@ describe("color theme contract", () => {
         "accent-strong",
         "accent-bright",
         "status-ok",
-        "status-warning",
         "status-warning-text",
         "status-error",
         "info-teal",
@@ -3243,6 +3297,7 @@ describe("color theme contract", () => {
         "brand-purple": "#8839ef",
         "status-ok": "#40a02b",
         "status-warning": "#df8e1d",
+        "status-warning-text": "#df8e1d",
         "status-error": "#e64553",
         "status-suspended": "#9ca0b0",
         "usage-series-2": "#1e66f5",
@@ -3251,7 +3306,7 @@ describe("color theme contract", () => {
         "usage-series-5": "#df8e1d",
       },
     };
-    const MARKS = ["danger-base", "status-suspended", "usage-series-2", "usage-series-3", "usage-series-4", "usage-series-5"];
+    const MARKS = ["danger-base", "status-suspended", "status-warning", "usage-series-2", "usage-series-3", "usage-series-4", "usage-series-5"];
     const SOFT: Record<string, string> = {
       "danger-text": "danger-soft",
       "success-text": "success-soft",
@@ -3339,9 +3394,12 @@ describe("color theme contract", () => {
         "bg-panel-hover",
         "bg-input",
       ].map((token) => paint(theme, theme[token], "#000000"));
+      // --status-warning draws dots, strokes, and meters; its text twin is
+      // measured at the text floor above.
       for (const token of [
         "danger-base",
         "status-suspended",
+        "status-warning",
         "usage-series-1",
         "usage-series-2",
         "usage-series-3",

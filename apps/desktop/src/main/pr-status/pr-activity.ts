@@ -100,6 +100,7 @@ export function describePrRepairDecision(status: string): string {
     case "deferred": return "Waiting for running checks to finish";
     case "missing-head": return "Waiting for the PR head commit";
     case "disabled": return "Auto-fix is off for this thread";
+    case "project-off": return "Not scheduled: off in this project's Forge Automation";
     case "locked": return "Skipped: the thread is locked";
     case "busy": return "Waiting for the current turn to finish";
     case "duplicate": return "No new repair queued: this PR event already has a recorded decision";
@@ -119,6 +120,7 @@ export function prRepairDecisionTone(status: string): PrActivityTone | undefined
     case "deferred":
     case "missing-head":
     case "disabled":
+    case "project-off":
     case "locked":
     case "busy":
     case "attempt-limit":

@@ -2,6 +2,7 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerNotification,
@@ -27,6 +28,7 @@ import type {
   ThreadArchiveResponse,
   ThreadSetNameResponse,
   ThreadSettingsUpdateResponse,
+  ThreadItem,
   TurnInterruptResponse,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 
@@ -241,6 +243,8 @@ class MockTransport implements JsonRpcTransport {
   readonly options?: unknown;
   closeCount = 0;
   connectCount = 0;
+  processInfo: { pid: number; startedAt: number } | undefined = { pid: 4242, startedAt: 0 };
+  stopReport: { descendants: number; orphansReaped: number } | undefined;
   readonly loadedThreads = new Set<string>();
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
@@ -262,6 +266,16 @@ class MockTransport implements JsonRpcTransport {
     this.closeCount += 1;
     this.loadedThreads.clear();
     this.closeHandler();
+  }
+
+  getProcessInfo(): { pid: number; startedAt: number } | undefined {
+    return this.processInfo;
+  }
+
+  takeLastStopReport(): { descendants: number; orphansReaped: number } | undefined {
+    const report = this.stopReport;
+    this.stopReport = undefined;
+    return report;
   }
 
   /** What the stdio transport does when the process ends without close(). */
@@ -1294,6 +1308,8 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/unsubscribe") {
+      // Codex unloads an idle thread once its last subscriber leaves.
+      this.loadedThreads.delete(String(payload.params?.threadId));
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -3918,6 +3934,7 @@ describe("CodexAppServerClient", () => {
       MockTransport.modelListResult = createModelListResponse([
         createCodexModel({ id: "future-model", isDefault: true }),
         createCodexModel({ id: "gpt-6-luna", additionalSpeedTiers: ["fast"] }),
+        createCodexModel({ id: "gpt-6.1-terra", additionalSpeedTiers: ["fast"] }),
         createCodexModel({ id: "hidden-model", hidden: true }),
         createCodexModel({ id: "gpt-6-sol", additionalSpeedTiers: ["fast"] }),
         createCodexModel({ id: "gpt-6.1-sol", additionalSpeedTiers: ["fast"] }),
@@ -3925,13 +3942,16 @@ describe("CodexAppServerClient", () => {
       ]);
       const refreshed = await client.listModels();
       expect(refreshed.map((model) => model.id)).toEqual([
-        "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "future-model",
+        "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6.1-terra", "gpt-6-luna", "future-model",
       ]);
       expect(refreshed.find((model) => model.id === "gpt-6.1-sol")).toMatchObject({
         label: "GPT-6.1-Sol", supportsFast: true,
       });
       expect(refreshed.find((model) => model.id === "gpt-6-sol")).toMatchObject({
         label: "GPT-6-Sol", supportsFast: true,
+      });
+      expect(refreshed.find((model) => model.id === "gpt-6.1-terra")).toMatchObject({
+        label: "GPT-6.1-Terra", supportsFast: true,
       });
       expect(refreshed.find((model) => model.id === "gpt-6-luna")).toMatchObject({
         label: "GPT-6-Luna", supportsFast: true,
@@ -7375,6 +7395,45 @@ describe("CodexAppServerClient", () => {
     expect(replay.lastUserMessage).toBe("Describe this image");
 
     await client.close();
+  });
+
+  it("projects native imageView history into local image placeholders for safe materialization", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const file = path.join(os.tmpdir(), "native (v1)#100%.png");
+    const item = { type: "imageView", id: "native-view", path: file } satisfies ThreadItem;
+    MockTransport.readThreadResultByThreadId.set("thread-native-image", {
+      thread: { turns: [{ id: "native-turn", items: [item] }] },
+    });
+    const client = new CodexAppServerClient();
+    try {
+      const replay = await client.readThread({ threadId: "thread-native-image" });
+      expect(replay.entries).toEqual([expect.objectContaining({ type: "activity", details: [expect.objectContaining({
+        id: item.id, label: `View image: ${file}`,
+        images: [{ type: "image", url: pathToFileURL(file).toString(), sourceUrl: pathToFileURL(file).toString(), alt: path.basename(file) }],
+      })] })]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("keeps distinct native image views of the same path in replay", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const file = path.join(os.tmpdir(), "screenshot.png");
+    const items = ["before", "after"].map((id) => ({ type: "imageView", id, path: file } satisfies ThreadItem));
+    MockTransport.readThreadResultByThreadId.set("thread-repeated-image", {
+      thread: { turns: [{ id: "image-turn", items }] },
+    });
+    const client = new CodexAppServerClient();
+    try {
+      const replay = await client.readThread({ threadId: "thread-repeated-image" });
+      expect(replay.entries).toEqual([expect.objectContaining({ type: "activity", details: items.map((item) =>
+        expect.objectContaining({ id: item.id, label: `View image: ${file}`, images: [{
+          type: "image", url: pathToFileURL(file).toString(), sourceUrl: pathToFileURL(file).toString(), alt: path.basename(file),
+        }] }),
+      ) })]);
+    } finally {
+      await client.close();
+    }
   });
 
   it("attaches custom tool output images to the final assistant message", async () => {
@@ -12494,6 +12553,48 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("announces a first-prompt name as derived and drops Codex's echo of each name it set", async () => {
+    const threadId = "thread-name-echoes";
+    MockTransport.threadStartResult = {
+      thread: { id: threadId, cwd: "/fixture/workspace", preview: "", name: null, updatedAt: 1_777_347_163 },
+      model: "gpt-5.5",
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const names: unknown[] = [];
+    client.onNotification((notification) => {
+      if (notification.method === "thread/name/updated") names.push(notification.params);
+    });
+    try {
+      await client.startThread({ cwd: "/fixture/workspace" });
+      const transport = MockTransport.instances.at(-1)!;
+      // Codex 0.159.2 echoes every thread/name/set, without a titleSource.
+      transport.notify("thread/name/updated", { threadId, threadName: "Untitled thread" });
+      await client.startTurn({ threadId, input: [{ type: "text", text: "Repair the flaky login test" }] });
+      transport.notify("thread/name/updated", { threadId, threadName: "Repair the flaky login test" });
+      // A rename made elsewhere, such as another Codex client, still arrives.
+      transport.notify("thread/name/updated", { threadId, threadName: "Renamed elsewhere" });
+      await vi.waitFor(() => expect(names).toHaveLength(2));
+      expect(names).toEqual([
+        { threadId, threadName: "Repair the flaky login test", titleSource: "derived" },
+        { threadId, threadName: "Renamed elsewhere" },
+      ]);
+      // An echo that never came expires: a later rename to that name still arrives.
+      await client.renameThread({ threadId, name: "Release checklist" });
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+      try {
+        transport.notify("thread/name/updated", { threadId, threadName: "Release checklist" });
+        await vi.waitFor(() => expect(names).toHaveLength(3));
+      } finally {
+        clock.mockRestore();
+      }
+      expect(names[2]).toEqual({ threadId, threadName: "Release checklist" });
+    } finally {
+      await client.close();
+    }
+  });
+
   it("retries a derived thread name while new session metadata is temporarily unreadable", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
     const threadId = "thread-transient-metadata-name";
@@ -16765,4 +16866,641 @@ describe("CodexAppServerClient", () => {
     expect(transport.connectCount).toBe(connects);
   });
 
+
+  describe("idle app server recycle", () => {
+    const MINUTE = 60_000;
+    const settings = {
+      enabled: true,
+      idleMs: 20 * MINUTE,
+      maxUptimeMs: 8 * 60 * MINUTE,
+      maxChildProcesses: 64,
+      maxOpenFds: 1_024,
+      minUptimeMs: 30 * MINUTE,
+    };
+    const quiescent = () => true;
+
+    async function recycleFixture(children = 557, options: Partial<ConstructorParameters<
+      typeof import("../codex-app-server/client").CodexAppServerClient
+    >[0]> = {}) {
+      let now = 0;
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { withCodexRequestActivity } = await import("../codex-app-server/request-activity");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+        now: () => now,
+        sampleAppServerProcessTree: async () => ({ childProcessCount: children }),
+        ...options,
+      });
+      await client.getInitializeResult();
+      const transport = MockTransport.instances.at(-1)!;
+      const initializeCount = () => transport.sentMessages
+        .filter((message) => JSON.parse(message).method === "initialize").length;
+      return {
+        client,
+        transport,
+        initializeCount,
+        withCodexRequestActivity,
+        advance: (ms: number) => { now += ms; },
+      };
+    }
+
+    it("replaces an idle server that leaked child processes; the next request starts a fresh one", async () => {
+      const { client, transport, initializeCount, advance } = await recycleFixture(557);
+      transport.stopReport = { descendants: 557, orphansReaped: 3 };
+      advance(45 * MINUTE);
+
+      const outcome = await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent });
+
+      expect(outcome).toEqual({
+        kind: "recycled",
+        record: expect.objectContaining({
+          reasons: ["child-processes"],
+          pid: 4242,
+          uptimeMs: 45 * MINUTE,
+          idleMs: 45 * MINUTE,
+          childProcessCount: 557,
+          orphansReaped: 3,
+        }),
+      });
+      expect(transport.closeCount).toBe(1);
+      expect(codexClientLogInfo).toHaveBeenCalledWith(
+        "Codex app server recycled while idle",
+        expect.objectContaining({ reasons: ["child-processes"], childProcessCount: 557 }),
+      );
+      expect(client.getAppServerRecycleStatus()).toEqual(expect.objectContaining({
+        recycleCount: 1,
+        lastCheck: expect.objectContaining({ outcome: "recycled" }),
+      }));
+      // Lazy restart: nothing starts until something needs Codex.
+      expect(initializeCount()).toBe(1);
+      await client.getInitializeResult();
+      expect(initializeCount()).toBe(2);
+      await client.close();
+    });
+
+    it("replaces an idle server past its uptime limit even with few children", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      const outcome = await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent });
+      expect(outcome).toEqual({
+        kind: "recycled",
+        record: expect.objectContaining({ reasons: ["uptime"], childProcessCount: 3 }),
+      });
+      expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("postpones recycling when the operator reads an old thread", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      advance(5 * MINUTE);
+
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 5 * MINUTE });
+      expect(transport.closeCount).toBe(0);
+      advance(15 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("does not postpone recycling for a background thread read or account poll", async () => {
+      const { client, transport, advance, withCodexRequestActivity } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      await withCodexRequestActivity({ countsAsActivity: false }, async () => {
+        await client.readThread({ threadId: "thread-2", includeTurns: false });
+        await client.readAccount();
+        await client.readRateLimits();
+      });
+
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({
+          kind: "recycled",
+          record: expect.objectContaining({ idleMs: 8 * 60 * MINUTE }),
+        }));
+      expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("does not postpone recycling for idle-thread unsubscribe probes", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      MockTransport.threadStatusByThreadId.set("thread-2", { type: "idle" });
+      await client.startTurn({ threadId: "thread-2", input: [] });
+      advance(8 * 60 * MINUTE);
+      expect(await client.unsubscribeIdleThreads({ idleMs: 10 * MINUTE, isThreadBusy: () => false }))
+        .toEqual(["thread-2"]);
+
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("keeps a concurrent operator read active while a background poll awaits its response", async () => {
+      let started!: () => void;
+      let finish!: () => void;
+      const polling = new Promise<void>((resolve) => { started = resolve; });
+      const response = new Promise<void>((resolve) => { finish = resolve; });
+      const { client, transport, advance, withCodexRequestActivity } = await recycleFixture(3, {
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (event.direction === "outbound" && event.envelope.method === "account/read") {
+              started();
+              await response;
+            }
+          },
+        },
+      });
+      advance(8 * 60 * MINUTE);
+      const poll = withCodexRequestActivity({ countsAsActivity: false }, () => client.readAccount());
+      await polling;
+      advance(MINUTE);
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      advance(10 * MINUTE);
+      finish();
+      await poll;
+      advance(9 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 19 * MINUTE });
+      expect(transport.closeCount).toBe(0);
+      advance(MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("starts the idle window when a slow operator read settles", async () => {
+      let started!: () => void;
+      let finish!: () => void;
+      const reading = new Promise<void>((resolve) => { started = resolve; });
+      const response = new Promise<void>((resolve) => { finish = resolve; });
+      const { client, transport, advance } = await recycleFixture(3, {
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (event.direction === "outbound" && event.envelope.method === "thread/read") {
+              started();
+              await response;
+            }
+          },
+        },
+      });
+      advance(8 * 60 * MINUTE);
+      const read = client.readThread({ threadId: "thread-2", includeTurns: false });
+      await reading;
+      advance(25 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "busy", blocker: "in-flight-request" });
+      finish();
+      await read;
+      advance(5 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 5 * MINUTE });
+      expect(transport.closeCount).toBe(0);
+      await client.close();
+    });
+
+    it("cancels a recycle if an operator read arrives during process sampling", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      const sample = await client.readAppServerProcessSample();
+      let sampled!: () => void;
+      let finish!: () => void;
+      const sampling = new Promise<void>((resolve) => { sampled = resolve; });
+      const response = new Promise<void>((resolve) => { finish = resolve; });
+      vi.spyOn(client, "readAppServerProcessSample").mockImplementationOnce(async () => {
+        sampled();
+        await response;
+        return sample;
+      });
+      const recycle = client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent });
+      await sampling;
+      advance(MINUTE);
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      finish();
+
+      expect(await recycle).toEqual({ kind: "busy", blocker: "app-server-activity" });
+      expect(transport.closeCount).toBe(0);
+      await client.close();
+    });
+
+    it("leaves a young or healthy server running", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(45 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "healthy" }));
+      const young = await recycleFixture(557);
+      young.advance(25 * MINUTE);
+      expect(await young.client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "healthy" }));
+      expect(transport.closeCount).toBe(0);
+      expect(young.transport.closeCount).toBe(0);
+      await client.close();
+      await young.client.close();
+    });
+
+    it("measures the idle window from the last message Codex sent", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      advance(40 * MINUTE);
+      transport.emitInbound({ method: "thread/status/changed", params: {
+        threadId: "thread-2", status: { type: "idle" },
+      } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      advance(5 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 5 * MINUTE });
+      advance(15 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("never restarts while a turn runs", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      transport.emitInbound({ method: "turn/started", params: {
+        threadId: "thread-busy", turn: { id: "turn-busy", status: "inProgress" },
+      } });
+      advance(10 * 60 * MINUTE);
+      await vi.waitFor(async () => expect(
+        await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }),
+      ).toEqual({ kind: "busy", blocker: "running-turn" }));
+      expect(transport.closeCount).toBe(0);
+
+      transport.emitInbound({ method: "turn/completed", params: {
+        threadId: "thread-busy", turn: { id: "turn-busy", status: "completed" },
+      } });
+      await vi.waitFor(async () => expect(
+        await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }),
+      ).toEqual(expect.objectContaining({ kind: "not-idle" })));
+      advance(21 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("never restarts while an approval waits for the operator", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      let answer!: (value: unknown) => void;
+      const requests: unknown[] = [];
+      client.onRequest((request) => {
+        requests.push(request);
+        return new Promise((resolve) => { answer = resolve; });
+      });
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        id: "approval-1",
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-2", turnId: "turn-7", itemId: "call-1", command: "ls" },
+      });
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      advance(10 * 60 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "busy", blocker: "pending-server-request" });
+      expect(transport.closeCount).toBe(0);
+
+      answer({ decision: "accept" });
+      await vi.waitFor(async () => expect(
+        await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }),
+      ).toEqual(expect.objectContaining({ kind: "not-idle" })));
+      advance(21 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("asks Codex before stopping and keeps a server with an active thread", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      transport.loadedThreads.add("thread-quiet");
+      MockTransport.threadStatusByThreadId.set("thread-quiet", {
+        type: "active", activeFlags: ["waitingOnUserInput"],
+      } as { type: string });
+      advance(45 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "busy", blocker: "codex-active-thread" });
+      expect(transport.closeCount).toBe(0);
+
+      MockTransport.threadStatusByThreadId.set("thread-quiet", { type: "idle" });
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("re-checks the owner's quiescence at the barrier, right before stopping", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      advance(45 * MINUTE);
+      let checks = 0;
+      // Idle when the check starts; a turn is reserved before the barrier.
+      const outcome = await client.maybeRecycleIdleAppServer({
+        settings,
+        isQuiescent: () => ++checks === 1,
+      });
+      expect(outcome).toEqual({ kind: "busy", blocker: "registry-work" });
+      expect(checks).toBe(2);
+      expect(transport.closeCount).toBe(0);
+      expect(client.getAppServerRecycleStatus()).toEqual({
+        recycleCount: 0,
+        lastCheck: expect.objectContaining({ outcome: "busy", blocker: "registry-work" }),
+      });
+      await client.close();
+    });
+
+    it("does nothing when no server is running", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-running" });
+      expect(await client.readAppServerProcessSample()).toBeUndefined();
+      expect(MockTransport.instances.at(-1)!.connectCount).toBe(0);
+      await client.close();
+    });
+  });
+
+  describe("idle thread unsubscribe", () => {
+    const MINUTE = 60_000;
+    const idleMs = 10 * MINUTE;
+
+    function deferred() {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => { resolve = done; });
+      return { promise, resolve };
+    }
+
+    async function idleFixture(
+      options: Partial<ConstructorParameters<
+        typeof import("../codex-app-server/client").CodexAppServerClient
+      >[0]> = {},
+    ) {
+      let now = 0;
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+        now: () => now,
+        ...options,
+      });
+      await client.getInitializeResult();
+      const transport = MockTransport.instances.at(-1)!;
+      const sent = () => transport.sentMessages.map((message) => JSON.parse(message) as {
+        method?: string;
+        params?: { threadId?: string };
+      });
+      const open = async (threadId: string) => {
+        MockTransport.threadStatusByThreadId.set(threadId, { type: "idle" });
+        await client.startTurn({ threadId, input: [] });
+      };
+      return {
+        client,
+        transport,
+        sent,
+        open,
+        advance: (ms: number) => { now += ms; },
+      };
+    }
+
+    it("releases idle threads so Codex can unload them, and the loaded count stops growing", async () => {
+      const { client, transport, sent, open, advance } = await idleFixture();
+      for (let round = 0; round < 3; round += 1) {
+        for (let index = 0; index < 5; index += 1) await open(`thread-${round}-${index}`);
+        expect(transport.loadedThreads.size).toBe(5);
+        advance(idleMs - 1);
+        expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false })).toEqual([]);
+        advance(1);
+        const released = await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false });
+        expect(released).toHaveLength(5);
+        // Before this change every thread stayed loaded: 15 after three rounds.
+        expect(transport.loadedThreads.size).toBe(0);
+        expect(client.getSubscribedThreadCount()).toBe(0);
+      }
+      expect(sent().filter((request) => request.method === "thread/unsubscribe")).toHaveLength(15);
+      expect(codexClientLogInfo).toHaveBeenCalledWith(
+        "unsubscribed idle Codex threads",
+        { count: 5, stillSubscribed: 0 },
+      );
+
+      // Next use resumes the thread, which reloads it.
+      await open("thread-0-0");
+      expect(transport.loadedThreads).toEqual(new Set(["thread-0-0"]));
+      const resumes = sent().filter((request) =>
+        request.method === "thread/resume" && request.params?.threadId === "thread-0-0");
+      expect(resumes).toHaveLength(2);
+      await client.close();
+    });
+
+    it("releases a thread stopped by a system error, which runs nothing", async () => {
+      const { client, transport, open, advance } = await idleFixture();
+      await open("thread-error");
+      MockTransport.threadStatusByThreadId.set("thread-error", { type: "systemError" });
+      advance(idleMs);
+
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-error"]);
+      expect(transport.loadedThreads.size).toBe(0);
+      await client.close();
+    });
+
+    it.each([
+      { parentThreadId: "thread-parent" },
+      { source: { subAgent: { thread_spawn: { parent_thread_id: "thread-parent" } } } },
+    ])("keeps sub-agents without re-reading them on later sweeps: %j", async (metadata) => {
+      const { client, transport, sent, open, advance } = await idleFixture();
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, ...metadata },
+      });
+      await open("thread-idle");
+      advance(idleMs);
+      const sweep = () => client.unsubscribeIdleThreads({
+        idleMs, isThreadBusy: () => false, limit: 1,
+      });
+      const childReads = () => sent().filter((request) =>
+        request.method === "thread/read" && request.params?.threadId === "thread-child");
+      const readsBefore = childReads().length;
+
+      expect(await sweep()).toEqual([]);
+      expect(childReads()).toHaveLength(readsBefore + 1);
+      // A cached child does not consume the pass's candidate limit either.
+      expect(await sweep()).toEqual(["thread-idle"]);
+      for (let pass = 0; pass < 3; pass += 1) {
+        advance(idleMs);
+        expect(await sweep()).toEqual([]);
+      }
+      // Viewing the child again preserves its known parent relationship.
+      await open("thread-child");
+      advance(idleMs);
+      expect(await sweep()).toEqual([]);
+      expect(childReads()).toHaveLength(readsBefore + 1);
+      expect(transport.loadedThreads).toEqual(new Set(["thread-child"]));
+      expect(client.getSubscribedThreadCount()).toBe(1);
+      expect(sent().filter((request) =>
+        request.method === "thread/unsubscribe" && request.params?.threadId === "thread-child"))
+        .toEqual([]);
+      await client.close();
+    });
+
+    it("forgets a kept sub-agent when Codex closes it", async () => {
+      const { client, transport, sent, open, advance } = await idleFixture();
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, parentThreadId: "thread-parent" },
+      });
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false })).toEqual([]);
+
+      transport.emitInbound({ method: "thread/closed", params: { threadId: "thread-child" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(client.getSubscribedThreadCount()).toBe(0);
+      // A fresh subscription must classify the runtime from its new read.
+      await open("thread-child");
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-child"]);
+      expect(sent().filter((request) => request.method === "thread/read")).toHaveLength(2);
+      await client.close();
+    });
+
+    it("forgets kept sub-agents when the server resets", async () => {
+      const { client, open, advance } = await idleFixture();
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, parentThreadId: "thread-parent" },
+      });
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false })).toEqual([]);
+
+      await client.close();
+      await open("thread-child");
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-child"]);
+      await client.close();
+    });
+
+    it("does not cache a sub-agent closed while its sweep read is in flight", async () => {
+      const reading = deferred();
+      const finishRead = deferred();
+      let blockRead = false;
+      const { client, transport, open, advance } = await idleFixture({
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (blockRead && event.direction === "outbound" && event.envelope.method === "thread/read") {
+              blockRead = false;
+              reading.resolve();
+              await finishRead.promise;
+            }
+          },
+        },
+      });
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, parentThreadId: "thread-parent" },
+      });
+      advance(idleMs);
+      blockRead = true;
+      const sweep = client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false });
+      await reading.promise;
+      transport.emitInbound({ method: "thread/closed", params: { threadId: "thread-child" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      finishRead.resolve();
+      expect(await sweep).toEqual([]);
+      await open("thread-child");
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-child"]);
+      await client.close();
+    });
+
+    it("keeps threads with a turn, a waiting approval, owner-tracked work, or Codex activity", async () => {
+      const { client, transport, open, advance } = await idleFixture();
+      for (const threadId of ["thread-turn", "thread-approval", "thread-owner", "thread-active", "thread-idle"]) {
+        await open(threadId);
+      }
+      transport.emitInbound({ method: "turn/started", params: {
+        threadId: "thread-turn", turn: { id: "turn-live", status: "inProgress" },
+      } });
+      const requests: unknown[] = [];
+      client.onRequest((request) => {
+        requests.push(request);
+        return new Promise(() => undefined);
+      });
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        id: "approval-1",
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-approval", turnId: "turn-7", itemId: "call-1", command: "ls" },
+      });
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      MockTransport.threadStatusByThreadId.set("thread-active", {
+        type: "active", activeFlags: ["waitingOnUserInput"],
+      } as { type: string });
+      advance(idleMs);
+
+      const released = await client.unsubscribeIdleThreads({
+        idleMs,
+        isThreadBusy: (threadId) => threadId === "thread-owner",
+      });
+
+      expect(released).toEqual(["thread-idle"]);
+      expect([...transport.loadedThreads].sort()).toEqual([
+        "thread-active", "thread-approval", "thread-owner", "thread-turn",
+      ]);
+      // Codex's report of activity restarts that thread's idle clock.
+      advance(idleMs - 1);
+      MockTransport.threadStatusByThreadId.set("thread-active", { type: "idle" });
+      expect(await client.unsubscribeIdleThreads({
+        idleMs,
+        isThreadBusy: (threadId) => threadId === "thread-owner",
+      })).toEqual([]);
+      await client.close();
+    });
+
+    it("replays the resume of an operation whose thread was released mid-flight", async () => {
+      const updating = deferred();
+      const finishUpdate = deferred();
+      let firstUpdate = true;
+      const { client, sent, advance } = await idleFixture({
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (firstUpdate && event.direction === "outbound" && event.envelope.method === "thread/settings/update") {
+              firstUpdate = false;
+              updating.resolve();
+              await finishUpdate.promise;
+            }
+          },
+        },
+      });
+      MockTransport.threadStatusByThreadId.set("thread-2", { type: "idle" });
+      const review = client.startReview({
+        threadId: "thread-2",
+        target: { type: "uncommittedChanges" },
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+      });
+      await updating.promise;
+      advance(idleMs);
+      const sweep = client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false });
+      finishUpdate.resolve();
+      expect(await sweep).toEqual(["thread-2"]);
+      await review;
+      expect(sent().map((request) => request.method).slice(-4)).toEqual([
+        "thread/unsubscribe", "thread/resume", "thread/settings/update", "review/start",
+      ]);
+      await client.close();
+    });
+
+    it("resumes again after Codex closes a thread on its own", async () => {
+      const { client, transport, sent, open } = await idleFixture();
+      await open("thread-2");
+      transport.emitInbound({ method: "thread/closed", params: { threadId: "thread-2" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(client.getSubscribedThreadCount()).toBe(0);
+      await open("thread-2");
+      expect(sent().filter((request) => request.method === "thread/resume")).toHaveLength(2);
+      await client.close();
+    });
+  });
 });

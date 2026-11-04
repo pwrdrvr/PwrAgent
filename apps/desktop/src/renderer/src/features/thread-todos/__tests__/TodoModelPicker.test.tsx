@@ -18,13 +18,13 @@ const base: ThreadTodo = { id: "card", backend: "claude", threadId: "thread-a", 
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-function setup(todo = base, recents = [codex]) {
+function setup(todo = base, recents = [codex], catalog = backends) {
   const onRun = vi.fn();
   const api = { listModelSettingsRecents: vi.fn(async () => ({ recents })) };
   const card = (value: ThreadTodo) => <ThreadTodoCard todo={value} running={false} now={0}
     onRun={onRun} onResolve={vi.fn()} onStartReview={vi.fn()} onSetItemChecked={vi.fn()} />;
   const tree = (value: ThreadTodo, visible = true) => (
-    <TodoDispatchProvider api={api} backends={backends} todos={[value]}>{visible ? card(value) : null}</TodoDispatchProvider>
+    <TodoDispatchProvider api={api} backends={catalog} todos={[value]}>{visible ? card(value) : null}</TodoDispatchProvider>
   );
   const result = render(tree(todo));
   return { ...result, onRun, api, tree };
@@ -36,8 +36,43 @@ async function openPicker() {
 }
 
 describe("to-do dispatch model picker", () => {
+  it("shares the composer's current models and keeps a selected legacy model under Other", async () => {
+    const labels = ["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6-Sol", "GPT-6.1-Terra", "GPT-6-Luna",
+      "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna"];
+    const settings: ThreadTodoModelSettings = { backend: "codex", model: "gpt-5.6-terra" };
+    const todo = { ...base, dispatchDefaults: { thread: settings } };
+    const catalog = [{ ...backends[1]!, launchpadOptions: {
+      models: labels.map((label) => ({ id: label.toLowerCase(), label })),
+    } }];
+    const { onRun } = setup(todo, [], catalog);
+    await openPicker();
+    fireEvent.click(screen.getByRole("menuitem", { name: "To-do model: GPT-5.6-Terra" }));
+    expect(screen.getAllByRole("option").map((option) =>
+      option.querySelector(".composer-dropdown__option-label")?.textContent,
+    )).toEqual([
+      "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "Other",
+    ]);
+    fireEvent.click(screen.getByRole("option", { name: "Other" }));
+    const other = screen.getByRole("listbox", { name: "To-do model: Other" });
+    const legacy = within(other).getByRole("option", { name: "GPT-5.6-Terra" });
+    expect(legacy.getAttribute("aria-selected")).toBe("true");
+    expect(within(other).getAllByRole("option").map((option) =>
+      option.querySelector(".composer-dropdown__option-label")?.textContent,
+    )).toEqual([
+      "GPT-6-Sol", "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna",
+    ]);
+    fireEvent.click(screen.getByRole("option", { name: "GPT-6-Sol" }));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenCalledWith(todo, { modelSettings: { backend: "codex", model: "gpt-6-sol" } });
+  });
+
   it("always shows the Model fact first and opens This thread, Recent, then Custom with display labels", async () => {
     const { container, api } = setup();
+    // No peer can host it, so the row has no Machine chip; Model leads.
+    expect(within(screen.getByRole("group", { name: "Start settings" })).getAllByRole("button")[0]!.getAttribute("aria-label"))
+      .toMatch(/^Model for the new thread:/);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show start settings" })); });
     expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Model", "Where", "Env"]);
     expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high" }).getAttribute("aria-expanded")).toBe("false");
     const menu = await openPicker();

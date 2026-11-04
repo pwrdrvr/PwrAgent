@@ -2,14 +2,21 @@ import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
-import type { DesktopHelperModelSettings } from "../helper-models";
+import type {
+  DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
+} from "../helper-models";
 import type { DesktopDecisionModelSettings } from "../decision-models";
 import type {
   CodexModelProviderSettings,
   DesktopCodexModelProvider,
 } from "../codex-model-providers";
 import type { ThreadTodoMergeMethod } from "./thread-todos";
-import type { ForgeAgentToolAccess, ForgeAgentToolGroup } from "./forge-agent-tools";
+import type {
+  ForgeAgentToolAccess,
+  ForgeAgentToolGroup,
+  ForgeAgentToolRule,
+} from "./forge-agent-tools";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
   TOOL_OUTPUT_WARNING_PERCENT,
@@ -817,6 +824,10 @@ export type DesktopAppearanceSnapshot = {
    *  background (xterm's `minimumContrastRatio`). Off by default, so each
    *  theme's own ANSI colors render as published. */
   terminalMinimumContrast: DesktopSettingsValue<boolean>;
+  /** Looping status animations (the thinking scanner, spinners,
+   *  indeterminate sweeps, status-dot pulses) run twice, then hold still.
+   *  Sets `<html data-motion="calm">`. Off by default. */
+  calmMotion: DesktopSettingsValue<boolean>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
@@ -1497,6 +1508,8 @@ export type DesktopSettingsSnapshot = {
     >;
     /** Models for work PwrAgent starts on its own. Absent on older builds. */
     helperModels?: DesktopHelperModelSettings;
+    /** Task monitor model per parent provider. Absent = Automatic for every provider. */
+    taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     /** The decision model and its providers. Absent on older builds. */
     decisionModels?: DesktopDecisionModelSettings;
     decisionSecrets?: {
@@ -1618,6 +1631,17 @@ export type DesktopSettingsSnapshot = {
     agentTools: {
       enabled: DesktopSettingsValue<boolean>;
       access: Record<ForgeAgentToolGroup, DesktopSettingsValue<ForgeAgentToolAccess>>;
+      /**
+       * Project rules from `[[git.agent_tools.rules]]`, validated and with
+       * duplicates merged. The global `access` levels are their defaults.
+       * Main always sends the list; absent reads as no rules.
+       */
+      rules?: ForgeAgentToolRule[];
+      /**
+       * Repositories named by a rule entry config.toml holds but PwrAgent
+       * cannot read. Every agent asks before writing there until it is fixed.
+       */
+      unreadableRuleRepositories?: string[];
     };
   };
   applications: DesktopApplicationsSnapshot;
@@ -1655,6 +1679,7 @@ export type DesktopSettingsConfigPatch = {
       lightTheme?: DesktopLightTheme;
       themedDockIcon?: boolean;
       terminalMinimumContrast?: boolean;
+      calmMotion?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -1839,6 +1864,8 @@ export type DesktopSettingsConfigPatch = {
     >;
     /** Replaces every helper model choice; omit a helper to use Helper default. */
     helperModels?: DesktopHelperModelSettings;
+    /** Replaces every provider's task monitor choice; omit a provider for Automatic. */
+    taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     /** Replaces the whole decision model section. */
     decisionModels?: DesktopDecisionModelSettings;
     codex?: {
@@ -1890,6 +1917,8 @@ export type DesktopSettingsConfigPatch = {
     agentTools?: {
       enabled?: boolean;
       access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
+      /** Replaces the whole project rules list; `[]` removes every rule. */
+      rules?: ForgeAgentToolRule[];
     };
   };
   applications?: {
@@ -1961,6 +1990,7 @@ export type DesktopConfigBootstrapSnapshot = {
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
+    calmMotion: boolean;
   };
   onboarding: {
     completed: boolean;

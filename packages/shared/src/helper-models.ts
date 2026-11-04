@@ -294,6 +294,52 @@ export function resolveHelperModel(params: {
   };
 }
 
+/**
+ * Which model runs the task monitors that one provider's threads start.
+ * Absent means Automatic: the provider's own lightweight model, or the Helper
+ * model for Codex.
+ */
+export type DesktopTaskMonitorModelChoice = {
+  /** `helper` runs the monitor on the Helper model, on Codex. */
+  source: "helper" | "provider";
+  /** The provider's own model, when `source` is `provider`. */
+  model?: string;
+  reasoningEffort?: string;
+};
+
+/** Whole name segments only: "gemini-3-pro" must not pass as "mini". */
+export function isLightweightHelperModel(modelId: string): boolean {
+  return /(?:^|[^a-z])(?:mini|lite|flash|haiku|small|nano|luna)(?:$|[^a-z])/iu
+    .test(modelId);
+}
+
+/**
+ * The provider model Automatic picks for a non-Codex provider's monitors:
+ * its newest lightweight model. Undefined when it offers none.
+ */
+export function automaticProviderMonitorModel(
+  models: readonly (Pick<BackendModelOption, "id"> & { other?: boolean })[],
+): string | undefined {
+  const lightweight = models.filter((model) => isLightweightHelperModel(model.id));
+  return (lightweight.find((model) => !model.other) ?? lightweight[0])?.id;
+}
+
+/** A saved choice with a provider source and no model is Automatic. */
+export function normalizeTaskMonitorModelChoice(
+  value: Partial<Record<keyof DesktopTaskMonitorModelChoice, unknown>> | undefined,
+): DesktopTaskMonitorModelChoice | undefined {
+  if (value?.source === "helper") return { source: "helper" };
+  const model = typeof value?.model === "string" ? value.model.trim() : "";
+  if (value?.source !== "provider" || !model) return undefined;
+  const reasoningEffort =
+    typeof value.reasoningEffort === "string" ? value.reasoningEffort.trim() : "";
+  return {
+    source: "provider",
+    model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+}
+
 function resolveHelperReasoningEffort(
   model: HelperModelCatalogEntry,
   preferred: readonly (string | undefined)[],

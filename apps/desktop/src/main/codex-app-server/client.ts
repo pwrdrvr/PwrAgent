@@ -14,10 +14,12 @@ import { rememberBoundedMap } from "../bounded-map";
 import { usageAccountKey } from "../usage-account-identity";
 import { nativeReviewTarget } from "../../shared/pull-request-review";
 import { ThreadListTextCache } from "./thread-list-text-cache";
+import { codexRequestCountsAsActivity, withCodexRequestActivity } from "./request-activity";
 import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
@@ -168,12 +170,25 @@ import {
 import {
   StdioJsonRpcTransport,
   type CodexAppServerExit,
+  type CodexAppServerProcessInfo,
   type StdioJsonRpcTransportOptions,
 } from "./stdio-transport";
 import {
   CodexAppServerRestartPolicy,
   type CodexAppServerRestartPolicyOptions,
 } from "./app-server-restart-policy";
+import {
+  decideCodexAppServerRecycle,
+  type CodexAppServerProcessSample,
+  type CodexAppServerRecycleOutcome,
+  type CodexAppServerRecycleSettings,
+  type CodexAppServerRecycleStatus,
+} from "./app-server-recycle-policy";
+import {
+  collectDescendants,
+  countOpenFileDescriptors,
+  readProcessTable,
+} from "../process-descendants";
 import {
   isCodexInvalidResponseMessageIdError,
   repairCodexInvalidResponseMessageIds,
@@ -183,7 +198,7 @@ import {
 import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
-} from "../app-server/thread-title-generation-service";
+} from "@pwragent/owner-core/thread-title-generation-service";
 import {
   normalizeCompatibleApprovalPolicy,
   resolveCodexProtocolCompatibility,
@@ -293,6 +308,7 @@ const PREFERRED_CODEX_MODEL_ORDER = [
   "gpt-6-astra",
   "gpt-6.1-sol",
   "gpt-6-sol",
+  "gpt-6.1-terra",
   "gpt-6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -366,7 +382,26 @@ type CodexClientOptions = {
   isCodexBootstrapDeferred?: () => boolean;
   /** Test seam for the backoff and circuit breaker after unexpected exits. */
   appServerRestartPolicy?: CodexAppServerRestartPolicyOptions;
+  /** Test seam: counts below the running app server for the idle recycle. */
+  sampleAppServerProcessTree?: (
+    process: CodexAppServerProcessInfo,
+  ) => Promise<{ childProcessCount?: number; openFdCount?: number }>;
+  /** Test seam for the idle recycle and idle-thread unsubscribe clock. */
+  now?: () => number;
 };
+
+async function sampleAppServerProcessTree(
+  process: CodexAppServerProcessInfo,
+): Promise<{ childProcessCount?: number; openFdCount?: number }> {
+  const [table, openFdCount] = await Promise.all([
+    readProcessTable().catch(() => undefined),
+    countOpenFileDescriptors(process.pid),
+  ]);
+  return {
+    ...(table ? { childProcessCount: collectDescendants(table, process.pid).length } : {}),
+    ...(openFdCount !== undefined ? { openFdCount } : {}),
+  };
+}
 
 /**
  * Thrown instead of starting Codex after it exited on its own too many times
@@ -597,6 +632,9 @@ function isHandledServerRequestMethod(method: string): boolean {
     method === "item/tool/call"
   );
 }
+
+/** How long after a thread/name/set its echo is still recognized. */
+const THREAD_NAME_ECHO_WINDOW_MS = 60_000;
 
 function isKnownCodexNotificationMethod(
   method: string
@@ -3307,10 +3345,11 @@ function reviewDisplayText(item: Record<string, unknown>): string | undefined {
 
 function pushActivityDetail(
   details: AppServerThreadActivityDetail[],
-  detailsByLabel: Map<string, AppServerThreadActivityDetail>,
+  detailsByKey: Map<string, AppServerThreadActivityDetail>,
   detail: AppServerThreadActivityDetail
 ): void {
-  const existing = detailsByLabel.get(detail.label);
+  const key = JSON.stringify(detail.images?.length ? ["image", detail.id] : ["label", detail.label]);
+  const existing = detailsByKey.get(key);
   if (existing) {
     if (!existing.status || existing.status === "completed") {
       existing.status = detail.status ?? existing.status;
@@ -3318,7 +3357,7 @@ function pushActivityDetail(
     return;
   }
   details.push(detail);
-  detailsByLabel.set(detail.label, detail);
+  detailsByKey.set(key, detail);
 }
 
 function normalizeFileChangeKind(
@@ -4668,7 +4707,7 @@ function summarizeActivityItems(
   }
 
   const details: AppServerThreadActivityDetail[] = [];
-  const detailsByLabel = new Map<string, AppServerThreadActivityDetail>();
+  const detailsByKey = new Map<string, AppServerThreadActivityDetail>();
   let inspectedFiles = 0;
   let commandsRun = 0;
   let changedFiles = 0;
@@ -4688,7 +4727,7 @@ function summarizeActivityItems(
       status ??= "completed";
       pushActivityDetail(
         details,
-        detailsByLabel,
+        detailsByKey,
         buildSubAgentActivityDetail(subAgentActivity),
       );
       continue;
@@ -4716,7 +4755,7 @@ function summarizeActivityItems(
 
       if (actions.length === 0) {
         commandsRun += 1;
-        pushActivityDetail(details, detailsByLabel, {
+        pushActivityDetail(details, detailsByKey, {
           id: itemId,
           kind: "command",
           label: appendElapsedLabel(formatCommandLabel(command), elapsedMs),
@@ -4735,7 +4774,7 @@ function summarizeActivityItems(
 
         if (actionType === "read" && actionPath) {
           inspectedFiles += 1;
-          pushActivityDetail(details, detailsByLabel, {
+          pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(
@@ -4750,7 +4789,7 @@ function summarizeActivityItems(
 
         if (actionType === "search") {
           inspectedFiles += 1;
-          pushActivityDetail(details, detailsByLabel, {
+          pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(
@@ -4771,7 +4810,7 @@ function summarizeActivityItems(
           const label = actionPath
             ? `Listed ${path.basename(actionPath) || actionPath}`
             : "Listed files";
-          pushActivityDetail(details, detailsByLabel, {
+          pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(label, elapsedMs),
@@ -4783,7 +4822,7 @@ function summarizeActivityItems(
 
         commandsRun += 1;
         const label = fallbackName?.trim() || formatCommandLabel(command);
-        pushActivityDetail(details, detailsByLabel, {
+        pushActivityDetail(details, detailsByKey, {
           id: detailId,
           kind: "command",
           label: appendElapsedLabel(label, elapsedMs),
@@ -4824,7 +4863,7 @@ function summarizeActivityItems(
         changedFiles += 1;
         changedFileAdditions += diffSummary?.additions ?? 0;
         changedFileRemovals += diffSummary?.removals ?? 0;
-        pushActivityDetail(details, detailsByLabel, {
+        pushActivityDetail(details, detailsByKey, {
           id: `${itemId}-${index + 1}`,
           kind: "write",
           label: `${changeType[0]?.toUpperCase() ?? "U"}${changeType.slice(1)} ${
@@ -4862,7 +4901,7 @@ function summarizeActivityItems(
       const commandDetail = functionName === "exec_command"
         ? buildCommandDetail({ item, command, elapsedMs })
         : undefined;
-      pushActivityDetail(details, detailsByLabel, {
+      pushActivityDetail(details, detailsByKey, {
         id: itemId,
         kind: "command",
         label: appendElapsedLabel(
@@ -4896,7 +4935,7 @@ function summarizeActivityItems(
         receiverThreadIds,
         tool,
       });
-      pushActivityDetail(details, detailsByLabel, {
+      pushActivityDetail(details, detailsByKey, {
         id: itemId,
         kind: "command",
         label: appendElapsedLabel(label, elapsedMs),
@@ -4916,7 +4955,8 @@ function summarizeActivityItems(
       toolCalls += 1;
       const toolName =
         pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
-        (normalizedItemType === "websearch" ? "web search" : undefined);
+        (normalizedItemType === "websearch" ? "web search"
+          : normalizedItemType === "imageview" ? `View image: ${pickString(item, ["path"]) ?? "unknown image"}` : undefined);
       const args = parseToolArguments(item);
       const query =
         pickString(item, ["query"]) ??
@@ -4935,6 +4975,8 @@ function summarizeActivityItems(
           ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
           : normalizedItemType === "mcptoolcall"
             ? extractMcpToolResultContentImageParts(item, toolName ?? "Tool")
+          : normalizedItemType === "imageview" && typeof item.path === "string" && path.isAbsolute(item.path)
+            ? [{ type: "image" as const, url: pathToFileURL(item.path).toString(), sourceUrl: pathToFileURL(item.path).toString(), alt: path.basename(item.path) }]
           : [];
       const label =
         (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
@@ -4946,7 +4988,7 @@ function summarizeActivityItems(
               toolName,
             )}`
           : toolName ?? "Used tool";
-      pushActivityDetail(details, detailsByLabel, {
+      pushActivityDetail(details, detailsByKey, {
         id: itemId,
         kind: normalizedItemType === "websearch" ? "read" : "command",
         label: [
@@ -6217,14 +6259,18 @@ function readCodexThreadSourceKind(
   const explicit =
     pickString(record, ["threadSource", "thread_source"]) ??
     pickString(sessionRecord ?? {}, ["threadSource", "thread_source"]);
-  if (explicit) {
-    return explicit;
-  }
-
   const source =
     asRecord(record.source) ??
     asRecord(sessionRecord?.source);
   const subAgent = source?.subAgent ?? source?.sub_agent;
+  // Native review children report the generic durable `subagent` marker.
+  // Their more specific protocol source distinguishes disposable reviews
+  // from ordinary workers that must continue to protect their checkout.
+  if (subAgent === "review" && (!explicit || explicit === "subagent")) return "subAgentReview";
+  if (explicit) {
+    return explicit;
+  }
+
   if (typeof subAgent === "string") {
     switch (subAgent) {
       case "review":
@@ -7717,6 +7763,9 @@ export class CodexAppServerClient {
   private readonly modelProviderTranslator?: CodexModelProviderTranslator;
   private lifecycleBarrier: Promise<void> | null = null;
   private readonly activeRequests = new Set<Promise<unknown>>();
+  // closeGeneration invalidates admitted work across close; serverGeneration
+  // identifies one transport incarnation, including exits during initialization.
+  // Neither replaces the lifecycle barrier or draining active requests.
   private closeGeneration = 0;
   private pendingCloses = 0;
   private serverGeneration = 0;
@@ -7742,6 +7791,26 @@ export class CodexAppServerClient {
   private rejectedCodexHome?: string;
   private transportClosePromise: Promise<void> | null = null;
   private readonly restartPolicy: CodexAppServerRestartPolicy;
+  private readonly transport: StdioJsonRpcTransport;
+  /** Last Codex event or ordinary RPC; background probes do not postpone recycling. */
+  private lastAppServerActivityAt: number;
+  /** Requests from Codex (approvals, user input, tool calls) not yet answered. */
+  private pendingServerRequests = 0;
+  private recycleStatus: CodexAppServerRecycleStatus = { recycleCount: 0 };
+  /**
+   * Threads this connection subscribed to with thread/start, thread/fork or
+   * thread/resume, and when each last saw a request or an event. Codex keeps
+   * a subscribed thread loaded, with its MCP servers running, until every
+   * subscriber leaves, so `unsubscribeIdleThreads` must let go of them.
+   */
+  private readonly subscribedThreads = new Map<string, number>();
+  /** Keep parent-addressable children without re-reading them on every sweep. */
+  private readonly keptSubAgentThreads = new Set<string>();
+  /** Bumped each time a thread unloads, so operations resume it again. */
+  private readonly threadUnloadGenerations = new Map<string, number>();
+  /** Requests from Codex (approvals, user input, tool calls) per thread. */
+  private readonly pendingServerRequestsByThread = new Map<string, number>();
+  private threadUnsubscribeUnsupported = false;
   private restartStatus: CodexAppServerRestartStatus = { stopped: false };
   private readonly restartStatusListeners = new Set<
     (status: CodexAppServerRestartStatus) => void
@@ -7796,6 +7865,15 @@ export class CodexAppServerClient {
   private archivedThreadListingGeneration = 0;
   private readonly threadListingInvalidations = new WeakSet<AppServerNotification>();
   private readonly recordedThreadNames = new Map<string, string>();
+  /**
+   * Names this client set with `thread/name/set` that Codex has not echoed
+   * yet. Codex 0.159.2 answers the request, then sends `thread/name/updated`
+   * with no `titleSource`, which every recorder reads as an operator rename.
+   * The caller of each set announces the name with its real source, so the
+   * echo is dropped. An entry expires, so a build that never echoes cannot
+   * leave one behind to swallow a later rename to the same name.
+   */
+  private readonly pendingThreadNameEchoes = new Map<string, Array<{ name: string; expiresAt: number }>>();
   private readonly requestListeners = new Set<
     (
       request: AppServerPendingRequestNotification
@@ -7862,27 +7940,29 @@ export class CodexAppServerClient {
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.restartPolicy = new CodexAppServerRestartPolicy(options.appServerRestartPolicy);
+    this.lastAppServerActivityAt = this.now();
+    this.transport = new StdioJsonRpcTransport({
+      command: options.command?.trim() || "codex",
+      authenticationRecovery: options.authenticationRecovery,
+      onAuthenticationRejected: (home) => {
+        this.rejectedCodexHome = home;
+        const runningTurns = [...this.runningTurnIdsByThread];
+        this.runningTurnIdsByThread.clear();
+        void (async () => {
+          await this.close();
+          await this.failRunningTurns(runningTurns, CODEX_SIGN_IN_REQUIRED);
+        })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
+      },
+      onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
+      args: options.args ?? [],
+      env: options.env,
+      resolveArgs: options.resolveArgs,
+      resolveCommand: options.resolveCommand,
+      resolveEnv: options.resolveEnv,
+      bundledToolsDirectory: options.bundledToolsDirectory,
+    });
     this.rawConnection = new JsonRpcConnection(
-      new StdioJsonRpcTransport({
-        command: options.command?.trim() || "codex",
-        authenticationRecovery: options.authenticationRecovery,
-        onAuthenticationRejected: (home) => {
-          this.rejectedCodexHome = home;
-          const runningTurns = [...this.runningTurnIdsByThread];
-          this.runningTurnIdsByThread.clear();
-          void (async () => {
-            await this.close();
-            await this.failRunningTurns(runningTurns, CODEX_SIGN_IN_REQUIRED);
-          })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
-        },
-        onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
-        args: options.args ?? [],
-        env: options.env,
-        resolveArgs: options.resolveArgs,
-        resolveCommand: options.resolveCommand,
-        resolveEnv: options.resolveEnv,
-        bundledToolsDirectory: options.bundledToolsDirectory,
-      }),
+      this.transport,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       createCodexObserverWithConfigReadRedaction(options.connectionObserver),
       { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
@@ -7900,6 +7980,14 @@ export class CodexAppServerClient {
         return translator.observeResponse(method, translated, result);
       };
     }
+    // Every route to Codex passes here, so this sees each subscription that
+    // any operation, helper or recovery opens or closes.
+    const requestBeforeSubscriptionTracking = this.rawConnection.request.bind(this.rawConnection);
+    this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
+      const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
+      this.observeThreadSubscription(method, params, result);
+      return result;
+    };
     this.connection = {
       request: (...args) => this.requestWhenAvailable(...args),
     };
@@ -7912,6 +8000,7 @@ export class CodexAppServerClient {
           })
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, rawParams) => {
+      this.lastAppServerActivityAt = this.now();
       const params = this.modelProviderTranslator
         ? this.modelProviderTranslator.translateNotification(method, rawParams)
         : rawParams;
@@ -7998,7 +8087,16 @@ export class CodexAppServerClient {
         this.takeGuardianDenialLimitMessage(method, params),
       );
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
+      if (method === "thread/name/updated" && this.consumeThreadNameEcho(params)) return;
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
+      if (helperThreadId && method === "thread/closed") {
+        // Codex unloaded it; the next operation must resume it first.
+        this.subscribedThreads.delete(helperThreadId);
+        this.keptSubAgentThreads.delete(helperThreadId);
+        this.noteThreadUnloaded(helperThreadId);
+      } else if (helperThreadId && this.subscribedThreads.has(helperThreadId)) {
+        this.subscribedThreads.set(helperThreadId, this.now());
+      }
       // Codex can send startup warnings before thread/start returns its ID.
       // Wait only for startup notices, then suppress those belonging to the
       // helper. Interactive turn traffic continues while the RPC is pending.
@@ -8068,7 +8166,11 @@ export class CodexAppServerClient {
         await listener(normalized);
       }
     });
-    this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
+    const handleServerRequest: Parameters<JsonRpcConnection["setRequestHandler"]>[0] = async (
+      method,
+      params,
+      rpcId,
+    ) => {
       const helperToolCallParams = asRecord(params);
       const helperToolHandler = helperToolCallParams
         ? this.resolveHelperThreadToolHandler(method, helperToolCallParams)
@@ -8118,7 +8220,185 @@ export class CodexAppServerClient {
       }
 
       throw new Error(`No desktop request handler registered for ${method}`);
+    };
+    this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
+      this.lastAppServerActivityAt = this.now();
+      this.pendingServerRequests += 1;
+      // A thread waiting on the operator must stay loaded to hear the answer.
+      const threadId = extractRequestMetadata(params).threadId;
+      if (threadId) {
+        this.pendingServerRequestsByThread.set(
+          threadId,
+          (this.pendingServerRequestsByThread.get(threadId) ?? 0) + 1,
+        );
+      }
+      try {
+        return await handleServerRequest(method, params, rpcId);
+      } finally {
+        this.pendingServerRequests -= 1;
+        this.lastAppServerActivityAt = this.now();
+        if (threadId) {
+          const remaining = (this.pendingServerRequestsByThread.get(threadId) ?? 1) - 1;
+          if (remaining > 0) this.pendingServerRequestsByThread.set(threadId, remaining);
+          else this.pendingServerRequestsByThread.delete(threadId);
+          if (this.subscribedThreads.has(threadId)) this.subscribedThreads.set(threadId, this.now());
+        }
+      }
     });
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private observeThreadSubscription(method: string, params: unknown, result: unknown): void {
+    if (method === "thread/unsubscribe") {
+      const threadId = pickString(asRecord(params) ?? {}, ["threadId"]);
+      if (threadId) {
+        this.subscribedThreads.delete(threadId);
+        this.keptSubAgentThreads.delete(threadId);
+      }
+      return;
+    }
+    if (method !== "thread/start" && method !== "thread/resume" && method !== "thread/fork") return;
+    // A resume names its thread; a start or fork learns it from the result.
+    const threadId = method === "thread/resume"
+      ? pickString(asRecord(params) ?? {}, ["threadId"])
+      : extractThreadIdFromValue(result);
+    if (threadId) this.subscribedThreads.set(threadId, this.now());
+  }
+
+  private noteThreadUnloaded(threadId: string): void {
+    this.threadUnloadGenerations.set(threadId, (this.threadUnloadGenerations.get(threadId) ?? 0) + 1);
+  }
+
+  /** Threads this connection keeps loaded in Codex. */
+  getSubscribedThreadCount(): number {
+    return this.subscribedThreads.size;
+  }
+
+  /**
+   * Let go of threads nothing needs live events for, so Codex can unload them
+   * and stop their MCP servers. Codex unloads a thread only when it is idle
+   * and has no subscriber; before this, every thread a long-lived connection
+   * started or resumed stayed loaded until the server stopped, and a day of
+   * use left hundreds of MCP servers running.
+   *
+   * A thread qualifies after `idleMs` with no request or event, when this
+   * client tracks no turn, pending request, helper turn, voice session or
+   * unstarted first turn for it, and `isThreadBusy` (the owner's view: queued
+   * input, background terminals, live tool items, reviews) says no. Each is
+   * checked again under the lifecycle barrier, together with Codex's own
+   * status for the thread; a sub-agent thread stays, since its parent may
+   * still address it. Cache that classification until it closes or this
+   * connection unsubscribes, so later sweeps need no read. The next operation
+   * on a released thread resumes it, as every thread operation does, and one
+   * already in flight replays its resume.
+   */
+  async unsubscribeIdleThreads(params: {
+    idleMs: number;
+    isThreadBusy: (threadId: string) => boolean;
+    /** Most threads to release in one pass; the barrier holds RPCs meanwhile. */
+    limit?: number;
+  }): Promise<string[]> {
+    if (!this.initialized || this.pendingCloses > 0 || this.threadUnsubscribeUnsupported) return [];
+    const isIdle = (threadId: string): boolean => {
+      const lastActiveAt = this.subscribedThreads.get(threadId);
+      return lastActiveAt !== undefined
+        && !this.keptSubAgentThreads.has(threadId)
+        && this.now() - lastActiveAt >= params.idleMs
+        && !this.threadKeepsSubscription(threadId)
+        && !params.isThreadBusy(threadId);
+    };
+    const candidates = [...this.subscribedThreads.keys()]
+      .filter(isIdle)
+      .slice(0, params.limit ?? 16);
+    if (candidates.length === 0) return [];
+    const serverGeneration = this.serverGeneration;
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // One barrier per thread, so other RPCs wait for at most one thread's
+    // read and unsubscribe rather than the whole pass.
+    const releaseIfIdle = (threadId: string) => this.runLifecycle(async (): Promise<
+      "released" | "kept" | "stop"
+    > => {
+      // No new RPC is admitted, so nothing can start on it from here on.
+      if (!this.initialized || serverGeneration !== this.serverGeneration) return "stop";
+      if (!isIdle(threadId)) return "kept";
+      let thread: Record<string, unknown> | null;
+      try {
+        thread = asRecord(asRecord(await this.rawConnection.request(
+          "thread/read",
+          { threadId, includeTurns: false },
+          timeoutMs,
+        ))?.thread);
+      } catch (error) {
+        if (/not (found|loaded)/i.test(error instanceof Error ? error.message : String(error))) {
+          this.subscribedThreads.delete(threadId);
+        }
+        return "kept";
+      }
+      const status = readThreadStatus(thread);
+      if (status === "notLoaded") {
+        this.subscribedThreads.delete(threadId);
+        return "kept";
+      }
+      if (typeof thread?.parentThreadId === "string"
+        || asRecord(thread?.source)?.subAgent !== undefined) {
+        // Codex 0.153 unload removes the child from the agent controller's
+        // thread manager; send_input and wait do not implicitly resume it.
+        // A thread/closed notification may have arrived during the read.
+        if (this.subscribedThreads.has(threadId)) this.keptSubAgentThreads.add(threadId);
+        return "kept";
+      }
+      // A thread stopped by a system error runs nothing and can go too.
+      const systemError = thread?.status === "systemError"
+        || asRecord(thread?.status)?.type === "systemError";
+      if (status !== "idle" && !systemError) {
+        // Busy: look again next pass.
+        this.subscribedThreads.set(threadId, this.now());
+        return "kept";
+      }
+      if (!isIdle(threadId)) return "kept";
+      try {
+        await this.rawConnection.request("thread/unsubscribe", { threadId }, timeoutMs);
+      } catch (error) {
+        if (isMethodUnavailableError(error, "thread/unsubscribe")) {
+          this.threadUnsubscribeUnsupported = true;
+          return "stop";
+        }
+        codexClientLog.warn("idle Codex thread unsubscribe failed", {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return "kept";
+      }
+      this.subscribedThreads.delete(threadId);
+      this.noteThreadUnloaded(threadId);
+      return "released";
+    });
+    const released: string[] = [];
+    for (const threadId of candidates) {
+      const outcome = await releaseIfIdle(threadId);
+      if (outcome === "stop") break;
+      if (outcome === "released") released.push(threadId);
+    }
+    if (released.length > 0) {
+      codexClientLog.info("unsubscribed idle Codex threads", {
+        count: released.length,
+        stillSubscribed: this.subscribedThreads.size,
+      });
+    }
+    return released;
+  }
+
+  /** Work this client tracks that needs the thread's live events. */
+  private threadKeepsSubscription(threadId: string): boolean {
+    return this.runningTurnIdsByThread.has(threadId)
+      || this.pendingServerRequestsByThread.has(threadId)
+      || this.helperThreadIds.has(threadId)
+      || this.ownedRealtimeThreads.has(threadId)
+      // Its history exists only in this process until the first turn starts.
+      || this.threadsAwaitingFirstTurn.has(threadId);
   }
 
   async close(): Promise<void> {
@@ -8259,6 +8539,139 @@ export class CodexAppServerClient {
     codexClientLog.info("Codex app server restart history cleared", { reason, wasStopped });
   }
 
+  /**
+   * The running app server's age and what it has started, or `undefined`
+   * when none is running. It never starts Codex.
+   */
+  async readAppServerProcessSample(): Promise<CodexAppServerProcessSample | undefined> {
+    const info = this.initialized ? this.transport.getProcessInfo?.() : undefined;
+    if (!info) return undefined;
+    const sampledAt = this.now();
+    const counts = await (this.options.sampleAppServerProcessTree ?? sampleAppServerProcessTree)(info)
+      .catch(() => ({}));
+    return {
+      pid: info.pid,
+      startedAt: info.startedAt,
+      sampledAt,
+      uptimeMs: Math.max(0, sampledAt - info.startedAt),
+      ...counts,
+    };
+  }
+
+  getAppServerRecycleStatus(): CodexAppServerRecycleStatus {
+    return this.recycleStatus;
+  }
+
+  /**
+   * Replace an idle app server that has run too long or started too much
+   * (`decideCodexAppServerRecycle`). The stop reaps its whole process tree;
+   * the next request starts a fresh server, and thread operations replay
+   * their resume and settings on it, as after a crash.
+   *
+   * Idle means no Codex event or foreground RPC for `settings.idleMs`, nothing
+   * this client is tracking, and `isQuiescent()` from the owner, which knows the
+   * work the client cannot see. All of it is checked again under the
+   * lifecycle barrier, where no new RPC can start, together with Codex's own
+   * report of active threads; any doubt leaves the server running.
+   */
+  async maybeRecycleIdleAppServer(params: {
+    settings: CodexAppServerRecycleSettings;
+    isQuiescent: () => boolean;
+  }): Promise<CodexAppServerRecycleOutcome> {
+    let outcome: CodexAppServerRecycleOutcome;
+    try {
+      outcome = await this.tryRecycleIdleAppServer(params);
+    } catch (error) {
+      codexClientLog.warn("Codex app server idle recycle failed", { error: String(error) });
+      outcome = { kind: "busy", blocker: "error" };
+    }
+    this.recycleStatus = {
+      ...this.recycleStatus,
+      ...(outcome.kind === "recycled"
+        ? { recycleCount: this.recycleStatus.recycleCount + 1, lastRecycle: outcome.record }
+        : {}),
+      lastCheck: {
+        at: this.now(),
+        outcome: outcome.kind,
+        ...(outcome.kind === "busy" ? { blocker: outcome.blocker } : {}),
+      },
+    };
+    return outcome;
+  }
+
+  private async tryRecycleIdleAppServer(params: {
+    settings: CodexAppServerRecycleSettings;
+    isQuiescent: () => boolean;
+  }): Promise<CodexAppServerRecycleOutcome> {
+    const blocker = (requests: boolean): string | undefined =>
+      this.appServerRecycleBlocker(requests)
+      ?? (params.isQuiescent() ? undefined : "registry-work");
+    const early = blocker(true);
+    if (early === "not-running") return { kind: "not-running" };
+    if (early) return { kind: "busy", blocker: early };
+    const idleSince = this.lastAppServerActivityAt;
+    const idleMs = this.now() - idleSince;
+    if (idleMs < params.settings.idleMs) return { kind: "not-idle", idleMs };
+    const sample = await this.readAppServerProcessSample();
+    if (!sample) return { kind: "not-running" };
+    const reasons = decideCodexAppServerRecycle(params.settings, sample);
+    if (reasons.length === 0) return { kind: "healthy", sample };
+
+    const serverGeneration = this.serverGeneration;
+    return await this.runLifecycle<CodexAppServerRecycleOutcome>(async () => {
+      // Admitted RPCs have drained and new ones wait at the barrier.
+      const late = (): string | undefined => {
+        if (serverGeneration !== this.serverGeneration) return "not-running";
+        if (this.lastAppServerActivityAt !== idleSince) return "app-server-activity";
+        return blocker(false);
+      };
+      let stillBlocked = late();
+      if (!stillBlocked) {
+        stillBlocked = (await this.listTurnsBlockingProcessStop()).length > 0
+          ? "codex-active-thread"
+          : late();
+      }
+      if (stillBlocked === "not-running") return { kind: "not-running" };
+      if (stillBlocked) return { kind: "busy", blocker: stillBlocked };
+
+      await this.closeConnection();
+      const stop = this.transport.takeLastStopReport?.();
+      const record = {
+        at: this.now(),
+        reasons,
+        pid: sample.pid,
+        uptimeMs: sample.uptimeMs,
+        idleMs: this.now() - idleSince,
+        ...(sample.childProcessCount !== undefined
+          ? { childProcessCount: sample.childProcessCount }
+          : {}),
+        ...(sample.openFdCount !== undefined ? { openFdCount: sample.openFdCount } : {}),
+        ...(stop ? { orphansReaped: stop.orphansReaped } : {}),
+      };
+      codexClientLog.info("Codex app server recycled while idle", record);
+      return { kind: "recycled", record };
+    });
+  }
+
+  /** Work on this process that a stop would cut short, by name. */
+  private appServerRecycleBlocker(includeRequests: boolean): string | undefined {
+    if (!this.initialized || this.pendingCloses > 0 || this.restartStatus.stopped) {
+      return "not-running";
+    }
+    if (this.runningTurnIdsByThread.size > 0) return "running-turn";
+    if (this.pendingServerRequests > 0) return "pending-server-request";
+    if (this.helperThreadIds.size > 0
+      || this.pendingHelperThreadStarts.size > 0
+      || this.helperTurnWaiters.size > 0) {
+      return "helper-turn";
+    }
+    if (this.ownedRealtimeThreads.size > 0) return "realtime-session";
+    // Its history exists only in this process until the first turn starts.
+    if (this.threadsAwaitingFirstTurn.size > 0) return "thread-awaiting-first-turn";
+    if (includeRequests && this.activeRequests.size > 0) return "in-flight-request";
+    return undefined;
+  }
+
   private setRestartStatus(status: CodexAppServerRestartStatus): void {
     if (!status.stopped && !this.restartStatus.stopped) return;
     this.restartStatus = status;
@@ -8313,6 +8726,12 @@ export class CodexAppServerClient {
     this.pendingFirstTurnThreadResults.clear();
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
+    this.pendingThreadNameEchoes.clear();
+    // A new process has loaded nothing; operations replay their own resume,
+    // keyed on the server generation, so unload counts can start over.
+    this.subscribedThreads.clear();
+    this.keptSubAgentThreads.clear();
+    this.threadUnloadGenerations.clear();
     this.helperThreadIds.clear();
     this.helperThreadToolHandlers.clear();
     this.helperToolTurnThreadIds.clear();
@@ -8948,6 +9367,15 @@ export class CodexAppServerClient {
         threadId: params.threadId,
         error: error instanceof Error ? error.message : String(error),
       });
+      return;
+    }
+    // The first prompt named the thread. Announce it as derived; Codex's own
+    // echo of this set is dropped because it cannot say where the name came from.
+    for (const listener of this.notificationListeners) {
+      await listener({
+        method: "thread/name/updated",
+        params: { threadId: params.threadId, threadName, titleSource: "derived" },
+      });
     }
   }
 
@@ -8955,14 +9383,48 @@ export class CodexAppServerClient {
     threadId: string;
     name: string;
   }): Promise<void> {
-    await requestWithThreadMetadataReadRetry(async () => {
-      await requestWithFallbacks({
-        client: this.connection,
-        methods: ["thread/name/set"],
-        payloads: [{ threadId: params.threadId, name: params.name }],
-        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    // Before the request: Codex sends the echo right after its response.
+    const echo = params.name.trim();
+    const now = Date.now();
+    const pending = (this.pendingThreadNameEchoes.get(params.threadId) ?? []).filter((entry) => entry.expiresAt > now);
+    // Delete first so a thread named again moves to the newest end of the map.
+    this.pendingThreadNameEchoes.delete(params.threadId);
+    rememberBoundedMap(this.pendingThreadNameEchoes, params.threadId,
+      [...pending, { name: echo, expiresAt: now + THREAD_NAME_ECHO_WINDOW_MS }].slice(-8), 1_000);
+    try {
+      await requestWithThreadMetadataReadRetry(async () => {
+        await requestWithFallbacks({
+          client: this.connection,
+          methods: ["thread/name/set"],
+          payloads: [{ threadId: params.threadId, name: params.name }],
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
       });
-    });
+      // The echo follows the response, so the window runs from here.
+      const entry = this.pendingThreadNameEchoes.get(params.threadId)?.find((pending) => pending.name === echo);
+      if (entry) entry.expiresAt = Date.now() + THREAD_NAME_ECHO_WINDOW_MS;
+    } catch (error) {
+      this.forgetThreadNameEcho(params.threadId, echo);
+      throw error;
+    }
+  }
+
+  /** Whether a `thread/name/updated` is Codex echoing a name this client set. */
+  private consumeThreadNameEcho(params: unknown): boolean {
+    const record = asRecord(params) ?? {};
+    const threadId = pickString(record, ["threadId", "thread_id"]);
+    const threadName = pickString(record, ["threadName", "thread_name"]);
+    return threadId !== undefined && threadName !== undefined && this.forgetThreadNameEcho(threadId, threadName);
+  }
+
+  private forgetThreadNameEcho(threadId: string, name: string): boolean {
+    const now = Date.now();
+    const pending = this.pendingThreadNameEchoes.get(threadId);
+    const index = pending?.findIndex((entry) => entry.name === name && entry.expiresAt > now) ?? -1;
+    if (!pending || index < 0) return false;
+    pending.splice(index, 1);
+    if (!pending.length) this.pendingThreadNameEchoes.delete(threadId);
+    return true;
   }
 
   private handleHelperThreadNotification(
@@ -9354,7 +9816,8 @@ export class CodexAppServerClient {
     this.archivedThreadMetadataScheduledByFilter.add(cacheKey);
     setTimeout(() => {
       this.archivedThreadMetadataScheduledByFilter.delete(cacheKey);
-      void this.refreshArchivedThreadMetadata(filter, diagnostics).catch((error) => {
+      void withCodexRequestActivity({ countsAsActivity: false }, () =>
+        this.refreshArchivedThreadMetadata(filter, diagnostics)).catch((error) => {
         codexClientLog.warn("archived thread metadata refresh failed", {
           error: error instanceof Error ? error.message : String(error),
           filter: filter?.trim() || null,
@@ -9423,6 +9886,8 @@ export class CodexAppServerClient {
     limit: number;
     checkpoint: () => Promise<void>;
     directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+    /** Admission still reads every identity; only disjoint Git probes skip. */
+    directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
   }): Promise<{ threads: AppServerThreadSummary[]; nextCursor?: string }> {
     await this.ensureInitialized();
     const result = await requestWithFallbacks({
@@ -9441,11 +9906,13 @@ export class CodexAppServerClient {
     });
     const page = extractThreadListPage(result, this.threadListTextCache);
     if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
-    // Completed Guardian approval reviews remain unarchived with an inherited
-    // cwd. They are not independent checkout users. Keep active or uncertain
-    // reviews, every ordinary thread/worker, and archived ownership evidence.
-    const checkoutUsers = params.archived ? page.threads : page.threads.filter((thread) =>
-      thread.codexThreadSourceKind !== "guardian_review"
+    // Native code-review children inherit their parent's cwd and have no
+    // independent checkout to restore, even after retirement. Completed
+    // Guardian approvals are also excluded from active checkout users. Keep
+    // active/uncertain reviews and every ordinary thread or worker.
+    const checkoutUsers = page.threads.filter((thread) =>
+      (thread.codexThreadSourceKind !== "subAgentReview"
+        && (params.archived || thread.codexThreadSourceKind !== "guardian_review"))
       || (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded"),
     );
     const threads = await this.enrichRawThreadDirectories(checkoutUsers, "thread-list", {
@@ -9453,6 +9920,7 @@ export class CodexAppServerClient {
       strict: true,
       concurrency: 1,
       directoryObservations: params.directoryObservations,
+      directoryFilter: params.directoryFilter,
     });
     return { threads: hydrateMissingLinkedDirectoriesFromSiblingRepos(threads), nextCursor: page.nextCursor };
   }
@@ -9505,6 +9973,7 @@ export class CodexAppServerClient {
     background?: {
       checkpoint: () => Promise<void>; strict: boolean; concurrency: number;
       directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+      directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
     },
   ): Promise<EnrichedCodexThread[]> {
     const enrichedThreads: Array<EnrichedCodexThread | undefined> = [];
@@ -9523,15 +9992,19 @@ export class CodexAppServerClient {
         const projectKey = await resolveThreadProjectKey(thread);
         let enrichment: ThreadDirectoryEnrichment;
         try {
-          const directoryKey = projectKey ? path.resolve(projectKey) : "";
-          let pending = directories.get(directoryKey);
-          if (!pending) {
-            await background?.checkpoint();
-            pending = this.threadDirectoryEnricher(projectKey, caller);
-            directories.set(directoryKey, pending);
+          if (background?.directoryFilter && !await background.directoryFilter(projectKey)) {
+            enrichment = { linkedDirectories: buildProjectKeyLinkedDirectories(projectKey) };
+          } else {
+            const directoryKey = projectKey ? path.resolve(projectKey) : "";
+            let pending = directories.get(directoryKey);
+            if (!pending) {
+              await background?.checkpoint();
+              pending = this.threadDirectoryEnricher(projectKey, caller);
+              directories.set(directoryKey, pending);
+            }
+            enrichment = await pending;
+            if (projectKey) this.lastDirectoryEnrichment.set(path.resolve(projectKey), enrichment);
           }
-          enrichment = await pending;
-          if (projectKey) this.lastDirectoryEnrichment.set(path.resolve(projectKey), enrichment);
         } catch (error) {
           if (background?.strict) throw error;
           codexClientLog.warn("thread directory enrichment failed", {
@@ -9872,6 +10345,15 @@ export class CodexAppServerClient {
    */
   modelProviderForThread(threadId: string): string | undefined {
     return this.modelProviderTranslator?.providerForThread(threadId);
+  }
+
+  /**
+   * The model provider Codex last reported for a thread, whether or not
+   * PwrAgent configured it: `openai` for Codex's default. Undefined when this
+   * connection has not been told, which callers must treat as unknown.
+   */
+  reportedModelProviderForThread(threadId: string): string | undefined {
+    return this.modelProviderTranslator?.reportedProviderForThread(threadId);
   }
 
   async readThreadPricingSnapshot(threadId: string): Promise<ThreadPricingSnapshot> {
@@ -11284,6 +11766,25 @@ export class CodexAppServerClient {
     };
   }
 
+  /** Retire an owned native review through Codex, retaining readable findings.
+   * Recheck identity and idleness: a terminal notification must never archive
+   * the parent or a child that has acquired new work. No workspace cleanup is
+   * requested here; the parent owns that lifecycle. */
+  async retireReviewThread(params: { threadId: string; parentThreadId: string }): Promise<boolean> {
+    if (params.threadId === params.parentThreadId) return false;
+    await this.ensureInitialized();
+    const result = await this.connection.request("thread/read", { threadId: params.threadId, includeTurns: false },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    const thread = asRecord(asRecord(result)?.thread);
+    if (!thread || thread.parentThreadId !== params.parentThreadId
+      || readCodexThreadSourceKind(thread, null) !== "subAgentReview"
+      || !["idle", "notLoaded"].includes(readThreadStatus(thread) ?? "")) return false;
+    await this.archiveThread({ threadId: params.threadId });
+    await this.connection.request("thread/unsubscribe", { threadId: params.threadId },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    return true;
+  }
+
   async deleteThread(params: { threadId: string }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
     await requestWithFallbacks({
@@ -11579,6 +12080,10 @@ export class CodexAppServerClient {
   private createThreadOperationConnection(): Pick<JsonRpcConnection, "request"> {
     let generation = this.serverGeneration;
     const setup: Array<Parameters<JsonRpcConnection["request"]>> = [];
+    let setupThreadId: string | undefined;
+    let unloadGeneration = 0;
+    const threadUnloaded = () => setupThreadId !== undefined
+      && (this.threadUnloadGenerations.get(setupThreadId) ?? 0) !== unloadGeneration;
     return {
       request: (...args) => this.runAdmittedRequest(async () => {
         const closeGeneration = this.closeGeneration;
@@ -11588,16 +12093,23 @@ export class CodexAppServerClient {
           }
           return this.rawConnection.request(...requestArgs);
         };
-        // Resume and settings belong to a process. Reapply successful setup
-        // after recovery, with setup plus the next RPC admitted as one unit.
+        // Resume and settings belong to a process and to a loaded thread.
+        // Reapply successful setup after recovery or after the thread
+        // unloaded, with setup plus the next RPC admitted as one unit.
         // Never replay the action itself (turn/start, review/start, etc.).
-        if (generation !== this.serverGeneration) {
+        if (generation !== this.serverGeneration || threadUnloaded()) {
           for (const previous of setup) await request(...previous);
           generation = this.serverGeneration;
+          if (setupThreadId) unloadGeneration = this.threadUnloadGenerations.get(setupThreadId) ?? 0;
         }
         const result = await request(...args);
         if (args[0] === "thread/resume" || args[0] === "thread/settings/update") {
           setup.push(args);
+          const threadId = pickString(asRecord(args[1]) ?? {}, ["threadId"]);
+          if (args[0] === "thread/resume" && threadId && setupThreadId === undefined) {
+            setupThreadId = threadId;
+            unloadGeneration = this.threadUnloadGenerations.get(threadId) ?? 0;
+          }
         }
         return result;
       }),
@@ -11615,12 +12127,15 @@ export class CodexAppServerClient {
     if (generation !== this.closeGeneration || !this.initialized) {
       throw new Error("codex app server client closed");
     }
+    const countsAsActivity = codexRequestCountsAsActivity();
+    if (countsAsActivity) this.lastAppServerActivityAt = this.now();
     const request = work();
     this.activeRequests.add(request);
     try {
       return await request;
     } finally {
       this.activeRequests.delete(request);
+      if (countsAsActivity) this.lastAppServerActivityAt = this.now();
     }
   }
 
@@ -11746,6 +12261,7 @@ export class CodexAppServerClient {
           },
         };
         const result = await this.rawConnection.request("initialize", initializeParams);
+        assertNotClosed();
         this.initializeResult = parseInitializeResponse(result);
         this.tokenMiserActivationNegotiated = Boolean(activationNonce);
       } catch (error) {

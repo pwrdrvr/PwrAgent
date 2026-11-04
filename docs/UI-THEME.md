@@ -257,8 +257,10 @@ The light block is **not** uniformly AA-clean. These predate the accent retune a
 when the warning is something read: a figure, a sentence, or a chip label. Its
 light value is the `--savings-over` amber, at least 4.5:1 on every light
 surface. Every warning `color:` rule reads it, and the theme contract test
-fails on one that reads `--status-warning`. Every theme except Tangerine light
-aliases the two, so only Tangerine light shows the difference.
+fails on one that reads `--status-warning`. Every dark theme aliases the two.
+Every light theme splits them: text keeps a 4.5:1 amber, and dots take a
+yellow at the 3:1 mark floor. At text strength, the light pending PR dot read
+as the black closed dot.
 
 #### Token Miser verdict
 
@@ -460,8 +462,13 @@ the `.status-dot` utility class:
 ```
 
 Activity (sending or receiving in flight) is signalled by adding the
-`.status-dot--blink` modifier — a 1.6s `ease-in-out` opacity pulse. The
-animation is suppressed under `prefers-reduced-motion: reduce`.
+`.status-dot--blink` modifier. The dot rests at full opacity and dips once — a
+1.6s `ease-in-out` opacity pulse — every 4.5s, from one shared timer in
+[`lib/status-pulse.ts`](../apps/desktop/src/renderer/src/lib/status-pulse.ts).
+Dots that are offscreen, in a hidden window, or under
+`prefers-reduced-motion: reduce` do not pulse. Do not give a status dot a CSS
+loop: an infinite animation keeps the compositor waking on every display
+refresh, even when the dot is offscreen.
 
 These dots are subordinate signals: keep them at 8px or smaller, never use
 them as the primary call-to-action color, and never use them in body copy.

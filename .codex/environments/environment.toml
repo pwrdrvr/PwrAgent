@@ -13,15 +13,8 @@ pnpm install
 
 [setup.win32]
 script = '''
-$ErrorActionPreference = "Stop"
-$nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw).Trim().TrimStart('v')
-nvm install $nodeVersion
-if ($LASTEXITCODE -ne 0) { throw "nvm install failed" }
-nvm use $nodeVersion
-if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
-corepack.cmd enable
-if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
-pnpm.cmd install
+. ./scripts/windows-environment.ps1 -InstallNode
+& $pnpmCommand install
 if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
 '''
 
@@ -67,14 +60,9 @@ icon = "run"
 platform = "win32"
 command = '''
 powershell.exe -NoProfile -Command {
-  $ErrorActionPreference = "Stop"
-  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
-  nvm use $nodeVersion
-  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
-  corepack.cmd enable
-  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  . ./scripts/windows-environment.ps1
   $env:PWRAGENT_PROFILE = "work"
-  pnpm.cmd dev
+  & $pnpmCommand dev
   exit $LASTEXITCODE
 }
 '''
@@ -107,14 +95,9 @@ icon = "run"
 platform = "win32"
 command = '''
 powershell.exe -NoProfile -Command {
-  $ErrorActionPreference = "Stop"
-  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
-  nvm use $nodeVersion
-  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
-  corepack.cmd enable
-  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  . ./scripts/windows-environment.ps1
   $env:PWRAGENT_PROFILE = "dev"
-  pnpm.cmd dev
+  & $pnpmCommand dev
   exit $LASTEXITCODE
 }
 '''
@@ -147,15 +130,10 @@ icon = "run"
 platform = "win32"
 command = '''
 powershell.exe -NoProfile -Command {
-  $ErrorActionPreference = "Stop"
-  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
-  nvm use $nodeVersion
-  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
-  corepack.cmd enable
-  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  . ./scripts/windows-environment.ps1
   $env:PWRAGENT_PROFILE = "dev"
   $env:PWRAGENT_DISABLE_MESSAGING = "1"
-  pnpm.cmd --filter "@pwragent/desktop" dev -- --disable-messaging
+  & $pnpmCommand --filter "@pwragent/desktop" dev -- --disable-messaging
   exit $LASTEXITCODE
 }
 '''
@@ -188,15 +166,10 @@ icon = "run"
 platform = "win32"
 command = '''
 powershell.exe -NoProfile -Command {
-  $ErrorActionPreference = "Stop"
-  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
-  nvm use $nodeVersion
-  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
-  corepack.cmd enable
-  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  . ./scripts/windows-environment.ps1
   $env:PWRAGENT_PROFILE = "default"
   $env:PWRAGENT_DISABLE_MESSAGING = "1"
-  pnpm.cmd --filter "@pwragent/desktop" dev -- --disable-messaging
+  & $pnpmCommand --filter "@pwragent/desktop" dev -- --disable-messaging
   exit $LASTEXITCODE
 }
 '''
@@ -229,18 +202,13 @@ icon = "run"
 platform = "win32"
 command = '''
 powershell.exe -NoProfile -Command {
-  $ErrorActionPreference = "Stop"
-  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
-  nvm use $nodeVersion
-  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
-  corepack.cmd enable
-  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  . ./scripts/windows-environment.ps1
   $env:PWRAGENT_PROTOCOL_CAPTURE = "1"
   $env:PWRAGENT_PROTOCOL_CAPTURE_ROOT = ".local/protocol-captures"
   $env:PWRAGENT_APP_SERVER_PROTOCOL_LOG = "1"
   $env:PWRAGENT_PROFILE = "dev"
   $env:PWRAGENT_DISABLE_MESSAGING = "1"
-  pnpm.cmd --filter "@pwragent/desktop" dev -- --disable-messaging
+  & $pnpmCommand --filter "@pwragent/desktop" dev -- --disable-messaging
   exit $LASTEXITCODE
 }
 '''
@@ -275,12 +243,7 @@ icon = "run"
 platform = "win32"
 command = '''
 powershell.exe -NoProfile -Command {
-  $ErrorActionPreference = "Stop"
-  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
-  nvm use $nodeVersion
-  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
-  corepack.cmd enable
-  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  . ./scripts/windows-environment.ps1
   npx.cmd react-devtools --port 8097
   exit $LASTEXITCODE
 }
@@ -314,16 +277,11 @@ icon = "run"
 platform = "win32"
 command = '''
 powershell.exe -NoProfile -Command {
-  $ErrorActionPreference = "Stop"
-  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
-  nvm use $nodeVersion
-  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
-  corepack.cmd enable
-  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  . ./scripts/windows-environment.ps1
   $env:PWRAGENT_PROFILE = "dev"
   $env:PWRAGENT_DEV_REACT_DEVTOOLS = "1"
   $env:PWRAGENT_DEV_REACT_DEVTOOLS_PORT = "8097"
-  pnpm.cmd dev
+  & $pnpmCommand dev
   exit $LASTEXITCODE
 }
 '''

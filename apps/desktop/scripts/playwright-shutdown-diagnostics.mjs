@@ -1,8 +1,9 @@
 import { createHook } from "node:async_hooks";
 import { execFile } from "node:child_process";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync, writeSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { observeWindowsLauncher } from "./windows-pipe-observation.mjs";
 
 const key = Symbol.for("pwragent.playwrightShutdownDiagnostics");
 const require = createRequire(import.meta.url);
@@ -13,6 +14,52 @@ const trackedTypes = new Set([
   "PROCESSWRAP", "PIPEWRAP", "TCPWRAP", "TCPSERVERWRAP", "Timeout",
   "FSREQCALLBACK", "FSREQPROMISE", "GETADDRINFOREQWRAP", "UDPWRAP",
 ]);
+
+// Cancellation can skip artifact upload. Keep a bounded, synchronous copy of
+// failure evidence in the job log, without stacks, output or raw reports.
+function logEvidence(kind, data) {
+  try {
+    const record = { kind, ...data };
+    let json = JSON.stringify(record);
+    for (const field of ["handles", "processes"]) {
+      while (Buffer.byteLength(json) > 16_384 && record[field]?.length) {
+        record[field].pop();
+        record.byteLimitReached = true;
+        json = JSON.stringify(record);
+      }
+    }
+    writeSync(2, `[worker-shutdown-evidence] ${json}\n`);
+  } catch { /* Evidence must not interfere with cleanup or artifact capture. */ }
+}
+
+const logText = (value) => typeof value === "string" ? value.slice(0, 256) : value;
+const logEndpoint = (value) => typeof value === "object" && value !== null
+  ? { port: value.port }
+  : logText(value);
+
+function logSnapshot(snapshot) {
+  const pending = snapshot.processes.filter(({ cleanupComplete }) => !cleanupComplete);
+  const handles = snapshot.report.libuv.filter((handle) => handle.is_referenced);
+  logEvidence("snapshot", {
+    workerPid: snapshot.workerPid, time: snapshot.time, reason: snapshot.reason, phase: snapshot.phase,
+    pendingProcessCount: pending.length,
+    processes: pending.slice(0, 16).map((record) => ({
+      pid: record.pid, executable: logText(record.executable), stage: record.stage,
+      owner: record.owner && {
+        title: logText(record.owner.title), file: logText(record.owner.file),
+        line: record.owner.line, retry: record.owner.retry,
+      },
+      registered: record.registered, exitObserved: record.exitObserved, closeObserved: record.closeObserved,
+      exitCode: record.exitCode, signalCode: record.signalCode, stdioCount: record.stdio.length, stdio: record.stdio.slice(0, 8),
+    })),
+    referencedHandleCount: handles.length,
+    handles: handles.slice(0, 32).map((handle) => ({
+      type: logText(handle.type), is_active: handle.is_active, is_referenced: handle.is_referenced,
+      fd: handle.fd, pid: handle.pid,
+      localEndpoint: logEndpoint(handle.localEndpoint), remoteEndpoint: logEndpoint(handle.remoteEndpoint),
+    })),
+  });
+}
 
 // Called while Playwright loads its config in the worker, before tests launch
 // anything. The two versioned pnpm patches only emit observations; they do
@@ -83,7 +130,16 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
     const started = Date.now();
     let child;
     const finish = (data) => {
-      write("process-tree.json", { workerPid: process.pid, elapsedMs: Date.now() - started, timeoutMs, ...data });
+      const result = { workerPid: process.pid, elapsedMs: Date.now() - started, timeoutMs, ...data };
+      write("process-tree.json", result);
+      logEvidence("process-tree", {
+        workerPid: result.workerPid, elapsedMs: result.elapsedMs, timeoutMs,
+        status: result.status ?? (result.error ? "failed" : "completed"),
+        reason: result.reason, workerExitCode: result.workerExitCode, queryPid: result.queryPid,
+        killed: result.killed, signal: result.signal, code: result.code,
+        processCount: result.processes?.length,
+        processes: result.processes?.slice(0, 64).map(({ pid, ppid, name }) => ({ pid, ppid, name: logText(name) })),
+      });
       process.removeListener("exit", interrupted);
     };
     const interrupted = safe((workerExitCode) => {
@@ -134,7 +190,7 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
       const registered = [...utils.gracefullyCloseSet];
       const report = process.report.getReport();
       const filename = `snapshot-${++captures}.json`;
-      write(filename, {
+      const snapshot = {
         reason, phase, workerPid: process.pid, time: new Date().toISOString(),
         registeredClosers: registered.map((close) => ({ name: close.name, pid: processes.get(close)?.child.pid })),
         processes: [...processes.entries()].map(([close, record]) => ({
@@ -153,7 +209,9 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
         // Do not write the raw report: it includes environment variables and
         // command-line arguments. These sections contain the useful waits.
         report: { javascriptStack: report.javascriptStack, nativeStack: report.nativeStack, libuv: report.libuv, resourceUsage: report.resourceUsage },
-      });
+      };
+      write(filename, snapshot);
+      logSnapshot(snapshot);
       event({ kind: "capture", reason, phase, filename });
       process.stderr.write(`[worker-shutdown] ${reason}; phase=${phase}; evidence=${path.join(directory, filename)}\n`);
       captureTree();
@@ -175,24 +233,27 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
       hook.disable();
     }),
     launched: safe((child, close) => {
+      const launchId = process.platform === "win32" ? observeWindowsLauncher(child, {
+        directory: process.env.PWRAGENT_WINDOWS_PIPE_REQUESTS, logEvidence,
+      }) : undefined;
       // Keep pending launches plus twenty completed launches for context.
       const completed = [...processes.entries()].filter(([, value]) => value.details.cleanupComplete);
       for (const [old] of completed.slice(0, Math.max(0, completed.length - 20))) processes.delete(old);
-      const details = { pid: child.pid, executable: path.basename(child.spawnfile), owner: testOwner(), launchStack: stack(), stage: "launched", exitObserved: false, closeObserved: false, cleanupComplete: false };
+      const details = { launchId, pid: child.pid, executable: path.basename(child.spawnfile), owner: testOwner(), launchStack: stack(), stage: "launched", exitObserved: false, closeObserved: false, cleanupComplete: false };
       processes.set(close, { child, details });
       event({ kind: "launch", ...details });
       child.once("exit", safe((code, signal) => {
         details.exitObserved = true;
-        event({ kind: "process-exit", pid: child.pid, code, signal });
+        event({ kind: "process-exit", launchId, pid: child.pid, code, signal });
       }));
       child.once("close", safe(() => {
         details.closeObserved = true;
-        event({ kind: "process-close", pid: child.pid });
+        event({ kind: "process-close", launchId, pid: child.pid });
       }));
       return { stage: safe((next) => {
         details.stage = next;
         if (next === "cleaned") details.cleanupComplete = true;
-        event({ kind: "process-stage", pid: child.pid, stage: next });
+        event({ kind: "process-stage", launchId, pid: child.pid, stage: next });
       }) };
     }),
   };

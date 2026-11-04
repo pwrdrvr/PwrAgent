@@ -739,6 +739,15 @@ Grok MCP servers; read-only tools run without a permission request in every
 mode; and a closed session stays listed until `_x.ai/session/delete`. See
 `src/main/acp/minimal-helper-session.ts`.
 
+An open ACP session keeps its MCP servers running until `session/close`.
+On Grok 1.0.45-pwragent.2, `session/new` started a session's stdio MCP
+server, `session/close` stopped it, and `session/load` started it again.
+`AcpAgentClient.closeIdleSessions` therefore closes a session after 10
+minutes without a request, update or permission request, and every session
+request reloads a closed session first. A helper session created with an
+agent profile in `_meta` or with no MCP servers stays open, because
+`session/load` cannot recreate either.
+
 Reach for this whenever a question about an agent's wire behavior would
 otherwise be answered by reading its source or guessing. **The committed
 `__tests__/fixtures/acp-transcripts/*-build.json` fixtures cannot answer
@@ -1175,8 +1184,12 @@ have:
 
 - **Non-primary attachments.** The test is the PR matching a local
   thread's *primary* repository, matching `collectPrPollTargets`. Fork
-  contributions match their separate `sourceRepository`; their status key
-  still belongs to the destination repository. A PR
+  contributions match their separate `sourceRepository`; an explicitly attached
+  contribution also matches its destination repository. Use the shared
+  `pullRequestMatchesRepositoryKey` predicate. Keep `explicitlyAttached` on the
+  thread's attachment when applying shared provider status; never copy it into
+  the status cache. Their status key still belongs
+  to the destination repository. A PR
   attached to a local thread some other way is not polled by us either,
   so the peer's observation is the fresher one.
 - **Before the first local snapshot.** `attachedPrsByThreadKey` is
@@ -1195,8 +1208,9 @@ have:
   attachments. Display-only parsing must not authorize automatic fetching.
 - The renderer resolves status authority per PR across all navigation rows:
   local primary-workspace attachments win, then peer observations, then other
-  local attachments. Use main's `primaryGitRepository` and a contribution's
-  `sourceRepository` for the local-primary check.
+  local attachments. Use `pullRequestMatchesRepositoryKey` with main's
+  `primaryGitRepository` for the local-primary check, including explicit fork
+  contributions to that repository.
 - Both transcript chips and composer hover cards use `useTranscriptPullRequest`.
   Peer observations suppress local subscription results in every window,
   including pinned peers in the main window. An ownership change must notify

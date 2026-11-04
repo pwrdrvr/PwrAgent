@@ -5,10 +5,12 @@ import {
   type FederationTarget,
   type FederationRemoteTarget,
   type NavigationThreadSummary,
+  type LaunchpadCreationStatus,
 } from "@pwragent/shared";
 import type { AppBuildMetadata, AppMetadata } from "./app-metadata";
 
 export type LocalThreadDiagnosticsContext = {
+  startup?: Partial<LaunchpadCreationStatus> & { operationId: string; targetInstanceId?: string };
   backend?: AppServerBackendKind;
   federation?: NavigationThreadSummary["federation"];
   federationHealth?: FederationHealthStatus;
@@ -204,6 +206,18 @@ export function buildLocalThreadDiagnosticsInfo(
     `Project directory/worktree path: ${available(context.projectPath)}`,
     `Provider/backend: ${available(context.backend)}`,
     `Thread title: ${available(context.title)}`,
+    ...(context.startup ? [
+      "Thread creation state: Pending startup (thread ID may not exist yet)",
+      `Startup operation ID: ${context.startup.operationId}`,
+      `Startup target instance ID: ${available(context.startup.targetInstanceId)}`,
+      `Startup directory key: ${available(context.startup.directoryKey)}`,
+      `Startup worktree path: ${available(context.startup.cwd)}`,
+      `Startup phase: ${context.startup.phase ?? "awaiting owner"}`,
+      `Submitted at (UTC): ${context.startup.submittedAt === undefined ? "Unavailable" : new Date(context.startup.submittedAt).toISOString()}`,
+      `Owner started at (UTC): ${context.startup.startedAt === undefined ? "Unavailable" : new Date(context.startup.startedAt).toISOString()}`,
+      `Setup started at (UTC): ${context.startup.setupProgress?.startedAt === undefined ? "Unavailable" : new Date(context.startup.setupProgress.startedAt).toISOString()}`,
+      `Startup elapsed (ms): ${context.startup.submittedAt === undefined ? "Unavailable" : Math.max(0, (context.startup.finishedAt ?? Date.now()) - context.startup.submittedAt)}`,
+    ] : []),
     ...federationLines(context),
     ...(remoteThreadContext
       ? viewerSupportLines(metadata)

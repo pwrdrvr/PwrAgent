@@ -110,6 +110,46 @@ test("launchpad creation validates ownership and unsupported settings before cre
   await assert.rejects(restricted.call("materializeDirectoryLaunchpad", params), /capability|forbidden/i);
 });
 
+test("a thread is named from its first prompt, persists the name and tells subscribed viewers", { timeout: 20000 }, async (t) => {
+  const h = await setup(t);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: await port() })).invite);
+  let v = await viewer(invite);
+  t.after(() => v.connection.close());
+  v.subscribe();
+  const prompt = "Please summarize the npm 1.3.7 smoke results for the release notes.";
+  const created = await v.call("materializeDirectoryLaunchpad", { directoryKey: h.workspace, launchpad: { prompt } });
+  const title = "Summarize the npm 1.3.7 smoke results for the release notes";
+  const events = () => v.events.filter((event) => event.method === "backend.event").map((event) => event.params.notification);
+  const renamed = await eventually(() => events().find((event) => event.method === "thread/name/updated"));
+  assert.deepEqual(renamed.params, { threadId: created.threadId, threadName: title, titleSource: "derived" });
+  assert.ok(events().some((event) => event.method === "navigation/invalidated" && event.params.sourceMethod === "thread/name/updated"
+    && event.params.threadId === created.threadId), "navigation viewers refresh the row");
+  const row = (await v.call("getNavigationQueryPage", { protocol: 2, query: { kind: "lens", lens: "inbox" } })).entries[0].row;
+  assert.equal(row.title, title);
+  assert.equal(row.titleSource, "derived");
+  const idle = (threadId) => eventually(async () => (await v.call("resolveThread", { threadId })).thread.threadStatus === "idle");
+  await idle(created.threadId);
+  await v.call("startTurn", { backend: "codex", threadId: created.threadId, input: [{ type: "text", text: "A later turn is not the title" }] });
+  assert.equal((await v.call("resolveThread", { threadId: created.threadId })).thread.title, title);
+  await idle(created.threadId);
+  // A thread submitted from the local CLI is named the same way.
+  await h.submit("cli-job", "Can you check the release checklist for 1.3.8?");
+  const cliThread = (await h.finished("cli-job")).threadId;
+  v.connection.close();
+  await h.stop(h.daemon);
+  const registry = JSON.parse(readFileSync(path.join(h.directory, "threads.json"), "utf8"));
+  assert.deepEqual(registry.threads.map(({ id, title: name, titleSource }) => ({ id, name, titleSource })), [
+    { id: created.threadId, name: title, titleSource: "derived" },
+    { id: cliThread, name: "Check the release checklist for 1.3.8?", titleSource: "derived" },
+  ]);
+  await h.start();
+  v = await viewer(invite, v.identity, "reconnect");
+  assert.equal((await v.call("resolveThread", { threadId: created.threadId })).thread.title, title, "the name survives a restart");
+  await v.call("renameThread", { threadId: cliThread, title: "Release checklist" });
+  const renamedRow = (await v.call("resolveThread", { threadId: cliThread })).thread;
+  assert.deepEqual([renamedRow.title, renamedRow.titleSource], ["Release checklist", "explicit"]);
+});
+
 test("SCP-style invite import joins through an outbound SSH-forward equivalent, survives tunnel loss and rejoins", { timeout: 20000 }, async (t) => {
   const gateway = await setup(t);
   const outpost = await setup(t);
@@ -190,6 +230,30 @@ test("ungranted mutation capabilities and wrong pinned keys fail closed", { time
   const reconnected = await viewer(second, limited.identity, "reconnect", HEADLESS_CAPABILITIES);
   t.after(() => reconnected.connection.close());
   assert.deepEqual(reconnected.connection.capabilities, HEADLESS_CAPABILITIES);
+});
+
+test("owner methods require the same grants as on desktop", { timeout: 15000 }, async (t) => {
+  const h = await setup(t);
+  const listenPort = await port();
+  const enroll = async (grants) => {
+    const v = await viewer(decodeFederationInvite((await h.rpc("federation-invite", { port: listenPort })).invite), undefined, "enroll", grants);
+    t.after(() => v.connection.close());
+    return v;
+  };
+  const owner = await enroll(HEADLESS_CAPABILITIES);
+  const created = await owner.call("startThread", { backend: "codex", cwd: h.workspace });
+  const ref = { backend: "codex", threadId: created.threadId };
+  const navigation = await enroll(["thread_navigation"]);
+  assert.equal((await navigation.call("getNavigationQueryPage", { protocol: 2, query: { kind: "lens", lens: "inbox" } })).entries.length, 1);
+  for (const [method, params] of [["getNavigationSelectedDetail", { protocol: 2, ref }], ["getNavigationQueueProjection", { protocol: 2, ref }],
+    ["getNavigationLaunchpadConfig", { protocol: 2, directoryKey: h.workspace }], ["listBackends", {}]]) {
+    await assert.rejects(navigation.call(method, params), /capability/i, `${method} needs thread_detail`);
+  }
+  const detail = await enroll(["thread_navigation", "thread_detail"]);
+  assert.equal((await detail.call("getNavigationSelectedDetail", { protocol: 2, ref })).identity, "present");
+  const noEnvironment = await enroll(HEADLESS_CAPABILITIES.filter((capability) => capability !== "environment_actions"));
+  await assert.rejects(noEnvironment.call("materializeDirectoryLaunchpad", { directoryKey: h.workspace, launchpad: {} }), /capability/i);
+  assert.equal(h.calls().filter((message) => message.method === "thread/start").length, 1, "a refused launchpad creates no thread");
 });
 
 for (const relay of [false, true]) {

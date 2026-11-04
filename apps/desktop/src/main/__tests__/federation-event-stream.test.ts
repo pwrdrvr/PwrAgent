@@ -22,6 +22,18 @@ function accounting(invocations: ThreadToolInvocationRecord[]): AgentEvent {
 }
 
 describe("federation accounting stream", () => {
+  it.each(["codex", "claude"] as const)("keeps retained %s image previews in streamed events", (backend) => {
+    const event: AgentEvent = {
+      backend,
+      rendererImageParts: [{ type: "image", url: "pwragent-image://federation/owner/retained" }],
+      notification: { method: "item/completed", params: {
+        threadId: "thread-1", item: { id: "reply", type: "agentMessage", text: "Preview" },
+      } },
+    };
+    const encoded = new FederationAccountingStream().encode(event, { epoch: "s", sequence: 1 });
+    expect(new FederationAccountingStream().decode(encoded)).toEqual(event);
+  });
+
   it("keeps a busy minute proportional to changes rather than accumulated tool history", () => {
     const sender = new FederationAccountingStream();
     const receiver = new FederationAccountingStream();

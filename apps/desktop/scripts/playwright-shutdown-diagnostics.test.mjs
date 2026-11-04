@@ -230,6 +230,16 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
         attemptToGracefullyClose: () => ${mode === "pipe" ? "Promise.resolve()" : "new Promise(() => {})"},
       });
       expect(launched.launchedProcess.pid).toBeGreaterThan(0);
+      ${mode === "large-snapshot" ? `
+      const getReport = process.report.getReport.bind(process.report);
+      process.report.getReport = () => ({
+        ...getReport(),
+        libuv: Array.from({ length: 128 }, () => ({
+          type: 'pipe', is_active: true, is_referenced: true,
+          remoteEndpoint: String.fromCharCode(1).repeat(1_000),
+        })),
+      });
+      ` : ""}
       ${milestone(root, "test-process-launched")}
       ${mode === "pipe" ? "await new Promise(resolve => launched.launchedProcess.once('exit', resolve));" : ""}
       ${mode === "healthy" ? "await launched.kill();" : ""}
@@ -277,7 +287,15 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
   const artifacts = files.map((file) => ({ file, text: readFileSync(path.join(diagnosticsRoot, file), "utf8") }));
   expect(artifacts.map(({ text }) => text).join("\n")).not.toContain("must-not-appear-in-artifacts");
   expect(artifacts.find(({ file }) => file.endsWith("timeline.jsonl"))?.text).toContain('"kind":"worker-start"');
-  return { ...result, parent: started.snapshot(), artifacts, snapshots: artifacts.filter(({ file }) => file.includes("snapshot-")).map(({ text }) => JSON.parse(text)) };
+  const prefix = "[worker-shutdown-evidence] ";
+  const evidenceLines = (result.stdout + result.stderr).split("\n").filter((line) => line.includes(prefix));
+  const loggedEvidence = evidenceLines.map((line) => {
+    const json = line.slice(line.indexOf(prefix) + prefix.length);
+    expect(Buffer.byteLength(json)).toBeLessThanOrEqual(16_384);
+    return JSON.parse(json);
+  });
+  expect(result.stdout + result.stderr).not.toContain("must-not-appear-in-artifacts");
+  return { ...result, loggedEvidence, parent: started.snapshot(), artifacts, snapshots: artifacts.filter(({ file }) => file.includes("snapshot-")).map(({ text }) => JSON.parse(text)) };
 }
 
 describe("real Playwright worker shutdown diagnostics", () => {
@@ -337,8 +355,16 @@ describe("real Playwright worker shutdown diagnostics", () => {
     const artifact = result.artifacts.find(({ file }) => file.endsWith("process-tree.json"));
     expect(artifact, result.stdout + result.stderr).toBeDefined();
     const tree = JSON.parse(artifact.text);
-    // The probe root is deleted after the run, so this message is the only
-    // copy of the failure classification a CI log keeps.
+    const loggedSnapshot = result.loggedEvidence.find(({ kind }) => kind === "snapshot");
+    expect(loggedSnapshot).toMatchObject({ workerPid: snapshot.workerPid, phase: snapshot.phase });
+    expect(loggedSnapshot.processes).toContainEqual(expect.objectContaining({
+      pid: pending.pid, owner: pending.owner, stage: pending.stage,
+      exitObserved: pending.exitObserved, closeObserved: pending.closeObserved, stdio: pending.stdio,
+    }));
+    expect(loggedSnapshot.handles.length).toBeGreaterThan(0);
+    expect(JSON.stringify(loggedSnapshot)).not.toContain("launchStack");
+    expect(result.loggedEvidence).toContainEqual(expect.objectContaining({ kind: "process-tree", workerPid: snapshot.workerPid }));
+    // Keep failure classification visible if the temporary probe is removed.
     const record = JSON.stringify(tree);
     if (tree.status === "interrupted") {
       // The worker owns its exit deadline. A pending asynchronous query must
@@ -381,6 +407,9 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(tree.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(tree.processes).toBeUndefined();
     expect(tree.queryPid).toBeGreaterThan(0);
+    expect(result.loggedEvidence).toContainEqual(expect.objectContaining({
+      kind: "process-tree", status: "interrupted", reason: "worker-exit", queryPid: tree.queryPid,
+    }));
     await expect.poll(() => {
       try {
         process.kill(tree.queryPid, 0);
@@ -409,10 +438,23 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(pending.stdio.some(({ fd, destroyed }) => fd === 1 && !destroyed)).toBe(true);
   }, PROBE_TEST_TIMEOUT_MS);
 
+  it("bounds failure logs while retaining the full snapshot artifact", async () => {
+    const result = await probe("large-snapshot");
+    expect(result.code, result.stdout + result.stderr).toBe(1);
+    const logged = result.loggedEvidence.find(({ kind }) => kind === "snapshot");
+    expect(logged).toMatchObject({ referencedHandleCount: 128, byteLimitReached: true });
+    expect(logged.handles.length).toBeGreaterThan(0);
+    expect(logged.handles.length).toBeLessThan(32);
+    expect(logged.processes[0].owner.title).toBe("identifiable shutdown probe");
+    expect(result.snapshots[0].report.libuv).toHaveLength(128);
+    expect(result.snapshots[0].report.libuv[0].remoteEndpoint).toHaveLength(1_000);
+  }, PROBE_TEST_TIMEOUT_MS);
+
   it("leaves healthy cleanup green without expensive snapshots", async () => {
     const result = await probe("healthy");
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(result.snapshots).toHaveLength(0);
+    expect(result.loggedEvidence).toHaveLength(0);
     const events = result.parent.events.map(({ kind }) => kind);
     expect(events).toEqual(expect.arrayContaining(["spawn", "worker-ready-observed", "exit", "close", "exec-callback"]));
     expect(events.indexOf("exit")).toBeLessThan(events.indexOf("close"));

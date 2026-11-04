@@ -283,6 +283,7 @@ export function GeneralSettings(props: {
   const themedDockIcon = props.snapshot.general.appearance.themedDockIcon;
   const terminalMinimumContrast =
     props.snapshot.general.appearance.terminalMinimumContrast;
+  const calmMotion = props.snapshot.general.appearance.calmMotion;
   const messagingAcknowledgment =
     props.snapshot.general.messagingAcknowledgment;
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
@@ -417,6 +418,16 @@ export function GeneralSettings(props: {
                 }}
               />
             ) : null}
+            <ToggleField
+              checked={appearance.calmMotion}
+              disabled={props.saving}
+              label="Calm motion"
+              sub="Spinners, the thinking scanner and status pulses move twice when they start, then hold still. Saves GPU work. Your system's Reduce Motion setting stops them entirely."
+              source={sourceBadge(calmMotion)}
+              onChange={async (next) => {
+                props.appearanceController?.setCalmMotion(next);
+              }}
+            />
             <SettingsField
               label="Info density"
               sub="How much rides on each thread row. Each preview is the same four threads."

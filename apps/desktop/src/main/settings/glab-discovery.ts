@@ -52,6 +52,7 @@ export async function discoverGlabCommands(params?: {
   env?: NodeJS.ProcessEnv;
   includeFailedAutoCandidates?: boolean;
   platform?: NodeJS.Platform;
+  signal?: AbortSignal;
 }): Promise<DesktopGlabDiscoverySnapshot> {
   const env = params?.env ?? process.env;
   const envOverride = env[GLAB_COMMAND_ENV]?.trim();
@@ -60,6 +61,7 @@ export async function discoverGlabCommands(params?: {
   const discovery = await discoverCommands<DesktopGlabCandidateSource>({
     env,
     platform: params?.platform,
+    signal: params?.signal,
     fixedCandidates: [
       { command: envOverride, source: "env" },
       { command: configuredCommand, source: "config" },

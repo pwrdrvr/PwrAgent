@@ -10,6 +10,7 @@ import { Select } from "../../components/Select";
 import { usageClock, usageMoney } from "./usage-activity-presentation";
 import type { OwnedUsageRow, UsageGroup } from "./usage-activity-summary";
 import { UsageSignals, turnSignals } from "./UsageSignals";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 const priced = (row: OwnedUsageRow) => row.line.priceStatus === "priced" && row.line.currency === "USD";
 const cacheShare = (row: OwnedUsageRow) => {
@@ -195,6 +196,9 @@ export function UsageInspector(props: {
           ? `${props.total ? Math.round(group.cost / props.total * 100) : 0}% of the window · ${group.rows.length} ${group.rows.length === 1 ? "turn" : "turns"}${group.helperThreads ? `, ${usageMoney(group.helperCost)} from helpers` : ""}`
           : "from the window total"}</span></div>
       {analysis && group ? <>
+        {/* The Analysis tab's ring is paired: while it runs, the footer below
+            both tabs names the work ("Reading on …"), so it can go still
+            under reduced motion. Keep that line outside the tab panels. */}
         <div className="usage-inspector__tabs" role="tablist" aria-label="Inspection"
           onKeyDown={(event) => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -205,7 +209,7 @@ export function UsageInspector(props: {
           }}>
           {(["details", "analysis"] as const).map((key) => <button type="button" role="tab" key={key} id={`usage-inspector-tab-${key}`}
             aria-selected={tab === key} aria-controls="usage-inspector-panel" tabIndex={tab === key ? 0 : -1}
-            onClick={() => selectTab(key)}>{key === "details" ? "Details" : "Analysis"}{key === "analysis" && running ? <span className="pending-spinner pending-spinner--sm" aria-hidden="true" /> : null}</button>)}
+            onClick={() => selectTab(key)}>{key === "details" ? "Details" : "Analysis"}{key === "analysis" && running ? <PendingSpinner pairing="paired" size="sm" /> : null}</button>)}
         </div>
         <div id="usage-inspector-panel" role="tabpanel" aria-labelledby={`usage-inspector-tab-${tab}`}>
           {tab === "details" ? turnList : <>{outcome}{settings}</>}
@@ -214,7 +218,7 @@ export function UsageInspector(props: {
     </div>
     <div className="usage-inspector__footer">
       {running ? <p className="usage-inspector__progress" role="status">
-        <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+        <PendingSpinner pairing="paired" size="sm" />
         Reading on {analysis.owner} and asking {analysis.modelLabel} · {elapsed} s</p>
         : analyzing ? <p className="usage-inspector__progress">Another thread's analysis is still running.</p> : null}
       <button type="button" className="usage-button usage-button--primary" disabled={analyzing || !props.canAnalyze} onClick={props.onAnalyze}>

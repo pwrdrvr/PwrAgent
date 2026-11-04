@@ -1,4 +1,4 @@
-import type { SubmitServerRequestRequest } from "@pwragent/shared";
+import type { ForgeApprovalRememberOptionId, SubmitServerRequestRequest } from "@pwragent/shared";
 import {
   buildPendingRequestActions,
   buildPendingRequestResponse,
@@ -6,6 +6,7 @@ import {
 import {
   buildMcpElicitationResponse,
   readMcpApprovalPersistence,
+  readMcpRememberOptions,
   type McpApprovalPersistence,
 } from "../thread-detail/mcp-elicitation";
 import type { OperatorWait } from "./operator-waits";
@@ -60,12 +61,13 @@ function mcpApprovalChoices(wait: OperatorWait): ApprovalChoices | undefined {
     busyLabel: string,
     action: "accept" | "decline" | "cancel",
     persist?: McpApprovalPersistence,
+    remember?: ForgeApprovalRememberOptionId,
   ): ApprovalChoice => ({
     id,
     label,
     effect: action === "accept" ? "allow" : action,
     busyLabel,
-    buildResponse: () => buildMcpElicitationResponse(mcp, action, persist),
+    buildResponse: () => buildMcpElicitationResponse(mcp, action, persist, remember),
   });
   const decline = choice("decline", "Decline", "Declining…", "decline");
   if (mcp.url) return { decline, alternatives: [] };
@@ -92,6 +94,17 @@ function mcpApprovalChoices(wait: OperatorWait): ApprovalChoices | undefined {
   }
   if (persistence.includes("always")) {
     alternatives.push(choice("always", "Always allow", "Allowing…", "accept", "always"));
+  }
+  // A forge approval can save the answer as a project rule, as its card can.
+  for (const option of readMcpRememberOptions(mcp)) {
+    alternatives.push(choice(
+      `remember:${option.id}`,
+      option.label,
+      "Allowing…",
+      "accept",
+      undefined,
+      option.id,
+    ));
   }
   alternatives.push(choice("cancel", "Cancel turn", "Cancelling…", "cancel"));
   return {

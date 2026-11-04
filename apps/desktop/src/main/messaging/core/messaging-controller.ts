@@ -270,6 +270,8 @@ import {
   type MessagingWorkspaceHandoffContext,
 } from "./messaging-status-card.js";
 import {
+  acpBackendDeclaresExecutionMode,
+  acpBackendUsesExecutionModePermissions,
   buildMessagingAcpRuntimeModeSummary,
   messagingAcpRuntimeValueLooksPrivileged,
 } from "./messaging-acp-runtime.js";
@@ -4568,10 +4570,12 @@ export class MessagingController {
       : currentBinding;
     let admissionState: MessagingThreadAdmissionState | undefined;
     try {
+      // Completion can drain an empty local queue while media is preparing.
+      // Read occupancy now so an earlier busy snapshot cannot strand this input.
       admissionState = await this.options.backend.getThreadAdmissionState({
-        backend: consumedSkillBinding.backend,
-        federationTarget: federationTargetForBinding(consumedSkillBinding),
-        threadId: consumedSkillBinding.threadId,
+        backend: currentBinding.backend,
+        federationTarget: federationTargetForBinding(currentBinding),
+        threadId: currentBinding.threadId,
       });
       this.markAdmissionStage(bundle.events[0], "admissionStateResolved");
     } catch (error) {
@@ -9329,6 +9333,7 @@ export class MessagingController {
           ? directoryForProjectSelection(navigation, nextSession.selectedProject)
           : undefined;
         const runtimeChoices = summary
+          && !acpBackendUsesExecutionModePermissions(summary)
           ? buildMessagingAcpRuntimeModeSummary({
               backend: summary,
               runtime: newThreadOptionsForSession(
@@ -10174,10 +10179,14 @@ export class MessagingController {
           (model) => model.supportsReasoning,
         ),
       );
+    const acpExecutionModePermissions =
+      acpBackendUsesExecutionModePermissions(selectedBackend);
     const supportsPermissionsControls =
       !isAcpBackendId(selectedBackend.kind) ||
+      acpExecutionModePermissions ||
       options.executionMode === "full-access";
     const acpRuntimeMode = isAcpBackendId(selectedBackend.kind)
+      && !acpExecutionModePermissions
       ? buildMessagingAcpRuntimeModeSummary({
           backend: selectedBackend,
           runtime: options.acpRuntime,
@@ -10766,6 +10775,18 @@ export class MessagingController {
       navigation.launchpadDefaults.executionMode;
     if (executionMode === currentMode) {
       await this.presentNewThreadPromptGate(session, event, navigation);
+      return;
+    }
+    const backendKind = session.backend ?? navigation.launchpadDefaults.backend;
+    if (
+      isAcpBackendId(backendKind)
+      && executionMode !== "default"
+      && !acpBackendDeclaresExecutionMode(
+        await this.getBackendSummary(backendKind),
+        executionMode,
+      )
+    ) {
+      await this.deliverInvalidBrowseSelection(event);
       return;
     }
     if (executionMode === "full-access") {
@@ -12784,7 +12805,10 @@ export class MessagingController {
           backend: summary,
           runtime: thread?.acpRuntime ?? binding.preferences?.acpRuntime,
         });
-        if (runtimeMode.choices.length > 0) {
+        if (
+          !acpBackendUsesExecutionModePermissions(summary)
+          && runtimeMode.choices.length > 0
+        ) {
           await this.presentStatusAcpRuntimeModePicker(binding, event);
         } else {
           await this.presentPermissionsPicker(binding, event);
@@ -14046,6 +14070,20 @@ export class MessagingController {
     if (executionMode === currentMode) {
       await this.clearActiveBindingSubmodeIntent(event, binding);
       await this.renderBindingStatus(binding, event, navigation);
+      return;
+    }
+    if (
+      isAcpBackendId(binding.backend)
+      && executionMode !== "default"
+      && !acpBackendDeclaresExecutionMode(
+        await this.getBackendSummary(
+          binding.backend,
+          federationTargetForBinding(binding),
+        ),
+        executionMode,
+      )
+    ) {
+      await this.deliverInvalidStatusSelection(event);
       return;
     }
     if (executionMode === "full-access") {
@@ -15789,13 +15827,17 @@ export class MessagingController {
       navigation ??
       (await this.readMonitorRows(binding.monitor, federationTargetForBinding(binding)));
     const now = this.now();
+    // Startup and timer renders have no inbound operator event.
+    const countsAsActivity = event !== undefined;
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
       binding.monitor,
+      countsAsActivity,
     );
     const snippetsByThreadKey = await this.resolveMonitorSnippets(
       snapshot,
       binding.monitor,
+      countsAsActivity,
     );
     const intent = buildMonitorStatusIntent({
       activeTurnsByThreadKey: activeTurns,
@@ -15841,13 +15883,16 @@ export class MessagingController {
       navigation ??
       (await this.readMonitorRows(subscription.monitor));
     const now = this.now();
+    const countsAsActivity = event !== undefined;
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
       subscription.monitor,
+      countsAsActivity,
     );
     const snippetsByThreadKey = await this.resolveMonitorSnippets(
       snapshot,
       subscription.monitor,
+      countsAsActivity,
     );
     const intent = {
       ...buildMonitorStatusIntent({
@@ -16028,6 +16073,7 @@ export class MessagingController {
   private async resolveMonitorActiveTurns(
     navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
+    countsAsActivity = true,
   ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
     const activeTurns = new Map(this.activeTurnsByThreadKey);
     if (!this.options.backend.readThreadStatus) {
@@ -16044,6 +16090,7 @@ export class MessagingController {
             backend: thread.source,
             federationTarget: federationTargetForThread(thread),
             threadId: thread.id,
+            ...(countsAsActivity ? {} : { countsAsActivity: false }),
           });
           if (status === "active") {
             activeTurns.set(threadKey, {
@@ -16077,6 +16124,7 @@ export class MessagingController {
   private async resolveMonitorSnippets(
     navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
+    countsAsActivity = true,
   ): Promise<ReadonlyMap<string, string>> {
     const snippets = new Map<string, string>();
     if (
@@ -16096,6 +16144,7 @@ export class MessagingController {
               backend: thread.source,
               federationTarget: federationTargetForThread(thread),
               threadId: thread.id,
+              ...(countsAsActivity ? {} : { countsAsActivity: false }),
             });
           const trimmed = text?.trim();
           if (trimmed) {
@@ -21807,7 +21856,10 @@ function newThreadPromptGateBody(
   toolUpdateMode: MessagingToolUpdateMode,
   showStreaming: boolean,
 ): string {
+  const acpExecutionModePermissions =
+    acpBackendUsesExecutionModePermissions(backend);
   const acpRuntimeMode = isAcpBackendId(options.backend)
+    && !acpExecutionModePermissions
     ? buildMessagingAcpRuntimeModeSummary({
         backend,
         runtime: options.acpRuntime,
@@ -21826,7 +21878,10 @@ function newThreadPromptGateBody(
     `Provider: ${backend.label}`,
     `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
     options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
-    acpRuntimeMode || !isAcpBackendId(options.backend) || options.executionMode === "full-access"
+    acpRuntimeMode
+      || !isAcpBackendId(options.backend)
+      || acpExecutionModePermissions
+      || options.executionMode === "full-access"
       ? `Permissions: ${permissionsLabel}`
       : undefined,
     options.codexEnvironmentOptions.length > 0 || options.codexEnvironmentId

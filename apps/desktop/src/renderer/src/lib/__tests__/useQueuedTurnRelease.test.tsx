@@ -783,6 +783,81 @@ describe("useQueuedTurnRelease", () => {
     expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
   });
 
+  it("never starts a failed scheduled review when the thread goes idle", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "review-turn",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    // The shape the scheduled-action projection gives a failed review.
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "scheduled-projection:scheduled-1",
+      failedScheduledActionId: "scheduled-1",
+      errorMessage: "Thread already has an active turn in progress",
+      text: "/review main",
+      imageAttachments: [],
+      fileAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: {
+          type: "baseBranch",
+          branch: "main",
+        },
+      },
+    });
+
+    const backend = backendSummary();
+    backend.capabilities.startReview = true;
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backend],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toMatchObject({
+      failedScheduledActionId: "scheduled-1",
+    });
+  });
+
   it("releases a queued review on its picked reviewer, not the thread's", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const startReview = vi.fn(async (request: StartReviewRequest) => ({

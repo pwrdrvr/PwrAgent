@@ -49,7 +49,7 @@ it("inserts relative to the current owner order and preserves every unloaded sib
     const repeated = await measureSqliteWrites(async () => {
       expect(await store.updateSubthreadOrder(request)).toEqual(expected);
     });
-    expect(repeated.writes.commits).toBe(1);
+    expect(repeated.writes.commits).toBe(0);
     expect(repeated.writes.rowsChanged).toBe(0);
     expect(repeated.writes.statements).toBe(0);
     await store.setThreadParent({ backend: "codex", threadId: "child-50", parentThreadId: "other-root" });

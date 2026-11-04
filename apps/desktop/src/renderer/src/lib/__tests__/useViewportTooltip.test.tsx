@@ -13,6 +13,7 @@ import {
   TOOLTIP_HOVER_DELAY_MS,
   useViewportTooltip,
 } from "../useViewportTooltip";
+import { anchorRectsMatch, observeTooltipAnchor } from "../observe-tooltip-anchor";
 
 afterEach(() => {
   cleanup();
@@ -1008,5 +1009,367 @@ describe("pointer-anchored viewport tooltips", () => {
     // The next move over the large target starts its own tooltip again.
     fireEvent.mouseMove(screen.getByTestId("large-target"), { clientX: 310, clientY: 210 });
     expect(screen.getByRole("tooltip")).toHaveTextContent("Click here");
+  });
+});
+
+
+describe("tooltip observation budgets", () => {
+  async function deliverMutations() {
+    await act(async () => { await Promise.resolve(); });
+  }
+
+  it("does no observer, anchor geometry or scheduled work for 100 unrelated streaming deliveries", async () => {
+    const NativeMutationObserver = MutationObserver;
+    let deliveries = 0;
+    vi.stubGlobal("MutationObserver", class extends NativeMutationObserver {
+      constructor(callback: MutationCallback) {
+        super((records, observer) => { deliveries += 1; callback(records, observer); });
+      }
+    });
+    mockAnchorRectangleFromLayout();
+    render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
+    const frame = vi.spyOn(window, "requestAnimationFrame");
+    const stream = screen.getByTestId("unrelated-update");
+    deliveries = 0;
+    for (let index = 0; index < 100; index += 1) {
+      stream.textContent = `Stream chunk ${index}`;
+      stream.setAttribute("data-sequence", String(index));
+      await deliverMutations();
+    }
+    expect(deliveries).toBe(0);
+    expect(geometry).toHaveBeenCalledTimes(0);
+    expect(frame).toHaveBeenCalledTimes(0);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+  });
+
+  /** Native geometry observers that stay silent unless a test notifies them. */
+  function stubNativeGeometryObservers() {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: ResizeObserverCallback) { resizeCallbacks.push(callback); }
+      observe(): void {}
+      disconnect(): void {}
+    });
+    vi.stubGlobal("IntersectionObserver", class {
+      observe(): void {}
+      disconnect(): void {}
+    });
+    return { resizeCallbacks };
+  }
+
+  /** Run each requested frame once the current delivery has settled. */
+  function runFramesAfterDelivery() {
+    const frames: FrameRequestCallback[] = [];
+    const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const drain = () => {
+      act(() => {
+        for (const frame of frames.splice(0)) frame(0);
+      });
+    };
+    return { request, drain };
+  }
+
+  it("does no anchor geometry or scheduled work for 100 updates inside its own anchor", async () => {
+    stubNativeGeometryObservers();
+    mockAnchorRectangleFromLayout();
+    const { rerender } = render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
+    const { request, drain } = runFramesAfterDelivery();
+    const marker = document.createElement("span");
+    for (let index = 0; index < 100; index += 1) {
+      // A live meter: its text, its label and its class change per token.
+      rerender(
+        <AnchorLifecycleFixture
+          anchorLabel={`${index}% context used`}
+          anchorStatus={index % 2 === 0 ? "streaming" : "pending"}
+        />,
+      );
+      anchor.append(marker);
+      await deliverMutations();
+      marker.remove();
+      await deliverMutations();
+      drain();
+    }
+    expect(screen.getByRole("button")).toBe(anchor);
+    expect(anchor).toHaveTextContent("99% context used");
+    expect(geometry).toHaveBeenCalledTimes(0);
+    expect(request).toHaveBeenCalledTimes(0);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+  });
+
+  it("still checks an anchor resize reported while its content streams", async () => {
+    const { resizeCallbacks } = stubNativeGeometryObservers();
+    mockAnchorRectangleFromLayout();
+    const { rerender } = render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.fn(() => rectangle({ left: 20, top: 80, width: 200, height: 26 }));
+    anchor.getBoundingClientRect = geometry;
+    const { request, drain } = runFramesAfterDelivery();
+    rerender(<AnchorLifecycleFixture anchorLabel="A much longer streamed label" />);
+    await deliverMutations();
+    expect(request).toHaveBeenCalledTimes(0);
+    act(() => {
+      for (const callback of resizeCallbacks) {
+        callback([{
+          target: anchor,
+          borderBoxSize: [{ inlineSize: 200, blockSize: 26 }],
+        } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+      }
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    drain();
+    expect(geometry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("still checks geometry in a frame when an ancestor's attributes change", async () => {
+    stubNativeGeometryObservers();
+    mockAnchorRectangleFromLayout();
+    render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const { request, drain } = runFramesAfterDelivery();
+    screen.getByTestId("anchor-layout").dataset.anchorTop = "180";
+    await deliverMutations();
+    expect(request).toHaveBeenCalledTimes(1);
+    drain();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("closes synchronously when an anchor update removes it, without a frame", async () => {
+    stubNativeGeometryObservers();
+    mockAnchorRectangleFromLayout();
+    const { rerender } = render(<AnchorLifecycleFixture />);
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    await deliverMutations();
+    const { request } = runFramesAfterDelivery();
+    rerender(<AnchorLifecycleFixture showAnchor={false} />);
+    await deliverMutations();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(request).toHaveBeenCalledTimes(0);
+  });
+
+  it("falls back to a frame for an inline anchor, which ResizeObserver cannot measure", async () => {
+    stubNativeGeometryObservers();
+    mockAnchorRectangleFromLayout();
+    const { rerender } = render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    anchor.style.display = "inline";
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const { request } = runFramesAfterDelivery();
+    rerender(<AnchorLifecycleFixture anchorLabel="Streamed label" />);
+    await deliverMutations();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to a frame for anchor content updates without native geometry observers", async () => {
+    mockAnchorRectangleFromLayout();
+    const { rerender } = render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
+    const { request, drain } = runFramesAfterDelivery();
+    rerender(<AnchorLifecycleFixture anchorLabel="Streamed label" />);
+    await deliverMutations();
+    expect(request).toHaveBeenCalledTimes(1);
+    drain();
+    expect(geometry).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+  });
+
+  it("coalesces relevant mutations before a frame and cancels the owned frame on unmount", async () => {
+    mockAnchorRectangleFromLayout();
+    const { unmount } = render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
+    const frames: FrameRequestCallback[] = [];
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return 42;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame");
+    for (let index = 0; index < 100; index += 1) {
+      anchor.setAttribute("data-sequence", String(index));
+      await deliverMutations();
+    }
+    expect(geometry).toHaveBeenCalledTimes(0);
+    expect(frame).toHaveBeenCalledTimes(1);
+    act(() => { frames[0]!(0); });
+    expect(geometry).toHaveBeenCalledTimes(1);
+    anchor.setAttribute("data-sequence", "next");
+    await deliverMutations();
+    unmount();
+    expect(cancel).toHaveBeenCalledWith(42);
+    act(() => { frames[1]!(0); });
+    expect(geometry).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates animation completion when the same anchor is reopened", async () => {
+    mockAnchorRectangleFromLayout();
+    const animation = stubAncestorAnimation();
+    render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    fireEvent.mouseLeave(anchor);
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
+    await act(async () => { animation.finish(); await Promise.resolve(); });
+    expect(geometry).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+  });
+
+  it("ignores animation completion after unmount", async () => {
+    mockAnchorRectangleFromLayout();
+    const animation = stubAncestorAnimation();
+    const { unmount } = render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
+    unmount();
+    await act(async () => { animation.finish(); await Promise.resolve(); });
+    expect(geometry).toHaveBeenCalledTimes(0);
+  });
+
+  it("transfers observation when a connected anchor is reparented without moving", async () => {
+    mockAnchorRectangleFromLayout();
+    render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    const parent = document.createElement("div");
+    parent.dataset.anchorTop = "80";
+    screen.getByTestId("unrelated-update").append(parent);
+    parent.append(anchor);
+    await deliverMutations();
+    await waitFor(() => expect(screen.getByRole("tooltip")).toBeInTheDocument());
+    parent.dataset.anchorTop = "180";
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+  });
+
+  it("checks a native anchor resize once in the owned frame and disconnects on hide", async () => {
+    let notify = () => {};
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      target?: Element;
+      constructor(callback: (entries: ResizeObserverEntry[]) => void) {
+        notify = () => callback([{
+          target: this.target!,
+          borderBoxSize: [{ inlineSize: 160 + 1 / 64, blockSize: 26 }],
+        } as unknown as ResizeObserverEntry]);
+      }
+      observe(target: Element) { this.target = target; }
+      disconnect = disconnect;
+    });
+    mockAnchorRectangleFromLayout();
+    render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.fn(() => rectangle({ left: 20, top: 80, width: 160 + 1 / 64, height: 26 }));
+    anchor.getBoundingClientRect = geometry;
+    let frame: FrameRequestCallback = () => {};
+    const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frame = callback;
+      return 42;
+    });
+    for (let index = 0; index < 100; index += 1) notify();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(geometry).toHaveBeenCalledTimes(0);
+    act(() => frame(0));
+    expect(geometry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 1e-13])("does not schedule geometry for an unchanged native size with roundoff %s", async (roundoff) => {
+    let notify = () => {};
+    vi.stubGlobal("ResizeObserver", class {
+      target?: Element;
+      constructor(private callback: (entries: ResizeObserverEntry[]) => void) {
+        notify = () => this.callback([{
+          target: this.target!,
+          borderBoxSize: [{ inlineSize: 160 + roundoff, blockSize: 26 + roundoff }],
+        } as unknown as ResizeObserverEntry]);
+      }
+      observe(target: Element) { this.target = target; }
+      disconnect = vi.fn();
+    });
+    mockAnchorRectangleFromLayout();
+    render(<AnchorLifecycleFixture />);
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    await deliverMutations();
+    const request = vi.spyOn(window, "requestAnimationFrame");
+    notify();
+    expect(request).toHaveBeenCalledTimes(0);
+  });
+
+  it("never observes the body subtree for attributes, text or child mutations", async () => {
+    const observe = vi.spyOn(MutationObserver.prototype, "observe");
+    render(<AnchorLifecycleFixture />);
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    await deliverMutations();
+    expect(observe.mock.calls.some(([element, options]) =>
+      element === document.body && options?.subtree,
+    )).toBe(false);
+  });
+});
+
+describe("observeTooltipAnchor native geometry", () => {
+  const baseline = { top: 100, right: 300, bottom: 140, left: 200 };
+
+  function rect(values: typeof baseline): DOMRectReadOnly {
+    return { ...values, x: values.left, y: values.top,
+      width: values.right - values.left, height: values.bottom - values.top,
+      toJSON: () => values } as DOMRectReadOnly;
+  }
+
+  it("checks the newest intersection entry when a delivery batches several", () => {
+    const callbacks: IntersectionObserverCallback[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: IntersectionObserverCallback) { callbacks.push(callback); }
+      observe(): void {}
+      disconnect(): void {}
+    });
+    const target = document.createElement("button");
+    document.body.append(target);
+    const check = vi.fn();
+    const stop = observeTooltipAnchor(target, baseline, () => null, check);
+    const moved = rect({ top: 160, right: 300, bottom: 200, left: 200 });
+    const entry = (boundingClientRect: DOMRectReadOnly, intersectionRatio: number) =>
+      ({ target, boundingClientRect, intersectionRatio }) as unknown as IntersectionObserverEntry;
+    // The initial notification and a later move arrive in one delivery.
+    callbacks[0]!([entry(rect(baseline), 1), entry(moved, 0)], {} as IntersectionObserver);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledWith(moved);
+    stop();
+    target.remove();
+  });
+
+  it("ignores floating-point roundoff and still detects a 1/64-pixel move", () => {
+    expect(anchorRectsMatch({ ...baseline, top: 100 + 1e-13 }, baseline)).toBe(true);
+    expect(anchorRectsMatch({ ...baseline, left: 200 + 1 / 64 }, baseline)).toBe(false);
   });
 });

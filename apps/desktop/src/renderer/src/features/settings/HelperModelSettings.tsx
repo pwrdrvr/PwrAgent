@@ -68,6 +68,18 @@ function resolveDefault(
   });
 }
 
+/** The model the Helper model row runs, by its catalog label, once Codex is read. */
+export function helperModelRunningLabel(
+  settings: DesktopHelperModelSettings,
+  backends: readonly BackendSummary[],
+  catalogReading: boolean,
+): string | undefined {
+  const codex = backendState("codex", backends, catalogReading);
+  if (codex.kind !== "ready") return undefined;
+  const model = resolveDefault(settings, codex)?.model;
+  return model ? modelLabel(model, codex.models) : undefined;
+}
+
 function withDefaults(
   settings: DesktopHelperModelSettings,
   next: { defaultModel?: string; defaultReasoningEffort?: string },

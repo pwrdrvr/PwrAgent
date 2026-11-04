@@ -129,6 +129,75 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     }
   });
 
+  it("hydrates after live durability while an unrelated pricing publication is blocked", async () => {
+    const registry = createRegistry([], { codexClient: { readThread: async () => ({ entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } }) } });
+    const privateRegistry = registry as unknown as {
+      publishThreadPricingUpdated(params: { threadId: string }): Promise<void>;
+      persistReplayUsageLines(replay: unknown): Promise<void>;
+      waitForLiveThreadUsageEmitWork(params: { backend: "codex"; threadId: string }): Promise<void>;
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const pricing = vi.spyOn(privateRegistry, "publishThreadPricingUpdated").mockImplementation(async ({ threadId }) => {
+      if (threadId === "thread-1") await gate;
+    });
+    const writes = vi.spyOn(store, "upsertThreadUsageLines");
+    const hydration = vi.spyOn(privateRegistry, "persistReplayUsageLines");
+    await internals(registry).emit(usage("codex", "background-turn"));
+    await privateRegistry.waitForLiveThreadUsageEmitWork({ backend: "codex", threadId: "thread-1" });
+    const flushing = internals(registry).flushLiveThreadUsageLines();
+    try {
+      await vi.waitFor(() => expect(pricing).toHaveBeenCalled());
+      let hydrated = false;
+      const selected = registry.readThread({ backend: "codex", threadId: "selected", includeAccounting: false }).then(() => { hydrated = true; });
+      await vi.waitFor(() => expect(hydrated).toBe(true));
+      await selected;
+      expect(writes).toHaveBeenCalledOnce();
+      expect(writes.mock.invocationCallOrder[0]).toBeLessThan(hydration.mock.invocationCallOrder[0]!);
+    } finally {
+      release();
+      await flushing;
+    }
+  });
+
+  it("does not hydrate across a failed live durability boundary", async () => {
+    const registry = createRegistry([], { codexClient: { readThread: async () => ({ entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } }) } });
+    const privateRegistry = registry as unknown as { persistReplayUsageLines(replay: unknown): Promise<void> };
+    const hydration = vi.spyOn(privateRegistry, "persistReplayUsageLines");
+    await internals(registry).emit(usage("codex", "turn-live"));
+    vi.spyOn(store, "upsertThreadUsageLines").mockRejectedValueOnce(new Error("durability failed"));
+    await expect(registry.readThread({ backend: "codex", threadId: "thread-1", includeAccounting: false })).rejects.toThrow("durability failed");
+    expect(hydration).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("returns the transcript before optional metadata repairs and drains them on close (directory failure: %s)", async (directoryFails) => {
+    const registry = createRegistry([], { codexClient: { readThread: async () => ({ entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } }) } });
+    const privateRegistry = registry as unknown as {
+      repairCodexThreadDirectoryRelationship(): Promise<void>;
+      restoreCodexNativeSubAgentsFromReplay(): Promise<void>;
+    };
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const directory = vi.spyOn(privateRegistry, "repairCodexThreadDirectoryRelationship").mockImplementation(async () => {
+      if (directoryFails) throw new Error("directory repair failed");
+      await pending;
+    });
+    const workers = vi.spyOn(privateRegistry, "restoreCodexNativeSubAgentsFromReplay").mockImplementation(() => pending);
+    let closed = false;
+    try {
+      await registry.readThread({ backend: "codex", threadId: "selected", includeAccounting: false });
+      expect(directory).toHaveBeenCalledOnce();
+      expect(workers).toHaveBeenCalledOnce();
+      const closing = registry.close().then(() => { closed = true; });
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      release();
+      await closing;
+    } finally {
+      release();
+    }
+  });
+
   it.each(["account", "configuration"])("records usage as unknown when %s identity lookup fails", async (failure) => {
     const registry = createRegistry([], {
       codexClient: { readAccount: async () => {

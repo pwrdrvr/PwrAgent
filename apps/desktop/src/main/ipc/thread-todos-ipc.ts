@@ -9,7 +9,7 @@ import { readLocalNavigationDirectoryIndex } from "../app-server/navigation-dire
 import { getMainLogger } from "../log";
 import { ipcMain } from "electron";
 import type {
-  FederationRemoteTarget, ThreadTodoFeedDelta, ThreadTodoFeedSnapshot, ThreadTodosChangedEvent,
+  AppServerThreadMessageOrigin, FederationRemoteTarget, ThreadTodoFeedDelta, ThreadTodoFeedSnapshot, ThreadTodosChangedEvent,
 } from "@pwragent/shared";
 import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
@@ -88,6 +88,8 @@ async function listLocalProjects(): Promise<ThreadTodoProjectCandidate[]> {
 export function registerThreadTodoIpcHandlers(options: {
   /** Starts handoff threads on federation peers. */
   federation?: PwrAgentFederationHandler;
+  /** The same tools sending one message origin, for a card's peer start. */
+  federationWithOrigin?: (messageOrigin: AppServerThreadMessageOrigin) => PwrAgentFederationHandler;
 } = {}): void {
   const runtime = getDesktopFederationRuntime();
   const mountedThreads = async () => (await getDesktopOverlayStore().listRemoteThreadPins())
@@ -126,6 +128,14 @@ export function registerThreadTodoIpcHandlers(options: {
     readDefaultMergeMethod: () =>
       getDesktopSettingsService().resolveDefaultMergeMethod(),
     ...(options.federation ? { federation: options.federation } : {}),
+    ...(options.federationWithOrigin ? { federationWithOrigin: options.federationWithOrigin } : {}),
+    peerPlans: {
+      // The instance picker can name this machine, which raises its own.
+      supports: (instanceId) => isLocalTodoInstance(runtime, instanceId)
+        || runtime.remotePeerSupportsTodoPlan({ scope: "remote", instanceId }),
+      raise: (instanceId, request) =>
+        runtime.requestThreadTodoOperation({ scope: "remote", instanceId }, "raisePlan", request),
+    },
   });
 
   const service = new FederatedThreadTodoService({
@@ -176,5 +186,17 @@ export function registerThreadTodoIpcHandlers(options: {
         throw error;
       }
     });
+  }
+}
+
+function isLocalTodoInstance(
+  runtime: ReturnType<typeof getDesktopFederationRuntime>,
+  instanceId: string,
+): boolean {
+  try {
+    return instanceId === runtime.localFederationInstanceId();
+  } catch {
+    // State is not open yet, so the id cannot be read or minted.
+    return false;
   }
 }

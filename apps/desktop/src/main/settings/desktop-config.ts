@@ -1,14 +1,22 @@
 import type { DesktopThreadArchivePolicy, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
 import {
   FORGE_AGENT_TOOL_GROUPS,
+  FORGE_AGENT_TOOL_RULE_GROUPS,
   isAcpBackendId,
   isForgeAgentToolAccess,
+  isForgeAgentToolRuleGroup,
   isThreadTodoMergeMethod,
+  normalizeForgeAgentToolRules,
+  normalizeForgeRuleRepository,
+  normalizeTaskMonitorModelChoice,
   validateCodexModelProviders,
+  validateForgeAgentToolRule,
   validateLocalModelIds,
   type CodexModelProviderSettings,
+  type DesktopTaskMonitorModelChoice,
   type ForgeAgentToolAccess,
   type ForgeAgentToolGroup,
+  type ForgeAgentToolRule,
 } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
@@ -97,6 +105,7 @@ import {
   applyTomlEdits,
   parseTomlTables,
   type TomlEdit,
+  type TomlEditScalar,
   type TomlTables,
   type TomlValue,
 } from "./toml-editor";
@@ -147,6 +156,7 @@ export type DesktopSettingsConfig = {
       lightTheme?: DesktopLightTheme;
       themedDockIcon?: boolean;
       terminalMinimumContrast?: boolean;
+      calmMotion?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -324,6 +334,7 @@ export type DesktopSettingsConfig = {
       DesktopProviderThreadModelMigration
     >;
     helperModels?: DesktopHelperModelSettings;
+    taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     decisionModels?: DesktopDecisionModelSettings;
     codex?: {
       path?: string;
@@ -336,6 +347,17 @@ export type DesktopSettingsConfig = {
       configOverrides?: string[];
       localModelIds?: string[];
       providers?: CodexModelProviderSettings[];
+      /**
+       * `[models.codex.app_server_recycle]`: when an idle Codex app server is
+       * replaced. Unset fields keep their defaults. Read only; no UI writes it.
+       */
+      appServerRecycle?: {
+        enabled?: boolean;
+        idleMinutes?: number;
+        maxUptimeHours?: number;
+        maxChildProcesses?: number;
+        maxOpenFds?: number;
+      };
     };
   };
   acpAgents?: {
@@ -369,6 +391,9 @@ export type DesktopSettingsConfig = {
     agentTools?: {
       enabled?: boolean;
       access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
+      rules?: ForgeAgentToolRule[];
+      /** Repositories named by a rule entry that could not be read. */
+      unreadableRuleRepositories?: string[];
     };
   };
   applications?: {
@@ -982,6 +1007,17 @@ export function desktopSettingsPatchToEdits(
       edits.push({
         op: "delete",
         path: ["general", "appearance", "terminal_minimum_contrast"],
+      });
+    }
+  }
+  if (patch.general?.appearance?.calmMotion !== undefined) {
+    // Off by default, so only the opt-in is written.
+    if (patch.general.appearance.calmMotion) {
+      set(["general", "appearance", "calm_motion"], true);
+    } else {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "calm_motion"],
       });
     }
   }
@@ -1892,6 +1928,23 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  if (patch.models?.taskMonitorModels !== undefined) {
+    const entries = Object.entries(
+      normalizeTaskMonitorModels(patch.models.taskMonitorModels),
+    )
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([provider, choice]) => ({
+        provider,
+        source: choice.source,
+        ...(choice.model ? { model: choice.model } : {}),
+        ...(choice.reasoningEffort
+          ? { reasoning_effort: choice.reasoningEffort }
+          : {}),
+      }));
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["models", "task_monitor_models"], value: entries }
+      : { op: "deleteTableArray", path: ["models", "task_monitor_models"] });
+  }
   if (patch.models?.decisionModels !== undefined) {
     // `[models.decision]`: new keys with no legacy shape. A key left at its
     // default is removed rather than written.
@@ -2050,6 +2103,19 @@ export function desktopSettingsPatchToEdits(
       set(["git", "agent_tools", group], access);
     }
   }
+  if (patch.git?.agentTools?.rules !== undefined) {
+    // `[[git.agent_tools.rules]]` is additive: older clients ignore it, so
+    // there is no legacy shape to preserve. An entry this build cannot read
+    // is written back as it was: dropping it could lift a restriction it
+    // meant, and the operator still has to see and fix it.
+    const entries: Record<string, TomlEditScalar | readonly string[]>[] = [
+      ...forgeAgentToolRuleTomlEntries(patch.git.agentTools.rules),
+      ...unreadableForgeAgentToolRuleEntries(currentTables["git.agent_tools"]?.rules),
+    ];
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["git", "agent_tools", "rules"], value: entries }
+      : { op: "deleteTableArray", path: ["git", "agent_tools", "rules"] });
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -2130,6 +2196,7 @@ function normalizeDesktopConfig(
   const line = tables["messaging.line"];
   const models = tables["models"];
   const codex = tables["models.codex"];
+  const codexAppServerRecycle = tables["models.codex.app_server_recycle"];
   const decision = tables["models.decision"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
@@ -2224,6 +2291,7 @@ function normalizeDesktopConfig(
         terminalMinimumContrast: readBoolean(
           generalAppearance?.terminal_minimum_contrast,
         ),
+        calmMotion: readBoolean(generalAppearance?.calm_motion),
         density: readAppearanceDensity(generalAppearance?.density),
         sidebarTextSize: readTextSize(
           generalAppearance?.sidebar_text_size,
@@ -2518,6 +2586,7 @@ function normalizeDesktopConfig(
         models?.helper_default_reasoning_effort,
         models?.helper_models,
       ),
+      taskMonitorModels: readTaskMonitorModels(models?.task_monitor_models),
       decisionModels: normalizeDecisionModelSettings({
         model: decision?.model,
         cameraCues: decision?.camera_cues,
@@ -2536,6 +2605,19 @@ function normalizeDesktopConfig(
         configOverrides: codex?.config_overrides === undefined
           ? undefined
           : validateCodexConfigOverrides(codex.config_overrides),
+        ...(codexAppServerRecycle
+          ? {
+              appServerRecycle: {
+                enabled: readBoolean(codexAppServerRecycle.enabled),
+                idleMinutes: readPositiveNumber(codexAppServerRecycle.idle_minutes),
+                maxUptimeHours: readPositiveNumber(codexAppServerRecycle.max_uptime_hours),
+                maxChildProcesses: readPositiveNumber(
+                  codexAppServerRecycle.max_child_processes,
+                ),
+                maxOpenFds: readPositiveNumber(codexAppServerRecycle.max_open_fds),
+              },
+            }
+          : {}),
       },
     },
     acpAgents: {
@@ -2581,6 +2663,7 @@ function normalizeDesktopConfig(
       agentTools: {
         enabled: readBoolean(gitAgentTools?.enabled),
         access: readForgeAgentToolAccess(gitAgentTools),
+        ...readForgeAgentToolRules(gitAgentTools?.rules),
       },
     },
     applications: {
@@ -2873,6 +2956,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const providerDefaults = config.models?.providerDefaults;
   const providerThreadMigrations = config.models?.providerThreadMigrations;
   const helperModels = config.models?.helperModels;
+  const taskMonitorModels = config.models?.taskMonitorModels;
+  const hasTaskMonitorModels = Boolean(
+    taskMonitorModels && Object.keys(taskMonitorModels).length > 0,
+  );
   const usageAccountGroups = config.models?.usageAccountGroups;
   const usageAccountNames = config.models?.usageAccountNames;
   const decisionModels = config.models?.decisionModels;
@@ -2892,6 +2979,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       && Object.keys(providerThreadMigrations).length > 0
     )
     || hasHelperModels
+    || hasTaskMonitorModels
     || (usageAccountGroups && Object.keys(usageAccountGroups).length > 0)
     || (usageAccountNames && Object.keys(usageAccountNames).length > 0)
     || decisionModels
@@ -2900,6 +2988,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       ...(usageAccountGroups && Object.keys(usageAccountGroups).length > 0 ? { usageAccountGroups } : {}),
       ...(usageAccountNames && Object.keys(usageAccountNames).length > 0 ? { usageAccountNames } : {}),
       ...(hasHelperModels ? { helperModels } : {}),
+      ...(hasTaskMonitorModels ? { taskMonitorModels } : {}),
       ...(decisionModels ? { decisionModels } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
@@ -3111,6 +3200,131 @@ function readForgeAgentToolAccess(
     }
   }
   return access;
+}
+
+type ForgeAgentToolRuleEntryRead =
+  | { ok: true; rule: ForgeAgentToolRule }
+  | { ok: false; problems: string[]; repository?: string };
+
+/**
+ * Read one `[[git.agent_tools.rules]]` table. Any problem makes the whole
+ * entry unreadable: a misspelled agent or group, a bad level, a provider or
+ * model where none is allowed. Applying part of it, or dropping it, could
+ * let a broader rule or the global level give an agent what the entry meant
+ * to withhold.
+ */
+function readForgeAgentToolRuleEntry(item: unknown): ForgeAgentToolRuleEntryRead {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    return { ok: false, problems: ["expected a table"] };
+  }
+  const entry = item as Record<string, unknown>;
+  const repository = typeof entry.repository === "string"
+    ? normalizeForgeRuleRepository(entry.repository)
+    : undefined;
+  const problems: string[] = [];
+  const access: Record<string, unknown> = {};
+  for (const [key, level] of Object.entries(entry)) {
+    if (FORGE_AGENT_TOOL_RULE_TOML_KEYS.has(key)) continue;
+    if (!isForgeAgentToolRuleGroup(key)) {
+      problems.push(
+        `unknown key ${key}; rules set only pull_requests, comments, issues, ci and approve_merge`,
+      );
+    } else if (isForgeAgentToolAccess(key, level)) {
+      access[key] = level;
+    } else {
+      problems.push(`${key} has unknown level ${JSON.stringify(level)}`);
+    }
+  }
+  const result = validateForgeAgentToolRule({
+    repository: entry.repository,
+    agent: {
+      backend: entry.agent,
+      codexModelProvider: entry.codex_model_provider,
+      model: entry.model,
+    },
+    access,
+  });
+  if (!result.ok) problems.push(result.reason);
+  else problems.push(...result.problems);
+  if (problems.length > 0 || !result.ok) {
+    return { ok: false, problems, ...(repository ? { repository } : {}) };
+  }
+  return { ok: true, rule: result.rule };
+}
+
+/**
+ * `[[git.agent_tools.rules]]`. An entry that cannot be read is left out of
+ * the rules with a warning, and its repository is reported so every call
+ * there is capped at Ask until the entry is fixed: a mistake never widens
+ * access. Duplicate entries for one repository and agent merge.
+ */
+function readForgeAgentToolRules(
+  value: TomlScalar | undefined,
+): { rules?: ForgeAgentToolRule[]; unreadableRuleRepositories?: string[] } {
+  if (value === undefined) return {};
+  if (!Array.isArray(value)) {
+    console.warn("Ignoring git.agent_tools.rules: expected [[git.agent_tools.rules]] tables.");
+    return { rules: [] };
+  }
+  const rules: ForgeAgentToolRule[] = [];
+  const unreadable = new Set<string>();
+  (value as readonly unknown[]).forEach((item, index) => {
+    const read = readForgeAgentToolRuleEntry(item);
+    if (read.ok) {
+      rules.push(read.rule);
+      return;
+    }
+    if (read.repository) unreadable.add(read.repository);
+    const effect = read.repository
+      ? `every agent asks before writing in ${read.repository} until it is fixed`
+      : "it names no repository, so it applies nowhere";
+    console.warn(
+      `git.agent_tools.rules entry ${index + 1} cannot be read (${read.problems.join("; ")}); ${effect}.`,
+    );
+  });
+  return {
+    rules: normalizeForgeAgentToolRules(rules),
+    ...(unreadable.size > 0 ? { unreadableRuleRepositories: [...unreadable] } : {}),
+  };
+}
+
+/** The raw tables of the entries `readForgeAgentToolRules` could not read. */
+function unreadableForgeAgentToolRuleEntries(
+  value: TomlValue | undefined,
+): Record<string, TomlEditScalar | readonly string[]>[] {
+  if (!Array.isArray(value)) return [];
+  return (value as readonly unknown[]).filter((item): item is Record<string, TomlEditScalar | string[]> =>
+    typeof item === "object" && item !== null && !Array.isArray(item)
+    && !readForgeAgentToolRuleEntry(item).ok);
+}
+
+const FORGE_AGENT_TOOL_RULE_TOML_KEYS = new Set([
+  "repository",
+  "agent",
+  "codex_model_provider",
+  "model",
+]);
+
+function forgeAgentToolRuleTomlEntries(
+  rules: readonly ForgeAgentToolRule[],
+): Record<string, string>[] {
+  return normalizeForgeAgentToolRules(rules, (problem, index) => {
+    throw new Error(`Invalid forge tool rule ${index + 1}: ${problem}.`);
+  }).map((rule) => {
+    const entry: Record<string, string> = {
+      repository: rule.repository,
+      agent: rule.agent.backend,
+    };
+    if (rule.agent.codexModelProvider) {
+      entry.codex_model_provider = rule.agent.codexModelProvider;
+    }
+    if (rule.agent.model) entry.model = rule.agent.model;
+    for (const group of FORGE_AGENT_TOOL_RULE_GROUPS) {
+      const level = rule.access[group];
+      if (level !== undefined) entry[group] = level;
+    }
+    return entry;
+  });
 }
 
 function readMergeMethod(
@@ -3506,6 +3720,39 @@ function readHelperModelSettings(
   };
 }
 
+function normalizeTaskMonitorModels(
+  value: Record<string, DesktopTaskMonitorModelChoice>,
+): Record<string, DesktopTaskMonitorModelChoice> {
+  return Object.fromEntries(Object.entries(value).flatMap(([provider, choice]) => {
+    const normalizedProvider = provider.trim();
+    const normalized = normalizeTaskMonitorModelChoice(choice);
+    return normalizedProvider && normalized ? [[normalizedProvider, normalized]] : [];
+  }));
+}
+
+/**
+ * `[[models.task_monitor_models]]` rows. A new key with no legacy shape: a
+ * malformed row is skipped, never the section.
+ */
+function readTaskMonitorModels(
+  value: TomlScalar | undefined,
+): Record<string, DesktopTaskMonitorModelChoice> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const choices: Record<string, DesktopTaskMonitorModelChoice> = {};
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const provider = typeof item.provider === "string" ? item.provider.trim() : "";
+    if (!provider || choices[provider]) continue;
+    const choice = normalizeTaskMonitorModelChoice({
+      source: item.source,
+      model: item.model,
+      reasoningEffort: item.reasoning_effort,
+    });
+    if (choice) choices[provider] = choice;
+  }
+  return Object.keys(choices).length > 0 ? choices : undefined;
+}
+
 function normalizeProviderModelDefaults(
   value: Record<string, DesktopProviderModelDefaults>,
 ): Record<string, DesktopProviderModelDefaults> {
@@ -3820,6 +4067,11 @@ function legacyTokenMiserGeneralComment(): string {
 
 function readNumber(value: TomlScalar | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readPositiveNumber(value: TomlScalar | undefined): number | undefined {
+  const number = readNumber(value);
+  return number !== undefined && number > 0 ? number : undefined;
 }
 
 /** A remembered pane width: a positive whole number of px, or nothing. */

@@ -3221,7 +3221,7 @@ describe("AcpBackendAdapter", () => {
           creditUsagePercent: 42.5,
           currentPeriod: {
             type: "USAGE_PERIOD_TYPE_WEEKLY",
-            end: "2026-08-03T00:00:00Z",
+            end: "2099-08-03T00:00:00Z",
           },
         },
         subscription_tier: "SuperGrok Heavy",
@@ -3286,7 +3286,7 @@ describe("AcpBackendAdapter", () => {
         {
           name: "Weekly limit",
           usedPercent: 42.5,
-          resetAt: Date.parse("2026-08-03T00:00:00Z"),
+          resetAt: Date.parse("2099-08-03T00:00:00Z"),
         },
       ],
     });
@@ -3400,6 +3400,87 @@ describe("AcpBackendAdapter", () => {
     expect(adapter.limitObservation(backendId)).toBeUndefined();
 
     await adapter.close();
+  });
+
+  it("keeps Grok's billing limit through a sparse read, a new period and a plan change", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+    };
+    const day = 86_400_000;
+    const periodEnd = Date.now() + 10 * day;
+    const statuses = [
+      { planType: "SuperGrok", rateLimits: [{ name: "Monthly limit", usedPercent: 40, resetAt: periodEnd }] },
+      // A read that leaves the limit out does not flash it away.
+      { planType: "SuperGrok", rateLimits: undefined },
+      // The next billing period starts over.
+      { planType: "SuperGrok", rateLimits: [{ name: "Monthly limit", usedPercent: 2, resetAt: periodEnd + 30 * day }] },
+      // A plan change has a new allowance.
+      { planType: "SuperGrok Heavy", rateLimits: [{ name: "Monthly limit", usedPercent: 1, resetAt: periodEnd + 30 * day }] },
+    ];
+    const readProviderStatus = vi.fn(async () => {
+      const { planType, rateLimits } = statuses.shift()!;
+      return {
+        account: { type: "provider" as const, label: "Grok account", planType },
+        ...(rateLimits ? { rateLimits } : {}),
+      };
+    });
+    const emit = vi.fn(async (_event: { notification: { method: string } }) => undefined);
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => [],
+        getSession: () => undefined,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: () =>
+        ({
+          initialize: vi.fn(async () => undefined),
+          readProviderStatus,
+          dispose: vi.fn(async () => undefined),
+        }) as never,
+      discoverLocalAcpAgents: async () => [],
+      emit,
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+    const realNow = Date.now.bind(Date);
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
+    const statusUpdates = () => emit.mock.calls
+      .filter(([event]) => event.notification.method === "backend/providerStatus/updated").length;
+    const read = async () => {
+      // Billing reads are throttled to one a minute.
+      elapsed += 61_000;
+      const updates = statusUpdates();
+      await adapter.describeInstalledBackends();
+      // Each read reports itself once it is recorded.
+      await vi.waitFor(() => expect(statusUpdates()).toBe(updates + 1));
+      return (await adapter.describeInstalledBackends())[0];
+    };
+    try {
+      await adapter.getClient(backendId);
+      expect((await read()).rateLimits).toEqual([{ name: "Monthly limit", usedPercent: 40, resetAt: periodEnd }]);
+      expect((await read()).rateLimits).toEqual([{ name: "Monthly limit", usedPercent: 40, resetAt: periodEnd }]);
+      expect((await read()).rateLimits)
+        .toEqual([{ name: "Monthly limit", usedPercent: 2, resetAt: periodEnd + 30 * day }]);
+      const replanned = await read();
+      expect(replanned.account?.planType).toBe("SuperGrok Heavy");
+      expect(replanned.rateLimits)
+        .toEqual([{ name: "Monthly limit", usedPercent: 1, resetAt: periodEnd + 30 * day }]);
+      expect(adapter.limitObservation(backendId)).toMatchObject({ planType: "SuperGrok Heavy" });
+      expect(readProviderStatus).toHaveBeenCalledTimes(4);
+    } finally {
+      clock.mockRestore();
+      await adapter.close();
+    }
   });
 
   it("checks Grok updates in the background and persists one daily result", async () => {

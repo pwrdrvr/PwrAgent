@@ -1,3 +1,4 @@
+import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   DEFAULT_THREAD_TODO_MERGE_METHOD,
@@ -5,8 +6,13 @@ import {
   codexModelProviderApiKeyEnv,
   isValidCodexModelProviderId,
   normalizeThreadArchivePolicy,
+  upsertForgeAgentToolRule,
   type CodexModelProviderSettings,
+  type ForgeAgentRuleAgent,
+  type ForgeAgentToolAccess,
   type ForgeAgentToolPolicy,
+  type ForgeAgentToolRule,
+  type ForgeAgentToolRuleGroup,
 } from "@pwragent/shared";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
@@ -31,6 +37,7 @@ import type {
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
   DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
   DesktopDecisionModelSettings,
   DecisionProviderId,
   DesktopCodexDiscoverySnapshot,
@@ -266,6 +273,10 @@ import type {
   ManagedCodexCheckMode,
   ManagedCodexRuntime,
 } from "../codex-managed-runtime";
+import {
+  DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
+  type CodexAppServerRecycleSettings,
+} from "../codex-app-server/app-server-recycle-policy";
 
 const LOGIN_SHELL_ENV_MARKER_START = "__PWRAGENT_LOGIN_SHELL_ENV_START__";
 const LOGIN_SHELL_ENV_MARKER_END = "__PWRAGENT_LOGIN_SHELL_ENV_END__";
@@ -342,6 +353,7 @@ type DesktopSettingsServiceOptions = {
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
+    calmMotion: boolean;
   }) => void;
   onManagedCodexRuntimeSwitchComplete?: () => void;
   /**
@@ -603,12 +615,20 @@ function forgeCliPresent(
 }
 
 export class DesktopSettingsService {
+  private readonly commandDiscoveryLifetime = new CommandDiscoveryLifetime();
+
+  closeCommandDiscovery(): Promise<void> {
+    return this.commandDiscoveryLifetime.close();
+  }
+
   private tokenMiserUsageStore?: TokenMiserStore;
   private readonly env: NodeJS.ProcessEnv;
   private readonly argv: readonly string[];
   private readonly configPath: string;
   private readonly configStore: DesktopConfigStore;
   private readonly configWriteListeners = new Set<() => void>();
+  /** Serializes read-modify-write updates of the forge tool rules list. */
+  private forgeAgentToolRuleWrites: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private readonly startupCodexHome?: string;
   private loggedObsoleteComposerConfig = false;
@@ -1094,6 +1114,10 @@ export class DesktopSettingsService {
           ),
           terminalMinimumContrast: this.resolveConfigBoolean(
             config.general?.appearance?.terminalMinimumContrast,
+            false,
+          ),
+          calmMotion: this.resolveConfigBoolean(
+            config.general?.appearance?.calmMotion,
             false,
           ),
           density: this.resolveAppearanceDensity(
@@ -1604,6 +1628,7 @@ export class DesktopSettingsService {
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},
         helperModels: config.models?.helperModels ?? { helpers: {} },
+        taskMonitorModels: config.models?.taskMonitorModels ?? {},
         decisionModels: config.models?.decisionModels ?? {},
         decisionSecrets: { localApiKey: decisionLocalApiKey, jevApiKey: typesafeJevApiKey },
         codex: {
@@ -1940,7 +1965,14 @@ export class DesktopSettingsService {
   ): Promise<DesktopGitDiscoverySnapshot> {
     const key = configuredCommand?.trim() ?? "";
     if (this.gitDiscoveryCache?.key !== key) {
-      const promise = discoverGitCommands({ configuredCommand, env: this.env });
+      const promise = this.commandDiscoveryLifetime.run(
+        () => discoverGitCommands({
+          configuredCommand,
+          env: this.env,
+          signal: this.commandDiscoveryLifetime.signal,
+        }),
+        { candidates: [] },
+      );
       const cache: NonNullable<typeof this.gitDiscoveryCache> = { key, promise };
       void promise.then((result) => {
         cache.result = result;
@@ -1965,7 +1997,14 @@ export class DesktopSettingsService {
   ): ReturnType<typeof discoverGhCommands> {
     const key = configuredCommand ?? "";
     if (this.ghDiscoveryCache?.key !== key) {
-      const promise = discoverGhCommands({ configuredCommand, env: this.env });
+      const promise = this.commandDiscoveryLifetime.run(
+        () => discoverGhCommands({
+          configuredCommand,
+          env: this.env,
+          signal: this.commandDiscoveryLifetime.signal,
+        }),
+        { candidates: [] },
+      );
       const cache: NonNullable<typeof this.ghDiscoveryCache> = { key, promise };
       void promise.then((result) => {
         cache.result = result;
@@ -1980,7 +2019,14 @@ export class DesktopSettingsService {
   ): ReturnType<typeof discoverGlabCommands> {
     const key = configuredCommand ?? "";
     if (this.glabDiscoveryCache?.key !== key) {
-      const promise = discoverGlabCommands({ configuredCommand, env: this.env });
+      const promise = this.commandDiscoveryLifetime.run(
+        () => discoverGlabCommands({
+          configuredCommand,
+          env: this.env,
+          signal: this.commandDiscoveryLifetime.signal,
+        }),
+        { candidates: [] },
+      );
       const cache: NonNullable<typeof this.glabDiscoveryCache> = { key, promise };
       void promise.then((result) => {
         cache.result = result;
@@ -2146,6 +2192,26 @@ export class DesktopSettingsService {
       ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT;
   }
 
+  /** `[models.codex.app_server_recycle]` over the defaults. */
+  resolveCodexAppServerRecycleSettings(): CodexAppServerRecycleSettings {
+    const configured = this.configStore.read("models").codex?.appServerRecycle;
+    const defaults = DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS;
+    return {
+      ...defaults,
+      enabled: configured?.enabled ?? defaults.enabled,
+      ...(configured?.idleMinutes !== undefined
+        ? { idleMs: Math.round(configured.idleMinutes * 60_000) }
+        : {}),
+      ...(configured?.maxUptimeHours !== undefined
+        ? { maxUptimeMs: Math.round(configured.maxUptimeHours * 60 * 60_000) }
+        : {}),
+      ...(configured?.maxChildProcesses !== undefined
+        ? { maxChildProcesses: configured.maxChildProcesses }
+        : {}),
+      ...(configured?.maxOpenFds !== undefined ? { maxOpenFds: configured.maxOpenFds } : {}),
+    };
+  }
+
   resolveTokenMiserFocusedSummariesEnabled(): boolean {
     return this.configStore.read("experimental").tokenMiserFocusedSummariesEnabled
       ?? false;
@@ -2205,11 +2271,45 @@ export class DesktopSettingsService {
       access: Object.fromEntries(
         FORGE_AGENT_TOOL_GROUPS.map((group) => [group, settings.access[group].value]),
       ) as ForgeAgentToolPolicy["access"],
+      rules: settings.rules ?? [],
+      ...(settings.unreadableRuleRepositories?.length
+        ? { unreadableRuleRepositories: settings.unreadableRuleRepositories }
+        : {}),
     };
   }
 
+  /**
+   * Set or clear one group of one (repository, agent) project rule, as an
+   * approval card's "Always allow" does, and return the saved list. `level`
+   * undefined clears the group. Updates are serialized so two cards answered
+   * together cannot drop each other's rule; the write goes through the same
+   * targeted path as Settings, so only `[[git.agent_tools.rules]]` changes.
+   */
+  async upsertForgeAgentToolRule(update: {
+    repository: string;
+    agent: ForgeAgentRuleAgent;
+    group: ForgeAgentToolRuleGroup;
+    level: ForgeAgentToolAccess | undefined;
+  }): Promise<ForgeAgentToolRule[]> {
+    const write = this.forgeAgentToolRuleWrites.then(async () => {
+      const current = this.configStore.read("git")?.agentTools?.rules ?? [];
+      const rules = upsertForgeAgentToolRule(current, update);
+      await this.writeConfigPatchTargeted({ git: { agentTools: { rules } } });
+      return rules;
+    });
+    this.forgeAgentToolRuleWrites = write.catch(() => undefined);
+    return await write;
+  }
+
   private resolveForgeAgentToolSettings(
-    config: { enabled?: boolean; access?: Partial<ForgeAgentToolPolicy["access"]> } | undefined,
+    config:
+      | {
+        enabled?: boolean;
+        access?: Partial<ForgeAgentToolPolicy["access"]>;
+        rules?: ForgeAgentToolRule[];
+        unreadableRuleRepositories?: string[];
+      }
+      | undefined,
   ): DesktopSettingsSnapshot["git"]["agentTools"] {
     return {
       enabled: this.resolveConfigBoolean(
@@ -2225,6 +2325,10 @@ export class DesktopSettingsService {
           }];
         }),
       ) as DesktopSettingsSnapshot["git"]["agentTools"]["access"],
+      rules: config?.rules ?? [],
+      ...(config?.unreadableRuleRepositories?.length
+        ? { unreadableRuleRepositories: config.unreadableRuleRepositories }
+        : {}),
     };
   }
 
@@ -2347,7 +2451,8 @@ export class DesktopSettingsService {
         || appearancePatch.lightTheme !== undefined
         || appearancePatch.density !== undefined
         || appearancePatch.sidebarTextSize !== undefined
-        || appearancePatch.transcriptTextSize !== undefined)
+        || appearancePatch.transcriptTextSize !== undefined
+        || appearancePatch.calmMotion !== undefined)
     ) {
       const next = update.values.general?.appearance;
       this.options.onAppearanceChange?.({
@@ -2359,6 +2464,7 @@ export class DesktopSettingsService {
           next?.sidebarTextSize ?? DESKTOP_TEXT_SIZE_DEFAULT,
         transcriptTextSize:
           next?.transcriptTextSize ?? DESKTOP_TEXT_SIZE_DEFAULT,
+        calmMotion: next?.calmMotion ?? false,
       });
     }
     // Any successful write notifies generic listeners so main-process services
@@ -3148,6 +3254,10 @@ export class DesktopSettingsService {
 
   resolveHelperModelSettings(): DesktopHelperModelSettings {
     return this.readModelsConfig().helperModels ?? { helpers: {} };
+  }
+
+  resolveTaskMonitorModels(): Record<string, DesktopTaskMonitorModelChoice> {
+    return this.readModelsConfig().taskMonitorModels ?? {};
   }
 
   resolveUsageAccountGroups(): Record<string, string> {

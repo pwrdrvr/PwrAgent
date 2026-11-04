@@ -46,6 +46,20 @@ export type FederationProjectPage = Pick<
 export type FederationArchivedThreadLookupRequest = {
   backend: AppServerBackendKind;
   threadIds: string[];
+  /** Also return owner-read parent links for archive promotion ancestry. */
+  includeParent?: true;
+};
+
+export type FederationArchivedThreadLookupResponse = {
+  threads: AppServerThreadSummary[];
+  /** Presence acknowledges the owner read, including a root's absent parent. */
+  parentLinks?: Array<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    parentThreadId?: string;
+    parentThreadBackend?: AppServerBackendKind;
+    parentThreadInstanceId?: string;
+  }>;
 };
 
 export function projectFederationProjectPage(
@@ -95,6 +109,7 @@ export function validateArchivedThreadLookup(
   request: FederationArchivedThreadLookupRequest,
 ): Set<string> {
   if (!request || !isAppServerBackendKind(request.backend)
+    || (request.includeParent !== undefined && request.includeParent !== true)
     || !Array.isArray(request.threadIds)
     || request.threadIds.length > FEDERATION_COLLECTION_PAGE_ROWS
     || request.threadIds.some((id) => typeof id !== "string" || !id || id.length > 1024)) {

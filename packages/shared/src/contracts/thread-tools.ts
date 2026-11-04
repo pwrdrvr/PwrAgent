@@ -76,6 +76,7 @@ export const PWRAGENT_THREAD_INSPECTION_ERROR_CODES = [
   "peer_unavailable",
   "forbidden",
   "unsupported_operation",
+  "project_paused",
   "internal_error",
 ] as const;
 
@@ -149,8 +150,8 @@ export type ReadThreadToolArgs = {
    */
   before?: string;
   /**
-   * Maximum transcript entries to return. Implementations clamp this to a
-   * bounded product limit.
+   * Maximum transcript entries to return. The newest entries of the page are
+   * kept. Implementations clamp this to a bounded product limit.
    */
   limit?: number;
   /**
@@ -400,7 +401,17 @@ export type PullRequestTerminalDetails = {
   detailsUnavailableReason?: string;
 };
 
+/**
+ * `watch` (the default) arms watches. `list` returns the thread's waiting
+ * watches, and `cancel` stops one of them by `watchId`.
+ */
+type WatchThreadPullRequestAction = "watch" | "list" | "cancel";
+
 export type WatchThreadPullRequestToolArgs = {
+  /** Absent means `watch`, the only action before list and cancel existed. */
+  action?: WatchThreadPullRequestAction;
+  /** The watch `cancel` stops, from `list` or an earlier `watch` result. */
+  watchId?: string;
   /** Defaults to the invoking PwrAgent thread's backend when omitted. */
   backend?: AppServerBackendKind;
   /** Defaults to the invoking PwrAgent thread id when omitted. */
@@ -412,6 +423,25 @@ export type WatchThreadPullRequestToolArgs = {
    * Add merged and/or closed to also wake when the PR reaches a terminal state.
    */
   notifyOn?: ThreadPullRequestWatchEvent[];
+  /**
+   * Arm the CI watch for the next result even when a final outcome is already
+   * known at this head, for a re-run PwrAgent did not request. The known
+   * outcome becomes the watch's baseline and cannot fire it.
+   */
+  waitForNextResult?: boolean;
+};
+
+/**
+ * The CI outcome a watch saw when it was armed. It cannot fire the watch: the
+ * watch waits for checks to run again, or for a failure on another check.
+ */
+export type ThreadPullRequestWatchBaseline = {
+  outcome: "success" | "failure";
+  observedAt: number;
+  failedCheckUrl?: string;
+  /** Set when PwrAgent requested the re-run that made the outcome stale. */
+  rerunRequestedAt?: number;
+  runAttempt?: number;
 };
 
 export type ThreadPullRequestWatchSummary = {
@@ -429,7 +459,33 @@ export type ThreadPullRequestWatchSummary = {
   failureHandledByAutoFix: boolean;
   /** Absent on rows written before terminal watches existed: those are `checks`. */
   kind?: ThreadPullRequestWatchKind;
+  baseline?: ThreadPullRequestWatchBaseline;
+  /**
+   * The CI run attempt this watch waits for, when PwrAgent requested the
+   * re-run. Unlike the baseline's copy, it stays while checks run, and a
+   * push drops it. Rows written before it existed carry only the baseline's.
+   */
+  runAttempt?: number;
+  /** The re-run's workflow run or GitLab pipeline, beside `runAttempt`. */
+  runId?: number;
+  /**
+   * Who armed the watch: an agent through `watch_thread_pull_request`, or the
+   * operator through Watch CI. Absent means an agent: older rows predate it.
+   */
+  createdBy?: "agent" | "operator";
+  /** The head this CI watch was armed at before a push moved it. */
+  followedFrom?: string;
 };
+
+/**
+ * Why `watch_thread_pull_request` did or did not arm a watch. `already_armed`
+ * means an identical active watch existed and is returned instead.
+ */
+export type WatchThreadPullRequestReason =
+  | "armed"
+  | "already_armed"
+  | "outcome_already_final"
+  | "pr_terminal";
 
 export type WatchThreadPullRequestResult = {
   /** The CI watch, when success or failure was requested. */
@@ -441,6 +497,26 @@ export type WatchThreadPullRequestResult = {
   terminal?: PullRequestTerminalDetails;
   coveredByAutoFix: ThreadPullRequestWatchEvent[];
   prAutomation: ThreadPullRequestAutomationStatus;
+  /**
+   * True when every requested event has a watch waiting after this call, new
+   * or already armed. A CI result that already finished leaves it false even
+   * when a merge/close watch was armed beside it.
+   */
+  armed: boolean;
+  reason: WatchThreadPullRequestReason;
+  /** One plain sentence saying what will, or will not, wake the thread. */
+  message: string;
+};
+
+/** What `watch_thread_pull_request` returns for `list` and `cancel`. */
+export type ThreadPullRequestWatchListResult = {
+  action: "list" | "cancel";
+  /** The thread's waiting watches after this call, oldest first. */
+  watches: ThreadPullRequestWatchSummary[];
+  /** The watch `cancel` stopped. */
+  cancelled?: ThreadPullRequestWatchSummary;
+  /** One plain sentence saying what is, or is no longer, waiting. */
+  message: string;
 };
 
 export type ThreadMutationField =
@@ -679,6 +755,14 @@ export type ThreadReadResult = {
   maxCharsPerEntry: number;
   entries?: ThreadReadEntrySummary[];
   messages?: ThreadReadMessageSummary[];
+  /**
+   * Earlier entries of this page left out to honor `limit`. The pagination
+   * cursor still starts before them, so read again with a larger `limit` to
+   * see them.
+   */
+  omittedEntries?: number;
+  /** Earlier messages of this page left out to honor `limit`. */
+  omittedMessages?: number;
   lastUserMessage?: string;
   lastAssistantMessage?: string;
   pagination: AppServerThreadReplayPagination;
@@ -776,6 +860,8 @@ export type PwrAgentThreadInspectionResponse =
       data:
         | {
             threadDependencies: import("./thread-dependencies").ManageThreadDependenciesResponse;
+            /** Why the stored PR conditions wait, when the project holds PR watches. */
+            projectNotice?: string;
           }
         | {
             threads: ThreadInspectionSummary[];
@@ -806,6 +892,9 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             pullRequestWatch: WatchThreadPullRequestResult;
+          }
+        | {
+            pullRequestWatches: ThreadPullRequestWatchListResult;
           }
         | {
             mutation: ThreadMutationResult;

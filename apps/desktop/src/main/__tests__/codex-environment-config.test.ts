@@ -18,9 +18,11 @@ describe("codex environment config", () => {
     expect(option.actions[0].id).toBe("work");
     if (platform === "win32") {
       expect(option.shell).toBe("powershell");
-      expect(option.setupScript).toContain("nvm install $nodeVersion");
+      expect(option.setupScript).toContain(". ./scripts/windows-environment.ps1 -InstallNode");
+      expect(option.setupScript).toContain("& $pnpmCommand install");
       expect(option.cleanupScript).toContain("Remove-Item -LiteralPath node_modules");
       expect(option.actions.every((action) => action.shell === "powershell")).toBe(true);
+      expect(option.actions.every((action) => action.command.includes(". ./scripts/windows-environment.ps1"))).toBe(true);
       expect(option.actions[0].command).toContain('$env:PWRAGENT_PROFILE = "work"');
     } else {
       expect(option.shell).toBeUndefined();

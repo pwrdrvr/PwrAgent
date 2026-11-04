@@ -7,6 +7,7 @@ import {
   type PrAutoDispatchBudgetConfig,
   type PrAutoDispatchBudgetStatus,
   type PrSummary,
+  type ThreadPrAutoDispatchEventKind,
   type ThreadPrAutoDispatchPending,
 } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
@@ -102,6 +103,7 @@ function createHarness(options: {
   currentPr?: PrSummary;
   pauseGateWhenBudgetPaused?: boolean;
   onPendingChanged?: (pending: ThreadPrAutoDispatchPending | null) => void;
+  allowsEventKind?: (kind: ThreadPrAutoDispatchEventKind) => boolean;
 } = {}) {
   let busy = options.busy ?? false;
   let gate = options.gate ?? true;
@@ -131,6 +133,9 @@ function createHarness(options: {
     },
     isPrAttached: () => true,
     isBackgroundPollingEnabled: () => gate,
+    ...(options.allowsEventKind
+      ? { allowsEventKind: (_identity, kind) => options.allowsEventKind!(kind) }
+      : {}),
     getBudgetConfig: () => budgetConfig,
     now: () => clock,
     onPendingChanged: ({ pending }) => {
@@ -236,7 +241,7 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps fork contributions eligible only in their source workspace", () => {
+  it("keeps automatically discovered fork contributions eligible only in their source workspace", () => {
     const contribution = pr({
       org: "upstream", repo: "project",
       url: "https://github.com/upstream/project/pull/38",
@@ -245,6 +250,20 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(pullRequestMatchesRepositoryKey(contribution, "github.com/contributor/project")).toBe(true);
     expect(pullRequestMatchesRepositoryKey(contribution, "github.com/unrelated/project")).toBe(false);
     expect(pullRequestMatchesRepositoryKey(contribution, "github.com/upstream/project")).toBe(false);
+  });
+
+  it("admits explicitly attached fork contributions in their source or destination workspace", () => {
+    const contribution = pr({
+      org: "Upstream", repo: "Project",
+      url: "https://github.com/Upstream/Project/pull/38",
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "project" },
+      explicitlyAttached: true,
+    });
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/contributor/project")).toBe(true);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/upstream/project")).toBe(true);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/unrelated/project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, "gitlab.com/upstream/project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, undefined)).toBe(false);
   });
 
   it("treats PRs from secondary repositories as informational", () => {
@@ -262,6 +281,46 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(pullRequestMatchesRepositoryKey(pr(), undefined)).toBe(false);
   });
 
+  it("allows an explicit fork contribution in its destination workspace only", () => {
+    const contribution = pr({
+      org: "upstream", repo: "project",
+      url: "https://github.com/upstream/project/pull/38",
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "project" },
+      explicitlyAttached: true,
+    });
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/upstream/project")).toBe(true);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/contributor/project")).toBe(true);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/unrelated/project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/upstream/other-project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.example.com/upstream/project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, undefined)).toBe(false);
+    expect(pullRequestMatchesRepositoryKey({ ...contribution, explicitlyAttached: undefined }, "github.com/upstream/project")).toBe(false);
+    // A legacy source identity must not override the destination URL.
+    expect(pullRequestMatchesRepositoryKey({ ...contribution, org: "contributor" }, "github.com/upstream/project")).toBe(true);
+  });
+
+  it("reads only the selected thread's PR elections and hydrates each owner once", async () => {
+    const first = buildPullRequestStatusKey(pr());
+    const second = buildPullRequestStatusKey(pr({ number: 1106, url: "https://github.com/pwrdrvr/PwrAgent/pull/1106" }));
+    await store.setThreadPrAutoDispatchEnabled({ backend: "codex", threadId: "owner", enabled: true });
+    await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId: "owner", prKeys: [first, second], now: 1 });
+    await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId: "thread-1", prKeys: [first, second], now: 2 });
+    for (let i = 0; i < 100; i += 1) {
+      const threadId = `unrelated-${i}`;
+      await store.setThreadPrAutoDispatchEnabled({ backend: "codex", threadId, enabled: true });
+      await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId, prKeys: [`unrelated-pr-${i}`], now: i });
+      await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId, prKeys: [`unrelated-pr-${i}`, first, second], now: i + 5 });
+    }
+    const prepare = vi.spyOn(stateDb.raw, "prepare");
+    const selected = await store.listPrAutoDispatchCandidates({ backend: "codex", threadId: "thread-1" });
+    expect(selected.map((candidate) => [candidate.prKey, candidate.threadId])).toEqual([
+      [first, "owner"], [first, "thread-1"], [second, "owner"], [second, "thread-1"],
+    ]);
+    expect(prepare.mock.calls.filter(([sql]) => sql === "SELECT payload FROM threads WHERE thread_id = ?")).toHaveLength(2);
+    prepare.mockRestore();
+    expect(await store.listPrAutoDispatchCandidates({ backend: "claude", threadId: "thread-1" })).toEqual([]);
+  });
+
   it("elects the oldest enabled primary attachment and reorders after detach", async () => {
     const dbPath = await useFileStateDb();
     const prKey = buildPullRequestStatusKey(pr());
@@ -276,12 +335,19 @@ describe("PrAutoDispatchCoordinator", () => {
       prKeys: [prKey],
       now: clock,
     });
-    await store.syncThreadPrAutoDispatchCandidates({
+    // The sync reports its changed rows, so windows can re-list Auto-fix.
+    await expect(store.syncThreadPrAutoDispatchCandidates({
       backend: "codex",
       threadId: "thread-2",
       prKeys: [prKey],
       now: clock + 1,
-    });
+    })).resolves.toEqual([{ backend: "codex", threadId: "thread-2", prKey }]);
+    await expect(store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-2",
+      prKeys: [prKey],
+      now: clock + 1,
+    })).resolves.toEqual([]);
 
     expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
       threadId: "thread-1",
@@ -294,12 +360,12 @@ describe("PrAutoDispatchCoordinator", () => {
       threadId: "thread-1",
     });
 
-    await store.syncThreadPrAutoDispatchCandidates({
+    await expect(store.syncThreadPrAutoDispatchCandidates({
       backend: "codex",
       threadId: "thread-1",
       prKeys: [],
       now: clock + 2,
-    });
+    })).resolves.toEqual([{ backend: "codex", threadId: "thread-1", prKey }]);
     expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
       threadId: "thread-2",
     });
@@ -313,6 +379,45 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
       threadId: "thread-2",
     });
+  });
+
+  it("leaves a locked thread out of the election, and an unlock rejoins behind the new owner", async () => {
+    const prKey = buildPullRequestStatusKey(pr());
+    await store.setThreadPrAutoDispatchEnabled({
+      backend: "codex",
+      threadId: "thread-2",
+      enabled: true,
+    });
+    for (const [threadId, now] of [["thread-1", clock], ["thread-2", clock + 1]] as const) {
+      await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId, prKeys: [prKey], now });
+    }
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({ threadId: "thread-1" });
+
+    await store.setThreadLock({
+      backend: "codex",
+      threadId: "thread-1",
+      lock: { lockedAt: clock + 2, source: "operator" },
+    });
+    // The older thread's row has not been resynced yet; the lock alone hands
+    // the PR on.
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({ threadId: "thread-2" });
+    expect((await store.listPrAutoDispatchCandidates()).map((candidate) => candidate.threadId))
+      .toEqual(["thread-2"]);
+    await expect(store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-1",
+      prKeys: [prKey],
+      now: clock + 2,
+    })).resolves.toEqual([{ backend: "codex", threadId: "thread-1", prKey }]);
+
+    await store.setThreadLock({ backend: "codex", threadId: "thread-1", lock: undefined });
+    await expect(store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-1",
+      prKeys: [prKey],
+      now: clock + 3,
+    })).resolves.toEqual([{ backend: "codex", threadId: "thread-1", prKey }]);
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({ threadId: "thread-2" });
   });
 
   it("creates only one durable repair claim when the same PR reaches many threads", async () => {
@@ -1132,6 +1237,49 @@ describe("PrAutoDispatchCoordinator", () => {
     );
   });
 
+  it("gives a merge conflict its own attempts after CI repairs run out", async () => {
+    const harness = createHarness();
+    const prKey = buildPullRequestStatusKey(pr());
+    const heads = ["a", "b", "c"].map((value) => value.repeat(40));
+
+    for (const head of heads.slice(0, 2)) {
+      const failing = pr({ headSha: head });
+      harness.setCurrentPr(failing);
+      await observe(harness.coordinator, failing);
+      await runCountdown();
+    }
+    const failingC = pr({ headSha: heads[2] });
+    harness.setCurrentPr(failingC);
+    expect((await observe(harness.coordinator, failingC))[0]?.status).toBe(
+      "attempt-limit",
+    );
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(
+      MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
+    );
+
+    // Main moves while CI is still red on the exhausted head.
+    const conflicting = pr({ headSha: heads[2], mergeState: "conflicting" });
+    harness.setCurrentPr(conflicting);
+    expect((await observe(harness.coordinator, conflicting))[0]?.status).toBe(
+      "scheduled",
+    );
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(
+      MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT + 1,
+    );
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey,
+    })).toBe(1);
+
+    // The same head and condition is the repair already dispatched.
+    const conflictingAgain = pr({ headSha: heads[2], mergeState: "conflicting" });
+    expect(
+      (await observe(harness.coordinator, conflictingAgain))[0]?.status,
+    ).toBe("duplicate");
+  });
+
   it("uses a unique SQLite claim across two app instances", async () => {
     const dbPath = await useFileStateDb();
     const secondDb = StateDb.open(dbPath);
@@ -1257,5 +1405,75 @@ describe("PrAutoDispatchCoordinator", () => {
     expect((await observe(harness.coordinator, completed))[0]?.status).toBe(
       "scheduled",
     );
+  });
+});
+
+describe("PrAutoDispatchCoordinator with project Forge Automation", () => {
+  it("schedules nothing for an incident kind the project turned off", async () => {
+    const harness = createHarness({ allowsEventKind: (kind) => kind !== "ci-failure" });
+
+    expect((await observe(harness.coordinator))[0]?.status).toBe("project-off");
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.getThreadPrAutoDispatchPending({ backend: "codex", threadId: "thread-1" }))
+      .toBeUndefined();
+  });
+
+  it("narrows a two-kind incident to the kinds the project allows", async () => {
+    const conflicting = pr({ mergeState: "conflicting" });
+    const harness = createHarness({
+      currentPr: conflicting,
+      allowsEventKind: (kind) => kind !== "ci-failure",
+    });
+
+    expect((await observe(harness.coordinator, conflicting))[0]?.status).toBe("scheduled");
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    const text = harness.submitTurnIfIdle.mock.calls[0]![0].input
+      .map((item) => item.type === "text" ? item.text : "")
+      .join("\n");
+    expect(text).toContain("- Event kinds: merge-conflict");
+    expect(text).not.toContain("ci-failure");
+  });
+
+  it("cancels a repair whose kind the project turned off before it was sent, then repairs once allowed again", async () => {
+    let allowed = true;
+    const harness = createHarness({ allowsEventKind: () => allowed });
+    expect((await observe(harness.coordinator))[0]?.status).toBe("scheduled");
+
+    allowed = false;
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(harness.pendingUpdates.at(-1)).toBeNull();
+
+    // The cancel is deferred, so the still-failing PR schedules afresh.
+    allowed = true;
+    expect((await observe(harness.coordinator))[0]?.status).toBe("scheduled");
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the pending repair when the project pauses", async () => {
+    let allowed = true;
+    const harness = createHarness({ allowsEventKind: () => allowed });
+    await observe(harness.coordinator);
+
+    expect(await harness.coordinator.cancelPendingDisallowedByProject({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBe(false);
+    allowed = false;
+    expect(await harness.coordinator.cancelPendingDisallowedByProject({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBe(true);
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(harness.onActivity).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Cancelled: off in this project's Forge Automation",
+    }));
   });
 });

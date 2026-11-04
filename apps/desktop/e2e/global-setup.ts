@@ -49,6 +49,7 @@ import {
   E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV,
   resetElectronShutdownCircuit,
 } from "./fixtures/electron-shutdown-policy";
+import { recordSourceCheckoutHooks } from "./fixtures/source-checkout-hooks-guard";
 
 const setupDir = path.dirname(fileURLToPath(import.meta.url));
 const SMOKE_FIXTURE = path.resolve(
@@ -66,6 +67,8 @@ const SMOKE_FIXTURE = path.resolve(
 const CANARY_TIMEOUT_MS = 60_000;
 
 export default async function globalSetup(): Promise<void> {
+  // Before the canary, which launches the app too.
+  recordSourceCheckoutHooks(path.resolve(setupDir, "../../.."));
   const diagnosticsFile = process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];
   if (diagnosticsFile) {
     rmSync(diagnosticsFile, { force: true });

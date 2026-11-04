@@ -121,7 +121,8 @@ export class PwrAgentFederatedThreadMessageError extends Error {
       | "peer_unavailable"
       | "stale_target"
       | "unsupported_backend"
-      | "unsupported_capability",
+      | "unsupported_capability"
+      | "project_paused",
     message: string,
   ) {
     super(message);

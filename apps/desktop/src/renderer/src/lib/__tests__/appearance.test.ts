@@ -15,6 +15,7 @@ afterEach(() => {
     "data-density",
     "data-sidebar-text",
     "data-transcript-text",
+    "data-motion",
   ]) {
     root.removeAttribute(attribute);
   }
@@ -39,6 +40,7 @@ describe("applyAppearanceAttributes", () => {
       "mission-control",
       "md",
       "md",
+      false,
     );
     expect(root.dataset.theme).toBe("light");
     expect(root.dataset.colorTheme).toBe("catppuccin-latte");
@@ -50,6 +52,7 @@ describe("applyAppearanceAttributes", () => {
       "mission-control",
       "md",
       "md",
+      false,
     );
     expect(root.hasAttribute("data-theme")).toBe(false);
     expect(root.dataset.colorTheme).toBe("gray-dark");
@@ -62,6 +65,7 @@ describe("applyAppearanceAttributes", () => {
       "mission-control",
       "md",
       "md",
+      false,
     );
     expect(root.hasAttribute("data-color-theme")).toBe(false);
     applyAppearanceAttributes(
@@ -71,6 +75,7 @@ describe("applyAppearanceAttributes", () => {
       "mission-control",
       "md",
       "md",
+      false,
     );
     expect(root.hasAttribute("data-color-theme")).toBe(false);
   });
@@ -80,11 +85,22 @@ describe("applyAppearanceAttributes density", () => {
   it("sets data-density for each denser mode and clears it for Mission Control", () => {
     const root = document.documentElement;
     for (const density of ["compact", "minimal"] as const) {
-      applyAppearanceAttributes("dark", "tangerine-dark", "tangerine-light", density, "md", "md");
+      applyAppearanceAttributes("dark", "tangerine-dark", "tangerine-light", density, "md", "md", false);
       expect(root.dataset.density).toBe(density);
     }
-    applyAppearanceAttributes("dark", "tangerine-dark", "tangerine-light", "mission-control", "md", "md");
+    applyAppearanceAttributes("dark", "tangerine-dark", "tangerine-light", "mission-control", "md", "md", false);
     expect(root.hasAttribute("data-density")).toBe(false);
+  });
+});
+
+describe("applyAppearanceAttributes motion", () => {
+  it("sets data-motion=calm for calm motion and removes it for full motion", () => {
+    const root = document.documentElement;
+    applyAppearanceAttributes("dark", "tangerine-dark", "tangerine-light", "mission-control", "md", "md", true);
+    expect(root.dataset.motion).toBe("calm");
+    // Full motion is the bare :root: the attribute is absent, not "full".
+    applyAppearanceAttributes("dark", "tangerine-dark", "tangerine-light", "mission-control", "md", "md", false);
+    expect(root.hasAttribute("data-motion")).toBe(false);
   });
 });
 
@@ -108,5 +124,16 @@ describe("readBridgedAppearance", () => {
       darkTheme: "tangerine-dark",
       lightTheme: "tangerine-light",
     });
+  });
+
+  it("reads calm motion only from a literal true", () => {
+    (window as BridgedWindow).__pwragentAppearance = { calmMotion: true };
+    expect(readBridgedAppearance().calmMotion).toBe(true);
+
+    (window as BridgedWindow).__pwragentAppearance = { calmMotion: "true" };
+    expect(readBridgedAppearance().calmMotion).toBe(false);
+
+    delete (window as BridgedWindow).__pwragentAppearance;
+    expect(readBridgedAppearance().calmMotion).toBe(false);
   });
 });
