@@ -683,10 +683,12 @@ describe("ScheduledThreadActionService", () => {
         params: { action: expect.objectContaining({ status: "cancelled" }) },
       },
     });
-    // A thread born from the action keeps its failed scheduled start.
-    expect(harness.markScheduledThreadStartTerminal).not.toHaveBeenCalled();
+    // A second window deleting the same row changes nothing, and a thread
+    // born from the action keeps its failed scheduled start.
     await expect(harness.service.cancel({ id: "scheduled-1" }))
-      .rejects.toThrow("The scheduled action can no longer be cancelled.");
+      .resolves.toMatchObject({ action: { status: "cancelled" } });
+    expect(harness.markScheduledThreadStartTerminal).not.toHaveBeenCalled();
+    expect(harness.publishLocalEvent).toHaveBeenCalledTimes(1);
   });
 
   it("cancels an action already waiting in the registry", async () => {
