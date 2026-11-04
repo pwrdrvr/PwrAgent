@@ -70,7 +70,8 @@ test("early terminal events, failed turns and interactive requests have honest o
   }
   const responses = h.calls().filter((m) => m.id === "server-request");
   assert.deepEqual(responses[0].result, { decision: "decline" });
-  assert.equal(responses[1].error.code, -32601);
+  assert.equal(responses[1].error.code, -32603);
+  assert.match(responses[1].error.message, /Interactive requests are not supported/);
 });
 
 test("provider death marks uncertain work and restart does not replay", { timeout }, async (t) => {

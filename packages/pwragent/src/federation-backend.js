@@ -372,7 +372,12 @@ export class HeadlessBackend {
   }
 
   async listBackends() {
-    const models = await this.runtime.codex.listModels();
+    const models = (await this.runtime.codex.listModels()).map((model) => ({
+      id: model.id, label: model.label, current: model.current,
+      reasoningEfforts: model.reasoningEfforts, defaultReasoningEffort: model.defaultReasoningEffort,
+      supportsReasoning: model.supportsReasoning, supportsSteering: true,
+      supportsImage: false, supportsFast: false,
+    }));
     return { fetchedAt: Date.now(), backends: [{ kind: "codex", label: "Codex (headless outpost)", available: true,
       methods: Object.keys(METHOD_CAPABILITIES), capabilities: { listThreads: true, createThread: true, resumeThread: true,
         renameThread: true, readThread: true, startTurn: true, interruptTurn: true, steerTurn: true,

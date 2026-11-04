@@ -33,7 +33,7 @@ import {
 import {
   CodexAppServerClient,
   type CodexThreadMigrationMetadata,
-} from "../codex-app-server/client";
+} from "../codex-app-server/desktop-client";
 import { buildCodexClientArgs } from "./backend-registry";
 import { runGitCommand } from "./git-executable";
 

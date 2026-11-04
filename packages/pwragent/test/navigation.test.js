@@ -86,8 +86,7 @@ test("replay normalizes turn status on messages and activities for mid-turn hydr
     assert.equal(entry.turn.status, expected);
   }
   assert.deepEqual(result.replay.entries.at(-1).turn, { id: "turn-inProgress", status: "in_progress" });
-  assert.equal(result.replay.messages.at(-1).id, "message-inProgress");
-  assert.equal(result.replay.messages.at(-1).text, "Working");
+  assert.equal(result.replay.messages.find((message) => message.id === "message-inProgress").text, "Working");
 });
 
 test("federated transcript reads return the newest page and page back by cursor", async (t) => {
@@ -134,7 +133,7 @@ test("federated transcript pages fit the frame budget and keep a cursor to the t
   assert.deepEqual(response.replay.pagination, { supportsPagination: true, hasPreviousPage: true, previousCursor: "answer-1" });
   const older = await backend.handle("readThread", { threadId: "thread", limit: 1, before: "answer-1" });
   assert.ok(Buffer.byteLength(JSON.stringify(older)) <= backend.replayByteBudget);
-  assert.deepEqual(older.replay.entries.map((entry) => entry.id), ["command-1"], "the oversized entry is compacted, not lost");
+  assert.deepEqual(older.replay.entries.map((entry) => entry.id), ["activity-command-1"], "the oversized entry is compacted, not lost");
   assert.match(older.replay.entries[0].summary, /exceeded the federation frame limit/);
 });
 

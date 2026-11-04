@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CodexAppServerClient } from "../codex-app-server/client";
+import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";
 import { archiveCleanupWorkspaceFilter } from "../app-server/archive-cleanup-workspace-scope";
 import budgets from "./fixtures/archive-cleanup-budgets.json";

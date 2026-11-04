@@ -18,7 +18,7 @@ const constructorState = vi.hoisted(() => ({
   codexResolveEnvs: [] as Array<(() => Promise<NodeJS.ProcessEnv>) | undefined>,
 }));
 
-vi.mock("../codex-app-server/client", () => ({
+vi.mock("../codex-app-server/desktop-client", () => ({
   CodexAppServerClient: class {
     constructor(options?: {
       args?: string[];

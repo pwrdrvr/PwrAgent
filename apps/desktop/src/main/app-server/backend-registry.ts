@@ -637,7 +637,7 @@ import {
   type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
   type HelperThreadToolCallHandler,
-} from "../codex-app-server/client";
+} from "../codex-app-server/desktop-client";
 import {
   DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
   codexAppServerRecycleCheckIntervalMs,

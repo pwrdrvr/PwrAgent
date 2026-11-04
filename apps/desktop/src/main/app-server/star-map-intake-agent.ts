@@ -19,7 +19,7 @@ import {
   buildPwrAgentFederationToolDefinitions,
   type PwrAgentFederationHandler,
 } from "../agent-tools/pwragent-federation-agent-tools";
-import type { HelperThreadToolCallHandler } from "../codex-app-server/client";
+import type { HelperThreadToolCallHandler } from "../codex-app-server/desktop-client";
 import {
   MAX_DISAMBIGUATION_CANDIDATES,
   truncateCandidateReason,

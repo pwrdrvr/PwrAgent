@@ -1,5 +1,5 @@
 import { parseCodexProviderModelId, type CodexModelProviderSettings } from "@pwragent/shared";
-import type { CodexAppServerClient } from "./client";
+import type { CodexAppServerClient } from "./desktop-client";
 
 type Route = "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "reportedProvider";
 // Exhaustive: adding a public client operation requires choosing its runtime ownership.
