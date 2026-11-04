@@ -12,7 +12,6 @@ import {
 import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
-  attachedPullRequestsForWorkspace,
   describeAttachedPullRequestLocalSync,
   findCheckedOutPullRequest,
   reviewThreadForWorkspace,

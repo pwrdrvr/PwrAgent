@@ -8232,7 +8232,7 @@ describe("Composer", () => {
     ]);
 
     fireEvent.change(project, { target: { value: "/repo/PwrGit" } });
-    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     expect(screen.getByLabelText("Attached pull request")).toHaveValue(gitRuntimePrs[2].url);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
