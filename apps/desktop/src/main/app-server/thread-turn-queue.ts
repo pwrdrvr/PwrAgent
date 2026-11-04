@@ -497,14 +497,21 @@ export class ThreadTurnQueue {
     const key = this.keyFor(entry);
     this.heldQueues.set(key, reason);
     const queue = this.queueFor(key);
-    queue.unshift(entry);
+    // A held entry goes ahead of turns that are not held, and behind the
+    // held ones already at the front, so unlocking or Retry sends held
+    // entries in the order they arrived. A hold marks the whole FIFO, so on
+    // a held queue this is the back.
+    const firstUnheld = queue.findIndex((candidate) => !candidate.manualReleaseRequired);
+    const index = firstUnheld < 0 ? queue.length : firstUnheld;
+    queue.splice(index, 0, entry);
     options?.onAdmission?.();
-    await this.emit({ type: "queued", entry, position: 1 });
+    await this.emit({ type: "queued", entry, position: index + 1 });
     await this.holdQueue(key, reason);
+    const held = this.findQueuedEntry(entry.id);
     return {
       status: "queued",
-      entry: this.queueFor(key)[0] ?? entry,
-      position: 1,
+      entry: held?.entry ?? entry,
+      position: held?.position ?? index + 1,
     };
   }
 

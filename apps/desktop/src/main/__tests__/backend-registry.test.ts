@@ -3990,6 +3990,37 @@ describe("DesktopBackendRegistry", () => {
     await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
   });
 
+  it("starts deliveries held on a locked thread in the order they arrived", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const identity = { backend: "codex" as const, threadId: "parked" };
+    const { lock } = await registry.setThreadLock({ ...identity, locked: true, note: "Parked" }, { source: "operator" });
+    const holdReason = threadLockRefusalMessage(lock!);
+
+    await registry.submitHeldTurn({
+      ...identity,
+      queueEntryId: "monitor-result",
+      input: [{ type: "text", text: "Monitor result" }],
+      holdReason,
+    });
+    await registry.submitHeldTurn({
+      ...identity,
+      queueEntryId: "later-result",
+      input: [{ type: "text", text: "Later result" }],
+      holdReason,
+    });
+    expect(registry.listHeldThreadQueueEntries(identity).map((entry) => entry.entryId))
+      .toEqual(["monitor-result", "later-result"]);
+
+    const startTurn = vi.spyOn(codexClient, "startTurn");
+    await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" });
+    await vi.waitFor(() => expect(startTurn).toHaveBeenCalledOnce());
+    // The delivery held first starts first.
+    expect(JSON.stringify(startTurn.mock.calls[0])).toContain("Monitor result");
+    expect(JSON.stringify(startTurn.mock.calls[0])).not.toContain("Later result");
+  });
+
   it("holds the turns a backend starts on its own while locked, in one entry, and sends them on unlock", async () => {
     const codexClient = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
