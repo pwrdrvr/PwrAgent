@@ -22,17 +22,31 @@ function deferred() {
 beforeEach(() => vi.spyOn(document, "hasFocus").mockReturnValue(true));
 afterEach(() => vi.restoreAllMocks());
 
-async function archiveFromSidebar(size: number, completionGroups: number[][]) {
+async function archiveFromSidebar(size: number, completionGroups: number[][], options?: {
+  failed?: number[];
+  remote?: number[];
+}) {
   const archived = new Set<string>();
+  const removedPins = new Set<string>();
+  const owner = { scope: "remote" as const, instanceId: "archive-owner" };
   const gates = Array.from({ length: size }, deferred);
   const rows: NavigationRow[] = Array.from({ length: size + 1 }, (_, index) => ({
     id: `thread-${index}`, source: "codex", title: `Thread ${index}`, titleSource: "explicit",
     ref: { backend: "codex", threadId: `thread-${index}` }, rowRevision: "r", linkedDirectories: [],
     inbox: { inInbox: true }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
     queueCount: 0, queueState: "unknown",
+    ...(options?.remote?.includes(index) ? {
+      ref: { backend: "codex", threadId: `thread-${index}`, ownerInstanceId: owner.instanceId },
+      federation: { ref: { backend: "codex", threadId: `thread-${index}`, target: owner },
+        instanceLabel: "Archive owner", peerStatus: "connected", capabilities: ["thread_navigation", "turn_control"] },
+    } : {}),
   }));
-  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async ({ query }) => {
-    const visible = rows.filter((row) => !archived.has(row.id));
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async ({ query, federationTarget }) => {
+    // The viewer keeps a remote mount's cached snapshot until its pin is
+    // removed, even after the owner archives the thread.
+    const visible = rows.filter((row) => federationTarget?.scope === "remote"
+      ? row.ref.ownerInstanceId === federationTarget.instanceId && !archived.has(row.id)
+      : row.federation ? !removedPins.has(row.id) : !archived.has(row.id));
     const entries = query.kind === "lens" && query.roots !== "pinned" ? visible
       : query.kind === "exact" ? visible.filter((row) => query.identities.some((ref) => ref.threadId === row.id)) : [];
     return { protocol: 2, queryKey: JSON.stringify(query), generation: "g", ownerEpoch: "owner", countsRevision: "r",
@@ -41,28 +55,35 @@ async function archiveFromSidebar(size: number, completionGroups: number[][]) {
       directories: [], complete: true };
   });
   const archive = vi.fn<NonNullable<DesktopApi["archiveThread"]>>(async ({ threadId }) => {
-    await gates[Number(threadId.slice("thread-".length))]!.promise;
+    const index = Number(threadId.slice("thread-".length));
+    await gates[index]!.promise;
+    if (options?.failed?.includes(index)) throw new Error(`Archive failed: ${threadId}`);
     archived.add(threadId);
     return { backend: "codex", threadId, archivedAt: 1, cleanup: [] };
   });
   const api: DesktopApi = {
     archiveThread: archive, getNavigationQueryPage: read, releaseNavigationQuery: async () => undefined,
+    removeRemoteThreadPin: vi.fn(async ({ ref }) => { removedPins.add(ref.threadId); return { removed: true }; }),
     getNavigationSelectedDetail: async ({ ref }) => ({ protocol: 2, ref, revision: "r", readiness: "ready",
       identity: archived.has(ref.threadId) ? "archived" : "present", thread: rows.find((row) => row.id === ref.threadId) }),
     onAgentEvent: () => () => undefined,
   };
-  const hook = renderHook(() => useThreadNavigation(api));
-  await waitFor(() => expect(hook.result.current.selectedThreadConfigurationReady).toBe(true));
+  let hook!: ReturnType<typeof renderHook<ReturnType<typeof useThreadNavigation>, void>>;
+  await act(async () => { hook = renderHook(() => useThreadNavigation(api)); });
+  await waitFor(() => {
+    expect(hook.result.current.selectedThreadConfigurationReady).toBe(true);
+    expect([...hook.result.current.pagedNavigation.resources.values()].every((resource) => !resource.loading)).toBe(true);
+  });
   const navigation = hook.result.current;
   const onThreadsArchived = vi.fn();
   // Mount the real sidebar against the hook's admitted page. Keep that
   // presentation stable while driving IPC completions; hook state still
   // renders on every optimistic removal and accepted owner page.
-  const sidebar = render(<Sidebar backends={backends} browseMode={navigation.browseMode}
+  const sidebar = render(<Sidebar backends={backends} remoteBackends={new Map([[owner.instanceId, backends]])} browseMode={navigation.browseMode}
     directories={navigation.directories} threads={navigation.threads} inboxThreads={navigation.inboxThreads}
     pagedNavigation={navigation.pagedNavigation} loading={navigation.loading} selectedItemKey={navigation.selectedItemKey}
     onBrowseModeChange={navigation.setBrowseMode} onSelectThread={navigation.selectThread}
-    onArchiveThread={navigation.archiveThread} onThreadsArchived={onThreadsArchived}
+    onArchiveThread={navigation.archiveThread} onArchiveThreads={navigation.archiveThreads} onThreadsArchived={onThreadsArchived}
     onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
   try {
     const first = screen.getByRole("button", { name: "Thread 0" });
@@ -79,10 +100,18 @@ async function archiveFromSidebar(size: number, completionGroups: number[][]) {
       await act(async () => { for (const index of group) gates[index]!.resolve(); });
     }
     await waitFor(() => expect(onThreadsArchived).toHaveBeenCalledOnce());
+    for (let index = 0; index < size; index++) {
+      const failed = options?.failed?.includes(index) === true;
+      expect(hook.result.current.threads.some((thread) => thread.id === `thread-${index}`)).toBe(failed);
+      expect(removedPins.has(`thread-${index}`)).toBe(!failed && options?.remote?.includes(index) === true);
+    }
+    const successes = onThreadsArchived.mock.calls[0]![0] as Array<{ threadId: string }>;
+    expect(successes.map((thread) => thread.threadId)).toEqual(rows.slice(0, size)
+      .filter((_, index) => !options?.failed?.includes(index)).map((row) => row.id));
     const loads = read.mock.calls.length;
     const lensLoads = read.mock.calls.filter(([request]) => request.query.kind === "lens" && request.query.roots !== "pinned").length;
     console.info("bulk archive navigation IPC", { size, groups: completionGroups.length, loads, lensLoads });
-    return { loads, lensLoads };
+    return { loads, lensLoads, selectedThreadKey: hook.result.current.selectedThreadKey };
   } finally {
     sidebar.unmount();
     hook.unmount();
@@ -94,7 +123,16 @@ it.each([50, 200])("bounds navigation IPC loads for %i sidebar archives, even wh
   const together = await archiveFromSidebar(size, [indices]);
   const staggered = await archiveFromSidebar(size, indices.map((index) => [index]));
   expect(staggered.loads).toBeLessThanOrEqual(together.loads);
-  expect(staggered.lensLoads).toBeLessThanOrEqual(2);
+  expect(staggered.lensLoads).toBe(1);
+});
+
+it("refreshes once when a pair completes before the final archive (the shrunk counterexample)", async () => {
+  expect((await archiveFromSidebar(3, [[0, 1], [2]])).lensLoads).toBe(1);
+});
+
+it("rolls back failed rows and selection while removing only successfully archived remote pins", async () => {
+  const outcome = await archiveFromSidebar(4, [[3], [2], [1], [0]], { failed: [0, 2], remote: [1, 2] });
+  expect(outcome.selectedThreadKey).toBe("codex:thread-0");
 });
 
 it("loads per bulk archive do not grow with the number of threads or completion groups", async () => {
@@ -105,7 +143,7 @@ it("loads per bulk archive do not grow with the number of threads or completion 
       const groups = [...new Set(completionOrder)].sort().map((rank) => completionOrder
         .flatMap((value, index) => value === rank ? [index] : []));
       const { loads, lensLoads } = await archiveFromSidebar(completionOrder.length, groups);
-      expect(lensLoads).toBeLessThanOrEqual(2);
+      expect(lensLoads).toBe(1);
       expect(loads).toBeLessThanOrEqual(baseline.loads);
     },
   ), { numRuns: 25 });

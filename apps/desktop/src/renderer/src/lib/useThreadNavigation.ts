@@ -3252,6 +3252,10 @@ export function useThreadNavigation(
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
   ) => Promise<ArchivedThreadRef[]>;
+  archiveThreads: (
+    threads: NavigationThreadSummary[],
+    options?: ArchiveThreadOptions,
+  ) => Promise<ArchivedThreadRef[]>;
   restoreArchivedThreads: (
     threads: readonly ArchivedThreadRef[],
     reopenKey?: string,
@@ -8643,6 +8647,7 @@ export function useThreadNavigation(
     async (
       thread: NavigationThreadSummary,
       options?: ArchiveThreadOptions,
+      refreshAfterArchive = refresh,
     ): Promise<ArchivedThreadRef[]> => {
       if (!archiveThreadRequest) {
         setArchiveThreadError("Desktop bridge is missing archiveThread().");
@@ -8767,7 +8772,7 @@ export function useThreadNavigation(
             });
           }
         }
-        await refresh(undefined, undefined, false, refreshOptions);
+        await refreshAfterArchive(undefined, undefined, false, refreshOptions);
       } catch (error) {
         for (const targetKey of targetThreadKeys) {
           if (!archivedKeys.has(targetKey)) {
@@ -8777,7 +8782,7 @@ export function useThreadNavigation(
           }
         }
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
-        await refresh(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey), refreshOptions);
+        await refreshAfterArchive(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey), refreshOptions);
       }
       return archived;
     },
@@ -8793,6 +8798,32 @@ export function useThreadNavigation(
       setSelectedItemKey,
     ]
   );
+
+  const archiveThreads = useCallback(async (
+    threads: NavigationThreadSummary[],
+    options?: ArchiveThreadOptions,
+  ): Promise<ArchivedThreadRef[]> => {
+    let refreshOptions: NavigationRefreshOptions | undefined;
+    let preferredSelectionKey: string | undefined;
+    // Each archive still owns its optimistic removal, rollback and viewer
+    // pin cleanup. Only its final read waits for the whole sidebar action.
+    const collectRefresh: typeof refresh = async (selectionKey, _thread, _force, requestOptions) => {
+      if (selectionKey !== undefined) preferredSelectionKey = selectionKey;
+      refreshOptions = refreshOptions
+        ? { owners: mergeNavigationRefreshOwners(refreshOptions.owners, requestOptions?.owners) }
+        : requestOptions;
+    };
+    const results = await Promise.all(threads.map((thread) => archiveThread(thread, options, collectRefresh)));
+    if (refreshOptions) {
+      try {
+        await refresh(preferredSelectionKey, undefined, preferredSelectionKey !== undefined, refreshOptions);
+      } catch (error) {
+        setArchiveThreadError(error instanceof Error ? error.message : String(error));
+        await refresh(preferredSelectionKey, undefined, preferredSelectionKey !== undefined, refreshOptions);
+      }
+    }
+    return results.flat();
+  }, [archiveThread, refresh]);
 
   /**
    * Undo an archive: restore each thread this window owns (its worktrees come
@@ -10129,6 +10160,7 @@ export function useThreadNavigation(
     markThreadUnread,
     showThread,
     archiveThread,
+    archiveThreads,
     restoreArchivedThreads,
     archiveWorktree,
     restoreWorktree,
