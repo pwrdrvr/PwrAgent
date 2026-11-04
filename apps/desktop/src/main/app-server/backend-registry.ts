@@ -38579,7 +38579,7 @@ export class DesktopBackendRegistry {
     };
     let inventory!: Awaited<ReturnType<DesktopBackendRegistry["readPacedArchiveCleanupInventory"]>>;
     let report!: ArchivedWorktreeRepairReport;
-    const ownersByPath = new Map<string, AppServerThreadSummary>();
+    const ownersByPath = new Map<string, { thread: AppServerThreadSummary; worktreePath: string }>();
     const canonicalKeys = new Map<string, string>();
     await this.archiveCleanupQueue.enqueue(`archive-repair-read:${++this.archiveWorkspaceWriteSequence}`, async (context) => {
       const checkpoint = async () => { await context.checkpoint(); };
@@ -38588,7 +38588,9 @@ export class DesktopBackendRegistry {
         try {
           const key = await canonical(value);
           canonicalKeys.set(normalizeWorktreePathForComparison(value), key);
-          ownersByPath.set(key, thread);
+          // Canonical keys may fold Windows casing or resolve an alias. Keep
+          // the supplied path for filesystem/provider calls and result data.
+          ownersByPath.set(key, { thread, worktreePath: normalizeWorktreePathForComparison(value) });
         } catch (error) {
           report.cleanup.push({ worktreePath: value, removedWorktree: false, deletedBranch: false,
             error: error instanceof Error ? error.message : String(error) });
@@ -38616,7 +38618,7 @@ export class DesktopBackendRegistry {
       }
       report.discoveredWorktrees = ownersByPath.size;
       const seenContainers = new Set<string>();
-      for (const [worktreePath, thread] of ownersByPath) {
+      for (const [canonicalKey, { worktreePath, thread }] of ownersByPath) {
         await checkpoint();
         try {
           if (!(await stat(worktreePath)).isDirectory()) throw new Error(`Worktree path is not a directory: ${worktreePath}`);
@@ -38652,7 +38654,10 @@ export class DesktopBackendRegistry {
             activeThreads: ownership.users.map((owner) => ({ backend: owner.source, threadId: owner.id, projectKey: owner.projectKey })),
           });
           if (!options.dryRun && !ownership.external) {
-            const directory = thread.linkedDirectories.find((row) => linkedDirectoryWorktreePath(row) === worktreePath);
+            const directory = thread.linkedDirectories.find((row) => {
+              const value = linkedDirectoryWorktreePath(row);
+              return value !== undefined && canonicalKeys.get(normalizeWorktreePathForComparison(value)) === canonicalKey;
+            });
             await this.retainDeferredArchiveWorktree({ backend: thread.source, thread, activeThreads: inventory.activeThreads },
               { worktreePath, repositoryPath: directory?.path }, ownership.users.map((owner) => buildThreadIdentityKey(owner.source, owner.id)));
           }
@@ -38677,9 +38682,11 @@ export class DesktopBackendRegistry {
       const completion = this.enqueueArchiveRepair(key, candidate.worktreePath, async (context) => {
         // This complete inventory is preliminary only. archiveThreadWorktrees
         // still performs a fresh authoritative ownership scan before removal.
-        const thread = { ...ownersByPath.get(candidate.worktreePath)!, linkedDirectories: ownersByPath.get(candidate.worktreePath)!.linkedDirectories.filter((directory) => {
+        const candidateKey = canonicalKeys.get(normalizeWorktreePathForComparison(candidate.worktreePath))!;
+        const owner = ownersByPath.get(candidateKey)!.thread;
+        const thread = { ...owner, linkedDirectories: owner.linkedDirectories.filter((directory) => {
           const worktreePath = linkedDirectoryWorktreePath(directory);
-          return worktreePath !== undefined && canonicalKeys.get(normalizeWorktreePathForComparison(worktreePath)) === candidate.worktreePath;
+          return worktreePath !== undefined && canonicalKeys.get(normalizeWorktreePathForComparison(worktreePath)) === candidateKey;
         }) };
         if (thread.linkedDirectories.length === 0) throw new Error("Archived thread no longer owns the repair candidate; the worktree was kept.");
         return {
@@ -38717,7 +38724,10 @@ export class DesktopBackendRegistry {
           await scope.prepare(this.archiveWorkspaceMutations());
           scope.reserve(this.archiveWorkspaceMutations());
           const ownedPaths = [current.thread.projectKey, ...current.thread.linkedDirectories.map(linkedDirectoryWorktreePath)];
-          if (!ownedPaths.some((value) => value && normalizeWorktreePathForComparison(value) === candidate.worktreePath)) {
+          const canonical = canonicalWorktreePaths();
+          const candidateKey = await canonical(candidate.worktreePath);
+          const ownedKeys = await Promise.all(ownedPaths.filter((value): value is string => Boolean(value)).map(canonical));
+          if (!ownedKeys.includes(candidateKey)) {
             throw new Error("Archived thread no longer owns the container; it was kept.");
           }
           if (this.isWorktreeContainerProtected(containerPath, current)) {
