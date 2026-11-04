@@ -30,6 +30,8 @@ type Scenario = {
   outcome: "started" | "queued" | "failed";
   overlap?: boolean;
   requestFails?: boolean;
+  lifecycle?: "completed" | "approval" | "replacement";
+  responseBeforeTransition?: boolean;
 };
 
 const scenario = fc.record({
@@ -52,6 +54,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
   const startupEntered = gate();
   const startup = gate();
   const response = gate();
+  const accepted = gate();
   const requests: Array<{ at: number; chatId: number | string; topicId?: number }> = [];
   const states: string[] = [];
   let starts = 0;
@@ -61,8 +64,13 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
     api: {
       sendChatAction: async (request) => {
         requests.push({ at: now, chatId: request.chat_id, topicId: request.message_thread_id });
-        await scheduler.schedule(response.promise, "Telegram response");
-        if (input.requestFails && requests.length === 1) throw new Error("Fixture typing request failure");
+        const ordinal = requests.length;
+        if (input.lifecycle) {
+          if (ordinal === 1) await response.promise;
+        } else {
+          await scheduler.schedule(response.promise, "Telegram response");
+        }
+        if (input.requestFails && ordinal === 1) throw new Error("Fixture typing request failure");
         return true;
       },
     } as TelegramBotApi,
@@ -100,7 +108,8 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
       starts += 1;
       if (starts > 1) return { backend: request.backend, threadId: request.threadId, turnId: "queued-2", queueStatus: "queued" as const };
       startupEntered.resolve();
-      await scheduler.schedule(startup.promise, "backend preflight");
+      if (input.lifecycle) await startup.promise;
+      else await scheduler.schedule(startup.promise, "backend preflight");
       if (input.outcome === "failed") throw new Error("Fixture startup failure");
       return { backend: request.backend, threadId: request.threadId, turnId: "turn-1", queueStatus: input.outcome };
     },
@@ -109,6 +118,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
     adapter, backend: backend as unknown as MessagingBackendBridge, store,
     authorizedActorIds: ["42"], now: () => now, inputDebounceMs: 0,
     fullAccessControls: { allowThreadResume: false, allowEscalation: false, warningPolicy: "always" },
+    logger: { info: (message) => { if (message === "messaging turn started") accepted.resolve(); } },
   });
   let handling: Promise<void> | undefined;
   try {
@@ -146,6 +156,44 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
       expect(states.at(-1), "a queued follow-up cannot stop the preparing attempt").toBe("active");
       expect(requests).toHaveLength(1);
     }
+    if (input.lifecycle) {
+      if (input.responseBeforeTransition) response.resolve();
+      startup.resolve();
+      await accepted.promise;
+      if (input.responseBeforeTransition) await handling;
+      if (input.lifecycle === "approval") {
+        await controller.handleBackendPendingRequest(input.backend, {
+          method: "item/commandExecution/requestApproval",
+          params: { threadId: "thread-1", turnId: "turn-1", requestId: "approval-1", prompt: "Fixture approval", command: "fixture" },
+        });
+      } else {
+        await controller.handleBackendEvent({
+          backend: input.backend,
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } },
+          },
+        });
+        if (input.lifecycle === "replacement") {
+          await controller.handleBackendEvent({
+            backend: input.backend,
+            notification: {
+              method: "turn/started",
+              params: { threadId: "thread-1", turnId: "turn-2", turn: { id: "turn-2", status: "running" } },
+            },
+          });
+        }
+      }
+      const activityCount = states.length;
+      const requestCount = requests.length;
+      expect(states.at(-1)).toBe(input.lifecycle === "replacement" ? "active" : "idle");
+      response.resolve();
+      await handling;
+      // The provider lifecycle owns the state now. Completing an earlier
+      // activity request cannot retry a completed, waiting or superseded turn.
+      expect(states.slice(activityCount)).toEqual([]);
+      expect(requests).toHaveLength(requestCount);
+    }
   } finally {
     startup.resolve();
     response.resolve();
@@ -158,8 +206,9 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
   }
   // Reference lifecycle: a started turn keeps activity; a failed or queued
   // attempt on this idle thread must not leave a preparation lease running.
-  expect(states.at(-1)).toBe(input.outcome === "started" ? "active" : "idle");
-  if (input.outcome === "started" && input.requestFails) expect(requests).toHaveLength(2);
+  expect(states.at(-1)).toBe(input.lifecycle && input.lifecycle !== "replacement"
+    ? "idle" : input.outcome === "started" ? "active" : "idle");
+  if (!input.lifecycle && input.outcome === "started" && input.requestFails) expect(requests).toHaveLength(2);
 }
 
 describe("first typing request (property)", () => {
@@ -175,6 +224,21 @@ describe("first typing request (property)", () => {
   it("never requests typing for an unauthorized actor or a denied Full Access resume", async () => {
     await fc.assert(fc.asyncProperty(scenario, fc.scheduler(), fc.constantFrom("actor" as const, "policy" as const),
       (input, scheduler, denied) => runScenario(input, scheduler, denied)), { numRuns: 25 });
+  });
+
+  it("preserves lifecycle ownership across preparation-response orderings", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("completed" as const, "approval" as const, "replacement" as const),
+      fc.boolean(), fc.boolean(), fc.boolean(),
+      (lifecycle, responseBeforeTransition, requestFails, defaultAgent) => runScenario({
+        backend: "codex", route: defaultAgent ? "default-agent" : "binding", delayMs: 101,
+        outcome: "started", lifecycle, responseBeforeTransition, requestFails,
+      }, fc.schedulerFor([])),
+    ), { numRuns: 25 });
+  });
+
+  it.each(["completed", "approval", "replacement"] as const)("does not retry a %s turn after the preparation response", async (lifecycle) => {
+    await runScenario({ backend: "codex", route: "binding", delayMs: 101, outcome: "started", lifecycle }, fc.schedulerFor([]));
   });
 
   async function assertReplacementLease(failBeforeReplacement: boolean): Promise<void> {
