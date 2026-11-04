@@ -185,6 +185,68 @@ function buildRepair() {
 }
 
 describe("archive cleanup pipeline", () => {
+  it("reclaims each managed checkout only after its final secondary reference is released", async () => {
+    vi.useFakeTimers();
+    const directories = ["first", "second"].map((id) => ({
+      id, kind: "worktree" as const, label: id, path: `/contrived/repo-${id}`, worktreePath: `/contrived/${id}`,
+    }));
+    const target = codexThread({ id: "target", linkedDirectories: directories });
+    const fixture = build(["one", "two"].map((id) => codexThread({ id, projectKey: `/contrived/other-${id}`, linkedDirectories: [] })), target);
+    fixture.overlays.set("one", { backend: "codex", threadId: "one", extraLinkedDirectories: directories });
+    fixture.overlays.set("two", { backend: "codex", threadId: "two", extraLinkedDirectories: [directories[0]!] });
+    await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    const pages = fixture.counts.providerPages;
+    await publishNotification(fixture.registry, { method: "turn/started", params: { threadId: "unrelated", turn: { id: "unrelated-turn" } } });
+    expect(fixture.counts.providerPages).toBe(pages);
+    await publishNotification(fixture.registry, { method: "turn/completed", params: { threadId: "unrelated", turnId: "unrelated-turn", turn: { id: "unrelated-turn", status: "completed", output: [] } } });
+
+    for (const [id, expectedPath] of [["one", "/contrived/second"], ["two", "/contrived/first"]]) {
+      fixture.overlays.set(id!, { backend: "codex", threadId: id!, extraLinkedDirectories: [] });
+      const completed = new Promise<AgentEvent>((resolve) => fixture.registry.onEvent((event) => {
+        if (event.notification.method === "thread/archiveCleanup/completed") resolve(event);
+      }));
+      await publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: [id!] } });
+      expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(1);
+      await drivePacer(fixture.registry, completed);
+      expect(fixture.archiveWorktree.mock.calls.at(-1)?.[0].worktreePath).toBe(expectedPath);
+    }
+    expect(fixture.archiveWorktree.mock.calls.map(([request]) => request.worktreePath)).toEqual(["/contrived/second", "/contrived/first"]);
+    expect(fixture.client.archiveThread).toHaveBeenCalledOnce();
+  });
+
+  it.each(["thread/archived", "thread/deleted"] as const)("reconsiders a pending checkout when its final owner emits %s", async (method) => {
+    vi.useFakeTimers();
+    const directory = { id: "shared", kind: "worktree" as const, label: "shared", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const active = [codexThread({ id: "owner", projectKey: "/contrived/other", linkedDirectories: [] })];
+    const fixture = build(active, codexThread({ id: "target", linkedDirectories: [directory] }));
+    fixture.overlays.set("owner", { backend: "codex", threadId: "owner", extraLinkedDirectories: [directory] });
+    await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    active.splice(0);
+    const completed = new Promise<AgentEvent>((resolve) => fixture.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed") resolve(event);
+    }));
+    await publishNotification(fixture.registry, { method, params: { threadId: "owner" } });
+    expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(1);
+    await drivePacer(fixture.registry, completed);
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+    expect(fixture.client.archiveThread).toHaveBeenCalledOnce();
+  });
+
+  it("checkpoints reference-blocked cleanup for restart without counting it as active quit work", async () => {
+    vi.useFakeTimers();
+    const saved: ArchiveCleanupIntent[][] = [];
+    const checkpoint = { save: vi.fn((_id: string, intents: ArchiveCleanupIntent[]) => { saved.push(structuredClone(intents)); }), recover: vi.fn(() => []) };
+    const directory = { id: "shared", kind: "worktree" as const, label: "shared", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const fixture = build([codexThread({ id: "owner", projectKey: "/contrived/worktree", linkedDirectories: [directory] })],
+      codexThread({ id: "target", linkedDirectories: [directory] }), checkpoint);
+    await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(0);
+    fixture.registry.checkpointArchiveCleanupsForQuit();
+    expect(saved.at(-1)).toEqual([expect.objectContaining({ threadId: "target", deferredWorktrees: [expect.objectContaining({ worktreePath: "/contrived/worktree" })] })]);
+  });
+
   it("Run now re-audits existing archived worktrees", async () => {
     const fixture = build([]);
     const repair = vi.spyOn(fixture.registry, "repairArchivedThreadWorktrees").mockResolvedValue({
