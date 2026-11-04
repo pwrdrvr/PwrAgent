@@ -477,7 +477,13 @@ describe("sqlite write metrics", () => {
         threadId: "claude-native:agent-1", threadStatus: "idle",
       })]);
       await vi.waitFor(() => expect(registry.listBackendTaskWakes({ backend: "claude", threadId })).toEqual([]));
-    } finally { await registry.close(); }
+    } finally {
+      // A failed assertion must not leave the fake session parked on a gate,
+      // or closing it hangs and hides the failure behind a timeout.
+      progressGate.resolve();
+      finishGate.resolve();
+      await registry.close();
+    }
   });
 
   it("budgets one commit when a Claude sub-agent starts and one when it ends", async () => {

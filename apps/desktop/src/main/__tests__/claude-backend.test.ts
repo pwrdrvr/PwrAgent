@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { HookEvent, HookInput, Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import {
@@ -3325,6 +3325,8 @@ describe("Claude SDK backend", () => {
         status: "stopped", output_file: "", summary: "Stopped" } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "noted" } as SDKMessage;
     });
+    // A failed assertion must not leave the session parked, or cleanup hangs.
+    onTestFinished(() => agentDone.resolve());
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     const started = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
     await f.waitForTurn();
