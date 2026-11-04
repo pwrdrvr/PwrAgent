@@ -2971,8 +2971,15 @@ function buildLaunchpadRelativeThreadKey(
     : buildThreadIdentityKey(backend, threadId);
 }
 
+function scheduleNavigationRefreshTask(callback: () => void): () => void {
+  const timer = setTimeout(callback, 0);
+  return () => clearTimeout(timer);
+}
+
 type UseThreadNavigationOptions = {
   enabled?: boolean;
+  /** Event-triggered reads use a timer task by default; tests inject a task queue. */
+  scheduleNavigationRefresh?: (callback: () => void) => () => void;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   /**
    * This machine's federation instance id. A sub-thread started on a peer
@@ -3685,9 +3692,8 @@ export function useThreadNavigation(
     else next.delete(key);
     removedDirectoryKeysRef.current = next;
   }, []);
-  const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined
-  );
+  const scheduledRefreshTaskRef = useRef<(() => void) | undefined>(undefined);
+  const scheduleNavigationRefresh = options.scheduleNavigationRefresh ?? scheduleNavigationRefreshTask;
   const remotePeerDisconnectedRef = useRef(false);
   const lastNavigationActivityAtRef = useRef(Date.now());
   const backgroundRefreshIdleRef = useRef(false);
@@ -4112,12 +4118,12 @@ export function useThreadNavigation(
         preferredSelectionKey,
       };
 
-      if (scheduledRefreshTimerRef.current !== undefined) {
+      if (scheduledRefreshTaskRef.current !== undefined) {
         return;
       }
 
-      scheduledRefreshTimerRef.current = setTimeout(() => {
-        scheduledRefreshTimerRef.current = undefined;
+      scheduledRefreshTaskRef.current = scheduleNavigationRefresh(() => {
+        scheduledRefreshTaskRef.current = undefined;
         const nextRequest = queuedRefreshRef.current;
         queuedRefreshRef.current = undefined;
         if (!nextRequest) {
@@ -4135,9 +4141,9 @@ export function useThreadNavigation(
             invalidatedOnly: nextRequest.invalidatedOnly,
           }
         );
-      }, 0);
+      });
     },
-    [refresh]
+    [refresh, scheduleNavigationRefresh]
   );
 
   const markNavigationActivity = useCallback(
@@ -4171,8 +4177,8 @@ export function useThreadNavigation(
 
   useEffect(() => {
     return () => {
-      if (scheduledRefreshTimerRef.current !== undefined) {
-        clearTimeout(scheduledRefreshTimerRef.current);
+      if (scheduledRefreshTaskRef.current !== undefined) {
+        scheduledRefreshTaskRef.current();
       }
     };
   }, []);

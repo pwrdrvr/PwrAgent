@@ -1,7 +1,7 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import type { BackendSummary, NavigationRow } from "@pwragent/shared";
+import type { AgentEvent, BackendSummary, NavigationRow } from "@pwragent/shared";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
@@ -27,6 +27,13 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
   remote?: number[];
 }) {
   const archived = new Set<string>();
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const emit = (event: AgentEvent) => { for (const listener of listeners) listener(event); };
+  const refreshTasks = new Set<() => void>();
+  const scheduleNavigationRefresh = (callback: () => void) => {
+    refreshTasks.add(callback);
+    return () => { refreshTasks.delete(callback); };
+  };
   const removedPins = new Set<string>();
   const owner = { scope: "remote" as const, instanceId: "archive-owner" };
   const gates = Array.from({ length: size }, deferred);
@@ -59,17 +66,23 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     await gates[index]!.promise;
     if (options?.failed?.includes(index)) throw new Error(`Archive failed: ${threadId}`);
     archived.add(threadId);
+    emit({ backend: "codex", ...(options?.remote?.includes(index) ? { federationTarget: owner } : {}),
+      notification: { method: "thread/archived", params: { threadId } } });
     return { backend: "codex", threadId, archivedAt: 1, cleanup: [] };
   });
   const api: DesktopApi = {
     archiveThread: archive, getNavigationQueryPage: read, releaseNavigationQuery: async () => undefined,
-    removeRemoteThreadPin: vi.fn(async ({ ref }) => { removedPins.add(ref.threadId); return { removed: true }; }),
+    removeRemoteThreadPin: vi.fn(async ({ ref }) => {
+      removedPins.add(ref.threadId);
+      emit({ backend: "codex", notification: { method: "navigation/remoteThreadPins/changed", params: {} } });
+      return { removed: true };
+    }),
     getNavigationSelectedDetail: async ({ ref }) => ({ protocol: 2, ref, revision: "r", readiness: "ready",
       identity: archived.has(ref.threadId) ? "archived" : "present", thread: rows.find((row) => row.id === ref.threadId) }),
-    onAgentEvent: () => () => undefined,
+    onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
   let hook!: ReturnType<typeof renderHook<ReturnType<typeof useThreadNavigation>, void>>;
-  await act(async () => { hook = renderHook(() => useThreadNavigation(api)); });
+  await act(async () => { hook = renderHook(() => useThreadNavigation(api, { scheduleNavigationRefresh })); });
   await waitFor(() => {
     expect(hook.result.current.selectedThreadConfigurationReady).toBe(true);
     expect([...hook.result.current.pagedNavigation.resources.values()].every((resource) => !resource.loading)).toBe(true);
@@ -98,6 +111,16 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     expect(hook.result.current.selectedThreadKey).toBe(`codex:thread-${size}`);
     for (const group of completionGroups) {
       await act(async () => { for (const index of group) gates[index]!.resolve(); });
+      // Deliver the same timer tasks production runs between staggered IPC
+      // replies, without depending on wall time or fake timers.
+      await act(async () => {
+        while (refreshTasks.size > 0) {
+          const tasks = [...refreshTasks];
+          refreshTasks.clear();
+          for (const task of tasks) task();
+          await Promise.resolve();
+        }
+      });
     }
     await waitFor(() => expect(onThreadsArchived).toHaveBeenCalledOnce());
     for (let index = 0; index < size; index++) {
