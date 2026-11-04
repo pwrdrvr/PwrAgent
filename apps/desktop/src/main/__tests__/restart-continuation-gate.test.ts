@@ -39,6 +39,10 @@ describe("restart continuation gate", () => {
 
     state = transitionRestartGate(state, { type: "settled", entryId: "a" });
     expect(restartGateHolds(state, {}, 500)).toBe(true);
+    // A continuation that settled without starting (a lock held it) still
+    // waits for its own time once released, while others are waiting.
+    expect(restartGateHolds(state, { restartEntryId: "a" }, 99)).toBe(true);
+    expect(restartGateHolds(state, { restartEntryId: "a" }, 100)).toBe(false);
     expect(transitionRestartGate(state, { type: "settled", entryId: "a" })).toBe(state);
     state = transitionRestartGate(state, { type: "settled", entryId: "b" });
     expect(state).toBe(OPEN_RESTART_GATE);

@@ -22128,12 +22128,20 @@ export class DesktopBackendRegistry {
   beginRestartContinuationDispatch(): void {
     if (this.restartDispatchStarted || this.restartGate.phase !== "resuming") return;
     this.restartDispatchStarted = true;
-    const pending = [...this.restartGate.pending.values()];
+    // Every restored continuation gets a time, settled ones too: one a lock
+    // held before dispatch began still waits its turn once unlocked.
+    const { pending } = this.restartGate;
     const now = Date.now();
-    const plan = planRestartDispatch(pending, { ...this.restartDispatchPlanOptions, now });
+    const plan = planRestartDispatch([...this.restartGate.scheduled.values()], {
+      ...this.restartDispatchPlanOptions,
+      now,
+    });
     this.restartGate = {
       phase: "resuming",
-      pending: new Map(plan.schedule.map((item) => [item.entryId, item])),
+      pending: new Map(plan.schedule
+        .filter((item) => pending.has(item.entryId))
+        .map((item) => [item.entryId, item])),
+      scheduled: new Map(plan.schedule.map((item) => [item.entryId, item])),
       releaseBy: plan.releaseBy,
     };
     this.publishRestartGateStatus();

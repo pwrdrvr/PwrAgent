@@ -31,41 +31,62 @@ const event: fc.Arbitrary<RestartGateEvent> = fc.oneof(
  * The gate's promises, written as plain flags and sets rather than phases:
  * a quiet restart shuts everything for good; otherwise the gate is shut while
  * any restored continuation has not settled, until its deadline passes or
- * the operator releases it.
+ * the operator releases it. While it is shut, every restored continuation,
+ * settled or not, waits for its own time.
  */
-type Reference = { quiet: boolean; pending: Map<string, number>; releaseBy: number };
+type Reference = {
+  quiet: boolean;
+  pending: Set<string>;
+  times: Map<string, number>;
+  releaseBy: number;
+};
+
+const OPEN_REFERENCE: Reference = { quiet: false, pending: new Set(), times: new Map(), releaseBy: 0 };
 
 function referenceStep(reference: Reference, next: RestartGateEvent): Reference {
   if (reference.quiet) return reference;
+  const open = reference.pending.size === 0;
+  let after: Reference;
   switch (next.type) {
     case "quiet":
-      return { quiet: true, pending: new Map(), releaseBy: 0 };
+      return { ...OPEN_REFERENCE, quiet: true };
     case "restore": {
-      const pending = new Map(reference.pending);
-      for (const item of next.schedule) pending.set(item.entryId, item.dispatchAt);
-      return {
+      const pending = new Set(reference.pending);
+      const times = new Map(reference.times);
+      for (const item of next.schedule) {
+        pending.add(item.entryId);
+        times.set(item.entryId, item.dispatchAt);
+      }
+      after = {
         quiet: false,
         pending,
-        releaseBy: reference.pending.size > 0 ? Math.max(reference.releaseBy, next.releaseBy) : next.releaseBy,
+        times,
+        releaseBy: open ? next.releaseBy : Math.max(reference.releaseBy, next.releaseBy),
       };
+      break;
     }
     case "settled": {
-      const pending = new Map(reference.pending);
+      const pending = new Set(reference.pending);
       pending.delete(next.entryId);
-      return { ...reference, pending };
+      after = { ...reference, pending };
+      break;
     }
     case "deadline":
-      return next.at >= reference.releaseBy ? { ...reference, pending: new Map() } : reference;
+      after = next.at >= reference.releaseBy ? OPEN_REFERENCE : reference;
+      break;
     case "release":
-      return { ...reference, pending: new Map() };
+      after = OPEN_REFERENCE;
+      break;
   }
+  // An open gate forgets the restart it was waiting on.
+  return after.pending.size === 0 ? OPEN_REFERENCE : after;
 }
 
 describe("restart gate (property)", () => {
   it("agrees with the reference on what it holds after any event sequence", () => {
     fc.assert(fc.property(fc.array(event, { maxLength: 25 }), fc.nat(1_000), (events, now) => {
       let state: RestartGateState = OPEN_RESTART_GATE;
-      let reference: Reference = { quiet: false, pending: new Map(), releaseBy: 0 };
+      let reference: Reference = OPEN_REFERENCE;
       for (const next of events) {
         state = transitionRestartGate(state, next);
         reference = referenceStep(reference, next);
@@ -76,7 +97,7 @@ describe("restart gate (property)", () => {
         // Work that is not a continuation waits exactly while the gate is shut.
         expect(restartGateHolds(state, {}, now)).toBe(shut);
         for (const entryId of IDS) {
-          const dispatchAt = reference.pending.get(entryId);
+          const dispatchAt = reference.times.get(entryId);
           const held = reference.quiet || (dispatchAt !== undefined && now < dispatchAt);
           expect(restartGateHolds(state, { restartEntryId: entryId }, now)).toBe(held);
         }

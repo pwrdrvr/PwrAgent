@@ -35,6 +35,12 @@ export type RestartGateState =
       phase: "resuming";
       /** Continuations not yet started, by entry id. */
       pending: ReadonlyMap<string, RestartContinuationSchedule>;
+      /**
+       * Every continuation restored this launch, by entry id, including
+       * those that have settled. One that a lock held keeps its time when
+       * the lock is released, so it cannot jump ahead of the stagger.
+       */
+      scheduled: ReadonlyMap<string, RestartContinuationSchedule>;
       /** The gate opens by this time even if a continuation is still waiting. */
       releaseBy: number;
     };
@@ -61,11 +67,16 @@ export function transitionRestartGate(
       // A restart already under way keeps everything shut.
       if (current.phase === "quieting") return current;
       const pending = new Map(current.phase === "resuming" ? current.pending : []);
-      for (const item of event.schedule) pending.set(item.entryId, item);
+      const scheduled = new Map(current.phase === "resuming" ? current.scheduled : []);
+      for (const item of event.schedule) {
+        pending.set(item.entryId, item);
+        scheduled.set(item.entryId, item);
+      }
       if (pending.size === 0) return OPEN_RESTART_GATE;
       return {
         phase: "resuming",
         pending,
+        scheduled,
         releaseBy: current.phase === "resuming"
           ? Math.max(current.releaseBy, event.releaseBy)
           : event.releaseBy,
@@ -99,7 +110,7 @@ export function restartGateHolds(
   if (state.phase === "open") return false;
   if (state.phase === "quieting") return true;
   if (entry.restartEntryId === undefined) return true;
-  const scheduled = state.pending.get(entry.restartEntryId);
+  const scheduled = state.scheduled.get(entry.restartEntryId);
   return scheduled !== undefined && now < scheduled.dispatchAt;
 }
 
