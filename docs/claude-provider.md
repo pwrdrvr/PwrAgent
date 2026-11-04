@@ -333,8 +333,8 @@ per-thread grants again.
 
 Claude Code can start a turn on its own later: `ScheduleWakeup` sets the next
 tick of a dynamic `/loop`, and `CronCreate` schedules a prompt once or on a
-cron schedule. Unless `CronCreate` is called with `durable: true`, both live in
-the CLI process's memory and end with it. The SDK has no control request that
+cron schedule. Unless the CLI saves a `CronCreate` job as durable, both live
+in the CLI process's memory and end with it. The SDK has no control request that
 lists or cancels them; only the model's `CronDelete`, or `ScheduleWakeup` with
 `stop: true`, cancels one.
 
@@ -358,9 +358,43 @@ The set is published as `thread/sessionWakes/updated` and listed in Waiting
 for under Scheduled. The row has no Stop and tells the operator to ask Claude to
 cancel it. Quitting PwrAgent, archiving the thread, a rewind, or a folder move
 ends the session and its wakes. Archiving is
-allowed while only wakes keep the session. A durable `CronCreate` job is saved
-in the project's `.claude/scheduled_tasks.json`, outside any one session, and
-is not listed.
+allowed while only wakes keep the session.
+
+### Durable cron jobs
+
+PwrAgent does not list a durable `CronCreate` job. The findings below were
+measured with the bundled CLI 2.1.310 in SDK mode on 2026-11-03.
+
+- **The account can turn them off.** Durable jobs depend on a Claude Code
+  feature flag. When it is off, `CronCreate` ignores `durable: true`, keeps the
+  job in the session, and answers `durable: false`. PwrAgent lists that job
+  like any session cron. The flag was off for the account that ran these
+  tests.
+- **The job is stored in the folder, not in a thread.** A durable job is
+  saved in `.claude/scheduled_tasks.json` in the session's working folder.
+  Each entry records the session that created it. Every Claude session in
+  that folder reads the file, even when the flag is off.
+- **The creator runs it first.** The creating session runs its own jobs while
+  it is open. A resumed session keeps its session id, so a PwrAgent thread
+  runs its own jobs again on its next turn.
+- **Another session can run it.** While the creating session is not running,
+  the session that holds `.claude/scheduled_tasks.lock` in that folder runs
+  the job instead. That session can be another PwrAgent thread or a Claude
+  Code terminal. In the test, a second session started first, took the lock,
+  and ran the job every minute. When the creator started, the creator took
+  over. When the creator stopped, the second session resumed.
+- **Few PwrAgent turns are open to run it.** A durable job does not keep a
+  process open. PwrAgent ends a thread's Claude process after its turn
+  settles, so the job runs only if a Claude session in that folder is open
+  and idle when it is due. A one-shot that was missed is offered at the start
+  of a later session that can run it. Claude asks before it runs that job.
+
+A Waiting for row in the creating thread would be wrong whenever another
+session runs the job. A row in every thread in the folder would claim work
+that most of those threads never do. Listing them would also make PwrAgent
+depend on the format of a file that Claude Code owns and does not document.
+Ask Claude to run `CronList` to see the durable jobs in a folder, or
+`CronDelete` to remove one.
 
 ## Usage, context, and MCP
 
