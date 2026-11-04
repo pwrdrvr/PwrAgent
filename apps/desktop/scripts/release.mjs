@@ -1078,7 +1078,7 @@ const dockTilePluginExecutable = join(
 );
 
 step("verify packaged Git and LFS");
-verifyBundledGit(join(builtApp, "Contents", "Resources"), { macSlices });
+verifyBundledGit(join(builtApp, "Contents", "Resources"));
 
 step(`verify ${macArch} binary slices`);
 verifyMacSlices(join(builtApp, "Contents", "MacOS", "PwrAgent"));

@@ -22,7 +22,7 @@ export default async function beforePack(context) {
   const dugiteDir = join(appDir, "node_modules", "dugite");
   if (platform !== "win32") {
     await stageRuntime({ manifestPath: join(appDir, "custom-git-runtime.json"), platform, arch,
-      output: join(dugiteDir, "git"), cache: process.env.PWRGIT_RUNTIME_CACHE });
+      output: join(dugiteDir, "git"), cache: process.env.PWRGIT_RUNTIME_CACHE || undefined });
     return;
   }
   const script = join(dugiteDir, "script", "download-git.js");
