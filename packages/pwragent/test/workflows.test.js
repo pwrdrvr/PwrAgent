@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import test from "node:test";
 import { connectFederationClient, decodeFederationInvite, FederationRpcEndpoint, generateFederationIdentityKeyPair,
@@ -11,17 +10,8 @@ import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js"
 import { OutpostGit } from "../src/projects.js";
 import { setup, eventually } from "./helpers.js";
 
-async function port() {
-  const server = net.createServer();
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const result = server.address().port;
-  await new Promise((resolve) => server.close(resolve));
-  return result;
-}
-
 async function peer(h, prior, onRequest, capabilities = HEADLESS_CAPABILITIES) {
-  const listener = (await h.rpc("federation-status")).listener;
-  const invite = prior?.invite || decodeFederationInvite((await h.rpc("federation-invite", { port: listener ? Number(new URL(listener.url).port) : await port() })).invite);
+  const invite = prior?.invite || decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
   const identity = prior?.identity || { id: randomUUID(), ...generateFederationIdentityKeyPair(), noiseStatic: generateNoiseStaticKeyPair() };
   const events = [];
   const endpoints = [];
@@ -174,8 +164,7 @@ test("repository intake preflights before file transfer or source archive, then 
   git(source.root, "clone", "--bare", origin, published);
   const sourceProject = await source.rpc("project-clone", { name: "source", remote: published });
   const destProject = await destination.rpc("project-clone", { name: "destination", remote: published });
-  const gatewayPort = await port();
-  const enrollment = await source.rpc("federation-invite", { port: gatewayPort });
+  const enrollment = await source.rpc("federation-invite", { port: 0 });
   await destination.rpc("federation-join", { invite: enrollment.invite });
   await eventually(async () => (await destination.rpc("federation-status")).gateway.status === "connected");
   const targetInstanceId = (await destination.rpc("federation-status")).instanceId;
@@ -224,9 +213,8 @@ test("handoffs validate trusted gateway destinations and transfer between siblin
     runtime: { store: { directory: path.join(gatewayDirectory, "jobs"), jobs: new Map() }, projects: { git: {} } },
     onFailure: (error) => { throw error; } });
   t.after(() => gateway.stop());
-  const listenPort = await port();
-  await source.rpc("federation-join", { invite: (await gateway.invite({ port: listenPort })).invite });
-  await destination.rpc("federation-join", { invite: (await gateway.invite({ port: listenPort })).invite });
+  await source.rpc("federation-join", { invite: (await gateway.invite({ port: 0 })).invite });
+  await destination.rpc("federation-join", { invite: (await gateway.invite({ port: 0 })).invite });
   const sourceId = (await source.rpc("federation-status")).instanceId;
   const destinationId = (await destination.rpc("federation-status")).instanceId;
   const controller = await peer(source);
@@ -282,7 +270,7 @@ test("handoffs validate trusted gateway destinations and transfer between siblin
 test("gateway loss reaps a relayed viewer's terminal while outpost execution continues", { timeout: 30000 }, async (t) => {
   const gateway = await setup(t);
   const outpost = await setup(t);
-  const issued = await gateway.rpc("federation-invite", { port: await port() });
+  const issued = await gateway.rpc("federation-invite", { port: 0 });
   await outpost.rpc("federation-join", { invite: issued.invite });
   const instanceId = (await outpost.rpc("federation-status")).instanceId;
   const viewer = await peer(gateway);
