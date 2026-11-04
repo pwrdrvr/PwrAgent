@@ -163,7 +163,8 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
 
 describe("first typing request (property)", () => {
   it("does not charge backend preparation or Telegram response time to first typing", async () => {
-    await fc.assert(fc.asyncProperty(scenario, fc.scheduler(), runScenario), { numRuns: 25 });
+    await fc.assert(fc.asyncProperty(scenario, fc.scheduler(),
+      (input, scheduler) => runScenario(input, scheduler)), { numRuns: 25 });
   });
 
   it("requests typing while a ten-second cold start remains blocked", async () => {
