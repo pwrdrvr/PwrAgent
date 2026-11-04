@@ -18,10 +18,9 @@ import {
   subscribeNativeDragInteraction,
 } from "./native-drag-interaction";
 import { anchorRectsMatch, observeTooltipAnchor } from "./observe-tooltip-anchor";
+import { anchoredTooltipPosition, TOOLTIP_GAP } from "./tooltip-placement";
 
 const VIEWPORT_PADDING = 12;
-/** Gap between the tooltip and its placement anchor. */
-const TOOLTIP_GAP = 10;
 /** Where a pointer-anchored tooltip sits relative to the cursor's hotspot:
  *  right of the arrow and below its tail, as a native cursor tooltip does. */
 const POINTER_OFFSET_X = 12;
@@ -119,7 +118,8 @@ type TooltipState = {
   };
   targetTop: number;
   targetBottom: number;
-  targetCenter: number;
+  targetLeft: number;
+  targetRight: number;
   /** Set for a tooltip that follows the pointer rather than its anchor's box.
    *  The live position is in `pointerRef`; moves never pass through state. */
   followsPointer?: boolean;
@@ -514,7 +514,8 @@ export function useViewportTooltip(options: {
                 horizontalBounds: getHorizontalBoundsRef.current?.(target),
                 targetTop: settled.top,
                 targetBottom: settled.bottom,
-                targetCenter: settled.left + settled.width / 2,
+                targetLeft: settled.left,
+                targetRight: settled.right,
               }
             : current,
         );
@@ -593,35 +594,22 @@ export function useViewportTooltip(options: {
       }
       return;
     }
-    const left = Math.min(
-      Math.max(horizontalLeft, horizontalRight - rect.width),
-      Math.max(horizontalLeft, state.targetCenter - rect.width / 2),
-    );
-    const viewportTop = portalViewportTop();
-    const viewportBottom = window.innerHeight - VIEWPORT_PADDING;
-    const aboveTop = state.targetTop - rect.height - TOOLTIP_GAP;
-    const belowTop = state.targetBottom + TOOLTIP_GAP;
-    const fitsAbove = aboveTop >= viewportTop;
-    const fitsBelow = belowTop + rect.height <= viewportBottom;
-    let top: number;
-    if (fitsAbove) {
-      top = aboveTop;
-    } else if (fitsBelow) {
-      top = belowTop;
-    } else {
-      const availableAbove = Math.max(
-        0,
-        state.targetTop - TOOLTIP_GAP - viewportTop,
-      );
-      const availableBelow = Math.max(
-        0,
-        viewportBottom - state.targetBottom - TOOLTIP_GAP,
-      );
-      const preferredTop =
-        availableAbove >= availableBelow ? aboveTop : belowTop;
-      const maximumTop = Math.max(viewportTop, viewportBottom - rect.height);
-      top = Math.min(maximumTop, Math.max(viewportTop, preferredTop));
-    }
+    const { left, top } = anchoredTooltipPosition({
+      target: {
+        top: state.targetTop,
+        bottom: state.targetBottom,
+        left: state.targetLeft,
+        right: state.targetRight,
+      },
+      width: rect.width,
+      height: rect.height,
+      bounds: {
+        top: portalViewportTop(),
+        bottom: window.innerHeight - VIEWPORT_PADDING,
+        left: horizontalLeft,
+        right: horizontalRight,
+      },
+    });
     if (state.left !== left || state.top !== top) {
       recordRendererUpdate(RendererUpdateEvent.tooltipReposition, tooltipId);
       setState({ ...state, left, top });
@@ -652,7 +640,8 @@ export function useViewportTooltip(options: {
       horizontalBounds,
       targetTop: rect.top,
       targetBottom: rect.bottom,
-      targetCenter: rect.left + rect.width / 2,
+      targetLeft: rect.left,
+      targetRight: rect.right,
     });
   }, [clearHoverDelay, getHorizontalBounds, rememberTarget, tooltipId]);
 
@@ -824,7 +813,7 @@ export function useViewportTooltip(options: {
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", hide, { capture: true });
     };
-  }, [active, hide, observedTarget, scheduleAnchorSettle, state?.targetTop, state?.targetBottom, state?.targetCenter]);
+  }, [active, hide, observedTarget, scheduleAnchorSettle, state?.targetTop, state?.targetBottom, state?.targetLeft, state?.targetRight]);
 
   const tooltipNode =
     state && typeof document !== "undefined"
