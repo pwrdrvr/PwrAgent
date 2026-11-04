@@ -11,6 +11,7 @@ import {
   within,
 } from "../../../test/phase-probes";
 import { useState } from "react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AcpAgentSettingsEntry,
@@ -35,7 +36,9 @@ import {
   CURRENT_CODEX_MODEL_LABELS,
   PROVIDER_MODEL,
   SUPERSEDED_CODEX_MODEL_LABELS,
+  codexCatalogArbitrary,
   codexCatalogModels,
+  expectedModelSelectSections,
 } from "../../../test/model-catalog";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { AppearanceController } from "../../../lib/useAppearance";
@@ -1059,6 +1062,58 @@ describe("SettingsScreen", () => {
     // Let the mount's agent read land inside act.
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
     await act(async () => undefined);
+  });
+
+  it("lists any Codex catalog as a default model by the shared model menu rule", async () => {
+    await fc.assert(fc.asyncProperty(codexCatalogArbitrary, async (models) => {
+      const cachedBackends = [{
+        kind: "codex",
+        label: "OpenAI",
+        available: true,
+        methods: [],
+        capabilities: { createThread: true },
+        executionModes: [],
+        launchpadOptions: { models },
+      }] as unknown as BackendSummary[];
+      const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+        async () => ({ fetchedAt: 1, entries: [] }),
+      );
+      try {
+        render(
+          <SettingsScreen
+            cachedBackends={cachedBackends}
+            desktopApi={{
+              listAcpAgents,
+              listBackends: async () => await new Promise<never>(() => undefined),
+            }}
+            initialSection="models"
+            settings={createSettingsState()}
+            onClose={() => undefined}
+          />,
+        );
+        const select = screen.getByLabelText("OpenAI default model");
+        const labels = (parent: Element) =>
+          [...parent.children].filter((child) => child.tagName === "OPTION")
+            .map((option) => option.textContent ?? "");
+        // A native select has no submenu: the first run of rows, then one optgroup per heading.
+        const shown = [
+          { labels: labels(select) },
+          ...[...select.querySelectorAll("optgroup")].map((group) => ({
+            group: group.label,
+            labels: labels(group),
+          })),
+        ];
+        expect(shown).toEqual(expectedModelSelectSections({
+          kind: "codex",
+          models,
+          leading: ["Provider advertised default"],
+        }));
+        await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+        await act(async () => undefined);
+      } finally {
+        cleanup();
+      }
+    }), { numRuns: 10 });
   });
 
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {

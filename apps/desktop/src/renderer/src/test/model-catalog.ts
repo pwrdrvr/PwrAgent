@@ -1,5 +1,11 @@
-import { fireEvent } from "@testing-library/react";
-import type { BackendModelOption } from "@pwragent/shared";
+import { fireEvent, screen, within } from "@testing-library/react";
+import fc from "fast-check";
+import { expect } from "vitest";
+import {
+  buildModelMenu,
+  modelMenuOtherLabel,
+  type BackendModelOption,
+} from "@pwragent/shared";
 
 /**
  * A Codex catalog in the order Codex lists it, with superseded models mixed
@@ -101,4 +107,132 @@ export function expectedCodexSelectSections(
     { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
     { group: PROVIDER_MODEL.providerLabel!, labels: [PROVIDER_MODEL.label!] },
   ];
+}
+
+/**
+ * Catalogs as main builds them, for property tests: Codex's own models in
+ * any order and any subset, mixed with models a Codex model provider serves
+ * (`@<provider>/<model>`), some named like a superseded Codex model.
+ */
+const OWN_CODEX_LABELS = [
+  "GPT-5.4", "GPT-5.5", "GPT-5.5-Codex", "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna",
+  "GPT-6-Astra", "GPT-6-Sol", "GPT-6-Luna", "GPT-6.1-Sol", "GPT-6.1-Terra",
+];
+const PROVIDER_CATALOG: BackendModelOption[] = [
+  PROVIDER_MODEL,
+  {
+    id: "@bonsai/ternary-bonsai-8b",
+    label: "Ternary-Bonsai-8B",
+    providerId: "bonsai",
+    providerLabel: "PrismML Bonsai (local)",
+  },
+  { id: "@openrouter/gpt-5.6-sol", label: "gpt-5.6-sol", providerId: "openrouter" },
+  { id: "@openrouter/gpt-5.5", label: "gpt-5.5", providerId: "openrouter" },
+];
+
+export const codexCatalogArbitrary: fc.Arbitrary<BackendModelOption[]> = fc
+  .shuffledSubarray(
+    [
+      ...OWN_CODEX_LABELS.map((label): BackendModelOption => ({
+        id: label.toLowerCase(),
+        label,
+        supportsReasoning: true,
+        reasoningEfforts: ["low", "medium", "high"],
+      })),
+      ...PROVIDER_CATALOG,
+    ],
+    { minLength: 1 },
+  )
+  .filter((models) => models.some((model) => !model.providerId));
+
+/** Claude catalogs: Claude marks its own older models with `other`. */
+export const claudeCatalogArbitrary: fc.Arbitrary<BackendModelOption[]> = fc
+  .shuffledSubarray(["Opus", "Sonnet", "Haiku", "Fable", "Opus 4.7", "Sonnet 4.6"], { minLength: 1 })
+  .chain((labels) => fc.tuple(...labels.map((label) => fc.boolean().map((other): BackendModelOption => ({
+    id: label.toLowerCase().replace(/[ .]/g, "-"),
+    label,
+    ...(other ? { other: true } : {}),
+  })))));
+
+/** A catalog and one model in it, such as a thread's or a saved choice. */
+export const codexCatalogWithChoiceArbitrary = codexCatalogArbitrary.chain((models) =>
+  fc.tuple(fc.constant(models), fc.constantFrom(...models)),
+);
+
+const labelOf = (model: BackendModelOption) => model.label ?? model.id;
+
+/**
+ * What a model chip (`ModelDropdown`) must list for a catalog, by the shared
+ * rule: `rows` is every option in the open list, in order, with the Other
+ * entry where it belongs; `other` is the Other submenu.
+ */
+export function expectedModelDropdown(params: {
+  kind: string;
+  models: readonly BackendModelOption[];
+  thread?: { model?: string };
+  leading?: string[];
+}): { rows: string[]; groups: Array<{ label: string; rows: string[] }>; other: string[] } {
+  const menu = buildModelMenu(params);
+  const groups = menu.providerGroups.map((group) => ({
+    label: group.label,
+    rows: group.models.map(labelOf),
+  }));
+  return {
+    rows: [
+      ...(params.leading ?? []),
+      ...menu.primary.map(labelOf),
+      ...(menu.other.length > 0 ? [modelMenuOtherLabel(params.kind)] : []),
+      ...groups.flatMap((group) => group.rows),
+    ],
+    groups,
+    other: menu.other.map(labelOf),
+  };
+}
+
+/** An open `ComposerDropdown` list as rows and titled provider groups. */
+export function readModelDropdown(list: HTMLElement): {
+  rows: string[];
+  groups: Array<{ label: string; rows: string[] }>;
+} {
+  return {
+    rows: composerDropdownOptionLabels(list),
+    groups: [...list.querySelectorAll('[role="group"]')].map((group) => ({
+      label: group.getAttribute("aria-label") ?? "",
+      rows: composerDropdownOptionLabels(group),
+    })),
+  };
+}
+
+/** What a Settings model list (`Select`) must show for a catalog, by the shared rule. */
+export function expectedModelSelectSections(params: {
+  kind: string;
+  models: readonly BackendModelOption[];
+  leading?: string[];
+}): Array<{ group?: string; labels: string[] }> {
+  const menu = buildModelMenu(params);
+  const sections: Array<{ group?: string; labels: string[] }> = [];
+  const lead = [...(params.leading ?? []), ...menu.primary.map(labelOf)];
+  if (lead.length > 0) sections.push({ labels: lead });
+  if (menu.other.length > 0) sections.push({ group: "Other models", labels: menu.other.map(labelOf) });
+  for (const group of menu.providerGroups) {
+    sections.push({ group: group.label, labels: group.models.map(labelOf) });
+  }
+  return sections;
+}
+
+/**
+ * Check an open model chip against `expectedModelDropdown`, opening its Other
+ * submenu when the rule puts anything there.
+ */
+export function expectModelDropdownToList(
+  list: HTMLElement,
+  ariaLabel: string,
+  expected: ReturnType<typeof expectedModelDropdown>,
+  otherLabel = "Other",
+): void {
+  expect(readModelDropdown(list)).toEqual({ rows: expected.rows, groups: expected.groups });
+  if (expected.other.length === 0) return;
+  fireEvent.click(within(list).getByRole("option", { name: otherLabel }));
+  const other = screen.getByRole("listbox", { name: `${ariaLabel}: ${otherLabel}` });
+  expect(composerDropdownOptionLabels(other)).toEqual(expected.other);
 }

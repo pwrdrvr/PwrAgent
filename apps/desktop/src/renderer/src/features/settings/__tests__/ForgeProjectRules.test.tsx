@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "../../../test/phase-probes";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendSummary,
@@ -18,7 +19,9 @@ import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
   CURRENT_CODEX_MODEL_LABELS,
   SUPERSEDED_CODEX_MODEL_LABELS,
+  codexCatalogArbitrary,
   codexCatalogModels,
+  expectedModelSelectSections,
   selectSections,
 } from "../../../test/model-catalog";
 import { ForgeProjectRules } from "../ForgeProjectRules";
@@ -228,6 +231,33 @@ describe("ForgeProjectRules", () => {
       ALL_AGENTS_RULE,
       { repository: REPOSITORY, agent: { backend: "codex", model: "gpt-5.6-sol" }, access: {} },
     ]));
+  });
+
+  it("lists any Codex catalog for the Codex agent by the shared model menu rule", () => {
+    fc.assert(fc.property(codexCatalogArbitrary, (models) => {
+      try {
+        renderRules(policyWith([ALL_AGENTS_RULE]), {
+          backends: [{
+            kind: "codex",
+            label: "Codex",
+            available: true,
+            launchpadOptions: { models },
+          } as unknown as BackendSummary],
+        });
+        fireEvent.click(screen.getByRole("button", { name: "+ Add agent" }));
+        const picker = screen.getByRole("group", { name: "Add an agent" });
+        chooseSelectOption(within(picker).getByRole("combobox", { name: "Agent" }), "Codex");
+        // The Codex agent offers Codex's own models; each provider is its own agent.
+        const own = models.filter((model) => !model.providerId);
+        const expected = expectedModelSelectSections({ kind: "codex", models: own, leading: ["Any model"] });
+        const last = expected.at(-1);
+        if (last && last.group === undefined) last.labels.push("Another model…");
+        else expected.push({ labels: ["Another model…"] });
+        expect(selectSections(within(picker).getByRole("combobox", { name: "Model" }))).toEqual(expected);
+      } finally {
+        cleanup();
+      }
+    }), { numRuns: 25 });
   });
 
   it("adds a Codex model provider row with a known model", async () => {

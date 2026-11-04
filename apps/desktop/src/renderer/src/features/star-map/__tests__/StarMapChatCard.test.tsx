@@ -3,6 +3,7 @@ import { StrictMode, type ReactElement } from "react";
 import { buildThreadComposerScopeKey } from "../../composer/useComposerDraftStore";
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   renderHook,
@@ -10,6 +11,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -22,12 +24,14 @@ import type {
   NavigationQueryPage,
   ThreadQueuedTurnSummary,
 } from "@pwragent/shared";
+import { buildModelMenu } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import {
   CURRENT_CODEX_MODEL_LABELS,
   SUPERSEDED_CODEX_MODEL_LABELS,
   codexCatalogModels,
+  codexCatalogWithChoiceArbitrary,
 } from "../../../test/model-catalog";
 import { StarMapChatCard } from "../StarMapChatCard";
 import {
@@ -3348,6 +3352,45 @@ describe("StarMapChatCard settings menu", () => {
         expect.objectContaining({ model: "gpt-5.6-sol" }),
       );
     });
+  });
+
+  it("lists any Codex catalog for this thread by the shared model menu rule", async () => {
+    await fc.assert(fc.asyncProperty(codexCatalogWithChoiceArbitrary, async ([models, threadModel]) => {
+      const desktopApi = settingsApi({
+        listBackends: vi.fn(async () => ({
+          fetchedAt: 1,
+          backends: [{
+            kind: "codex",
+            label: "Codex",
+            available: true,
+            methods: [],
+            capabilities: {},
+            executionModes: [],
+            launchpadOptions: { models },
+          }],
+        })),
+      } as unknown as Partial<DesktopApi>);
+      const menu = buildModelMenu({ kind: "codex", models, thread: { model: threadModel.id } });
+      const labels = (rows: typeof models) => rows.map((model) => model.label ?? model.id);
+      const radios = () =>
+        screen.getAllByRole("menuitemradio").map((row) => row.textContent?.replace("✓", ""));
+      try {
+        renderCard({ desktopApi, thread: localThread({ model: threadModel.id }) });
+        await openSettingsMenu();
+        fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
+        await screen.findAllByRole("menuitemradio");
+        expect(radios()).toEqual(labels(menu.primary));
+        const other = screen.queryByRole("menuitem", { name: /^Other/ });
+        expect(Boolean(other)).toBe(menu.other.length > 0);
+        if (other) {
+          fireEvent.click(other);
+          await screen.findByRole("menuitemradio", { name: labels(menu.other)[0] });
+          expect(radios()).toEqual(labels(menu.other));
+        }
+      } finally {
+        cleanup();
+      }
+    }), { numRuns: 10 });
   });
 
   it("updates image gating immediately after an optimistic model change", async () => {
