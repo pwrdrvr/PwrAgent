@@ -20,6 +20,7 @@ export type ArchiveWorkspaceObservation = {
  * through a writer inherit its fence, even if their inventory sees old paths. */
 export class ArchiveWorkspaceOwnership {
   private readonly writers = new Map<string, Set<symbol>>();
+  private readonly controlledWriters = new Set<symbol>();
 
   constructor(private readonly admissions: () => Iterable<ArchiveWorkspaceAdmission>) {}
 
@@ -27,24 +28,41 @@ export class ArchiveWorkspaceOwnership {
     for (const key of this.writers.keys()) admission.invalidateOwnership(key);
   }
 
-  invalidate(key: string): ArchiveWorkspaceObservation {
-    return { key, tokens: [...new Set(this.admissions())].map((admission) => ({
+  isControlled(key: string): boolean {
+    const writers = this.writers.get(key);
+    return Boolean(writers?.size) && [...writers!].every((writer) => this.controlledWriters.has(writer));
+  }
+
+  invalidate(key: string, cause: "observed" | "controlled" = "observed"): ArchiveWorkspaceObservation {
+    return { key, tokens: [...new Set(this.admissions())].filter((admission) => cause !== "controlled" || !admission.isReserved).map((admission) => ({
       admission, generation: admission.invalidateOwnership(key),
     })) };
   }
 
-  beginMutation(key: string): () => ArchiveWorkspaceObservation {
+  beginMutation(key: string, controlled = false): () => ArchiveWorkspaceObservation {
     const writer = Symbol(key);
     const writers = this.writers.get(key) ?? new Set<symbol>();
     writers.add(writer);
     this.writers.set(key, writers);
-    this.invalidate(key);
+    if (controlled) this.controlledWriters.add(writer);
+    this.invalidate(key, controlled ? "controlled" : "observed");
     return () => {
       writers.delete(writer);
+      this.controlledWriters.delete(writer);
       if (writers.size === 0) this.writers.delete(key);
       // Revoke notification reads made while this writer was still running.
-      return this.invalidate(key);
+      return this.invalidate(key, controlled ? "controlled" : "observed");
     };
+  }
+
+  async assertAvailable(paths: readonly string[]): Promise<void> {
+    for (const admission of new Set(this.admissions())) {
+      if (!admission.isReserved) continue;
+      const filter = archiveCleanupWorkspaceFilter(admission.scopePath);
+      for (const value of paths.length ? paths : [""]) {
+        if (await filter(value)) throw new Error("Worktree removal is reserved by archive cleanup; retry the workspace change after cleanup finishes.");
+      }
+    }
   }
 
   async refresh(observation: ArchiveWorkspaceObservation, read: () => Promise<readonly string[]>): Promise<void> {
@@ -67,9 +85,17 @@ export class ArchiveWorkspaceOwnership {
 export class ArchiveWorkspaceAdmission {
   private readonly threads = new Map<string, OwnershipState>();
   readonly directoryFilter: ReturnType<typeof archiveCleanupWorkspaceFilter>;
+  private reserved = false;
 
-  constructor(readonly ownerKey: string, private readonly scopePath: string) {
+  constructor(readonly ownerKey: string, readonly scopePath: string) {
     this.directoryFilter = archiveCleanupWorkspaceFilter(scopePath);
+  }
+
+  get isReserved(): boolean { return this.reserved; }
+
+  reserve(mutations: readonly ArchiveWorkspaceMutation[]): void {
+    this.assertCurrent(mutations);
+    this.reserved = true;
   }
 
   private thread(key: string): OwnershipState {

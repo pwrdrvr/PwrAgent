@@ -36,10 +36,12 @@ export class ArchiveWorktreeReferences {
   private readonly owners = new Map<string, { intent: ArchiveCleanupIntent; worktrees: Map<string, DeferredArchiveWorktree> }>();
   private readonly watchers = new Map<string, Set<string>>();
   private readonly observations = new Map<string, number>();
+  private readonly eligible = new WeakSet<DeferredArchiveWorktree>();
 
   hasReference(key: string): boolean { return this.watchers.has(key); }
 
   async retain(intent: ArchiveCleanupIntent, worktree: DeferredArchiveWorktree): Promise<void> {
+    for (const blocker of worktree.blockers) if (this.observations.has(blocker)) this.beginObservation(blocker);
     const canonical = await canonicalWorktreePaths()(worktree.worktreePath).catch(() => path.resolve(worktree.worktreePath));
     const key = buildThreadIdentityKey(intent.backend, intent.threadId);
     const owner = this.owners.get(key) ?? { intent, worktrees: new Map<string, DeferredArchiveWorktree>() };
@@ -63,6 +65,13 @@ export class ArchiveWorktreeReferences {
     return [...this.owners.values()].map(({ intent, worktrees }) => ({ ...intent, deferredWorktrees: [...worktrees.values()] }));
   }
 
+  recoveryIntents(): ArchiveCleanupIntent[] { return this.selectOwners([...this.owners.keys()], false); }
+  readyIntents(key: string): ArchiveCleanupIntent[] { return this.selectOwners([key], true); }
+  wasObserved(key: string): boolean { return this.observations.has(key); }
+  scheduled(intent: ArchiveCleanupIntent): void {
+    for (const row of intent.deferredWorktrees ?? []) this.eligible.delete(row);
+  }
+
   /** Invalidate before the first read. A late completion cannot release a
    * reference which a newer directory mutation has changed again. */
   beginObservation(key: string): number {
@@ -78,27 +87,43 @@ export class ArchiveWorktreeReferences {
     // An absent/relative path or failed read must never release ownership.
     const observed = await Promise.all(paths.map(canonical));
     if (this.observations.get(key) !== generation) return [];
-    const ready: ArchiveCleanupIntent[] = [];
     for (const ownerKey of affected) {
       const owner = this.owners.get(ownerKey);
       if (!owner) continue;
       for (const [checkout, worktree] of owner.worktrees) {
         if (observed.some((value) => value === checkout || value.startsWith(checkout + path.sep))) continue;
+        const owned = worktree.blockers.includes(key);
         worktree.blockers = worktree.blockers.filter((blocker) => blocker !== key);
+        if (owned && !worktree.blockers.length) this.eligible.add(worktree);
       }
-      const available = [...owner.worktrees.values()].filter((worktree) => worktree.blockers.length === 0);
-      if (available.length) ready.push({ ...owner.intent, deferredWorktrees: available });
     }
     this.reindex();
-    return ready;
+    return this.selectOwners(affected, true);
+  }
+
+  private selectOwners(keys: string[], readyOnly: boolean): ArchiveCleanupIntent[] {
+    const selected = new Set<string>();
+    const requests: ArchiveCleanupIntent[] = [];
+    for (const key of keys) {
+      const owner = this.owners.get(key);
+      if (!owner) continue;
+      const worktrees: DeferredArchiveWorktree[] = [];
+      for (const [checkout, worktree] of owner.worktrees) {
+        if (selected.has(checkout) || (readyOnly && (!this.eligible.has(worktree) || worktree.blockers.length))) continue;
+        selected.add(checkout);
+        worktrees.push(worktree);
+      }
+      if (worktrees.length) requests.push({ ...owner.intent, deferredWorktrees: worktrees });
+    }
+    return requests;
   }
 
   private reindex(): void {
     this.watchers.clear();
     for (const [ownerKey, owner] of this.owners) for (const worktree of owner.worktrees.values()) {
-      // Failed attempts without a known blocker wait for their owner's next
-      // ownership change or startup recovery, never a timer or ordinary turn.
-      for (const key of worktree.blockers.length ? worktree.blockers : [ownerKey]) {
+      // Failed attempts without a known blocker wait for startup or an
+      // explicit retry, never a timer or their own archive completion.
+      for (const key of worktree.blockers) {
         const watched = this.watchers.get(key) ?? new Set<string>();
         watched.add(ownerKey);
         this.watchers.set(key, watched);

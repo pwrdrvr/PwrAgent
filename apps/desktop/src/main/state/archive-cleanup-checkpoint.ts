@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { isAppServerBackendKind, type AppServerBackendKind } from "@pwragent/shared";
+import { isAppServerBackendKind, type AppServerBackendKind, type WorktreeSnapshotSummary } from "@pwragent/shared";
 import { storageProcessAlive } from "./storage-maintenance";
 
 export type ArchiveCleanupIntent = {
@@ -14,6 +14,7 @@ export type ArchiveCleanupIntent = {
     repositoryPath?: string;
     worktreePath: string;
     blockers: string[];
+    snapshot?: WorktreeSnapshotSummary;
   }>;
 };
 
@@ -35,7 +36,11 @@ function parseCheckpoint(value: string): { ownerPid: number; intents: ArchiveCle
         || item.deferredWorktrees.some((worktree: NonNullable<ArchiveCleanupIntent["deferredWorktrees"]>[number]) =>
           !worktree || typeof worktree.worktreePath !== "string" || !worktree.worktreePath.trim()
           || (worktree.repositoryPath !== undefined && typeof worktree.repositoryPath !== "string")
-          || !Array.isArray(worktree.blockers) || worktree.blockers.some((key: unknown) => typeof key !== "string" || !key))))
+          || !Array.isArray(worktree.blockers) || worktree.blockers.some((key: unknown) => typeof key !== "string" || !key)
+          || (worktree.snapshot !== undefined && (!worktree.snapshot || worktree.snapshot.backend !== item.backend
+            || worktree.snapshot.threadId !== item.threadId || worktree.snapshot.state !== "archived"
+            || ![worktree.snapshot.id, worktree.snapshot.worktreePath, worktree.snapshot.repositoryPath,
+              worktree.snapshot.snapshotRef, worktree.snapshot.snapshotCommit].every((value) => typeof value === "string" && value.length > 0))))))
       || !item.messagingCleanup || typeof item.messagingCleanup !== "object"
       || (item.messagingCleanup.error !== undefined && typeof item.messagingCleanup.error !== "string")) {
       throw new Error("Invalid archive cleanup intent.");
