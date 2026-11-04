@@ -11000,6 +11000,11 @@ export class CodexAppServerClient {
 
   async startTurn(params: {
     threadId: string;
+    /** Hosts with durable jobs can retain a terminal response before the call returns. */
+    onTerminalResult?: (result: {
+      threadId: string;
+      turn: { id: string; status: "completed" | "failed" | "interrupted"; error?: { message: string } };
+    }) => void;
     /** Delegation attribution only. */
     parentTurnId?: string;
     rootTurnId?: string;
@@ -11159,6 +11164,12 @@ export class CodexAppServerClient {
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
     const turn = asRecord(asRecord(result)?.turn);
+    const terminalStatus = pickString(turn ?? {}, ["status"]);
+    if (terminalStatus === "completed" || terminalStatus === "failed" || terminalStatus === "interrupted") {
+      const message = pickString(asRecord(turn?.error) ?? {}, ["message"]);
+      params.onTerminalResult?.({ threadId, turn: { id: turnId, status: terminalStatus,
+        ...(message ? { error: { message } } : {}) } });
+    }
     if (typeof turn?.rootTurnId === "string" || turn?.rootTurnId === null) {
       rememberBoundedMap(this.turnRoots, `${threadId}:${turnId}`, turn.rootTurnId, 1_000);
     }

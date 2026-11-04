@@ -64,7 +64,7 @@ test("concurrent submit has one owner; busy rejects without a queued record; dup
 
 test("early terminal events, failed turns and interactive requests have honest outcomes", { timeout }, async (t) => {
   const h = await setup(t);
-  for (const [prompt, status] of [["early", "completed"], ["fail", "failed"], ["approval", "blocked"], ["question", "blocked"]]) {
+  for (const [prompt, status] of [["early", "completed"], ["returned", "completed"], ["fail", "failed"], ["approval", "blocked"], ["question", "blocked"]]) {
     await h.submit(prompt, prompt);
     assert.equal((await h.finished(prompt)).status, status);
   }

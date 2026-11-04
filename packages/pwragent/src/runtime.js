@@ -135,6 +135,7 @@ export class Runtime {
     this.save({ ...this.store.get(job.id), threadId: result.threadId,
       ...(!job.threadId ? { messagingFileTools: true } : {}) });
     const turn = await this.codex.startTurn({ ...params, threadId: result.threadId,
+      onTerminalResult: (params) => this.notification({ method: "turn/completed", params }),
       input: [{ type: "text", text: prompt }],
       ...(job.reasoningEffort ? { reasoningEffort: job.reasoningEffort } : {}),
       ...(job.serviceTier ? { serviceTier: job.serviceTier } : {}),

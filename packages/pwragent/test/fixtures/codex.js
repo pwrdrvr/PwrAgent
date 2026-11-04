@@ -89,6 +89,14 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
           callId: `call-${active.id}`, namespace: "pwragent", tool: tool.operation, arguments: tool.args || {} } });
         continue;
       }
+      if (prompt === "returned") {
+        const turn = { id: active.id, status: "completed", items: [{ type: "agentMessage", text: "Returned result" }] };
+        threads[active.threadId].turns.push(turn);
+        persist();
+        active = null;
+        reply({ turn });
+        continue;
+      }
       if (prompt === "early") { complete("completed"); reply(initial); continue; }
       reply(initial);
       if (prompt === "crash") { setTimeout(() => process.exit(7), 30); continue; }
