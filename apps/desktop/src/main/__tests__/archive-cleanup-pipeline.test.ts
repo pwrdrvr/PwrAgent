@@ -414,7 +414,9 @@ describe("archive cleanup pipeline", () => {
       return states;
     });
     const completed = new Promise<AgentEvent>((resolve) => fixture.registry.onEvent((event) => {
-      if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.cleanup.some((item) => item.removedWorktree)) resolve(event);
+      const cleanup = event.notification.params.cleanup;
+      if (event.notification.method === "thread/archiveCleanup/completed"
+        && Array.isArray(cleanup) && cleanup.some((item: { removedWorktree?: boolean }) => item.removedWorktree)) resolve(event);
     }));
     await drivePacer(fixture.registry, Promise.all([fixture.registry.archiveThread({ backend: "codex", threadId: "target" }), completed]));
     expect(fixture.archiveWorktree).toHaveBeenCalledOnce();

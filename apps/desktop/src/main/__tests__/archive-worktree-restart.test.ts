@@ -332,7 +332,12 @@ describe("ACP snapshot archive and restoration", () => {
     await writeFile(path.join(fixture.worktree, "file.txt"), "shared dirty edit\n");
     const { writes: archiveWrites } = await measureSqliteWrites(async () => {
       expect((await first.registry.archiveThread(acpOwner)).cleanup).toEqual([expect.objectContaining({ removedWorktree: false })]);
-      expect((await first.registry.archiveThread(other)).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      const cleanup = (await first.registry.archiveThread(other)).cleanup;
+      expect(cleanup).toEqual([expect.objectContaining({ worktreePath: fixture.worktree })]);
+      // Releasing the final reference can let the first owner's queued retry
+      // remove the checkout before this owner's cleanup reaches it.
+      if (!cleanup[0]!.removedWorktree) expect(cleanup[0]!.skippedReason).toBe("Worktree directory no longer exists.");
+      await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
     });
     if (otherBackend === "acp:fixture" && acpFirst) expectSqliteWriteBudget({ scenario: "acp-shared-worktree-archive",
       note: "Archive two ACP owners, retain the active checkout until both archive, then save both recovery snapshots; boundary writes only.", writes: archiveWrites });
@@ -368,7 +373,9 @@ describe("archive worktrees across a desktop restart", () => {
         expect((await first.registry.repairArchivedThreadWorktrees()).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
       } else {
         expect((await first.registry.archiveThread(fixture.owners[0]!)).cleanup).toEqual([expect.objectContaining({ removedWorktree: false })]);
-        expect((await first.registry.archiveThread(fixture.owners[1]!)).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+        const cleanup = (await first.registry.archiveThread(fixture.owners[1]!)).cleanup;
+        expect(cleanup).toEqual([expect.objectContaining({ worktreePath: fixture.worktree })]);
+        if (!cleanup[0]!.removedWorktree) expect(cleanup[0]!.skippedReason).toBe("Worktree directory no longer exists.");
       }
     });
     if (otherBackend === "codex" && restoreFirst === "codex") expectSqliteWriteBudget({
