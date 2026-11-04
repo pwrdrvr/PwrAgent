@@ -219,8 +219,9 @@ describe("MessagingController", () => {
       await bindThread(harness);
       const recordDelivery = store.recordDelivery.bind(store);
       vi.spyOn(store, "recordDelivery").mockImplementation(async (record) => {
-        await recordDelivery(record);
-        if (record.intentId.startsWith("activity:")) activityRecorded.resolve();
+        const recorded = await recordDelivery(record);
+        if (record.intentId?.startsWith("activity:")) activityRecorded.resolve();
+        return recorded;
       });
       const { writes } = await measureSqliteWrites(async () => {
         handling = harness.controller.handleInboundEvent(buildTextEvent("Fixture request"));

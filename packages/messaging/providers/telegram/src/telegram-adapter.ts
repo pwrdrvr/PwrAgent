@@ -2542,7 +2542,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     try {
       await this.sendTypingSignal(target, signalId, "start");
     } catch (error) {
-      this.stopTypingSignal(target, "start_failed");
+      if (this.typingSignals.get(key)?.signalId === signalId) {
+        this.stopTypingSignal(target, "start_failed");
+      }
       throw error;
     }
   }
