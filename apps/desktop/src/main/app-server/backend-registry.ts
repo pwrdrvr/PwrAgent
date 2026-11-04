@@ -8,7 +8,7 @@ import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from 
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
-import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
+import { buildForgeToolDefinitions, type ForgePrToolHandler, type ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
@@ -10196,6 +10196,7 @@ export class DesktopBackendRegistry {
   }
 
   private readonly gatedForgeReadHandler: ForgeReadHandler = async (operation, args, context) => {
+    context = this.resolveTaskMonitorForgeContext(context, true);
     this.assertForgeToolAllowed("read", operation);
     if (!this.forgeReadHandler) throw new ForgeReadError("unavailable", "Forge read tools are unavailable on this instance.");
     return await this.forgeReadHandler(operation, args, context);
@@ -10203,6 +10204,7 @@ export class DesktopBackendRegistry {
 
   private readonly gatedForgePrToolHandler: ForgePrToolHandler = async (operation, args, context) => {
     const group = forgePrToolGroup(operation, args);
+    context = this.resolveTaskMonitorForgeContext(context, group === "read");
     this.assertForgeToolAllowed(group, operation);
     let target = args;
     let notes: ForgeWriteApprovalNotes | undefined;
@@ -11681,6 +11683,7 @@ export class DesktopBackendRegistry {
                     buildPwrAgentToolGuideDefinition(),
                   ]) },
                   { id: "mcp_connections", router: new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools)) },
+                  { id: "forge", router: new AgentToolRouter(this.buildTaskMonitorForgeToolDefinitions(this.resolveForgeToolPolicy())) },
                 ]
               : resolveAgentToolCatalogs({
                 appManagementHandler: this.appManagementHandler,
@@ -42071,12 +42074,13 @@ export class DesktopBackendRegistry {
     });
     if (hostToolCall && this.isTaskMonitorThread({ backend, threadId: hostToolCall.threadId })) {
       const allowedTools = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
-        ? ["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool", "read_tool_guide"]
+        ? ["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool", "read_tool_guide",
+            ...this.buildTaskMonitorForgeToolDefinitions().map((tool) => tool.name)]
         : hostToolCall.namespace === TASK_MONITOR_TOOL_NAMESPACE
           ? ["inject_progress", "complete_monitoring"]
           : [];
       if (!allowedTools.includes(hostToolCall.tool)) {
-        return toDynamicToolResponse({ ok: false, code: "forbidden", message: "Job Monitors may use only their lifecycle and read-only MCP gateway tools." });
+        return toDynamicToolResponse({ ok: false, code: "forbidden", message: "Job Monitors may use only their lifecycle, read-only forge and MCP gateway tools." });
       }
     }
     // Keep dispatch available after disabling the experiment: older runtimes
@@ -42387,6 +42391,24 @@ export class DesktopBackendRegistry {
   private taskMonitorForThread(context: { backend: AppServerBackendKind; threadId: string }): TaskMonitorDelegationRecord | undefined {
     return [...this.taskMonitorDelegations.values()].find((record) =>
       record.backend === context.backend && record.monitorThreadId === context.threadId);
+  }
+
+  private buildTaskMonitorForgeToolDefinitions(policy?: ForgeAgentToolPolicy) {
+    return buildForgeToolDefinitions({
+      forgeReadHandler: this.gatedForgeReadHandler,
+      forgePrToolHandler: this.gatedForgePrToolHandler,
+      policy,
+    }).filter((tool) => tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true);
+  }
+
+  private resolveTaskMonitorForgeContext(context: AgentToolCallContext, readOnly: boolean): AgentToolCallContext {
+    if (!this.isTaskMonitorThread(context)) return context;
+    const monitor = this.taskMonitorForThread(context);
+    if (!readOnly || !monitor || monitor.cancellation || monitor.finalizationStarted) {
+      throw new ForgeReadError("forbidden", "Job Monitors may only read forge state while monitoring is active.");
+    }
+    // Hidden monitor threads have no repository links or attached PRs of their own.
+    return { ...context, backend: monitor.parentBackend, threadId: monitor.parentThreadId, turnId: monitor.parentTurnId };
   }
 
   private async readMcpGatewaySelection(context: AgentToolCallContext): Promise<string[]> {
@@ -46999,6 +47021,7 @@ export class DesktopBackendRegistry {
         ? new AgentToolRouter([
             ...buildPwrAgentTaskMonitorToolDefinitions(undefined, "monitor"),
             ...buildMcpGatewayToolDefinitions(this.mcpGatewayTools),
+            ...this.buildTaskMonitorForgeToolDefinitions(this.resolveForgeToolPolicy()),
           ]).buildDynamicToolSpecs()
         : [];
 
