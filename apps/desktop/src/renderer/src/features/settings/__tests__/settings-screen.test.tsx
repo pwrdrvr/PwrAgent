@@ -1097,6 +1097,58 @@ describe("SettingsScreen", () => {
     }), { numRuns: 10 });
   });
 
+  it("saves a chosen default model with that model's default reasoning", async () => {
+    const cachedBackends = [{
+      kind: "codex",
+      label: "OpenAI",
+      available: true,
+      methods: [],
+      capabilities: { createThread: true },
+      executionModes: [],
+      launchpadOptions: {
+        models: [{
+          id: "gpt-6-astra",
+          label: "GPT-6-Astra",
+          supportsReasoning: true,
+          reasoningEfforts: ["low", "medium", "high"],
+          defaultReasoningEffort: "medium",
+        }],
+      },
+    }] as unknown as BackendSummary[];
+    const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+      async () => ({ fetchedAt: 1, entries: [] }),
+    );
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        cachedBackends={cachedBackends}
+        desktopApi={{
+          listAcpAgents,
+          listBackends: async () => await new Promise<never>(() => undefined),
+        }}
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    chooseSelectOption(screen.getByLabelText("OpenAI default model"), "GPT-6-Astra");
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "gpt-6-astra",
+              reasoningEffortsByModel: { "gpt-6-astra": "medium" },
+            },
+          },
+        },
+      });
+    });
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+    await act(async () => undefined);
+  });
+
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
     const cachedBackends: BackendSummary[] = [
       {
