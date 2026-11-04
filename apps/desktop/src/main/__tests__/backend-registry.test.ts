@@ -64237,7 +64237,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it.each([true, false])("only treats a missing cleanup target as a quiet skip (target missing: %s)", async (targetMissing) => {
+  it.each([true, false])("treats a missing cleanup target or repository as a quiet skip (target missing: %s)", async (targetMissing) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-missing-archive-"));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     const worktreePath = path.join(root, "worktree");
@@ -64294,14 +64294,18 @@ script = "printf setup"
         expect.anything(),
       );
     } else {
-      expect(response.cleanup).toEqual([expect.objectContaining({
+      // The checkout exists but its repository does not: it is kept, as a
+      // skip, because there is nothing to snapshot it into.
+      expect(response.cleanup).toEqual([{
         worktreePath,
+        branch: undefined,
         removedWorktree: false,
-        error: expect.stringContaining("ENOENT"),
-      })]);
-      expect(mainLoggerMock.warn).toHaveBeenCalledWith(
+        deletedBranch: false,
+        skippedReason: "Its repository no longer exists; the checkout was kept.",
+      }]);
+      expect(mainLoggerMock.warn).not.toHaveBeenCalledWith(
         "archive thread worktree cleanup failed",
-        expect.objectContaining({ worktreePath, error: expect.stringContaining("ENOENT") }),
+        expect.anything(),
       );
     }
     expect(mainLoggerMock.info.mock.calls.some(([event]) =>

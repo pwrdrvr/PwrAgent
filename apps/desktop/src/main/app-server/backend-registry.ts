@@ -805,7 +805,7 @@ import {
   type AcpAvailableCommandsStoreLike,
 } from "../acp/acp-available-commands-store";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
-import { MissingArchiveWorktreeError, WorktreeArchiveService } from "./worktree-archive-service";
+import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
@@ -2530,6 +2530,28 @@ export type ArchivedWorktreeRepairReport = {
   emptyContainerCandidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string; containerIdentity: NonNullable<WorktreeContainerCleanup["identity"]> }>;
   containerCleanup: WorktreeContainerCleanup[];
 };
+
+/** Checkouts left in place by a repair pass, counted by a short reason. A
+ * checkout that was already gone is not counted: nothing was kept. */
+function archivedWorktreeKeptReasons(report: ArchivedWorktreeRepairReport): Record<string, number> {
+  const kept: Record<string, number> = {};
+  const add = (reason: string) => { kept[reason] = (kept[reason] ?? 0) + 1; };
+  for (const detail of report.protectedWorktreeDetails) {
+    add(detail.externallyManaged ? "Externally managed" : "Used by an active thread");
+  }
+  for (const item of report.cleanup) {
+    if (item.removedWorktree || item.error || !item.skippedReason) continue;
+    if (item.skippedReason === MISSING_WORKTREE_SKIP_REASON) continue;
+    if (item.skippedReason === MISSING_REPOSITORY_SKIP_REASON) add("Repository no longer exists");
+    else if (item.skippedReason.includes("still used by")) add("Used by an active thread");
+    else if (item.skippedReason.startsWith("Externally managed")) add("Externally managed");
+    else add(item.skippedReason.split(":")[0]!.replace(/\.$/, ""));
+  }
+  return kept;
+}
+
+const MISSING_WORKTREE_SKIP_REASON = "Worktree directory no longer exists.";
+const MISSING_REPOSITORY_SKIP_REASON = "Its repository no longer exists; the checkout was kept.";
 
 type WorktreeRestoreCandidate = {
   branch?: string;
@@ -16674,6 +16696,7 @@ export class DesktopBackendRegistry {
           emptyContainers: report.emptyContainerCandidates.length,
           processedContainers: Math.max(0, completed - report.candidates.length),
           removedContainers: report.containerCleanup.filter((item) => item.removed).length,
+          kept: archivedWorktreeKeptReasons(report),
         });
         const repair = async () => await this.repairArchivedThreadWorktrees({
           onProgress: (completed, _total, report) => {
@@ -16686,7 +16709,7 @@ export class DesktopBackendRegistry {
         if (!report) return;
         publishProgress(report.candidates.length + report.emptyContainerCandidates.length, report);
         for (const item of [...report.cleanup, ...report.containerCleanup]) {
-          if (item.error) onFailure(new Error(item.error));
+          if (item.error) onFailure(new Error(item.error), { path: item.worktreePath });
         }
       },
       cleanupRetention: async (onFailure) => await this.sweepArchivedThreadRetention(onFailure),
@@ -16726,17 +16749,36 @@ export class DesktopBackendRegistry {
             buildThreadIdentityKey(watch.backend, watch.threadId)),
         );
         const candidates: ThreadArchiveCandidate[] = [];
+        // A failed read keeps only the threads it covers, never the whole list.
+        const unreadable = (error: unknown, backend: AppServerBackendKind, threadId?: string) => {
+          backendRegistryLog.warn("auto-archive candidate state read failed; the thread is kept", {
+            backend, threadId, error: error instanceof Error ? error.message : String(error),
+          });
+        };
         for (const backend of new Set(threads.map((thread) => thread.source))) {
           const backendThreads = threads.filter((thread) => thread.source === backend);
-          const overlays = await this.overlayStore.getThreadOverlayStates({
-            backend, threadIds: backendThreads.map((thread) => thread.id),
-          });
-          for (const thread of backendThreads) {
-            candidates.push({
-              thread, overlay: overlays[thread.id],
-              activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
-              activePrWatch: watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id)),
+          let overlays: Record<string, ThreadOverlayState | undefined> | undefined;
+          try {
+            overlays = await this.overlayStore.getThreadOverlayStates({
+              backend, threadIds: backendThreads.map((thread) => thread.id),
             });
+          } catch (error) { unreadable(error, backend); }
+          for (const thread of backendThreads) {
+            const activePrWatch = watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
+            if (!overlays) {
+              candidates.push({ thread, activePrWatch, unreadable: true });
+              continue;
+            }
+            try {
+              candidates.push({
+                thread, overlay: overlays[thread.id],
+                activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
+                activePrWatch,
+              });
+            } catch (error) {
+              unreadable(error, backend, thread.id);
+              candidates.push({ thread, overlay: overlays[thread.id], activePrWatch, unreadable: true });
+            }
           }
         }
         return candidates;
@@ -39457,8 +39499,13 @@ export class DesktopBackendRegistry {
         // A removed checkout may no longer enrich to a linked directory. Its
         // archived provider cwd still proves association with a managed id.
         if (thread.source !== "codex" && thread.source !== "claude" && !isAcpBackendId(thread.source)) continue;
-        if (thread.projectKey && await this.worktreeContainerService.containerPath(thread.projectKey)) {
-          await rememberOwner(thread.projectKey, thread);
+        try {
+          if (thread.projectKey && await this.worktreeContainerService.containerPath(thread.projectKey)) {
+            await rememberOwner(thread.projectKey, thread);
+          }
+        } catch (error) {
+          report.cleanup.push({ worktreePath: thread.projectKey!, removedWorktree: false, deletedBranch: false,
+            error: error instanceof Error ? error.message : String(error) });
         }
         for (const directory of thread.linkedDirectories) {
           const worktreePath = linkedDirectoryWorktreePath(directory);
@@ -39469,50 +39516,57 @@ export class DesktopBackendRegistry {
       const seenContainers = new Set<string>();
       for (const [canonicalKey, { worktreePath, thread }] of ownersByPath) {
         await checkpoint();
+        // One unreadable checkout records its own error; the rest are still read.
         try {
-          if (!(await stat(worktreePath)).isDirectory()) throw new Error(`Worktree path is not a directory: ${worktreePath}`);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
-              error: error instanceof Error ? error.message : String(error) });
+          try {
+            if (!(await stat(worktreePath)).isDirectory()) throw new Error(`Worktree path is not a directory: ${worktreePath}`);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+              report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
+                error: error instanceof Error ? error.message : String(error) });
+              continue;
+            }
+            report.missingWorktrees += 1;
+            const containerPath = thread.source === "codex" ? await this.worktreeContainerService.containerPath(worktreePath) : undefined;
+            if (containerPath && !seenContainers.has(containerPath)) {
+              seenContainers.add(containerPath);
+              const inspection = await this.worktreeContainerService.inspect(worktreePath);
+              if (inspection?.identity && !inspection.skippedReason && !inspection.error
+                && !this.isWorktreeContainerProtected(containerPath, inventory)) {
+                report.emptyContainerCandidates.push({ backend: thread.source, threadId: thread.id, worktreePath, containerIdentity: inspection.identity });
+              } else if (inspection?.error) report.containerCleanup.push(inspection);
+            }
             continue;
           }
-          report.missingWorktrees += 1;
-          const containerPath = thread.source === "codex" ? await this.worktreeContainerService.containerPath(worktreePath) : undefined;
-          if (containerPath && !seenContainers.has(containerPath)) {
-            seenContainers.add(containerPath);
-            const inspection = await this.worktreeContainerService.inspect(worktreePath);
-            if (inspection?.identity && !inspection.skippedReason && !inspection.error
-              && !this.isWorktreeContainerProtected(containerPath, inventory)) {
-              report.emptyContainerCandidates.push({ backend: thread.source, threadId: thread.id, worktreePath, containerIdentity: inspection.identity });
-            } else if (inspection?.error) report.containerCleanup.push(inspection);
+          const acpBlocker = this.archivedAcpWorktreeBlocker(worktreePath, inventory);
+          if (acpBlocker) {
+            report.protectedWorktrees += 1;
+            report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
+              skippedReason: acpBlocker });
+            continue;
           }
-          continue;
-        }
-        const acpBlocker = this.archivedAcpWorktreeBlocker(worktreePath, inventory);
-        if (acpBlocker) {
-          report.protectedWorktrees += 1;
-          report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
-            skippedReason: acpBlocker });
-          continue;
-        }
-        const ownership = await this.readCanonicalArchiveOwnership(inventory, worktreePath);
-        if (ownership.external || ownership.users.length) {
-          report.protectedWorktrees += 1;
-          report.protectedWorktreeDetails.push({ worktreePath, externallyManaged: ownership.external,
-            activeThreads: ownership.users.map((owner) => ({ backend: owner.source, threadId: owner.id, projectKey: owner.projectKey })),
-          });
-          if (!options.dryRun && !ownership.external) {
-            const directory = thread.linkedDirectories.find((row) => {
-              const value = linkedDirectoryWorktreePath(row);
-              return value !== undefined && canonicalKeys.get(normalizeWorktreePathForComparison(value)) === canonicalKey;
+          const ownership = await this.readCanonicalArchiveOwnership(inventory, worktreePath);
+          if (ownership.external || ownership.users.length) {
+            report.protectedWorktrees += 1;
+            report.protectedWorktreeDetails.push({ worktreePath, externallyManaged: ownership.external,
+              activeThreads: ownership.users.map((owner) => ({ backend: owner.source, threadId: owner.id, projectKey: owner.projectKey })),
             });
-            await this.retainDeferredArchiveWorktree({ backend: thread.source, thread, activeThreads: inventory.activeThreads },
-              { worktreePath, repositoryPath: directory?.path }, ownership.users.map((owner) => buildThreadIdentityKey(owner.source, owner.id)));
+            if (!options.dryRun && !ownership.external) {
+              const directory = thread.linkedDirectories.find((row) => {
+                const value = linkedDirectoryWorktreePath(row);
+                return value !== undefined && canonicalKeys.get(normalizeWorktreePathForComparison(value)) === canonicalKey;
+              });
+              await this.retainDeferredArchiveWorktree({ backend: thread.source, thread, activeThreads: inventory.activeThreads },
+                { worktreePath, repositoryPath: directory?.path }, ownership.users.map((owner) => buildThreadIdentityKey(owner.source, owner.id)));
+            }
+            continue;
           }
-          continue;
+          report.candidates.push({ backend: thread.source, threadId: thread.id, worktreePath });
+        } catch (error) {
+          if (error instanceof ArchiveCleanupCancelledError || this.closed || this.stoppingRunningTurnsForShutdown) throw error;
+          report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
+            error: error instanceof Error ? error.message : String(error) });
         }
-        report.candidates.push({ backend: thread.source, threadId: thread.id, worktreePath });
       }
       backendRegistryLog.info("archived worktree repair discovered", {
         archivedThreads: report.archivedThreads, discoveredWorktrees: report.discoveredWorktrees,
@@ -40865,7 +40919,24 @@ export class DesktopBackendRegistry {
             branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
             removedWorktree: false,
             deletedBranch: false,
-            skippedReason: "Worktree directory no longer exists.",
+            skippedReason: MISSING_WORKTREE_SKIP_REASON,
+          };
+        }
+        if (error instanceof MissingArchiveRepositoryError) {
+          // Without its repository the checkout cannot be snapshotted, so it
+          // stays on disk. Only the operator may delete it.
+          backendRegistryLog.debug("archive thread worktree cleanup skipped: repository missing", {
+            backend: params.backend,
+            threadId: params.thread.id,
+            repositoryPath: error.repositoryPath,
+            worktreePath: candidate.worktreePath,
+          });
+          return {
+            worktreePath: candidate.worktreePath,
+            branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+            removedWorktree: false,
+            deletedBranch: false,
+            skippedReason: MISSING_REPOSITORY_SKIP_REASON,
           };
         }
         const changed = removalAdmission?.scope.changedThreadKeys() ?? [];

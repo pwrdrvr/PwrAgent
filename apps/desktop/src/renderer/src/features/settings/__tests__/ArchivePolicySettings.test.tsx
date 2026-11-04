@@ -77,7 +77,8 @@ describe("ArchivePolicySettings", () => {
       running: false, startedAt: FINISHED_AT, finishedAt: FINISHED_AT, nextAt: NEXT_AT, archived: 4, deleted: 1, failed: 0,
     });
     render(<ArchivePolicySettings onWriteConfig={vi.fn(async () => true)} desktopApi={api} />);
-    expect(await screen.findByText("Archived 4 threads. Deleted 1 expired archive.")).toBeInTheDocument();
+    expect(await screen.findByText("Archived 4 threads.")).toBeInTheDocument();
+    expect(screen.getByText("Deleted 1 expired archive.")).toBeInTheDocument();
     expect(screen.getByText(clock.format(FINISHED_AT))).toBeInTheDocument();
     expect(screen.getByText(`Next sweep about ${clock.format(NEXT_AT)}`)).toBeInTheDocument();
   });
@@ -124,6 +125,36 @@ describe("ArchivePolicySettings", () => {
     render(<ArchivePolicySettings onWriteConfig={vi.fn(async () => true)} desktopApi={api} />);
     expect(await screen.findByText("2 failed")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("thread/archive timed out");
+  });
+
+  it("reports each phase and lists every failure with its path", async () => {
+    const { api } = sweepApi({
+      running: false, finishedAt: FINISHED_AT, nextAt: NEXT_AT, archived: 0, deleted: 0, failed: 3,
+      threads: { checked: 30, eligible: 25, archived: 0,
+        kept: { "Within the per-project limit": 20, "Ignored files only": 5, "Pinned thread": 3, "Agent thread": 1, "Busy": 1 } },
+      worktrees: { candidates: 2, protected: 0, processed: 2, removed: 1, kept: { "Repository no longer exists": 1 } },
+      error: "first",
+      failures: [
+        { phase: "worktrees", message: "EACCES: permission denied", path: "/w/one" },
+        { phase: "threads", message: "provider unavailable", threadId: "t1" },
+      ],
+    });
+    render(<ArchivePolicySettings onWriteConfig={vi.fn(async () => true)} desktopApi={api} />);
+    expect(await screen.findByText("Checked 30 threads. Archived 0. Kept 30: Within the per-project limit (20), Ignored files only (5), Pinned thread (3), and 2 more reasons."))
+      .toBeInTheDocument();
+    expect(screen.getByText("Cleaned 1 of 2 archived worktrees. Kept 1: Repository no longer exists (1).")).toBeInTheDocument();
+    expect(screen.getByText("EACCES: permission denied (/w/one)")).toBeInTheDocument();
+    expect(screen.getByText("provider unavailable")).toBeInTheDocument();
+    expect(screen.getByText("and 1 more")).toBeInTheDocument();
+  });
+
+  it("says why the thread pass did not run", async () => {
+    const { api } = sweepApi({
+      running: false, finishedAt: FINISHED_AT, archived: 0, deleted: 0, failed: 0,
+      threads: { checked: 0, eligible: 0, archived: 0, kept: {}, skipped: "Automatic archiving is off" },
+    });
+    render(<ArchivePolicySettings onWriteConfig={vi.fn(async () => true)} desktopApi={api} />);
+    expect(await screen.findByText("Threads: Automatic archiving is off.")).toBeInTheDocument();
   });
 
   it("keeps manual worktree cleanup available when archiving and deletion are both off", async () => {

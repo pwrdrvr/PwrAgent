@@ -68,11 +68,13 @@ async function createFixture(managed: boolean | "claude" = false) {
   const { dbPath, tempDir } = createTempStateDb("pwragent-archive-restart-db-");
   roots.push(tempDir);
   const claudeStore = new ClaudeSessionStore(path.join(root, "claude"));
-  const reopen = (workspace = directory, checkpoint = false, createAcpTransport?: AcpTransportFactory) => {
+  const reopen = (workspace = directory, checkpoint = false, createAcpTransport?: AcpTransportFactory,
+    extraWorkspaces: Array<typeof directory> = []) => {
     const db = StateDb.open(dbPath);
     databases.push(db);
     const store = new SqliteOverlayStore(db);
-    const client = new CodexAppServerClient({ directoryResolver: async (cwd) => cwd === workspace.worktreePath ? [workspace] : [] });
+    const client = new CodexAppServerClient({ directoryResolver: async (cwd) =>
+      [workspace, ...extraWorkspaces].filter((row) => row.worktreePath === cwd) });
     const acpAgentStore = new AcpAgentStore(db);
     const acpSessionStore = new AcpSessionStore(db);
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null, threadTitleGenerationService: null,
@@ -882,6 +884,61 @@ describe("archive worktrees across a desktop restart", () => {
     expect(result.cleanup[0]?.removedWorktree).toBe(false);
     expect(activeReads).toBe(2);
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+  });
+
+  it("keeps an orphaned checkout whose repository is gone, as a skip, and still cleans the next one", async () => {
+    const fixture = await createFixture();
+    const goneRepo = path.join(fixture.root, "gone-repo");
+    const orphan = path.join(fixture.root, "orphan");
+    await mkdir(goneRepo);
+    await fixture.git(goneRepo, ["init", "-b", "main"]);
+    await writeFile(path.join(goneRepo, "file.txt"), "gone\n");
+    await fixture.git(goneRepo, ["add", "file.txt"]);
+    await fixture.git(goneRepo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-m", "gone"]);
+    await fixture.git(goneRepo, ["worktree", "add", "-b", "orphan", orphan]);
+    await rm(goneRepo, { recursive: true, force: true });
+    const orphanDirectory = { id: "orphan", kind: "worktree" as const, label: "gone-repo", path: goneRepo, worktreePath: orphan };
+    ArchiveWorktreeTransport.threads = [
+      { id: "orphan-owner", cwd: orphan, source: "cli", archived: true },
+      { id: "old-target", cwd: fixture.worktree, source: "cli", archived: true },
+    ];
+    const instance = fixture.reopen(fixture.directory, false, undefined, [orphanDirectory]);
+    const result = await instance.registry.repairArchivedThreadWorktrees();
+    expect(result.cleanup).toEqual(expect.arrayContaining([
+      expect.objectContaining({ worktreePath: orphan, removedWorktree: false,
+        skippedReason: "Its repository no longer exists; the checkout was kept." }),
+      expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true }),
+    ]));
+    expect(result.cleanup.filter((item) => item.error)).toEqual([]);
+    expect((await stat(orphan)).isDirectory()).toBe(true);
+  });
+
+  it("records a discovery failure for one checkout and still cleans the others", async () => {
+    const fixture = await createFixture();
+    const second = path.join(fixture.root, "second");
+    await fixture.git(fixture.repo, ["worktree", "add", "-b", "second", second]);
+    const secondDirectory = { ...fixture.directory, id: "second", worktreePath: second };
+    ArchiveWorktreeTransport.threads = [
+      { id: "broken-owner", cwd: second, source: "cli", archived: true },
+      { id: "old-target", cwd: fixture.worktree, source: "cli", archived: true },
+    ];
+    const instance = fixture.reopen(fixture.directory, false, undefined, [secondDirectory]);
+    const registry = instance.registry as unknown as { archivedAcpWorktreeBlocker: (worktreePath: string, inventory: unknown) => string | undefined };
+    const original = registry.archivedAcpWorktreeBlocker.bind(registry);
+    let thrown = false;
+    vi.spyOn(registry, "archivedAcpWorktreeBlocker").mockImplementation((worktreePath, inventory) => {
+      if (!thrown && worktreePath === second) {
+        thrown = true;
+        throw new Error("EACCES: permission denied");
+      }
+      return original(worktreePath, inventory);
+    });
+    const result = await instance.registry.repairArchivedThreadWorktrees();
+    expect(result.cleanup).toEqual(expect.arrayContaining([
+      expect.objectContaining({ worktreePath: second, removedWorktree: false, error: "EACCES: permission denied" }),
+      expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true }),
+    ]));
+    expect((await stat(second)).isDirectory()).toBe(true);
   });
 
   it("does not remove the primary checkout or invent a snapshot for an absent worktree", async () => {
