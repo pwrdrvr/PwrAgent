@@ -77,6 +77,14 @@ export function bundledGitEnvironment(
     { LOCAL_GIT_DIRECTORY: root, GIT_EXEC_PATH: helperDirectory },
     { ...clean, PATH: inheritedPath },
   );
+  // Dugite points Linux Git at the bundle's ssl/cacert.pem only without
+  // LOCAL_GIT_DIRECTORY, which is passed above, so restore its fixed path. A
+  // set GIT_SSL_CAINFO wins, as in Dugite. A bundle without the file keeps
+  // the libcurl default rather than pointing Git at a missing one.
+  const caBundle = path.join(root, "ssl", "cacert.pem");
+  if (platform === "linux" && !env.GIT_SSL_CAINFO && existsSync(caBundle)) {
+    env.GIT_SSL_CAINFO = caBundle;
+  }
   const executableDirectory = path.dirname(bundledGitExecutable());
   // Git puts its exec path first for subcommands; shells and hooks also need
   // the bundled git/git-lfs before any installed versions in PATH.

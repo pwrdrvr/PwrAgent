@@ -434,16 +434,25 @@ describe.skipIf(process.platform === "win32")("bundled Git system config visibil
     }
   });
 
-  it("adds no certificate settings and passes the operator's through", async () => {
+  it("points Linux Git at the bundle's CA file as Dugite does, beneath an explicit one", async () => {
     const { root, source } = await fixture();
     delete source.GIT_SSL_CAINFO;
+    const caBundle = path.join(root, "resources", "git", "ssl", "cacert.pem");
     try {
+      configureBundledGit(path.join(root, "resources"));
+      // No file, no variable: Git keeps its libcurl default.
+      expect(bundledGitEnvironment(source, { platform: "linux" }).GIT_SSL_CAINFO).toBeUndefined();
+      await mkdir(path.dirname(caBundle), { recursive: true });
+      await writeFile(caBundle, "");
       const env = bundledGitEnvironment(source, { platform: "linux" });
-      expect(env.GIT_SSL_CAINFO).toBeUndefined();
+      expect(env.GIT_SSL_CAINFO).toBe(caBundle);
       expect(await readFile(env.GIT_CONFIG_SYSTEM!, "utf8")).not.toContain("[http]");
       const explicit = bundledGitEnvironment({ ...source, GIT_SSL_CAINFO: "/operator/ca.pem" }, { platform: "linux" });
       expect(explicit.GIT_SSL_CAINFO).toBe("/operator/ca.pem");
+      // Dugite sets it on Linux only; macOS keeps the system trust store.
+      expect(bundledGitEnvironment(source, { platform: "darwin" }).GIT_SSL_CAINFO).toBeUndefined();
     } finally {
+      configureBundledGit();
       await rm(root, { recursive: true, force: true });
     }
   });
