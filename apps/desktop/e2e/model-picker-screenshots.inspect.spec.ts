@@ -48,7 +48,8 @@ test.skip(
   "Set PWRAGENT_MODEL_PICKER_CAPTURE=1 to capture model picker screenshots.",
 );
 
-test("captures the review card's model menu", async ({}, testInfo) => {
+test("captures the review card's model menu", async () => {
+  const testInfo = test.info();
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-model-picker-"));
   const fixturePath = path.join(rootDir, "replay.fixture.json");
   const fixture = JSON.parse(await readFile(
