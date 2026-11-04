@@ -299,14 +299,18 @@ export function bundledGitConfigDirectory(): string {
 /** First line of every system config PwrAgent generates. */
 const GENERATED_CONFIG_MARKER = "# Written by PwrAgent:";
 
+/** The same first line from any Pwr app: PwrGit writes `# Written by PwrGit:`. */
+const PWR_GENERATED_CONFIG = /^# Written by Pwr[A-Za-z]+:/;
+
 /**
- * Whether an inherited GIT_CONFIG_SYSTEM is one PwrAgent set, not the
- * operator's: the bundle's own file, or a config PwrAgent generated. A shell
- * in PwrAgent's terminal carries the generated one, and a generated file
- * under another PwrAgent root (a dev profile launched from that terminal) is
- * recognized by its first line. Those are rebuilt rather than included, so
- * the defaults are not stacked twice. Anything else is the operator's own
- * system config and must stay visible.
+ * Whether an inherited GIT_CONFIG_SYSTEM was set by an app, not the operator:
+ * the bundle's own file, or a config PwrAgent or another Pwr app generated.
+ * A shell in PwrAgent's terminal carries PwrAgent's generated file. One under
+ * another PwrAgent root (a dev profile launched from that terminal) or from
+ * PwrGit is recognized by its first line. Those are rebuilt rather than
+ * included, so app defaults and another bundle's config are not stacked
+ * beneath ours. Anything else is the operator's own system config and must
+ * stay visible.
  */
 export function isOwnSystemConfig(bundleRoot: string, value: string | undefined): boolean {
   if (!value) return false;
@@ -314,7 +318,7 @@ export function isOwnSystemConfig(bundleRoot: string, value: string | undefined)
   if (isInsideDirectory(path.resolve(bundleRoot), file)) return true;
   if (isInsideDirectory(path.resolve(bundledGitConfigDirectory()), file)) return true;
   try {
-    return readFileSync(file, "utf8").startsWith(GENERATED_CONFIG_MARKER);
+    return PWR_GENERATED_CONFIG.test(readFileSync(file, "utf8"));
   } catch {
     return false;
   }

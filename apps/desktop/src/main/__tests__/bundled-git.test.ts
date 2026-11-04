@@ -406,6 +406,11 @@ describe.skipIf(process.platform === "win32")("bundled Git system config visibil
       await copyFile(first.GIT_CONFIG_SYSTEM!, elsewhere);
       const fromOtherRoot = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: elsewhere }, { platform: "linux" });
       expect(await readFile(fromOtherRoot.GIT_CONFIG_SYSTEM!, "utf8")).toContain(bundleInclude);
+      // So is one a sister app generated, which would stack its defaults.
+      const sister = path.join(root, "pwrgit-gitconfig");
+      await writeFile(sister, "# Written by PwrGit: defaults for its bundled Git\n[credential]\n\thelper = sister\n");
+      const fromSister = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: sister }, { platform: "linux" });
+      expect(fromSister.GIT_CONFIG_SYSTEM).toBe(first.GIT_CONFIG_SYSTEM);
       // So is the bundle's own file.
       const bundleFile = path.join(bundledGitDirectory(), "etc", "gitconfig");
       const fromBundle = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: bundleFile }, { platform: "linux" });
