@@ -26921,6 +26921,44 @@ function rbacProviderGranting(
 }
 
 describe("RBAC capability enforcement", () => {
+  it.each(["other", "next", "previous", "back"])(
+    "denies a previously delivered model %s callback after permission revocation", async (submenu) => {
+      const permissions: MessagingPermissionId[] = [
+        "message.reply", "thread.resume", "thread.status.view", "thread.settings.model",
+      ];
+      const listBackends = vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [buildBackendSummary({ launchpadOptions: {
+          models: submenu === "next" || submenu === "previous"
+            ? Array.from({ length: 10 }, (_, index) => ({ id: `native-${index}` }))
+            : messagingModelCatalog,
+        } })],
+      }));
+      const harness = await createHarness({ rbacPolicy: rbacProviderGranting(permissions), listBackends });
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:model" }));
+      const choices = () => {
+        const intent = harness.delivered.at(-1)!;
+        if (intent.kind !== "single_select") throw new Error(`Expected model picker, got ${intent.kind}`);
+        return intent.choices;
+      };
+      if (submenu === "previous" || submenu === "back") {
+        const navigate = choices().find((action) => action.id === `status:model:${submenu === "previous" ? "next" : "other"}`)!;
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: navigate.id, value: navigate.value }));
+      }
+      const staleAction = choices().find((action) => action.id === `status:model:${submenu}`)!;
+      expect(staleAction).toBeDefined();
+      permissions.splice(permissions.indexOf("thread.settings.model"), 1);
+      harness.delivered.length = 0;
+      listBackends.mockClear();
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: staleAction.id, value: staleAction.value }));
+      expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", title: "Not permitted" });
+      expect(harness.delivered.some((intent) => intent.kind === "single_select")).toBe(false);
+      expect(listBackends).not.toHaveBeenCalled();
+      expect(harness.setThreadModelSettings).not.toHaveBeenCalled();
+    },
+  );
+
   it("gates /status handoff and project selection on handoff permission", async () => {
     const harness = await createHarness({
       rbacPolicy: rbacProviderGranting(["message.reply", "elicitation.answer", "thread.status.view"]),

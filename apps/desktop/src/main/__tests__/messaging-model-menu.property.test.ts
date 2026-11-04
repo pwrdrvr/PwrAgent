@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildModelMenu } from "@pwragent/shared";
+import { buildModelMenu, modelOptionsForThreadProvider, permissionForActionId } from "@pwragent/shared";
 import type { MessagingBindingRecord, MessagingJsonValue } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import { buildStatusModelPickerIntent } from "../messaging/core/messaging-status-card";
@@ -17,6 +17,64 @@ const binding: MessagingBindingRecord = {
 };
 
 describe("messaging model menu oracle", () => {
+  it("keeps ID-based provider matching for every omission of optional catalog metadata", () => {
+    const catalog = [
+      { id: "native-model", providerId: undefined },
+      { id: "@local/one", providerId: "local" },
+      { id: "@local/two", providerId: "local" },
+      { id: "@remote/one", providerId: "remote" },
+    ];
+    // Peers may omit providerId on any catalog entry. Qualified IDs still
+    // identify exactly which models an existing Codex thread can select.
+    for (let mask = 0; mask < 1 << catalog.length; mask++) {
+      const models = catalog.map((model, index) => ({
+        ...model, providerId: mask & (1 << index) ? model.providerId : undefined,
+      }));
+      for (const currentModelId of catalog.map((model) => model.id)) {
+        const intent = buildStatusModelPickerIntent({
+          binding, models, currentModelId, id: "legacy-peer-picker", createdAt: 1,
+          capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+        });
+        expect(intent.choices.filter((choice) => choice.id === "status:set-model")
+          .map((choice) => (choice.value as { model: string }).model)).toEqual(
+            modelOptionsForThreadProvider(models, currentModelId).map((model) => model.id),
+          );
+      }
+    }
+  });
+
+  it("gates every emitted model submenu with the entry action's permission", () => {
+    const models = [
+      ...messagingModelCatalog,
+      ...Array.from({ length: 10 }, (_, index) => ({ id: `native-${index}` })),
+      { id: "@local/one", providerId: "local" },
+    ];
+    const queue: Array<MessagingJsonValue | undefined> = [undefined];
+    const seen = new Set<string>();
+    const actionIds = new Set<string>();
+    while (queue.length > 0) {
+      const menuValue = queue.shift();
+      const key = JSON.stringify(menuValue ?? null);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const actions = buildMessagingModelMenuActions({
+        kind: "codex", models, menuValue,
+        menuActionId: "status:model", selectActionId: "status:set-model",
+        capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+        backAction: { id: "status:refresh", label: "Back", priority: 1 },
+      });
+      for (const action of actions.filter((candidate) => candidate.id.startsWith("status:model:"))) {
+        actionIds.add(action.id);
+        expect(permissionForActionId(action.id)).toBe(permissionForActionId("status:model"));
+        queue.push(action.value);
+      }
+    }
+    expect([...actionIds].sort()).toEqual([
+      "status:model:back", "status:model:next", "status:model:other",
+      "status:model:previous", "status:model:provider:0",
+    ]);
+  });
+
   it("keeps every catalog entry reachable within the action budget", () => {
     for (const maxActions of [4, 5, 13, 20, 25, 100]) {
       for (const count of [1, 8, 9, 25, 65]) {
