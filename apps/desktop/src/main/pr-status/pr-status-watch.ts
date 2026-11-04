@@ -501,6 +501,10 @@ function buildPrStatusWatchPrompt(params: {
   observedAt: number;
 }): string {
   const checkState = params.pr.checkState ?? params.pr.state ?? "unknown";
+  // A skipped-only head passes so its watch can end, but nothing ran.
+  const nothingTested = params.outcome === "success"
+    && params.pr.checksAllSkipped === true
+    && params.pr.lifecycleState !== "merged";
   return [
     "PwrAgent resumed this thread because its one-shot pull request watch completed.",
     "",
@@ -511,12 +515,17 @@ function buildPrStatusWatchPrompt(params: {
     `- Watched head SHA: ${params.watch.headSha}`,
     `- Outcome: ${params.outcome}`,
     `- Check state: ${checkState}`,
+    ...(nothingTested
+      ? ["- Checks: every check at this head was skipped, so nothing was tested"]
+      : []),
     `- Merge state: ${params.pr.mergeState ?? "unknown"}`,
     `- Lifecycle state: ${params.pr.lifecycleState ?? "open"}`,
     `- Observed at: ${new Date(params.observedAt).toISOString()}`,
     "",
-    params.outcome === "success"
-      ? "Report that the watched PR checks succeeded and continue only if the operator's prior request requires another action. Do not poll CI or create a monitor thread."
-      : "Report the failure unless the prior request already authorized you to investigate or repair it. Verify current provider state before changing code, and do not create a polling or monitor loop.",
+    nothingTested
+      ? "Report that every check on the watched head was skipped, so CI tested nothing; do not report it as passing. Continue only if the operator's prior request requires another action. Do not poll CI or create a monitor thread."
+      : params.outcome === "success"
+        ? "Report that the watched PR checks succeeded and continue only if the operator's prior request requires another action. Do not poll CI or create a monitor thread."
+        : "Report the failure unless the prior request already authorized you to investigate or repair it. Verify current provider state before changing code, and do not create a polling or monitor loop.",
   ].join("\n");
 }

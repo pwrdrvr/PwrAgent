@@ -1545,6 +1545,7 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
       candidate.checksStillRunning === pr.checksStillRunning &&
+      candidate.checksAllSkipped === pr.checksAllSkipped &&
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
