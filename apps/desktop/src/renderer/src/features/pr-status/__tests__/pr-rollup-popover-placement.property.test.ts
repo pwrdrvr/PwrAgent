@@ -53,6 +53,17 @@ describe("placeRollupPopover", () => {
     );
   });
 
+  it("scrolls below a chip at the top of a short window instead of covering it", () => {
+    // The counterexample the no-cover property shrank to on the old code,
+    // which clamped the list to the top margin, over the chip.
+    expect(placeRollupPopover({
+      chip: { top: 8, bottom: 24, right: 40 },
+      width: 340,
+      contentHeight: 83,
+      viewport: { width: 360, height: 120 },
+    })).toMatchObject({ top: 24 + POPOVER_GAP, maxHeight: 82 });
+  });
+
   it("opens below whenever the whole list fits there", () => {
     fc.assert(
       fc.property(scene, (s) => {

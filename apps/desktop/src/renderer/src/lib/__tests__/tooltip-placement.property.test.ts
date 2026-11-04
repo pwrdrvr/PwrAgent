@@ -119,6 +119,17 @@ describe("anchoredTooltipPosition", () => {
     );
   });
 
+  it("goes right of a corner target it would otherwise cover", () => {
+    // The counterexample the no-cover property shrank to on the old code.
+    const placed = anchoredTooltipPosition({
+      target: { left: 0, top: 0, right: 12, bottom: 12 },
+      width: 20,
+      height: 109,
+      bounds: { left: 0, top: 0, right: 120, bottom: 120 },
+    });
+    expect(placed).toEqual({ left: 12 + TOOLTIP_GAP, top: 0 });
+  });
+
   it("goes beside a sidebar chip when the card is taller than the room above and below it", () => {
     // Close to the reported layout, in CSS pixels: a PR chip in the sidebar,
     // a 270 × 465 status card, and less than 465px above or below the chip.
