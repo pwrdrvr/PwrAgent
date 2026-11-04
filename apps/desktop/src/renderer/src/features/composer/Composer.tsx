@@ -5090,6 +5090,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         return "failed";
       }
     }
+    if (queued.failedScheduledActionId) {
+      // Steering a failed row delivers it, so its failure is settled too.
+      await dismissFailedScheduledAction(queued);
+      return "cancelled";
+    }
     if (!queued.queueEntryId) {
       return "cancelled";
     }

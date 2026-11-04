@@ -11675,6 +11675,74 @@ describe("Composer", () => {
     },
   );
 
+  it("dismisses a failed scheduled row on its owner when the operator steers it", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
+      id: "scheduled-projection:scheduled-action-1",
+      failedScheduledActionId: "scheduled-action-1",
+      errorMessage: "Thread already has an active turn in progress",
+      text: "Steer the running turn",
+      imageAttachments: [],
+      fileAttachments: [],
+      input: [{ type: "text", text: "Steer the running turn" }],
+    });
+    const cancelScheduledThreadAction = vi.fn(async () => {
+      throw new Error("owner refused");
+    });
+    const steerTurn = vi.fn(async () => ({ turnId: "turn-1" }));
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          cancelScheduledThreadAction,
+          onAgentEvent: () => () => undefined,
+          steerTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    });
+
+    expect(cancelScheduledThreadAction).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      id: "scheduled-action-1",
+    });
+    await waitFor(() => expect(steerTurn).toHaveBeenCalled());
+  });
+
   it("preserves a cancelled queued item when its steer target changes", async () => {
     const draftStore = createComposerDraftStore();
     draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
