@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { NavigationQueryStore, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "../dist/federation-core.js";
+import { fixtureCodexClient } from "./helpers/codex-client.js";
 import { HeadlessBackend } from "../src/federation-backend.js";
 
 function backendFixture(t, jobs, published = []) {
@@ -73,29 +74,30 @@ test("directory pages retain creation order while Updated pages follow recent ac
 test("replay normalizes turn status on messages and activities for mid-turn hydration", async (t) => {
   const backend = backendFixture(t, new Map([["job", job("job", "thread", "2026-01-01T00:00:00.000Z")]]));
   const statuses = ["completed", "failed", "interrupted", "cancelled", "inProgress"];
-  backend.runtime.codex = { request: async () => ({ thread: { turns: statuses.map((status) => ({
+  backend.runtime.codex = fixtureCodexClient(async () => ({ thread: { turns: statuses.map((status) => ({
     id: `turn-${status}`, status, items: [
       { id: `message-${status}`, type: "agentMessage", text: "Working" },
       { id: `command-${status}`, type: "commandExecution", command: "fixture", status: "inProgress" },
     ],
-  })) } }) };
+  })) } }));
   const result = await backend.readThread("thread");
   for (const entry of result.replay.entries) {
     const expected = entry.turn.id === "turn-inProgress" ? "in_progress" : entry.turn.id.slice(5);
     assert.equal(entry.turn.status, expected);
   }
   assert.deepEqual(result.replay.entries.at(-1).turn, { id: "turn-inProgress", status: "in_progress" });
-  assert.deepEqual(result.replay.messages.at(-1).turn, { id: "turn-inProgress", status: "in_progress" });
+  assert.equal(result.replay.messages.at(-1).id, "message-inProgress");
+  assert.equal(result.replay.messages.at(-1).text, "Working");
 });
 
 test("federated transcript reads return the newest page and page back by cursor", async (t) => {
   const backend = backendFixture(t, new Map([["job", job("job", "thread", "2026-01-01T00:00:00.000Z")]]));
-  backend.runtime.codex = { request: async () => ({ thread: { turns: [1, 2, 3].map((n) => ({
+  backend.runtime.codex = fixtureCodexClient(async () => ({ thread: { turns: [1, 2, 3].map((n) => ({
     id: `turn-${n}`, status: "completed", items: [
       { id: `user-${n}`, type: "userMessage", content: [{ type: "text", text: `Question ${n}` }] },
       { id: `answer-${n}`, type: "agentMessage", text: `Answer ${n}` },
     ],
-  })) } }) };
+  })) } }));
   // read_thread on a viewer keeps the first `limit` entries of what the owner
   // returns, so an unpaged owner showed the oldest turn of a long thread.
   const newest = (await backend.handle("readThread", { threadId: "thread", limit: 1 })).replay;
@@ -121,11 +123,11 @@ test("federated transcript reads return the newest page and page back by cursor"
 test("federated transcript pages fit the frame budget and keep a cursor to the trimmed entries", async (t) => {
   const backend = backendFixture(t, new Map([["job", job("job", "thread", "2026-01-01T00:00:00.000Z")]]));
   backend.replayByteBudget = 20_000;
-  backend.runtime.codex = { request: async () => ({ thread: { turns: [{ id: "turn-1", status: "completed", items: [
+  backend.runtime.codex = fixtureCodexClient(async () => ({ thread: { turns: [{ id: "turn-1", status: "completed", items: [
     { id: "user-1", type: "userMessage", content: [{ type: "text", text: "Run it" }] },
     { id: "command-1", type: "commandExecution", command: "find /", aggregatedOutput: "x".repeat(200_000), status: "completed" },
     { id: "answer-1", type: "agentMessage", text: "Done" },
-  ] }] } }) };
+  ] }] } }));
   const response = await backend.handle("readThread", { threadId: "thread", limit: 1 });
   assert.ok(Buffer.byteLength(JSON.stringify(response)) <= backend.replayByteBudget);
   assert.deepEqual(response.replay.entries.map((entry) => entry.id), ["answer-1"]);

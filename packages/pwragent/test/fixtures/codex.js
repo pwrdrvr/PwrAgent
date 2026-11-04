@@ -53,15 +53,16 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   } else {
     assert.ok(acknowledged);
     if (method === "model/list") {
-      reply({ data: [{ id: "fixture-model", displayName: "Fixture model", isDefault: true, supportedReasoningEfforts: [] }] });
+      reply({ data: [{ id: "fixture-model", displayName: "Fixture model", isDefault: true, hidden: false,
+        supportedReasoningEfforts: [], defaultReasoningEffort: "medium", inputModalities: ["text"], additionalSpeedTiers: [], serviceTiers: [] }], nextCursor: null });
     } else if (method === "thread/start" || method === "thread/resume") {
-      assert.equal(params.approvalPolicy, "never");
-      assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
-      assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
+      if (params.approvalPolicy !== undefined) assert.equal(params.approvalPolicy, "never");
+      if (params.sandbox !== undefined) assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
+      if (params.cwd !== undefined) assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const threadId = params.threadId || `thread-${Date.now()}-${++sequence}`;
       if (method === "thread/resume") {
         assert.ok(threads[threadId]);
-        if (!threads[threadId].turns.length) {
+        if (!threads[threadId].turns.length && active?.threadId !== threadId) {
           send({ id, error: { code: -32600, message: `no rollout found for thread id ${threadId}` } });
           continue;
         }
@@ -113,6 +114,13 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       reply({});
     } else if (method === "thread/read") {
       reply({ thread: { ...threads[params.threadId], path: `/fixture-provider/${params.threadId}` } });
+    } else if (method === "thread/turns/list") {
+      reply({ data: threads[params.threadId].turns.slice().reverse().map((turn) => ({ ...turn, itemsView: "full" })), nextCursor: null });
+    } else if (method === "thread/name/set") {
+      threads[params.threadId].name = params.name;
+      persist();
+      reply({});
+      send({ method: "thread/name/updated", params: { threadId: params.threadId, threadName: params.name } });
     } else if (method === "fs/readFile") {
       const thread = threads[path.basename(params.path)];
       assert.ok(thread);

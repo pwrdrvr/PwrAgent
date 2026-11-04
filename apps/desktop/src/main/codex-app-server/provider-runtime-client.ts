@@ -61,6 +61,7 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   listBackgroundTerminals: "threadId",
   terminateBackgroundTerminal: "threadId",
   readThread: "thread",
+  readThreadProtocolResult: "thread",
   readThreadModelSettings: "thread",
   exportThreadForHandoff: "threadId",
   prepareFreshNativeVoiceThread: "thread",
@@ -96,7 +97,7 @@ type Callback = (...args: unknown[]) => unknown;
 type Subscription = { method: Method; args: unknown[]; stops: Map<CodexAppServerClient, () => void> };
 const READ_ONLY = new Set<Method>([
   "readArchiveCleanupThreadSummary", "readThreadPricingSnapshot", "readThreadTurn", "readThreadActivity",
-  "readThreadName", "readThreadSummary", "readThread", "readThreadModelSettings", "exportThreadForHandoff",
+  "readThreadName", "readThreadSummary", "readThread", "readThreadProtocolResult", "readThreadModelSettings", "exportThreadForHandoff",
   "listBackgroundTerminals",
   "readThreadToolInvocation", "readTurnRoot",
 ]);

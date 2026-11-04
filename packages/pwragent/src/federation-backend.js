@@ -140,6 +140,10 @@ export class HeadlessBackend {
     }
     const id = message.params?.threadId || message.params?.thread?.id;
     if (!this.threads.has(id)) return;
+    if (message.method === "thread/name/updated") {
+      this.setTitle(this.threads.get(id), message.params.threadName, message.params.titleSource || "explicit");
+      return;
+    }
     // The desktop adapter represents failed completions as turn/failed and
     // supplies turnId alongside the provider's nested turn object.
     const turnId = message.params?.turnId || message.params?.turn?.id;
@@ -281,8 +285,7 @@ export class HeadlessBackend {
     this.publish({ backend: "codex", notification: { method: "navigation/invalidated", params: { threadId, ...(sourceMethod ? { sourceMethod } : {}) } } }, "navigation");
   }
 
-  // threads.json is the only store for a title. The outpost never sets the
-  // Codex thread name.
+  // threads.json retains owner title provenance, including explicit renames.
   setTitle(thread, title, titleSource) {
     Object.assign(thread, { title, titleSource });
     this.persist();
@@ -387,6 +390,8 @@ export class HeadlessBackend {
       const job = [...this.runtime.store.jobs.values()].find((job) => job.threadId === id && job.turnId === entry.turn?.id);
       return job?.messageOrigin ? { ...entry, origin: job.messageOrigin } : entry;
     });
+    const origins = new Map(entries.filter((entry) => entry.type === "message" && entry.origin).map((entry) => [entry.id, entry.origin]));
+    const messages = replay.messages.map((message) => origins.has(message.id) ? { ...message, origin: origins.get(message.id) } : message);
     const summary = await this.runtime.codex.readThreadSummary(id);
     const thread = this.owned(id);
     if (thread.titleSource === "fallback" && summary.titleSource !== "fallback") {
@@ -395,7 +400,7 @@ export class HeadlessBackend {
       this.deriveTitle(id, replay.messages.find((message) => message.role === "user")?.text);
     }
     return { backend: "codex", threadId: id, fetchedAt: Date.now(), threadStatus: this.summary(thread).threadStatus,
-      replay: { ...replay, entries, messages: entries.filter((entry) => entry.type === "message") } };
+      replay: { ...replay, entries, messages } };
   }
 
   navigationIndex() {
