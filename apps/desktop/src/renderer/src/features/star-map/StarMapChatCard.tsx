@@ -2247,6 +2247,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           mentionSources={mentionSources}
           model={threadModel}
           normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
+          preserveImageBytes={federationTarget?.scope === "remote"}
           onAttachmentError={onAttachmentError}
           onDraftRestoreApplied={onDraftRestoreApplied}
           onInterrupt={onInterrupt}

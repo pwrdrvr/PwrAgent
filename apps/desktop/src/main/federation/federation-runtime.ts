@@ -1,3 +1,4 @@
+import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
@@ -24,7 +25,7 @@ import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageA
 import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANSCRIPT_METHOD, resolveFilePullThread } from "./federation-file-pull";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
 import { resolveActiveProfileDir } from "../profile";
-import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest } from "./thread-instance-handoff-service";
+import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest, type ThreadHandoffSendOptions } from "./thread-instance-handoff-service";
 import { app } from "electron";
 import { FEDERATION_MESSAGING_DESTINATION_METHOD, handleFederationMessagingDestination,
   type FederationMessagingDestinationOperation, type FederationMessagingDestinationResult } from "./federation-messaging-tools";
@@ -32,6 +33,7 @@ import {
   FederationFilePushReceiver,
   FederationFilePushReceipts,
   FILE_PUSH_MAX_BYTES,
+  FILE_PUSH_METHODS,
   type FilePushResult,
   FILE_PUSH_METHOD_CAPABILITIES,
   registerFilePushHandlers,
@@ -651,6 +653,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "file_pull",
   "event_subscriptions",
   "turn_input_blobs",
+  "resumable_blobs",
   // Signed transport negotiation; not a user-authorized remote action.
   "transport_brotli",
   "shutdown_notice",
@@ -1410,6 +1413,7 @@ export class DesktopFederationRuntime {
   private walkEpoch = 0;
   private lastConnectedAt?: number;
   private stopping = true;
+  private blobLifetime = new AbortController();
   private lastConnectionError?: string;
   private lastConnectionFailureKind?: "auth" | "replaced" | "transport";
   private cloudflareSignInRequiredEndpoint?: string;
@@ -1763,6 +1767,7 @@ export class DesktopFederationRuntime {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.blobLifetime.abort(new Error("Federation stopped."));
     this.parked = false;
     this.shortNames.dispose();
     await this.cloudflareGateway.stop();
@@ -3001,13 +3006,68 @@ export class DesktopFederationRuntime {
     const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
     if (!peer?.capabilities.includes("file_push")) throw new Error("The target does not support file push.");
     if (peer.receiverPermissions?.filePush !== true) throw new Error("The target does not allow incoming files.");
+    if (this.remotePeerAdvertisesCapability(target.instanceId, "resumable_blobs")) {
+      const signal = options?.signal ? AbortSignal.any([options.signal, this.blobLifetime.signal]) : this.blobLifetime.signal;
+      return await pushResumableBlob(this.resumableBlobTransport(target), sourcePath, name, { ...options, signal });
+    }
     return await pushFederationFile(this.rpcFor(target), sourcePath, name, options);
   }
 
-  async handoffInstanceThread(request: HandoffInstanceThreadRequest, sourceInstanceId?: string): Promise<HandoffInstanceThreadResult> {
+  /** Shared reconnect timer: Retry Now on any waiting handoff wakes the link. */
+  retryHandoffNow(_handoffId?: string): void {
+    if (!this.reconnectTimer || this.stopping) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    void this.connectToGateway().catch((error) => this.handleClientConnectionFailure(error));
+  }
+
+  private resumableBlobTransport(target: FederationRemoteTarget): ResumableBlobTransport {
+    const waitForReconnect = async (signal?: AbortSignal): Promise<void> => {
+      while (true) {
+        signal?.throwIfAborted();
+        if (this.stopping) throw new Error("Federation stopped.");
+        const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+        if (peer?.status === "revoked") throw new Error("The receiving peer was revoked.");
+        if (peer?.status === "connected" && this.remotePeerAdvertisesCapability(target.instanceId, "resumable_blobs")) return;
+        await new Promise<void>((resolve, reject) => {
+          const cleanup = (): void => {
+            this.peerStatusListeners.delete(done);
+            signal?.removeEventListener("abort", abort);
+          };
+          const done = (): void => { cleanup(); resolve(); };
+          const abort = (): void => { cleanup(); reject(signal?.reason); };
+          this.peerStatusListeners.add(done);
+          signal?.addEventListener("abort", abort, { once: true });
+          if (signal?.aborted) abort();
+        });
+      }
+    };
+    return {
+      localInstanceId: this.ensureLocalInstanceId(), targetInstanceId: target.instanceId,
+      connection: () => {
+        const rpc = this.rpcFor(target);
+        const didDisconnect = (): boolean => this.rpcByPeer.get(target.instanceId) !== rpc;
+        return { rpc, didDisconnect, send: async (envelope) => {
+          if (didDisconnect()) throw new FederationPeerUnavailableError(target.instanceId);
+          await this.sendEnvelopeToTargetWithBackpressure(target.instanceId, envelope);
+        } };
+      },
+      waitForReconnect,
+      cancel: (identity) => {
+        // A disconnected peer cannot receive cancellation. Deliver the tombstone
+        // when health reports it connected; its 24-hour expiry also survives us.
+        void waitForReconnect(this.blobLifetime.signal).then(async () => {
+          await this.rpcFor(target).request({ method: FILE_PUSH_METHODS.cancel, params: identity, timeoutMs: null,
+            signal: this.blobLifetime.signal });
+        }).catch(() => undefined);
+      },
+    };
+  }
+
+  async handoffInstanceThread(request: HandoffInstanceThreadRequest, sourceInstanceId?: string, sendOptions?: ThreadHandoffSendOptions): Promise<HandoffInstanceThreadResult> {
     if (!sourceInstanceId || sourceInstanceId === this.localFederationInstanceId()) {
       if (!this.threadHandoffService) throw new Error("Federation is not running on the source instance.");
-      return await this.threadHandoffService.send(request);
+      return await this.threadHandoffService.send(request, sendOptions);
     }
     const peer = this.visiblePeers().find((candidate) => candidate.id === sourceInstanceId);
     if (!peer?.capabilities.includes("thread_handoff")) throw new Error("Update PwrAgent on the source machine to enable thread handoff.");
@@ -3884,6 +3944,7 @@ export class DesktopFederationRuntime {
     config: FederationRuntimeConfig,
   ): Promise<void> {
     this.stopping = false;
+    this.blobLifetime = new AbortController();
     // Startup fence: a concurrent stop flips `stopping` and bumps `walkEpoch`.
     // A stale startup continuation must not create or publish sockets
     // afterwards (the same guard connectToGateway uses per attempt).
@@ -3929,6 +3990,11 @@ export class DesktopFederationRuntime {
               : additionalFederationBackendCapabilities(envelope),
     });
     router.registerBlobChunkHandler(async (envelope) => {
+      if (envelope.purpose === "file_push") {
+        if (!this.filePushReceiver) throw new Error("File receiver is unavailable.");
+        await this.filePushReceiver.receiveBlob(envelope);
+        return;
+      }
       await this.turnInputAttachmentReceiver.receive(
         envelope,
         envelope.sourceInstanceId,
@@ -3969,7 +4035,9 @@ export class DesktopFederationRuntime {
       // A history-only thread lands where a new Workspaces thread would.
       createHistoryWorkspace: () => createScratchProjectDirectory(),
       localInstanceId: () => this.ensureLocalInstanceId(),
-      push: (instanceId, source) => this.pushFile({ scope: "remote", instanceId }, source),
+      push: (instanceId, source, options) => this.pushFile({ scope: "remote", instanceId }, source, undefined, options),
+      supportsResumable: (instanceId) => this.remotePeerAdvertisesCapability(instanceId, "resumable_blobs"),
+      retryNow: () => this.retryHandoffNow(),
       remoteImport: (instanceId, request) => this.rpcFor({ scope: "remote", instanceId }).request({
         method: THREAD_HANDOFF_METHODS.import, params: request, timeoutMs: null,
       }),
@@ -4866,6 +4934,8 @@ export class DesktopFederationRuntime {
     // Transport revisions are scoped to the remote process lifetime, so a
     // replacement must not reuse any selection state from the prior session.
 
+    this.rpcByPeer.get(connection.peerId)?.rejectAll(new FederationPeerUnavailableError(connection.peerId));
+    this.rpcByPeer.delete(connection.peerId);
     this.router?.registerConnection({
       peerId: connection.peerId,
       capabilities: connection.capabilities,
@@ -4906,6 +4976,7 @@ export class DesktopFederationRuntime {
   }
 
   private unregisterPeer(peerId: FederationInstanceId): void {
+    void this.filePushReceiver?.disconnect(peerId).catch((error) => log.warn("Unable to suspend incoming blobs", { error }));
     this.services?.disconnect(peerId);
     this.serviceForwarder.disconnectPeer(peerId);
     this.shutdown.disconnected(peerId);
@@ -4933,6 +5004,7 @@ export class DesktopFederationRuntime {
       if (this.router?.getConnection(peerId)) {
         continue;
       }
+      void this.filePushReceiver?.disconnect(peerId).catch((error) => log.warn("Unable to suspend incoming blobs", { error }));
       this.remotePeerDirectory.set(peerId, {
         ...peer,
         status: peer.status === "revoked" ? "revoked" : "disconnected",
@@ -4950,6 +5022,7 @@ export class DesktopFederationRuntime {
     }
     for (const [peerId, rpc] of this.rpcByPeer) {
       rpc.rejectAll(new FederationPeerUnavailableError(peerId, reason));
+      void this.filePushReceiver?.disconnect(peerId).catch((error) => log.warn("Unable to suspend incoming blobs", { error }));
     }
     this.rpcByPeer.clear();
   }

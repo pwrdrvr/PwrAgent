@@ -251,6 +251,7 @@ export function IntakeDialog(props: {
         }
 
         const normalized = await normalizeImageFile(file, {
+          preserveOriginalIfLarger: props.target.federationTarget?.scope === "remote",
           fallback: props.desktopApi?.normalizeImageForUpload,
           maxPatchCount: props.pastedImageMaxPatches,
           sourceMimeType: type,
