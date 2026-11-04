@@ -29694,32 +29694,39 @@ export class DesktopBackendRegistry {
     }
     const persisted = await this.overlayStore.upsertDirectoryLaunchpad(nextLaunchpad);
 
+    // A peer's draft keeps the operator's pick (`settingsTouchedAt`) but
+    // changes no default here. It is seeded from the owner's defaults, and
+    // its models are the owner's: saved here, a local provider would start
+    // new launchpads on a model it cannot run.
+    const saveSticky =
+      request.stickySettingsChanged === true
+      && !isRemoteLaunchpadStorageKey(request.directoryKey);
     const stickyPatch: Partial<NavigationLaunchpadDefaults> = {};
-    if (request.stickySettingsChanged && request.patch.backend) {
+    if (saveSticky && request.patch.backend) {
       stickyPatch.backend = request.patch.backend;
     }
-    if (request.stickySettingsChanged && patch.executionMode) {
+    if (saveSticky && patch.executionMode) {
       stickyPatch.executionMode = patch.executionMode;
     }
-    if (request.stickySettingsChanged && "model" in patch) {
+    if (saveSticky && "model" in patch) {
       stickyPatch.model = patch.model;
     }
-    if (request.stickySettingsChanged && "reasoningEffort" in patch) {
+    if (saveSticky && "reasoningEffort" in patch) {
       stickyPatch.reasoningEffort = patch.reasoningEffort;
     }
-    if (request.stickySettingsChanged && "serviceTier" in patch) {
+    if (saveSticky && "serviceTier" in patch) {
       stickyPatch.serviceTier = patch.serviceTier;
     }
-    if (request.stickySettingsChanged && "fastMode" in patch) {
+    if (saveSticky && "fastMode" in patch) {
       stickyPatch.fastMode = patch.fastMode;
       if (!("serviceTier" in request.patch)) {
         stickyPatch.serviceTier = undefined;
       }
     }
-    if (request.stickySettingsChanged && "acpRuntime" in patch) {
+    if (saveSticky && "acpRuntime" in patch) {
       stickyPatch.acpRuntime = patch.acpRuntime;
     }
-    if (request.stickySettingsChanged && request.patch.workMode) {
+    if (saveSticky && request.patch.workMode) {
       stickyPatch.workMode = request.patch.workMode;
     }
 
