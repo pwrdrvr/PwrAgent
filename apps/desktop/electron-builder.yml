@@ -91,8 +91,6 @@ files:
 extraResources:
   - from: node_modules/dugite/git
     to: git
-  - from: resources/embedded-git
-    to: git
   - from: LICENSE
     to: LICENSE
   - from: THIRD_PARTY_LICENSES
@@ -127,6 +125,9 @@ electronFuses:
   grantFileProtocolExtraPrivileges: true
 
 mac:
+  # Preserve the approved universal Git payload and its existing PwrDrvr signatures.
+  signIgnore:
+    - "/Contents/Resources/git(?:/|$)"
   # Both prebuilt canvas bindings and Claude binaries are intentionally present in both temporary
   # per-arch apps. They have distinct package paths and runtime selects the
   # matching one, so keep the identical single-arch files side-by-side when
@@ -243,6 +244,9 @@ pacman:
     - xdg-utils
 
 win:
+  extraResources:
+    - from: resources/embedded-git
+      to: git
   icon: build/icon.png
   # Windows .ico is generated from the 512x512 build/icon.png by electron-builder.
   artifactName: "${productName}-${version}-windows-${arch}.${ext}"

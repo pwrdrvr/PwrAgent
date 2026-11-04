@@ -219,7 +219,11 @@ function assembleBundle(bundles, requestedPlatform) {
       throw new Error("macos-universal ripgrep requires arm64 and x86_64 archives");
     }
     runChecked("lipo", ["-create", arm64.executable, x86_64.executable, "-output", executable]);
-    runChecked("lipo", [executable, "-verify_arch", "arm64", "x86_64"]);
+    // Xcode 27's lipo reads a second architecture as an input file, so
+    // verify one architecture per call.
+    for (const arch of ["arm64", "x86_64"]) {
+      runChecked("lipo", [executable, "-verify_arch", arch]);
+    }
   } else {
     copyFileSync(bundles[0].executable, executable);
   }
