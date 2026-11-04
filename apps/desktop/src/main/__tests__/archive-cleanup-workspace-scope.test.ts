@@ -49,6 +49,16 @@ describe("archive admission workspace scope", () => {
     expect(() => scope.assertCurrent([mutation])).toThrow("may use this worktree");
   });
 
+  it("can establish an initial proof when ordinary activity arrives before its inventory row", async () => {
+    const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    scope.changed("codex:other");
+    await scope.prepare([]);
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+    scope.observeThread("codex:other", ["/fixture/other"]);
+    await scope.prepare([]);
+    expect(() => scope.assertCurrent([])).not.toThrow();
+  });
+
   it("keeps removal fenced until a new checkout user's overlay is known", async () => {
     const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
     const token = scope.invalidateOwnership("codex:new");

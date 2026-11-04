@@ -131,7 +131,7 @@ export class ArchiveWorkspaceAdmission {
     for (const mutation of mutations) this.observeThread(mutation.key, mutation.paths);
     for (const [key, state] of this.threads) {
       // Inventory and ordinary activity cannot complete an ownership refresh.
-      if (state.phase === "refreshing" || state.phase === "blocked") continue;
+      if (state.phase === "refreshing" || state.phase === "blocked" || state.paths.size === 0) continue;
       const generation = state.generation;
       for (const [value, known] of state.paths) {
         if (known !== undefined) continue;

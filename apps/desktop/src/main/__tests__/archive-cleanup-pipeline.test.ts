@@ -1462,6 +1462,74 @@ describe("archive cleanup pipeline", () => {
     }
   });
 
+  it("persists the snapshot when a directory change arrives after irreversible removal", async () => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([codexThread({ id: "owner", projectKey: "/contrived/other", linkedDirectories: [] })], target);
+    const persist = vi.fn(async () => {});
+    Object.assign(fixture.store, { upsertWorktreeSnapshot: persist });
+    const archive = fixture.archiveWorktree.getMockImplementation()!;
+    fixture.archiveWorktree.mockImplementation(async (params) => {
+      const snapshot = await archive(params);
+      await fixture.registry.withThreadWorkspaceMutation({ backend: "codex", threadId: "owner" }, async () => {
+        fixture.overlays.set("owner", { backend: "codex", threadId: "owner", extraLinkedDirectories: target.linkedDirectories });
+        await publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated", params: {
+          reason: "selected-thread", threadIds: ["owner"],
+        } });
+      });
+      return snapshot;
+    });
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(result.cleanup[0]?.removedWorktree).toBe(true);
+    expect(persist).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ snapshot: expect.objectContaining({ snapshotCommit: "abc" }) }));
+  });
+
+  it("does not admit removal when an older directory event completes ahead of a newer held read", async () => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([codexThread({ id: "owner", projectKey: "/contrived/other", linkedDirectories: [] })], target);
+    let fencedAfterOldRead = false;
+    const archive = fixture.archiveWorktree.getMockImplementation()!;
+    fixture.archiveWorktree.mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
+      const assertRemoval = await params.beforeRemove!();
+      const gates = [0, 1].map(() => {
+        let release!: () => void;
+        let started!: () => void;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        const reading = new Promise<void>((resolve) => { started = resolve; });
+        return { held, reading, release, started };
+      });
+      for (const [index, gate] of gates.entries()) fixture.store.getArchiveCleanupOverlayStates.mockImplementationOnce(async () => {
+        gate.started();
+        await gate.held;
+        return { owner: { backend: "codex", threadId: "owner", extraLinkedDirectories: index === 0 ? [] : target.linkedDirectories } };
+      });
+      const notify = () => publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated", params: {
+        reason: "selected-thread", threadIds: ["owner"],
+      } });
+      const first = notify();
+      await Promise.race([gates[0]!.reading, first]);
+      const second = notify();
+      try {
+        await Promise.race([gates[1]!.reading, second]);
+        gates[0]!.release();
+        await first;
+        try { assertRemoval(); } catch { fencedAfterOldRead = true; }
+      } finally {
+        for (const gate of gates) gate.release();
+        await Promise.all([first, second]);
+      }
+      return assertRemoval;
+    } }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(fencedAfterOldRead).toBe(true);
+    expect(result.cleanup[0]?.removedWorktree).toBe(false);
+  });
+
   it("removes the worktree when an unenriched refresh preserves an existing owner's workspace", async () => {
     const target = codexThread({ id: "target", linkedDirectories: [{
       id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",

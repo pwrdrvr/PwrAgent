@@ -51236,7 +51236,7 @@ export class DesktopBackendRegistry {
         } else if (notification.method === "navigation/threadDirectories/updated") {
           const threadIds = notification.params.threadIds;
           const identities = Array.isArray(threadIds) ? threadIds.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
-          if (identities.length && identities.length === threadIds?.length) {
+          if (Array.isArray(threadIds) && identities.length && identities.length === threadIds.length) {
             for (const threadId of new Set(identities)) invalidateOwnership(threadId);
           } else this.recordArchiveWorkspaceChange();
         } else {

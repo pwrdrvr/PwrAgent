@@ -469,7 +469,10 @@ describe("DesktopFederationRuntime", () => {
     const registration = vi.spyOn(directoryRegistration, "registerDirectoryFromDisk").mockImplementation(async () => {
       fencedAtRegistration = fenced;
       await held;
-      return { ok: true, directoryKey: "directory:/owner/extra", directoryKind: "directory", directoryLabel: "extra", directoryPath: "/owner/extra" };
+      return { ok: true, directoryKey: "directory:/owner/extra", directoryLabel: "extra", directoryPath: "/owner/extra",
+        launchpad: { directoryKey: "directory:/owner/extra", directoryKind: "directory", directoryLabel: "extra", directoryPath: "/owner/extra",
+          backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+        defaults: { backend: "codex", executionMode: "default" } };
     });
     const publishLocalEvent = vi.fn(async () => undefined);
     const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
