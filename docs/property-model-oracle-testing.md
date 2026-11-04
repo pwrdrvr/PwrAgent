@@ -18,8 +18,8 @@ output was itself the bug, and the test kept it in place:
   as two limits. #3117 merged them and flipped the assertion.
 
 The three ideas here let the computer choose the inputs. We use
-[fast-check](https://fast-check.dev/) inside Vitest. It is not a dependency
-yet; see [Adding fast-check](#adding-fast-check).
+[fast-check](https://fast-check.dev/) inside Vitest. It is already a root
+`devDependency`; see [Dependency and licensing](#dependency-and-licensing).
 
 ## The three words
 
@@ -195,12 +195,12 @@ sets in step. The rules are the same in every Pwr app:
 - The result doesn't depend on GitHub's list order.
 - A Restart offer always names an update that is still on disk.
 
-## Adding fast-check
+## Dependency and licensing
 
-- Add `fast-check` as a root `devDependency`, beside `vitest`.
-- fast-check 4.10.2 (MIT) was published 2026-09-19, and its only dependency,
-  pure-rand 8.4.2 (MIT), on 2026-07-10. Both clear the seven-day
-  `minimumReleaseAge` in `pnpm-workspace.yaml`. Check any newer version
-  against that cooldown before you pick it.
-- devDependencies do not ship, so the third-party notice does not list it.
-  Run `pnpm licenses:check` anyway.
+- The root [package.json](../package.json) already pins `fast-check` 4.10.2
+  (MIT) as a `devDependency`. [pnpm-lock.yaml](../pnpm-lock.yaml) resolves
+  that version with its only dependency, pure-rand 8.4.2 (MIT).
+- Check any newer version against the seven-day `minimumReleaseAge` in
+  `pnpm-workspace.yaml` before you pick it.
+- These test-only dependencies do not ship, so the third-party notice does
+  not list them. Run `pnpm licenses:check` when updating them.
