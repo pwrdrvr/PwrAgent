@@ -58,6 +58,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
   const requests: Array<{ at: number; chatId: number | string; topicId?: number }> = [];
   const states: string[] = [];
   let starts = 0;
+  let providerStatus: "idle" | "active" = "idle";
   const transport = new TelegramAdapter({
     config: { channel: "telegram", botToken: "12345:fixture", authorizedActorIds: [{ id: "42", displayName: "Fixture" }] },
     now: () => now,
@@ -96,10 +97,11 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
   };
   const backend = {
     getThreadAdmissionState: async () => ({
-      threadStatus: "idle" as const,
+      threadStatus: providerStatus,
       thread: {
         id: "thread-1", source: input.backend, title: "Fixture", titleSource: "explicit" as const, linkedDirectories: [],
         inbox: { inInbox: false },
+        threadStatus: providerStatus,
         executionMode: denied === "policy" ? "full-access" as const : "default" as const,
         agent: { name: "Fixture", instructionLineCount: 1, instructionsTooLong: false, updatedAt: now },
       },
@@ -111,9 +113,11 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
       if (input.lifecycle) await startup.promise;
       else await scheduler.schedule(startup.promise, "backend preflight");
       if (input.outcome === "failed") throw new Error("Fixture startup failure");
+      if (input.outcome === "started") providerStatus = "active";
       return { backend: request.backend, threadId: request.threadId, turnId: "turn-1", queueStatus: input.outcome };
     },
-  } satisfies Pick<MessagingBackendBridge, "getThreadAdmissionState" | "startTurn">;
+    readThreadStatus: async () => providerStatus,
+  } satisfies Pick<MessagingBackendBridge, "getThreadAdmissionState" | "startTurn" | "readThreadStatus">;
   const controller = new MessagingController({
     adapter, backend: backend as unknown as MessagingBackendBridge, store,
     authorizedActorIds: ["42"], now: () => now, inputDebounceMs: 0,
@@ -167,6 +171,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
           params: { threadId: "thread-1", turnId: "turn-1", requestId: "approval-1", prompt: "Fixture approval", command: "fixture" },
         });
       } else {
+        providerStatus = "idle";
         await controller.handleBackendEvent({
           backend: input.backend,
           notification: {
@@ -175,6 +180,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
           },
         });
         if (input.lifecycle === "replacement") {
+          providerStatus = "active";
           await controller.handleBackendEvent({
             backend: input.backend,
             notification: {
