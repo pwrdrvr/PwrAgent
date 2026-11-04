@@ -57,6 +57,7 @@
     "dependency-cruiser": "^18.0.0",
     "eslint": "^10.6.0",
     "eslint-plugin-react-hooks": "^7.1.1",
+    "fast-check": "4.10.2",
     "globals": "^17.7.0",
     "jsdom": "^30.0.1",
     "oxc-parser": "0.155.0",
