@@ -17208,7 +17208,10 @@ export class MessagingController {
             });
           }
         }
-        await delivery;
+        // A failed or queued start must report its outcome even when the
+        // earlier activity HTTP request is still pending. It already has a
+        // rejection handler; successful starts await it before their retry.
+        if (started) await delivery;
       },
     };
   }
