@@ -2908,6 +2908,98 @@ describe("Claude SDK backend", () => {
     expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", additionalDirectories: [attached] });
   });
 
+  describe("a setting only a new process takes, while Claude's own wake is pending", () => {
+    const pwragent = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
+    const settings: Array<{
+      name: string;
+      base?: Partial<Parameters<ClaudeBackend["startTurn"]>[0]>;
+      change: (root: string) => Partial<Parameters<ClaudeBackend["startTurn"]>[0]>;
+      applied: (root: string) => Partial<Options>;
+    }> = [{
+      name: "instructions",
+      change: () => ({ instructions: "Be brief." }),
+      applied: () => ({ systemPrompt: { type: "preset", preset: "claude_code", append: "Be brief." } }),
+    }, {
+      name: "an attached directory",
+      change: (root) => ({ attachedDirectories: [{ id: path.join(root, "attached"), kind: "local", label: "attached", path: path.join(root, "attached") }] }),
+      applied: (root) => ({ additionalDirectories: [path.join(root, "attached")] }),
+    }, {
+      name: "an environment",
+      change: () => ({ shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" } }),
+      applied: () => ({ env: expect.objectContaining({ PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" }) }),
+    }, {
+      name: "tool rules",
+      base: { mcpServers: {} },
+      change: () => ({ mcpServers: { pwragent } }),
+      applied: () => ({ allowedTools: [CLAUDE_MCP_GATEWAY_TOOL, ...CLAUDE_FORGE_TOOLS] }),
+    }];
+
+    it.each(settings)("defers $name and keeps the process for the wake, then relaunches with it", async (setting) => {
+      const loop = { id: "a1b2c3d4", schedule: "5 14 3 11 *", recurring: false, prompt: "/loop check the deploy" };
+      const ended = Promise.withResolvers<void>();
+      let second: SDKUserMessage | undefined;
+      const f = await fixture(async function* (options, prompt) {
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        if (options.resume) {
+          yield { type: "assistant", parent_tool_use_id: null, message: { id: "relaunched", content: [{ type: "text", text: "Done." }] } } as SDKMessage;
+          yield { type: "result", subtype: "success", is_error: false, result: "Done." } as SDKMessage;
+          return;
+        }
+        const input = prompt[Symbol.asyncIterator]();
+        await input.next();
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "schedule", content: [{ type: "tool_use", id: "tool-wake", name: "ScheduleWakeup",
+            input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt } }],
+        } } as SDKMessage;
+        await runHooks(options, "PostToolUse", {
+          tool_name: "ScheduleWakeup", tool_use_id: "tool-wake",
+          tool_input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt },
+          tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
+        });
+        await runHooks(options, "Stop", { stop_hook_active: false, session_crons: [loop] });
+        yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+        second = (await input.next()).value as SDKUserMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "stopping", content: [{ type: "text", text: "Stopping the loop." }] } } as SDKMessage;
+        await ended.promise;
+        // Claude ended its loop, so nothing holds the process any more.
+        await runHooks(options, "Stop", { stop_hook_active: false, session_crons: [] });
+        yield { type: "result", subtype: "success", is_error: false, result: "stopped",
+          user_message_uuids: [second.uuid] } as unknown as SDKMessage;
+        await new Promise<void>((resolve) => {
+          options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }, { setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }) });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: loop.prompt }], ...setting.base });
+      await f.waitForTurn();
+      expect(f.backend.listSessionWakes(threadId)).toHaveLength(1);
+      expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
+
+      // A relaunch now would end the wake, so the live process takes the turn.
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Stop checking" }],
+        ...setting.base, ...setting.change(f.root) });
+      expect(f.run).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(second).toBeDefined());
+      expect(f.close).not.toHaveBeenCalled();
+      expect(f.backend.liveSessionThreadIds()).toEqual([threadId]);
+      expect(f.backend.listSessionWakes(threadId)).toEqual([expect.objectContaining({ id: "a1b2c3d4", origin: "loop_wakeup" })]);
+
+      ended.resolve();
+      await f.waitForTurn();
+      await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+      expect(f.close).toHaveBeenCalled();
+      expect(f.backend.listSessionWakes(threadId)).toEqual([]);
+
+      // With nothing held, the next turn's new process takes the setting.
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Again" }], ...setting.base, ...setting.change(f.root) });
+      await f.waitForTurn();
+      expect(f.run).toHaveBeenCalledTimes(2);
+      expect(f.queries[0]).not.toMatchObject(setting.applied(f.root));
+      expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", ...setting.applied(f.root) });
+      expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+    });
+  });
+
   it("refuses to fork a thread while its turn is running", async () => {
     let finish!: () => void;
     const gate = new Promise<void>((resolve) => { finish = resolve; });
@@ -3095,6 +3187,72 @@ describe("Claude SDK backend", () => {
       expect((await f.store.entries(f.threadId)).find((entry) => entry.id === "tool-bash")).toMatchObject({
         status: "cancelled", turn: { id: f.turn.turnId, status: "cancelled" },
       });
+    });
+  });
+
+  describe("stopping a turn while Claude's own wake is pending", () => {
+    const capabilities = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"];
+    async function stoppable(params: { wake: boolean }) {
+      const interrupted = Promise.withResolvers<void>();
+      const interrupt = vi.fn(async () => {
+        interrupted.resolve();
+        return { still_queued: [], cancelled: [] };
+      });
+      const prompt = "/loop check the deploy";
+      const f = await fixture(async function* (options) {
+        const aborted = new Promise<void>((resolve) => {
+          options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", capabilities } as SDKMessage;
+        if (params.wake) {
+          yield { type: "assistant", parent_tool_use_id: null, message: {
+            id: "schedule", content: [{ type: "tool_use", id: "tool-wake", name: "ScheduleWakeup",
+              input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt } }],
+          } } as SDKMessage;
+          await runHooks(options, "PostToolUse", {
+            tool_name: "ScheduleWakeup", tool_use_id: "tool-wake",
+            tool_input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt },
+            tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
+          });
+        }
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "reading", content: [{ type: "text", text: "Reading the logs." }] } } as SDKMessage;
+        await Promise.race([interrupted.promise, aborted]);
+        if (options.abortController!.signal.aborted) return;
+        yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["Request interrupted by user"] } as unknown as SDKMessage;
+        await aborted;
+      }, { interrupt });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: prompt }] });
+      await vi.waitFor(() => expect((f.backend.readThread(threadId)).then((replay) => replay.lastAssistantMessage))
+        .resolves.toBe("Reading the logs."));
+      return { ...f, threadId, turn, interrupt };
+    }
+
+    it("interrupts Claude and keeps the process for the wake", async () => {
+      const f = await stoppable({ wake: true });
+      // No task holds the process; only the wake does.
+      expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
+      expect(f.backend.listSessionWakes(f.threadId)).toHaveLength(1);
+      await f.backend.interruptTurn(f.turn);
+      expect(f.interrupt).toHaveBeenCalledWith({ cancelQueued: true });
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/cancelled", params: { turnId: f.turn.turnId } });
+      // Ending the process would end the wake with it.
+      expect(f.close).not.toHaveBeenCalled();
+      expect(f.backend.liveSessionThreadIds()).toEqual([f.threadId]);
+      expect(f.backend.listSessionWakes(f.threadId)).toEqual([expect.objectContaining({
+        origin: "loop_wakeup", prompt: "/loop check the deploy", nextFireAt: 4_000_000_000_000,
+      })]);
+      await f.backend.close();
+    });
+
+    it("ends the query when neither a wake nor a task would stop with it", async () => {
+      const f = await stoppable({ wake: false });
+      expect(f.backend.listSessionWakes(f.threadId)).toEqual([]);
+      await f.backend.interruptTurn(f.turn);
+      expect(f.interrupt).not.toHaveBeenCalled();
+      expect(f.close).toHaveBeenCalled();
+      expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
+      expect(f.backend.liveSessionThreadIds()).toEqual([]);
     });
   });
 
