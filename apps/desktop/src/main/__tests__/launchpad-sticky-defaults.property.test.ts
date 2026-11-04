@@ -1,5 +1,10 @@
 import fc from "fast-check";
-import type { AppServerBackendKind, NavigationLaunchpadDefaults } from "@pwragent/shared";
+import {
+  launchpadStorageKey,
+  type AppServerBackendKind,
+  type FederationTarget,
+  type NavigationLaunchpadDefaults,
+} from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -23,6 +28,11 @@ vi.mock("../acp/acp-instance-discovery", () => ({
  * saved as the Claude default, and new Claude launchpads started on
  * `gpt-6.1-terra`.
  *
+ * A peer's launchpad never changes this machine's defaults. Its draft is
+ * seeded from the owner's defaults and carries the owner's models, which
+ * this machine's catalog may lack. Broken before the fix: a sticky pick in a
+ * peer's launchpad saved the owner's model as a local provider's default.
+ *
  * Oracle: each provider's model catalog, plus a model of the last sticky
  * pick per provider and the provider the defaults follow.
  */
@@ -34,6 +44,9 @@ const CATALOGS: Record<Provider, string[]> = {
   claude: ["opus", "sonnet"],
 };
 const DIRECTORIES = ["directory:/repo-a", "directory:/repo-b"];
+const PEER: FederationTarget = { scope: "remote", instanceId: "peer-1" };
+/** The owner's models: some this machine's catalogs lack. */
+const OWNER_MODELS = ["gpt-owner-only", "opus", "claude-owner-only", "gpt-5.5"];
 
 type Model = {
   /** The provider each directory's launchpad runs. */
@@ -159,6 +172,46 @@ class SetAccess implements fc.AsyncCommand<Model, Real> {
   }
 }
 
+/**
+ * An edit to a peer's launchpad. Its draft keeps the edit; this machine's
+ * defaults stay as they were.
+ */
+class EditPeerLaunchpad implements fc.AsyncCommand<Model, Real> {
+  constructor(
+    readonly directoryKey: string,
+    readonly patch:
+      | { backend: Provider }
+      | { model: string }
+      | { executionMode: "auto" | "full-access" },
+    readonly sticky: boolean,
+  ) {}
+  check(): boolean {
+    return true;
+  }
+  async run(model: Model, real: Real): Promise<void> {
+    const { launchpad } = await real.registry.updateDirectoryLaunchpad(
+      {
+        directoryKey: this.directoryKey,
+        patch: this.patch as never,
+        stickySettingsChanged: this.sticky,
+      },
+      { owner: PEER },
+    );
+    if ("model" in this.patch) {
+      // The owner validates its models; the viewer stores them as given.
+      expect(launchpad.model).toBe(this.patch.model);
+    }
+    const stored = await real.store.getDirectoryLaunchpad({
+      directoryKey: launchpadStorageKey(this.directoryKey, PEER),
+    });
+    expect(stored?.settingsTouchedAt !== undefined || !this.sticky).toBe(true);
+    await expectAgreement(model, real);
+  }
+  toString(): string {
+    return `peer(${this.directoryKey}, ${JSON.stringify(this.patch)}${this.sticky ? ", sticky" : ""})`;
+  }
+}
+
 const directory = fc.constantFrom(...DIRECTORIES);
 const commands = [
   fc.tuple(directory, fc.constantFrom(...PROVIDERS), fc.boolean())
@@ -167,6 +220,16 @@ const commands = [
     .map(([key, choice, sticky]) => new PickModel(key, choice, sticky)),
   fc.tuple(directory, fc.constantFrom("auto" as const, "full-access" as const), fc.boolean())
     .map(([key, mode, sticky]) => new SetAccess(key, mode, sticky)),
+  fc.tuple(
+    directory,
+    fc.oneof(
+      fc.constantFrom(...PROVIDERS).map((backend) => ({ backend })),
+      fc.constantFrom(...OWNER_MODELS).map((model) => ({ model })),
+      fc.constantFrom("auto" as const, "full-access" as const)
+        .map((executionMode) => ({ executionMode })),
+    ),
+    fc.boolean(),
+  ).map(([key, patch, sticky]) => new EditPeerLaunchpad(key, patch, sticky)),
 ];
 
 async function setup(): Promise<{ model: Model; real: Real; dispose: () => Promise<void> }> {
