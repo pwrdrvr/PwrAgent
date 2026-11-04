@@ -202,6 +202,14 @@ describe("GitLab MR routing and status", () => {
     expect(parseGitLabMr({ ...mr, head_pipeline: { status: "success", sha: "old-head" } }).checkState).toBe("unknown");
   });
 
+  it("passes a skipped pipeline so a watch can end, and flags that nothing was tested", () => {
+    // `[skip ci]` leaves a final pipeline with no jobs run. As `unknown` it held
+    // a success watch forever.
+    const skipped = parseGitLabMr({ ...mr, head_pipeline: { status: "skipped", sha: "new-head" } });
+    expect(skipped).toMatchObject({ checkState: "passing", checksStillRunning: false, checksAllSkipped: true });
+    expect(parseGitLabMr(mr)).not.toHaveProperty("checksAllSkipped");
+  });
+
   it("coalesces concurrent reads and does not leak CLI diagnostics", async () => {
     const { fetcher, run } = fixture(() => mr);
     await Promise.all([fetcher.fetchByRef(ref), fetcher.fetchByRef(ref)]);

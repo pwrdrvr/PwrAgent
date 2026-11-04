@@ -16,6 +16,9 @@ import {
   isSkippedOnlyCheckSetSettling,
   normalizeCommitShas,
   parsePullRequestProvider,
+  readSkippedOnlyChecks,
+  type GhCheckRunPayload,
+  type GhCheckSuitePayload,
 } from "./pr-derivations";
 import type { GithubTerminalNode } from "./pr-terminal-details";
 import {
@@ -262,15 +265,7 @@ fragment PrStatus on PullRequest {
   }
 }`;
 
-type GraphqlCheckContext = {
-  __typename?: string;
-  conclusion?: string | null;
-  completedAt?: string | null;
-  detailsUrl?: string | null;
-  status?: string | null;
-  state?: string | null;
-  targetUrl?: string | null;
-};
+type GraphqlCheckContext = GhCheckRunPayload;
 
 type PrCheckResolution = {
   checksStillRunning: boolean;
@@ -293,10 +288,7 @@ type GraphqlCommit = {
     contexts?: GraphqlStatusContextPage | null;
   } | null;
   checkSuites?: {
-    nodes?: ({
-      status?: string | null;
-      workflowRun?: { id?: string | null } | null;
-    } | null)[] | null;
+    nodes?: (GhCheckSuitePayload | null)[] | null;
   } | null;
 };
 
@@ -600,19 +592,20 @@ export function mapGraphqlPrNode(
   now = Date.now(),
 ): PrSummary {
   const headCommit = getHeadCommit(node);
-  const checkContexts = headCommit?.statusCheckRollup?.contexts?.nodes ?? [];
-  const contexts = checkContexts.filter(
-    (context): context is GraphqlCheckContext => context !== null,
-  );
+  const contextPage = headCommit?.statusCheckRollup?.contexts;
+  const contexts = readCheckContexts(contextPage) ?? [];
   // GitHub's rollup only sees check runs that exist. It reports SUCCESS for a
   // head whose every job was skipped, and for one whose real workflow is still
   // queued with no jobs yet. Neither has tested anything.
   const workflowsPending = hasWorkflowRunsStillRunning(
     (headCommit?.checkSuites?.nodes ?? []).filter((suite) => suite !== null),
   );
-  const skippedOnlySettling =
-    headCommit?.statusCheckRollup?.contexts?.pageInfo?.hasNextPage !== true
-    && isSkippedOnlyCheckSetSettling(contexts, now);
+  // A later page may hold real results, so only a complete page can be
+  // skipped-only.
+  const skippedOnly = contextPage?.pageInfo?.hasNextPage === true
+    ? undefined
+    : readSkippedOnlyChecks(contexts);
+  const skippedOnlySettling = isSkippedOnlyCheckSetSettling(skippedOnly, now);
   const rollupCheckState = deriveChipStateFromRollup(
     headCommit?.statusCheckRollup?.state,
   );
@@ -654,6 +647,7 @@ export function mapGraphqlPrNode(
     state: checkState,
     checkState,
     ...(checksStillRunning ? { checksStillRunning: true } : {}),
+    ...(skippedOnly && checkState === "passing" ? { checksAllSkipped: true as const } : {}),
     ...(failedCheckUrl ? { failedCheckUrl } : {}),
     lifecycleState: deriveLifecycleState(shaped),
     reviewState: deriveReviewState(shaped),

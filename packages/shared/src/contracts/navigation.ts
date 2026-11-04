@@ -564,6 +564,12 @@ export type PrSummary = {
    * have a failed check while other checks are still running.
    */
   checksStillRunning?: boolean;
+  /**
+   * Every check on the head was skipped or neutral, so a `passing` state
+   * means nothing was tested. Absent from older builds and federated peers;
+   * treat absence as "checks ran".
+   */
+  checksAllSkipped?: true;
   lifecycleState?: PrLifecycleState;
   reviewState?: PrReviewState;
   mergeState?: PrMergeState;

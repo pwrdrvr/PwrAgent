@@ -330,6 +330,25 @@ describe("PrStatusWatchCoordinator", () => {
     });
   });
 
+  it("wakes a skipped-only head with success but says nothing was tested", async () => {
+    await registerWatch();
+    const harness = createHarness();
+
+    await expect(harness.coordinator.handleStatusSnapshot(pr({
+      state: "passing",
+      checkState: "passing",
+      checksAllSkipped: true,
+    }), now)).resolves.toBe(1);
+
+    const text = (harness.submitTurnIfIdle.mock.calls[0]?.[0].input[0] as { text: string }).text;
+    expect(text).toContain("- Outcome: success");
+    expect(text).toContain(
+      "- Checks: every check at this head was skipped, so nothing was tested",
+    );
+    expect(text).toContain("do not report it as passing");
+    expect(text).not.toContain("Report that the watched PR checks succeeded");
+  });
+
   it("lets an accepted Auto-fix event satisfy a failure-only watch without a duplicate turn", async () => {
     await registerWatch(store, ["failure"]);
     const harness = createHarness();

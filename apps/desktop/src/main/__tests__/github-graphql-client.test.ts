@@ -530,6 +530,7 @@ describe("mapGraphqlPrNode heads with nothing tested yet", () => {
 
     expect(summary.checkState).toBe("passing");
     expect(summary).not.toHaveProperty("checksStillRunning");
+    expect(summary).not.toHaveProperty("checksAllSkipped");
     expect(getPrStatusWatchOutcome(summary)).toBe("success");
   });
 
@@ -580,7 +581,38 @@ describe("mapGraphqlPrNode heads with nothing tested yet", () => {
     );
     expect(settled.checkState).toBe("passing");
     expect(settled).not.toHaveProperty("checksStillRunning");
+    // It passes so the watch can end, and says nothing was tested.
+    expect(settled.checksAllSkipped).toBe(true);
     expect(getPrStatusWatchOutcome(settled)).toBe("success");
+  });
+
+  it("does not hold a head whose first context page is skipped but has more pages", () => {
+    // Page 2 may hold real results, so a partial page is never skipped-only.
+    const summary = mapGraphqlPrNode(
+      node({
+        commits: {
+          nodes: [{
+            commit: {
+              id: "commit-f",
+              oid: "f".repeat(40),
+              statusCheckRollup: {
+                state: "SUCCESS",
+                contexts: {
+                  pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                  nodes: [skipped(), skipped()],
+                },
+              },
+            },
+          }],
+        },
+      }),
+      { checksStillRunning: false },
+      watchFiredAt,
+    );
+
+    expect(summary.checkState).toBe("passing");
+    expect(summary).not.toHaveProperty("checksStillRunning");
+    expect(summary).not.toHaveProperty("checksAllSkipped");
   });
 
   it("does not treat a commit status beside skipped checks as skipped-only", () => {
