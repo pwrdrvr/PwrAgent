@@ -91,6 +91,7 @@ async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "a
       threadStatus: "idle" as const,
       thread: {
         id: "thread-1", source: input.backend, title: "Fixture", titleSource: "explicit" as const, linkedDirectories: [],
+        inbox: { inInbox: false },
         executionMode: denied === "policy" ? "full-access" as const : "default" as const,
         agent: { name: "Fixture", instructionLineCount: 1, instructionsTooLong: false, updatedAt: now },
       },
@@ -190,7 +191,7 @@ describe("first typing request (property)", () => {
           }
           return true;
         },
-      } as TelegramBotApi,
+        } as unknown as TelegramBotApi,
     });
     const activity = (id: string, state: "active" | "idle"): MessagingSurfaceIntent => ({
       id, kind: "activity", activity: "typing", state, createdAt: 1_000,

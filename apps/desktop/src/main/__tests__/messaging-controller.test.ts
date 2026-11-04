@@ -196,7 +196,7 @@ function boundedPeerBrowseFixture(local: NavigationSnapshot, remote: NavigationS
 }
 
 describe("MessagingController", () => {
-  it("budgets the first typing delivery while backend preparation remains blocked", async () => {
+  it.each(["pending", "failed"] as const)("budgets preparation typing writes (startup=%s)", async (outcome) => {
     const previous = process.env[SQLITE_WRITE_METRICS_ENV];
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const { tempDir, dbPath } = createTempStateDb("pwragent-first-typing-writes-");
@@ -205,6 +205,8 @@ describe("MessagingController", () => {
     const startupEntered = createDeferred<void>();
     const startup = createDeferred<void>();
     const activityRecorded = createDeferred<void>();
+    const errorEntered = createDeferred<void>();
+    const errorDelivery = createDeferred<void>();
     let handling: Promise<void> | undefined;
     try {
       const store = new SqliteMessagingStore(db);
@@ -213,7 +215,15 @@ describe("MessagingController", () => {
         startTurn: async (request) => {
           startupEntered.resolve();
           await startup.promise;
+          if (outcome === "failed") throw new Error("Fixture startup failure");
           return { backend: request.backend, threadId: request.threadId, turnId: "turn-1" };
+        },
+        deliver: async (intent) => {
+          if (intent.kind === "error") {
+            errorEntered.resolve();
+            await errorDelivery.promise;
+          }
+          return { channel: "telegram", deliveredAt: 1_000, outcome: "presented" };
         },
       });
       await bindThread(harness);
@@ -226,14 +236,23 @@ describe("MessagingController", () => {
       const { writes } = await measureSqliteWrites(async () => {
         handling = harness.controller.handleInboundEvent(buildTextEvent("Fixture request"));
         await Promise.all([startupEntered.promise, activityRecorded.promise]);
+        if (outcome === "failed") {
+          startup.resolve();
+          // Stop before persisting the existing error surface, so this budget
+          // measures the new preparation activity and its cleanup only.
+          await errorEntered.promise;
+        }
       });
       expectSqliteWriteBudget({
-        scenario: "messaging-first-typing-before-startup",
-        note: "One admitted reply through its first activity delivery with startup blocked: 1 commit, 12360 WAL bytes; 0.247 MB/day at 20 turns/day, 12.36 MB/day at 1000, 0 idle/timer writes.",
+        scenario: outcome === "pending" ? "messaging-first-typing-before-startup" : "messaging-first-typing-failed-start",
+        note: outcome === "pending"
+          ? "One admitted reply through its first activity delivery with startup blocked: 1 commit, 12360 WAL bytes; 0.247 MB/day at 20 turns/day, 12.36 MB/day at 1000, 0 idle/timer writes."
+          : "One preparation activity and its failed-start cleanup: 2 boundary commits; about 0.494 MB/day at 20 failures/day or 24.72 MB/day at 1000; no timer persistence.",
         writes,
       });
     } finally {
       startup.resolve();
+      errorDelivery.resolve();
       await handling;
       await settleHarnessWork();
       db.close();
