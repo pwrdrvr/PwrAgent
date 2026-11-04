@@ -63,7 +63,7 @@ import {
   threadSupportsFederationCapability,
 } from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
-import { isFederationViewerWindow } from "../../lib/federation-window";
+import { isFederationViewerWindow, readRendererFederationTarget } from "../../lib/federation-window";
 import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { useThreadPinOrdering, type ThreadPinScope } from "./useThreadPinOrdering";
@@ -97,6 +97,7 @@ import {
   selectUnlandedStartingThreads,
   type PendingSidebarRow,
 } from "./StartingThreadRow";
+import { startingThreadHomeDirectoryKey, withStartingPlaceholderDirectories } from "./starting-thread-home";
 import { PendingThreadRow } from "./SubthreadDraftRow";
 import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
 import { jumpScrollPlan, jumpTailIsOffscreen } from "./project-index";
@@ -488,24 +489,58 @@ export function DirectoriesList(props: DirectoriesListProps) {
    * (having no threads) it would be offered the "Remove Directory" action — which
    * would delete the overlay row of the sub-thread being composed.
    */
-  const visibleDirectories = useMemo(
+  const windowFederationTarget = useMemo(readRendererFederationTarget, []);
+  // A peer's thread whose project has no row here lands in a placeholder
+  // project that main adds when the thread arrives. Draw that row while the
+  // thread starts, so the starting row is already where the thread lands.
+  // The filter is its own step: starting rows update on every setup tick,
+  // and the list must keep its identity unless a placeholder joins it.
+  const listedDirectories = useMemo(
     () =>
       props.directories.filter(
         (directory) => !isSubthreadLaunchpadKey(directory.key),
       ),
     [props.directories],
   );
-  // The projects a starting thread will render in. A sub-thread launchpad's
-  // own key names no project; its thread lands under the parent's row.
+  const visibleDirectories = useMemo(
+    () =>
+      withStartingPlaceholderDirectories(
+        listedDirectories,
+        props.startingThreads,
+        windowFederationTarget,
+        ({ key, kind, label, localAvailability, repositoryKey, repositoryKeys }) => ({
+          key, kind, label, localAvailability,
+          ...(repositoryKey ? { repositoryKey } : {}),
+          ...(repositoryKeys ? { repositoryKeys } : {}),
+        }),
+      ),
+    [listedDirectories, props.startingThreads, windowFederationTarget],
+  );
+  // The projects a starting thread will render in: the row its thread lands
+  // in. For a peer's thread that is the local project main files it under.
+  // A sub-thread launchpad's own key names no project; its thread lands
+  // under the parent's row.
+  // Resolved once per list change: every directory row asks for each one.
+  const startingHomeKeys = useMemo(
+    () => new Map((props.startingThreads ?? []).map((creation) => [
+      creation.selectionKey,
+      startingThreadHomeDirectoryKey(creation, visibleDirectories, windowFederationTarget),
+    ])),
+    [props.startingThreads, visibleDirectories, windowFederationTarget],
+  );
+  const startingThreadHomeKey = useCallback(
+    (creation: PendingSidebarRow): string | undefined => startingHomeKeys.get(creation.selectionKey),
+    [startingHomeKeys],
+  );
   const startingThreadDirectoryKeys = useCallback((creation: PendingSidebarRow): string[] => {
     const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
-    return parent
-      ? parent.linkedDirectories.map((linked) => classifyDirectory(linked).key)
-      : [creation.directoryKey];
-  }, [threadsByKey]);
+    if (parent) return parent.linkedDirectories.map((linked) => classifyDirectory(linked).key);
+    const homeKey = startingThreadHomeKey(creation);
+    return homeKey ? [homeKey] : [];
+  }, [startingThreadHomeKey, threadsByKey]);
   const unplacedStartingThreads = selectUnlandedStartingThreads(
     props.startingThreads?.filter((creation) =>
-      !visibleDirectories.some((directory) => directory.key === creation.directoryKey)
+      !startingThreadHomeKey(creation)
       && !(creation.parentThreadKey && threadsByKey.has(creation.parentThreadKey))),
     threadsByKey,
   );
@@ -1320,7 +1355,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const startingSubthreads = directoryStartingThreads.filter((creation) =>
       creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
     const startingRootThreads = directoryStartingThreads.filter((creation) =>
-      creation.directoryKey === directory.key && !startingSubthreads.includes(creation));
+      startingThreadHomeKey(creation) === directory.key && !startingSubthreads.includes(creation));
     // A sub-thread being written opens its parent's tray and gives the
     // parent its chevron, as the thread will once it lands.
     const draftParentKeys = new Set(
@@ -1901,7 +1936,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       {unplacedStartingThreads.length > 0 ? (
         // No project or parent row this lens has loaded will take these, so
         // they wait at the top, the one place every lens can show them.
-        <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Starting threads">
+        <div className="sidebar-list sidebar-list--compact directory-list__starting" role="list" aria-label="Starting threads">
           {unplacedStartingThreads.map((creation) => (
             <PendingThreadRow
               key={creation.selectionKey}
