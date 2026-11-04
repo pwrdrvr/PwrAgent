@@ -1015,7 +1015,7 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
   });
 
-  it("lists default models the way the composer does: current first, superseded under Other models", () => {
+  it("lists default models the way the composer does: current first, superseded under Other models", async () => {
     const cachedBackends = [{
       kind: "codex",
       label: "OpenAI",
@@ -1025,11 +1025,14 @@ describe("SettingsScreen", () => {
       executionModes: [],
       launchpadOptions: { models: codexCatalogModels() },
     }] as unknown as BackendSummary[];
+    const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+      async () => ({ fetchedAt: 1, entries: [] }),
+    );
     render(
       <SettingsScreen
         cachedBackends={cachedBackends}
         desktopApi={{
-          listAcpAgents: async () => ({ fetchedAt: 1, entries: [] }),
+          listAcpAgents,
           listBackends: async () => await new Promise<never>(() => undefined),
         }}
         initialSection="models"
@@ -1053,6 +1056,9 @@ describe("SettingsScreen", () => {
       { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
       { group: PROVIDER_MODEL.providerLabel, labels: [PROVIDER_MODEL.label] },
     ]);
+    // Let the mount's agent read land inside act.
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+    await act(async () => undefined);
   });
 
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
