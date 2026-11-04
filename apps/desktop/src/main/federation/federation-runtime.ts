@@ -8061,11 +8061,11 @@ function localBackendOperations(): FederationBackendOperations {
           label: registered.directoryLabel,
           path: directoryPath,
         };
-        await getDesktopOverlayStore().addLinkedDirectory({
+        await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.path], async () => await getDesktopOverlayStore().addLinkedDirectory({
           backend,
           threadId: request.threadId,
           directory,
-        });
+        }));
         await getDesktopBackendRegistry().publishLocalEvent({
           backend,
           notification: {
@@ -8082,7 +8082,7 @@ function localBackendOperations(): FederationBackendOperations {
           threadId: request.threadId,
           directory,
         };
-      });
+      }, [request.path]);
     },
     async detachDirectoryFromThread(
       request: DetachDirectoryFromThreadRequest,

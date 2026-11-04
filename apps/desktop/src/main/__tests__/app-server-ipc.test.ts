@@ -1241,6 +1241,7 @@ vi.mock("../app-server/backend-registry", () => {
     onEvent,
     publishLocalEvent,
     withThreadWorkspaceMutation,
+    withArchiveWorkspaceWrite: async (_paths: string[], work: () => Promise<unknown>) => await work(),
     setForgeReadHandlers,
     setForgePrToolHandler,
     setForgeToolPolicyResolver,
@@ -13919,7 +13920,7 @@ describe("app server ipc", () => {
         path: directoryPathId,
       },
     });
-    expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" }, expect.any(Function));
+    expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" }, expect.any(Function), ["/repo/app"]);
     expect(withThreadWorkspaceMutation.mock.invocationCallOrder[0]).toBeLessThan(registerDirectoryFromDiskService.mock.invocationCallOrder[0]!);
     expect(response).toEqual({
       ok: true,

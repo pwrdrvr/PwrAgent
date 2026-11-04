@@ -52253,7 +52253,7 @@ script = "printf setup"
 
     expect(response).toMatchObject({ success: true });
     expect(fencedAtFirstOverlayRead).toBe(true);
-    expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "agent-thread" }, expect.any(Function));
+    expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "agent-thread" }, expect.any(Function), ["/repo/agent-kit"]);
     expect(prepareLaunchpadWorkspace).toHaveBeenCalledWith({
       backend: "codex",
       branchName: "origin/main",
@@ -64995,6 +64995,7 @@ script = "printf setup"
     };
     const childThread: AppServerThreadSummary = {
       id: "thread-child",
+      projectKey: "/repo/child",
       title: "Child thread",
       titleSource: "explicit",
       linkedDirectories: [],

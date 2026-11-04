@@ -16,6 +16,36 @@ afterEach(async () => {
 });
 
 describe("archive admission workspace scope", () => {
+  it("reserves removal against controlled writers while retaining provider invalidation", async () => {
+    const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    scope.observeThread("codex:other", ["/fixture/other"]);
+    await scope.prepare([]);
+    scope.reserve([]);
+    const ownership = new ArchiveWorkspaceOwnership(() => [scope]);
+    const finish = ownership.beginMutation("codex:other", true);
+    await expect(ownership.assertAvailable(["/fixture/target"])).rejects.toThrow("removal is reserved");
+    await expect(ownership.assertAvailable(["/fixture/other"])).resolves.toBeUndefined();
+    await ownership.refresh(finish(), async () => ["/fixture/other"]);
+    expect(() => scope.assertCurrent([])).not.toThrow();
+    // A raw provider notification is outside the controlled writer contract.
+    ownership.invalidate("codex:other");
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+  });
+
+  it("cannot reserve midway through an earlier writer's asynchronous boundary", async () => {
+    const scopes: ArchiveWorkspaceAdmission[] = [];
+    const ownership = new ArchiveWorkspaceOwnership(() => scopes);
+    const finish = ownership.beginMutation("codex:other", true);
+    const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    scopes.push(scope);
+    ownership.beginAdmission(scope);
+    scope.observeThread("codex:other", ["/fixture/other"]);
+    await scope.prepare([]);
+    expect(() => scope.reserve([])).toThrow("workspace state changed");
+    await ownership.refresh(finish(), async () => ["/fixture/other"]);
+    expect(() => scope.reserve([])).not.toThrow();
+  });
+
   it("ignores unrelated activity but protects shared, unknown and newly assigned checkout users", async () => {
     const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
     scope.observeThread("codex:other", ["/fixture/other"]);

@@ -9960,11 +9960,11 @@ class DesktopAppServerService {
         label: registered.directoryLabel,
         path: directoryPathId,
       };
-      await this.getOverlayStore().addLinkedDirectory({
+      await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.path], async () => await this.getOverlayStore().addLinkedDirectory({
         backend,
         threadId: request.threadId,
         directory,
-      });
+      }));
 
       await getDesktopBackendRegistry().publishLocalEvent({
         backend,
@@ -9983,7 +9983,7 @@ class DesktopAppServerService {
         threadId: request.threadId,
         directory,
       };
-    });
+    }, [request.path]);
   }
 
   async detachDirectoryFromThread(

@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { isAppServerBackendKind, type AppServerBackendKind } from "@pwragent/shared";
+import { isAppServerBackendKind, type AppServerBackendKind, type WorktreeSnapshotSummary } from "@pwragent/shared";
 import { storageProcessAlive } from "./storage-maintenance";
 
 export type ArchiveCleanupIntent = {
@@ -9,6 +9,13 @@ export type ArchiveCleanupIntent = {
   codexRolloutMissing: boolean;
   preserveWorktrees?: boolean;
   messagingCleanup: { error?: string };
+  /** Managed checkouts still awaiting reference release or a successful retry. */
+  deferredWorktrees?: Array<{
+    repositoryPath?: string;
+    worktreePath: string;
+    blockers: string[];
+    snapshot?: WorktreeSnapshotSummary;
+  }>;
 };
 
 const PREFIX = "archive_cleanup_checkpoint_v1:";
@@ -25,6 +32,15 @@ function parseCheckpoint(value: string): { ownerPid: number; intents: ArchiveCle
       || typeof item.archivedAt !== "number" || !Number.isFinite(item.archivedAt)
       || typeof item.codexRolloutMissing !== "boolean"
       || (item.preserveWorktrees !== undefined && typeof item.preserveWorktrees !== "boolean")
+      || (item.deferredWorktrees !== undefined && (!Array.isArray(item.deferredWorktrees)
+        || item.deferredWorktrees.some((worktree: NonNullable<ArchiveCleanupIntent["deferredWorktrees"]>[number]) =>
+          !worktree || typeof worktree.worktreePath !== "string" || !worktree.worktreePath.trim()
+          || (worktree.repositoryPath !== undefined && typeof worktree.repositoryPath !== "string")
+          || !Array.isArray(worktree.blockers) || worktree.blockers.some((key: unknown) => typeof key !== "string" || !key)
+          || (worktree.snapshot !== undefined && (!worktree.snapshot || worktree.snapshot.backend !== item.backend
+            || worktree.snapshot.threadId !== item.threadId || worktree.snapshot.state !== "archived"
+            || ![worktree.snapshot.id, worktree.snapshot.worktreePath, worktree.snapshot.repositoryPath,
+              worktree.snapshot.snapshotRef, worktree.snapshot.snapshotCommit].every((value) => typeof value === "string" && value.length > 0))))))
       || !item.messagingCleanup || typeof item.messagingCleanup !== "object"
       || (item.messagingCleanup.error !== undefined && typeof item.messagingCleanup.error !== "string")) {
       throw new Error("Invalid archive cleanup intent.");

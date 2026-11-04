@@ -476,13 +476,13 @@ describe("DesktopFederationRuntime", () => {
     });
     const publishLocalEvent = vi.fn(async () => undefined);
     const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
-      .mockReturnValue({ withThreadWorkspaceMutation, publishLocalEvent } as never);
+      .mockReturnValue({ withThreadWorkspaceMutation, publishLocalEvent, withArchiveWorkspaceWrite: async (_paths: string[], work: () => Promise<unknown>) => await work() } as never);
     try {
       const attaching = new DesktopFederationRuntime().localBackend().attachDirectoryToThread({ threadId: "owner", path: "/owner/extra" });
       expect(fencedAtRegistration).toBe(true);
       release();
       await expect(attaching).resolves.toMatchObject({ ok: true });
-      expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "owner" }, expect.any(Function));
+      expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "owner" }, expect.any(Function), ["/owner/extra"]);
       expect(fenced).toBe(false);
     } finally {
       release();
