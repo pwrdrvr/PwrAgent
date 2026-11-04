@@ -15,8 +15,8 @@ Codex App Server Rust dependency disclosures are maintained by the Codex distrib
 
 Bundled Git runtime (approved separate-executable license exception)
 ------------------------------------------------------------------
-macOS/Linux: Custom Git 2.56.0-dev-pwrgit.1; exact source https://github.com/huntharo/git/tree/d5db8771ce659822bd9fbb0911b600de1339fea3.
-Matching source archives, dependency sources, symbols, build recipes and checksums: https://github.com/huntharo/git/releases/tag/v2.56.0-dev-pwrgit.1.
+macOS/Linux: Custom Git 2.56.0-dev-pwrgit.2; exact source https://github.com/huntharo/git/tree/ada47e445ed68570a72e2b2641c48e36a0f8df63.
+Matching source archives, dependency sources, symbols, build recipes and checksums: https://github.com/huntharo/git/releases/tag/v2.56.0-dev-pwrgit.2.
 The custom Git payload includes exact SOURCES, build provenance, Git/LFS licenses and Linux dependency notices. Git/LFS remain separate command-line programs; PwrAgent remains MIT licensed.
 The following existing Dugite distribution and notices apply to Windows:
 
