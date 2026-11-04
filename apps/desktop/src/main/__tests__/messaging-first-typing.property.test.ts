@@ -47,9 +47,11 @@ const scenario = fc.record({
 }).filter((value) => value.backend === "codex" || value.route === "binding");
 
 async function runScenario(input: Scenario, scheduler: fc.Scheduler, denied?: "actor" | "policy"): Promise<void> {
-  // An unsolicited replacement turn has no messaging origin on a Default
-  // Agent route. A persistent binding also receives that replacement's activity.
-  const replacementOwnsActivity = input.lifecycle === "replacement" && input.route === "binding";
+  // Replacement events reach a persistent binding or the starting origin
+  // retained while input handling is pending. A settled Default Agent reply
+  // has neither route for an unsolicited replacement turn.
+  const replacementOwnsActivity = input.lifecycle === "replacement"
+    && (input.route === "binding" || !input.responseBeforeTransition);
   let now = 1_000;
   const receivedAt = now;
   const db = openInMemoryStateDb();
@@ -236,14 +238,20 @@ describe("first typing request (property)", () => {
   });
 
   it("preserves lifecycle ownership across preparation-response orderings", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom("completed" as const, "approval" as const, "replacement" as const),
-      fc.boolean(), fc.boolean(), fc.boolean(),
-      (lifecycle, responseBeforeTransition, requestFails, defaultAgent) => runScenario({
-        backend: "codex", route: defaultAgent ? "default-agent" : "binding", delayMs: 101,
-        outcome: "started", lifecycle, responseBeforeTransition, requestFails,
-      }, fc.schedulerFor([])),
-    ), { numRuns: 25 });
+    // Exhaust this finite lifecycle model so every response ordering, response
+    // outcome and route is checked on every run, including successful retries.
+    for (const lifecycle of ["completed", "approval", "replacement"] as const) {
+      for (const responseBeforeTransition of [false, true]) {
+        for (const requestFails of [false, true]) {
+          for (const route of ["binding", "default-agent"] as const) {
+            await runScenario({
+              backend: "codex", route, delayMs: 101, outcome: "started",
+              lifecycle, responseBeforeTransition, requestFails,
+            }, fc.schedulerFor([]));
+          }
+        }
+      }
+    }
   });
 
   it.each(["completed", "approval", "replacement"] as const)("does not retry a %s turn after the preparation response", async (lifecycle) => {
