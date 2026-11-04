@@ -11,6 +11,7 @@ import {
   type HelperModelResolution,
 } from "@pwragent/shared";
 import { Select } from "../../components/Select";
+import { modelSelectOptions } from "../../lib/model-select-options";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 
 /** The closed pickers draw as the AI Providers page's chip pills. */
@@ -282,10 +283,7 @@ export function HelperModelSettings(props: {
                         label: modelOffered ? savedModel : `${savedModel} (not offered)`,
                       }]
                     : []),
-                  ...models.map((model) => ({
-                    value: model.id,
-                    label: model.label ?? model.id,
-                  })),
+                  ...modelSelectOptions({ kind: "codex", models }),
                 ]}
                 onChange={(model) => {
                   const next = models.find((entry) => entry.id === model);

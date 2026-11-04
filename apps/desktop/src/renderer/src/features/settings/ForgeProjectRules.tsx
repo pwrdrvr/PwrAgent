@@ -14,6 +14,7 @@ import {
   sameForgeRuleRepository,
   upsertForgeAgentToolRule,
   validateForgeAgentRuleAgent,
+  type BackendModelOption,
   type BackendSummary,
   type DesktopCodexModelProvider,
   type ForgeAgentRuleAgent,
@@ -29,6 +30,7 @@ import {
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { modelSelectOptions } from "../../lib/model-select-options";
 import {
   isNavigationPreviewCancelled,
   useNavigationSettingsPreview,
@@ -83,8 +85,8 @@ type AgentChoice = {
   label: string;
   description: string;
   agent: ForgeAgentRuleAgent;
-  /** Model ids the renderer already knows for this agent. */
-  models: string[];
+  /** Models the renderer already knows for this agent, as Model rows. */
+  models: SelectOption[];
 };
 
 const sameRepository = sameForgeRuleRepository;
@@ -124,15 +126,27 @@ function uniqueSorted(values: Iterable<string>): string[] {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function backendModelIds(
+function backendModels(
   backends: readonly BackendSummary[] | undefined,
   kind: string,
   keep: (option: { id: string; providerId?: string }) => boolean = () => true,
-): string[] {
+): BackendModelOption[] {
   const backend = backends?.find((entry) => entry.kind === kind);
-  return (backend?.launchpadOptions?.models ?? [])
-    .filter(keep)
-    .map((option) => option.id);
+  // One row per id, even when a catalog repeats one.
+  const byId = new Map<string, BackendModelOption>();
+  for (const option of backend?.launchpadOptions?.models ?? []) {
+    if (keep(option) && !byId.has(option.id)) byId.set(option.id, option);
+  }
+  return [...byId.values()];
+}
+
+/** A catalog's models in the composer's order, superseded ones grouped last. */
+function catalogModelRows(
+  backends: readonly BackendSummary[] | undefined,
+  kind: string,
+  keep?: (option: { id: string; providerId?: string }) => boolean,
+): SelectOption[] {
+  return modelSelectOptions({ kind, models: backendModels(backends, kind, keep) });
 }
 
 function buildAgentChoices(input: {
@@ -146,32 +160,33 @@ function buildAgentChoices(input: {
       label: "Claude",
       description: "Claude threads on any model.",
       agent: { backend: "claude" },
-      models: uniqueSorted(backendModelIds(input.backends, "claude")),
+      models: catalogModelRows(input.backends, "claude"),
     },
     {
       key: "codex",
       label: "Codex",
       description: "Codex threads on OpenAI models.",
       agent: { backend: "codex" },
-      models: uniqueSorted(backendModelIds(
+      models: catalogModelRows(
         input.backends,
         "codex",
         (option) => !option.providerId && !parseCodexProviderModelId(option.id).providerId,
-      )),
+      ),
     },
   ];
   for (const provider of input.codexProviders) {
-    const served = backendModelIds(
+    const served = backendModels(
       input.backends,
       "codex",
       (option) => (option.providerId ?? parseCodexProviderModelId(option.id).providerId) === provider.id,
-    ).map((id) => parseCodexProviderModelId(id).model);
+    ).map((option) => parseCodexProviderModelId(option.id).model);
     choices.push({
       key: `codex:${provider.id}`,
       label: `Codex · ${provider.name || provider.id}`,
       description: `Codex threads on models ${provider.name || provider.id} serves.`,
       agent: { backend: "codex", codexModelProvider: provider.id },
-      models: uniqueSorted([...(provider.models ?? []), ...served]),
+      models: uniqueSorted([...(provider.models ?? []), ...served])
+        .map((id) => ({ value: id, label: id })),
     });
   }
   for (const agent of input.acpAgents) {
@@ -180,7 +195,7 @@ function buildAgentChoices(input: {
       label: agent.name,
       description: `${agent.name} threads on any model.`,
       agent: { backend: `acp:${agent.registryId}` },
-      models: uniqueSorted(backendModelIds(input.backends, `acp:${agent.registryId}`)),
+      models: catalogModelRows(input.backends, `acp:${agent.registryId}`),
     });
   }
   return choices;
@@ -963,7 +978,7 @@ function AddAgentForm(props: {
                 value={modelChoice}
                 options={[
                   { value: "", label: "Any model", description: `Every ${choice.label} thread.` },
-                  ...knownModels.map((id) => ({ value: id, label: id })),
+                  ...knownModels,
                   { value: OTHER_MODEL_VALUE, label: "Another model…" },
                 ]}
                 onChange={(value) => {

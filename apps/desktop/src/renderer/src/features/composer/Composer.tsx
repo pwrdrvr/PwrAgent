@@ -1,6 +1,6 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
-import { codexProviderIdOfModel, formatModelOptionLabel, type BackendModelOption } from "@pwragent/shared";
-import { splitModelMenuOptions } from "../../lib/model-menu-options";
+import { codexProviderIdOfModel, type BackendModelOption } from "@pwragent/shared";
+import { ModelDropdown } from "./ModelDropdown";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
@@ -294,8 +294,6 @@ import {
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import {
   ComposerDropdown,
-  type ComposerDropdownGroup,
-  type ComposerDropdownOption,
   useDismissableMenu,
 } from "./ComposerDropdown";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
@@ -1105,29 +1103,6 @@ const REVIEW_TARGET_OPTIONS: Array<{
     description: "Review using custom instructions",
   },
 ];
-
-function toModelDropdownOption(model: ModelOption): ComposerDropdownOption {
-  return {
-    label: model.label ?? model.id,
-    ...(model.providerLabel ? { selectedLabel: formatModelOptionLabel(model) } : {}),
-    value: model.id,
-  };
-}
-
-function groupModelOptionsByProvider(models: readonly ModelOption[]): ComposerDropdownGroup[] {
-  const groups = new Map<string, ComposerDropdownGroup>();
-  for (const model of models) {
-    const providerId = model.providerId;
-    if (!providerId) continue;
-    let group = groups.get(providerId);
-    if (!group) {
-      group = { label: model.providerLabel ?? providerId, options: [] };
-      groups.set(providerId, group);
-    }
-    group.options.push(toModelDropdownOption(model));
-  }
-  return [...groups.values()];
-}
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -11016,26 +10991,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const threadModelProvider = backend?.kind === "codex" && props.thread && !props.launchpad
     ? codexProviderIdOfModel(props.thread.model)
     : undefined;
-  const ownModelOptions = threadModelProvider
-    ? modelOptions.filter((model) => model.providerId === threadModelProvider)
-    : modelOptions.filter((model) => !model.providerId);
-  const providerModelOptions = modelOptions.filter((model) => model.providerId);
-  const providerModelGroups = props.launchpad
-    ? groupModelOptionsByProvider(providerModelOptions)
-    : [];
   const threadProviderLabel = threadModelProvider
-    ? ownModelOptions[0]?.providerLabel ?? threadModelProvider
+    ? modelOptions.find((model) => model.providerId === threadModelProvider)?.providerLabel
+      ?? threadModelProvider
     : "Codex";
   const modelMenuFootnote = backend?.kind === "codex"
     && props.thread
     && !props.launchpad
-    && (threadModelProvider || providerModelOptions.length > 0)
+    && (threadModelProvider || modelOptions.some((model) => model.providerId))
     ? `This thread runs on ${threadProviderLabel}. To use another provider, hand it off to a new thread.`
     : undefined;
-  const { primary: visibleModelOptions, other: otherModelOptions } = splitModelMenuOptions(
-    backend?.kind,
-    ownModelOptions,
-  );
   const selectedModelOption: BackendModelOption | undefined =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
     (currentSettings?.model
@@ -13796,13 +13761,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         }}
                       />
                       {reviewerModelOptions.length > 0 ? (
-                        <ComposerDropdown
+                        <ModelDropdown
                           ariaLabel="Review model"
                           id="composer-review-model"
-                          options={reviewerModelOptions.map((option) => ({
-                            label: option.label ?? option.id,
-                            value: option.id,
-                          }))}
+                          kind={reviewerSelection.backend}
+                          models={reviewerModelOptions}
                           value={reviewerSelection.model?.id ?? ""}
                           onChange={(value) => {
                             patchReviewer((current) => {
@@ -14772,23 +14735,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ) : null}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.models?.length ? (
-            <ComposerDropdown
+            <ModelDropdown
               id="composer-model"
               ariaLabel="Model"
               disabled={launchpadSubmitting}
               value={selectedModelOption?.id ?? ""}
-              options={[
-                ...(selectedModelOption && !modelOptions.some((option) => option.id === selectedModelOption.id)
-                  ? [{ value: selectedModelOption.id, label: selectedModelOption.id, disabled: true,
-                      description: "This model is absent from this provider's catalog. Choose an available model." }]
-                  : []),
-                ...visibleModelOptions.map(toModelDropdownOption),
-              ]}
-              optionsLabel={formatBackendLabel(backend.kind)}
-              groups={providerModelGroups}
+              kind={backend.kind}
+              models={modelOptions}
+              thread={props.launchpad ? undefined : props.thread}
+              leadingOptions={selectedModelOption && !modelOptions.some((option) => option.id === selectedModelOption.id)
+                ? [{ value: selectedModelOption.id, label: selectedModelOption.id, disabled: true,
+                    description: "This model is absent from this provider's catalog. Choose an available model." }]
+                : []}
               footnote={modelMenuFootnote}
-              otherOptions={otherModelOptions.map(toModelDropdownOption)}
-              otherLabel={backend.kind === "claude" ? "Other Models" : undefined}
               onChange={(value) => {
                 const model = value;
                 const nextModelOption = backend.launchpadOptions?.models?.find(

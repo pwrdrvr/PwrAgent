@@ -53,6 +53,12 @@ import { Composer as ProductionComposer } from "../Composer";
 import { ImageGalleryLayer } from "../../thread-detail/ImageGalleryLayer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import {
+  CURRENT_CODEX_MODEL_LABELS,
+  SUPERSEDED_CODEX_MODEL_LABELS,
+  codexCatalogModels,
+  composerDropdownOptionLabels,
+} from "../../../test/model-catalog";
 import { settleFakeTimers } from "../../../test/settle-fake-timers";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
@@ -9414,6 +9420,82 @@ describe("Composer", () => {
     );
     // A default is not a pick, so it must not push real picks off the list.
     expect(recordModelSettingsRecent).not.toHaveBeenCalled();
+  });
+
+  it("lists reviewer models the way the model chip does: current first, superseded under Other", async () => {
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "codex-thread",
+      reviewThreadId: "review-1",
+      turnId: "turn-1",
+    }));
+    const codex = backendSummary("codex", { models: codexCatalogModels() });
+    codex.capabilities = {
+      ...codex.capabilities,
+      startReview: true,
+      reviewRunner: true,
+      reviewRunMode: true,
+      reviewCodexSubAgent: true,
+    };
+
+    render(
+      <Composer
+        backends={[codex]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          listModelSettingsRecents: async () => ({ recents: [] }),
+          recordModelSettingsRecent: vi.fn(async () => undefined),
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "codex-thread",
+          title: "Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          model: "gpt-6.1-sol",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    fireEvent.click(
+      within(reviewTarget).getByRole("button", { name: /^Review model(?::|$)/ })
+    );
+    const list = screen.getByRole("listbox", { name: /^Review model/ });
+    expect(composerDropdownOptionLabels(list)).toEqual([
+      ...CURRENT_CODEX_MODEL_LABELS,
+      "Other",
+      "Ternary-Bonsai-27B",
+    ]);
+    expect(within(list).getByRole("group", { name: "PrismML Bonsai (local)" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(within(list).getByRole("option", { name: "Other" }));
+    const other = screen.getByRole("listbox", { name: "Review model: Other" });
+    expect(composerDropdownOptionLabels(other)).toEqual(SUPERSEDED_CODEX_MODEL_LABELS);
+    fireEvent.click(within(other).getByRole("option", { name: "GPT-5.6-Terra" }));
+    expect(
+      within(reviewTarget).getByRole("button", { name: /^Review model(?::|$)/ })
+    ).toHaveAttribute("data-value", "gpt-5.6-terra");
+
+    await act(async () => {
+      fireEvent.click(
+        within(reviewTarget).getByRole("button", { name: "Start review" })
+      );
+    });
+    expect(startReview).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewBackend: "codex", model: "gpt-5.6-terra" })
+    );
   });
 
   it("does not reuse one instance's reviewer recents on another's thread", async () => {

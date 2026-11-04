@@ -53,6 +53,7 @@ import { formatAutomationRelative } from "./automation-format";
 import { AutomationMcpPicker } from "./AutomationMcpPicker";
 import { ProjectPicker } from "../composer/ProjectPicker";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
+import { ModelDropdown } from "../composer/ModelDropdown";
 import { AutomationFlow, AutomationStage } from "./AutomationFunnel";
 
 type AutomationEditorMode =
@@ -2657,10 +2658,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     }
                   }}
                 />
-                <ComposerDropdown
+                <ModelDropdown
                   ariaLabel="Automation model"
                   disabled={!effectiveBackendKind}
-                  options={[
+                  kind={effectiveBackendKind}
+                  models={catalogModels}
+                  leadingOptions={[
                     {
                       label: agentThreadSummary?.model
                         ? `Inherit Agent model (${agentThreadSummary.model})`
@@ -2676,10 +2679,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
                           },
                         ]
                       : []),
-                    ...catalogModels.map((model) => ({
-                      label: model.label ?? model.id,
-                      value: model.id,
-                    })),
                   ]}
                   value={profileModel}
                   onChange={(value) => {
