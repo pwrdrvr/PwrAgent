@@ -545,6 +545,7 @@ function describeWake(
           <>
             <span className="waiting-for-panel__quote">{`“${clipText(prompt, 90)}” `}</span>
             {"Claude scheduled this itself. Ask Claude to cancel it."}
+            {rowHold ? <span className="waiting-for-panel__held">{` ${rowHold}`}</span> : null}
             <span className="waiting-for-panel__transient">
               {` Ends if ${ownerLabel ?? "PwrAgent"} quits or Claude restarts.`}
             </span>

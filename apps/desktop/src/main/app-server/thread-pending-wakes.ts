@@ -142,7 +142,7 @@ export async function buildThreadPendingWakes(
       state.backend === thread.backend && state.threadId === thread.threadId)), hold),
     ...withHold(dependencyWakes(dependencies), hold),
     ...withHold(monitors.map(monitorWake).sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)), hold),
-    ...tasks.filter((task) => task.background).map(backendTaskWake),
+    ...withHold(tasks.filter((task) => task.background).map(backendTaskWake), hold),
   ];
   const ended = [
     ...prHistory.flatMap(endedPrWatch),
