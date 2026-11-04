@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind, NavigationLaunchpadDefaults } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -51,15 +51,22 @@ type Real = {
   store: SqliteOverlayStore;
 };
 
+/** A provider's saved access, written into its slot or still implied by the top level. */
+function savedAccess(
+  defaults: NavigationLaunchpadDefaults,
+  provider: Provider,
+): string | undefined {
+  return defaults.providerSettings?.[provider]?.executionMode
+    ?? (defaults.backend === provider ? defaults.executionMode : undefined);
+}
+
 async function expectAgreement(model: Model, real: Real): Promise<void> {
   const defaults = await real.store.getLaunchpadDefaults();
   for (const provider of PROVIDERS) {
     const saved = defaults.providerSettings?.[provider]?.model;
     expect(saved, `saved ${provider} default`).toBe(model.stickyModel[provider]);
-    expect(
-      defaults.providerSettings?.[provider]?.executionMode,
-      `saved ${provider} access`,
-    ).toBe(model.stickyAccess[provider]);
+    expect(savedAccess(defaults, provider), `saved ${provider} access`)
+      .toBe(model.stickyAccess[provider]);
   }
   expect(defaults.backend).toBe(model.defaultsBackend);
   expect(CATALOGS[defaults.backend as Provider]).toContain(defaults.model);
@@ -199,8 +206,8 @@ async function setup(): Promise<{ model: Model; real: Real; dispose: () => Promi
     launchpadBackend: Object.fromEntries(DIRECTORIES.map((key) => [key, "claude"])),
     stickyModel: { codex: "gpt-5.4", claude: "opus" },
     stickyAccess: {
-      codex: seeded.providerSettings?.codex?.executionMode,
-      claude: seeded.providerSettings?.claude?.executionMode,
+      codex: savedAccess(seeded, "codex"),
+      claude: savedAccess(seeded, "claude"),
     },
     defaultsBackend: "claude",
   };
