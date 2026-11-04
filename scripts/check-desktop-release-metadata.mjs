@@ -450,7 +450,7 @@ assertWorkflowStepContainsText(
 for (const jobName of ["test-macos", "desktop-e2e-macos"]) {
   assertWorkflowJobRunner(ciWorkflow, ".github/workflows/ci.yml", jobName, macosRunner);
 }
-for (const expected of ["lane: [1, 2]", "run: pnpm test --shard=${{ matrix.lane }}/2", 'PWRAGENT_REQUIRE_ACTOOL: "1"']) {
+for (const expected of ["lane: [1, 2, 3, 4]", "run: pnpm test --shard=${{ matrix.lane }}/4", 'PWRAGENT_REQUIRE_ACTOOL: "1"']) {
   assertWorkflowJobContainsText(ciWorkflow, ".github/workflows/ci.yml", "test-macos", expected);
 }
 for (const expected of [
@@ -530,7 +530,7 @@ assertWorkflowStepContainsText(
   "Lint and typecheck",
   "run: pnpm lint",
 );
-for (const expected of ["lane: [1, 2]", "run: pnpm test --shard=${{ matrix.lane }}/2"]) {
+for (const expected of ["lane: [1, 2, 3, 4]", "run: pnpm test --shard=${{ matrix.lane }}/4"]) {
   assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "test", expected);
 }
 assertWorkflowJobRunner(

@@ -186,6 +186,40 @@ describe("WaitingForPanel", () => {
     expect(screen.queryByText("0")).not.toBeInTheDocument();
   });
 
+  it("lists Auto-fix on a merged PR as idle, uncounted, and still turnable off", async () => {
+    const merged: ThreadPendingWake = {
+      kind: "pr_auto_fix", key: "pr_auto_fix:github/acme/widgets#3204", prKey: "github/acme/widgets#3204",
+      prNumber: 3204, state: "active", prEnded: "merged", durable: true, stop: "turn_off",
+    };
+    const turnOff = vi.fn(async () => {});
+    render(<WaitingForPanel thread={thread} controller={controller(ready([merged], []))} now={NOW} onTurnOffAutoFix={turnOff} />);
+
+    expect(screen.getByText("Nothing will wake this thread.")).toBeInTheDocument();
+    expect(document.querySelector(".waiting-for-panel__count")).toBeNull();
+    expect(screen.getByText("#3204 · merged")).toBeInTheDocument();
+    const title = screen.getByRole("button", { name: "Auto-fix idle" });
+    expect(title.closest(".waiting-for-panel__row")).toHaveClass("is-idle");
+    expect(screen.getByText(/On, but #3204 merged, so there is nothing to repair/)).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Turn Off: Auto-fix idle" }));
+    });
+    expect(turnOff).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts only live wakes and lists an ended PR after the open ones", () => {
+    const closed: ThreadPendingWake = {
+      kind: "pr_auto_fix", key: "pr_auto_fix:github/acme/widgets#3100", prKey: "github/acme/widgets#3100",
+      prNumber: 3100, state: "active", prEnded: "closed", durable: true, stop: "turn_off",
+    };
+    const live = WAKES.filter((wake) => wake.kind === "pr_watch" || wake.kind === "pr_auto_fix");
+    render(<WaitingForPanel thread={thread} controller={controller(ready([closed, ...live], []))} now={NOW} />);
+
+    expect(document.querySelector(".waiting-for-panel__count")).toHaveTextContent("2");
+    expect(screen.queryByText("Nothing will wake this thread.")).not.toBeInTheDocument();
+    const asides = [...document.querySelectorAll(".waiting-for-panel__eyebrow-aside")].map((node) => node.textContent);
+    expect(asides).toEqual(["#3174", "#3100 · closed"]);
+  });
+
   it("shows no false empty list when the owner sends none", () => {
     render(<WaitingForPanel thread={thread} controller={controller({ status: "unknown" })} ownerLabel="studio-mac" now={NOW} />);
     expect(screen.getByText("studio-mac does not share what will wake this thread.")).toBeInTheDocument();

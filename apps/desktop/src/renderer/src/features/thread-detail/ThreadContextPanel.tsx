@@ -31,7 +31,7 @@ import type {
   ThreadUsageLineRecord,
   ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
-import { operatorTodoItemKey } from "@pwragent/shared";
+import { isThreadPendingWakeLive, operatorTodoItemKey } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
@@ -342,7 +342,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         ? "info"
       : props.activeTab;
   const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi, { includeEnded: open && activeTab === "waiting" });
-  const pendingWakeCount = pendingWakes.state.status === "ready" ? pendingWakes.state.wakes.length : 0;
+  const pendingWakeCount = pendingWakes.state.status === "ready"
+    ? pendingWakes.state.wakes.filter(isThreadPendingWakeLive).length
+    : 0;
   const [subAgentLens, setSubAgentLens] = useState<SubAgentLens>();
   const displayResource = useThreadDisplayResource({
     subAgentLens,
