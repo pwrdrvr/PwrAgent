@@ -24,20 +24,17 @@ export function displayText(maxPieces = 60): fc.Arbitrary<string> {
 }
 
 /**
- * Text whose length straddles `limit`: plain words up to just short of it,
- * then a few display pieces, so the cut lands among the pieces that tear.
- * Random text alone rarely reaches a 72- or 160-character limit with an
- * emoji or accent right at the cut. Pass filler without spaces to reach a
- * helper's hard cut rather than its word break.
+ * Text whose length straddles `limit`: a run of letters up to just short of
+ * it, then a few display pieces, so the cut lands among the pieces that
+ * tear. Random text alone rarely reaches a 72- or 160-character limit with an
+ * emoji or accent right at the cut. The run has no spaces, so word-boundary
+ * helpers reach their hard cut too.
  */
-export function displayTextNear(
-  limit: number,
-  fillerUnits: readonly string[] = ["a", "b", " "],
-): fc.Arbitrary<string> {
+export function displayTextNear(limit: number): fc.Arbitrary<string> {
   return fc
     .tuple(
       fc.string({
-        unit: fc.constantFrom(...fillerUnits),
+        unit: fc.constantFrom("a", "b"),
         minLength: Math.max(0, limit - 8),
         maxLength: limit + 2,
       }),
@@ -47,12 +44,8 @@ export function displayTextNear(
 }
 
 /** Random display text, half of it near `limit`. */
-export function displayTextAround(
-  limit: number,
-  maxPieces = 60,
-  fillerUnits?: readonly string[],
-): fc.Arbitrary<string> {
-  return fc.oneof(displayText(maxPieces), displayTextNear(limit, fillerUnits));
+export function displayTextAround(limit: number, maxPieces = 60): fc.Arbitrary<string> {
+  return fc.oneof(displayText(maxPieces), displayTextNear(limit));
 }
 
 /** Whitespace only, which trimming helpers must treat as empty. */
