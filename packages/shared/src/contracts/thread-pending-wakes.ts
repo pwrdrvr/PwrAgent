@@ -1,5 +1,5 @@
 import type { FederationTarget } from "./federation";
-import type { AppServerBackendKind, AppServerBackgroundTask } from "./normalized-app-server";
+import type { AppServerBackendKind, AppServerBackendWake, AppServerBackgroundTask } from "./normalized-app-server";
 import type { ScheduledThreadAction, ScheduledThreadActionKind } from "./scheduled-thread-actions";
 import type { ThreadDependency } from "./thread-dependencies";
 import type { ThreadPrAutoFixState } from "./thread-pr-watches";
@@ -8,8 +8,9 @@ import type { ThreadPullRequestWatchSummary } from "./thread-tools";
 /**
  * The operator's one list of what will start a turn on a thread later: PR
  * watches, Auto-fix, dependencies on other threads, monitor delegations,
- * scheduled messages and reviews, the backend's own background tasks, and
- * wake-ups a lock or a paused project holds in the thread's queue.
+ * scheduled messages and reviews, the backend's own background tasks and
+ * scheduled wake-ups, and wake-ups a lock or a paused project holds in the
+ * thread's queue.
  * Main builds it on request from each source's own state and stores nothing.
  * A stop goes to the source that owns the wake, through its own cancel path.
  */
@@ -29,7 +30,8 @@ export type PendingWakeScheduledActions = { actions: PendingWakeScheduledAction[
 export const THREAD_PENDING_WAKE_SOURCE_METHODS: ReadonlySet<string> = new Set([
   "thread/prAutoDispatch/updated", "thread/prWatches/updated", "thread/dependencies/updated",
   "thread/scheduledAction/updated", "thread/subAgents/updated", "thread/backgroundTasks/updated",
-  "thread/lock/updated", "thread/turnQueue/updated", "directory/forgeAutomation/updated",
+  "thread/sessionWakes/updated", "thread/lock/updated", "thread/turnQueue/updated",
+  "directory/forgeAutomation/updated",
 ]);
 
 /** A source mutation, or the compact invalidation an owner sends a peer. */
@@ -47,6 +49,7 @@ export type ThreadPendingWakeKind =
   | "monitor"
   | "scheduled_action"
   | "backend_task"
+  | "backend_wake"
   | "held_message";
 
 /**
@@ -113,6 +116,14 @@ export type ThreadPendingWakeSource =
   | { kind: "backend_task"; task: AppServerBackgroundTask }
   | {
       /**
+       * A turn the backend scheduled in its own session, such as Claude's
+       * /loop. `prompt` is cut to `THREAD_PENDING_WAKE_TEXT_MAX_CHARS`.
+       */
+      kind: "backend_wake";
+      wake: AppServerBackendWake;
+    }
+  | {
+      /**
        * A message already in the thread's queue that a hold keeps from
        * starting: a finished monitor, a met dependency, or a queued send.
        */
@@ -130,7 +141,7 @@ export type ThreadPendingWake = ThreadPendingWakeSource & {
   /** `${kind}:${sourceId}`, stable across reads. */
   key: string;
   createdAt?: number;
-  /** A known fire time: scheduled actions only. */
+  /** A known fire time: scheduled actions and backend wakes. */
   wakesAt?: number;
   createdBy?: "agent" | "operator" | "messaging";
   /** False: the wake ends if the thread's owner quits. */
@@ -143,7 +154,7 @@ export type ThreadPendingWake = ThreadPendingWakeSource & {
 
 export type ThreadPendingWakeEnded = {
   key: string;
-  kind: Exclude<ThreadPendingWakeKind, "pr_auto_fix" | "backend_task" | "held_message">;
+  kind: Exclude<ThreadPendingWakeKind, "pr_auto_fix" | "backend_task" | "backend_wake" | "held_message">;
   endedAt: number;
   /** One short line: what ended it, as the source recorded. */
   summary: string;
@@ -217,5 +228,5 @@ export function parseThreadPendingWakeKey(
 function isThreadPendingWakeKind(value: string): value is ThreadPendingWakeKind {
   return value === "pr_watch" || value === "pr_auto_fix" || value === "dependency"
     || value === "monitor" || value === "scheduled_action" || value === "backend_task"
-    || value === "held_message";
+    || value === "backend_wake" || value === "held_message";
 }

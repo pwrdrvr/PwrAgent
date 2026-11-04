@@ -75,6 +75,24 @@ const WAKES: ThreadPendingWake[] = [
   },
 ];
 
+/** Claude's own /loop wake-up and session cron. */
+const CLAUDE_WAKES: ThreadPendingWake[] = [
+  {
+    kind: "backend_wake", key: "backend_wake:c1", createdAt: at(15, 50), wakesAt: at(16, 40), createdBy: "agent", durable: false,
+    wake: {
+      id: "c1", origin: "loop_wakeup", schedule: "40 16 1 11 *", recurring: false, prompt: "<<autonomous-loop-dynamic>>",
+      reason: "The deploy takes about forty minutes.", nextFireAt: at(16, 40), createdAt: at(15, 50),
+    },
+  },
+  {
+    kind: "backend_wake", key: "backend_wake:c2", createdAt: at(15, 0), createdBy: "agent", durable: false,
+    wake: {
+      id: "c2", origin: "cron", schedule: "*/5 * * * *", humanSchedule: "Every 5 minutes", recurring: true,
+      prompt: "Check CI on #3174", createdAt: at(15, 0),
+    },
+  },
+];
+
 const ENDED: ThreadPendingWakeEnded[] = [
   { key: "pr_watch:old", kind: "pr_watch", endedAt: at(14, 58), summary: "PR watch woke the thread", detail: "#3174 CI failed" },
 ];
@@ -114,6 +132,31 @@ describe("WaitingForPanel", () => {
     expect(within(running).getByText(/Claude continues when it ends\. Running 6 min\./)).toBeInTheDocument();
     // Memory-only wakes say they end with the app.
     expect(within(running).getAllByText(/Ends if PwrAgent quits\./)).toHaveLength(2);
+  });
+
+  it("lists Claude's own wake-ups under Scheduled, says only Claude can cancel them, and offers no stop", () => {
+    render(<WaitingForPanel thread={thread} controller={controller(ready([WAKES[0]!, ...CLAUDE_WAKES]))} now={NOW} />);
+
+    const scheduled = screen.getByRole("group", { name: "Scheduled" });
+    expect(within(scheduled).getByRole("button", { name: "Claude loop at 4:40 PM" })).toBeInTheDocument();
+    expect(within(scheduled).getByRole("button", { name: "Claude repeats every 5 minutes" })).toBeInTheDocument();
+    // The autonomous loop's sentinel is not words to quote.
+    expect(within(scheduled).getByText("“Continue the autonomous loop”")).toBeInTheDocument();
+    expect(within(scheduled).getByText("“Check CI on #3174”")).toBeInTheDocument();
+    expect(within(scheduled).getAllByText(/Claude scheduled this itself\. Ask Claude to cancel it\./)).toHaveLength(2);
+    expect(within(scheduled).getAllByText(/Ends if PwrAgent quits or Claude restarts\./)).toHaveLength(2);
+    // Only the scheduled message has a stop of its own.
+    expect(within(scheduled).getAllByRole("button", { name: /^(Stop|Cancel)/ })).toHaveLength(1);
+
+    fireEvent.click(within(scheduled).getByRole("button", { name: "Claude loop at 4:40 PM" }));
+    expect(within(scheduled).getByText("The deploy takes about forty minutes.")).toBeInTheDocument();
+    expect(within(scheduled).getByText("40 16 1 11 *")).toHaveClass("waiting-for-panel__mono");
+  });
+
+  it("names the peer whose quit ends Claude's wake-up", () => {
+    render(<WaitingForPanel thread={thread} controller={controller(ready(CLAUDE_WAKES, [], true))} ownerLabel="studio-mac" now={NOW} />);
+    expect(screen.getAllByText(/Ends if studio-mac quits or Claude restarts\./)).toHaveLength(2);
+    expect(screen.queryByText(/Stop them there\./)).not.toBeInTheDocument();
   });
 
   it("stops a wake through its source and shows why a stop failed", async () => {

@@ -23,6 +23,7 @@ panel requests up to eight ended rows. Each source reads the selected thread:
 | Scheduled actions | Up to 100 active metadata rows and the requested ended rows. No execution input or attachment leaves the source reader. |
 | Monitors | Live delegations from memory; ended monitor summaries from an index ordered by completion time, independently of other sub-agent cards. |
 | Claude tasks | Background tasks from the thread's live session; no provider history read. |
+| Claude wake-ups | `/loop` wake-ups and session crons from the thread's live session, from memory. No stop: only Claude can cancel one. |
 
 Scheduled preview decoding admits payload files up to 256 KiB. The source
 keeps at most 128 text previews, each at most 600 characters, keyed by immutable
@@ -90,7 +91,7 @@ batches over 800 milliseconds. These are operation counts, not latency timings:
 | Measured work | Cache bypassed | Owner cache |
 | --- | ---: | ---: |
 | Projection builds | 1,280 | 4 |
-| Source calls | 9,600 | 32 |
+| Source calls | 10,880 | 36 |
 | SQLite SELECTs | 10,880 | 36 |
 | Returned SQLite rows | 8,320 | 28 |
 | Overlay payload bytes | 805,120 | 2,992 |

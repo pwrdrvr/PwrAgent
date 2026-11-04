@@ -329,6 +329,39 @@ and closes every session and its tasks. A relaunch hands the old session's
 MCP grants to the new one, because the relaunching turn registered the same
 per-thread grants again.
 
+## Scheduled wake-ups
+
+Claude Code can start a turn on its own later: `ScheduleWakeup` sets the next
+tick of a dynamic `/loop`, and `CronCreate` schedules a prompt once or on a
+cron schedule. Unless `CronCreate` is called with `durable: true`, both live in
+the CLI process's memory and end with it. The SDK has no control request that
+lists or cancels them; only the model's `CronDelete`, or `ScheduleWakeup` with
+`stop: true`, cancels one.
+
+PwrAgent tracks them in `claude-session-wakes.ts` from two hooks. A
+`PostToolUse` hook on the three tools records each new wake, its fire time and
+its reason, and each delete. The `Stop` hook's `session_crons` is the CLI's
+whole set at each turn's end, and replaces what the hooks recorded. A wake keeps
+the session open the way a running task does, so a `/loop` keeps running after
+its turn ends. When a wake fires, Claude starts a native turn, which PwrAgent
+shows as it shows a task follow-up. A relaunch for new settings waits while a
+wake is pending, and Stop on a turn interrupts it instead of closing the query.
+
+A one-shot wake more than an hour past its fire time stops holding the
+session. A one-shot's time comes from its tool result, or else from its pinned
+cron fields. A recurring job, or a one-shot with no readable time, stops seven
+days after PwrAgent first saw it (the CLI's default expiry for recurring jobs).
+That bounds a missed `Stop` hook. Archiving waits while a fired wake's turn
+runs, as it does for any turn.
+
+The set is published as `thread/sessionWakes/updated` and listed in Waiting
+for under Scheduled. The row has no Stop and tells the operator to ask Claude to
+cancel it. Quitting PwrAgent, archiving the thread, a rewind, or a folder move
+ends the session and its wakes. Archiving is
+allowed while only wakes keep the session. A durable `CronCreate` job is saved
+in the project's `.claude/scheduled_tasks.json`, outside any one session, and
+is not listed.
+
 ## Usage, context, and MCP
 
 The Pricing rail uses the SDK's per-model result totals, including cache

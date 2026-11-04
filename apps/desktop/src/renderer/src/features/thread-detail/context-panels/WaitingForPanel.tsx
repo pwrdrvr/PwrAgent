@@ -14,6 +14,7 @@ import {
   ClockIcon,
   ContinueAfterIcon,
   EyeIcon,
+  HistoryIcon,
   LockIcon,
   MergeIcon,
   PauseIcon,
@@ -49,6 +50,8 @@ type WaitingForPanelProps = {
 type Group = { id: string; label: string; aside?: string; wakes: ThreadPendingWake[] };
 
 export type HeldMessageWake = Extract<ThreadPendingWake, { kind: "held_message" }>;
+
+type BackendWake = Extract<ThreadPendingWake, { kind: "backend_wake" }>;
 
 /** Ended rows one list shows. */
 const ENDED_ROWS = 8;
@@ -293,7 +296,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
 
 const GROUP_ORDER: Array<{ id: string; label: string; kinds: ThreadPendingWakeKind[] }> = [
   { id: "held", label: "Held", kinds: ["held_message"] },
-  { id: "scheduled", label: "Scheduled", kinds: ["scheduled_action"] },
+  { id: "scheduled", label: "Scheduled", kinds: ["scheduled_action", "backend_wake"] },
   { id: "prs", label: "Pull requests", kinds: ["pr_watch", "pr_auto_fix"] },
   { id: "threads", label: "Other threads", kinds: ["dependency"] },
   { id: "running", label: "Running", kinds: ["monitor", "backend_task"] },
@@ -527,6 +530,24 @@ function describeWake(
         sub: <>{`Checks every ${formatInterval(wake.pollIntervalSeconds)}. Last check ${formatAgo(wake.lastActivityAt, now)}.`}{transient}</>,
       };
     }
+    case "backend_wake": {
+      const { lead, when } = describeBackendWakeTitle(wake, now);
+      const prompt = describeBackendWakePrompt(wake);
+      return {
+        icon: wake.wake.recurring ? <HistoryIcon size={12} /> : <ClockIcon size={12} />,
+        title: when ? <>{lead}<span className="waiting-for-panel__when">{when}</span></> : lead,
+        plainTitle: `${lead}${when ?? ""}`,
+        sub: (
+          <>
+            <span className="waiting-for-panel__quote">{`“${clipText(prompt, 90)}” `}</span>
+            {"Claude scheduled this itself. Ask Claude to cancel it."}
+            <span className="waiting-for-panel__transient">
+              {` Ends if ${ownerLabel ?? "PwrAgent"} quits or Claude restarts.`}
+            </span>
+          </>
+        ),
+      };
+    }
     case "backend_task": {
       const command = wake.task.command;
       const running = wake.task.startedAt !== undefined ? ` Running ${formatElapsed(wake.task.startedAt, now)}.` : "";
@@ -539,6 +560,28 @@ function describeWake(
       };
     }
   }
+}
+
+/** A wake-up by its time, a cron by its schedule. `when` is a time still ahead. */
+function describeBackendWakeTitle(wake: BackendWake, now: number): { lead: string; when?: string } {
+  const { wake: scheduled } = wake;
+  if (scheduled.recurring) {
+    const schedule = scheduled.humanSchedule?.trim();
+    return { lead: schedule ? `Claude repeats ${lowerFirst(schedule)}` : `Claude repeats on ${scheduled.schedule || "a schedule"}` };
+  }
+  const noun = scheduled.origin === "loop_wakeup" ? "Claude loop" : "Claude reminder";
+  if (wake.wakesAt === undefined) return { lead: scheduled.schedule ? `${noun} on ${scheduled.schedule}` : `${noun} scheduled` };
+  return wake.wakesAt > now ? { lead: `${noun} at `, when: formatWatchTime(wake.wakesAt, now) } : { lead: `${noun} due now` };
+}
+
+/** The autonomous /loop sends itself a sentinel, not words. */
+function describeBackendWakePrompt(wake: BackendWake): string {
+  const prompt = wake.wake.prompt.trim();
+  return /^<<autonomous-loop(-dynamic)?>>$/.test(prompt) ? "Continue the autonomous loop" : prompt || "No text.";
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
 function describeDependencyTitle(
@@ -613,6 +656,20 @@ function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now:
           {wake.wakesAt !== undefined ? <span className="pr-watch-list__sub">{`Fires ${formatWatchTime(wake.wakesAt, now)}.`}</span> : null}
         </span>
       );
+    case "backend_wake": {
+      const { wake: scheduled } = wake;
+      return (
+        <span className="waiting-for-panel__detail">
+          <span className="waiting-for-panel__prompt">{describeBackendWakePrompt(wake)}</span>
+          <dl className="waiting-for-panel__facts">
+            {scheduled.reason ? <><dt>Why</dt><dd>{scheduled.reason}</dd></> : null}
+            {wake.wakesAt !== undefined ? <><dt>Next</dt><dd>{formatWatchTime(wake.wakesAt, now)}</dd></> : null}
+            {scheduled.schedule ? <><dt>Cron</dt><dd className="waiting-for-panel__mono">{scheduled.schedule}</dd></> : null}
+            {wake.createdAt !== undefined ? <><dt>Since</dt><dd>{formatWatchTime(wake.createdAt, now)}</dd></> : null}
+          </dl>
+        </span>
+      );
+    }
     case "backend_task":
       return (
         <span className="waiting-for-panel__detail">

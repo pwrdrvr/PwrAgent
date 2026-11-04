@@ -28,6 +28,12 @@ describe("navigation query events", () => {
     expect(navigationInvalidationMayChangeMembership("thread/backgroundTasks/updated")).toBe(false);
   });
 
+  // Claude's own wake-ups change no row; only the thread's Waiting for list re-reads.
+  it("keeps a backend's scheduled wakes out of the thread list", () => {
+    expect(navigationQueryEventRequiresRefresh("thread/sessionWakes/updated", { threadId: "thread", wakes: [] })).toBe(false);
+    expect(navigationInvalidationMayChangeMembership("thread/sessionWakes/updated")).toBe(false);
+  });
+
   // A row carries its owner's CI watch marks, so a viewer's peer row must
   // re-read when a watch is armed, stopped or ends.
   it("refreshes a row, and only that row, when its PR watches change", () => {

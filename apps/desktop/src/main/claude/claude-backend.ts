@@ -7,7 +7,7 @@ import {
   type SDKResultMessage, type SDKUserMessage, type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerCollaborationModeRequest,
+  AgentEvent, AppServerAvailableCommandSummary, AppServerBackendWake, AppServerBackgroundTask, AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification, AppServerReviewContext,
   AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadImagePart, AppServerThreadMessageEntry,
   AppServerThreadMessageOrigin,
@@ -35,6 +35,7 @@ import { PlanLimitStore } from "../app-server/plan-limit-store";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./claude-rewind-backup";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
+import { ClaudeSessionWakeTracker, claudeSessionWakeHooks } from "./claude-session-wakes";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
 import {
   CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactAction, claudeArtifactResult, claudeArtifactShowsOutput,
@@ -173,6 +174,9 @@ const CLAUDE_INTERRUPT_GRACE_MS = 5_000;
  * button waits on it, so a CLI that never answers must not hold it forever.
  */
 const CLAUDE_REWIND_PREVIEW_TIMEOUT_MS = 30_000;
+
+/** The longest wait before re-reading the wakes Claude scheduled. */
+const CLAUDE_WAKE_EXPIRY_MAX_DELAY_MS = 24 * 60 * 60_000;
 
 /** The CLI drops queued messages along with the interrupted turn. */
 const CLAUDE_INTERRUPT_CANCEL_QUEUED = "interrupt_cancel_queued_v1";
@@ -350,6 +354,12 @@ type LiveSession = {
   /** The rows last published through `thread/backgroundTasks/updated`. */
   publishedTasks: AppServerBackgroundTask[];
   publishedTaskKey: string;
+  /** Turns Claude scheduled in this process: /loop wake-ups and session crons. */
+  sessionWakes: ClaudeSessionWakeTracker;
+  /** The set last published through `thread/sessionWakes/updated`. */
+  publishedWakeKey: string;
+  /** Re-reads the wakes when the soonest one stops holding the session. */
+  wakeExpiryTimer?: ReturnType<typeof setTimeout>;
   /** Tool rows a task may still settle, with the desktop turn that shows them. */
   toolRows: Map<string, { entry: AppServerThreadActivityEntry; turnId: string }>;
   /** Tool calls answered with a background placeholder and not yet settled. */
@@ -759,8 +769,15 @@ export class ClaudeBackend {
 
   async setArchived(threadId: string, archived: boolean): Promise<void> {
     const live = this.sessions.get(threadId);
-    if (live?.turn) throw new Error("Interrupt the active Claude turn before archiving.");
-    if (live) throw new Error("Stop Claude's background tasks before archiving.");
+    // A fired wake runs Claude before its init opens the desktop turn.
+    if (live?.turn || (live?.sessionState !== undefined && live.sessionState !== "idle")) {
+      throw new Error("Interrupt the active Claude turn before archiving.");
+    }
+    if (live && (!archived || live.tasks.active().length > 0 || !live.sessionWakes.hasPending())) {
+      throw new Error("Stop Claude's background tasks before archiving.");
+    }
+    // Only Claude's own scheduled wakes keep this process; archiving ends them.
+    if (live) await this.closeSession(live);
     const session = await this.store.read(threadId);
     session.thread.archivedAt = archived ? Date.now() : undefined;
     await this.store.save(session);
@@ -897,6 +914,7 @@ export class ClaudeBackend {
         session, controller, input: new ClaudeInputStream(), inputWrites: Promise.resolve(),
         config: claudeSessionConfig(params, session), turn, lastTurnId: turn.turnId, onClosed: [],
         tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", toolRows: new Map(), launchedToolUseIds: new Set(),
+        sessionWakes: new ClaudeSessionWakeTracker(), publishedWakeKey: "[]",
         messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0, wake: claudeWakeSignal(), stderr: "",
         accountChecked: settledSignal(),
       };
@@ -963,11 +981,22 @@ export class ClaudeBackend {
         }),
         // A findings report that leaves findings skipped tells the agent they are still open.
         // A CI wait or polling loop is pointed at PwrAgent's PR watch and monitors.
+        // Claude's own wake-ups and crons keep this process, which runs them, open.
         hooks: mergeClaudeHooks(
           claudeReportFindingsHooks(),
           claudeMonitorSuggestionHooks(async (request) => {
             const turnId = current.turn?.turnId;
             return turnId ? await this.options.suggestMonitorJob?.({ ...request, threadId, turnId }) : undefined;
+          }),
+          claudeSessionWakeHooks({
+            toolResult: (toolName, toolInput, response) => {
+              current.sessionWakes.applyToolResult(toolName, toolInput, response);
+              void this.publishSessionWakes(current).catch(() => {});
+            },
+            turnEnded: (crons) => {
+              current.sessionWakes.replace(crons);
+              void this.publishSessionWakes(current).catch(() => {});
+            },
           }),
         ),
       };
@@ -1075,14 +1104,14 @@ export class ClaudeBackend {
 
   /**
    * Apply a turn's settings to a live session; false when it must relaunch.
-   * A relaunch stops the session's tasks, so with tasks running a setting
-   * only a new process takes waits for one, and a rejected change fails the
-   * turn instead.
+   * A relaunch stops the session's tasks and ends the wakes Claude scheduled,
+   * so with either pending a setting only a new process takes waits for one,
+   * and a rejected change fails the turn instead.
    */
   private async reconfigure(live: LiveSession, config: ClaudeSessionConfig): Promise<boolean> {
     const query = live.query;
     if (!query) return false;
-    const keepTasks = live.tasks.active().length > 0;
+    const keepTasks = this.processHoldsWork(live);
     // The system prompt and the process environment are fixed when the
     // process starts.
     if (config.instructions !== live.config.instructions) {
@@ -1378,7 +1407,7 @@ export class ClaudeBackend {
         // This banner can stop execution without a result on an open input
         // stream. Do not wait for another message to end the desktop turn.
         if (turn && message.type === "system" && message.subtype === "informational" && message.prevent_continuation) {
-          if (live.tasks.active().length === 0) break;
+          if (!this.processHoldsWork(live)) break;
           await this.endTurn(live, turn);
         }
         // The probe is a control round-trip that can wait 1.5s; never hold
@@ -1467,15 +1496,21 @@ export class ClaudeBackend {
   }
 
   /**
-   * The session, and the process with it, ends once no task runs, Claude is
-   * idle, and Claude has answered the last task notification.
+   * The session, and the process with it, ends once no task runs, no wake
+   * Claude scheduled is still to come, Claude is idle, and Claude has
+   * answered the last task notification. A wake lives in this process.
    */
   private sessionSettled(live: LiveSession, ignoreTurn = false): boolean {
     if (live.turn && !ignoreTurn) return false;
     if (live.released) return true;
-    if (live.tasks.active().length > 0) return false;
+    if (this.processHoldsWork(live)) return false;
     if (live.sessionState !== undefined && live.sessionState !== "idle") return false;
     return live.lastNotificationSeq < live.lastResultSeq || live.followUpWaivedAt === live.messageSeq;
+  }
+
+  /** Ending the process would end work: a running task, or a wake Claude scheduled. */
+  private processHoldsWork(live: LiveSession): boolean {
+    return live.tasks.active().length > 0 || live.sessionWakes.hasPending();
   }
 
   /** Bound the wait for a follow-up Claude may not run. */
@@ -1526,6 +1561,7 @@ export class ClaudeBackend {
     const threadId = live.session.thread.id;
     live.closing = true;
     if (live.followUpTimer) clearTimeout(live.followUpTimer);
+    if (live.wakeExpiryTimer) clearTimeout(live.wakeExpiryTimer);
     // A turn still opening in a live session is failed by its own start.
     const turn = live.turn?.started ? live.turn : undefined;
     if (turn) turn.ending = true;
@@ -1545,6 +1581,11 @@ export class ClaudeBackend {
         live.publishedTasks = [];
         live.publishedTaskKey = "[]";
         await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId, tasks: [] } });
+      }
+      // Claude's own wakes end with its process.
+      if (live.publishedWakeKey !== "[]") {
+        live.publishedWakeKey = "[]";
+        await this.emit({ method: "thread/sessionWakes/updated", params: { threadId, wakes: [] } });
       }
     };
     try {
@@ -1733,6 +1774,33 @@ export class ClaudeBackend {
     await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId: live.session.thread.id, tasks } });
   }
 
+  /**
+   * Publish the wakes Claude scheduled when the set changes, and re-read it
+   * once the soonest wake stops holding the session open.
+   */
+  private async publishSessionWakes(live: LiveSession): Promise<void> {
+    if (live.wakeExpiryTimer) clearTimeout(live.wakeExpiryTimer);
+    live.wakeExpiryTimer = undefined;
+    if (live.closing || live.closed) return;
+    const wakes = live.sessionWakes.pending();
+    const expiry = live.sessionWakes.nextExpiry();
+    if (expiry !== undefined) {
+      // A longer delay overflows setTimeout and fires at once; an early
+      // timer only re-reads the wakes and arms again.
+      live.wakeExpiryTimer = setTimeout(() => {
+        live.wakeExpiryTimer = undefined;
+        void this.publishSessionWakes(live).catch(() => {});
+        // The pump re-checks whether anything still holds the session.
+        live.wake.wake();
+      }, Math.min(CLAUDE_WAKE_EXPIRY_MAX_DELAY_MS, Math.max(1_000, expiry - Date.now() + 1_000)));
+      live.wakeExpiryTimer.unref?.();
+    }
+    const key = JSON.stringify(wakes);
+    if (key === live.publishedWakeKey) return;
+    live.publishedWakeKey = key;
+    await this.emit({ method: "thread/sessionWakes/updated", params: { threadId: live.session.thread.id, wakes } });
+  }
+
   private taskRows(live: LiveSession): AppServerBackgroundTask[] {
     return live.tasks.active().map((task) => {
       const row = task.toolUseId ? live.toolRows.get(task.toolUseId) : undefined;
@@ -1778,6 +1846,11 @@ export class ClaudeBackend {
       await this.store.append(threadId, [entry]);
     }
     await this.emit({ method: "item/completed", params: { threadId, turnId: row.turnId, item: claudeActivityItem(entry, output) } });
+  }
+
+  /** Turns Claude scheduled for the thread in its live process, soonest first. */
+  listSessionWakes(threadId: string): AppServerBackendWake[] {
+    return this.sessions.get(threadId)?.sessionWakes.pending() ?? [];
   }
 
   /** Commands and sub-agents Claude is running for the thread. */
@@ -2826,12 +2899,13 @@ export class ClaudeBackend {
   }
 
   /**
-   * Stop the turn but keep the process, and the background tasks it runs.
-   * Returns false when only ending the query can stop the turn.
+   * Stop the turn but keep the process, and the background tasks and
+   * scheduled wakes it runs. Returns false when only ending the query can
+   * stop the turn.
    */
   private async interruptKeepingTasks(live: LiveSession, turn: RunningTurn): Promise<boolean> {
     // A CLI that cannot drop queued messages would run the steers being stopped.
-    if (!live.query || live.closing || live.tasks.active().length === 0
+    if (!live.query || live.closing || !this.processHoldsWork(live)
       || !live.capabilities?.includes(CLAUDE_INTERRUPT_CANCEL_QUEUED)) return false;
     turn.interrupted = true;
     let cancelledPrompt = false;

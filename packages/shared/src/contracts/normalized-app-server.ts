@@ -568,6 +568,31 @@ export type AppServerBackgroundTask = {
   startedAt?: number;
 };
 
+/**
+ * A turn a backend scheduled in its own session and will start by itself:
+ * Claude Code's dynamic /loop wake-up (`ScheduleWakeup`) or a session cron
+ * (`CronCreate`). It lives in the backend's process and ends with it, and
+ * only the backend's agent can cancel it.
+ */
+export type AppServerBackendWake = {
+  /** The backend's own id for the wake. */
+  id: string;
+  origin: "loop_wakeup" | "cron";
+  /** 5-field cron in the owner's local time. Empty until the backend reports it. */
+  schedule: string;
+  /** The backend's own wording for a recurring schedule, such as `every 5 minutes`. */
+  humanSchedule?: string;
+  recurring: boolean;
+  /** What the backend sends itself when the wake fires. */
+  prompt: string;
+  /** Why the agent chose this delay. */
+  reason?: string;
+  /** The next fire time, when the backend reported one that is still ahead. */
+  nextFireAt?: number;
+  /** When this process first saw the wake. */
+  createdAt?: number;
+};
+
 /** Provider provenance carried by a native Codex `spawn_agent` thread. */
 export type CodexNativeSubAgentProvenance = {
   parentThreadId: ThreadIdentifier;
@@ -2624,6 +2649,17 @@ export type AppServerNotification =
       params: {
         threadId: string;
         tasks: AppServerBackgroundTask[];
+      };
+    }
+  | {
+      /**
+       * The set of turns a backend scheduled in its own session changed.
+       * Claude reports it at each turn's end and after each wake tool.
+       */
+      method: "thread/sessionWakes/updated";
+      params: {
+        threadId: string;
+        wakes: AppServerBackendWake[];
       };
     }
   | {
