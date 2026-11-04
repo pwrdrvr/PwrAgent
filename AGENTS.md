@@ -49,6 +49,18 @@
   - Claude Code's `skipped` outcome is recorded as `declined` with no reason. Defer a skipped finding that is still worth doing.
   - [docs/thread-reviews.md](docs/thread-reviews.md#finding-outcomes) defines the outcomes.
 
+### Property, model and oracle tests
+
+- A bug fix states the rule it broke as a property, model or oracle test,
+  and confirms that test fails on the pre-fix code.
+- Do the same for new rule-heavy logic, state machines, concurrency, and code
+  that re-derives state that git, a provider's event stream, or a thread's
+  owning instance owns.
+- Example tests alone check only what their author expected. Here they have
+  asserted the bug as correct.
+- [docs/property-model-oracle-testing.md](docs/property-model-oracle-testing.md)
+  says what each kind is and how to write one.
+
 ### Command output
 
 - Keep model-visible command output bounded.
