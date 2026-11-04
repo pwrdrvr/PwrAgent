@@ -47,4 +47,10 @@ describe("truncateThreadTitle properties", () => {
     const title = `${"a".repeat(59)}n\u0303an\u0303n\u0303`;
     expect(truncateThreadTitle(title)).toBe(`${"a".repeat(59)}n\u0303an\u0303`);
   });
+
+  it("never empties a title whose first cluster outgrows the limit", () => {
+    // One letter carrying 70 combining marks: a single 71-code-point cluster.
+    const title = `a${"\u0301".repeat(70)} launch`;
+    expect(truncateThreadTitle(title)).toBe(`a${"\u0301".repeat(64)}`);
+  });
 });

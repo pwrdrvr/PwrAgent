@@ -232,7 +232,11 @@ export function truncateThreadTitle(value: string): string {
     kept += cluster;
     codePoints += size;
   }
-  return cleanThreadTitle(kept);
+  // A first cluster longer than the whole limit cannot be kept whole; cut it
+  // rather than return an empty title the caller has already ruled out.
+  return cleanThreadTitle(
+    kept || Array.from(wordTruncated).slice(0, ACCEPTED_MAX_TITLE_CHARACTERS).join(""),
+  );
 }
 
 function stripMatchingQuotes(value: string): string {

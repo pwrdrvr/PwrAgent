@@ -98,7 +98,7 @@ export function formatCopyTooltip(path: string, maxLength = 72): string {
   return `${elideMiddle(path, maxLength)}\nClick to copy to clipboard`;
 }
 
-function elideMiddle(text: string, maxLength: number): string {
+export function elideMiddle(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
