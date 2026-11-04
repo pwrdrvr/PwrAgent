@@ -39022,9 +39022,9 @@ export class DesktopBackendRegistry {
         for (const row of slice) {
           params.context?.assertCurrent();
           const overlay = raw.overlaysByThreadKey?.get(buildThreadIdentityKey(row.source, row.id));
-          let directories = row.linkedDirectories;
-          if (row.source === "codex") directories = enrichedCodex[codexIndex++]!.linkedDirectories;
-          else {
+          const enrichedRow = row.source === "codex" ? enrichedCodex[codexIndex++]! : row;
+          let directories = enrichedRow.linkedDirectories;
+          if (row.source !== "codex") {
             const cwd = resolveThreadWorkspaceCwd(row, overlay?.extraLinkedDirectories ?? []);
             if (cwd && (!directoryFilter || await directoryFilter(cwd))) {
               let observation = workspaceObservations.get(cwd);
@@ -39037,7 +39037,7 @@ export class DesktopBackendRegistry {
               if (directory) directories = [directory];
             }
           }
-          result.push({ ...row, linkedDirectories: withRetainedWorktrees(
+          result.push({ ...enrichedRow, linkedDirectories: withRetainedWorktrees(
             mergeThreadLinkedDirectories([...directories, ...(overlay?.extraLinkedDirectories ?? [])]), overlay,
           ) });
         }

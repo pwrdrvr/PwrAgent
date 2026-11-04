@@ -36,6 +36,7 @@ type CleanupBoundary = {
   completeArchivedThreadCleanup(params: { backend: "codex"; threadId: string; archivedAt: number;
     codexRolloutMissing: boolean; messagingCleanup: { error?: string }; context: ArchiveCleanupContext }): Promise<{ cleanup: Array<{ removedWorktree: boolean }> }>;
   findThreadForArchiveCleanup(params: { backend: "codex"; threadId: string; context: ArchiveCleanupContext; reuseInventory: boolean }): Promise<{ thread: AppServerThreadSummary }>;
+  worktreeArchiveService: WorktreeArchiveService;
   claudeBackend: { listThreads(params: { archived: boolean }): Promise<AppServerThreadSummary[]> };
 };
 
@@ -268,6 +269,10 @@ it("uses real Git and canonical paths as the snapshot/removal oracle at the chan
   await git(repo, "config", "user.name", "Fixture");
   await git(repo, "config", "user.email", "fixture@example.com");
   await git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--allow-empty", "-m", "initial");
+  const unrelated = path.join(root, "unrelated");
+  const unrelatedAlias = path.join(root, "unrelated-alias");
+  await mkdir(unrelated);
+  await symlink(unrelated, unrelatedAlias, process.platform === "win32" ? "junction" : "dir");
   let sequence = 0;
   try {
     await fc.assert(fc.asyncProperty(fc.constantFrom("eligible", "alias-owner", "descendant-owner", "external-alias", "primary", "locked"), fc.string({ minLength: 1, maxLength: 25 }), async (kind, contents) => {
@@ -280,12 +285,30 @@ it("uses real Git and canonical paths as the snapshot/removal oracle at the chan
       await writeFile(path.join(target, "preserved.txt"), contents);
       if (kind === "locked") await git(repo, "worktree", "lock", checkout);
       const run = await fixture([], 1, false, { cwd: target, repositoryPath: repo });
+      const previousRefs = new Set((await git(repo, "for-each-ref", "--format=%(refname)", "refs/codex/snapshots/")).split("\n"));
+      const service = run.boundary.worktreeArchiveService;
+      const archive = service.archive.bind(service);
+      vi.spyOn(service, "archive").mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
+        const refs = (await git(repo, "for-each-ref", "--format=%(refname)", "refs/codex/snapshots/")).split("\n").filter((ref) => !previousRefs.has(ref));
+        expect(refs).toHaveLength(1);
+        expect(await git(repo, "show", `${refs[0]}:preserved.txt`)).toBe(contents.trim());
+        expect(await readFile(path.join(target, "preserved.txt"), "utf8")).toBe(contents);
+        return await params.beforeRemove!();
+      } }));
       if (kind === "alias-owner" || kind === "descendant-owner") run.rows.active.push({ id: "owner", cwd: kind === "alias-owner" ? alias : path.join(alias, "child") });
       if (kind === "external-alias") {
         run.rows.archived.push({ id: "external", cwd: alias });
         run.overlays.set("external", { backend: "codex", threadId: "external", extraLinkedDirectories: [{ ...worktree(alias), path: repo, worktreeOwnership: "external" }] });
       }
       try {
+        await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "target", context: run.context, reuseInventory: true });
+        const baselineDiscoveries = run.effects.git;
+        run.rows.active.push({ id: "noise-alias", cwd: unrelatedAlias }, { id: "noise-repeat", cwd: unrelatedAlias });
+        run.rows.archived.push({ id: "noise-real", cwd: unrelated });
+        run.context.batch = {};
+        await run.boundary.findThreadForArchiveCleanup({ backend: "codex", threadId: "target", context: run.context, reuseInventory: true });
+        expect(run.effects.git).toBe(2 * baselineDiscoveries);
+        for (const id of ["noise-alias", "noise-repeat", "noise-real"]) expect(run.inspected).toContain(`codex:${id}`);
         const result = await run.cleanup();
         const removed = result.cleanup.some((item) => item.removedWorktree);
         expect(removed).toBe(kind === "eligible");
