@@ -13417,6 +13417,56 @@ describe("app server ipc", () => {
     },
   );
 
+  it("budgets remote model seeding and unchanged draft reopens", async () => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const { applyNavigationLaunchpadProviderSettingsPatch } = await import("@pwragent/shared");
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const fixture = createTempStateDb("remote-model-seed-");
+    const db = StateDb.open(fixture.dbPath);
+    const store = new SqliteOverlayStore(db);
+    const launchpad = { directoryKey: "directory:/repo/app", directoryKind: "directory" as const,
+      directoryLabel: "app", directoryPath: "/repo/app", backend: "codex" as const, executionMode: "default" as const,
+      model: "viewer-only", prompt: "Investigate", createdAt: 100, updatedAt: 100 };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const, model: "owner-model" };
+    const request = { directoryKey: launchpad.directoryKey, directoryKind: launchpad.directoryKind,
+      directoryLabel: launchpad.directoryLabel, directoryPath: launchpad.directoryPath,
+      federationTarget: { scope: "remote" as const, instanceId: "owner_one" } };
+    try {
+      await store.upsertDirectoryLaunchpad(launchpad);
+      federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValue({ launchpad, defaults });
+      ensureDirectoryLaunchpad.mockImplementation(async () => ({
+        launchpad: (await store.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey }))!, defaults,
+      }));
+      updateDirectoryLaunchpad.mockImplementation(async (update) => {
+        const current = (await store.getDirectoryLaunchpad({ directoryKey: update.directoryKey }))!;
+        return { launchpad: await store.upsertDirectoryLaunchpad(
+          applyNavigationLaunchpadProviderSettingsPatch(current, update.patch)), defaults };
+      });
+      registerAppServerIpcHandlers();
+      const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+      const seeded = await measureSqliteWrites(() => ensure({}, request));
+      expect(seeded.result).toMatchObject({ launchpad: { model: "owner-model" } });
+      expectSqliteWriteBudget({ scenario: "remote-launchpad-model-seed", writes: seeded.writes,
+        note: "One owner model correction: 1 commit; ~0.83 MB/day at 100 corrections/day. Unchanged reopens write zero.",
+      });
+      const reopened = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 100; index++) await ensure({}, request);
+      });
+      expectSqliteWriteBudget({ scenario: "remote-launchpad-model-unchanged", writes: reopened.writes,
+        note: "100 unchanged remote model reconciliations: zero commits and 0 MB/day.",
+      });
+    } finally {
+      db.close();
+      removeTempStateDbDir(fixture.tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("resolves a remote draft's provider against the owner's providers", async () => {
     const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = { scope: "remote" as const, instanceId: "owner_one" };

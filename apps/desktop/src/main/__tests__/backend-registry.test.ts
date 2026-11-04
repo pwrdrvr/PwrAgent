@@ -41767,7 +41767,8 @@ command = "pnpm dev"
         expect(await handoff(explicit)).toMatchObject({ isError: true, structuredContent: { code: "invalid_arguments" } });
         expect(codexClient.lastStartThreadParams).toBeUndefined();
       }
-      expect(await handoff({})).not.toMatchObject({ isError: true });
+      const child = await handoff({});
+      expect(child).toMatchObject({ structuredContent: { inheritedSettings: { model: "child-model" } } });
       expect(codexClient.lastStartThreadParams).toMatchObject({
         model: "child-model", reasoningEffort: supportsReasoning ? "low" : undefined,
         fastMode: false, serviceTier: undefined,
