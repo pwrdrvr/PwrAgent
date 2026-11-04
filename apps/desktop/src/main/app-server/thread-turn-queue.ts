@@ -527,8 +527,11 @@ export class ThreadTurnQueue {
     const queue = this.queueFor(key);
     // On a held FIFO a held entry joins the back, so held entries go in the
     // order they arrived. Otherwise it goes ahead of the turns waiting, and
-    // its hold then covers them.
-    const index = this.heldQueues.has(key) ? queue.length : 0;
+    // its hold then covers them, though never ahead of a restart continuation.
+    const leadingContinuations = queue.findIndex((queued) => !queued.restartContinuation);
+    const index = this.heldQueues.has(key)
+      ? queue.length
+      : leadingContinuations < 0 ? queue.length : leadingContinuations;
     this.addHoldReason(key, reason);
     queue.splice(index, 0, entry);
     options?.onAdmission?.();

@@ -2041,6 +2041,25 @@ describe("ThreadTurnQueue.submitProjectHeld", () => {
       expect(started).toEqual([]);
     });
 
+    it("puts a held submission behind a restart continuation and reports the continuation held", async () => {
+      const gate: { state: RestartGateState; now: number } = { state: OPEN_RESTART_GATE, now: 0 };
+      const events: ThreadTurnQueueLifecycleEvent[] = [];
+      const queue = new ThreadTurnQueue({
+        startTurn: async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` }),
+        isDispatchHeld: (entry) => restartGateHolds(gate.state, {
+          ...(entry.restartContinuation && entry.id ? { restartEntryId: entry.id } : {}),
+        }, gate.now),
+        onLifecycle: (event) => {
+          events.push(event);
+        },
+      });
+      onTestFinished(() => queue.close());
+      queue.restoreRestartContinuations([{ ...buildEntry({ id: "restart" }), createdAt: 1 } as ThreadTurnQueueEntry]);
+      await queue.submitHeld(buildEntry({ id: "monitor" }), "Thread is locked");
+      expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["restart", "monitor"]);
+      expect(events.filter((event) => event.type === "held").map((event) => event.entry.id)).toContain("restart");
+    });
+
     it("lets nothing move past a restart continuation", async () => {
       const gate: { state: RestartGateState; now: number } = {
         state: transitionRestartGate(OPEN_RESTART_GATE, {

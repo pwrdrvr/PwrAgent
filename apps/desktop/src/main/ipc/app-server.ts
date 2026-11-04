@@ -4285,7 +4285,7 @@ class DesktopAppServerService {
   async startOwnerNavigation(): Promise<void> {
     this.ownerNavigationActive = true;
     // Continue After waits while a quiet restart's continuations go first.
-    this.unsubscribeRestartGate ??= getDesktopBackendRegistry().onRestartGateChanged((closed) => {
+    this.unsubscribeRestartGate ??= getDesktopBackendRegistry().onRestartGateChanged?.((closed) => {
       if (!closed && this.ownerNavigationActive) {
         void this.reconcileThreadDependencies().catch((error: unknown) => {
           appServerLog.warn("dependency reconcile after restart gate failed", {
@@ -10255,7 +10255,7 @@ class DesktopAppServerService {
         // A quiet restart's continuations go first; the gate opening
         // reconciles again (see `startAppServerOwnerNavigation`).
         canDispatch: (dependency) => this.ownerNavigationActive
-          && !getDesktopBackendRegistry().isRestartGateClosed()
+          && !getDesktopBackendRegistry().isRestartGateClosed?.()
           && (dependency.conditions.every((condition) => condition.when === "turn_completed")
             || (this.backgroundPrPollingEnabled
               && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),

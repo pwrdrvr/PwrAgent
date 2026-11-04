@@ -22047,8 +22047,9 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * A continuation that starts, fails, is discarded, or is blocked no
-   * longer holds the gate. Its row goes when it leaves the queue; a blocked
+   * A continuation that starts, fails, is discarded, or is blocked or held
+   * no longer holds the gate: a held one waits on the operator, who should
+   * not wait on it. Its row goes when it leaves the queue; a blocked or held
    * one keeps its row, so a later restart sends it again.
    */
   private trackRestartContinuation(event: ThreadTurnQueueLifecycleEvent): void {
@@ -22060,6 +22061,7 @@ export class DesktopBackendRegistry {
     if (
       event.type === "started" || event.type === "failed"
       || event.type === "cancelled" || event.type === "blocked"
+      || event.type === "held"
     ) {
       this.applyRestartGate({ type: "settled", entryId: entry.id });
     }
