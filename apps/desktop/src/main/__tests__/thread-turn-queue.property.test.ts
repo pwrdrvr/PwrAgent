@@ -34,7 +34,8 @@ type Operation =
   | { kind: "releaseHold"; reason: string }
   | { kind: "releaseThread" | "staleRelease"; status: "turn/completed" | "turn/failed" }
   | { kind: "retry"; index: number }
-  | { kind: "pause"; index: number; paused: boolean };
+  | { kind: "pause"; index: number; paused: boolean }
+  | { kind: "move"; index: number; before?: number };
 
 function setup(): { model: Model; real: Real } {
   const model: Model = {
@@ -108,6 +109,7 @@ class QueueCommand implements fc.AsyncCommand<Model, Real> {
       case "releaseThread": return model.active !== undefined;
       case "staleRelease": return model.finished.length > 0;
       case "retry":
+      case "move":
       case "pause": return model.waiting.length > 0;
       default: return true;
     }
@@ -220,6 +222,31 @@ class QueueCommand implements fc.AsyncCommand<Model, Real> {
           .toMatchObject({ disposition, entryId: entry.id });
         break;
       }
+      case "move": {
+        const entry = model.waiting[operation.index % model.waiting.length]!;
+        const anchor = operation.before === undefined ? undefined
+          : model.waiting[operation.before % model.waiting.length];
+        const from = model.waiting.indexOf(entry);
+        const to = anchor ? model.waiting.indexOf(anchor) : model.waiting.length;
+        const crossed = model.waiting.filter((candidate, index) =>
+          candidate !== entry && index >= Math.min(from, to) && index < Math.max(from, to));
+        let disposition: "held" | "unchanged" | "moved";
+        if (entry.holds.length > 0 || crossed.some((entry) => entry.holds.length > 0)) {
+          disposition = "held";
+        } else if (anchor === entry) {
+          disposition = "unchanged";
+        } else {
+          const reordered = model.waiting.filter((candidate) => candidate !== entry);
+          reordered.splice(anchor ? reordered.indexOf(anchor) : reordered.length, 0, entry);
+          disposition = reordered.every((entry, index) => entry === model.waiting[index])
+            ? "unchanged" : "moved";
+          model.waiting = reordered;
+        }
+        advance(model);
+        expect(await real.queue.moveEntry(entry.id, anchor?.id))
+          .toMatchObject({ disposition, entryId: entry.id });
+        break;
+      }
     }
     await assertState(model, real);
   }
@@ -240,9 +267,26 @@ const commands = fc.commands([
   fc.nat({ max: 10 }).map((index) => new QueueCommand({ kind: "retry", index })),
   fc.tuple(fc.nat({ max: 10 }), fc.boolean())
     .map(([index, paused]) => new QueueCommand({ kind: "pause", index, paused })),
+  fc.tuple(fc.nat({ max: 10 }), fc.option(fc.nat({ max: 10 }), { nil: undefined }))
+    .map(([index, before]) => new QueueCommand({ kind: "move", index, before })),
 ], { maxCommands: 40, size: "+1" });
 
 describe("ThreadTurnQueue model", () => {
+  it("holds every waiting entry after failure even if the newest hold already has that reason", async () => {
+    const state = setup();
+    try {
+      await fc.asyncModelRun(() => state, [
+        new QueueCommand({ kind: "submit" }),
+        new QueueCommand({ kind: "submitHeld", reason: "locked" }),
+        new QueueCommand({ kind: "submitHeld", reason: FAILURE }),
+        new QueueCommand({ kind: "releaseThread", status: "turn/failed" }),
+        new QueueCommand({ kind: "releaseHold", reason: "locked" }),
+      ]);
+    } finally {
+      state.real.queue.close();
+    }
+  });
+
   it("ignores an old failure after a newer entry is held", async () => {
     const state = setup();
     try {

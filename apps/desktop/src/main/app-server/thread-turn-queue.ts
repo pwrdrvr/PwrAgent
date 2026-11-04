@@ -1291,7 +1291,9 @@ export class ThreadTurnQueue {
     const reason = errorMessage
       ?? "The previous turn failed. Review the error before retrying queued messages.";
     // An immediate start's release may already have applied this hold.
-    if (this.holdReasonFor(key) === reason) return;
+    if (this.holdReasonFor(key) === reason
+      && this.queueFor(key).every((entry) =>
+        entry.manualReleaseRequired && entry.holdReason === reason)) return;
     await this.holdQueue(key, reason);
   }
 
