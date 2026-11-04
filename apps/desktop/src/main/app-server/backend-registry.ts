@@ -29651,11 +29651,14 @@ export class DesktopBackendRegistry {
       updatedAt: Date.now(),
     };
     let nextLaunchpad = patchedLaunchpad;
+    // A sub-thread draft keeps its plain key under a peer owner.
+    const isPeerDraft =
+      owner?.scope === "remote"
+      || isRemoteLaunchpadStorageKey(request.directoryKey);
     // A peer's draft carries the owner's model choices. The viewer's catalog
     // cannot normalize them; the owner validates them when creating the thread.
     if (
-      owner?.scope !== "remote"
-      && !isRemoteLaunchpadStorageKey(request.directoryKey)
+      !isPeerDraft
       && (
         "model" in patch
         || "reasoningEffort" in patch
@@ -29698,9 +29701,7 @@ export class DesktopBackendRegistry {
     // changes no default here. It is seeded from the owner's defaults, and
     // its models are the owner's: saved here, a local provider would start
     // new launchpads on a model it cannot run.
-    const saveSticky =
-      request.stickySettingsChanged === true
-      && !isRemoteLaunchpadStorageKey(request.directoryKey);
+    const saveSticky = request.stickySettingsChanged === true && !isPeerDraft;
     const stickyPatch: Partial<NavigationLaunchpadDefaults> = {};
     if (saveSticky && request.patch.backend) {
       stickyPatch.backend = request.patch.backend;
