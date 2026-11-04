@@ -8547,6 +8547,115 @@ a.button {
   -webkit-line-clamp: 2;
 }
 
+/* A thread chip's hover card: the PR card's container and rows, plus the
+   thread's machine and id, a running dot and a cost headline. */
+.thread-info-card__machine {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__id {
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-suspended);
+}
+
+.thread-info-card__dot--idle {
+  background: var(--status-ok);
+}
+
+.thread-info-card__dot--running {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.thread-info-card__dot--offline {
+  border: 1px dashed var(--text-muted);
+  background: transparent;
+}
+
+.thread-info-card__aside {
+  color: var(--text-muted);
+}
+
+.thread-info-card__cost {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thread-info-card__cost-total {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-info-card__cost-caption,
+.thread-info-card__note {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.thread-info-card__share {
+  display: flex;
+  height: 4px;
+  margin: 2px 0 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+
+.thread-info-card__share-self {
+  height: 100%;
+  background: var(--accent);
+}
+
+.thread-info-card__share-sub {
+  flex: 1;
+  height: 100%;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.thread-info-card__skeleton {
+  display: inline-block;
+  width: 56px;
+  height: 10px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.thread-info-card__skeleton--big {
+  width: 72px;
+  height: 16px;
+}
+
 .pr-detach-warning-modal {
   position: fixed;
   inset: 0;
