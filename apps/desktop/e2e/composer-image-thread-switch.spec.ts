@@ -314,12 +314,36 @@ test("keeps a pasted composer image after switching away from a newly created th
       .fill("Start the regression thread");
     await app.window.getByRole("button", { name: "Start thread" }).click();
 
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Thread composer regression",
-      }),
-    ).toBeVisible();
+    // DIAGNOSTIC BRANCH ONLY (not for merge): attach main-side timing for
+    // every attempt so a failing first attempt can be compared with its retry.
+    const attachStallDiagnostics = async (outcome: string) => {
+      const main = await app.electronApp.evaluate(() =>
+        (globalThis as Record<string, unknown> & {
+          __PWRAGENT_E2E_STALL_DIAGNOSTICS__?: () => unknown;
+        }).__PWRAGENT_E2E_STALL_DIAGNOSTICS__?.() ?? null
+      ).catch((error: unknown) => ({ error: String(error) }));
+      const renderer = await app.window.evaluate(() =>
+        (globalThis as Record<string, unknown> & {
+          __pwragentNavigationListingDiagnostics?: () => unknown;
+        }).__pwragentNavigationListingDiagnostics?.() ?? null
+      ).catch((error: unknown) => ({ error: String(error) }));
+      await test.info().attach(`thread-start-stall-diagnostics-${outcome}.json`, {
+        body: JSON.stringify({ outcome, retry: test.info().retry, main, renderer }, null, 2),
+        contentType: "application/json",
+      });
+    };
+    try {
+      await expect(
+        app.window.getByRole("heading", {
+          level: 2,
+          name: "Thread composer regression",
+        }),
+      ).toBeVisible();
+    } catch (error) {
+      await attachStallDiagnostics("failed");
+      throw error;
+    }
+    await attachStallDiagnostics("passed");
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     await app.advance({ stepId: "turn-started-1" });
     await app.advance({ stepId: "assistant-message-1" });

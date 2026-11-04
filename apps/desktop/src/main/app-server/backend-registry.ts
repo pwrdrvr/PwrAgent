@@ -934,6 +934,12 @@ import {
   type PdfTurnInputHandling,
 } from "../pdf/pdf-turn-input-preparation";
 
+// DIAGNOSTIC BRANCH ONLY (not for merge): timestamped step marks for the
+// Windows composer-image thread-start flake.
+function diagMark(label: string): void {
+  listingDiagnostics.record("workflow", "cache-hit", { query: label });
+}
+
 type InitializeResult = {
   serverInfo?: {
     name?: string;
@@ -20439,14 +20445,18 @@ export class DesktopBackendRegistry {
     // A launchpad's access defaults to Auto for Codex and Claude. A Codex older
     // than 0.153.0 cannot run Auto, so start on Default Access instead of
     // sending a mode the runtime does not have.
+    diagMark("diag-st-a-begin");
     const executionMode = requestedExecutionMode === "auto"
       ? await this.downgradeUnavailableAutoExecutionMode(backend)
       : requestedExecutionMode;
     // Handoffs and messaging create threads without a launchpad. Apply the
     // profile defaults here too, while preserving an explicit empty selection.
+    diagMark("diag-st-b-exec-mode");
     const mcpConnectionIds = requestedMcpConnectionIds
       ?? await this.resolveNewThreadMcpConnectionIds();
+    diagMark("diag-st-c-mcp-ids");
     const modelSettings = await this.admitNewThreadModelSettings(backend, request);
+    diagMark("diag-st-d-admit");
     let cwd: string | undefined =
       !request.cwd?.trim()
         ? await this.createScratchProjectDirectory()
@@ -20605,12 +20615,15 @@ export class DesktopBackendRegistry {
         : undefined;
     // Custom MCP servers can report READY without Codex exposing their tools
     // to the model. Keep the dynamic PDF surface as the compatible fallback.
+    diagMark("diag-st-e-pre-mcp");
     const dynamicTools = resolvedDynamicTools?.length
       ? resolvedDynamicTools
       : undefined;
+    diagMark("diag-st-f-mcp-begin");
     const [pdfMcpRegistration, mcpConnectionRegistrations, inheritedCodexMcpServerNames] = await joinConcurrent([
       pdfMcpPreparation, connectionPreparation, inventoryPreparation, runtimePreparation,
     ]);
+    diagMark("diag-st-g-mcp-done");
     const pdfMcpConfig = pdfMcpRegistration
       ? buildCodexPdfMcpConfig(pdfMcpRegistration)
       : undefined;
@@ -20672,6 +20685,7 @@ export class DesktopBackendRegistry {
     });
 
     let result: { threadId: string };
+    diagMark("diag-st-h-pre-start");
     try {
       result = await this.withArchiveWorkspaceWrite([cwd ?? "", ...(resolvedLinkedDirectories ?? []).map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], async () => backend === "claude"
         ? await this.claudeBackend.startThread({ cwd: cwd!, executionMode: effectiveExecutionMode, model: modelSettings.model, linkedDirectories: resolvedLinkedDirectories })
@@ -20740,9 +20754,11 @@ export class DesktopBackendRegistry {
       registration.bindThread(result.threadId);
     }
     const startedAt = Date.now();
+    diagMark("diag-st-i-started");
     const pendingThreadKey = buildThreadIdentityKey(backend, result.threadId);
     const agentName = request.agent?.name?.trim();
     const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
+    diagMark("diag-st-j-git-branch");
     this.pendingStartedThreads.set(
       pendingThreadKey,
       {
@@ -20885,6 +20901,7 @@ export class DesktopBackendRegistry {
         },
       });
     }
+    diagMark("diag-st-k-overlay");
     const visibilityFinalization = await this.finalizeCreatedThreadVisibility({
       backend,
       directoryKey,
@@ -30634,10 +30651,12 @@ export class DesktopBackendRegistry {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
     const projectedDraft = projectNavigationLaunchpadProviderSettings(draft);
+    diagMark("diag-m-a-begin");
     await this.admitNewThreadModelSettings(projectedDraft.backend, projectedDraft);
     let launchpad = options?.sourceInstanceId
       ? await this.resolveRemoteLaunchpadModelSettings(draft)
       : draft;
+    diagMark("diag-m-b-admit");
     operation?.update({ backend: launchpad.backend, projectPath: launchpad.directoryPath, title: request.input?.find((item) => item.type === "text")?.text ?? launchpad.prompt });
     operation?.check();
     if (
@@ -30646,10 +30665,12 @@ export class DesktopBackendRegistry {
     ) {
       throw new Error("Scheduled time must be a finite Unix timestamp.");
     }
+    diagMark("diag-m-c-env-begin");
     const [codexEnvironmentOptions] = await joinConcurrent([
       listCodexEnvironmentOptions(launchpad.directoryPath),
       this.getBackendLaunchpadOptions(launchpad.backend, "thread-start-defaults"),
     ]);
+    diagMark("diag-m-d-env");
     if (request.codexEnvironmentSelector?.trim()) {
       // An agent names an environment by id or name; only this machine has
       // the project's config to resolve it. Refuse before any workspace work.
@@ -30694,6 +30715,7 @@ export class DesktopBackendRegistry {
         backend: launchpad.backend,
       });
     }
+    diagMark("diag-m-e-workspace");
     const workspace =
       launchpad.directoryKind === "workspace" && !preparedWorkspace.cwd
         ? {
@@ -30703,10 +30725,12 @@ export class DesktopBackendRegistry {
         : preparedWorkspace;
     operation?.update({ cwd: workspace.cwd });
     operation?.check();
+    diagMark("diag-m-f-scratch");
     const repositoryPath = await resolvePreparedRepositoryIdentityPath({
       preparedPath: workspace.repositoryPath,
       requestedPath: launchpad.directoryPath,
     });
+    diagMark("diag-m-g-repo-identity");
     const linkedDirectories =
       workspace.workMode === "worktree"
         ? buildWorktreeLinkedDirectory({
@@ -30818,6 +30842,7 @@ export class DesktopBackendRegistry {
         worktreeCleanupAvailable: workspace.workMode === "worktree",
       };
     }
+    diagMark("diag-m-h-pre-start-thread");
     operation?.check();
     operation?.update({ phase: "creating" });
     const startThreadResponse = await this.startThread({
@@ -30931,12 +30956,15 @@ export class DesktopBackendRegistry {
       );
       this.pendingEnvironmentLaunchStore.put({ ...pendingLaunch, request: { ...request, input: retainedInput } });
     }
+    diagMark("diag-m-i-pre-on-materialized");
     await options?.onThreadMaterialized?.(materializedThread);
+    diagMark("diag-m-j-commit");
     operation?.commit();
     if (!codexEnvironmentStartupFailure) {
       continuation = await this.startMaterializedLaunchpadRequest(pendingLaunch);
     }
 
+    diagMark("diag-m-k-dispatched");
     if (!request.releaseLaunchpadOnSubmit) {
       await this.resetLaunchpadDraft(launchpad);
     } else if (launchpad.prompt.trim()) {

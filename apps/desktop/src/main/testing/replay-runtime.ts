@@ -16,6 +16,8 @@ import type {
 import { ReplayClient } from "./replay-client";
 import type { ReplayFixture, ReplayStepOverride } from "./replay-fixture";
 import { validateReplayFixture } from "./replay-fixture";
+import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 
 const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
@@ -252,8 +254,33 @@ export function createReplayClientsFromEnv():
       await client.respondToPendingRequest?.(params.requestId);
     }
   };
+  installStartupStallDiagnostics();
 
   return clients;
+}
+
+// DIAGNOSTIC BRANCH ONLY (not for merge): exposes main-side timing so the
+// Windows composer-image thread-start flake can be localized from CI.
+function installStartupStallDiagnostics(): void {
+  const stalls: Array<{ at: number; lagMs: number }> = [];
+  const intervalMs = 20;
+  let last = performance.now();
+  const timer = setInterval(() => {
+    const now = performance.now();
+    const lagMs = now - last - intervalMs;
+    last = now;
+    if (lagMs > 100) {
+      stalls.push({ at: Date.now(), lagMs: Math.round(lagMs) });
+      if (stalls.length > 256) stalls.shift();
+    }
+  }, intervalMs);
+  timer.unref?.();
+  (globalThis as Record<string, unknown>).__PWRAGENT_E2E_STALL_DIAGNOSTICS__ = () => ({
+    capturedAt: Date.now(),
+    eventLoopStalls: [...stalls],
+    listings: listingDiagnostics.snapshot(),
+    git: gitSubprocessDiagnostics.snapshot(),
+  });
 }
 
 function createReplayClients(fixture: ReplayFixture): {

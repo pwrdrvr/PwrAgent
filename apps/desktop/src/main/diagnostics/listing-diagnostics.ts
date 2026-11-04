@@ -37,6 +37,7 @@ const LABELS = new Set([
   "main-sidebar", "star-map", "exact-link", "messaging-browse", "settings", "unknown", "remote-window", "search", "mentions", "agent-tool",
   "directory-index", "directory", "children", "exact", "group-members", "model-inventory", "lens", "star-map-geometry", "messaging-threads", "messaging-projects",
   "demand", "refresh", "continuation", "rebaseline", "pins", "turn", "thread", "metadata", "federation", "messaging-bindings", "timer", "visibility", "event", "cursor-expired", "page-budget", "owner-invalidated", "provider-fallback",
+  "diag-st-a-begin","diag-st-b-exec-mode","diag-st-c-mcp-ids","diag-st-d-admit","diag-st-e-pre-mcp","diag-st-f-mcp-begin","diag-st-g-mcp-done","diag-st-h-pre-start","diag-st-i-started","diag-st-j-git-branch","diag-st-k-overlay","diag-m-a-begin","diag-m-b-admit","diag-m-c-env-begin","diag-m-d-env","diag-m-e-workspace","diag-m-f-scratch","diag-m-g-repo-identity","diag-m-h-pre-start-thread","diag-m-i-pre-on-materialized","diag-m-j-commit","diag-m-k-dispatched",
   "thread-list", "renderer-navigation-query", "federation-navigation-query", "navigation-snapshot", "startup-prewarm", "startup-provider-refresh", "authentication-recovery", "archive-cleanup", "thread-id-lookup", "agent-thread-inspection", "notification-context", "title-generation", "federation-thread-search",
 ]);
 const NUMBER_FIELDS = ["targetId", "view", "effect", "logical", "attempt", "invalidations", "sender", "rows", "page", "durationMs"] as const;
