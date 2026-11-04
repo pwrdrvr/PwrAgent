@@ -15,7 +15,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-native-quit-${{ github.event.pull_request.number || github.ref }}
+  # Skipped unrelated-label runs must not cancel an active or pending probe.
+  group: windows-native-quit-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:windows-shutdown-diagnostics' && '-unrelated-label' || '' }}
   cancel-in-progress: true
 
 jobs:

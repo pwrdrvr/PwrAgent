@@ -39,6 +39,15 @@ async function bounded(promise, ms, message) {
   } finally { clearTimeout(timer); }
 }
 
+export async function cleanupProbeProcessGroup(child, closed) {
+  if (process.platform === "win32" || !child.pid) return;
+  // A descendant can retain the launcher pipes after the group leader exits.
+  try { process.kill(-child.pid, "SIGKILL"); } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+  await bounded(closed, 1_000, "Probe process group did not close after cleanup");
+}
+
 function writeRequest(requests, event) {
   if (!requests) return;
   const filename = path.join(requests, randomUUID());
@@ -182,10 +191,7 @@ async function runCase({ output, index, mode, electron, profileLocation }) {
     writeFileSync(path.join(root, "stderr-tail.txt"), stderrTail);
     // Windows failures leave this worker immediately; its enclosing atomic Job
     // then closes, killing only this probe's descendants. Preserve every file.
-    if (process.platform !== "win32" && child.pid && child.exitCode === null && child.signalCode === null) {
-      try { process.kill(-child.pid, "SIGKILL"); } catch { /* Group already exited. */ }
-      await bounded(closed, 1_000, "Probe process group did not close after cleanup");
-    }
+    await cleanupProbeProcessGroup(child, closed);
     throw error;
   } finally { clearTimeout(timer); }
 }
