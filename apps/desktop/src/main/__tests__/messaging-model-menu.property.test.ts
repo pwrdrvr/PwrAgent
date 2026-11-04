@@ -16,6 +16,33 @@ const binding: MessagingBindingRecord = {
 };
 
 describe("messaging model menu oracle", () => {
+  it.each([undefined, "@local/gpt-6-sol"])("keeps an existing Codex thread on its provider (%s)", (model) => {
+    const models = [
+      ...messagingModelCatalog,
+      { id: "@local/gpt-6-sol", label: "Local Sol", providerId: "local", providerLabel: "Local" },
+      { id: "@local/another", label: "Another", providerId: "local", providerLabel: "Local" },
+    ];
+    const expected = buildModelMenu({ kind: "codex", models, thread: { model } });
+    const intent = buildStatusModelPickerIntent({
+      binding, models, currentModelId: model, id: "model-picker", createdAt: 1,
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+    });
+    expect(intent.choices.filter((choice) => choice.id === "status:set-model")
+      .map((choice) => (choice.value as { model: string }).model)).toEqual(expected.primary.map((entry) => entry.id));
+  });
+
+  it("keeps Claude's Other Models flag and its current selection on the second page", () => {
+    const models = [{ id: "new", label: "New" }, { id: "old", label: "Old", other: true }];
+    const render = (menuValue?: MessagingJsonValue) => buildStatusModelPickerIntent({
+      binding: { ...binding, backend: "claude" }, models, currentModelId: "old", menuValue,
+      id: "claude-picker", createdAt: 1, capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+    });
+    expect(render().choices.filter((choice) => choice.id === "status:set-model")).toHaveLength(1);
+    const other = render().choices.find((choice) => choice.label === "Other Models")!;
+    expect(other).toBeDefined();
+    expect(render(other.value).choices).toContainEqual(expect.objectContaining({ label: "Old (current)" }));
+  });
+
   it("matches the desktop menu for every subset of the Codex catalog", () => {
     // The shared desktop rule owns classification and catalog order. Removing
     // replacements must also restore older models to the primary menu.

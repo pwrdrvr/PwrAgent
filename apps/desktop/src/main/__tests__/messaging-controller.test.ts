@@ -1014,6 +1014,35 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("Update") });
   });
 
+  it("review model menus put superseded models behind Other", async () => {
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000,
+      backends: [buildBackendSummary({
+        capabilities: { ...buildBackendSummary().capabilities, reviewRunner: true },
+        launchpadOptions: { models: messagingModelCatalog },
+      })],
+    }) });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:reviewer" }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:reviewer:provider:0" }));
+    const picker = harness.delivered.at(-1)!;
+    expect(picker.kind).toBe("review");
+    if (picker.kind !== "review") throw new Error("Expected review picker");
+    expect(picker.actions.filter((action) => (action.value as { model?: string } | undefined)?.model)
+      .map((action) => (action.value as { model: string }).model)).toEqual(currentMessagingModels);
+    const other = picker.actions.find((action) => action.label === "Other")!;
+    expect(other).toBeDefined();
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: other.id, value: other.value }));
+    const otherPicker = harness.delivered.at(-1)!;
+    if (otherPicker.kind !== "review") throw new Error("Expected review picker");
+    expect(otherPicker.actions.filter((action) => (action.value as { model?: string } | undefined)?.model)
+      .map((action) => (action.value as { model: string }).model)).toEqual(otherMessagingModels);
+    const selected = otherPicker.actions.find((action) => (action.value as { model?: string } | undefined)?.model === "gpt-6-sol")!;
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: selected.id, value: selected.value }));
+    expect(harness.delivered.at(-1)).toMatchObject({ review: { reviewer: { backend: "codex", model: "gpt-6-sol" } } });
+  });
+
   it("picks a reviewer through the configurator buttons", async () => {
     const harness = await createHarness({
       listBackends: async (): Promise<ListBackendsResponse> => ({
