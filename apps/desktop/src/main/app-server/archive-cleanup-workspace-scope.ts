@@ -11,6 +11,7 @@ export class ArchiveWorkspaceAdmission {
   private readonly classifiedPaths = new Map<string, boolean>();
   private readonly unclassifiedPaths = new Set<string>();
   private readonly changes: Array<{ key?: string; paths: readonly string[] }> = [];
+  private pendingObservations = 0;
   readonly directoryFilter: ReturnType<typeof archiveCleanupWorkspaceFilter>;
 
   constructor(readonly ownerKey: string, scopePath: string) {
@@ -25,6 +26,11 @@ export class ArchiveWorkspaceAdmission {
   changed(key?: string, paths: readonly string[] = []): void {
     this.changes.push({ key, paths });
     this.observePaths(paths);
+  }
+
+  holdObservation(): () => void {
+    this.pendingObservations += 1;
+    return () => { this.pendingObservations -= 1; };
   }
 
   private observePaths(paths: readonly string[]): void {
@@ -58,7 +64,7 @@ export class ArchiveWorkspaceAdmission {
   }
 
   assertCurrent(mutations: readonly ArchiveWorkspaceMutation[]): void {
-    if (this.changes.some((change) => !this.disjoint(change.key, change.paths))) {
+    if (this.pendingObservations || this.changes.some((change) => !this.disjoint(change.key, change.paths))) {
       throw new Error("Thread workspace state changed during removal admission; the worktree was kept. Retry archive after it settles.");
     }
     if (mutations.some((mutation) => mutation.key !== this.ownerKey && !this.disjoint(mutation.key, mutation.paths))) {

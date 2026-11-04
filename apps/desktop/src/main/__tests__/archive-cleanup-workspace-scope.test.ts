@@ -49,6 +49,24 @@ describe("archive admission workspace scope", () => {
     expect(() => scope.assertCurrent([mutation])).toThrow("may use this worktree");
   });
 
+  it("keeps removal fenced until a new checkout user's overlay is known", async () => {
+    const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    scope.changed("codex:new", ["/fixture/other"]);
+    const release = scope.holdObservation();
+    await scope.prepare([]);
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+    release();
+    expect(() => scope.assertCurrent([])).not.toThrow();
+  });
+
+  it("keeps ambiguous aliases without interrupting lifecycle event delivery", async () => {
+    const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
+    scope.changed("codex:other", ["/fixture/denied"]);
+    vi.mocked(realpath).mockRejectedValueOnce(Object.assign(new Error("Denied"), { code: "EACCES" }));
+    await scope.prepare([]);
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+  });
+
   it("includes checkout roots, descendants, ancestors and aliases, but excludes unrelated and prefix-sibling workspaces", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "archive-scope-"));
     roots.push(root);

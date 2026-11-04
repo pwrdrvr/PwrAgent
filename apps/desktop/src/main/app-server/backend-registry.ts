@@ -2374,6 +2374,14 @@ function archiveWorkspacePaths(thread: Pick<AppServerThreadSummary, "projectKey"
     .filter((value): value is string => Boolean(value));
 }
 
+function archiveNotificationWorkspacePaths(thread: Record<string, unknown> | undefined): string[] {
+  const directories = Array.isArray(thread?.linkedDirectories) ? thread.linkedDirectories : [];
+  return [thread?.projectKey, thread?.cwd, ...directories.flatMap((value) => {
+    const directory = readRecord(value);
+    return [directory?.path, directory?.worktreePath];
+  })].map(readNonEmptyString).filter((value): value is string => Boolean(value));
+}
+
 export type ArchivedWorktreeRepairReport = {
   archivedThreads: number;
   discoveredWorktrees: number;
@@ -20563,7 +20571,7 @@ export class DesktopBackendRegistry {
         worktreePath: cwd,
       });
     }
-    this.invalidateThreadListCache(backend, true, result.threadId, [cwd]);
+    this.invalidateThreadListCache(backend, true, result.threadId, cwd ? [cwd] : []);
 
     if (backend === "claude") {
       await this.overlayStore.setThreadExecutionMode({ backend, threadId: result.threadId, executionMode: effectiveExecutionMode });
@@ -21198,7 +21206,7 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         branch: gitBranch,
       });
-      this.invalidateThreadListCache(backend, true, result.threadId, [cwd]);
+      this.invalidateThreadListCache(backend, true, result.threadId, cwd ? [cwd] : []);
     } catch (error) {
       this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, result.threadId));
       await preparedWorkspace.rollback?.();
@@ -32189,7 +32197,11 @@ export class DesktopBackendRegistry {
             }
           }
         }
-        if (this.invalidateArchiveCleanupForNotification(backend, notification)) await this.prepareArchiveWorkspaceChanges();
+        const archiveWorkspaceChanged = this.invalidateArchiveCleanupForNotification(backend, notification);
+        if (notification.method === "thread/unarchived" || notification.method === "thread/deleted") {
+          this.archiveCleanupQueue.cancel(buildThreadIdentityKey(backend, notification.params.threadId));
+        }
+        if (archiveWorkspaceChanged) await this.prepareArchiveWorkspaceChanges(backend, notification);
         if (backend === "codex" && notification.method === "account/updated") {
           this.forgetCodexAccountRateLimits();
         }
@@ -38335,15 +38347,7 @@ export class DesktopBackendRegistry {
     return await client.archiveThread({ threadId });
   }
 
-  private async findThreadForArchiveCleanup(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    context?: ArchiveCleanupContext;
-    targetThread?: AppServerThreadSummary;
-    codexRolloutMissing?: boolean;
-    reuseInventory?: boolean;
-    ownershipScope?: string;
-  }): Promise<ArchiveCleanupMetadata> {
+  private async findThreadForArchiveCleanup(params: ArchiveCleanupDiscoveryRequest): Promise<ArchiveCleanupMetadata> {
     if (this.codexClient.listArchiveCleanupThreadsPage) {
       return await this.readPacedArchiveCleanupMetadata(params);
     }
@@ -51073,10 +51077,30 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async prepareArchiveWorkspaceChanges(): Promise<void> {
-    const mutations = this.archiveWorkspaceMutations();
-    await Promise.all([...new Set([...this.archiveWorktreeRemovalAdmissions].map((admission) => admission.scope))]
-      .map(async (scope) => { await scope.prepare(mutations); }));
+  private async prepareArchiveWorkspaceChanges(backend: AppServerBackendKind, notification: AppServerNotification): Promise<void> {
+    const scopes = [...new Set([...this.archiveWorktreeRemovalAdmissions].map((admission) => admission.scope))];
+    if (!scopes.length) return;
+    const started = notification.method === "thread/started" ? readRecord(notification.params.thread) : undefined;
+    const threadId = notification.method === "thread/started"
+      ? readNonEmptyString(notification.params.threadId) ?? readNonEmptyString(started?.id) : undefined;
+    const releases = threadId ? scopes.map((scope) => scope.holdObservation()) : [];
+    try {
+      if (threadId) {
+        const key = buildThreadIdentityKey(backend, threadId);
+        try {
+          const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+          const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [threadId] });
+          const paths = archiveWorkspacePaths({ linkedDirectories: overlays[threadId]?.extraLinkedDirectories ?? [] });
+          if (paths.length) this.recordArchiveWorkspaceChange(key, paths);
+        } catch {
+          this.recordArchiveWorkspaceChange(key, [""]);
+        }
+      }
+      const mutations = this.archiveWorkspaceMutations();
+      await Promise.all(scopes.map(async (scope) => { await scope.prepare(mutations); }));
+    } finally {
+      for (const release of releases) release();
+    }
   }
 
   private invalidateArchiveCleanupReads(
@@ -51135,13 +51159,19 @@ export class DesktopBackendRegistry {
         // change archived membership or require another messaging cleanup scan.
         this.archiveWorkspaceRevision += 1;
         if (notification.method === "thread/started") {
-          const thread = notification.params.thread;
-          this.recordArchiveWorkspaceChange(buildThreadIdentityKey(backend, thread.id), archiveWorkspacePaths(thread));
+          const thread = readRecord(notification.params.thread);
+          const threadId = readNonEmptyString(notification.params.threadId) ?? readNonEmptyString(thread?.id);
+          this.recordArchiveWorkspaceChange(threadId ? buildThreadIdentityKey(backend, threadId) : undefined, archiveNotificationWorkspacePaths(thread));
         } else if (notification.method === "navigation/threadDirectories/updated") {
-          for (const threadId of notification.params.threadIds ?? []) this.recordArchiveWorkspaceChange(buildThreadIdentityKey(backend, threadId));
+          const threadIds = notification.params.threadIds;
+          if (Array.isArray(threadIds)) {
+            for (const threadId of threadIds) {
+              if (typeof threadId === "string") this.recordArchiveWorkspaceChange(buildThreadIdentityKey(backend, threadId));
+            }
+          } else this.recordArchiveWorkspaceChange();
         } else {
-          this.recordArchiveWorkspaceChange("threadId" in notification.params
-            ? buildThreadIdentityKey(backend, notification.params.threadId) : undefined);
+          const threadId = readNonEmptyString(readRecord(notification.params)?.threadId);
+          this.recordArchiveWorkspaceChange(threadId ? buildThreadIdentityKey(backend, threadId) : undefined);
         }
       }
       return true;
@@ -51196,7 +51226,11 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
-    if (this.invalidateArchiveCleanupForNotification(event.backend, event.notification)) await this.prepareArchiveWorkspaceChanges();
+    const archiveWorkspaceChanged = this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
+    if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
+      this.archiveCleanupQueue.cancel(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
+    }
+    if (archiveWorkspaceChanged) await this.prepareArchiveWorkspaceChanges(event.backend, event.notification);
     if (event.notification.method === "navigation/threadDirectories/updated") {
       // Managed local MCP servers in these threads are told their roots moved.
       const threadIds = readRecord(event.notification.params)?.threadIds;
@@ -51206,9 +51240,6 @@ export class DesktopBackendRegistry {
           threadIds.filter((threadId): threadId is string => typeof threadId === "string"),
         );
       }
-    }
-    if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
-      this.archiveCleanupQueue.cancel(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
     }
     if (event.notification.method === "thread/deleted") {
       this.invalidateThreadListCache(event.backend);

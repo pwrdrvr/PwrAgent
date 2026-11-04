@@ -1112,7 +1112,7 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.counts.providerPages).toBe(backend === "codex" ? 5 : 4);
     expect(fixture.counts.archiveMutations).toBe(1);
     for (const thread of others) {
-      await publishNotification(fixture.registry, { method: "turn/completed", params: { threadId: thread.id, turn: { id: `turn-${thread.id}`, status: "completed" } } }, backend);
+      await publishNotification(fixture.registry, { method: "turn/completed", params: { threadId: thread.id, turnId: `turn-${thread.id}`, turn: { id: `turn-${thread.id}`, status: "completed" } } }, backend);
       await publishNotification(fixture.registry, { method: "thread/status/changed", params: { threadId: thread.id, status: { type: "idle" } } }, backend);
     }
   });
@@ -1143,12 +1143,13 @@ describe("archive cleanup pipeline", () => {
     }
   });
 
-  it.each(["unrelated", "shared", "unknown"] as const)("checks a newly started %s thread after the final inventory", async (workspace) => {
+  it.each(["unrelated", "shared", "overlay", "unknown"] as const)("checks a newly started %s thread after the final inventory", async (workspace) => {
     vi.useFakeTimers();
     const target = codexThread({ id: "target", linkedDirectories: [{
       id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
     }] });
     const fixture = build([], target);
+    if (workspace === "overlay") fixture.overlays.set("new-thread", { backend: "codex", threadId: "new-thread", extraLinkedDirectories: target.linkedDirectories });
     const archive = fixture.archiveWorktree.getMockImplementation()!;
     fixture.archiveWorktree.mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
       const assertRemoval = await params.beforeRemove!();
