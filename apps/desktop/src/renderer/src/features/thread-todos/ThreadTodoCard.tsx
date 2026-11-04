@@ -620,6 +620,11 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const action = todo.action;
   const sendingMessage = action?.type === "send_message" || messageChoices.dispatchMode === "message";
   const messageTarget = messageChoices.messageTarget ?? (action?.type === "send_message" ? action.target : undefined);
+  // An agent can address a request to the thread that raised it. That card's
+  // only useful action is Do it here, so it leads instead of a refused Send.
+  const targetsOwnThread = sendingMessage && messageTarget !== undefined
+    && messageTarget.backend === todo.backend && messageTarget.threadId === todo.threadId
+    && (!messageTarget.instanceId || messageTarget.instanceId === todo.federationTarget?.instanceId);
   const canSendMessage = !todo.federationTarget
     || props.instances?.some((instance) => instance.instanceId === todo.federationTarget?.instanceId && instance.messageTarget);
   const titleId = `thread-todo-title-${todo.id}`;
@@ -850,17 +855,13 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             onSelect: () => chooseMessage({ dispatchMode: "new_thread" }),
           });
         }
-        if (props.onDoHere) {
-          const doHere = props.onDoHere;
-          entries.push({
-            kind: "item",
-            id: "here",
-            label: "Do it here",
-            onSelect: () => completeCard(
-              { question: "Send it here anyway?", label: "Do it here" },
-              (allowOpenItems) => void doHere(todo, resolveOptions(allowOpenItems)),
-            ),
-          });
+        const doHere = props.onDoHere;
+        const runHere = doHere ? () => completeCard(
+          { question: "Send it here anyway?", label: "Do it here" },
+          (allowOpenItems) => void doHere(todo, resolveOptions(allowOpenItems)),
+        ) : undefined;
+        if (runHere && !targetsOwnThread) {
+          entries.push({ kind: "item", id: "here", label: "Do it here", onSelect: runHere });
         }
         if (entries.length > 0) {
           entries.push({ kind: "separator", id: "separator" });
@@ -872,14 +873,25 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           onSelect: () => markDone("handled_elsewhere"),
         });
         return (
-          <TodoSplitButton
-            label={sendingMessage ? "Send request" : todo.error ? "Retry" : "Start thread"}
-            disabled={sendingMessage && (!messageTarget || !canSendMessage)}
-            Icon={HandoffIcon}
-            menuLabel="Handoff options"
-            onClick={() => runAction()}
-            entries={entries}
-          />
+          runHere && targetsOwnThread ? (
+            <TodoSplitButton
+              label="Do it here"
+              Icon={HandoffIcon}
+              menuLabel="Handoff options"
+              onClick={runHere}
+              entries={entries}
+            />
+          ) : (
+            <TodoSplitButton
+              label={sendingMessage ? "Send request" : todo.error ? "Retry" : "Start thread"}
+              // Without Do it here, a send to the card's own thread is refused.
+              disabled={sendingMessage && (!messageTarget || !canSendMessage || targetsOwnThread)}
+              Icon={HandoffIcon}
+              menuLabel="Handoff options"
+              onClick={() => runAction()}
+              entries={entries}
+            />
+          )
         );
       }
     }

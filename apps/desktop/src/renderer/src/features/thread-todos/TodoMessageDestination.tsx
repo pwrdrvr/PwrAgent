@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ThreadSearchResult, ThreadTodo, ThreadTodoMessageTarget } from "@pwragent/shared";
+import { formatBackendLabel } from "../../lib/backend-label";
+import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
+import { ThreadChip } from "../thread-detail/ThreadChip";
 import { useTodoDispatchContext } from "./TodoDispatchProvider";
 import type { ThreadTodoLocalMachine } from "./thread-todos-view";
 
@@ -37,13 +40,29 @@ export function TodoMessageDestination(props: {
     };
   };
   const target = props.target;
+  const threadLinks = useThreadLinks();
+  // A target without its own owner lives on the card's machine.
+  const targetInstanceId = target?.instanceId ?? owner;
+  const resolved = target && threadLinks?.resolve({ backend: target.backend, threadId: target.threadId,
+    ...(targetInstanceId ? { instanceId: targetInstanceId } : {}) });
+  // The card's recorded label names the machine until navigation knows it.
+  const targetLink: ResolvedThreadLink | undefined = resolved && target?.instanceLabel && !resolved.instanceLabel
+    && resolved.instanceId ? { ...resolved, instanceLabel: target.instanceLabel } : resolved;
   return (
     <div className="todo-message-destination">
       <div className="todo-message-destination__heading">
         <span>To</span>
         <span className="todo-message-destination__target">
-          {target ? target.title ?? target.threadId : "Choose an existing thread"}
-          {target ? <small>{target.backend} · {target.instanceLabel ?? target.instanceId ?? "Card's machine"} · {target.threadId}</small> : null}
+          {target && targetLink && threadLinks ? (
+            <ThreadChip fallbackLabel={target.title ?? target.threadId} link={targetLink}
+              onOpen={(link) => threadLinks.show(link)} />
+          ) : target ? target.title ?? target.threadId : "Choose an existing thread"}
+          {target ? (
+            <small>
+              {formatBackendLabel(target.backend)} · {target.instanceLabel ?? target.instanceId ?? "Card's machine"}
+              {threadLinks ? null : <> · {target.threadId}</>}
+            </small>
+          ) : null}
         </span>
         {target && api?.searchThreads ? (
           <button type="button" className="button thread-todo-card__button" disabled={props.disabled}

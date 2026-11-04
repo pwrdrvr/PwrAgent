@@ -62,6 +62,7 @@ function setup(options: {
   backendsTarget?: FederationTarget;
   /** Mounted copies of the card, as the stack and the To-dos panel both show it. */
   copies?: number;
+  onDoHere?: (todo: ThreadTodo) => void;
 } = {}) {
   const todo = options.todo ?? card;
   const onRun = vi.fn();
@@ -91,6 +92,7 @@ function setup(options: {
       {visible ? Array.from({ length: options.copies ?? 1 }, (_, index) => (
         <ThreadTodoCard key={index} todo={value} running={false} now={0} onRun={onRun} onResolve={vi.fn()}
           onStartReview={vi.fn()} onSetItemChecked={vi.fn()}
+          {...(options.onDoHere ? { onDoHere: options.onDoHere } : {})}
           instances={options.instances ?? [WIN]} localMachine={MAC} />
       )) : null}
     </TodoDispatchProvider>
@@ -129,6 +131,25 @@ describe("to-do dispatch target", () => {
     expect(onRun).toHaveBeenCalledWith(card, { messageTarget: {
       backend: "codex", threadId: "pr-owner", title: "Refresh PR #42", instanceLabel: "studio",
     } });
+  });
+
+  it("leads with Do it here when the request names the card's own thread", async () => {
+    const target = { backend: "claude" as const, threadId: "thread-a", title: "An older title" };
+    const onDoHere = vi.fn();
+    const { onRun } = setup({ onDoHere, todo: { ...card, action: { type: "send_message", prompt: "Follow up", target } } });
+    expect(screen.queryByRole("button", { name: "Send request" })).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Handoff options" })); });
+    expect(screen.queryByRole("menuitem", { name: "Do it here" })).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Handoff options" })); });
+    fireEvent.click(screen.getByRole("button", { name: "Do it here" }));
+    expect(onDoHere.mock.calls[0]?.[0]).toMatchObject({ id: "card" });
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it("disables a send to the card's own thread when it cannot be done here", () => {
+    const target = { backend: "claude" as const, threadId: "thread-a" };
+    setup({ todo: { ...card, action: { type: "send_message", prompt: "Follow up", target } } });
+    expect((screen.getByRole("button", { name: "Send request" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("shows the agent's proposed destination before sending", async () => {

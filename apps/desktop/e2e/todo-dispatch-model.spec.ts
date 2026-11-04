@@ -217,7 +217,11 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await stack.getByRole("button", { name: "Search", exact: true }).click();
     await stack.getByRole("button", { name: /Per-route rate limits/ }).click();
     await expect(stack.getByRole("button", { name: "Send request", exact: true })).toBeEnabled();
-    await expect(stack).toContainText("atlas-rate-limits");
+    // The destination is a thread chip; its hover card names the thread id.
+    const destination = stack.getByRole("button", { name: "Open thread Per-route rate limits", exact: true });
+    await destination.focus();
+    await expect(app.window.getByRole("tooltip")).toContainText(other);
+    await destination.blur();
     expect(await app.getLastStartTurn()).toBeUndefined();
     await stack.getByRole("button", { name: "Show the whole proposed prompt" }).click();
     await app.window.screenshot({ path: testInfo.outputPath("todo-send-request.png") });

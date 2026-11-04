@@ -3,7 +3,7 @@ import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
-import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
+import type { LaunchpadCreationRequest, LaunchpadCreationResponse, ThreadTodoMessageTarget } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
@@ -44608,11 +44608,53 @@ export class DesktopBackendRegistry {
       context: { backend: params.sourceBackend, threadId: params.sourceThreadId },
       args: {
         ...params.target,
-        includeRemote: params.target.instanceId !== undefined,
+        // A card raised without its owner still names one thread: a thread
+        // this instance does not own is looked for on connected peers.
+        includeRemote: true,
         prompt: params.prompt,
       },
     }, { threadTodo: params.todo, operatorApproved: true });
     if (!response.ok) throw new Error(response.error.message);
+  }
+
+  /**
+   * Names the instance that owns a to-do's destination thread. An agent can
+   * name a peer's thread by id alone; without the owner the card reads as
+   * this machine's thread. A thread this instance owns, or one no peer
+   * reports, is returned as given.
+   */
+  async locateThreadTodoMessageTarget(
+    source: { backend: AppServerBackendKind; threadId: string },
+    target: ThreadTodoMessageTarget,
+  ): Promise<ThreadTodoMessageTarget> {
+    if (target.instanceId && target.instanceLabel && target.title) return target;
+    if (!target.instanceId) {
+      const local = await this.resolveThread({ backend: target.backend, threadId: target.threadId })
+        .catch(() => undefined);
+      if (local) return target.title ? target : { ...target, title: local.title };
+    }
+    if (!this.federationHandler) return target;
+    const response = await Promise.resolve(this.federationHandler({
+      operation: "search_federation_threads",
+      context: source,
+      args: {
+        query: target.threadId,
+        scope: "remote",
+        backend: target.backend,
+        ...(target.instanceId ? { instanceId: target.instanceId } : {}),
+        limit: 5,
+      },
+    })).catch(() => undefined);
+    if (!response?.ok || !("results" in response.data)) return target;
+    const found = response.data.results.find((result) =>
+      !result.isLocal && result.backend === target.backend && result.threadId === target.threadId);
+    if (!found) return target;
+    return {
+      ...target,
+      instanceId: found.instanceId,
+      instanceLabel: found.instanceLabel,
+      title: target.title ?? found.title,
+    };
   }
 
   private async sendMessageToThread(
