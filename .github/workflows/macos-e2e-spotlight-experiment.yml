@@ -1,0 +1,79 @@
+name: macOS E2E Spotlight experiment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: github.head_ref == 'ci/macos-e2e-duration'
+    name: Spotlight ${{ matrix.spotlight }} (sample ${{ matrix.sample }}, lane 4)
+    runs-on: macos-26
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        spotlight: [baseline, disabled]
+        sample: [1, 2, 3]
+    steps:
+      - name: Record fresh VM and select Spotlight treatment
+        env:
+          SPOTLIGHT_TREATMENT: ${{ matrix.spotlight }}
+        run: |
+          date -u
+          uptime
+          sysctl hw.ncpu hw.memsize
+          ps -A -o pid,pcpu,comm | sort -nr -k2 | awk 'NR <= 21'
+          if [[ "$SPOTLIGHT_TREATMENT" == "disabled" ]]; then
+            sudo mdutil -a -i off
+          fi
+          mdutil -a -s
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+        with:
+          lfs: true
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
+
+      - name: Record pre-test load
+        run: |
+          date -u
+          uptime
+          ps -A -o pid,pcpu,comm | sort -nr -k2 | awk 'NR <= 21'
+          mdutil -a -s
+
+      - name: Run desktop replay-backed Electron tests
+        env:
+          PWRAGENT_E2E_DISABLE_GPU: "1"
+          PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
+          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
+        run: >-
+          exec bash ./scripts/ci/macos-e2e-run-lane.sh
+          pnpm --filter @pwragent/desktop test:e2e --shard=4/4
+
+      - name: Record final load
+        if: always()
+        run: |
+          date -u
+          uptime
+          ps -A -o pid,pcpu,comm | sort -nr -k2 | awk 'NR <= 21'
+
+      - name: Upload timing and failure reports
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: spotlight-${{ matrix.spotlight }}-sample-${{ matrix.sample }}
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          retention-days: 7
