@@ -16,7 +16,7 @@ it("packages raw history within the raw gzip budget", async () => {
     const encoded = await encodeThreadHandoff({ version: 2,
       handoffId: "00000000-0000-0000-0000-000000000000", sourceThreadId: "fixture",
       historyDigest: "0".repeat(64), rolloutBase64: raw.toString("base64") });
-    expect(encoded.length).toBeLessThanOrEqual(gzipSync(raw).length + 600);
+    expect(encoded.length).toBeLessThanOrEqual(gzipSync(raw).length + 300);
   }), { numRuns: 10 });
 });
 

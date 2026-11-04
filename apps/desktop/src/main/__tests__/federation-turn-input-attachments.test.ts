@@ -32,6 +32,12 @@ import {
   prepareOutgoingFederationTurnInput,
 } from "../federation/federation-turn-input-attachments";
 
+// These transport fixtures use opaque image bytes; image decoding and patch
+// limits have their own generated oracle tests.
+vi.mock("electron", () => ({ nativeImage: {
+  createFromBuffer: () => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }),
+} }));
+
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
