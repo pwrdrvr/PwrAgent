@@ -23024,6 +23024,36 @@ describe("MessagingController", () => {
     },
   );
 
+  it("groups Codex providers for a new thread and opens their model pages", async () => {
+    const providerModels = [
+      { id: "@local/gpt-6-sol", label: "Local Sol", providerId: "local", providerLabel: "Local" },
+      { id: "@local/second", label: "Second", providerId: "local", providerLabel: "Local" },
+    ];
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000,
+      backends: [buildBackendSummary({ launchpadOptions: { models: [...messagingModelCatalog, ...providerModels] } })],
+    }) });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project", value: {
+      directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+    } }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:model" }));
+    const picker = harness.delivered.at(-1)!;
+    if (picker.kind !== "confirmation") throw new Error("Expected model picker");
+    expect(picker.actions.filter((action) => action.id === "browse:new:set-model")
+      .map((action) => (action.value as { model: string }).model)).toEqual(currentMessagingModels);
+    const provider = picker.actions.find((action) => action.label === "Local")!;
+    expect(provider).toBeDefined();
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: provider.id, value: provider.value }));
+    const providerPicker = harness.delivered.at(-1)!;
+    if (providerPicker.kind !== "confirmation") throw new Error("Expected provider model picker");
+    expect(providerPicker.actions.filter((action) => action.id === "browse:new:set-model")
+      .map((action) => (action.value as { model: string }).model)).toEqual(providerModels.map((model) => model.id));
+    expect(providerPicker.actions.some((action) => action.label === "Other")).toBe(false);
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:set-model", value: { model: providerModels[0]!.id } }));
+    expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ patch: { model: providerModels[0]!.id } }));
+  });
+
   it("opens a model picker and stores the selected model", async () => {
     const harness = await createHarness({
       listBackends: async () => ({

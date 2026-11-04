@@ -2,7 +2,8 @@ import { automatedWorkStartedLabel, correspondenceNotice, incomingWorkText } fro
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import { finalTurnOutputText } from "@pwragent/shared";
 import type { ReviewRunMode } from "@pwragent/shared";
-import { formatModelOptionLabel, isThreadLockRefusal, modelOptionsForThreadProvider } from "@pwragent/shared";
+import { isThreadLockRefusal } from "@pwragent/shared";
+import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
@@ -3193,6 +3194,7 @@ export class MessagingController {
     target?: AppServerReviewTarget;
     reviewer?: ModelSettingsRecent;
     reviewerBackends?: MessagingReviewIntent["review"]["reviewerBackends"];
+    modelMenuValue?: MessagingJsonValue;
     id?: string;
     createdAt?: number;
     targetSurface?: MessagingSurfaceRef;
@@ -3558,33 +3560,27 @@ export class MessagingController {
       ];
     } else if (params.phase === "reviewer_model") {
       const models = reviewerEntry?.models ?? [];
-      const maxActions = this.capabilityProfile.actions?.maxActions;
-      if (maxActions !== undefined && models.length + 3 > maxActions) {
-        this.logger.debug?.("messaging reviewer model list truncated", {
-          backend: reviewerBackendKind,
-          maxActions,
-          modelCount: models.length,
-        });
-      }
       title = "Review model";
       body = `Choose the model ${reviewerEntry?.label ?? reviewerBackendKind} should review with.`;
-      actions = [
-        ...models.map((model, index) => ({
-          id: `review:reviewer:model:${index}`,
-          label: model.label,
-          fallbackText: model.id,
-          priority: 10 + index,
-          value: { model: model.id },
-        })),
-        {
-          id: "review:reviewer:model:default",
-          label: "Provider Default",
-          fallbackText: "provider default",
-          priority: 3,
-        },
+      actions = buildMessagingModelMenuActions({
+        kind: reviewerBackendKind,
+        models,
+        currentModelId: reviewerModelId,
+        menuValue: params.modelMenuValue,
+        menuActionId: "review:reviewer:models",
+        selectActionId: (model) => `review:reviewer:model:${models.indexOf(model)}`,
+        capabilityProfile: this.capabilityProfile,
         backAction,
-        cancelAction,
-      ];
+        footerActions: [
+          {
+            id: "review:reviewer:model:default",
+            label: "Provider Default",
+            fallbackText: "provider default",
+            priority: 3,
+          },
+          cancelAction,
+        ],
+      });
     } else if (params.phase === "reviewer_effort") {
       const efforts = reviewerModelEntry?.reasoningEfforts ?? [];
       title = "Review reasoning";
@@ -6133,6 +6129,13 @@ export class MessagingController {
         return;
       }
       if (phase === "reviewer_model") {
+        if (action.id.startsWith("review:reviewer:models:")) {
+          await this.updateReviewPendingIntent(pendingIntent, event, {
+            phase: "reviewer_model",
+            modelMenuValue: action.value,
+          });
+          return;
+        }
         const model = typeof value?.model === "string" ? value.model : undefined;
         const next: ModelSettingsRecent = {
           backend: current.backend,
@@ -6260,6 +6263,7 @@ export class MessagingController {
       workspacePageIndex?: number;
       target?: AppServerReviewTarget;
       reviewer?: ModelSettingsRecent;
+      modelMenuValue?: MessagingJsonValue;
       clearReviewer?: boolean;
       forceBaseBranch?: boolean;
       resetRepositoryTarget?: boolean;
@@ -6330,6 +6334,7 @@ export class MessagingController {
             reviewer: review.reviewer ?? pendingIntent.intent.review.reviewer,
           }),
       reviewerBackends: await this.listReviewerBackends(),
+      modelMenuValue: review.modelMenuValue,
       id: pendingIntent.intent.id,
       createdAt: pendingIntent.intent.createdAt,
       targetSurface,
@@ -9545,7 +9550,7 @@ export class MessagingController {
       );
       return;
     }
-    if (actionId === "browse:new:model") {
+    if (actionId === "browse:new:model" || actionId.startsWith("browse:new:model:")) {
       await this.presentNewThreadModelPicker(
         nextSession,
         event,
@@ -10556,16 +10561,14 @@ export class MessagingController {
       body: "Choose the model for the new thread.",
       fallbackText: "Choose a model, or reply back.",
       targetSurface: session.surface,
-      actions: [
-        ...models.map((model, index) => ({
-          id: "browse:new:set-model",
-          label: formatModelOptionLabel(model),
-          style: "secondary" as const,
-          fallbackText: String(index + 1),
-          priority: 10 + index,
-          value: { model: model.id },
-        })),
-        {
+      actions: buildMessagingModelMenuActions({
+        kind: backend,
+        models,
+        menuValue: event.kind === "callback" ? event.value : undefined,
+        menuActionId: "browse:new:model",
+        selectActionId: "browse:new:set-model",
+        capabilityProfile: this.capabilityProfile,
+        backAction: {
           id: session.workMode === "worktree"
             ? "browse:new:workspace:worktree"
             : "browse:new:workspace:local",
@@ -10574,7 +10577,7 @@ export class MessagingController {
           fallbackText: "back",
           priority: 1,
         },
-      ],
+      }),
     });
     await this.storePendingIntent(intent, undefined, event);
     const result = await this.deliver(intent, undefined, event);
@@ -12753,7 +12756,7 @@ export class MessagingController {
       await this.executeHandoff(binding, event);
       return;
     }
-    if (actionId === "status:model") {
+    if (actionId === "status:model" || actionId.startsWith("status:model:")) {
       await this.presentModelPicker(binding, event);
       return;
     }
@@ -13587,11 +13590,8 @@ export class MessagingController {
         binding,
         createdAt: this.now(),
         currentModelId,
-        // A thread keeps its Codex model provider for life, so offer only
-        // that provider's models.
-        models: binding.backend === "codex" && thread
-          ? modelOptionsForThreadProvider(models, currentModelId)
-          : models,
+        models,
+        menuValue: event.kind === "callback" ? event.value : undefined,
       }),
       binding,
       event,
@@ -15313,6 +15313,9 @@ export class MessagingController {
           models: (candidate.launchpadOptions?.models ?? []).map((model) => ({
             id: model.id,
             label: model.label ?? model.id,
+            other: model.other,
+            providerId: model.providerId,
+            providerLabel: model.providerLabel,
             reasoningEfforts:
               model.reasoningEfforts
               ?? candidate.launchpadOptions?.reasoningEfforts

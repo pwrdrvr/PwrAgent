@@ -3,6 +3,7 @@ import { buildModelMenu } from "@pwragent/shared";
 import type { MessagingBindingRecord, MessagingJsonValue } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import { buildStatusModelPickerIntent } from "../messaging/core/messaging-status-card";
+import { buildMessagingModelMenuActions } from "../messaging/core/messaging-model-menu";
 import { messagingModelCatalog } from "./fixtures/messaging-model-catalog";
 
 const binding: MessagingBindingRecord = {
@@ -16,6 +17,35 @@ const binding: MessagingBindingRecord = {
 };
 
 describe("messaging model menu oracle", () => {
+  it("keeps every catalog entry reachable within the action budget", () => {
+    for (const maxActions of [4, 5, 13, 20, 25, 100]) {
+      for (const count of [1, 8, 9, 25, 65]) {
+        const models = Array.from({ length: count }, (_, index) => ({ id: `model-${index}` }));
+        const seen: string[] = [];
+        let menuValue: MessagingJsonValue | undefined;
+        for (let page = 0; page < count; page++) {
+          const actions = buildMessagingModelMenuActions({
+            kind: "codex", models, menuValue,
+            menuActionId: "menu", selectActionId: "select",
+            capabilityProfile: {
+              ...PERMISSIVE_CAPABILITY_PROFILE,
+              actions: { ...PERMISSIVE_CAPABILITY_PROFILE.actions!, maxActions },
+            },
+            backAction: { id: "back", label: "Back", priority: 1 },
+          });
+          expect(actions.length).toBeLessThanOrEqual(maxActions);
+          expect(actions.some((action) => action.id === "back")).toBe(true);
+          seen.push(...actions.filter((action) => action.id === "select")
+            .map((action) => (action.value as { model: string }).model));
+          const next = actions.find((action) => action.label === "Next");
+          if (!next) break;
+          menuValue = next.value;
+        }
+        expect(seen).toEqual(models.map((model) => model.id));
+      }
+    }
+  });
+
   it.each([undefined, "@local/gpt-6-sol"])("keeps an existing Codex thread on its provider (%s)", (model) => {
     const models = [
       ...messagingModelCatalog,
