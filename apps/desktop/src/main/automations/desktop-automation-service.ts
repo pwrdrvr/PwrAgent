@@ -164,6 +164,9 @@ export class DesktopAutomationService {
   private readonly scheduler: AutomationScheduler;
   private readonly inspectionBus: AutomationInspectionBus;
   private unsubscribeRegistryEvents?: () => void;
+  private unsubscribeRestartGate?: () => void;
+  /** Held while a quiet restart's continuations go first. */
+  private releaseRestartGateHold?: () => Promise<void>;
   private readonly runActorCache = new Map<
     string,
     { actors: MessagingDirectoryActor[]; readAt: number }
@@ -249,13 +252,40 @@ export class DesktopAutomationService {
       );
     }
     this.reconcileStartupRuns();
+    // Before the scheduler starts, so a restored restart holds it at once.
+    if (!this.unsubscribeRestartGate) {
+      this.syncRestartGateHold(this.options.registry.isRestartGateClosed?.() ?? false);
+      this.unsubscribeRestartGate = this.options.registry.onRestartGateChanged?.(
+        (closed) => this.syncRestartGateHold(closed),
+      );
+    }
     this.scheduler.start();
+  }
+
+  private syncRestartGateHold(closed: boolean): void {
+    if (closed) {
+      this.releaseRestartGateHold ??= this.scheduler.quiesceDispatch();
+      return;
+    }
+    const release = this.releaseRestartGateHold;
+    this.releaseRestartGateHold = undefined;
+    if (!release) return;
+    void Promise.resolve()
+      .then(() => release())
+      .catch((error: unknown) => {
+        automationServiceLog.warn("automation dispatch resume after restart failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
   }
 
   dispose(): void {
     this.scheduler.stop();
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
+    this.unsubscribeRestartGate?.();
+    this.unsubscribeRestartGate = undefined;
+    this.releaseRestartGateHold = undefined;
     if (this.pendingRunUsageTimer) {
       clearTimeout(this.pendingRunUsageTimer);
       this.pendingRunUsageTimer = undefined;

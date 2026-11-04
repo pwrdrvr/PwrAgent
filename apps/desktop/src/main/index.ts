@@ -572,6 +572,15 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
       error: error instanceof Error ? error.message : String(error),
     });
   });
+  // Continuations a quiet restart left start once providers can take a
+  // turn, a few threads at a time.
+  void startupProviderRefresh.then(() => {
+    getExistingDesktopBackendRegistry()?.beginRestartContinuationDispatch();
+  }).catch((error) => {
+    mainLog.warn("restart continuation dispatch failed to start", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   void startupProviderRefresh.then(() => {
     getExistingDesktopBackendRegistry()?.startThreadArchiveSweeper();
   }).catch((error) => {

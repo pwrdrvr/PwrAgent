@@ -77,6 +77,16 @@ import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
 import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_QUEUE_LIMIT, type ArchiveCleanupContext } from "./archive-cleanup-queue";
 import { ArchiveCleanupCheckpointStore, type ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 import { ProjectHeldWakeupStore, type StoredProjectHeldWakeup } from "../state/project-held-wakeup-store";
+import { RestartContinuationStore, type StoredRestartContinuation } from "../state/restart-continuation-store";
+import {
+  OPEN_RESTART_GATE,
+  planRestartDispatch,
+  restartGateHolds,
+  transitionRestartGate,
+  type RestartDispatchPlanOptions,
+  type RestartGateEvent,
+  type RestartGateState,
+} from "./restart-continuation-gate";
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
@@ -534,6 +544,7 @@ import {
   applyCodexEnvironmentActionRunUpdate,
   buildPendingRequestResponse,
   buildThreadIdentityKey,
+  parseThreadIdentityKey,
   mergeThreadLinkedDirectories,
   federatedThreadIdentityKey,
   insertSubthreadIdAfter,
@@ -2340,6 +2351,40 @@ type WorktreeArchiveCandidate = {
 };
 
 type ProjectHeldWakeupStoreLike = Pick<ProjectHeldWakeupStore, "save" | "update" | "remove" | "claimOrphaned">;
+type RestartContinuationStoreLike = Pick<RestartContinuationStore, "saveAll" | "remove" | "claimOrphaned">;
+
+/** A running turn a quiet restart stops and continues after the restart. */
+export type QuietRestartTarget = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  turnId: string;
+};
+
+/** Steered into each running turn as a quiet restart begins. */
+export const QUIET_RESTART_STEER_TEXT = [
+  "PwrAgent is restarting now, for example to install an update.",
+  "Stop at the next safe point: do not start new commands or edits.",
+  "Running commands and environment actions are being terminated, and this turn will be interrupted in a few seconds.",
+  "After the restart, PwrAgent will send you a message to continue this work.",
+].join(" ");
+
+/** The continuation each stopped thread receives after the restart. */
+export function buildRestartContinuationText(stoppedAt: number): string {
+  return [
+    `PwrAgent restarted. Your previous turn was stopped at ${new Date(stoppedAt).toISOString()} so the app could restart.`,
+    "Commands and environment actions that were running then were terminated.",
+    "Check the state of your work, such as processes, partial edits, and build or test output, and continue where you left off.",
+    "If the task was already complete, reply with a short summary instead.",
+  ].join(" ");
+}
+
+/** How long one quiet-restart steer may take before the quit moves on. */
+const QUIET_RESTART_STEER_TIMEOUT_MS = 5_000;
+/**
+ * Continuation dispatch starts once providers have refreshed. If that never
+ * happens, it starts after this long anyway, so the gate cannot stay shut.
+ */
+const RESTART_DISPATCH_FALLBACK_MS = 120_000;
 
 const THREAD_TURN_QUEUE_ORIGINS: readonly string[] = ["manual", "automation", "messaging", "scheduled"] satisfies ThreadTurnQueueOrigin[];
 
@@ -9498,6 +9543,15 @@ export class DesktopBackendRegistry {
   private readonly projectHeldWakeupStore?: ProjectHeldWakeupStoreLike;
   /** Project-held entries with a durable copy, by queue entry id, as stored. */
   private readonly durableProjectHeldWakeups = new Map<string, StoredProjectHeldWakeup>();
+  private readonly restartContinuationStore?: RestartContinuationStoreLike;
+  /** Restart continuations with a durable row, by queue entry id. */
+  private readonly durableRestartContinuations = new Set<string>();
+  /** See `restart-continuation-gate.ts`. */
+  private restartGate: RestartGateState = OPEN_RESTART_GATE;
+  private readonly restartGateTimers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly restartGateListeners = new Set<(closed: boolean) => void>();
+  private restartDispatchStarted = false;
+  private readonly restartDispatchPlanOptions: Omit<RestartDispatchPlanOptions, "now">;
   private readonly archiveWorktreeReferences = new ArchiveWorktreeReferences();
   private readonly archiveReferenceReleaseRevisions = new Map<string, number>();
   private readonly archiveReferenceNotificationWork = new WeakMap<AppServerNotification, Promise<void>>();
@@ -11007,6 +11061,10 @@ export class DesktopBackendRegistry {
     archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover"> | null;
     /** `null` keeps held wake-ups in memory only. */
     projectHeldWakeupStore?: ProjectHeldWakeupStoreLike | null;
+    /** `null` keeps no restart continuations. */
+    restartContinuationStore?: RestartContinuationStoreLike | null;
+    /** Batch size, delays, and jitter for continuations. Tests only. */
+    restartDispatchPlan?: Omit<RestartDispatchPlanOptions, "now">;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
     runningTurnShutdownStopTimeoutMs?: number;
@@ -11028,6 +11086,9 @@ export class DesktopBackendRegistry {
       : options?.archiveCleanupCheckpointStore ?? (isAppStateInitialized() ? new ArchiveCleanupCheckpointStore(getAppStateDb().raw) : undefined);
     this.projectHeldWakeupStore = options?.projectHeldWakeupStore === null ? undefined
       : options?.projectHeldWakeupStore ?? (isAppStateInitialized() ? new ProjectHeldWakeupStore(getAppStateDb().raw) : undefined);
+    this.restartContinuationStore = options?.restartContinuationStore === null ? undefined
+      : options?.restartContinuationStore ?? (isAppStateInitialized() ? new RestartContinuationStore(getAppStateDb().raw) : undefined);
+    this.restartDispatchPlanOptions = options?.restartDispatchPlan ?? {};
     this.registrySessionId = options?.registrySessionId ?? randomUUID();
     this.runningTurnShutdownStopTimeoutMs =
       options?.runningTurnShutdownStopTimeoutMs
@@ -12043,9 +12104,13 @@ export class DesktopBackendRegistry {
         this.stoppingRunningTurnsForShutdown
         || this.threadHasActiveTurn(threadId, backend)
         || this.threadHasBlockingWorkspaceMove({ backend, threadId }),
+      isDispatchHeld: (entry) => restartGateHolds(this.restartGate, {
+        ...(entry.restartContinuation && entry.id ? { restartEntryId: entry.id } : {}),
+      }, Date.now()),
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
     this.restoreProjectHeldWakeups();
+    this.restoreRestartContinuations();
     this.taskMonitorWatchdogTimer = setInterval(() => {
       void this.checkStaleTaskMonitors().catch((error) => {
         backendRegistryLog.warn("task monitor stale watchdog failed", {
@@ -13342,6 +13407,7 @@ export class DesktopBackendRegistry {
     event: ThreadTurnQueueLifecycleEvent,
   ): Promise<void> {
     this.trackDurableProjectHeldWakeup(event);
+    this.trackRestartContinuation(event);
     if (event.type === "queued" || event.type === "held") {
       // Re-queued entries (a release that put the queue back) keep the
       // title they already have. A grouped steer that took another message
@@ -21709,6 +21775,304 @@ export class DesktopBackendRegistry {
     } catch (error) {
       backendRegistryLog.warn("project held wake-up edit was not saved", {
         entryId: entry.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Whether the quiet-restart gate is shut: a quiet restart is under way, or
+   * this launch is still sending the continuations the last one left. While
+   * it is shut, no queued entry starts or steers except a continuation at
+   * its own time, and the sources that bypass the queue stand down.
+   */
+  isRestartGateClosed(): boolean {
+    return this.restartGate.phase !== "open";
+  }
+
+  /** Called with `true` when the gate shuts and `false` when it opens. */
+  onRestartGateChanged(listener: (closed: boolean) => void): () => void {
+    this.restartGateListeners.add(listener);
+    return () => {
+      this.restartGateListeners.delete(listener);
+    };
+  }
+
+  private applyRestartGate(event: RestartGateEvent): void {
+    const wasClosed = this.isRestartGateClosed();
+    this.restartGate = transitionRestartGate(this.restartGate, event);
+    const closed = this.isRestartGateClosed();
+    if (wasClosed === closed) return;
+    if (!closed) {
+      for (const timer of this.restartGateTimers) clearTimeout(timer);
+      this.restartGateTimers.clear();
+      backendRegistryLog.info("restart gate opened", { event: event.type });
+      // Everything the gate held waits in its FIFO; start what can start.
+      this.threadTurnQueue.drainAll();
+    } else {
+      backendRegistryLog.info("restart gate closed", { event: event.type });
+    }
+    for (const listener of this.restartGateListeners) {
+      try {
+        listener(closed);
+      } catch (error) {
+        backendRegistryLog.warn("restart gate listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  /**
+   * The running turns a quiet restart stops: one per thread, never a
+   * sub-agent's (its parent's continuation resumes it) or a headless
+   * automation run's (the automation owns that run).
+   */
+  private listQuietRestartTargets(): QuietRestartTarget[] {
+    const automationThreadKeys = new Set([...this.headlessAutomationTurns.values()]
+      .map((run) => buildThreadIdentityKey(run.backend, run.executionThreadId)));
+    const targets = new Map<string, QuietRestartTarget>();
+    for (const key of this.activeTurnKeys) {
+      const parsed = parseActiveTurnKey(key);
+      if (!parsed) continue;
+      const threadKey = buildThreadIdentityKey(parsed.backend, parsed.threadId);
+      if (automationThreadKeys.has(threadKey) || targets.has(threadKey)) continue;
+      if (this.resolveSubAgentThreadOwner(parsed).isSubAgent) continue;
+      targets.set(threadKey, parsed);
+    }
+    return [...targets.values()];
+  }
+
+  /**
+   * Starts a quiet restart: shuts the restart gate so nothing new starts,
+   * and returns the running turns it will stop. Nothing is stopped yet.
+   */
+  beginQuietRestart(): QuietRestartTarget[] {
+    this.applyRestartGate({ type: "quiet", at: Date.now() });
+    return this.listQuietRestartTargets();
+  }
+
+  /**
+   * Tells each running turn that the app is restarting, as a steer, where
+   * the backend can take one into the running turn. ACP steering can queue
+   * a new turn instead, so those turns hear about it in their continuation
+   * only. Bounded per steer; a refusal or timeout moves on. Returns how
+   * many turns were steered.
+   */
+  async steerTurnsForQuietRestart(targets: readonly QuietRestartTarget[]): Promise<number> {
+    const results = await Promise.all(targets.map(async (target) => {
+      if (target.backend !== "codex" && target.backend !== "claude") return false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          this.steerTurn({
+            backend: target.backend,
+            threadId: target.threadId,
+            expectedTurnId: target.turnId,
+            requestId: `quiet-restart:${target.backend}:${target.threadId}:${target.turnId}`,
+            input: [{ type: "text", text: QUIET_RESTART_STEER_TEXT }],
+          }, { kind: "pwragent", systemReason: "app-restart" }).then(() => true),
+          new Promise<false>((resolve) => {
+            timer = setTimeout(() => resolve(false), QUIET_RESTART_STEER_TIMEOUT_MS);
+          }),
+        ]);
+      } catch (error) {
+        backendRegistryLog.info("quiet restart steer refused", {
+          backend: target.backend,
+          threadId: target.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
+    return results.filter(Boolean).length;
+  }
+
+  /** Resolves once none of these turns is running, or at the deadline. */
+  async waitForQuietRestartTurns(
+    targets: readonly QuietRestartTarget[],
+    timeoutMs: number,
+  ): Promise<"ended" | "deadline"> {
+    const running = () => targets.some((target) =>
+      this.getActiveTurnForThread(target)?.turnId === target.turnId);
+    if (!running()) return "ended";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe: (() => void) | undefined;
+    try {
+      return await Promise.race([
+        new Promise<"ended">((resolve) => {
+          unsubscribe = this.activeTurnKeys.onDelete(() => {
+            if (!running()) resolve("ended");
+          });
+        }),
+        new Promise<"deadline">((resolve) => {
+          timer = setTimeout(() => resolve("deadline"), Math.max(0, timeoutMs));
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      unsubscribe?.();
+    }
+  }
+
+  /**
+   * Writes one durable continuation for each target thread, and for any
+   * other thread whose turn is still running, in one commit. The quit that
+   * follows interrupts the turns; the next launch continues them. Returns
+   * how many threads will be continued.
+   */
+  saveRestartContinuations(targets: readonly QuietRestartTarget[], stoppedAt = Date.now()): number {
+    const store = this.restartContinuationStore;
+    if (!store) return 0;
+    const threads = new Map<string, QuietRestartTarget>();
+    for (const target of [...targets, ...this.listQuietRestartTargets()]) {
+      threads.set(buildThreadIdentityKey(target.backend, target.threadId), target);
+    }
+    const text = buildRestartContinuationText(stoppedAt);
+    const continuations: StoredRestartContinuation[] = [...threads.values()].map((target, index) => ({
+      id: `restart-continuation:${randomUUID()}`,
+      backend: target.backend,
+      threadId: target.threadId,
+      messageOrigin: { kind: "pwragent", systemReason: "app-restart" },
+      input: [{ type: "text", text }],
+      // Keeps the stop order stable when the next launch sorts by time.
+      createdAt: stoppedAt + index,
+    }));
+    try {
+      const saved = store.saveAll(this.runtimeInstanceId, continuations);
+      backendRegistryLog.info("restart continuations saved", {
+        count: saved.length,
+        threads: [...threads.keys()],
+      });
+      return saved.length;
+    } catch (error) {
+      backendRegistryLog.warn("restart continuations could not be saved", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 0;
+    }
+  }
+
+  /**
+   * Puts back the continuations an exited instance saved, at the top of
+   * each thread's queue, and shuts the restart gate until they start. Runs
+   * in the constructor, before any window or source reads the queue.
+   * Dispatch times are set by `beginRestartContinuationDispatch`.
+   */
+  private restoreRestartContinuations(): void {
+    const store = this.restartContinuationStore;
+    if (!store) return;
+    let claimed: StoredRestartContinuation[];
+    try {
+      claimed = store.claimOrphaned(this.runtimeInstanceId, this.resolveLiveProfileRuntimeInstanceIdsFn);
+    } catch (error) {
+      backendRegistryLog.warn("restart continuations could not be restored", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (claimed.length === 0) return;
+    for (const continuation of claimed) this.durableRestartContinuations.add(continuation.id);
+    const restored = this.threadTurnQueue.restoreRestartContinuations(claimed.map((continuation) => ({
+      id: continuation.id,
+      backend: continuation.backend,
+      threadId: continuation.threadId,
+      origin: "scheduled" as const,
+      input: continuation.input,
+      ...(continuation.messageOrigin ? { messageOrigin: continuation.messageOrigin } : {}),
+      createdAt: continuation.createdAt,
+    })));
+    if (restored.length === 0) return;
+    this.applyRestartGate({
+      type: "restore",
+      schedule: restored.map((entry) => ({
+        entryId: entry.id,
+        threadKey: buildThreadIdentityKey(entry.backend, entry.threadId),
+        dispatchAt: Number.POSITIVE_INFINITY,
+      })),
+      releaseBy: Number.POSITIVE_INFINITY,
+    });
+    backendRegistryLog.info("restart continuations restored", {
+      count: restored.length,
+      entryIds: restored.map((entry) => entry.id),
+    });
+    const fallback = setTimeout(() => this.beginRestartContinuationDispatch(), RESTART_DISPATCH_FALLBACK_MS);
+    fallback.unref?.();
+    this.restartGateTimers.add(fallback);
+  }
+
+  /**
+   * Gives each restored continuation its dispatch time, in staggered
+   * batches, once providers can take a turn. Runs once; the first call wins.
+   */
+  beginRestartContinuationDispatch(): void {
+    if (this.restartDispatchStarted || this.restartGate.phase !== "resuming") return;
+    this.restartDispatchStarted = true;
+    const pending = [...this.restartGate.pending.values()];
+    const now = Date.now();
+    const plan = planRestartDispatch(pending, { ...this.restartDispatchPlanOptions, now });
+    this.restartGate = {
+      phase: "resuming",
+      pending: new Map(plan.schedule.map((item) => [item.entryId, item])),
+      releaseBy: plan.releaseBy,
+    };
+    backendRegistryLog.info("restart continuation dispatch scheduled", {
+      count: plan.schedule.length,
+      firstAt: Math.min(...plan.schedule.map((item) => item.dispatchAt)),
+      releaseBy: plan.releaseBy,
+    });
+    for (const item of plan.schedule) {
+      const parsed = parseThreadIdentityKey(item.threadKey);
+      if (!parsed) continue;
+      const timer = setTimeout(() => {
+        this.restartGateTimers.delete(timer);
+        this.threadTurnQueue.scheduleThreadDrain(parsed);
+      }, Math.max(0, item.dispatchAt - now));
+      timer.unref?.();
+      this.restartGateTimers.add(timer);
+    }
+    const deadline = setTimeout(() => {
+      this.restartGateTimers.delete(deadline);
+      if (this.restartGate.phase === "resuming") {
+        backendRegistryLog.warn("restart gate opened at its deadline", {
+          pending: [...this.restartGate.pending.keys()],
+        });
+      }
+      this.applyRestartGate({ type: "deadline", at: Date.now() });
+    }, Math.max(0, plan.releaseBy - now));
+    deadline.unref?.();
+    this.restartGateTimers.add(deadline);
+  }
+
+  /**
+   * A continuation that starts, fails, is discarded, or is blocked no
+   * longer holds the gate. Its row goes when it leaves the queue; a blocked
+   * one keeps its row, so a later restart sends it again.
+   */
+  private trackRestartContinuation(event: ThreadTurnQueueLifecycleEvent): void {
+    const { entry } = event;
+    if (!entry.restartContinuation) return;
+    if (event.type === "started" || event.type === "failed" || event.type === "cancelled") {
+      this.forgetRestartContinuation(entry.id);
+    }
+    if (
+      event.type === "started" || event.type === "failed"
+      || event.type === "cancelled" || event.type === "blocked"
+    ) {
+      this.applyRestartGate({ type: "settled", entryId: entry.id });
+    }
+  }
+
+  private forgetRestartContinuation(entryId: string): void {
+    if (!this.restartContinuationStore || !this.durableRestartContinuations.has(entryId)) return;
+    try {
+      this.restartContinuationStore.remove(entryId);
+      this.durableRestartContinuations.delete(entryId);
+    } catch (error) {
+      backendRegistryLog.warn("restart continuation could not be forgotten", {
+        entryId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -30689,6 +31053,8 @@ export class DesktopBackendRegistry {
   close(): Promise<void> {
     this.shutdownRequested = true;
     this.launchpadCreationOperations.cancelAll();
+    for (const timer of this.restartGateTimers) clearTimeout(timer);
+    this.restartGateTimers.clear();
     this.closeOperation ??= this.closeResources();
     return this.closeOperation;
   }

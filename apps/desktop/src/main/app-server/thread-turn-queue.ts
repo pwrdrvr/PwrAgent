@@ -57,6 +57,12 @@ export type ThreadTurnQueueEntry = {
    */
   projectHold?: ThreadTurnQueueProjectHold;
   /**
+   * A quiet restart stopped this thread's turn, and this entry continues it.
+   * It sits at the top of the FIFO, and the restart gate decides when it
+   * starts and what waits behind it.
+   */
+  restartContinuation?: true;
+  /**
    * Display-only label from `queued-message-title.ts`, set after admission
    * for messages too long to show as typed. Never sent with the turn.
    */
@@ -199,8 +205,22 @@ export type ThreadTurnQueueOptions = {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
   }) => boolean;
+  /**
+   * Whether a gate outside the queue keeps this entry from starting or
+   * steering now (the quiet-restart gate). A held entry keeps its place and
+   * starts on a later drain; `drainAll` follows the gate opening.
+   */
+  isDispatchHeld?: (entry: ThreadTurnQueueDispatchCandidate) => boolean;
   onLifecycle?: (event: ThreadTurnQueueLifecycleEvent) => void | Promise<void>;
   now?: () => number;
+};
+
+/** An entry about to start, or a thread a new entry would start on. */
+export type ThreadTurnQueueDispatchCandidate = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  id?: string;
+  restartContinuation?: true;
 };
 
 type RunningEntry = {
@@ -368,6 +388,7 @@ export class ThreadTurnQueue {
         && !this.runningEntries.has(key)
         && !this.heldQueues.has(key)
         && !(this.options.isThreadActive?.(entry) ?? false)
+        && !this.isDispatchHeld(entry)
       ) {
         const starting = this.startEntry(entry);
         options?.onAdmission?.();
@@ -411,6 +432,7 @@ export class ThreadTurnQueue {
         && !this.runningEntries.has(key)
         && !holdReason
         && !(this.options.isThreadActive?.(entry) ?? false)
+        && !this.isDispatchHeld(entry)
       ) {
         const starting = this.startEntry(entry);
         options?.onAdmission?.();
@@ -621,8 +643,33 @@ export class ThreadTurnQueue {
       !this.runningEntries.has(key) &&
       !this.heldQueues.has(key) &&
       !hasWaitingEntry(this.queueFor(key)) &&
-      !(this.options.isThreadActive?.(params) ?? false)
+      !(this.options.isThreadActive?.(params) ?? false) &&
+      !this.isDispatchHeld({ backend: params.backend, threadId: params.threadId })
     );
+  }
+
+  /**
+   * Puts back the continuations of turns a quiet restart stopped, at
+   * startup and before any window reads the queue, so it emits nothing.
+   * Each goes to the top of its thread's FIFO, ahead of anything queued
+   * there. An id that is already queued is skipped.
+   */
+  restoreRestartContinuations(
+    entries: ReadonlyArray<Omit<ThreadTurnQueueEntry, "restartContinuation" | "paused" | "pauseRevision">>,
+  ): ThreadTurnQueueEntry[] {
+    const restored: ThreadTurnQueueEntry[] = [];
+    for (const input of [...entries].sort((left, right) => right.createdAt - left.createdAt)) {
+      if (this.findQueuedEntry(input.id)) continue;
+      const entry: ThreadTurnQueueEntry = { ...input, restartContinuation: true };
+      this.queueFor(this.keyFor(entry)).unshift(entry);
+      restored.unshift(entry);
+    }
+    return restored;
+  }
+
+  /** Recheck every FIFO, after a gate outside the queue opens. */
+  drainAll(): void {
+    for (const key of this.queuedEntries.keys()) this.scheduleDrain(key);
   }
 
   getQueuedEntries(params: {
@@ -692,7 +739,9 @@ export class ThreadTurnQueue {
       const from = queue.findIndex((entry) => entry.id === entryId);
       const entry = queue[from];
       if (!entry) return { disposition: "not_found", entryId };
-      if (entry.manualReleaseRequired) return result("held");
+      // A restart continuation stays on top until it starts: the restart
+      // gate holds everything behind it, so nothing may pass it.
+      if (entry.manualReleaseRequired || entry.restartContinuation) return result("held");
       if (beforeEntryId === entryId) return result("unchanged");
       const anchor = beforeEntryId === undefined
         ? queue.length
@@ -701,7 +750,7 @@ export class ThreadTurnQueue {
       const passed = anchor > from
         ? queue.slice(from + 1, anchor)
         : queue.slice(anchor, from);
-      if (passed.some((candidate) => candidate.manualReleaseRequired)) {
+      if (passed.some((candidate) => candidate.manualReleaseRequired || candidate.restartContinuation)) {
         return result("held");
       }
       const to = anchor > from ? anchor - 1 : anchor;
@@ -1029,6 +1078,7 @@ export class ThreadTurnQueue {
     // A held head waits for its release. Entries ahead of every hold, which
     // an unlock released, still start.
     if (!head || head.manualReleaseRequired) return "none";
+    if (this.isDispatchHeld(head)) return "none";
     const steer = head.delivery === "queued-steer" && this.options.canSteerThread?.(head);
     if (!steer && (this.runningEntries.has(key)
       || (this.options.isThreadActive?.(head) ?? false))) return "none";
@@ -1092,6 +1142,10 @@ export class ThreadTurnQueue {
       await this.holdQueue(key, normalized.message, { keepHeld: true });
       return "blocked";
     }
+  }
+
+  private isDispatchHeld(entry: ThreadTurnQueueDispatchCandidate): boolean {
+    return this.options.isDispatchHeld?.(entry) ?? false;
   }
 
   private scheduleDrain(key: string): void {

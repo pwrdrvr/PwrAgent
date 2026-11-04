@@ -4,6 +4,12 @@ import {
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
 } from "../app-server/thread-turn-queue";
+import {
+  OPEN_RESTART_GATE,
+  restartGateHolds,
+  transitionRestartGate,
+  type RestartGateState,
+} from "../app-server/restart-continuation-gate";
 
 function buildEntry(
   overrides: Partial<Omit<ThreadTurnQueueEntry, "input">> = {},
@@ -1965,4 +1971,92 @@ describe("ThreadTurnQueue.submitProjectHeld", () => {
     await vi.waitFor(() => expect(started).toEqual(["wake"]));
     queue.close();
   });
+
+  describe("quiet-restart gate", () => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    const other = { backend: "codex" as const, threadId: "thread-2" };
+
+    function gatedQueue(gate: { state: RestartGateState; now: number }) {
+      const started: string[] = [];
+      const queue = new ThreadTurnQueue({
+        startTurn: async (entry) => {
+          started.push(entry.id);
+          return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+        },
+        isDispatchHeld: (entry) => restartGateHolds(gate.state, {
+          ...(entry.restartContinuation && entry.id ? { restartEntryId: entry.id } : {}),
+        }, gate.now),
+      });
+      onTestFinished(() => queue.close());
+      return { queue, started };
+    }
+
+    it("starts a restored continuation first and holds everything else until the gate opens", async () => {
+      const gate: { state: RestartGateState; now: number } = { state: OPEN_RESTART_GATE, now: 0 };
+      const { queue, started } = gatedQueue(gate);
+      gate.state = transitionRestartGate(gate.state, {
+        type: "restore",
+        schedule: [{ entryId: "restart", threadKey: "codex:thread-1", dispatchAt: 100 }],
+        releaseBy: 1_000,
+      });
+      await queue.submit(buildEntry({ id: "queued-before" }));
+      queue.restoreRestartContinuations([{ ...buildEntry({ id: "restart" }), createdAt: 1 } as ThreadTurnQueueEntry]);
+      await queue.submit(buildEntry({ id: "elsewhere", ...other }));
+
+      expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["restart", "queued-before"]);
+      expect(queue.getQueuedEntries(target)[0]).toMatchObject({ restartContinuation: true });
+      expect(queue.canStartImmediately(other)).toBe(false);
+      await expect(queue.submitIfIdle(buildEntry({ id: "idle", ...other }))).resolves.toEqual({ status: "busy" });
+
+      // Before its dispatch time, nothing starts, not even the continuation.
+      queue.drainAll();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(started).toEqual([]);
+
+      gate.now = 100;
+      queue.scheduleThreadDrain(target);
+      await vi.waitFor(() => expect(started).toEqual(["restart"]));
+      gate.state = transitionRestartGate(gate.state, { type: "settled", entryId: "restart" });
+      expect(gate.state).toEqual(OPEN_RESTART_GATE);
+
+      queue.drainAll();
+      await vi.waitFor(() => expect(started).toEqual(["restart", "elsewhere"]));
+      // queued-before waits for the continuation's turn, as any queued turn does.
+      await queue.releaseThread({ ...target, turnId: "turn-restart", status: "turn/completed" });
+      await vi.waitFor(() => expect(started).toEqual(["restart", "elsewhere", "queued-before"]));
+    });
+
+    it("starts and steers nothing while quieting", async () => {
+      const gate: { state: RestartGateState; now: number } = {
+        state: transitionRestartGate(OPEN_RESTART_GATE, { type: "quiet", at: 0 }),
+        now: 0,
+      };
+      const { queue, started } = gatedQueue(gate);
+      const submitted = await queue.submit(buildEntry({ id: "manual" }));
+      const steered = await queue.submitSteer(buildEntry({ id: "steer", ...other }));
+      expect(submitted.status).toBe("queued");
+      expect(steered.status).toBe("queued");
+      queue.drainAll();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(started).toEqual([]);
+    });
+
+    it("lets nothing move past a restart continuation", async () => {
+      const gate: { state: RestartGateState; now: number } = {
+        state: transitionRestartGate(OPEN_RESTART_GATE, {
+          type: "restore",
+          schedule: [{ entryId: "restart", threadKey: "codex:thread-1", dispatchAt: 100 }],
+          releaseBy: 1_000,
+        }),
+        now: 0,
+      };
+      const { queue } = gatedQueue(gate);
+      queue.restoreRestartContinuations([{ ...buildEntry({ id: "restart" }), createdAt: 1 } as ThreadTurnQueueEntry]);
+      await queue.submit(buildEntry({ id: "later" }));
+      await expect(queue.moveEntry("later", "restart")).resolves.toMatchObject({ disposition: "held" });
+      await expect(queue.moveEntry("restart")).resolves.toMatchObject({ disposition: "held" });
+      expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["restart", "later"]);
+    });
+  });
 });
+

@@ -173,6 +173,7 @@ import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
+import { RestartContinuationStore } from "../state/restart-continuation-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -4636,6 +4637,119 @@ describe("DesktopBackendRegistry", () => {
         expect(second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })[0])
           .toMatchObject({ displayText: "Edited wake", paused: true });
       });
+    });
+  });
+
+  describe("quiet restart continuations", () => {
+    const durableStore = () => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const temp = createTempStateDb("pwragent-restart-continuations-");
+      const db = StateDb.open(temp.dbPath);
+      onTestFinished(() => {
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+        vi.unstubAllEnvs();
+      });
+      const rows = () => db.raw.prepare(
+        "SELECT owner_instance_id FROM restart_continuations",
+      ).all() as { owner_instance_id: string }[];
+      return { rows, store: new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false }) };
+    };
+    const launch = (store: RestartContinuationStore, instanceId: string, live: string[] = []) => {
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+        projectHeldWakeupStore: null,
+        restartContinuationStore: store,
+        restartDispatchPlan: { firstDelayMs: 0, intervalMs: 0, jitterMs: 0, releaseGraceMs: 60_000 },
+        runtimeInstanceId: instanceId,
+        resolveLiveProfileRuntimeInstanceIds: () => live,
+      });
+      onTestFinished(() => registry.close());
+      return { codexClient, registry };
+    };
+    const text = (value: string) => [{ type: "text" as const, text: value }];
+
+    it("steers the running turn, then continues it first after a restart while other work waits", async () => {
+      const { rows, store } = durableStore();
+      const { writes } = await measureSqliteWrites(async () => {
+        const first = launch(store, "instance-a");
+        await expect(first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Long task") }))
+          .resolves.toMatchObject({ status: "started" });
+
+        const targets = first.registry.beginQuietRestart();
+        expect(targets).toEqual([expect.objectContaining({ backend: "codex", threadId: "busy" })]);
+        expect(first.registry.isRestartGateClosed()).toBe(true);
+        // Nothing new starts on the way down.
+        await expect(first.registry.submitTurn({ backend: "codex", threadId: "idle", input: text("Later") }))
+          .resolves.toMatchObject({ status: "queued" });
+        expect(first.codexClient.startTurnCallCount).toBe(1);
+
+        await expect(first.registry.steerTurnsForQuietRestart(targets)).resolves.toBe(1);
+        expect(first.codexClient.lastSteerTurnParams).toMatchObject({
+          threadId: "busy",
+          input: [{ type: "text", text: expect.stringContaining("PwrAgent is restarting") }],
+        });
+        expect(first.registry.saveRestartContinuations(targets, Date.UTC(2026, 10, 4))).toBe(1);
+        // A second quiet restart does not add a second continuation.
+        expect(first.registry.saveRestartContinuations(targets)).toBe(0);
+        expect(rows()).toEqual([{ owner_instance_id: "instance-a" }]);
+        await first.registry.close();
+
+        const second = launch(store, "instance-b", ["instance-b"]);
+        expect(rows()).toEqual([{ owner_instance_id: "instance-b" }]);
+        expect(second.registry.isRestartGateClosed()).toBe(true);
+        await expect(second.registry.submitTurn({ backend: "codex", threadId: "elsewhere", input: text("Queued reply") }))
+          .resolves.toMatchObject({ status: "queued" });
+        await expect(second.registry.submitTurnIfIdle({ backend: "codex", threadId: "watcher", input: text("PR"), origin: "automation" }))
+          .resolves.toEqual({ status: "busy" });
+        // Nothing starts until providers are ready and the schedule begins.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(second.codexClient.startTurnCallCount).toBe(0);
+
+        second.registry.beginRestartContinuationDispatch();
+        await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(2));
+        expect(second.codexClient.startTurnCalls[0]).toMatchObject({
+          threadId: "busy",
+          input: [{ type: "text", text: expect.stringContaining("PwrAgent restarted. Your previous turn was stopped at 2026-11-04T00:00:00.000Z") }],
+        });
+        expect(second.codexClient.startTurnCalls[1]).toMatchObject({ threadId: "elsewhere" });
+        expect(second.registry.isRestartGateClosed()).toBe(false);
+        await vi.waitFor(() => expect(rows()).toEqual([]));
+      });
+      expectSqliteWriteBudget({
+        scenario: "restart-continuation-cycle",
+        note: "one quiet restart with one running thread: one insert for every continuation, one startup claim, one delete when the continuation starts. Restarts are rare, so even 10 a day is a few dozen commits. Idle and per-turn writes are 0.",
+        writes,
+      });
+    });
+
+    it("opens the gate when a continuation is discarded", async () => {
+      const { rows, store } = durableStore();
+      const first = launch(store, "instance-a");
+      await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Long task") });
+      first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
+      await first.registry.close();
+
+      const second = launch(store, "instance-b", ["instance-b"]);
+      const [entry] = second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" });
+      expect(entry).toBeDefined();
+      expect(second.registry.cancelQueuedTurn(entry!.queueEntryId)).toBe(true);
+      expect(second.registry.isRestartGateClosed()).toBe(false);
+      expect(rows()).toEqual([]);
+      expect(second.codexClient.startTurnCallCount).toBe(0);
+    });
+
+    it("leaves a live sibling instance's continuations with that instance", async () => {
+      const { rows, store } = durableStore();
+      const first = launch(store, "instance-a");
+      await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Long task") });
+      first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
+
+      const sibling = launch(store, "instance-b", ["instance-a", "instance-b"]);
+      expect(sibling.registry.isRestartGateClosed()).toBe(false);
+      expect(rows()).toEqual([{ owner_instance_id: "instance-a" }]);
     });
   });
 

@@ -712,6 +712,84 @@ describe("createQuitManager", () => {
     finishResume();
     await resumePending;
   });
+
+  describe("Quiet & Continue After Restart", () => {
+    const blockers = () => ({ count: 1, terminalSessionCount: 0, terminalThreadKeys: [],
+      threadIds: ["codex:thread-1"], actionRunCount: 0, items: [] });
+
+    it("authorizes, quiets, then commits and quits once without asking authorization again", async () => {
+      const order: string[] = [];
+      const beforeQuit = vi.fn(() => {
+        order.push("authorize");
+        return true;
+      });
+      const quietForRestart = vi.fn(async () => {
+        order.push("quiet");
+      });
+      const commitShutdown = vi.fn(() => order.push("commit"));
+      const performQuit = vi.fn(() => order.push("quit"));
+      const confirm = vi.fn(async (options: Parameters<NonNullable<QuitManagerDependencies["confirm"]>>[0]) => {
+        expect(await options.quietRestart?.()).toBe(true);
+        return "quiet-restart" as const;
+      });
+      const manager = createQuitManager({
+        getConfirmationEnabled: () => true,
+        getQuitBlockers: blockers,
+        quietForRestart, commitShutdown, performQuit, confirm, log: {},
+      });
+      await expect(manager.requestQuit({ source: "update-install", beforeQuit })).resolves.toBe(true);
+      expect(order).toEqual(["authorize", "quiet", "commit", "quit"]);
+      expect(manager.isQuitAllowed()).toBe(true);
+    });
+
+    it("stops nothing when authorization refuses, and the prompt closes as a cancel", async () => {
+      const quietForRestart = vi.fn(async () => undefined);
+      const cancelShutdown = vi.fn();
+      const performQuit = vi.fn();
+      const confirm = vi.fn(async (options: Parameters<NonNullable<QuitManagerDependencies["confirm"]>>[0]) =>
+        await options.quietRestart?.() ? "quiet-restart" as const : "manual-cancel" as const);
+      const manager = createQuitManager({
+        getConfirmationEnabled: () => true,
+        getQuitBlockers: blockers,
+        quietForRestart, cancelShutdown, performQuit, confirm, log: {},
+      });
+      await expect(manager.requestQuit({ source: "update-install", beforeQuit: () => false })).resolves.toBe(false);
+      expect(quietForRestart).not.toHaveBeenCalled();
+      expect(cancelShutdown).toHaveBeenCalledOnce();
+      expect(performQuit).not.toHaveBeenCalled();
+    });
+
+    it("still quits when the quiet restart fails", async () => {
+      const warn = vi.fn();
+      const performQuit = vi.fn();
+      const confirm = vi.fn(async (options: Parameters<NonNullable<QuitManagerDependencies["confirm"]>>[0]) => {
+        expect(await options.quietRestart?.()).toBe(true);
+        return "quiet-restart" as const;
+      });
+      const manager = createQuitManager({
+        getConfirmationEnabled: () => true,
+        getQuitBlockers: blockers,
+        quietForRestart: async () => {
+          throw new Error("registry gone");
+        },
+        performQuit, confirm, log: { warn },
+      });
+      await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(true);
+      expect(performQuit).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith("quiet restart failed; quitting", { error: "registry gone" });
+    });
+
+    it("offers no quiet restart without a handler", async () => {
+      const confirm = vi.fn(async () => "manual-cancel" as const);
+      const manager = createQuitManager({
+        getConfirmationEnabled: () => true,
+        getQuitBlockers: blockers,
+        performQuit: vi.fn(), confirm, log: {},
+      });
+      await manager.requestQuit({ source: "menu" });
+      expect(confirm.mock.calls[0]![0]).not.toHaveProperty("quietRestart");
+    });
+  });
 });
 
 describe("buildQuitBlockerSnapshot", () => {
