@@ -3106,6 +3106,7 @@ async function callRegistryMcpTool(params: {
   threadId: string;
   turnId: string;
   tool: string;
+  callId?: string;
   args: Record<string, unknown>;
 }) {
   const internal = params.registry as unknown as {
@@ -3133,7 +3134,7 @@ async function callRegistryMcpTool(params: {
     backend: params.backend,
     threadId: params.threadId,
     turnId: params.turnId,
-    callId: `mcp:${params.tool}`,
+    callId: params.callId ?? `mcp:${params.tool}`,
     tool: params.tool,
     args: params.args,
   });
@@ -41761,10 +41762,13 @@ command = "pnpm dev"
       } });
       const handoff = (settings: { reasoningEffort?: string; fastMode?: boolean; serviceTier?: string }) => callRegistryMcpTool({
         registry, backend: "codex", threadId: "parent", turnId: "parent-turn", tool: "handoff_task",
+        callId: `model-settings:${JSON.stringify(settings)}`,
         args: { task: "Inspect the fixture", model: "child-model", workspaceMode: "none", ...settings },
       });
       for (const explicit of [{ reasoningEffort: "high" }, { fastMode: true }, { serviceTier: "priority" }]) {
-        expect(await handoff(explicit)).toMatchObject({ isError: true, structuredContent: { code: "invalid_arguments" } });
+        expect(await handoff(explicit)).toMatchObject({ isError: true, structuredContent: {
+          code: "invalid_arguments", message: expect.stringContaining(Object.keys(explicit)[0]!),
+        } });
         expect(codexClient.lastStartThreadParams).toBeUndefined();
       }
       const child = await handoff({});

@@ -1047,6 +1047,8 @@
   },
   "remote-launchpad-environment-reset": {"commits": 2, "note": "Clear one submitted viewer draft and retain its environment at the submission boundary. Two commits, approximately 1.7 MB/day at 100 threads/day, with no idle or streamed-event writes.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "remote-launchpad-legacy-adoption": {"commits": 1, "note": "First open of one peer's draft after drafts named their owner: one commit for the copy and its marker, once per peer directory, none after that.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
+  "remote-launchpad-model-seed": {"commits": 1, "note": "One owner model correction: 1 commit; ~0.83 MB/day at 100 corrections/day. Unchanged reopens write zero.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "remote-launchpad-model-unchanged": {"commits": 0, "note": "100 unchanged remote model reconciliations: zero commits and 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "registered-project-launchpad-submit": {
     "commits": 1,
     "note": "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes",
