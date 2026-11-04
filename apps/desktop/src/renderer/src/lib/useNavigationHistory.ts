@@ -195,13 +195,18 @@ export function useNavigationHistory(args: {
   const startedThreadKey = args.current?.view === "starting"
     ? startingThreads?.get(args.current.creationId)
     : undefined;
-  const resolvedCurrent: NavigationHistoryLocation | undefined = startedThreadKey !== undefined
-    ? {
-        view: "thread",
-        threadKey: startedThreadKey,
-        ...(args.current?.label !== undefined ? { label: args.current.label } : {}),
-      }
-    : args.current;
+  const currentLabel = args.current?.label;
+  const startedThreadLocation = useMemo<NavigationHistoryLocation | undefined>(
+    () => startedThreadKey !== undefined
+      ? {
+          view: "thread",
+          threadKey: startedThreadKey,
+          ...(currentLabel !== undefined ? { label: currentLabel } : {}),
+        }
+      : undefined,
+    [currentLabel, startedThreadKey],
+  );
+  const resolvedCurrent = startedThreadLocation ?? args.current;
   const current = resolvedCurrent?.view === "thread" && archivedThreadKeys?.has(resolvedCurrent.threadKey)
     ? undefined
     : resolvedCurrent;
