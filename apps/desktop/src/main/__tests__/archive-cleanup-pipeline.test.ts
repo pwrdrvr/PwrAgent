@@ -1066,6 +1066,70 @@ describe("archive cleanup pipeline", () => {
       : []);
   });
 
+  it.each(["during inventory", "after inventory"] as const)("removes a worktree while 30 unrelated threads start turns %s", async (timing) => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const others = Array.from({ length: 30 }, (_, index) => codexThread({
+      id: `other-${index}`, projectKey: `/contrived/other-${index}`,
+    }));
+    const fixture = build(others, target);
+    const activity = async () => {
+      for (const thread of others) {
+        await publishNotification(fixture.registry, { method: "turn/started", params: { threadId: thread.id, turn: { id: `turn-${thread.id}` } } });
+        await publishNotification(fixture.registry, { method: "thread/status/changed", params: { threadId: thread.id, status: { type: "active" } } });
+      }
+    };
+    if (timing === "during inventory") {
+      const listPage = fixture.client.listArchiveCleanupThreadsPage.getMockImplementation()!;
+      let reads = 0;
+      fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+        if (++reads === 4) await activity();
+        return await listPage(params);
+      });
+    } else {
+      const archive = fixture.archiveWorktree.getMockImplementation()!;
+      fixture.archiveWorktree.mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
+        const assertRemoval = await params.beforeRemove!();
+        await activity();
+        return assertRemoval;
+      } }));
+    }
+
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+    expect(fixture.counts.providerPages).toBe(5);
+    expect(fixture.counts.archiveMutations).toBe(1);
+  });
+
+  it("removes a worktree while an unrelated thread's turn admission is in flight", async () => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([codexThread({ id: "other", projectKey: "/contrived/other" })], target);
+    let finish!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const held = new Promise<void>((resolve) => { finish = resolve; });
+    let mutation: Promise<void> | undefined;
+    const archive = fixture.archiveWorktree.getMockImplementation()!;
+    fixture.archiveWorktree.mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
+      mutation = fixture.registry.withThreadLifecycleMutation({ backend: "codex", threadId: "other" }, async () => { started(); await held; });
+      await entered;
+      return await params.beforeRemove!();
+    } }));
+    try {
+      const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+      expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+    } finally {
+      finish();
+      await mutation;
+    }
+  });
+
   it.each(["codex", "claude"] as const)("still rejects a different %s thread's archive notification during removal admission", async (backend) => {
     vi.useFakeTimers();
     const target = codexThread({ id: "target", linkedDirectories: [{
