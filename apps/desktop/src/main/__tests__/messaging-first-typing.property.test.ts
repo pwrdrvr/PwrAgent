@@ -175,4 +175,48 @@ describe("first typing request (property)", () => {
     await fc.assert(fc.asyncProperty(scenario, fc.scheduler(), fc.constantFrom("actor" as const, "policy" as const),
       (input, scheduler, denied) => runScenario(input, scheduler, denied)), { numRuns: 25 });
   });
+
+  it("keeps the replacement lease when a cancelled typing request fails late", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (failBeforeReplacement) => {
+      const pending = gate();
+      let calls = 0;
+      const transport = new TelegramAdapter({
+        config: { channel: "telegram", botToken: "12345:fixture", authorizedActorIds: [{ id: "42", displayName: "Fixture" }] },
+        api: {
+          sendChatAction: async () => {
+            calls += 1;
+            if (calls === 1) {
+              await pending.promise;
+              throw new Error("Cancelled request failed late");
+            }
+            return true;
+          },
+        } as TelegramBotApi,
+      });
+      const activity = (id: string, state: "active" | "idle"): MessagingSurfaceIntent => ({
+        id, kind: "activity", activity: "typing", state, createdAt: 1_000,
+        targetSurface: { channel: "telegram", id: "fixture", state: { opaque: { chatId: -1001, messageThreadId: 1 } } },
+      });
+      const first = transport.deliver(activity("first", "active"));
+      try {
+        await transport.deliver(activity("cancel", "idle"));
+        if (failBeforeReplacement) {
+          pending.resolve();
+          await first;
+        }
+        await transport.deliver(activity("replacement", "active"));
+        pending.resolve();
+        await first;
+        // Reference model: cancellation ended the first lease; replacement
+        // owns a second one. An old response cannot end that new lease, so a
+        // subsequent activity renews it instead of issuing a third start.
+        await transport.deliver(activity("renew", "active"));
+        expect(calls).toBe(2);
+      } finally {
+        pending.resolve();
+        await first;
+        await transport.stop();
+      }
+    }), { numRuns: 25 });
+  });
 });
