@@ -17,11 +17,11 @@ export function modelSelectOptions(params: {
   kind: BackendSummary["kind"] | undefined;
   models: readonly BackendModelOption[];
   /** The stored value of a model's row. Defaults to its id. */
-  valueOf?: (model: BackendModelOption) => string;
+  valueFor?: (model: BackendModelOption) => string;
 }): SelectOption[] {
-  const valueOf = params.valueOf ?? ((model: BackendModelOption) => model.id);
+  const valueFor = params.valueFor ?? ((model: BackendModelOption) => model.id);
   const row = (model: BackendModelOption, group?: string): SelectOption => ({
-    value: valueOf(model),
+    value: valueFor(model),
     label: model.label ?? model.id,
     ...(group ? { group } : {}),
   });

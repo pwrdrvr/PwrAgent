@@ -78,7 +78,7 @@ export function TaskMonitorModelSettings(props: {
     ...modelSelectOptions({
       kind: props.backendId,
       models,
-      valueOf: (model) => `${MODEL_VALUE_PREFIX}${model.id}`,
+      valueFor: (model) => `${MODEL_VALUE_PREFIX}${model.id}`,
     }),
   ];
 

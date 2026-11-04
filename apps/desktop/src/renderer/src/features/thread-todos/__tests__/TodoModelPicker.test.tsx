@@ -52,7 +52,7 @@ describe("to-do dispatch model picker", () => {
     expect(composerDropdownOptionLabels(list)).toEqual([
       ...CURRENT_CODEX_MODEL_LABELS, "Other", PROVIDER_MODEL.label,
     ]);
-    expect(within(list).getByRole("group", { name: PROVIDER_MODEL.providerLabel })).toBeInTheDocument();
+    expect(within(list).getByRole("group", { name: PROVIDER_MODEL.providerLabel })).toBeTruthy();
   });
 
   it("shares the composer's current models and keeps a selected legacy model under Other", async () => {
