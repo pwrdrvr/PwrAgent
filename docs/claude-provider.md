@@ -374,7 +374,8 @@ names the author: `loop_wakeup`, `schedule_wakeup` (a cron), or `system` (a
 task notification, among others). A prompt counts as Claude's own only when
 no desktop turn is open, because a task notification can also fold into a
 running turn. A CLI that omits `source` is judged by that rule alone, since
-every desktop message opens its turn before its prompt is written.
+every desktop message opens its turn before its prompt is written. Its held
+prompt leaves the tracked wakes only when it matches a wake's prompt.
 
 When the thread is locked, the registry's `holdBackendSelfStartedTurn` keeps
 the prompt in a held queue entry (`self-started:<threadId>`), and the hook

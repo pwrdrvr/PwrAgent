@@ -150,6 +150,8 @@ describe("ClaudeSessionWakeTracker.fired", () => {
     // Nothing is due yet, so an unknown prompt drops nothing.
     expect(wakes.fired("Continue the autonomous loop.")).toBe(false);
     advance(10 * MINUTE);
+    // A caller that cannot tell a fire from a task notification matches by prompt only.
+    expect(wakes.fired("Continue the autonomous loop.", { dueFallback: false })).toBe(false);
     expect(wakes.fired("Continue the autonomous loop.")).toBe(true);
     expect(wakes.pending().map((wake) => wake.id)).toEqual(["later"]);
   });

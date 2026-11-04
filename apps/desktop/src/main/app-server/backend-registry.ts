@@ -21358,16 +21358,17 @@ export class DesktopBackendRegistry {
     if (!lock) return false;
     const identity = { backend: params.backend, threadId: params.threadId };
     const queueEntryId = `${SELF_STARTED_TURN_ENTRY_PREFIX}${params.threadId}`;
-    const existing = this.threadTurnQueue.getQueuedEntries(identity).find((entry) => entry.id === queueEntryId);
+    let existing: ThreadTurnQueueEntry | undefined;
+    for (const entry of this.threadTurnQueue.iterateQueuedEntries(identity)) {
+      if (entry.id === queueEntryId) existing = entry;
+    }
     if (existing) {
       const prompts = existing.input.flatMap((item) => item.type === "text" ? [item.text] : []);
       if (prompts.includes(params.prompt)) return true;
-      const input: AppServerTurnInputItem[] = [...existing.input, { type: "text", text: params.prompt }];
-      if (this.threadTurnQueue.updateQueuedEntryInput(queueEntryId, input)) {
-        const entry = this.threadTurnQueue.setQueuedEntryTitle(queueEntryId, selfStartedTurnTitle(params.source, prompts.length + 1));
-        if (entry) this.emitQueuedTurnInputUpdated(entry);
-        return true;
-      }
+      this.threadTurnQueue.updateQueuedEntryInput(queueEntryId, [...existing.input, { type: "text", text: params.prompt }]);
+      const entry = this.threadTurnQueue.setQueuedEntryTitle(queueEntryId, selfStartedTurnTitle(params.source, prompts.length + 1));
+      if (entry) this.emitQueuedTurnInputUpdated(entry);
+      return true;
     }
     await this.submitHeldTurn({
       ...identity,

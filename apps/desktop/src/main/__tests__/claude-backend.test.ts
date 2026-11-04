@@ -2491,6 +2491,47 @@ describe("Claude SDK backend", () => {
       expect(outputs).toEqual([{}, {}, {}]);
     });
 
+    it("opens a turn for a later fire once a desktop turn has run, though Claude sent no result for a held one", async () => {
+      let locked = true;
+      const hold = vi.fn(async () => locked);
+      const fire = Promise.withResolvers<void>();
+      const f = await fixture(async function* (options, prompt) {
+        const inputs = prompt[Symbol.asyncIterator]();
+        await inputs.next();
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        await runHooks(options, "PostToolUse", {
+          tool_name: "CronCreate", tool_use_id: "tool-cron", tool_input: { cron: "*/5 * * * *", prompt: "/review-ci" },
+          tool_response: { id: "cron-1", recurring: true, nextFireAt: 4_000_000_000_000 },
+        });
+        yield { type: "result", subtype: "success", is_error: false, result: "scheduled" } as SDKMessage;
+        // A fire the lock holds; this CLI reports nothing more for it.
+        await runPromptSubmit(options, { prompt: "/review-ci", source: "schedule_wakeup" });
+        const next = await inputs.next();
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "next", content: [{ type: "text", text: "OK" }] } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "OK",
+          user_message_uuids: [next.value!.uuid] } as unknown as SDKMessage;
+        await fire.promise;
+        // Unlocked, the cron's slash command runs and reports only its output.
+        await runPromptSubmit(options, { prompt: "/review-ci", source: "schedule_wakeup" });
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        yield { type: "system", subtype: "local_command_output", content: "CI is green." } as unknown as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "CI is green." } as SDKMessage;
+      });
+      const backend = f.openBackend({ ...f.backendOptions, holdSelfStartedTurn: hold });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Check CI every five minutes" }] });
+      await f.waitForTurn();
+      await vi.waitFor(() => expect(hold).toHaveBeenCalledOnce());
+      locked = false;
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Next" }] });
+      await f.waitForTurn();
+      fire.resolve();
+      await vi.waitFor(() => expect(turnsStarted(f.events)).toHaveLength(3));
+      await f.waitForTurn();
+      expect(hold).toHaveBeenCalledTimes(2);
+    });
+
     it("holds a fired /loop wake-up, which then leaves the session's wakes", async () => {
       const fire = Promise.withResolvers<void>();
       const hold = vi.fn(async () => true);

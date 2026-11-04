@@ -152,9 +152,10 @@ export class ClaudeSessionWakeTracker {
    * fires, and no Stop hook follows a held fire to report that, so the
    * one-shot leaves here. A recurring job stays. A /loop fire can submit
    * expanded text rather than the scheduled prompt; with no match by prompt,
-   * the soonest one-shot already due leaves. Returns whether one left.
+   * the soonest one-shot already due leaves, unless `dueFallback` is false.
+   * Returns whether one left.
    */
-  fired(prompt: string): boolean {
+  fired(prompt: string, options: { dueFallback?: boolean } = {}): boolean {
     const now = this.now();
     const matches = (scheduled: string) => scheduled === prompt || samePrompt(prompt, scheduled);
     const loopIndex = this.loopWakeups.findIndex((wakeup) => matches(wakeup.prompt));
@@ -165,6 +166,7 @@ export class ClaudeSessionWakeTracker {
     const oneShots = [...this.wakes.values()].filter((wake) => !wake.recurring);
     const byPrompt = oneShots.find((wake) => matches(wake.prompt));
     if (byPrompt) return this.wakes.delete(byPrompt.id);
+    if (options.dueFallback === false) return false;
     if ([...this.wakes.values()].some((wake) => wake.recurring && matches(wake.prompt))) return false;
     const dueWake = oneShots
       .filter((wake) => wake.nextFireAt !== undefined && wake.nextFireAt <= now + FIRE_SKEW_MS)

@@ -1091,6 +1091,9 @@ export class ClaudeBackend {
     const turn = claudeTurn(live.session);
     live.turn = turn;
     live.lastTurnId = turn.turnId;
+    // Claude runs prompts in order, so a dropped prompt's result comes before
+    // this turn's own and lands in it. None is left to open no turn after it.
+    live.heldSelfStarts = 0;
     if (live.followUpTimer) clearTimeout(live.followUpTimer);
     live.followUpTimer = undefined;
     // A steer for this turn must follow its prompt into the input stream.
@@ -1512,9 +1515,11 @@ export class ClaudeBackend {
     if (!held) return false;
     // An open follow-up turn takes the dropped prompt's result and ends.
     if (!openFollowUp) live.heldSelfStarts += 1;
-    if (selfStarted.source !== "task_notification" && live.sessionWakes.fired(selfStarted.prompt)) {
-      void this.publishSessionWakes(live).catch(() => {});
-    }
+    // A CLI that names no source may be firing a wake; match that by prompt only.
+    const wakeFired = selfStarted.source !== "task_notification"
+      ? live.sessionWakes.fired(selfStarted.prompt)
+      : input.source === undefined && live.sessionWakes.fired(selfStarted.prompt, { dueFallback: false });
+    if (wakeFired) void this.publishSessionWakes(live).catch(() => {});
     claudeBackendLog.info("Held a turn Claude started on its own while the thread is locked", {
       threadId, source: selfStarted.source,
     });
