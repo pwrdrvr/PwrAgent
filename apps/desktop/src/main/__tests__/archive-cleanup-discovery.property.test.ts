@@ -166,8 +166,7 @@ it("bounds a 1876-identity single archive to candidate discovery plus fresh admi
     await run.cleanup();
     expect(run.removed).toBe(1);
     expect(run.inspected.size).toBe(1876);
-    expect(run.effects).toEqual({ git: 2, workspace: 0 });
-    expect(run.transport.listings).toHaveLength(38);
+    expect({ ...run.effects, providerPages: run.transport.listings.length }).toEqual({ git: 2, workspace: 0, providerPages: 38 });
   } finally { await run.registry.close(); }
 });
 
@@ -338,7 +337,8 @@ it("automatically completes once after the last owner releases while unrelated e
     fc.scheduler(), async (count, events, scheduler) => {
       const run = await fixture([]);
       const owners = new Set(Array.from({ length: count }, (_, i) => i));
-      run.rows.active = [...owners].map((i) => ({ id: `owner-${i}`, cwd: "/fixture/candidate-0" }));
+      const unrelated = { id: "unrelated", cwd: "/fixture/active-elsewhere" };
+      run.rows.active = [...owners].map((i) => ({ id: `owner-${i}`, cwd: "/fixture/candidate-0" })).concat(unrelated);
       const context: ArchiveCleanupContext = { ...run.context, checkpoint: async () => {
         await run.registry.publishLocalEvent({ backend: "codex", notification: { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["unrelated"] } } });
         await scheduler.schedule(Promise.resolve(), "paced cleanup with unrelated activity");
@@ -357,7 +357,7 @@ it("automatically completes once after the last owner releases while unrelated e
       };
       const writeOwner = (owner: number, attached: boolean) => {
         if (attached) owners.add(owner); else owners.delete(owner);
-        run.rows.active = [...owners].map((i) => ({ id: `owner-${i}`, cwd: "/fixture/candidate-0" }));
+        run.rows.active = [...owners].map((i) => ({ id: `owner-${i}`, cwd: "/fixture/candidate-0" })).concat(unrelated);
         // A released owner still exists elsewhere; its current cwd, rather
         // than an event's historical payload, is the ownership oracle.
         for (let i = 0; i < count; i++) if (!owners.has(i)) run.rows.active.push({ id: `owner-${i}`, cwd: `/fixture/released-${i}` });
