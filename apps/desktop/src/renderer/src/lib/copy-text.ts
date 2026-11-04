@@ -1,3 +1,4 @@
+import { graphemePrefix, graphemeSuffix } from "@pwragent/shared";
 import { getDesktopApi, type DesktopApi } from "./desktop-api";
 
 export async function copyText(
@@ -97,7 +98,7 @@ export function formatCopyTooltip(path: string, maxLength = 72): string {
   return `${elideMiddle(path, maxLength)}\nClick to copy to clipboard`;
 }
 
-function elideMiddle(text: string, maxLength: number): string {
+export function elideMiddle(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
@@ -105,5 +106,5 @@ function elideMiddle(text: string, maxLength: number): string {
   const visible = Math.max(8, maxLength - 1);
   const left = Math.ceil(visible / 2);
   const right = Math.floor(visible / 2);
-  return `${text.slice(0, left)}…${text.slice(-right)}`;
+  return `${graphemePrefix(text, left)}…${graphemeSuffix(text, right)}`;
 }

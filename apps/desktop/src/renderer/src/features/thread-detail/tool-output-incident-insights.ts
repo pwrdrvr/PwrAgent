@@ -6,6 +6,8 @@ import type {
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
+  graphemePrefix,
+  graphemeSuffix,
   isFlaggedToolInvocation,
   TOOL_OUTPUT_CAP_CHARS,
   toolOutputCapShare,
@@ -953,7 +955,7 @@ function elideMiddle(value: string, budget: number): string {
   if (value.length <= budget) return value;
   const head = Math.floor((budget - 1) * 0.42);
   const tail = budget - 1 - head;
-  return `${value.slice(0, head).trimEnd()}…${value.slice(value.length - tail).trimStart()}`;
+  return `${graphemePrefix(value, head).trimEnd()}…${graphemeSuffix(value, tail).trimStart()}`;
 }
 
 function sumTokens(invocations: ThreadToolInvocationRecord[]): number {
