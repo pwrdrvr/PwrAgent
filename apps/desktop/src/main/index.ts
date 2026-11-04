@@ -16,7 +16,6 @@ import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from
 import { removeRetiredCiArtifactStore } from "./pr-status/forge-artifact-download";
 import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
 import { observeStorageArchive } from "./state/storage-maintenance";
-import { runOneTimeArchivedWorktreeRepair } from "./state/archived-worktree-repair";
 import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import type {
@@ -584,19 +583,6 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     const registry = getExistingDesktopBackendRegistry();
     if (!registry) return;
     await registry.resumeArchiveCleanupsAtStartup();
-    const report = await runOneTimeArchivedWorktreeRepair({
-      db: getAppStateDb().raw,
-      repair: async () => await registry.repairArchivedThreadWorktrees(),
-    });
-    if (report) mainLog.info("archived worktree repair completed", {
-      archivedThreads: report.archivedThreads, candidates: report.candidates.length,
-      removed: report.cleanup.filter((item) => item.removedWorktree).length,
-      protected: report.protectedWorktrees, missing: report.missingWorktrees,
-      emptyContainers: report.emptyContainerCandidates.length,
-      removedContainers: report.containerCleanup.filter((item) => item.removed).length,
-      retainedContainers: report.containerCleanup.filter((item) => !item.removed),
-      retained: report.cleanup.filter((item) => !item.removedWorktree),
-    });
   }).catch((error) => {
     mainLog.warn("archived worktree repair interrupted", { error: error instanceof Error ? error.message : String(error) });
   });

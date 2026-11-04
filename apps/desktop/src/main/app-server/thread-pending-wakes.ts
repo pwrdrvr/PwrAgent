@@ -219,6 +219,7 @@ function pullRequestWakes(
         ...(prNumber !== undefined ? { prNumber } : {}),
         state: state.state,
         ...(state.handledBy ? { handledBy: state.handledBy } : {}),
+        ...(state.prEnded ? { prEnded: state.prEnded } : {}),
         durable: true,
         // Another thread owns the PR's repairs; turning this one off changes nothing.
         ...(state.state !== "handled_by_other_thread" ? { stop: "turn_off" as const } : {}),

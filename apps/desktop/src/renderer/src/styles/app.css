@@ -9853,6 +9853,25 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* Unbind from <platform> (<conversation>). The platform says what the item
+   does, so it never shrinks. The conversation name can be any length:
+   `contain: inline-size` keeps it out of the menu's intrinsic width, so the
+   menu sizes to its other rows and the name fills what is left. */
+.thread-context-menu__binding-platform {
+  flex: none;
+  white-space: nowrap;
+}
+
+.thread-context-menu__binding-name {
+  contain: inline-size;
+  flex: 1 1 0;
+  min-width: 12ch;
+  margin-left: 0.3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* macOS-native pattern: action label on the left, keyboard
    shortcut hint chip on the right (margin-left: auto). Used by
    the pin/move items in the thread + directory context menus so
@@ -38770,6 +38789,15 @@ div.composer-error-row__toggle {
   text-transform: none;
 }
 
+/* Auto-fix on a merged or closed PR: still on, waiting for nothing. */
+.waiting-for-panel__row.is-idle .pr-watch-list__title {
+  color: var(--text-muted);
+}
+
+.waiting-for-panel__row.is-idle .pr-watch-list__icon {
+  opacity: 0.6;
+}
+
 .waiting-for-panel__row.is-open {
   margin: 0 -8px;
   padding: 7px 8px 9px;
@@ -45719,10 +45747,12 @@ button.composer__subthread-source-parent:hover {
   cursor: default;
 }
 
-/* The project's Forge Automation has Auto-fix paused or off: the thread keeps
-   its own value (aria-pressed) but the chip drops its accent. */
+/* The project's Forge Automation has Auto-fix paused or off, or every PR it
+   could repair has merged or closed: the thread keeps its own value
+   (aria-pressed) but the chip drops its accent. */
 .composer__toggle.is-project-overridden,
-.composer__toggle.is-active.is-project-overridden {
+.composer__toggle.is-active.is-project-overridden,
+.composer__toggle.is-active.is-idle {
   border-color: var(--border-subtle);
   background: var(--bg-input);
   color: var(--text-muted);

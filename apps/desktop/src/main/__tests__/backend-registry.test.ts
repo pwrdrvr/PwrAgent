@@ -62135,7 +62135,7 @@ script = "printf setup"
     });
     const archive = vi.spyOn(client, "archiveThread");
     try {
-      await registry.sweepInactiveThreads();
+      await registry.sweepInactiveThreads({ manual: false });
       expect(archive.mock.calls.map(([request]) => request.threadId).sort()).toEqual(["scratch-aaaaaa", "scratch-bbbbbb"]);
       expect(registry.getThreadArchiveSweepStatus()).toEqual(expect.objectContaining({ archived: 2, failed: 0 }));
     } finally {

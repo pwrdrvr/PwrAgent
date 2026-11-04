@@ -197,6 +197,7 @@ import {
   getAppStateMode,
   isAppStateInitialized,
 } from "../state/app-state";
+import { runOneTimeArchivedWorktreeRepair } from "../state/archived-worktree-repair";
 import type {
   OverlayStoreLike,
   SqliteOverlayStore,
@@ -9458,6 +9459,7 @@ export class DesktopBackendRegistry {
   private readonly durableProjectHeldWakeups = new Map<string, StoredProjectHeldWakeup>();
   private readonly pendingArchiveCleanupIntents = new Map<string, ArchiveCleanupIntent>();
   private archiveCleanupResumeStarted = false;
+  private archivedWorktreeRepair?: Promise<ArchivedWorktreeRepairReport>;
   private archiveCleanupInventories = new WeakMap<object, {
     revision: number;
     includesArchived: boolean;
@@ -16352,8 +16354,8 @@ export class DesktopBackendRegistry {
       || !this.threadTurnQueue.iterateQueuedEntries({ backend, threadId }).next().done;
   }
 
-  async sweepInactiveThreads(): Promise<void> {
-    if (!this.closed) await this.getThreadArchiveSweeper().sweep();
+  async sweepInactiveThreads(options: { manual?: boolean } = {}): Promise<void> {
+    if (!this.closed) await this.getThreadArchiveSweeper().sweep({ manual: options.manual ?? true });
   }
 
   getThreadArchiveSweepStatus(): DesktopThreadArchiveSweepStatus {
@@ -16370,6 +16372,29 @@ export class DesktopBackendRegistry {
   private getThreadArchiveSweeper(): ThreadArchiveSweeper {
     return this.threadArchiveSweeper ??= new ThreadArchiveSweeper({
       getPolicy: () => this.readThreadArchivePolicy(),
+      cleanupWorktrees: async ({ manual, onProgress, onFailure }) => {
+        const publishProgress = (completed: number, report: ArchivedWorktreeRepairReport) => onProgress({
+          candidates: report.candidates.length, protected: report.protectedWorktrees,
+          processed: Math.min(completed, report.candidates.length),
+          removed: report.cleanup.filter((item) => item.removedWorktree).length,
+          emptyContainers: report.emptyContainerCandidates.length,
+          processedContainers: Math.max(0, completed - report.candidates.length),
+          removedContainers: report.containerCleanup.filter((item) => item.removed).length,
+        });
+        const repair = async () => await this.repairArchivedThreadWorktrees({
+          onProgress: (completed, _total, report) => {
+            if (report) publishProgress(completed, report);
+          },
+        });
+        const report = isAppStateInitialized()
+          ? await runOneTimeArchivedWorktreeRepair({ db: getAppStateDb().raw, repair, force: manual })
+          : manual ? await repair() : undefined;
+        if (!report) return;
+        publishProgress(report.candidates.length + report.emptyContainerCandidates.length, report);
+        for (const item of [...report.cleanup, ...report.containerCleanup]) {
+          if (item.error) onFailure(new Error(item.error));
+        }
+      },
       cleanupRetention: async (onFailure) => await this.sweepArchivedThreadRetention(onFailure),
       resolveProject: async ({ thread, overlay }) => {
         const directory = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []][0];
@@ -38279,9 +38304,24 @@ export class DesktopBackendRegistry {
   /** Backfill only archived checkouts; never archive the provider thread again.
    * Discovery is one complete read, while each removal retains fresh ownership
    * admission and the ordinary snapshot/restore persistence boundary. */
-  async repairArchivedThreadWorktrees(options: {
+  repairArchivedThreadWorktrees(options: {
     dryRun?: boolean;
-    onProgress?: (completed: number, total: number) => void;
+    onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
+  } = {}): Promise<ArchivedWorktreeRepairReport> {
+    // A manual sweep joins startup repair rather than queuing duplicate removals.
+    // Read-only audits never join a mutating pass.
+    if (options.dryRun) return this.runArchivedThreadWorktreeRepair(options);
+    if (this.archivedWorktreeRepair) return this.archivedWorktreeRepair;
+    const running = this.runArchivedThreadWorktreeRepair(options).finally(() => {
+      this.archivedWorktreeRepair = undefined;
+    });
+    this.archivedWorktreeRepair = running;
+    return running;
+  }
+
+  private async runArchivedThreadWorktreeRepair(options: {
+    dryRun?: boolean;
+    onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
   } = {}): Promise<ArchivedWorktreeRepairReport> {
     await this.subAgentStartupReconciliation;
     if (this.isBootstrapModeFn() || this.isCodexBootstrapDeferredFn() || !this.codexClient.listArchiveCleanupThreadsPage) {
@@ -38360,13 +38400,22 @@ export class DesktopBackendRegistry {
       }
       report.candidates.push({ backend: thread.source, threadId: thread.id, worktreePath });
     }
+    backendRegistryLog.info("archived worktree repair discovered", {
+      archivedThreads: report.archivedThreads, discoveredWorktrees: report.discoveredWorktrees,
+      candidates: report.candidates.length, protected: report.protectedWorktrees, missing: report.missingWorktrees,
+      dryRun: options.dryRun === true,
+    });
     if (options.dryRun) return report;
+    const total = report.candidates.length + report.emptyContainerCandidates.length;
+    options.onProgress?.(0, total, report);
+    let completed = 0;
     for (const candidate of report.candidates) {
       assertCurrent();
       const key = buildThreadIdentityKey(candidate.backend, candidate.threadId);
       const completion = this.archiveCleanupQueue.enqueue(key, async (context) => {
-        const current = await this.findThreadForArchiveCleanup({ ...candidate, context });
-        const thread = { ...current.thread, linkedDirectories: current.thread.linkedDirectories.filter((directory) => {
+        // This complete inventory is preliminary only. archiveThreadWorktrees
+        // still performs a fresh authoritative ownership scan before removal.
+        const thread = { ...ownersByPath.get(candidate.worktreePath)!, linkedDirectories: ownersByPath.get(candidate.worktreePath)!.linkedDirectories.filter((directory) => {
           const worktreePath = linkedDirectoryWorktreePath(directory);
           return worktreePath !== undefined && normalizeWorktreePathForComparison(worktreePath) === candidate.worktreePath;
         }) };
@@ -38374,7 +38423,7 @@ export class DesktopBackendRegistry {
         return {
           backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(),
           cleanup: await this.archiveThreadWorktrees({
-            ...current, backend: candidate.backend, thread, context,
+            ...inventory, backend: candidate.backend, thread, context,
           }),
         };
       });
@@ -38388,7 +38437,7 @@ export class DesktopBackendRegistry {
         report.cleanup.push({ worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
           error: error instanceof Error ? error.message : String(error) });
       }
-      options.onProgress?.(report.cleanup.length, report.candidates.length);
+      options.onProgress?.(++completed, total, report);
     }
     for (const candidate of report.emptyContainerCandidates) {
       assertCurrent();
@@ -38429,8 +38478,14 @@ export class DesktopBackendRegistry {
           containerPath: path.dirname(candidate.worktreePath), removed: false,
           error: error instanceof Error ? error.message : String(error) });
       }
+      options.onProgress?.(++completed, total, report);
     }
     assertCurrent();
+    backendRegistryLog.info("archived worktree repair completed", {
+      candidates: report.candidates.length, removed: report.cleanup.filter((item) => item.removedWorktree).length,
+      failed: [...report.cleanup, ...report.containerCleanup].filter((item) => item.error).length,
+      protected: report.protectedWorktrees, removedContainers: report.containerCleanup.filter((item) => item.removed).length,
+    });
     return report;
   }
 
@@ -50996,7 +51051,7 @@ export class DesktopBackendRegistry {
     }
     if (event.notification.method === "thread/deleted") {
       this.invalidateThreadListCache(event.backend);
-      if (!this.closed) void this.sweepInactiveThreads();
+      if (!this.closed) void this.sweepInactiveThreads({ manual: false });
     }
     const emitted = event.notification.method === "thread/deleted"
       ? deleteThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })

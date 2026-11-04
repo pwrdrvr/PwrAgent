@@ -84,6 +84,7 @@ export type ThreadPendingWakeSource =
       prNumber?: number;
       state: ThreadPrAutoFixState["state"];
       handledBy?: ThreadPrAutoFixState["handledBy"];
+      prEnded?: ThreadPrAutoFixState["prEnded"];
     }
   | {
       kind: "dependency";
@@ -187,6 +188,15 @@ export type ThreadPendingWakesErrorCode =
 export type ThreadPendingWakesResponse =
   | ({ ok: true } & Partial<ThreadPendingWakesList> & { stopped?: boolean })
   | { ok: false; error: { code: ThreadPendingWakesErrorCode; message: string } };
+
+/**
+ * Whether a listed wake can start a turn. Auto-fix on a merged or closed PR
+ * is listed, so it can be turned off, but it waits for nothing. Counts
+ * include only wakes this returns true for.
+ */
+export function isThreadPendingWakeLive(wake: ThreadPendingWake): boolean {
+  return !(wake.kind === "pr_auto_fix" && wake.prEnded);
+}
 
 /** The key a wake's source gives it. */
 export function buildThreadPendingWakeKey(kind: ThreadPendingWakeKind, sourceId: string): string {

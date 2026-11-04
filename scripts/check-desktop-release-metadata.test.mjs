@@ -148,10 +148,10 @@ test.each(["windows-sign", "publish-release-assets", "publish-release-notes"])(
 
 test("rejects a release test matrix that omits half the suite", () => {
   const root = fixture();
-  replace(root, ".github/workflows/release.yml", "lane: [1, 2]", "lane: [1]");
+  replace(root, ".github/workflows/release.yml", "lane: [1, 2, 3, 4]", "lane: [1, 2]");
   const result = check(root);
   expect(result.status).toBe(1);
-  expect(result.stderr).toContain("test must contain \"lane: [1, 2]\"");
+  expect(result.stderr).toContain("test must contain \"lane: [1, 2, 3, 4]\"");
 });
 
 test("rejects release unit tests that may skip the macOS icon compile", () => {
