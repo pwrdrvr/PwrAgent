@@ -19,6 +19,11 @@ export async function eventually(check, waitMs = timeout) {
   throw new Error("Condition did not become true");
 }
 
+export async function restartAfterCompletedTurn(h, _turn, _wait = eventually) {
+  await h.stop(h.daemon);
+  return h.start();
+}
+
 export async function setup(t) {
   // The daemon refuses a socket path over 100 bytes (the Unix sun_path
   // limit), and the socket sits 35 bytes below this root. A root inside the
