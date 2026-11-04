@@ -659,6 +659,15 @@ binding stores the backend as immutable thread identity. After that,
 there is no Provider button; the bound-thread status card only reports
 which backend owns the thread.
 
+Messaging's existing-thread, new-thread, and reviewer model pickers use
+`buildModelMenu` through `messaging-model-menu.ts`, matching desktop catalog
+order and superseded-model rules. **Other** (Claude: **Other Models**) opens
+a second page with a **Back** button. New threads and reviewers offer Codex
+model providers as named groups that open their own model pages; existing
+Codex threads offer only their own provider's models. Each list paginates
+within the adapter's action budget. Page navigation travels in callback
+values, so the same menus work across providers without adapter branches.
+
 ### ACP runtime modes
 
 - Messaging renders ACP runtime modes as a distinct action family, separate
