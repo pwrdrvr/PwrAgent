@@ -10,6 +10,10 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 const electron = vi.hoisted(() => ({ app: { isPackaged: false } }));
 vi.mock("electron", () => electron);
 
+function readTimingBridge() {
+  return globalThis.__PWRAGENT_E2E_MAIN_PROCESS_TIMING__;
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -31,7 +35,7 @@ describe("replay main-process timing bridge", () => {
           vi.stubEnv("PWRAGENT_REPLAY_FIXTURE_PATH", hasFixture ? fixture : "");
           electron.app.isPackaged = isPackaged;
           createReplayClientsFromEnv();
-          const snapshot = globalThis.__PWRAGENT_E2E_MAIN_PROCESS_TIMING__;
+          const snapshot = readTimingBridge();
           if (e2e !== "1" || !hasFixture || isPackaged) {
             expect(snapshot).toBeUndefined();
           } else {
