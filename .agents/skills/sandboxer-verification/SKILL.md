@@ -1,16 +1,26 @@
-# Former Sandboxer verification workflow
+---
+name: sandboxer-verification
+description: >-
+  Dormant Sandboxer verification procedure, retained for explicit reference
+  while a replacement provider is evaluated. Do not automatically invoke
+  or route development checks to this workflow; use local or CI verification.
+---
 
-> Historical reference only. This is no longer the repository development or
-> verification workflow. Do not provision or invoke Sandboxer for repository
-> checks. Use the local commands or repository CI described in `AGENTS.md`.
-> The PwrAgent product integration and general remote-compute design remain
-> supported; selecting a future development provider is separate work.
+# Verify on Sandboxer (dormant)
 
-The former workflow used an Ubuntu 24.04 x64 VM with root, Git, Docker,
-Node, and Python. Its checks mirrored the CI `Lint`, `Test`, and
-`Linux Desktop E2E` jobs, with verification running in the VM.
+> **Status: dormant pending a replacement provider.** The process, helper and
+> measurements below are preserved for reference; they are not active
+> development instructions. Do not automatically provision or invoke Sandboxer
+> for repository checks. Use local `pnpm test`, `pnpm lint`, `pnpm typecheck`
+> and `pnpm test:desktop-e2e`, or repository CI. Platform-specific verification
+> still uses the corresponding native CI or PwrSuiteLab routes in `AGENTS.md`.
+> This status does not change the product integration or installed MCP settings.
 
-[`scripts/sandboxer/verify.sh`](../scripts/sandboxer/verify.sh) runs in
+Sandboxer gives this thread an Ubuntu 24.04 x64 VM with root, Git, Docker,
+Node, and Python. The checks here mirror the CI `Lint`, `Test`, and
+`Linux Desktop E2E` jobs. Run them in the VM and keep the local machine free.
+
+[`scripts/sandboxer/verify.sh`](../../../scripts/sandboxer/verify.sh) runs in
 the VM. It installs the Node version from `.nvmrc`, the pinned pnpm, and the
 E2E window manager, then runs each check with a log and a status line.
 
@@ -243,7 +253,7 @@ Report the sandbox ID, the commit, and each status line. Name every failure.
   Sandboxer MCP lists that tool. Otherwise it calls `stop_sandbox` and marks
   the deletion pending until the tool appears. The switch is Settings →
   Plugins → MCPs → Sandboxer → **Clean up when PRs close**, on by default.
-  [`docs/sandboxer-remote-compute.md`](sandboxer-remote-compute.md)
+  [`docs/sandboxer-remote-compute.md`](../../../docs/sandboxer-remote-compute.md)
   has the details. For it to reach this thread's sandbox:
   - Create the sandbox with this thread's `create_sandbox`. PwrAgent releases
     only the sandboxes that the thread itself created.

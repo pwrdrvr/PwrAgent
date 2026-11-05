@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Historical helper for the former Sandboxer verification workflow (Ubuntu).
-# Not part of the current development workflow; use local commands or CI.
-# Retained procedure and measurements: docs/sandboxer-verification-history.md.
+# Dormant Sandboxer verification helper (Ubuntu), retained pending a replacement provider.
+# Do not automatically invoke it for development checks; use local commands or CI.
+# Preserved procedure: .agents/skills/sandboxer-verification/SKILL.md.
 #
 #   scripts/sandboxer/verify.sh setup        Node from .nvmrc, pnpm, E2E packages, pnpm install
 #   scripts/sandboxer/verify.sh unit [--shards N] [args]
