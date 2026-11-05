@@ -1,14 +1,14 @@
 {
   "assets": {
     "darwin-universal": {
-      "inventory_sha256": "32e0e0f25c4bc99437e71c6ebc559f7106fa1562acb067e2ff66b4941e941058",
+      "inventory_sha256": "7a1012cb699e10e37b800b0fe81a356b1a4e53899ba7fe71c1210db8964ffb63",
       "minimum_os": "13.0",
       "minimum_os_tested": false,
       "notarized": true,
-      "sha256": "a36eb7c50b234e01d385ef7607171d29cee29f4b5a9c735ebecc258ab07f1300",
+      "sha256": "ac017760d56e45395b692ab85c51c213bdde659fdc30dd8905adaeaf6050f220",
       "signing": "Developer ID Application: PwrDrvr LLC (T44CNHC4UH)",
       "team_id": "T44CNHC4UH",
-      "url": "https://github.com/huntharo/git/releases/download/v2.56.0-dev-pwrgit.3/pwrgit-2.56.0-dev-pwrgit.3-ada47e4-darwin-universal.tar.gz"
+      "url": "https://github.com/huntharo/git/releases/download/v2.56.0-dev-pwrgit.4/pwrgit-2.56.0-dev-pwrgit.4-97dd200-darwin-universal.tar.gz"
     },
     "linux-arm64": {
       "ca_bundle": {
@@ -21,13 +21,13 @@
         "sha256": "796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe",
         "url": "https://curl.se/ca/cacert-2026-10-20.pem"
       },
-      "inventory_sha256": "4b4f64036a86d78d6987300ccb9fdd75c91d7a6ae438c9ef4335813107acc103",
+      "inventory_sha256": "05b6f7a4569650b22ec1f96a33047742567b888913d76f56269b3e7e7c876148",
       "minimum_os": "glibc 2.35",
       "minimum_os_tested": false,
       "notarized": false,
-      "sha256": "b1a2c7268f56ff006e81c5e9827d6b25b2c56784541a7ef89cd11efccc7320d2",
+      "sha256": "9f81c626da93b0a0743d1efe4b85ae82a3fe7e614ee19b4c486a18426cb13a7d",
       "signing": "unsigned",
-      "url": "https://github.com/huntharo/git/releases/download/v2.56.0-dev-pwrgit.3/pwrgit-2.56.0-dev-pwrgit.3-ada47e4-linux-arm64.tar.gz"
+      "url": "https://github.com/huntharo/git/releases/download/v2.56.0-dev-pwrgit.4/pwrgit-2.56.0-dev-pwrgit.4-97dd200-linux-arm64.tar.gz"
     },
     "linux-x64": {
       "ca_bundle": {
@@ -40,23 +40,25 @@
         "sha256": "796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe",
         "url": "https://curl.se/ca/cacert-2026-10-20.pem"
       },
-      "inventory_sha256": "9bf8f27e19fa1a25126a20e7900f92af75a9bfffbac352197777c104e17501b7",
+      "inventory_sha256": "70bc8834cbdb196cc779d141ff1ee8272c0a403cda5e1164eaf65be44d29ed01",
       "minimum_os": "glibc 2.35",
       "minimum_os_tested": false,
       "notarized": false,
-      "sha256": "418c947542266c9f8bf3871e686297168e6ba129506b96a6f68cefa1b2dfb6a5",
+      "sha256": "4c204d577aa073b11df9b9b27e408f7db2a8658798a657bbddbb0da097ac9f71",
       "signing": "unsigned",
-      "url": "https://github.com/huntharo/git/releases/download/v2.56.0-dev-pwrgit.3/pwrgit-2.56.0-dev-pwrgit.3-ada47e4-linux-x64.tar.gz"
+      "url": "https://github.com/huntharo/git/releases/download/v2.56.0-dev-pwrgit.4/pwrgit-2.56.0-dev-pwrgit.4-97dd200-linux-x64.tar.gz"
     }
   },
-  "build_run": "https://github.com/huntharo/git/actions/runs/41849165689",
+  "build_run": "https://github.com/huntharo/git/actions/runs/42050909603",
   "consumer_sha256": "03a2dac8d3bd2a97f28c580a617b09aeb950ce03e8489b6c604da4e3488a6bf4",
   "schema": 1,
   "source_pull_requests": [
     2,
     3,
-    5
+    5,
+    10,
+    11
   ],
-  "source_revision": "ada47e445ed68570a72e2b2641c48e36a0f8df63",
-  "version": "2.56.0-dev-pwrgit.3"
+  "source_revision": "97dd200ae74c18d4afe94deb03bc79f29b9d774d",
+  "version": "2.56.0-dev-pwrgit.4"
 }
