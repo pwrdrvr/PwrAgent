@@ -1,6 +1,6 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationInvalidationMayChangeMembership, navigationWorkingStatePath } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope } from "@pwragent/shared";
 import type { AgentEvent, FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
@@ -291,10 +291,11 @@ export class NavigationWindowQueries {
   /** Invalidate transport baselines before canonical owner events can race a late page. */
   invalidate(id?: string, owners?: readonly FederationTarget[], event?: AgentEvent): void {
     let changed = false;
+    const directoryScope = event ? readNavigationDirectoryScope(event.navigationDirectoryScope) : undefined;
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
       if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
-      if (event && !this.eventAffectsResource(resource, event)) continue;
+      if (event && !this.eventAffectsResource(resource, event, directoryScope)) continue;
       const method = event?.notification.method === "navigation/invalidated"
         ? (event.notification.params as { sourceMethod?: unknown })?.sourceMethod : event?.notification.method;
       const childPin = resource.value.state.request.query.kind === "children"
@@ -351,11 +352,19 @@ export class NavigationWindowQueries {
     return true;
   }
 
-  private eventAffectsResource(resource: Resource, event: AgentEvent): boolean {
+  private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[]): boolean {
     const request = resource.value.state.request;
     const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
+    if (request.query.kind === "directory" && directoryScope && !resource.membershipUncertain
+      && !navigationInvalidationMayChangeMembership(method)
+      && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
+      // The owner's complete membership includes off-page descendants. Loaded
+      // roots and linked paths can never supply this negative membership proof.
+      // A pending membership read retains its broad fence until accepted.
+      return directoryScope.includes(request.query.directoryKey);
+    }
     if (request.query.kind === "children" && !resource.membershipUncertain
       && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
       && (!navigationInvalidationMayChangeMembership(method)

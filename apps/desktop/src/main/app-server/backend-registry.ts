@@ -1,4 +1,5 @@
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
+import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
@@ -9704,6 +9705,7 @@ export class DesktopBackendRegistry {
   private readonly reviewStartFailureNotices = new Map<string, string>();
   private readonly codexProtocolCaptureSession?: CodexProtocolCaptureSession;
   private readonly captureStores: ProtocolCaptureStore[] = [];
+  readonly navigationDirectoryScope = new NavigationDirectoryScope();
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
@@ -53245,6 +53247,7 @@ export class DesktopBackendRegistry {
   }
 
   private emitEvent(event: AgentEvent): Promise<void> {
+    this.navigationDirectoryScope.invalidate(event);
     this.trackLiveCodexToolItem(event);
     if (event.backend === "codex" && event.notification.method === "turn/started") {
       const notification = event.notification as {
@@ -54043,6 +54046,7 @@ export class DesktopBackendRegistry {
       this.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
     }
     event = this.withReviewRuntimeMetadata(event);
+    event = { ...event, navigationDirectoryScope: this.navigationDirectoryScope.forEvent(event) };
     await this.emitToListeners(event);
   }
 

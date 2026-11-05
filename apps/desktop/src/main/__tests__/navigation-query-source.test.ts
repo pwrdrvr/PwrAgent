@@ -38,6 +38,7 @@ vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: 
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
+import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 
 function createSource(coverage: "complete" | "checking" | "degraded" = "complete") {
   let finish!: () => void;
@@ -45,6 +46,8 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
   const listeners = new Set<(event: AgentEvent) => void>();
   const listThreads = vi.fn(async (_params?: { forceRefresh?: boolean }): Promise<NavigationThreadSummary[]> => { await gate; return []; });
   const rememberNavigationVisibilityIndex = vi.fn();
+  const navigationDirectoryScope = new NavigationDirectoryScope();
+  const rememberDirectoryScope = vi.spyOn(navigationDirectoryScope, "remember");
   const registry = {
     listThreads,
     onEvent: (listener: (event: AgentEvent) => void) => {
@@ -56,11 +59,12 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
     withNavigationSubAgentActivity: (threads: []) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
     rememberNavigationVisibilityIndex,
+    navigationDirectoryScope,
     getStartupProviderRefreshStatus: () => ({ state: coverage === "checking" ? "checking" : "ready" }),
     isIncompleteThreadList: () => coverage === "degraded",
   } as unknown as DesktopBackendRegistry;
   return {
-    finish, listThreads, listeners, rememberNavigationVisibilityIndex,
+    finish, listThreads, listeners, rememberNavigationVisibilityIndex, rememberDirectoryScope, navigationDirectoryScope,
     read: (backend?: AppServerBackendScope) => loadLocalNavigationQueryIndex({ registry, backend, callerReason: "source-event-regression" }),
     refresh: () => loadLocalNavigationQueryIndex({ registry, callerReason: "source-event-regression", refreshProviders: true }),
     emit: (method: string) => {
@@ -83,9 +87,33 @@ describe("owner index source event admission", () => {
       const index = await source.read(backend);
       if (remembers) expect(source.rememberNavigationVisibilityIndex).toHaveBeenCalledExactlyOnceWith(index);
       else expect(source.rememberNavigationVisibilityIndex).not.toHaveBeenCalled();
+      if (backend === "all") expect(source.rememberDirectoryScope).toHaveBeenCalledExactlyOnceWith(index, 0);
+      else expect(source.rememberDirectoryScope).not.toHaveBeenCalled();
     } finally {
       source.emit("thread/name/updated");
     }
+  });
+
+  it("cannot grant directory scope from a scan overtaken at ingress before listeners hear the membership event", async () => {
+    const source = createSource();
+    const row: NavigationThreadSummary = { id: "hidden", source: "codex", title: "Hidden", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false } };
+    const original = mocks.store.readNavigationQueryIndex.getMockImplementation();
+    mocks.store.readNavigationQueryIndex.mockImplementation(() => ({ threads: [row], directories: [{
+      key: "project", kind: "directory", label: "Project", threadKeys: ["codex:hidden"], needsAttentionCount: 0,
+    }] }));
+    const event = { backend: "codex", notification: { method: "thread/backgroundTasks/updated", params: { threadId: "hidden" } } } as AgentEvent;
+    try {
+      const pending = source.read();
+      await Promise.resolve();
+      source.navigationDirectoryScope.invalidate({ ...event,
+        notification: { method: "navigation/threadDirectories/updated", params: {} } } as AgentEvent);
+      source.finish(); await pending;
+      expect(source.navigationDirectoryScope.forEvent(event)).toBeUndefined();
+      source.emit("navigation/threadDirectories/updated");
+      await source.read();
+      expect(source.navigationDirectoryScope.forEvent(event)).toEqual({ version: 1, directoryKeys: ["project"] });
+    } finally { source.emit("thread/name/updated"); mocks.store.readNavigationQueryIndex.mockImplementation(original!); }
   });
 
   it("shares pending index work across transcript-only events", async () => {

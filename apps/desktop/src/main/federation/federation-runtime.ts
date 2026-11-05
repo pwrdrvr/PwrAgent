@@ -849,6 +849,7 @@ export function unsequencedFederationEventPayload(event: AgentEvent): AgentEvent
   return {
     backend: event.backend,
     notification: event.notification,
+    ...(event.navigationDirectoryScope ? { navigationDirectoryScope: event.navigationDirectoryScope } : {}),
     ...(event.rendererImageParts ? { rendererImageParts: event.rendererImageParts } : {}),
     ...(event.errorNoticeContext
       ? { errorNoticeContext: event.errorNoticeContext }
@@ -875,6 +876,7 @@ export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEve
     typeof value === "string" && value.length <= 1_024 ? value : undefined;
   return {
     backend: event.backend,
+    ...(event.navigationDirectoryScope ? { navigationDirectoryScope: event.navigationDirectoryScope } : {}),
     notification: {
       method: "navigation/invalidated",
       params: {
@@ -6988,6 +6990,7 @@ export class DesktopFederationRuntime {
         instanceId: sourceInstanceId,
       },
       notification: decoded.notification,
+      ...(decoded.navigationDirectoryScope ? { navigationDirectoryScope: decoded.navigationDirectoryScope } : {}),
       ...(decoded.errorNoticeContext
         ? { errorNoticeContext: decoded.errorNoticeContext }
         : {}),
