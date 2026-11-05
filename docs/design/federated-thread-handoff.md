@@ -18,7 +18,8 @@ same backend call. Neither moves the example Windows thread automatically.
 
 - `ThreadMigrationService` already uses Codex's `thread/fork(path)` to cross
   profiles, checks destination replay, and archives only after a successful copy.
-- `CodexAppServerClient` now exports bytes through the protocol's `fs/readFile`.
+- `CodexAppServerClient` exports portable bytes through managed Codex's
+  `thread/export`, with `fs/readFile` compatibility for legacy threads.
   PwrAgent does not open, parse, rewrite, or discover Codex-owned storage.
 - Federation file push already provides authenticated routing, chunking,
   backpressure, collision protection, byte limits, and SHA-256 verification.
@@ -28,13 +29,25 @@ same backend call. Neither moves the example Windows thread automatically.
   internal `preserveWorktrees` option so Move retains the source checkout.
 
 The path override on `thread/fork` is documented as unstable in the pinned Codex
-protocol. A source that cannot serve `fs/readFile` fails explicitly, before Git
+protocol. A source that cannot export its history fails explicitly, before Git
 capture. There is no storage-reading fallback. See the [Codex App Server
 documentation](https://learn.chatgpt.com/docs/app-server).
 
 ## Portable history requirement
 
-The sender forwards `thread/read.thread.historyMode` in `thread.handoff.prepare`.
+The sender requests `thread/export` with a 64 MiB decoded snapshot limit.
+Managed Codex resolves complete paginated ancestry at its frozen fork cutoffs,
+preserves model response, tool, and compaction records, and supplies the legacy
+presentation events needed for the destination transcript. It returns the
+versioned `legacy-rollout-v1` format; PwrAgent transports it opaquely. Stock
+Codex on the receiver can import this self-contained history by path.
+
+An older sender can use `fs/readFile` only for a legacy source and only when
+`thread/export` is unavailable. A paginated source requires a managed sender
+with portable export support; the error identifies the sending machine to
+update. Export failures never fall back to copying an incomplete paginated file.
+
+The sender declares the exported format in `thread.handoff.prepare`.
 The receiver accepts only `legacy` and acknowledges that format explicitly;
 missing or unknown formats fail before file push or destination workspace creation.
 Both peers must run a PwrAgent version with this acknowledgement. The incoming
@@ -47,15 +60,22 @@ source ID through receiver-local history. An empty receiver answers
 path. `thread/fork` first appears in stable Codex 0.80.0 and honors `path` there;
 0.79.0 has no fork handler. The implementations in 0.100.0, 0.135.0, 0.153.0, and 0.164.0
 all honor a nonempty path; 0.153.0 and 0.164.0 additionally resolve paginated
-history through the local thread store. Upgrading Codex alone is not a remedy.
+history through the local thread store. Path-based fork first appeared in the
+stable 0.80.0 handler. A newer stock binary alone does not flatten paginated
+history; the managed sender's export is the missing operation.
 
 The live oracle runs two real App Servers with isolated, empty homes and
 contrived fixtures. It covers Copy, Move, a published Git workspace, and
-paginated rejection before upload. It reads Codex data only through protocol
-requests and makes no model calls. Run it separately from hermetic unit tests:
+paginated rejection before upload with an older sender. With an upgraded sender
+it also creates a paginated fork, transfers it through Copy and Move into stock
+Codex, checks its transcript, and checks the actual next model request against
+the inherited context. Model responses come from a local contrived HTTP fixture;
+no inference service or account is used. Codex data is accessed only through
+protocol requests. Run it separately from hermetic unit tests:
 
 ```sh
 PWRAGENT_CODEX_HANDOFF_ORACLE_COMMAND=/absolute/path/to/codex \
+PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND=/absolute/path/to/managed/codex \
   pnpm exec vitest run --config apps/desktop/scripts/thread-handoff-oracle.config.ts
 ```
 
@@ -70,7 +90,7 @@ sequenceDiagram
   participant R as Destination Codex
   V->>S: Copy or Move(thread, target, repository)
   S->>S: Reserve idle thread; reject queued work
-  S->>C: thread/read and fs/readFile
+  S->>C: thread/read and thread/export
   C-->>S: Protocol history and opaque rollout bytes
   S->>S: Capture Git state; gzip PwrAgent package
   S->>D: Federation file push

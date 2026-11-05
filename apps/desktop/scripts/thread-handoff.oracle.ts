@@ -213,7 +213,12 @@ it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each
       await completeTurn(f.sourceClient, child.threadId, "Keep the contrived second fact: cedar.");
       const before = await f.sourceClient.readThread({ threadId: child.threadId });
       expect(before.messages).toHaveLength(4);
-      const result = await f.sender.send({ sourceThreadId: child.threadId, operation, targetInstanceId: "receiver" });
+      const reads = vi.spyOn(f.targetClient, "readThread");
+      const result = await f.sender.send({ sourceThreadId: child.threadId, operation, targetInstanceId: "receiver" }).catch(async (error) => {
+        // Contrived protocol data makes history loss reviewable on a live-oracle failure.
+        console.error(JSON.stringify({ expected: before.messages, actual: await reads.mock.results.at(-1)?.value }));
+        throw error;
+      });
       expect(result.sourceArchived).toBe(operation === "move");
       const after = await f.targetClient.readThread({ threadId: result.threadId });
       expect(after.messages.map(({ role, text }) => ({ role, text })))
