@@ -3,7 +3,7 @@ import type { NavigationPresentationOrder } from "./navigation-presentation-orde
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
-import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
+import { buildPagedDirectoryChildren, buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
 import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
@@ -467,6 +467,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     },
   });
   const { threadsByKey, pinnedThreadKeys } = pinOrdering;
+  const pagedChildren = useMemo(() => buildPagedDirectoryChildren({
+    resources: props.pagedNavigation?.resources ?? new Map(), presentationOrder: props.presentationOrder, threadsByKey,
+  }), [props.pagedNavigation?.resources, props.presentationOrder, threadsByKey]);
   const pointerDownSubthread = useSubthreadReorderDrag({
     threadByKey: threadsByKey,
     onUpdateSubthreadOrder: props.onUpdateSubthreadOrder,
@@ -1164,7 +1167,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       .filter((label): label is string => Boolean(label))
       .join(", ");
     const expandedThreadModel =
-      expanded ? buildPagedDirectoryPresentation({ directory, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
+      expanded ? buildPagedDirectoryPresentation({ directory, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey, children: pagedChildren }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
     const { childThreadsByParentKey, ownerChildOrder } = expandedThreadModel;
     // One tray per top-level row, holding its whole descendant subtree in
     // depth-first order. The owner keys each child under its *true* parent, so
