@@ -1997,11 +1997,11 @@ export class DesktopSettingsService {
     const key = `${configuredCommand?.trim() ?? ""}\0${selectedManaged ?? ""}`;
     if (this.gitDiscoveryCache?.key !== key) {
       const promise = this.commandDiscoveryLifetime.run(
-        async () => discoverGitCommands({
+        () => discoverGitCommands({
           configuredCommand,
           env: this.env,
           signal: this.commandDiscoveryLifetime.signal,
-          managed: (await listManagedGitGenerations().catch(() => [])).map((release) => ({
+          managed: async () => (await listManagedGitGenerations()).map((release) => ({
             generation: release.generation,
             executable: release.executable,
             root: release.root,

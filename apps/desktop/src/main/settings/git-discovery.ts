@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { bundledGitEnvironment, bundledGitExecutable, installedGitLfs, validateBundledGit } from "../bundled-git";
 import { customGitEnvironment, GIT_COMMAND_ENV } from "../git-runtime";
+import { managedGitRoot } from "../managed-git-paths";
 export { GIT_COMMAND_ENV } from "../git-runtime";
 import path from "node:path";
 import {
@@ -141,8 +142,11 @@ export async function discoverGitCommands(params?: {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   signal?: AbortSignal;
-  /** Downloaded PwrDrvr Git releases, newest first. */
-  managed?: ManagedGitDiscoveryInput[];
+  /**
+   * Downloaded PwrDrvr Git releases, newest first. A loader runs beside the
+   * other probes, so discovery starts the moment it is called.
+   */
+  managed?: ManagedGitDiscoveryInput[] | (() => Promise<ManagedGitDiscoveryInput[]>);
   /** The release chosen with Use, by generation id. */
   selectedManaged?: string;
 }): Promise<DesktopGitDiscoverySnapshot> {
@@ -156,16 +160,35 @@ export async function discoverGitCommands(params?: {
     buildGitCandidate(input, { env, platform: params?.platform, signal: params?.signal });
 
   const inputs = gitCandidateInputs(env);
-  const managed = params?.managed ?? [];
-  const selectedManaged = managed.find((release) => release.generation === params?.selectedManaged);
-  const [configured, ...discovered] = await Promise.all([
+  const loadManaged = params?.managed;
+  const chosen = params?.selectedManaged;
+  // Git commands fail while the chosen release is gone, so its row stays
+  // selected and says why rather than handing "In use" to the bundle.
+  const chosenWins = Boolean(chosen && !configuredCommand && !env[GIT_COMMAND_ENV]?.trim());
+  const managedList = (typeof loadManaged === "function"
+    ? loadManaged().catch(() => [])
+    : Promise.resolve(loadManaged ?? []))
+    .then((list) => !chosen || !chosenWins || list.some((release) => release.generation === chosen)
+      ? list
+      : [...list, {
+        generation: chosen,
+        executable: path.join(managedGitRoot(), "versions", chosen),
+        root: path.join(managedGitRoot(), "versions", chosen),
+        failure: "This PwrDrvr Git release is no longer installed.",
+      }]);
+  const managedProbes = managedList.then((list) => Promise.all(
+    list.map((release) => build({ command: release.executable, source: "managed", managed: release })),
+  ));
+  const [configured, first, bundled, ...rest] = await Promise.all([
     build({ command: configuredCommand, source: "config" }),
     build(inputs[0]),
-    // Downloaded releases sit beside the bundle they update.
-    ...managed.map((release) => build({ command: release.executable, source: "managed", managed: release })),
     build({ command: bundledGitExecutable(), source: "bundled" }),
     ...inputs.slice(1).map(build),
   ]);
+  const managed = await managedList;
+  const selectedManaged = managed.find((release) => release.generation === params?.selectedManaged);
+  // Downloaded releases sit beside the bundle they update.
+  const discovered = [first, ...await managedProbes, bundled, ...rest];
   // A configured path that is already one of the well-known locations
   // stays under the source that names it, so the row keeps reading
   // "Homebrew" rather than the far less useful "Custom path". The extra
