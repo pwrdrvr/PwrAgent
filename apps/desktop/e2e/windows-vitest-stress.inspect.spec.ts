@@ -3,7 +3,7 @@ import { createWriteStream } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "@playwright/test";
+import { test } from "./fixtures/electron-test";
 
 const STRESS_ARG = "--pwragent-vitest-stress";
 const PROCESS_SAMPLES_ARG = "--pwragent-vitest-process-samples";

@@ -83,9 +83,10 @@ describe("StarMapTerminalCard", () => {
 
   // Dragging the bottom edge down grows the card. The pane's own handle sat
   // under the title bar and grew the card downward when dragged up.
-  it("grows the card when the bottom grip is dragged down", () => {
+  it("grows the card when the bottom grip is dragged down", async () => {
     const onHeightChange = vi.fn();
     renderCard({ onHeightChange });
+    await screen.findByTestId("terminal-pane");
 
     const grip = screen.getByRole("separator", { name: /resize terminal/i });
     fireEvent.pointerDown(grip, { button: 0, clientY: 900 });
@@ -99,7 +100,7 @@ describe("StarMapTerminalCard", () => {
     expect(onHeightChange).not.toHaveBeenCalled();
   });
 
-  it("converts screen pixels to card pixels at the current zoom", () => {
+  it("converts screen pixels to card pixels at the current zoom", async () => {
     const onHeightChange = vi.fn();
     render(
       <StarMapTerminalCard
@@ -112,6 +113,7 @@ describe("StarMapTerminalCard", () => {
         zIndex={10}
       />,
     );
+    await screen.findByTestId("terminal-pane");
 
     const grip = screen.getByRole("separator", { name: /resize terminal/i });
     fireEvent.pointerDown(grip, { button: 0, clientY: 900 });
@@ -120,9 +122,10 @@ describe("StarMapTerminalCard", () => {
     expect(onHeightChange).toHaveBeenLastCalledWith(RECT.height + 60);
   });
 
-  it("resizes from the keyboard, down to grow", () => {
+  it("resizes from the keyboard, down to grow", async () => {
     const onHeightChange = vi.fn();
     renderCard({ onHeightChange });
+    await screen.findByTestId("terminal-pane");
 
     const grip = screen.getByRole("separator", { name: /resize terminal/i });
     fireEvent.keyDown(grip, { key: "ArrowDown" });

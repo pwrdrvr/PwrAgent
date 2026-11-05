@@ -800,7 +800,7 @@ describe("PluginsSettings", () => {
     for (const name of ["Reauthorize", "Disconnect", "Edit", "Remove"]) {
       expect(datadogRow.getByRole("button", { name })).toBeEnabled();
     }
-    expect(screen.getByLabelText("Remote MCP URL")).toBeEnabled();
+    expect(screen.getByLabelText("MCP server URL")).toBeEnabled();
 
     // So a second sign-in can run beside the first.
     fireEvent.click(datadogRow.getByRole("button", { name: "Reauthorize" }));
@@ -1248,6 +1248,62 @@ describe("PluginsSettings", () => {
       await waitFor(() => expect(row.getByRole("status")).toHaveTextContent(/Connection test passed · 1 tool · [0-9.]+ s/));
       expect(article).toHaveAttribute("data-health", "ready");
       expect(api.listMcpConnectionTools).toHaveBeenCalledTimes(3);
+    });
+
+    it.each([
+      { token: "replacement-ticket", pending: false },
+      { token: "", pending: false },
+      { token: "", pending: true },
+    ])("retires an IPC test after saving token '$token' (pending: $pending) without consuming a new session", async ({ token, pending }) => {
+      let connection = managed({
+        id: "native-app", displayName: "Native app", authMode: "none",
+        serverUrl: "unix:///tmp/private/server.sock#/mcp", updatedAt: 1,
+        discovery: { state: "ready", lastSuccessAt: 1 },
+      });
+      const api = managedApi([connection], ["old_tool"]);
+      api.listMcpConnections = vi.fn(async () => ({ connections: [connection] }));
+      api.updateMcpConnection = vi.fn(async () => {
+        // Token changes retain URL/configured state, but revise the row.
+        connection = { ...connection, updatedAt: 2, discovery: { state: "untested" } };
+        return { connectionId: connection.id, connection };
+      });
+      // Finish loading the row and its mount effects before starting a test.
+      // The IPC effect retires earlier reads without opening a session.
+      await act(async () => {
+        render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      });
+      const article = (await screen.findByText("Native app", { exact: true })).closest("article")!;
+      const row = within(article);
+      expect(api.listMcpConnectionTools).not.toHaveBeenCalled();
+      fireEvent.click(row.getByRole("button", { name: "Test connection" }));
+      await waitFor(() => expect(row.getByRole("status")).toHaveTextContent(/Connection test passed/));
+      expect(row.getByText("1 tool")).toBeInTheDocument();
+      let finishOldTest: (() => void) | undefined;
+      if (pending) {
+        vi.mocked(api.listMcpConnectionTools!).mockImplementationOnce(async () => await new Promise((done) => {
+          finishOldTest = () => done({ connectionId: connection.id, tools: ["stale_tool"], fetchedAt: 1 });
+        }));
+        fireEvent.click(row.getByRole("button", { name: "Test connection" }));
+        expect(row.getByRole("status")).toHaveTextContent("Testing Native app...");
+      }
+      const reads = vi.mocked(api.listMcpConnectionTools!).mock.calls.length;
+      fireEvent.click(row.getByRole("button", { name: "Edit" }));
+      const dialog = within(screen.getByRole("dialog", { name: "Edit connection" }));
+      if (token) fireEvent.change(dialog.getByLabelText("New session bearer token (leave blank to keep)"), { target: { value: token } });
+      else fireEvent.click(dialog.getByRole("button", { name: "Clear saved token" }));
+      fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+      await screen.findByText("Native app was updated.");
+      expect(api.updateMcpConnection).toHaveBeenCalledWith(expect.objectContaining({ ipcBearerToken: token }));
+      await waitFor(() => expect(row.queryByRole("status")).toBeNull());
+      expect(row.queryByText("1 tool")).toBeNull();
+      expect(article).toHaveAttribute("data-health", "unknown");
+      if (finishOldTest) await act(async () => { finishOldTest!(); });
+      expect(row.queryByRole("status")).toBeNull();
+      expect(api.listMcpConnectionTools).toHaveBeenCalledTimes(reads);
+      // A new session still requires an explicit operator action.
+      fireEvent.click(row.getByRole("button", { name: "Test connection" }));
+      await waitFor(() => expect(row.getByRole("status")).toHaveTextContent(/Connection test passed/));
+      expect(api.listMcpConnectionTools).toHaveBeenCalledTimes(reads + 1);
     });
 
     it("does not ask a connection that cannot answer", async () => {

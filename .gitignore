@@ -32,6 +32,7 @@ apps/desktop/release-stage-arm64/
 apps/desktop/build/bundled-agents/grok/
 apps/desktop/build/bundled-tools/ripgrep/
 apps/desktop/build/native/
+apps/desktop/build/mcp-ipc-relay/
 
 # Release-time secrets — must never land in the repo
 .envrc.release

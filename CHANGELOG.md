@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.3.12 - 2026-11-04
+
+- Quiet Restart - Add "Quiet & Continue After Restart" when quitting with running threads. Stop their turns and continue them a few at a time after the next launch, holding other queued messages and automatic work until those continuations start. A restart notice shows progress and offers "Start everything now."
+- To-do Destinations - Search for an existing destination thread with the jump palette's search engine, including keyboard navigation and clearer thread details.
+- Model Pickers - Apply consistent model ordering across desktop and messaging, grouping superseded models under Other. Save launchpad choices under the correct provider and keep remote choices from changing local defaults.
+- Remote Threads - Keep a new thread in the project selected on its owning machine, without jumping to another project when startup finishes or referenced directories are attached. Show remote running turns in grey in the project index.
+- Pull Request Watches - Keep watches waiting until real CI checks run instead of treating missing checks as success.
+- Archive Recovery - Preserve ACP archive metadata when loading replay history, and limit single-thread cleanup's Git discovery to the relevant worktrees.
+- Navigation and Previews - Show progress badges in the jump palette, keep hover cards clear of their source chip, and shorten text without splitting Unicode characters.
+- Messaging - Request the first typing indicator before backend startup so incoming requests receive earlier feedback.
+- Bundled Git - Ship a pinned PwrDrvr Git runtime on macOS and Linux, with verified runtime inventories and a bundled Linux CA certificate store. Windows continues using bundled Dugite Git.
+
 ## v1.3.11 - 2026-11-04
 
 - Thread Locks and Queues - Hold Claude's own follow-ups and wake-ups while a thread is locked. Release lock-held entries in arrival order, preserve each reason when work is held more than once, and keep the lock card visible above To-dos.

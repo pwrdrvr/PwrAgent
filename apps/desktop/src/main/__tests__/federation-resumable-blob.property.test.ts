@@ -5,7 +5,7 @@ import path from "node:path";
 import fc from "fast-check";
 import { expect, it } from "vitest";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
-import { BLOB_CHUNK_BYTES, BLOB_COMMIT_BYTES, BLOB_RETENTION_MS, FederationResumableBlobReceiver } from "@pwragent/federation/federation-resumable-blob";
+import { BLOB_CHUNK_BYTES, BLOB_RETENTION_MS, FederationResumableBlobReceiver } from "@pwragent/federation/federation-resumable-blob";
 import { FederationFilePushReceiver, FILE_PUSH_METHODS } from "../federation/federation-file-push";
 
 it("commits each prefix once across generated send/ack/drop/restart interleavings", async () => {
@@ -13,7 +13,7 @@ it("commits each prefix once across generated send/ack/drop/restart interleaving
     fc.array(fc.record({ event: fc.integer({ min: 1, max: 50 }), after: fc.boolean() }), { maxLength: 4 }),
     async (drops) => {
       const root = await mkdtemp(path.join(os.tmpdir(), "blob-model-"));
-      const data = Buffer.alloc(BLOB_COMMIT_BYTES + BLOB_CHUNK_BYTES + 3, 0x57);
+      const data = Buffer.alloc(4 * 1024 * 1024 + BLOB_CHUNK_BYTES + 3, 0x57);
       const source = path.join(root, "source");
       const received = path.join(root, "received");
       const makeReceiver = () => new FederationFilePushReceiver({ allowed: () => true, directory: () => received });

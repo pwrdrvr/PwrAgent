@@ -70,6 +70,8 @@ async function hasGitAdministrativeBoundary(directory: string, signal?: AbortSig
   return false;
 }
 
+const NEUTRAL_ENVIRONMENT_CONFIG_KEYS = new Set(["safe.directory", "core.autocrlf"]);
+
 function hasGitEnvironmentOverride(): boolean {
   const env = new Map(Object.entries(process.env).map(([key, value]) => [key.toUpperCase(), value]));
   if ([...env.keys()].some((key) =>
@@ -84,8 +86,10 @@ function hasGitEnvironmentOverride(): boolean {
   for (let index = 0; index < count; index++) {
     const key = "GIT_CONFIG_KEY_" + index;
     const value = "GIT_CONFIG_VALUE_" + index;
-    // safe.directory changes trust checks, not the ref backend or HEAD.
-    if (env.get(key)?.toLowerCase() !== "safe.directory" || !env.has(value)) return true;
+    // safe.directory changes trust checks and core.autocrlf changes content
+    // line endings. Neither changes discovery, the ref backend or HEAD.
+    // Playwright sets core.autocrlf for every E2E launch.
+    if (!NEUTRAL_ENVIRONMENT_CONFIG_KEYS.has(env.get(key)?.toLowerCase() ?? "") || !env.has(value)) return true;
     allowed.add(key);
     allowed.add(value);
   }

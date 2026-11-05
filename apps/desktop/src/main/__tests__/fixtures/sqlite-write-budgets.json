@@ -55,7 +55,7 @@
   },
   "agent-thread-named-environment-start": {"commits": 5, "note": "One agent-created thread with a named environment: thread start bookkeeping, setup hydration and runtime persistence; no per-event writes. ~74 KB per thread: ~7.4 MB/day at 100 agent-created threads/day, 0 MB/day idle.", "observedWalBytes": 74160, "rowsChanged": 5, "statements": 5},
   "all-pinned-project-thread-creation": {"commits": 4, "note": "One new thread including its automatic pin: 4 commits, ~0.054 MB/thread and ~5.4 MB/day at 100 starts/day; 0 MB/day idle.", "observedWalBytes": 53560, "rowsChanged": 4, "statements": 4},
-  "archive-cleanup-130-checkpoint-recover-drain": {"commits": 3, "note": "130 jobs: one quit checkpoint, one recovery claim, one drained checkpoint deletion; 3 commits per quit/restart cycle, no per-item or timer writes. At 10 cycles/day and 32 KiB/commit, about 0.94 MB/day; idle is 0 MB/day.", "observedWalBytes": 90640, "rowsChanged": 4, "statements": 4},
+  "archive-cleanup-130-checkpoint-recover-drain": {"commits": 3, "note": "130 jobs: one quit checkpoint writing one row per intent, one recovery claim, one drained deletion; 3 commits per quit/restart cycle, no per-item or timer writes. At 10 cycles/day and about 210 KB WAL per cycle, about 2.1 MB/day; idle is 0 MB/day.", "observedWalBytes": 210152, "rowsChanged": 520, "statements": 520},
   "archive-cleanup-read-only-inventory": {
     "commits": 0,
     "note": "One ownership projection and three ACP identity pages: zero SQLite writes; pacing and queue state add 0 MB/day.",
@@ -94,7 +94,7 @@
   "archive-retention-restore": {"commits": 1, "note": "One restore boundary clears archive markers and records the restore watermark in one commit (~0.012 MB); 10 restores/day cost ~0.12 MB/day. No recurring writes.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "archive-subthread-promotion": {"commits": 1, "note": "One archive boundary promotes 100 children in one commit (~0.033 MB); 10 such archives/day cost ~0.33 MB/day. No per-child commits or idle writes (0 MB/day).", "observedWalBytes": 32960, "rowsChanged": 103, "statements": 103},
   "archive-subthread-promotion-repeat": {"commits": 0, "note": "Repeated archive notification or resumed cleanup after promotion: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
-  "archive-worktree-100-reference-wait-release": {"commits": 3, "note": "100 archived owners of one checkout: one queue-drain checkpoint, one non-final release, one final drain deletion; 3 commits, zero idle writes. At 10 batches/day and 128 KiB/commit, at most 3.75 MB/day.", "observedWalBytes": 107152, "rowsChanged": 3, "statements": 3},
+  "archive-worktree-100-reference-wait-release": {"commits": 2, "note": "100 archived owners of one checkout: one queue-drain checkpoint writing one row per intent, a non-final release that only shrinks the backlog and writes nothing, and one final drain deletion; 2 commits, zero idle writes. At 10 batches/day and about 128 KB WAL per batch, about 1.3 MB/day.", "observedWalBytes": 127752, "rowsChanged": 200, "statements": 200},
   "archived-worktree-repair-once-marker": {
     "commits": 2,
     "note": "One claim and one completion for a 501-thread pass plus a completed-startup no-op: 2 commits total, no per-item or timer writes; about 0.02 MB once and 0 MB/day afterward.",
@@ -158,6 +158,8 @@
   "claude-permission-selection": {"commits": 1, "note": "one operator mode selection; 100 duplicate selections add no writes", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "claude-result-usage": {"commits": 1, "note": "100 context updates plus one result usage event and ledger flush; context does not write SQLite; 1 commit/turn, measured 65,920 bytes: ~6.6 MB/day at 100 turns/day, zero idle writes", "observedWalBytes": 65920, "rowsChanged": 3, "statements": 3},
   "claude-steer": {"commits": 1, "note": "one steer with agent origin plus one idempotent retry; 1 commit, measured 12,360 bytes (~1.24 MB/day at 100 steers/day), zero idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "claude-subagent-cards": {"commits": 2, "note": "one Claude sub-agent's start and end, then a late report: 2 commits per sub-agent, ~24.7 KB WAL each; ~1 MB/day at 20 sub-agents/day, ~10 MB/day at 200; zero idle", "observedWalBytes": 49472, "rowsChanged": 2, "statements": 2},
+  "claude-subagent-progress": {"commits": 0, "note": "20 progress reports from one running Claude sub-agent; progress stays in memory, zero commits", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "claude-thread-creation": {"commits": 3, "note": "one thread creation through the registry; SDK transcripts and resume metadata use files", "observedWalBytes": 49440, "rowsChanged": 3, "statements": 3},
   "cleanup-expired-gc-pass": {
     "commits": 1,

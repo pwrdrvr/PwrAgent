@@ -6534,6 +6534,17 @@ a.button {
   opacity: 0.62;
 }
 
+/* A Claude sub-agent row names a task in the parent's session; nothing opens. */
+.native-subagents__agent--static {
+  cursor: default;
+}
+
+.native-subagents__agent--static:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
 .native-subagents__status {
   width: 7px;
   height: 7px;
@@ -45812,6 +45823,315 @@ button.composer__subthread-source-parent:hover {
   overflow-wrap: anywhere;
 }
 
+/* The dialog takes focus itself when a send starts or settles and swaps
+   its contents, so focus never falls behind the scrim. */
+.thread-handoff-dialog:focus {
+  outline: none;
+}
+
+/* While sending: the title names the operation and the machine, and the
+   minimise button sits at its end, as PwrGit's Bulk Sync dialog does. */
+.thread-handoff-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-handoff-dialog__head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.thread-handoff-dialog__minimise {
+  display: inline-grid;
+  width: 26px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-handoff-dialog__minimise:hover,
+.thread-handoff-dialog__minimise:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-handoff-dialog__minimise:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Cancel keeps the last slot, as the update card's way out does. */
+.thread-handoff-dialog__actions {
+  justify-content: flex-end;
+}
+
+/* One row per step. Only Send has a percent, so only Send has a track: a
+   bar on a step with no extent would only stand still. */
+.thread-handoff-steps {
+  display: grid;
+  margin: 14px 0 0;
+  padding: 4px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  list-style: none;
+}
+
+.thread-handoff-steps__step {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 32px;
+  padding: 4px 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.thread-handoff-steps__step--done {
+  color: var(--text-secondary);
+}
+
+.thread-handoff-steps__step--now,
+.thread-handoff-steps__step--held {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.thread-handoff-steps__body {
+  display: grid;
+  min-width: 0;
+}
+
+.thread-handoff-steps__body .app-update-banner__track {
+  margin-top: 6px;
+}
+
+.thread-handoff-steps__mark {
+  display: inline-grid;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  place-items: center;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.thread-handoff-steps__step--done .thread-handoff-steps__mark {
+  border: 0;
+  background: color-mix(in srgb, var(--status-ok) 18%, transparent);
+  color: var(--status-ok);
+}
+
+.thread-handoff-steps__step--now .thread-handoff-steps__mark {
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: thread-handoff-step-spin 0.7s linear infinite;
+}
+
+.thread-handoff-steps__step--held .thread-handoff-steps__mark {
+  border-color: var(--status-suspended);
+}
+
+.thread-handoff-steps__value {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.thread-handoff-meter {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes thread-handoff-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Held: the link dropped and the transfer waits to resume. The fill keeps
+   the bytes the receiver confirmed, in still stripes of the suspended tone,
+   as PwrGit's halted bar does. Red is kept for a send that has ended. */
+.thread-handoff-track--held i {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--status-suspended) 0 6px,
+    color-mix(in srgb, var(--status-suspended) 60%, transparent) 6px 12px
+  );
+}
+
+/* Resumed: what the receiver already held stays a lighter accent, so a
+   resume is visibly not a restart. */
+.thread-handoff-track--resumed {
+  display: flex;
+}
+
+.thread-handoff-track--resumed i {
+  border-radius: 0;
+}
+
+.thread-handoff-track--resumed .thread-handoff-track__resumed {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* A minimised handoff in the toast stack: the update banner's card. */
+.thread-handoff-card {
+  gap: 10px;
+  padding: 12px 10px 12px 14px;
+}
+
+.thread-handoff-card--held {
+  border-color: color-mix(in srgb, var(--status-suspended) 45%, transparent);
+  background: var(--bg-panel-elevated);
+}
+
+.thread-handoff-card--held .app-update-banner__eyebrow {
+  color: var(--text-muted);
+}
+
+.thread-handoff-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.thread-handoff-card__head .app-update-banner__content {
+  flex: 1 1 auto;
+}
+
+.thread-handoff-card__icons {
+  display: flex;
+  flex: none;
+  margin: -4px 0 0;
+}
+
+/* The title expands the card back into the dialog. */
+.thread-handoff-card__title {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.thread-handoff-card__title:hover {
+  text-decoration: underline;
+}
+
+.thread-handoff-card__title:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-handoff-card__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* The composer band row of a thread being sent: why its turns are paused. */
+.thread-handoff-band {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-input));
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.thread-handoff-band__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-handoff-band__text b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.thread-handoff-band .app-update-banner__track {
+  width: 90px;
+  flex: none;
+  margin-top: 0;
+}
+
+.thread-handoff-band__value {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-handoff-band__action {
+  margin-left: auto;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.thread-handoff-band__action:hover,
+.thread-handoff-band__action:focus-visible {
+  background: var(--accent-soft);
+}
+
+.thread-handoff-band__action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The empty card that flies between a dialog and its toast (lib/fly-between). */
+.fly-ghost {
+  position: fixed;
+  z-index: 145;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-handoff-steps__step--now .thread-handoff-steps__mark {
+    animation: none;
+    border-color: var(--accent);
+  }
+}
+
 .workspace-handoff-dialog__actions {
   display: flex;
   flex-wrap: wrap;
@@ -47803,6 +48123,12 @@ button.composer__subthread-source-parent:hover {
     animation:
       pending-spinner-spin 0.8s linear 2,
       calm-motion-spinner-rest 0s 1.6s forwards;
+  }
+
+  :root[data-motion="calm"] .thread-handoff-steps__step--now .thread-handoff-steps__mark {
+    animation:
+      thread-handoff-step-spin 0.7s linear 2,
+      calm-motion-spinner-rest 0s 1.4s forwards;
   }
 
   :root[data-motion="calm"] .missing-worktree-card--busy::before,

@@ -5345,9 +5345,7 @@ class DesktopAppServerService {
       recentSubAgents: async (thread, limit) => limit === 0 ? []
         : await this.getOverlayStore().listEndedThreadTaskMonitors({ ...thread, limit }),
       // Only Claude continues a thread when a background task ends.
-      backendTasks: async (thread) => thread.backend === "claude"
-        ? (await registry.listBackgroundTerminals(thread)).terminals
-        : [],
+      backendTasks: async (thread) => registry.listBackendTaskWakes(thread),
       backendWakes: (thread) => registry.listBackendWakes(thread),
       hold: async (thread) => await registry.readThreadWakeHold(thread),
       heldEntries: (thread) => registry.listHeldThreadQueueEntries(thread),

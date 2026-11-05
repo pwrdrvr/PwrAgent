@@ -5,7 +5,7 @@ import path from "node:path";
 import { FEDERATION_PROTOCOL_VERSION, type FederationBlobChunkEnvelope } from "@pwragent/shared";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 import type { FilePushResult, PushFederationFileOptions } from "./federation-file-push";
-import { BLOB_CHUNK_BYTES, BLOB_WINDOW_CHUNKS, hashBlobFile, type BlobIdentity } from "./federation-resumable-blob";
+import { BLOB_CHUNK_BYTES, BLOB_COMMIT_BYTES, BLOB_WINDOW_CHUNKS, hashBlobFile, type BlobIdentity } from "./federation-resumable-blob";
 
 export type BlobConnection = {
   rpc: Pick<FederationRpcEndpoint, "request">;
@@ -42,11 +42,12 @@ export async function pushResumableBlob(
     if (!before.isFile() || before.size > 512 * 1024 * 1024) throw new Error("Select a regular file of at most 512 MiB.");
     identity = { sha256: await hashBlobFile(sourcePath), sizeBytes: before.size, senderToken: randomUUID() };
     let committed = 0;
+    let sent = 0;
     let resumedFromBytes: number | undefined;
     let disconnectedAt: string | undefined;
     const progress = (link: "waiting" | "connected"): void => {
-      options.onProgress?.(committed, before.size);
-      options.onTransferProgress?.({ bytesCommitted: committed, bytesTotal: before.size,
+      options.onProgress?.(sent, before.size);
+      options.onTransferProgress?.({ bytesCommitted: committed, bytesSent: sent, bytesTotal: before.size,
         ...(resumedFromBytes === undefined ? {} : { resumedFromBytes }),
         ...(link === "waiting" ? { disconnectedAt } : {}), link, transport: "resumable" });
     };
@@ -54,6 +55,7 @@ export async function pushResumableBlob(
       signal?.throwIfAborted();
       if (transport.isConnected?.() === false) {
         disconnectedAt = new Date().toISOString();
+        sent = committed;
         progress("waiting");
         await transport.waitForReconnect(signal);
       }
@@ -64,11 +66,12 @@ export async function pushResumableBlob(
         });
         if (!begin.transferId.startsWith("blob:") || !Number.isSafeInteger(begin.committedOffset)
           || begin.committedOffset < committed || begin.committedOffset > before.size
-          || (begin.committedOffset !== before.size && begin.committedOffset % (4 * 1024 * 1024) !== 0)) {
+          || (begin.committedOffset !== before.size && begin.committedOffset % BLOB_COMMIT_BYTES !== 0)) {
           throw new Error("Invalid receiver committed offset.");
         }
         if (begin.committedOffset > 0) resumedFromBytes ??= begin.committedOffset;
         committed = begin.committedOffset;
+        sent = committed;
         progress("connected");
         disconnectedAt = undefined;
         let offset = committed;
@@ -92,8 +95,12 @@ export async function pushResumableBlob(
             method: "file.push.checkpoint", params: { transferId: begin.transferId }, timeoutMs: null, signal,
           });
           if (ack.receivedOffset !== offset || !Number.isSafeInteger(ack.committedOffset)
-            || ack.committedOffset < committed || ack.committedOffset > offset) throw new Error("Invalid blob acknowledgement.");
+            || ack.committedOffset < committed || ack.committedOffset > offset
+            || (ack.committedOffset !== before.size && ack.committedOffset % BLOB_COMMIT_BYTES !== 0)) {
+            throw new Error("Invalid blob acknowledgement.");
+          }
           committed = ack.committedOffset;
+          sent = ack.receivedOffset;
           progress("connected");
         }
         const after = await file.stat();
@@ -110,6 +117,7 @@ export async function pushResumableBlob(
         signal?.throwIfAborted();
         if (!connection.didDisconnect()) throw error;
         disconnectedAt ??= new Date().toISOString();
+        sent = committed;
         progress("waiting");
         await transport.waitForReconnect(signal);
       }

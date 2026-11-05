@@ -434,6 +434,10 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
   ) => Promise<ArchivedThreadRef[] | void>;
+  onArchiveThreads?: (
+    threads: NavigationThreadSummary[],
+    options?: ArchiveThreadOptions,
+  ) => Promise<ArchivedThreadRef[]>;
   /**
    * Threads left the list through Archive. `reopenKey` is the thread that
    * was open, so an Undo can bring the operator back to it.
@@ -1938,9 +1942,11 @@ export function Sidebar(props: SidebarProps) {
         );
     const archiveOptions: ArchiveThreadOptions | undefined =
       nextSelectionKey === undefined ? options : { ...options, nextSelectionKey };
-    const results = await Promise.all(threads.map((thread) =>
-      archiveOptions ? onArchiveThread(thread, archiveOptions) : onArchiveThread(thread)));
-    const archived = results.flatMap((result) => result ?? []);
+    const archived = props.onArchiveThreads
+      ? await props.onArchiveThreads(threads, archiveOptions)
+      : (await Promise.all(threads.map((thread) =>
+          archiveOptions ? onArchiveThread(thread, archiveOptions) : onArchiveThread(thread))))
+        .flatMap((result) => result ?? []);
     if (archived.length > 0) {
       props.onThreadsArchived?.(archived, {
         title: threads.length === 1 ? threads[0]!.title : undefined,

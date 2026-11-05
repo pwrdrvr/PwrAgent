@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { HookEvent, HookInput, Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import {
@@ -79,6 +79,8 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
   const turnCompletions = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
   let latestTurnId: string | undefined;
   const queries: Options[] = [];
+  /** Each batch of sub-agent cards the backend asked to save. */
+  const subAgentRecords: Array<{ threadId: string; subAgents: Array<{ monitorId: string; status: string; task: string; agentName?: string; lastMessage?: string }> }> = [];
   const close = vi.fn();
   const run = vi.fn((args: Parameters<typeof query>[0]) => {
     const options = args.options!;
@@ -123,6 +125,9 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
     request: async () => ({ decision: "accept" }),
     cancelRequest: async () => {},
     resolveEnv: async (): Promise<NodeJS.ProcessEnv> => ({ PATH: "/fixture", ANTHROPIC_API_KEY: "must-not-reach-child", CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child" }),
+    recordSubAgents: async (params: { threadId: string; subAgents: unknown[] }) => {
+      subAgentRecords.push(structuredClone(params) as (typeof subAgentRecords)[number]);
+    },
   };
   /** Every backend over this root goes through here, so cleanup can close it. */
   function openBackend(options: ClaudeBackendOptions = backendOptions) {
@@ -139,7 +144,7 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
     if (!completion) throw new Error("No Claude turn has started in this fixture.");
     await completion.promise;
   }
-  return { backend, backendOptions, openBackend, store, events, queries, run, close, waitForTurn, root };
+  return { backend, backendOptions, openBackend, store, events, queries, run, close, waitForTurn, root, subAgentRecords };
 }
 
 describe("Claude SDK backend", () => {
@@ -3297,7 +3302,7 @@ describe("Claude SDK backend", () => {
     ])));
   });
 
-  it("reports a background sub-agent as running work with its progress", async () => {
+  it("reports a background sub-agent as a Sub-agents card, not an Actions row", async () => {
     const agentDone = Promise.withResolvers<void>();
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
@@ -3320,21 +3325,95 @@ describe("Claude SDK backend", () => {
         status: "stopped", output_file: "", summary: "Stopped" } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "noted" } as SDKMessage;
     });
+    // A failed assertion must not leave the session parked, or cleanup hangs.
+    onTestFinished(() => agentDone.resolve());
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     const started = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
     await f.waitForTurn();
-    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
+    // The Actions panel lists commands. A sub-agent is a card in the
+    // Sub-agents panel, and it still keeps the thread working.
+    await vi.waitFor(() => expect(f.subAgentRecords.flatMap((record) => record.subAgents)).toEqual([
+      { monitorId: "claude-native:agent-1", taskId: "agent-1", task: "Audit the SDK", status: "running",
+        agentName: "Explore", startedAt: expect.any(Number) },
+    ]));
+    expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([]);
+    // Claude takes another turn when it ends, so Waiting For still lists it.
+    await vi.waitFor(() => expect(f.backend.listWaitingTasks(threadId)).toEqual([{
       itemId: "tool-agent", processId: "agent-1", command: "Audit the SDK", cwd: f.root,
       kind: "agent", agentType: "Explore", progress: "3 tool uses · last Grep",
       background: true, startedAt: expect.any(Number),
     }]));
+    expect(f.backend.backgroundTaskThreadIds()).toEqual([threadId]);
+    expect(f.backend.activeTaskCount(threadId)).toBe(1);
+    expect(f.subAgentRecords.every((record) => record.threadId === threadId)).toBe(true);
+    expect(f.events.filter((event) => event.notification.method === "thread/backgroundTasks/updated")
+      .flatMap((event) => (event.notification.params as { tasks: unknown[] }).tasks)).toEqual([]);
     expect(f.events.filter((event) => event.notification.method === "turn/started")).toHaveLength(1);
     agentDone.resolve();
     await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+    expect(f.subAgentRecords.flatMap((record) => record.subAgents).at(-1)).toMatchObject({
+      monitorId: "claude-native:agent-1", status: "cancelled", lastMessage: "Stopped",
+    });
+    expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
+    expect(f.backend.listWaitingTasks(threadId)).toEqual([]);
     expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
     expect(f.events.find((event) => event.notification.method === "item/completed"
       && (event.notification.params.item as { id?: string }).id === "tool-agent")?.notification.params)
       .toMatchObject({ turnId: started.turnId, item: { status: "cancelled" } });
+  });
+
+  it("retries a sub-agent card whose write failed", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        task_type: "local_agent", subagent_type: "Explore", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
+        status: "completed", output_file: "", summary: "Audit done" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const saved: string[] = [];
+    let attempts = 0;
+    const backend = f.openBackend({
+      ...f.backendOptions,
+      recordSubAgents: async ({ subAgents }) => {
+        attempts += 1;
+        // The first write fails, as a busy or closing database would.
+        if (attempts === 1) throw new Error("database is locked");
+        saved.push(...subAgents.map((card) => card.status));
+      },
+    });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    await vi.waitFor(() => expect(backend.liveSessionThreadIds()).toEqual([]));
+    // The running card failed once, was written on the next event, then ended.
+    expect(saved).toEqual(["running", "success"]);
+  });
+
+  it("ends a running sub-agent's card when Claude's process ends without settling it", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        task_type: "local_agent", subagent_type: "general-purpose", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+    // A card left running would say "working" forever.
+    expect(f.subAgentRecords.flatMap((record) => record.subAgents).map((card) => card.status))
+      .toEqual(["running", "failure"]);
   });
 
   it("does not wait on a foreground task that sends no notification", async () => {

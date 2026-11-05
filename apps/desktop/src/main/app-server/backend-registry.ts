@@ -5,6 +5,7 @@ import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse, ThreadTodoMessageTarget } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
+import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
@@ -14,6 +15,7 @@ import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
+import { ArchiveFleetIndex, type FleetChange, type FleetRow } from "./archive-cleanup-fleet-index";
 import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
 import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "./git-head-branch";
@@ -263,6 +265,9 @@ import {
   resolveMcpConnectionSetup,
   estimateTokenUsageCost,
   formatTokenUsageUsd,
+  CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+  type AppServerBackgroundTask,
+  isClaudeNativeSubAgent,
   isCodexNativeSubAgentVisibleInNavigation,
   isToolManagedWorktreePath,
   normalizeRenamedTitleSource,
@@ -1137,6 +1142,8 @@ type BackendClient = {
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
   listArchiveCleanupThreadsPage?: CodexAppServerClient["listArchiveCleanupThreadsPage"];
+  /** The listing above honors `sortKey: "updated_at"`. */
+  archiveCleanupRecencyReads?: boolean;
   readArchiveCleanupThreadSummary?: CodexAppServerClient["readArchiveCleanupThreadSummary"];
   enrichArchiveCleanupThreads?: CodexAppServerClient["enrichArchiveCleanupThreads"];
   listNativeSubAgentThreads?(
@@ -2442,6 +2449,11 @@ const RESTART_DISPATCH_FALLBACK_MS = 120_000;
 
 const THREAD_TURN_QUEUE_ORIGINS: readonly string[] = ["manual", "automation", "messaging", "scheduled"] satisfies ThreadTurnQueueOrigin[];
 
+/** Rows per page, and pages, of admission's incremental provider read. More
+ * changes than this cost about as much as one complete read, so read that. */
+const ARCHIVE_FLEET_DELTA_PAGE_SIZE = 5;
+const ARCHIVE_FLEET_DELTA_PAGES = 20;
+
 type ArchiveCleanupMetadata = {
   workspaceRevision?: number;
   activeThreads: AppServerThreadSummary[];
@@ -2455,6 +2467,9 @@ type ArchiveCleanupMetadata = {
     activeByPath: Map<string, AppServerThreadSummary[]>;
     archivedByPath: Map<string, AppServerThreadSummary[]>;
   };
+  /** The paths of each listed thread that can relate to the listed scopes.
+   * Absent for a thread: every one of its paths. */
+  ownershipPaths?: WeakMap<AppServerThreadSummary, readonly string[]>;
 };
 
 type ArchiveCleanupDiscoveryRequest = {
@@ -2469,6 +2484,8 @@ type ArchiveCleanupDiscoveryRequest = {
   /** Fresh global membership/overlays, with Git probes limited to this scope. */
   ownershipScope?: string;
   removalAdmission?: ArchiveWorkspaceAdmission;
+  /** Collects each identity row before overlay merging, for the fleet index. */
+  fleetRows?: Array<{ backend: AppServerBackendKind; base: AppServerThreadSummary; overlay?: ThreadOverlayState; archived: boolean }>;
 };
 
 type ArchiveWorktreeRemovalAdmission = {
@@ -4194,6 +4211,18 @@ function codexNativeSubAgentOutcome(
     return "cancelled";
   }
   return undefined;
+}
+
+/** The thread list's tray row for a stored native sub-agent card. */
+function nativeSubAgentRowFromCard(card: ThreadSubAgentSummary, threadId: string): CodexNativeSubAgentSummary {
+  return {
+    threadId,
+    title: card.task,
+    createdAt: card.createdAt,
+    updatedAt: card.updatedAt,
+    threadStatus: codexNativeSubAgentIsTerminal(card.status) ? "idle" : "active",
+    ...(card.agentName ? { agentNickname: card.agentName } : {}),
+  };
 }
 
 function codexNativeSubAgentIsTerminal(status: ThreadSubAgentSummary["status"]): boolean {
@@ -9232,6 +9261,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "writeThreadGitWorkingStateCacheEntry"
     | "getVoiceManagerThread"
     | "getArchiveCleanupOverlayStates"
+    | "readArchiveCleanupChangeToken"
   >
 >;
 
@@ -9592,8 +9622,19 @@ export class DesktopBackendRegistry {
   );
   private readonly archiveLifecycleMutationPaths = new Map<string, Set<readonly string[]>>();
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
-  private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>(undefined,
-    () => this.dispatchReleasedArchiveCleanups(this.archiveWorktreeReferences.readyIntents()));
+  private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>(undefined, () => {
+    this.drainArchiveCleanupOverflow();
+    this.dispatchReleasedArchiveCleanups(this.archiveWorktreeReferences.readyIntents());
+    // A drained queue ends its batch; the next batch reads the fleet afresh.
+    if (!this.archiveCleanupQueue.pendingKeys().length && !this.archiveCleanupOverflow.size) this.archiveFleet = undefined;
+  });
+  /** Cleanups beyond the bounded physical queue, in arrival order. Each keeps
+   * its intent in `pendingArchiveCleanupIntents`, so quit checkpoints it. */
+  private readonly archiveCleanupOverflow = new Map<string, {
+    intent: ArchiveCleanupIntent; resuming: boolean;
+    resolve: (response: ArchiveThreadResponse) => void; reject: (error: unknown) => void;
+    promise: Promise<ArchiveThreadResponse>;
+  }>();
   private readonly archiveRepairOwners = new Map<string, string>();
   private readonly archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">;
   private readonly projectHeldWakeupStore?: ProjectHeldWakeupStoreLike;
@@ -9625,6 +9666,17 @@ export class DesktopBackendRegistry {
     inventory: ArchiveCleanupInventory;
   }>();
   private archiveWorkspaceRevision = 0;
+  /** Additions (reference rows plus queued intents) at the last checkpoint. */
+  private archiveCheckpointedAdditions = -1;
+  /** Counts cleanup intents queued, so a boundary persists new queued work. */
+  private archiveCleanupIntentAdditions = 0;
+  /** The fleet index of the current cleanup queue batch. Each batch reads the
+   * fleet once; writers and notifications keep it current within the batch. */
+  private archiveFleet?: { batch: object; index: ArchiveFleetIndex };
+  /** The identities each fleet admission found related to its scope. */
+  private readonly archiveFleetAdmissionKeys = new WeakMap<ArchiveWorkspaceAdmission, ReadonlySet<string>>();
+  /** Each fleet admission's related paths per identity; see `ownershipPaths`. */
+  private readonly archiveFleetAdmissionPaths = new WeakMap<ArchiveWorkspaceAdmission, ReadonlyMap<string, readonly string[]>>();
   private readonly threadArchiveOperations = new Map<string, Promise<ArchiveThreadResponse>>();
   private readonly archiveCleanupCompletions = new Map<string, { promise: Promise<ArchiveThreadResponse>; archivedAt: number }>();
   private readonly cancelledArchiveCleanupKeys = new Set<string>();
@@ -11890,6 +11942,7 @@ export class DesktopBackendRegistry {
       holdSelfStartedTurn: async ({ threadId, prompt, source }) => await this.holdBackendSelfStartedTurn({
         backend: "claude", threadId, prompt, source,
       }),
+      recordSubAgents: async (params) => await this.recordClaudeSubAgents(params),
       planLimits: this.planLimits,
       ...options?.claudeBackendOptions,
     });
@@ -14488,7 +14541,11 @@ export class DesktopBackendRegistry {
     diagnostics: { callerReason: ThreadListCallerReason; ownerId: string },
   ): Promise<{ threads: AppServerThreadSummary[]; enriched: boolean }> {
     if (backend === "claude") {
-      return { threads: await this.claudeBackend.listThreads(params), enriched: true };
+      const threads = await this.claudeBackend.listThreads(params);
+      return {
+        threads: params.archived ? threads : await this.withClaudeNativeSubAgents(threads),
+        enriched: true,
+      };
     }
     if (backend === "codex") {
       const archiveGeneration = this.archiveCleanupReads.generation("codex");
@@ -16730,7 +16787,7 @@ export class DesktopBackendRegistry {
           await deleteThreadAssets({ backend: thread.source, threadId: thread.id });
         }
         this.invalidateThreadListCache(root.source);
-        for (const thread of family) this.invalidateArchiveCleanupReads(thread.source, undefined, true, thread.id);
+        for (const thread of family) this.invalidateArchiveCleanupReads(thread.source, undefined, true, thread.id, [], "deleted");
       };
       if (isAcpBackendId(root.source)) {
         const backend = root.source;
@@ -16987,7 +17044,7 @@ export class DesktopBackendRegistry {
       await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: request.threadId }], archivedAt, { promoteSubthreads: true });
       this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, request.threadId));
       this.invalidateThreadListCache(backend);
-      this.invalidateArchiveCleanupReads(backend, undefined, true, request.threadId);
+      this.invalidateArchiveCleanupReads(backend, undefined, true, request.threadId, [], "archived");
       await this.emit({ backend, notification: { method: "thread/archived", params: { threadId: request.threadId } } });
       const messagingCleanup = await this.cleanupMessagingForArchivedThread({
         backend,
@@ -17047,7 +17104,7 @@ export class DesktopBackendRegistry {
     if (!codexRolloutMissing) this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, result.threadId));
     await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: result.threadId }], archivedAt, { promoteSubthreads: true });
     this.invalidateThreadListCache(backend);
-    this.invalidateArchiveCleanupReads(backend, undefined, true, result.threadId);
+    this.invalidateArchiveCleanupReads(backend, undefined, true, result.threadId, [], "archived");
     if (backend === "codex") await this.archiveTokenMiserThread(result.threadId);
     const messagingCleanup = await this.cleanupMessagingForArchivedThread({
       backend,
@@ -17070,7 +17127,7 @@ export class DesktopBackendRegistry {
   }
 
   getArchiveCleanupCountForQuit(): number {
-    return new Set([...this.pendingArchiveCleanupIntents.keys(), ...this.archiveCleanupQueue.pendingKeys()]).size;
+    return new Set([...this.pendingArchiveCleanupIntents.keys(), ...this.archiveCleanupQueue.pendingKeys(), ...this.archiveCleanupOverflow.keys()]).size;
   }
 
   checkpointArchiveCleanupsForQuit(): void {
@@ -17083,8 +17140,16 @@ export class DesktopBackendRegistry {
   }
 
   private tryCheckpointArchiveCleanupsForQuit(phase: "before-drain" | "after-drain" | "reference-change"): void {
+    // A release or removal only shrinks the backlog, and recovery rereads every
+    // recovered row, so a reference boundary persists only what was added.
+    // Rewriting the remaining backlog after each release was quadratic.
+    // A drained backlog is still written: an empty checkpoint serializes nothing.
+    const additions = this.archiveWorktreeReferences.additions + this.archiveCleanupIntentAdditions;
+    if (phase === "reference-change" && additions === this.archiveCheckpointedAdditions && this.archiveCheckpointedAdditions >= 0
+      && (this.archiveWorktreeReferences.hasOwners || this.pendingArchiveCleanupIntents.size > 0)) return;
     try {
       this.checkpointArchiveCleanupsForQuit();
+      this.archiveCheckpointedAdditions = additions;
     } catch (error) {
       // Persistence failure must not prevent queue cancellation or backend
       // disposal, nor poison the memoized shutdown operation.
@@ -17095,13 +17160,30 @@ export class DesktopBackendRegistry {
   }
 
   private cancelArchiveCleanups(key: string): void {
+    this.cancelArchiveCleanupOverflow(key);
     this.archiveCleanupQueue.cancel(key);
     for (const [job, owner] of this.archiveRepairOwners) if (owner === key) this.archiveCleanupQueue.cancel(job);
   }
 
   private async cancelAndWaitArchiveCleanups(key: string): Promise<void> {
+    this.cancelArchiveCleanupOverflow(key);
     await Promise.all([key, ...[...this.archiveRepairOwners].filter(([, owner]) => owner === key).map(([job]) => job)]
       .map(async (job) => { await this.archiveCleanupQueue.cancelAndWait(job); }));
+  }
+
+  private drainArchiveCleanupOverflow(): void {
+    for (const [key, waiting] of this.archiveCleanupOverflow) {
+      if (this.closed || this.archiveCleanupQueue.availableSlots <= 0) return;
+      this.archiveCleanupOverflow.delete(key);
+      this.enqueueArchiveCleanup(waiting.intent, waiting.resuming).then(waiting.resolve, waiting.reject);
+    }
+  }
+
+  private cancelArchiveCleanupOverflow(key: string): void {
+    const waiting = this.archiveCleanupOverflow.get(key);
+    if (!waiting) return;
+    this.archiveCleanupOverflow.delete(key);
+    waiting.reject(new ArchiveCleanupCancelledError());
   }
 
   private enqueueArchiveRepair(owner: string, worktreePath: string, work: (context: ArchiveCleanupContext) => Promise<ArchiveThreadResponse>): Promise<ArchiveThreadResponse> {
@@ -17112,11 +17194,30 @@ export class DesktopBackendRegistry {
 
   private enqueueArchiveCleanup(intent: ArchiveCleanupIntent, resuming = false): Promise<ArchiveThreadResponse> {
     const key = buildThreadIdentityKey(intent.backend, intent.threadId);
-    const existing = this.archiveCleanupQueue.pending(key);
+    const existing = this.archiveCleanupQueue.pending(key) ?? this.archiveCleanupOverflow.get(key)?.promise;
     if (existing) return existing;
+    if (!this.closed && this.archiveCleanupQueue.availableSlots <= 0) {
+      // A bulk archive can outrun the physical queue. Hold the intent rather
+      // than refuse its cleanup; a freed slot admits it in arrival order.
+      let resolve!: (response: ArchiveThreadResponse) => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<ArchiveThreadResponse>((accept, fail) => { resolve = accept; reject = fail; });
+      this.pendingArchiveCleanupIntents.set(key, intent);
+      this.archiveCleanupOverflow.set(key, { intent, resuming, resolve, reject, promise });
+      backendRegistryLog.info("archive cleanup waiting for queue capacity", {
+        backend: intent.backend, threadId: intent.threadId, runtimeInstanceId: this.runtimeInstanceId, waiting: this.archiveCleanupOverflow.size,
+      });
+      void promise.catch((error: unknown) => {
+        if (!(this.closed && error instanceof ArchiveCleanupCancelledError)
+          && this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
+      });
+      return promise;
+    }
     const queuedAt = Date.now();
     const logFields = { backend: intent.backend, threadId: intent.threadId, archivedAt: intent.archivedAt, runtimeInstanceId: this.runtimeInstanceId, queuedAt };
     backendRegistryLog.info("archive cleanup queued", { ...logFields, resuming, queueDepth: this.archiveCleanupQueue.pendingKeys().length + 1 });
+    // Released and recovered intents are already durable; a fresh archive is not.
+    if (!resuming && this.pendingArchiveCleanupIntents.get(key) !== intent) this.archiveCleanupIntentAdditions += 1;
     this.pendingArchiveCleanupIntents.set(key, intent);
     let startedAt: number | undefined;
     const completion = this.archiveCleanupQueue.enqueue(key, async (context) => {
@@ -17146,7 +17247,7 @@ export class DesktopBackendRegistry {
       if (this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
       // Persist only reference-wait boundaries, not every successful archive.
       if (this.archiveCleanupQueue.pendingKeys().length === 1
-        && (this.archiveWorktreeReferences.intents().length || intent.deferredWorktrees)) this.tryCheckpointArchiveCleanupsForQuit("reference-change");
+        && (this.archiveWorktreeReferences.hasOwners || intent.deferredWorktrees)) this.tryCheckpointArchiveCleanupsForQuit("reference-change");
       queueMicrotask(() => this.dispatchReleasedArchiveCleanups(this.archiveWorktreeReferences.readyIntents(key)));
     }, (error: unknown) => {
       const completedAt = Date.now();
@@ -17284,7 +17385,9 @@ export class DesktopBackendRegistry {
         // Do not deserialize every target again through thread/read. The lookup
         // below rechecks the revision after its checkpoint and removal still
         // obtains its own fresh ownership admission.
-        const canReuseTarget = cached?.includesArchived && cached.revision === this.archiveWorkspaceRevision;
+        // The batch's fleet index already holds the target once it is built.
+        const canReuseTarget = (cached?.includesArchived && cached.revision === this.archiveWorkspaceRevision)
+          || (context.batch !== undefined && this.archiveFleet?.batch === context.batch && !this.archiveFleet.index.needsRebuild);
         if (!this.codexClient.enrichArchiveCleanupThreads && !canReuseTarget && !params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
           targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
         } else if (isAcpBackendId(backend)) {
@@ -17340,6 +17443,7 @@ export class DesktopBackendRegistry {
           backend, activeThreads: cleanupMetadata.activeThreads, archivedThreads: cleanupMetadata.archivedThreads,
           thread: cleanupMetadata.thread, context, codexRolloutMissing, worktreeEvidence: cleanupMetadata.worktreeEvidence,
           deferredWorktrees: params.deferredWorktrees, workspaceRevision: cleanupMetadata.workspaceRevision,
+          ownershipPaths: cleanupMetadata.ownershipPaths,
         })
       : this.buildArchiveCleanupMetadataSkippedResult({ backend, threadId: result.threadId, error: cleanupMetadataError }));
     if (codexRolloutMissing) {
@@ -17377,6 +17481,7 @@ export class DesktopBackendRegistry {
       // A missing rollout can leave this owner in the provider's active list.
       // Subsequent jobs must apply the new tombstone before checking sharing.
       this.invalidateArchiveCleanupInventory();
+      this.noteArchiveFleetChange({ backend, threadId: result.threadId }, "overlay", "tombstone");
       this.pendingStartedThreads.delete(key);
       this.invalidateThreadListCache(backend);
       backendRegistryLog.warn("codex archive tombstoned missing rollout", {
@@ -17495,7 +17600,7 @@ export class DesktopBackendRegistry {
       });
     }
     this.invalidateThreadListCache(backend);
-    this.invalidateArchiveCleanupReads(backend, undefined, true, result.threadId);
+    this.invalidateArchiveCleanupReads(backend, undefined, true, result.threadId, [], "active");
     this.clearArchivedMessagingCleanupCache({
       backend,
       threadId: result.threadId,
@@ -26110,6 +26215,28 @@ export class DesktopBackendRegistry {
       };
     }
 
+    if (isClaudeNativeSubAgent(subAgent)) {
+      const taskId = subAgent.monitorId.slice(CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX.length);
+      if (this.claudeBackend.runsTask(params.threadId, taskId)) {
+        // Claude stops the task; its notification then settles the card.
+        await this.claudeBackend.stopBackgroundTask(params.threadId, taskId);
+      } else {
+        // Claude's process is gone and the card missed its end. Nothing runs
+        // to stop, so end the card here rather than refuse forever.
+        await this.recordClaudeSubAgents({ threadId: params.threadId, subAgents: [{
+          monitorId: subAgent.monitorId, taskId, task: subAgent.task, status: "cancelled",
+          lastMessage: "Stopped by user.",
+          ...(subAgent.agentName ? { agentName: subAgent.agentName } : {}),
+        }] });
+      }
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        monitorId: params.monitorId,
+        stoppedAt: Date.now(),
+      };
+    }
+
     if (!subAgent.monitorThreadId || !subAgent.monitorTurnId) {
       throw new Error("Sub-agent does not expose an active turn to stop.");
     }
@@ -29891,6 +30018,15 @@ export class DesktopBackendRegistry {
     );
   }
 
+  /**
+   * The backend tasks a thread waits on, for Waiting For. Only Claude takes
+   * another turn when one ends, and its sub-agents count: the Actions list
+   * leaves them out because they have Sub-agents cards.
+   */
+  listBackendTaskWakes(thread: { backend: AppServerBackendKind; threadId: string }): AppServerBackgroundTask[] {
+    return thread.backend === "claude" ? this.claudeBackend.listWaitingTasks(thread.threadId) : [];
+  }
+
   async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
     // Claude's running tasks live with its session, which counts as work for
     // quit and auto-archive like a Codex background terminal.
@@ -31289,6 +31425,7 @@ export class DesktopBackendRegistry {
     this.flushCodexEnvironmentActionLiveOutputsForShutdown();
     this.threadTurnQueue.close();
     this.queuedMessageTitler.close();
+    for (const key of [...this.archiveCleanupOverflow.keys()]) this.cancelArchiveCleanupOverflow(key);
     await this.archiveCleanupQueue.close();
     this.tryCheckpointArchiveCleanupsForQuit("after-drain");
     this.backgroundTerminalGeneration += 1;
@@ -34187,14 +34324,7 @@ export class DesktopBackendRegistry {
       ) {
         continue;
       }
-      const agent: CodexNativeSubAgentSummary = {
-        threadId: card.monitorThreadId,
-        title: card.task,
-        createdAt: card.createdAt,
-        updatedAt: card.updatedAt,
-        threadStatus: codexNativeSubAgentIsTerminal(card.status) ? "idle" : "active",
-        agentNickname: card.agentName,
-      };
+      const agent = nativeSubAgentRowFromCard(card, card.monitorThreadId);
       if (isCodexNativeSubAgentVisibleInNavigation(agent, Date.now())) {
         agents.set(agent.threadId, agent);
       }
@@ -37092,6 +37222,88 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Saves the cards for sub-agents Claude Code runs with its Agent tool, the
+   * way native Codex workers are saved. They have no thread of their own: the
+   * card names the task, and Claude stops it by the task id. A card that
+   * already ended keeps its end.
+   */
+  private async recordClaudeSubAgents(params: {
+    threadId: string;
+    subAgents: readonly ClaudeSubAgentCard[];
+  }): Promise<void> {
+    const existing = new Map((await this.overlayStore.getThreadSubAgents({
+      backend: "claude",
+      threadId: params.threadId,
+      monitorIds: params.subAgents.map((card) => card.monitorId),
+    })).map((card) => [card.monitorId, card]));
+    const now = Date.now();
+    const subAgents = params.subAgents.flatMap((card): ThreadSubAgentSummary[] => {
+      const previous = existing.get(card.monitorId);
+      if (previous && codexNativeSubAgentIsTerminal(previous.status)) return [];
+      const outcome = codexNativeSubAgentOutcome(card.status);
+      const createdAt = previous?.createdAt ?? card.startedAt ?? now;
+      return [{
+        ...previous,
+        monitorId: card.monitorId,
+        task: card.task,
+        status: card.status,
+        createdAt,
+        updatedAt: Math.max(now, createdAt),
+        ownerRuntimeInstanceId: previous?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
+        ownerRegistrySessionId: previous?.ownerRegistrySessionId ?? this.registrySessionId,
+        backend: "claude",
+        ...(card.agentName ? { agentName: card.agentName } : {}),
+        ...(card.lastMessage ? { lastMessage: truncateSubAgentText(card.lastMessage, 360) } : {}),
+        ...(outcome ? { outcome, completedAt: previous?.completedAt ?? Math.max(now, createdAt) } : {}),
+      }];
+    });
+    if (subAgents.length === 0) return;
+    // One transaction for the batch where the store offers it.
+    if (this.overlayStore.upsertThreadSubAgents) {
+      await this.overlayStore.upsertThreadSubAgents({ backend: "claude", threadId: params.threadId, subAgents });
+    } else {
+      for (const subAgent of subAgents) {
+        await this.overlayStore.upsertThreadSubAgent({ backend: "claude", threadId: params.threadId, subAgent });
+      }
+    }
+    this.invalidateThreadListCache("claude");
+    await this.emit({
+      backend: "claude",
+      notification: { method: "thread/subAgents/updated", params: { threadId: params.threadId } },
+    });
+  }
+
+  /**
+   * The thread list's sub-agent tray for Claude threads, from their saved
+   * sub-agent cards: running ones, and ones that ended within the hour.
+   */
+  private async withClaudeNativeSubAgents(
+    threads: AppServerThreadSummary[],
+  ): Promise<AppServerThreadSummary[]> {
+    if (threads.length === 0) return threads;
+    const cardsByThreadId = await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
+      backend: "claude",
+      threadIds: threads.map((thread) => thread.id),
+      monitorIdPrefix: CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+    });
+    const now = Date.now();
+    return threads.map((thread) => {
+      // A Claude sub-agent has no thread; its row is keyed by its card.
+      const agents = (cardsByThreadId[thread.id] ?? [])
+        .map((card) => nativeSubAgentRowFromCard(card, card.monitorId))
+        .filter((agent) => isCodexNativeSubAgentVisibleInNavigation(agent, now))
+        .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)
+          || left.threadId.localeCompare(right.threadId));
+      if (agents.length === 0) {
+        if (!thread.codexNativeSubAgents) return thread;
+        const { codexNativeSubAgents: _stale, ...rest } = thread;
+        return rest;
+      }
+      return { ...thread, codexNativeSubAgents: agents };
+    });
+  }
+
   private async persistCodexNativeSubAgent(params: {
     authoritativeReplayOutcome?: boolean;
     call: CodexNativeSubAgentCall;
@@ -39299,7 +39511,7 @@ export class DesktopBackendRegistry {
         this.archiveWorkspaceOwnership.beginAdmission(scope);
         try {
           const current = await this.findThreadForArchiveCleanup({ ...candidate, context, ownershipScope: containerPath, removalAdmission: scope });
-          await scope.prepare(this.archiveWorkspaceMutations());
+          await scope.prepare(this.archiveWorkspaceMutationsFor(scope));
           scope.reserve(this.archiveWorkspaceMutations());
           const ownedPaths = [current.thread.projectKey, ...current.thread.linkedDirectories.map(linkedDirectoryWorktreePath)];
           const canonical = canonicalWorktreePaths();
@@ -39386,9 +39598,11 @@ export class DesktopBackendRegistry {
   }
 
   private async readPacedArchiveCleanupInventory(params: ArchiveCleanupDiscoveryRequest): Promise<
-    Omit<ArchiveCleanupMetadata, "thread"> & { thread?: AppServerThreadSummary; activeTarget?: AppServerThreadSummary; targetIsActive: boolean }
+    Omit<ArchiveCleanupMetadata, "thread"> & { thread?: AppServerThreadSummary; activeTarget?: AppServerThreadSummary; targetIsActive: boolean; codexWatermark?: number }
   > {
     if (this.isBootstrapModeFn()) throw new Error("Archive discovery is unavailable in bootstrap mode.");
+    const fleet = this.archiveFleetIndexFor(params);
+    if (fleet) return await this.readFleetArchiveCleanupInventory(fleet, params);
     if (params.reuseInventory && !params.identityOnly && this.codexClient.enrichArchiveCleanupThreads) {
       return await this.readCandidateScopedArchiveCleanupInventory(params);
     }
@@ -39437,7 +39651,10 @@ export class DesktopBackendRegistry {
     const providerPageSize = directoryFilter ? 100 : ARCHIVE_CLEANUP_SLICE_SIZE;
     const scanStartedAt = Date.now();
     let providerPages = 0;
-    const appendPage = async (backend: AppServerBackendKind, rows: AppServerThreadSummary[], archived: boolean, resolveCwd = isAcpBackendId(backend)) => {
+    // Newest active Codex row this complete read covered. Admission later
+    // reads only rows the provider changed at or after it.
+    let codexWatermark: number | undefined = 0;
+    const appendPage = async (backend: AppServerBackendKind, rows: AppServerThreadSummary[], archived: boolean, resolveCwd = isAcpBackendId(backend), providerRows = backend === "codex") => {
       for (let offset = 0; offset < rows.length; offset += ARCHIVE_CLEANUP_SLICE_SIZE) {
         await context?.checkpoint();
         const slice = rows.slice(offset, offset + ARCHIVE_CLEANUP_SLICE_SIZE);
@@ -39464,6 +39681,10 @@ export class DesktopBackendRegistry {
               if (directory) directories = [directory];
             }
           }
+          if (providerRows && !archived && codexWatermark !== undefined) {
+            codexWatermark = typeof row.updatedAt === "number" ? Math.max(codexWatermark, row.updatedAt) : undefined;
+          }
+          params.fleetRows?.push({ backend, archived, overlay, base: { ...row, source: backend, linkedDirectories: directories } });
           directories = withRetainedWorktrees(
             mergeThreadLinkedDirectories([...directories, ...(overlay?.extraLinkedDirectories ?? [])]),
             overlay,
@@ -39528,7 +39749,7 @@ export class DesktopBackendRegistry {
           // A newly started thread may not appear in the provider list yet.
           // It is nevertheless an active checkout user.
           const pending = this.withPendingStartedThreads("codex", [], { archived: false });
-          await appendPage("codex", pending, false, true);
+          await appendPage("codex", pending, false, true, false);
         }
       }
       for (const agent of agents) {
@@ -39564,7 +39785,8 @@ export class DesktopBackendRegistry {
     // provider listing. Use that exact identity for recovery while still
     // scanning every checkout user. Actual restore intent cancels this job.
     return { workspaceRevision: revision, activeThreads, archivedThreads: params.targetThread ? [...archivedThreads, params.targetThread] : archivedThreads,
-      thread: archivedTarget, activeTarget, targetIsActive, overlaysByThreadKey, activeChildren, legacyParentBackends, worktreeEvidence };
+      thread: archivedTarget, activeTarget, targetIsActive, overlaysByThreadKey, activeChildren, legacyParentBackends, worktreeEvidence,
+      codexWatermark: this.isCodexBootstrapDeferredFn() ? undefined : codexWatermark };
   }
 
   /** Share only complete identity/overlay evidence across a preliminary batch.
@@ -39668,6 +39890,434 @@ export class DesktopBackendRegistry {
       activeChildren: activeThreads.filter((thread) => overlaysByThreadKey?.get(buildThreadIdentityKey(thread.source, thread.id))?.parentThreadId === params.threadId),
       legacyParentBackends: new Set([params.backend, ...[...activeThreads, ...inventory.archivedThreads]
         .filter((thread) => thread.id === params.threadId).map((thread) => thread.source)]),
+    };
+  }
+
+  /** The current queue batch's fleet index, when this read can use one.
+   * Repair's complete audit and alternate adapters keep the complete read. */
+  private archiveFleetIndexFor(params: ArchiveCleanupDiscoveryRequest): ArchiveFleetIndex | undefined {
+    const batch = params.context?.batch;
+    if (!batch || params.identityOnly || params.fleetRows || !params.threadId || !this.codexClient.listArchiveCleanupThreadsPage) return undefined;
+    if (this.archiveFleet?.batch !== batch) this.archiveFleet = { batch, index: new ArchiveFleetIndex() };
+    return this.archiveFleet.index;
+  }
+
+  /** Record a change the current batch's index has not read yet. A change
+   * with no identity can affect any checkout, so it requests a complete read. */
+  private noteArchiveFleetChange(identity: { backend: AppServerBackendKind; threadId: string } | undefined, change: FleetChange, reason: string): void {
+    const index = this.archiveFleet?.index;
+    if (!index) return;
+    if (identity) index.markDirty(buildThreadIdentityKey(identity.backend, identity.threadId), change);
+    else index.requestRebuild(reason);
+  }
+
+  private archiveFleetRow(backend: AppServerBackendKind, base: AppServerThreadSummary, overlay: ThreadOverlayState | undefined, archived: boolean): FleetRow {
+    const linkedDirectories = withRetainedWorktrees(
+      mergeThreadLinkedDirectories([...base.linkedDirectories, ...(overlay?.extraLinkedDirectories ?? [])]),
+      overlay,
+    );
+    const thread: AppServerThreadSummary = {
+      id: base.id, source: backend, title: "", titleSource: "explicit", linkedDirectories,
+      projectKey: base.projectKey, gitBranch: base.gitBranch, observedGitBranch: base.observedGitBranch,
+    };
+    return {
+      key: buildThreadIdentityKey(backend, base.id), backend, threadId: base.id, archived, base, thread, overlay,
+      paths: archiveWorkspacePaths(thread),
+      // A provider row with no workspace of its own cannot prove where it runs.
+      unknownWorkspace: !base.projectKey && base.linkedDirectories.length === 0,
+      externalPaths: linkedDirectories.filter((directory) => directory.worktreeOwnership === "external")
+        .map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path),
+    };
+  }
+
+  private async readClaudeArchiveCleanupChangeToken(): Promise<string | undefined> {
+    try { return await this.claudeBackend.archiveCleanupChangeToken?.(); } catch { return undefined; }
+  }
+
+  /** One complete identity and overlay read: every provider, every page. */
+  private async rebuildArchiveFleet(index: ArchiveFleetIndex, context?: ArchiveCleanupContext): Promise<void> {
+    const reason = index.rebuildReason ?? "new batch";
+    const epoch = index.beginRead();
+    const startedAt = Date.now();
+    // Observe change tokens before the read, so a write during it forces the
+    // next admission to read again rather than trust this result.
+    const overlayToken = this.overlayStore.readArchiveCleanupChangeToken?.();
+    const claudeToken = await this.readClaudeArchiveCleanupChangeToken();
+    const fleetRows: NonNullable<ArchiveCleanupDiscoveryRequest["fleetRows"]> = [];
+    const inventory = await this.readPacedArchiveCleanupInventory({ backend: "codex", threadId: "", context, identityOnly: true, fleetRows });
+    // A provider can list one identity as both active and archived. Archived
+    // membership must be unambiguous: an active listing anywhere wins.
+    const rows = new Map<string, FleetRow>();
+    for (const row of fleetRows) {
+      const next = this.archiveFleetRow(row.backend, row.base, row.overlay, row.archived);
+      const previous = rows.get(next.key);
+      if (!previous || (previous.archived && !next.archived)) rows.set(next.key, next);
+    }
+    await index.replaceAll([...rows.values()], epoch, {
+      codexWatermark: inventory.codexWatermark, overlayToken, claudeToken,
+    });
+    backendRegistryLog.info("archive cleanup fleet index built", {
+      runtimeInstanceId: this.runtimeInstanceId, reason, rows: index.size, durationMs: Date.now() - startedAt,
+    });
+  }
+
+  private async refreshArchiveFleet(index: ArchiveFleetIndex, context?: ArchiveCleanupContext): Promise<"rebuilt" | "current"> {
+    // Past a quarter of the fleet, one complete read costs less than reading
+    // each changed identity on its own.
+    if (index.dirtyCount > Math.max(ARCHIVE_CLEANUP_SLICE_SIZE, index.size / 4)) index.requestRebuild("many identities changed");
+    if (!index.needsRebuild) await this.refreshDirtyArchiveFleetRows(index, context);
+    if (!index.needsRebuild) return "current";
+    await this.rebuildArchiveFleet(index, context);
+    return "rebuilt";
+  }
+
+  /** Read again only the identities a writer or notification changed. */
+  private async refreshDirtyArchiveFleetRows(index: ArchiveFleetIndex, context?: ArchiveCleanupContext): Promise<void> {
+    const dirty = index.dirtyEntries();
+    if (!dirty.length) return;
+    const epoch = index.beginRead();
+    const checkpoint = async () => { await context?.checkpoint(); };
+    const reads: Array<{ key: string; backend: AppServerBackendKind; threadId: string; archived: boolean; base: AppServerThreadSummary }> = [];
+    let claude: Map<string, { thread: AppServerThreadSummary; archived: boolean }> | undefined;
+    for (const { key, changes, membership } of dirty) {
+      const identity = parseThreadIdentityKey(key);
+      if (!identity) {
+        index.requestRebuild("unrecognized identity");
+        return;
+      }
+      const backend = identity.backend;
+      const threadId = identity.threadId;
+      const prior = index.get(key);
+      if (membership === "deleted") {
+        index.delete(key);
+        index.settle(key, epoch);
+        continue;
+      }
+      let archived = membership ? membership === "archived" : prior?.archived ?? false;
+      // Archive membership and overlay links do not move the provider's cwd.
+      let base = changes.has("provider") || !prior ? undefined : prior.base;
+      if (!base) {
+        if (isAcpBackendId(backend)) {
+          const session = this.acpBackend.getSession(backend, threadId);
+          // Deletion is announced; an unreadable session is not proof that it
+          // is gone, so it protects every checkout until it can be read.
+          base = session ? this.acpBackend.sessionToThreadSummary(session)
+            : { id: threadId, source: backend, title: "", titleSource: "explicit", linkedDirectories: [] };
+          if (session) archived = Boolean(session.archivedAt);
+        } else if (backend === "claude") {
+          if (!claude) {
+            claude = new Map();
+            for (const isArchived of [false, true]) {
+              await checkpoint();
+              for (const thread of await this.claudeBackend.listThreads({ archived: isArchived })) claude.set(thread.id, { thread, archived: isArchived });
+            }
+          }
+          const found = claude.get(threadId);
+          if (!found) {
+            index.delete(key);
+            index.settle(key, epoch);
+            continue;
+          }
+          base = found.thread;
+          archived = found.archived;
+        } else if (backend === "codex") {
+          const pending = this.pendingStartedThreads.get(key);
+          if (pending && !archived) base = pending;
+          else if (this.codexClient.readArchiveCleanupThreadSummary) {
+            // An unreadable owner protects every checkout until it is read.
+            base = await this.codexClient.readArchiveCleanupThreadSummary(threadId, checkpoint).catch(() => undefined)
+              ?? { id: threadId, source: "codex", title: "", titleSource: "explicit", linkedDirectories: [] };
+          } else {
+            index.requestRebuild("provider row reads unavailable");
+            return;
+          }
+        } else {
+          index.requestRebuild("unsupported backend");
+          return;
+        }
+      }
+      reads.push({ key, backend, threadId, archived, base });
+    }
+    const overlays = await this.readArchiveFleetOverlays(reads, context);
+    for (const read of reads) {
+      const overlay = overlays.get(read.key);
+      if (overlay?.archiveTombstonedAt !== undefined) index.delete(read.key);
+      else await index.upsert(this.archiveFleetRow(read.backend, read.base, overlay, read.archived));
+      index.settle(read.key, epoch);
+    }
+  }
+
+  private async readArchiveFleetOverlays(
+    identities: ReadonlyArray<{ key: string; backend: AppServerBackendKind; threadId: string }>,
+    context?: ArchiveCleanupContext,
+  ): Promise<Map<string, ThreadOverlayState | undefined>> {
+    const result = new Map<string, ThreadOverlayState | undefined>();
+    const byBackend = new Map<AppServerBackendKind, string[]>();
+    for (const { backend, threadId } of identities) byBackend.set(backend, [...byBackend.get(backend) ?? [], threadId]);
+    const read = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+    for (const [backend, threadIds] of byBackend) {
+      for (let offset = 0; offset < threadIds.length; offset += ARCHIVE_CLEANUP_SLICE_SIZE) {
+        await context?.checkpoint();
+        const slice = threadIds.slice(offset, offset + ARCHIVE_CLEANUP_SLICE_SIZE);
+        const overlays = await read.call(this.overlayStore, { backend, threadIds: slice });
+        for (const threadId of slice) result.set(buildThreadIdentityKey(backend, threadId), overlays[threadId]);
+      }
+    }
+    return result;
+  }
+
+  /** Reread the overlays of related identities and apply any that changed. */
+  private async refreshArchiveFleetOverlays(index: ArchiveFleetIndex, keys: ReadonlySet<string>, context?: ArchiveCleanupContext): Promise<void> {
+    const rows = index.rows(keys);
+    const overlays = await this.readArchiveFleetOverlays(rows, context);
+    for (const row of rows) {
+      const overlay = overlays.get(row.key);
+      if (overlay?.archiveTombstonedAt !== undefined) index.delete(row.key);
+      else if (JSON.stringify(overlay) !== JSON.stringify(row.overlay)) {
+        await index.upsert(this.archiveFleetRow(row.backend, row.base, overlay, row.archived));
+      }
+    }
+  }
+
+  /**
+   * The provider's rows changed since the index's watermark, newest first.
+   * A new thread, a cwd change and a reactivated thread each advance the row's
+   * `updated_at`, so a short read finds them without rereading the fleet.
+   */
+  private async readArchiveFleetCodexDelta(
+    index: ArchiveFleetIndex,
+    context: ArchiveCleanupContext | undefined,
+    directoryFilter?: (cwd: string | undefined) => Promise<boolean>,
+  ): Promise<void> {
+    const watermark = index.codexWatermark!;
+    let newest = watermark;
+    const changed: AppServerThreadSummary[] = [];
+    const cursors = new Set<string>();
+    const directoryObservations = new Map<string, Promise<ThreadDirectoryEnrichment>>();
+    let cursor: string | undefined;
+    for (let pages = 0; ; pages += 1) {
+      if (pages >= ARCHIVE_FLEET_DELTA_PAGES) {
+        index.requestRebuild("provider changes exceeded the incremental read");
+        return;
+      }
+      await context?.checkpoint();
+      const page = await this.codexClient.listArchiveCleanupThreadsPage!({
+        archived: false, cursor, limit: ARCHIVE_FLEET_DELTA_PAGE_SIZE, sortKey: "updated_at",
+        checkpoint: async () => { await context?.checkpoint(); }, directoryObservations, directoryFilter,
+      });
+      let reachedOlder = false;
+      for (const row of page.threads) {
+        if (typeof row.updatedAt !== "number") {
+          index.requestRebuild("provider row without updatedAt");
+          return;
+        }
+        // Rows at the watermark itself are read again: a timestamp tie cannot
+        // prove the row predates the complete read.
+        if (row.updatedAt < watermark) {
+          reachedOlder = true;
+          continue;
+        }
+        newest = Math.max(newest, row.updatedAt);
+        changed.push(row);
+      }
+      cursor = page.nextCursor?.trim();
+      if (reachedOlder || !cursor) break;
+      if (cursors.has(cursor)) {
+        index.requestRebuild("provider recency cursor repeated");
+        return;
+      }
+      cursors.add(cursor);
+    }
+    const unseen = changed.filter((row) => !index.get(buildThreadIdentityKey("codex", row.id)))
+      .map((row) => ({ key: buildThreadIdentityKey("codex", row.id), backend: "codex" as const, threadId: row.id }));
+    const overlays = await this.readArchiveFleetOverlays(unseen, context);
+    for (const row of changed) {
+      const key = buildThreadIdentityKey("codex", row.id);
+      const overlay = overlays.has(key) ? overlays.get(key) : index.get(key)?.overlay;
+      if (overlay?.archiveTombstonedAt !== undefined) continue;
+      await index.upsert(this.archiveFleetRow("codex", row, overlay, false));
+    }
+    index.codexWatermark = newest;
+  }
+
+  /**
+   * Fresh evidence for one removal, bounded by what changed: identities that
+   * PwrAgent's writers and notifications marked, provider rows changed since
+   * the watermark, and the overlays of every related identity. Without a
+   * provider recency read, or after another process wrote the overlay store or
+   * Claude sessions, admission reads the complete fleet again instead.
+   */
+  private async verifyArchiveFleetForAdmission(index: ArchiveFleetIndex, scopePath: string, params: ArchiveCleanupDiscoveryRequest): Promise<void> {
+    const overlayToken = this.overlayStore.readArchiveCleanupChangeToken?.();
+    if (overlayToken === undefined || overlayToken !== index.overlayToken) index.requestRebuild("overlay store changed or has no change token");
+    const claudeToken = await this.readClaudeArchiveCleanupChangeToken();
+    if (claudeToken === undefined || claudeToken !== index.claudeToken) index.requestRebuild("Claude sessions changed or have no change token");
+    if (await index.pathWriteRelates(scopePath)) index.requestRebuild("workspace write near this checkout");
+    if (this.codexClient.archiveCleanupRecencyReads !== true || index.codexWatermark === undefined || this.isCodexBootstrapDeferredFn()) {
+      index.requestRebuild("provider recency reads unavailable");
+    }
+    if (await this.refreshArchiveFleet(index, params.context) === "rebuilt") return;
+    await this.readArchiveFleetCodexDelta(index, params.context, params.removalAdmission?.directoryFilter);
+    await this.refreshArchiveFleet(index, params.context);
+  }
+
+  /** Git and cwd enrichment for related rows only, as the complete read did. */
+  private async enrichArchiveFleetRows(
+    rows: readonly FleetRow[],
+    directoryFilter: ((cwd: string | undefined) => Promise<boolean>) | undefined,
+    context: ArchiveCleanupContext | undefined,
+    directoryObservations: Map<string, Promise<ThreadDirectoryEnrichment>>,
+    workspaceObservations: Map<string, Promise<LinkedDirectorySummary | undefined>>,
+  ): Promise<AppServerThreadSummary[]> {
+    const checkpoint = async () => { await context?.checkpoint(); };
+    const result: AppServerThreadSummary[] = [];
+    for (let offset = 0; offset < rows.length; offset += ARCHIVE_CLEANUP_SLICE_SIZE) {
+      await checkpoint();
+      const slice = rows.slice(offset, offset + ARCHIVE_CLEANUP_SLICE_SIZE);
+      const codex = slice.filter((row) => row.backend === "codex").map((row) => row.base);
+      const enrichedCodex = codex.length && this.codexClient.enrichArchiveCleanupThreads
+        ? await this.codexClient.enrichArchiveCleanupThreads(codex, { checkpoint, directoryObservations, directoryFilter })
+        : codex;
+      let codexIndex = 0;
+      for (const row of slice) {
+        context?.assertCurrent();
+        let directories = row.backend === "codex" ? enrichedCodex[codexIndex++]!.linkedDirectories : row.base.linkedDirectories;
+        if (row.backend !== "codex") {
+          const cwd = resolveThreadWorkspaceCwd(row.base, row.overlay?.extraLinkedDirectories ?? []);
+          if (cwd && (!directoryFilter || await directoryFilter(cwd))) {
+            let observation = workspaceObservations.get(cwd);
+            if (!observation) {
+              await checkpoint();
+              observation = this.acpWorktreeRepositoryResolver(cwd);
+              workspaceObservations.set(cwd, observation);
+            }
+            const directory = await observation;
+            if (directory) directories = [directory];
+          }
+        }
+        result.push({ ...row.thread, linkedDirectories: withRetainedWorktrees(
+          mergeThreadLinkedDirectories([...directories, ...(row.overlay?.extraLinkedDirectories ?? [])]), row.overlay,
+        ) });
+      }
+    }
+    return result;
+  }
+
+  /** Ownership lists for related identities, as consumers expect them. */
+  private async buildArchiveFleetLists(
+    index: ArchiveFleetIndex,
+    keys: ReadonlySet<string>,
+    scopes: readonly string[],
+    directoryFilter: ((cwd: string | undefined) => Promise<boolean>) | undefined,
+    context: ArchiveCleanupContext | undefined,
+    removalAdmission?: ArchiveWorkspaceAdmission,
+    directoryObservations = new Map<string, Promise<ThreadDirectoryEnrichment>>(),
+    workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>(),
+  ) {
+    const rows = index.rows(keys);
+    const ownershipPaths = new WeakMap<AppServerThreadSummary, readonly string[]>();
+    const pathsByKey = new Map<string, readonly string[]>();
+    if (removalAdmission) this.archiveFleetAdmissionPaths.set(removalAdmission, pathsByKey);
+    const enriched = await this.enrichArchiveFleetRows(rows, directoryFilter, context, directoryObservations, workspaceObservations);
+    context?.assertCurrent();
+    const activeThreads: AppServerThreadSummary[] = [];
+    const archivedThreads: AppServerThreadSummary[] = [];
+    const byKey = new Map<string, { row: FleetRow; summary: AppServerThreadSummary }>();
+    const worktreeEvidence: NonNullable<ArchiveCleanupMetadata["worktreeEvidence"]> = {
+      externalPaths: new Set(), activeByPath: new Map(), archivedByPath: new Map(),
+    };
+    for (const [offset, row] of rows.entries()) {
+      const summary = enriched[offset]!;
+      // Enrichment can only add a checkout above a related cwd; keep any path
+      // the index has not seen, and every path of an unknown owner.
+      const related = await index.relatedPaths(row.key, scopes);
+      const known = new Set(row.paths);
+      const paths = related ? [...new Set([...related, ...archiveWorkspacePaths(summary).filter((value) => !known.has(value))])] : undefined;
+      if (paths) {
+        ownershipPaths.set(summary, paths);
+        pathsByKey.set(row.key, paths);
+      }
+      byKey.set(row.key, { row, summary });
+      (row.archived ? archivedThreads : activeThreads).push(summary);
+      removalAdmission?.observeThread(row.key, [...paths ?? archiveWorkspacePaths(summary), ...(row.unknownWorkspace ? [""] : [])]);
+      const evidencePaths = new Set(summary.projectKey ? [normalizeWorktreePathForComparison(summary.projectKey)] : []);
+      for (const directory of summary.linkedDirectories) {
+        const worktreePath = linkedDirectoryWorktreePath(directory);
+        if (!worktreePath) continue;
+        const normalized = normalizeWorktreePathForComparison(worktreePath);
+        evidencePaths.add(normalized);
+        if (directory.worktreeOwnership === "external") worktreeEvidence.externalPaths.add(normalized);
+      }
+      const byPath = row.archived ? worktreeEvidence.archivedByPath : worktreeEvidence.activeByPath;
+      for (const value of evidencePaths) byPath.set(value, [...byPath.get(value) ?? [], summary]);
+    }
+    return { activeThreads, archivedThreads, byKey, worktreeEvidence, ownershipPaths };
+  }
+
+  /**
+   * Discovery and admission from the batch's fleet index. The returned lists
+   * hold only identities related to the candidate scopes, plus every identity
+   * whose workspace is unknown; every consumer of these lists asks only about
+   * those scopes, so unrelated threads cost nothing per removal.
+   */
+  private async readFleetArchiveCleanupInventory(index: ArchiveFleetIndex, params: ArchiveCleanupDiscoveryRequest): Promise<
+    Omit<ArchiveCleanupMetadata, "thread"> & { thread?: AppServerThreadSummary; activeTarget?: AppServerThreadSummary; targetIsActive: boolean }
+  > {
+    const revision = this.archiveWorkspaceRevision;
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const scope = params.ownershipScope ?? params.removalAdmission?.scopePath;
+    if (scope) await this.verifyArchiveFleetForAdmission(index, scope, params);
+    else await this.refreshArchiveFleet(index, params.context);
+    params.context?.assertCurrent();
+    let lists: Awaited<ReturnType<DesktopBackendRegistry["buildArchiveFleetLists"]>>;
+    if (scope) {
+      // Admission: fresh overlays for every related identity, then fresh lists.
+      await this.refreshArchiveFleetOverlays(index, await index.related(scope), params.context);
+      const keys = await index.related(scope);
+      if (index.get(key)) keys.add(key);
+      if (params.removalAdmission) this.archiveFleetAdmissionKeys.set(params.removalAdmission, keys);
+      lists = await this.buildArchiveFleetLists(index, keys, [scope], params.removalAdmission?.directoryFilter ?? archiveCleanupWorkspaceFilter(scope),
+        params.context, params.removalAdmission);
+    } else {
+      // Only the target's own checkouts can become candidates.
+      const targetRow = index.get(key);
+      // One job's observations: the target's checkout is enriched once.
+      const directoryObservations = new Map<string, Promise<ThreadDirectoryEnrichment>>();
+      const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
+      const [target] = targetRow ? await this.enrichArchiveFleetRows([targetRow], undefined, params.context, directoryObservations, workspaceObservations) : [];
+      const roots = [...new Set((target?.linkedDirectories ?? []).map(linkedDirectoryWorktreePath)
+        .filter((value): value is string => Boolean(value)))];
+      const memoized = roots.length === 1
+        ? await index.memo(roots[0]!, async (keys) => await this.buildArchiveFleetLists(index, keys, roots, archiveCleanupWorkspaceFilter(roots[0]!), params.context,
+          undefined, directoryObservations, workspaceObservations))
+        : undefined;
+      if (memoized && (!targetRow || memoized.byKey.has(key))) lists = memoized;
+      else {
+        const keys = new Set(targetRow ? [key] : []);
+        for (const root of roots) for (const related of await index.related(root)) keys.add(related);
+        const filters = roots.map(archiveCleanupWorkspaceFilter);
+        lists = await this.buildArchiveFleetLists(index, keys, roots, async (cwd) => {
+          for (const filter of filters) if (await filter(cwd)) return true;
+          return false;
+        }, params.context, undefined, directoryObservations, workspaceObservations);
+      }
+    }
+    const target = lists.byKey.get(key);
+    const thread = params.targetThread ?? (target?.row.archived ? target.summary : undefined);
+    const activeTarget = target && !target.row.archived ? target.summary : undefined;
+    const overlaysByThreadKey = new Map<string, ThreadOverlayState | undefined>();
+    const activeChildren = index.childrenOf(params.threadId).map((row) => {
+      overlaysByThreadKey.set(row.key, row.overlay);
+      return row.thread;
+    });
+    // Shared lists may be memoized; copy before adding a supplied target.
+    const archivedThreads = params.targetThread && !lists.archivedThreads.includes(params.targetThread)
+      ? [...lists.archivedThreads.filter((row) => row.id !== params.targetThread!.id || row.source !== params.targetThread!.source), params.targetThread]
+      : lists.archivedThreads;
+    return {
+      workspaceRevision: revision, activeThreads: lists.activeThreads, archivedThreads, thread, activeTarget, targetIsActive: Boolean(activeTarget),
+      overlaysByThreadKey, activeChildren, worktreeEvidence: lists.worktreeEvidence, ownershipPaths: lists.ownershipPaths,
+      legacyParentBackends: new Set([params.backend, ...index.withThreadId(params.threadId).map((row) => row.backend)]),
     };
   }
 
@@ -39889,6 +40539,7 @@ export class DesktopBackendRegistry {
     worktreeEvidence?: ArchiveCleanupMetadata["worktreeEvidence"];
     deferredWorktrees?: ArchiveCleanupIntent["deferredWorktrees"];
     workspaceRevision?: number;
+    ownershipPaths?: ArchiveCleanupMetadata["ownershipPaths"];
   }): Promise<ArchiveThreadCleanupResult[]> {
     // Ownership may live on another (even archived) thread using the same
     // checkout. A provider alias without the marker must not authorize removal.
@@ -39947,7 +40598,7 @@ export class DesktopBackendRegistry {
       const prior = params.deferredWorktrees?.find((row) => row.worktreePath === candidate.worktreePath)?.snapshot;
       if (prior && !(await pathExists(candidate.worktreePath))) {
         await this.retainSharedWorktreeSnapshotForArchivedThreads({ archivedThreadId: params.thread.id,
-          archivedThreads: params.archivedThreads, backend: params.backend, snapshot: prior,
+          archivedThreads: params.archivedThreads, ownershipPaths: params.ownershipPaths, backend: params.backend, snapshot: prior,
           worktreePath: candidate.worktreePath, context: params.context });
         await this.archiveWorktreeReferences.fulfilled(candidate.worktreePath);
         return { worktreePath: candidate.worktreePath, removedWorktree: true, deletedBranch: false };
@@ -39998,6 +40649,7 @@ export class DesktopBackendRegistry {
           if (isAcpBackendId(owner.source)) await this.acpBackend.prepareWorktreeArchive(owner.source, owner.id);
         }
         let removalMetadata: ArchiveCleanupMetadata | undefined;
+        let removalSiblings: AppServerThreadSummary[] | undefined;
         const managedContainerPath = params.backend === "codex" ? await this.worktreeContainerService.containerPath(candidate.worktreePath) : undefined;
         const scope = new ArchiveWorkspaceAdmission(buildThreadIdentityKey(params.backend, params.thread.id), managedContainerPath ?? candidate.worktreePath);
         const admission = {
@@ -40024,13 +40676,15 @@ export class DesktopBackendRegistry {
               removalAdmission: scope,
             });
             removalMetadata = current;
+            removalSiblings = await this.archivedWorktreeSiblings({ archivedThreadId: params.thread.id, archivedThreads: current.archivedThreads,
+              ownershipPaths: current.ownershipPaths, backend: params.backend, worktreePath: candidate.worktreePath });
             const ownership = await this.readCanonicalArchiveOwnership(current, candidate.worktreePath);
             if (ownership.users.some((owner) => owner.id !== params.thread.id || owner.source !== params.backend)) {
               await this.retainDeferredArchiveWorktree({ ...params, activeThreads: current.activeThreads }, candidate,
                 ownership.users.filter((owner) => owner.id !== params.thread.id || owner.source !== params.backend)
                   .map((owner) => buildThreadIdentityKey(owner.source, owner.id)));
             }
-            await scope.prepare(this.archiveWorkspaceMutations());
+            await scope.prepare(this.archiveWorkspaceMutationsFor(scope));
           const check = () => {
             params.context!.assertCurrent();
             scope.assertCurrent(this.archiveWorkspaceMutations());
@@ -40071,6 +40725,8 @@ export class DesktopBackendRegistry {
         await this.retainSharedWorktreeSnapshotForArchivedThreads({
           archivedThreadId: params.thread.id,
           archivedThreads: removalMetadata?.archivedThreads ?? params.archivedThreads,
+          ownershipPaths: removalMetadata ? removalMetadata.ownershipPaths : params.ownershipPaths,
+          siblings: removalSiblings,
           backend: params.backend,
           snapshot,
           worktreePath: candidate.worktreePath,
@@ -40154,8 +40810,8 @@ export class DesktopBackendRegistry {
           };
         }
         const changed = removalAdmission?.scope.changedThreadKeys() ?? [];
-        if (removedSnapshot || changed.length || !this.archiveWorktreeReferences.intents().some((intent) => intent.backend === params.backend && intent.threadId === params.thread.id
-          && intent.deferredWorktrees?.some((row) => row.worktreePath === candidate.worktreePath))) {
+        if (removedSnapshot || changed.length
+          || !this.archiveWorktreeReferences.hasPending(buildThreadIdentityKey(params.backend, params.thread.id), candidate.worktreePath)) {
           await this.retainDeferredArchiveWorktree(params, candidate, changed, removedSnapshot);
         }
         backendRegistryLog.warn("archive thread worktree cleanup failed", {
@@ -40229,7 +40885,8 @@ export class DesktopBackendRegistry {
       // Ready rows are the durable backlog. Leave them ready until a physical
       // queue slot is available; slot release resumes dispatch without polling.
       if (this.archiveCleanupQueue.availableSlots === 0) break;
-      if (this.archiveCleanupQueue.pending(buildThreadIdentityKey(intent.backend, intent.threadId))) continue;
+      const key = buildThreadIdentityKey(intent.backend, intent.threadId);
+      if (this.archiveCleanupQueue.pending(key) || this.archiveCleanupOverflow.has(key)) continue;
       this.archiveWorktreeReferences.scheduled(intent);
       const completion = this.enqueueArchiveCleanup(intent, true);
       void this.observeArchiveCleanupCompletion(completion, { ...intent, backgroundCleanup: true });
@@ -40263,7 +40920,7 @@ export class DesktopBackendRegistry {
   }
 
   private async readCanonicalArchiveOwnership(
-    params: { activeThreads: AppServerThreadSummary[]; archivedThreads: AppServerThreadSummary[] },
+    params: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
     worktreePath: string,
   ): Promise<{ users: AppServerThreadSummary[]; external: boolean }> {
     let pending = this.canonicalArchiveOwnership.get(params.activeThreads);
@@ -40276,7 +40933,7 @@ export class DesktopBackendRegistry {
         for (const thread of params.activeThreads) {
           const paths = archiveWorkspacePaths(thread);
           if (!paths.length) unknown.push(thread);
-          for (const value of paths) {
+          for (const value of params.ownershipPaths?.get(thread) ?? paths) {
             try {
               const key = await canonical(value);
               const users = active.get(key) ?? [];
@@ -40288,6 +40945,7 @@ export class DesktopBackendRegistry {
         for (const thread of [...params.activeThreads, ...params.archivedThreads]) for (const directory of thread.linkedDirectories) {
           if (directory.worktreeOwnership !== "external") continue;
           const value = linkedDirectoryWorktreePath(directory) ?? directory.path;
+          if (params.ownershipPaths?.get(thread) && !params.ownershipPaths.get(thread)!.includes(value)) continue;
           try { external.add(await canonical(value)); } catch { external.add("*"); }
         }
         return { active, unknown, external };
@@ -40301,26 +40959,43 @@ export class DesktopBackendRegistry {
     return { users: [...users], external: external.has(key) || external.has("*") };
   }
 
-  private async retainSharedWorktreeSnapshotForArchivedThreads(params: {
+  /** Archived threads other than the owner that use this checkout. Resolve
+   * them before removal: afterwards a sibling's symlink to it dangles and no
+   * longer resolves to the checkout. */
+  private async archivedWorktreeSiblings(params: {
     archivedThreadId: string;
     archivedThreads: AppServerThreadSummary[];
+    ownershipPaths?: ArchiveCleanupMetadata["ownershipPaths"];
     backend: AppServerBackendKind;
-    snapshot: WorktreeSnapshotSummary;
     worktreePath: string;
-    context?: ArchiveCleanupContext;
-  }): Promise<void> {
+  }): Promise<AppServerThreadSummary[]> {
     const canonical = canonicalWorktreePaths();
     const checkout = await canonical(params.worktreePath);
     const siblingThreads: AppServerThreadSummary[] = [];
     for (const thread of params.archivedThreads) {
       if (thread.source === params.backend && thread.id === params.archivedThreadId) continue;
-      for (const value of archiveWorkspacePaths(thread)) {
+      for (const value of params.ownershipPaths?.get(thread) ?? archiveWorkspacePaths(thread)) {
         if (await canonical(value).then((candidate) => candidate === checkout).catch(() => false)) {
           siblingThreads.push(thread);
           break;
         }
       }
     }
+    return siblingThreads;
+  }
+
+  private async retainSharedWorktreeSnapshotForArchivedThreads(params: {
+    archivedThreadId: string;
+    archivedThreads: AppServerThreadSummary[];
+    ownershipPaths?: ArchiveCleanupMetadata["ownershipPaths"];
+    /** Resolved while the checkout still existed. */
+    siblings?: AppServerThreadSummary[];
+    backend: AppServerBackendKind;
+    snapshot: WorktreeSnapshotSummary;
+    worktreePath: string;
+    context?: ArchiveCleanupContext;
+  }): Promise<void> {
+    const siblingThreads = params.siblings ?? await this.archivedWorktreeSiblings(params);
 
     if (siblingThreads.length === 0) {
       return;
@@ -48611,10 +49286,10 @@ export class DesktopBackendRegistry {
     }
   }
 
-  /** Background tasks a Claude monitor's session runs, such as its watcher. */
+  /** Background tasks a Claude monitor's session runs, such as its watcher or a sub-agent. */
   private claudeMonitorTaskCount(record: TaskMonitorDelegationRecord): number {
     if (record.backend !== "claude" || !record.monitorThreadId) return 0;
-    return this.claudeBackend.listBackgroundTasks(record.monitorThreadId).terminals.length;
+    return this.claudeBackend.activeTaskCount(record.monitorThreadId);
   }
 
   /**
@@ -52079,6 +52754,31 @@ export class DesktopBackendRegistry {
     this.archiveCleanupInventories = new WeakMap();
   }
 
+  /**
+   * Fleet admission observes only related identities. Before an unobserved
+   * identity's change or in-flight mutation reaches the scope, give it the
+   * batch evidence admission used: proven disjoint when the index related it
+   * to nothing here, its indexed paths otherwise. New paths it reports later
+   * still have to be proven by `prepare`, as before.
+   */
+  private observeArchiveFleetIdentity(scope: ArchiveWorkspaceAdmission, key: string): void {
+    if (scope.hasObserved(key)) return;
+    const related = this.archiveFleetAdmissionKeys.get(scope);
+    const row = this.archiveFleet?.index.get(key);
+    if (!row) return;
+    // While admission is still reading, `prepare` proves the indexed paths.
+    if (related && !related.has(key) && !row.unknownWorkspace && row.paths.length) scope.observeDisjoint(key, row.paths);
+    else {
+      const paths = this.archiveFleetAdmissionPaths.get(scope)?.get(key) ?? row.paths;
+      scope.observeThread(key, [...paths, ...(row.unknownWorkspace || !paths.length ? [""] : [])]);
+    }
+  }
+
+  private archiveWorkspaceMutationsFor(scope: ArchiveWorkspaceAdmission, mutations = this.archiveWorkspaceMutations()): ArchiveWorkspaceMutation[] {
+    for (const { key } of mutations) this.observeArchiveFleetIdentity(scope, key);
+    return mutations;
+  }
+
   private archiveWorkspaceMutations(): ArchiveWorkspaceMutation[] {
     return [...this.threadLifecycleMutationCounts.keys()].flatMap((key) =>
       [...this.archiveLifecycleMutationPaths.get(key) ?? [[]]].map((paths) => ({ key, paths })),
@@ -52086,8 +52786,12 @@ export class DesktopBackendRegistry {
   }
 
   private recordArchiveWorkspaceChange(key?: string, paths: readonly string[] = [], observation = false): void {
+    const identity = key ? parseThreadIdentityKey(key) : undefined;
+    this.noteArchiveFleetChange(identity ? { backend: identity.backend, threadId: identity.threadId } : undefined, "provider",
+      "workspace change without an identity");
     for (const scope of new Set([...this.archiveWorktreeRemovalAdmissions].map((admission) => admission.scope))) {
       if (observation && key === scope.ownerKey) continue;
+      if (key) this.observeArchiveFleetIdentity(scope, key);
       const observedPaths = observation && paths.length === 0 ? [""] : paths;
       if (observation && key) scope.observeThread(key, observedPaths);
       scope.changed(key, observedPaths);
@@ -52104,11 +52808,16 @@ export class DesktopBackendRegistry {
   ): Promise<T> {
     const finish = this.archiveWorkspaceOwnership.beginMutation(buildThreadIdentityKey(identity.backend, identity.threadId), paths !== undefined);
     this.archiveWorkspaceRevision += 1;
+    this.noteArchiveFleetChange(identity, "provider", "workspace mutation");
     try {
-      if (paths) await this.archiveWorkspaceOwnership.assertAvailable(paths);
+      if (paths) {
+        await this.archiveFleet?.index.notePathWrite(paths);
+        await this.archiveWorkspaceOwnership.assertAvailable(paths);
+      }
       return await work();
     } finally {
       this.archiveWorkspaceRevision += 1;
+      this.noteArchiveFleetChange(identity, "provider", "workspace mutation");
       await this.refreshArchiveWorkspaceOwnership(identity.backend, identity.threadId, finish());
     }
   }
@@ -52119,6 +52828,9 @@ export class DesktopBackendRegistry {
     const key = `workspace-write:${++this.archiveWorkspaceWriteSequence}`;
     const finish = this.archiveWorkspaceOwnership.beginMutation(key, true);
     try {
+      // The written identity is announced after the write. Until a complete
+      // read, a removal near these paths cannot rely on incremental evidence.
+      await this.archiveFleet?.index.notePathWrite(paths);
       await this.archiveWorkspaceOwnership.assertAvailable(paths);
       return await work();
     } finally {
@@ -52186,7 +52898,7 @@ export class DesktopBackendRegistry {
     }));
     const mutations = this.archiveWorkspaceMutations();
     await Promise.all([...new Set([...this.archiveWorktreeRemovalAdmissions].map((admission) => admission.scope))]
-      .map(async (scope) => { await scope.prepare(mutations); }));
+      .map(async (scope) => { await scope.prepare(this.archiveWorkspaceMutationsFor(scope, mutations)); }));
   }
 
   private invalidateArchiveCleanupReads(
@@ -52195,8 +52907,16 @@ export class DesktopBackendRegistry {
     workspaceChanged = true,
     threadId?: string,
     paths: readonly string[] = [],
+    change: FleetChange = notification?.method === "thread/archived" ? "archived"
+      : notification?.method === "thread/deleted" ? "deleted"
+        : notification?.method === "thread/unarchived" ? "active" : "provider",
   ): void {
     this.invalidateArchiveCleanupInventory();
+    // Membership-only refreshes without an identity (navigation observing its
+    // own archive) change no checkout user; their added identities are marked
+    // through recordArchiveWorkspaceChange.
+    if (backend && threadId) this.noteArchiveFleetChange({ backend, threadId }, change, "identity change");
+    else if (workspaceChanged) this.noteArchiveFleetChange(undefined, change, "workspace change without an identity");
     if (workspaceChanged) {
       this.archiveWorkspaceRevision += 1;
       this.recordArchiveWorkspaceChange(backend && threadId ? buildThreadIdentityKey(backend, threadId) : undefined, paths);
@@ -52211,12 +52931,15 @@ export class DesktopBackendRegistry {
     source: "provider" | "local" = "local",
   ): Array<{ threadId: string; observation: ArchiveWorkspaceObservation }> | undefined {
     const observations: Array<{ threadId: string; observation: ArchiveWorkspaceObservation }> = [];
-    const invalidateOwnership = (threadId: string) => {
+    const invalidateOwnership = (threadId: string, change: FleetChange) => {
+      this.noteArchiveFleetChange({ backend, threadId }, change, "identity change");
       observations.push({ threadId, observation: this.archiveWorkspaceOwnership.invalidate(buildThreadIdentityKey(backend, threadId),
         source === "local" && this.archiveWorkspaceOwnership.isControlled(buildThreadIdentityKey(backend, threadId)) ? "controlled" : "observed") });
     };
     if (notification.method === "thread/parent/set" || notification.method === "thread/parent/cleared") {
       this.invalidateArchiveCleanupInventory();
+      const threadId = readNonEmptyString(readRecord(notification.params)?.threadId);
+      this.noteArchiveFleetChange(threadId ? { backend, threadId } : undefined, "overlay", "grouping change without an identity");
     }
     const membershipChanged = notification.method === "thread/archived"
       || notification.method === "thread/deleted"
@@ -52253,13 +52976,15 @@ export class DesktopBackendRegistry {
         if (notification.method === "thread/started") {
           const thread = readRecord(notification.params.thread);
           const threadId = readNonEmptyString(notification.params.threadId) ?? readNonEmptyString(thread?.id);
-          if (threadId) invalidateOwnership(threadId);
+          if (threadId) invalidateOwnership(threadId, "provider");
           else this.recordArchiveWorkspaceChange();
         } else if (notification.method === "navigation/threadDirectories/updated") {
           const threadIds = notification.params.threadIds;
           const identities = Array.isArray(threadIds) ? threadIds.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
           if (Array.isArray(threadIds) && identities.length && identities.length === threadIds.length) {
-            for (const threadId of new Set(identities)) invalidateOwnership(threadId);
+            // A directory refresh can report a provider cwd move as well as an
+            // overlay link, so the identity's provider row is read again too.
+            for (const threadId of new Set(identities)) invalidateOwnership(threadId, "provider");
           } else this.recordArchiveWorkspaceChange();
         } else {
           const threadId = readNonEmptyString(readRecord(notification.params)?.threadId);

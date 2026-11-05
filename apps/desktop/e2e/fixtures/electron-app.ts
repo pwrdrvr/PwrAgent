@@ -57,6 +57,7 @@ import {
 } from "./electron-shutdown-policy";
 import { removeTempRoot } from "./temp-root-cleanup";
 import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
+import { registerMainProcessTiming } from "./electron-test";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -88,6 +89,7 @@ export const DESKTOP_MAIN_ENTRY = path.resolve(
  * matters is the close below, not this one.
  */
 const ELECTRON_EVALUATE_QUIT_TIMEOUT_MS = 1_000;
+const ELECTRON_DIAGNOSTICS_TIMEOUT_MS = 1_000;
 /**
  * How long the app gets to shut down on its own before the process tree is
  * force-killed.
@@ -446,12 +448,22 @@ export async function launchElectronApp(
   // the next job on a persistent runner to inherit. That now includes the
   // onboarding-wizard check inside `finishElectronLaunch`, which throws by
   // design.
+  let captureMainProcessTiming: () => Promise<unknown> = async () => undefined;
   try {
+    captureMainProcessTiming = registerMainProcessTiming(async () => {
+      if (!env.PWRAGENT_REPLAY_FIXTURE_PATH) return undefined;
+      return await withTimeout(
+        electronApp.evaluate(() => globalThis.__PWRAGENT_E2E_MAIN_PROCESS_TIMING__?.()),
+        ELECTRON_DIAGNOSTICS_TIMEOUT_MS,
+        "Main-process timing snapshot did not respond",
+      );
+    });
     // Onboarding may quit before teardown. Preserve Windows ownership while
     // the main-process RPC is alive; cmd.exe's exit alone does not close pipes
     // inherited by Electron descendants.
     await captureElectronMainProcess(electronApp);
     return await finishElectronLaunch({
+      captureMainProcessTiming,
       circuitEnabled,
       circuitStateFile,
       diagnosticsFile,
@@ -464,6 +476,7 @@ export async function launchElectronApp(
       suppressOnboarding,
     });
   } catch (error) {
+    await captureMainProcessTiming();
     await closeElectronApplication(electronApp, {
       circuitEnabled,
       circuitStateFile,
@@ -479,6 +492,7 @@ export async function launchElectronApp(
 }
 
 async function finishElectronLaunch(args: {
+  captureMainProcessTiming: () => Promise<unknown>;
   circuitEnabled: boolean;
   circuitStateFile?: string;
   diagnosticsFile?: string;
@@ -491,6 +505,7 @@ async function finishElectronLaunch(args: {
   suppressOnboarding: boolean;
 }): Promise<LaunchResult> {
   const {
+    captureMainProcessTiming,
     circuitEnabled,
     circuitStateFile,
     diagnosticsFile,
@@ -502,14 +517,17 @@ async function finishElectronLaunch(args: {
     seedConfigPath,
     suppressOnboarding,
   } = args;
-  const closeApplicationOnce = memoizeElectronClose(async () =>
-    await closeElectronApplication(electronApp, {
+  const closeApplicationOnce = memoizeElectronClose(async () => {
+    // Specs usually close in finally, before Playwright records a hard failure.
+    // Retain this bounded copy until the shared fixture knows the outcome.
+    await captureMainProcessTiming();
+    return await closeElectronApplication(electronApp, {
       circuitEnabled,
       circuitStateFile,
       diagnosticsFile,
       launchId,
-    }),
-  );
+    });
+  });
   // Bound every action on every window this app opens.
   //
   // Playwright leaves actions unbounded by default, so a click that never

@@ -6472,6 +6472,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       );
   }
 
+  /**
+   * Changes whenever another connection commits to this database, such as a
+   * second PwrAgent instance on the same profile. Commits on this connection
+   * do not move it; archive cleanup fences those through its own writers.
+   */
+  readArchiveCleanupChangeToken(): string {
+    return String(this.stateDb.raw.pragma("data_version", { simple: true }));
+  }
+
   /** Cleanup needs ownership/grouping only, never histories or PR claims. */
   async getArchiveCleanupOverlayStates(params: {
     backend: ThreadOverlayState["backend"];

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
@@ -566,6 +566,9 @@ test("loads an offscreen transcript image only after scrolling it into view", as
     expect(await offscreenImage.getAttribute("src")).toBeNull();
     expect((await readImageMetrics(offscreenImage)).naturalWidth).toBe(0);
 
+    // A user scroll detaches bottom-follow. Programmatic scrolling alone
+    // can be undone by the transcript's pending bottom-follow frame.
+    await app.window.locator(".transcript-list__items").press("Home");
     await offscreenImage.scrollIntoViewIfNeeded();
     await expect(offscreenImage).toBeInViewport();
     await expect.poll(async () => (await readImageMetrics(offscreenImage)).naturalWidth).toBe(848);

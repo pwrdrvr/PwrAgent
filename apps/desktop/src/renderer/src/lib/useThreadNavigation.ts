@@ -2969,8 +2969,15 @@ function buildLaunchpadRelativeThreadKey(
     : buildThreadIdentityKey(backend, threadId);
 }
 
+function scheduleNavigationRefreshTask(callback: () => void): () => void {
+  const timer = setTimeout(callback, 0);
+  return () => clearTimeout(timer);
+}
+
 type UseThreadNavigationOptions = {
   enabled?: boolean;
+  /** Event-triggered reads use a timer task by default; tests inject a task queue. */
+  scheduleNavigationRefresh?: (callback: () => void) => () => void;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   /**
    * This machine's federation instance id. A sub-thread started on a peer
@@ -3248,6 +3255,10 @@ export function useThreadNavigation(
   }) => Promise<void>;
   archiveThread: (
     thread: NavigationThreadSummary,
+    options?: ArchiveThreadOptions,
+  ) => Promise<ArchivedThreadRef[]>;
+  archiveThreads: (
+    threads: NavigationThreadSummary[],
     options?: ArchiveThreadOptions,
   ) => Promise<ArchivedThreadRef[]>;
   restoreArchivedThreads: (
@@ -3643,6 +3654,8 @@ export function useThreadNavigation(
   const manuallySelectedThreadKeysRef = useRecoverableRef("navigation.manualSelections", () => new Set<string>());
   const submittedSeenUpdatedAtByThreadKeyRef = useRecoverableRef("navigation.submittedSeenUpdates", () => new Map<string, number | undefined>());
   const refreshInFlightRef = useRef(false);
+  const archiveRefreshBatchesRef = useRef(0);
+  const archiveEventRefreshOwnersRef = useRef(new Map<string, FederationTarget>());
   const mountedRef = useRef(true);
   const actionAbortControllerRef = useRef(new AbortController());
   const queuedRefreshRef = useRef<
@@ -3679,9 +3692,8 @@ export function useThreadNavigation(
     else next.delete(key);
     removedDirectoryKeysRef.current = next;
   }, []);
-  const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined
-  );
+  const scheduledRefreshTaskRef = useRef<(() => void) | undefined>(undefined);
+  const scheduleNavigationRefresh = options.scheduleNavigationRefresh ?? scheduleNavigationRefreshTask;
   const remotePeerDisconnectedRef = useRef(false);
   const lastNavigationActivityAtRef = useRef(Date.now());
   const backgroundRefreshIdleRef = useRef(false);
@@ -4106,12 +4118,12 @@ export function useThreadNavigation(
         preferredSelectionKey,
       };
 
-      if (scheduledRefreshTimerRef.current !== undefined) {
+      if (scheduledRefreshTaskRef.current !== undefined) {
         return;
       }
 
-      scheduledRefreshTimerRef.current = setTimeout(() => {
-        scheduledRefreshTimerRef.current = undefined;
+      scheduledRefreshTaskRef.current = scheduleNavigationRefresh(() => {
+        scheduledRefreshTaskRef.current = undefined;
         const nextRequest = queuedRefreshRef.current;
         queuedRefreshRef.current = undefined;
         if (!nextRequest) {
@@ -4129,9 +4141,9 @@ export function useThreadNavigation(
             invalidatedOnly: nextRequest.invalidatedOnly,
           }
         );
-      }, 0);
+      });
     },
-    [refresh]
+    [refresh, scheduleNavigationRefresh]
   );
 
   const markNavigationActivity = useCallback(
@@ -4165,8 +4177,8 @@ export function useThreadNavigation(
 
   useEffect(() => {
     return () => {
-      if (scheduledRefreshTimerRef.current !== undefined) {
-        clearTimeout(scheduledRefreshTimerRef.current);
+      if (scheduledRefreshTaskRef.current !== undefined) {
+        scheduledRefreshTaskRef.current();
       }
     };
   }, []);
@@ -4272,9 +4284,18 @@ export function useThreadNavigation(
       const method = event.notification.method as string;
       const owners: FederationTarget[] = [event.federationTarget ?? { scope: "local" }];
       if (event.federationTarget?.scope === "remote" && windowTarget?.scope !== "remote") owners.push({ scope: "local" });
-      const scheduleEventRefresh: typeof scheduleRefresh = (selection, optimistic, forceSelection, options) =>
+      const scheduleEventRefresh: typeof scheduleRefresh = (selection, optimistic, forceSelection, options) => {
+        if (archiveRefreshBatchesRef.current > 0
+          && (method === "thread/archived" || method === "navigation/remoteThreadPins/changed")) {
+          // Archive replies and their notifications are one sidebar action.
+          // Keep invalidation and row patches immediate; read these owners
+          // with the action's final refresh, including any concurrent archive.
+          for (const owner of owners) archiveEventRefreshOwnersRef.current.set(JSON.stringify(owner), owner);
+          return;
+        }
         scheduleRefresh(selection, optimistic, forceSelection, { ...options, owners,
           invalidatedOnly: navigationQueryEventRequiresRefresh(method, event.notification.params) });
+      };
       if (federationTargetsEqual(event.federationTarget, windowTarget) && navigationQueryEventRequiresRefresh(method, event.notification.params)) {
         invalidateNavigation(owners, event);
         // These notifications contain the complete replacement for every
@@ -8640,6 +8661,7 @@ export function useThreadNavigation(
     async (
       thread: NavigationThreadSummary,
       options?: ArchiveThreadOptions,
+      refreshAfterArchive = refresh,
     ): Promise<ArchivedThreadRef[]> => {
       if (!archiveThreadRequest) {
         setArchiveThreadError("Desktop bridge is missing archiveThread().");
@@ -8764,7 +8786,7 @@ export function useThreadNavigation(
             });
           }
         }
-        await refresh(undefined, undefined, false, refreshOptions);
+        await refreshAfterArchive(undefined, undefined, false, refreshOptions);
       } catch (error) {
         for (const targetKey of targetThreadKeys) {
           if (!archivedKeys.has(targetKey)) {
@@ -8774,7 +8796,7 @@ export function useThreadNavigation(
           }
         }
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
-        await refresh(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey), refreshOptions);
+        await refreshAfterArchive(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey), refreshOptions);
       }
       return archived;
     },
@@ -8790,6 +8812,45 @@ export function useThreadNavigation(
       setSelectedItemKey,
     ]
   );
+
+  const archiveThreads = useCallback(async (
+    threads: NavigationThreadSummary[],
+    options?: ArchiveThreadOptions,
+  ): Promise<ArchivedThreadRef[]> => {
+    let refreshOptions: NavigationRefreshOptions | undefined;
+    // Each archive still owns its optimistic removal, rollback and viewer
+    // pin cleanup. Only its final read waits for the whole sidebar action.
+    const collectRefresh: typeof refresh = async (selectionKey, _thread, forceSelection, requestOptions) => {
+      // Roll back selection when the failure arrives, so a later user
+      // selection survives batch completion. Only the reads are deferred.
+      if (selectionKey) setSelectedItemKey((current) => forceSelection || !current ? selectionKey : current);
+      refreshOptions = refreshOptions
+        ? { owners: mergeNavigationRefreshOwners(refreshOptions.owners, requestOptions?.owners) }
+        : requestOptions;
+    };
+    archiveRefreshBatchesRef.current++;
+    let results: ArchivedThreadRef[][];
+    try {
+      results = await Promise.all(threads.map((thread) => archiveThread(thread, options, collectRefresh)));
+    } finally {
+      archiveRefreshBatchesRef.current--;
+      const eventOwners = [...archiveEventRefreshOwnersRef.current.values()];
+      archiveEventRefreshOwnersRef.current.clear();
+      if (eventOwners.length > 0) {
+        refreshOptions = { owners: refreshOptions
+          ? mergeNavigationRefreshOwners(refreshOptions.owners, eventOwners) : eventOwners };
+      }
+      if (refreshOptions) {
+        try {
+          await refresh(undefined, undefined, false, refreshOptions);
+        } catch (error) {
+          setArchiveThreadError(error instanceof Error ? error.message : String(error));
+          await refresh(undefined, undefined, false, refreshOptions);
+        }
+      }
+    }
+    return results.flat();
+  }, [archiveThread, refresh, setSelectedItemKey]);
 
   /**
    * Undo an archive: restore each thread this window owns (its worktrees come
@@ -10126,6 +10187,7 @@ export function useThreadNavigation(
     markThreadUnread,
     showThread,
     archiveThread,
+    archiveThreads,
     restoreArchivedThreads,
     archiveWorktree,
     restoreWorktree,
