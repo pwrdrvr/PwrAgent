@@ -118,16 +118,18 @@ export class ThreadInstanceHandoffService {
           if (relative) git.cwdRelative = relative;
         }
         const prepared = await this.options.prepareTarget(request.targetInstanceId, {
+          historyMode: source.historyMode,
           ...(git ? { git, repository: request.targetRepositoryPath } : {}),
         });
         signal?.throwIfAborted();
         if (prepared?.version !== 2 || typeof prepared.platform !== "string"
+          || prepared.historyMode !== "legacy" || source.historyMode !== prepared.historyMode
           || (git && prepared.git?.head !== git.head)) {
           throw new Error("Upgrade the receiving PwrAgent and retry. Receiver preflight was not confirmed.");
         }
         const workspace = source.cwd && !git ? await exportWorkspaceArchive(source.cwd, staging, prepared.platform) : undefined;
         await writeFile(filePath, await encodeThreadHandoff({
-          version: 2, handoffId, sourceThreadId: request.sourceThreadId,
+          version: 2, historyMode: prepared.historyMode, handoffId, sourceThreadId: request.sourceThreadId,
           rolloutBase64: source.rolloutBase64, historyDigest,
           ...(source.title ? { title: source.title } : {}), ...(git ? { git } : {}),
           ...(workspace ? { workspace } : {}),
@@ -180,7 +182,13 @@ export class ThreadInstanceHandoffService {
       || Boolean(request.git) !== Boolean(request.repository)) {
       throw new Error("Git handoff preflight requires a published ref and an absolute existing receiver repository path.");
     }
-    return { version: 2, platform: process.platform,
+    if (request.historyMode === "paginated") {
+      throw new Error("This thread uses Codex paginated history, which Send to Another Machine cannot transfer yet. Codex requires source-local history that is not included in a single exported file. Continue this thread on the sending machine.");
+    }
+    if (request.historyMode !== "legacy") {
+      throw new Error("The receiver could not confirm a portable history format. Update PwrAgent on the sending machine and retry.");
+    }
+    return { version: 2, historyMode: "legacy", platform: process.platform,
       ...(request.git ? { git: await this.options.git.prepareGitHandoff(request.repository!, request.git) } : {}) };
   }
 

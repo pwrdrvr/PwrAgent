@@ -16,7 +16,7 @@ const roots: string[] = [];
 const replay: ThreadHandoffExport["replay"] = {
   entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
 };
-const source: ThreadHandoffExport = { rolloutBase64: Buffer.from("opaque fixture history\n").toString("base64"), replay, title: "Windows fixture" };
+const source: ThreadHandoffExport = { historyMode: "legacy", rolloutBase64: Buffer.from("opaque fixture history\n").toString("base64"), replay, title: "Windows fixture" };
 
 async function setup(options: { createHistoryWorkspace?: () => Promise<string>; retryNow?: (instanceId: string) => void } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-handoff-"));
@@ -86,6 +86,34 @@ it("moves only after validation and preserves the source worktree", async () => 
   expect(result.sourceArchived).toBe(true);
   expect(archive).toHaveBeenCalledWith({ backend: "codex", threadId: "source-thread", preserveWorktrees: true });
   expect(backend.readThread.mock.invocationCallOrder[0]).toBeLessThan(archive.mock.invocationCallOrder[0]);
+});
+
+it("requires a portable-history acknowledgement from an older receiver before upload", async () => {
+  const { sender, receiver, prepareTarget, push } = await setup();
+  prepareTarget.mockImplementationOnce(async (_id, request) => {
+    const result = await receiver.prepare(request);
+    return { version: result.version, platform: result.platform } as typeof result;
+  });
+  await expect(sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" }))
+    .rejects.toThrow("Upgrade the receiving PwrAgent");
+  expect(push).not.toHaveBeenCalled();
+});
+
+it("rejects an unconfirmed or nonportable package before creating a workspace", async () => {
+  for (const historyMode of [undefined, "paginated", "future-mode"]) {
+    const { sender, receiver, push, backend } = await setup();
+    push.mockImplementationOnce(async (_id, filePath) => {
+      const pkg = await decodeThreadHandoff(await readFile(filePath));
+      const bytes = await encodeThreadHandoff({ ...pkg, historyMode } as ThreadHandoffPackage);
+      const incoming = path.join(path.dirname(filePath), "unconfirmed.gz");
+      await writeFile(incoming, bytes);
+      return { path: incoming, sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+    });
+    await expect(sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" }))
+      .rejects.toThrow("Unsupported or invalid thread handoff package");
+    expect(backend.forkThread).not.toHaveBeenCalled();
+    await expect(receiver.prepare({ historyMode })).rejects.toThrow(/history/i);
+  }
 });
 
 async function gitFixture(root: string) {
@@ -302,7 +330,7 @@ it("does not archive a source whose history changes through another protocol cli
 it("binds imports to the pushing peer and deduplicates repeated acknowledgements", async () => {
   const { receiver, backend, root, receipt } = await setup();
   const handoffId = randomUUID();
-  const pkg: ThreadHandoffPackage = { version: 2, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay) };
+  const pkg: ThreadHandoffPackage = { version: 2, historyMode: "legacy", handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay) };
   const bytes = await encodeThreadHandoff(pkg);
   const filePath = path.join(root, "package.gz");
   await writeFile(filePath, bytes);
@@ -319,7 +347,7 @@ it("keeps accepting imports after many settled ones", async () => {
   const { receiver, backend, root } = await setup();
   for (let index = 0; index < 130; index += 1) {
     const handoffId = randomUUID();
-    const bytes = await encodeThreadHandoff({ version: 2, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay) });
+    const bytes = await encodeThreadHandoff({ version: 2, historyMode: "legacy", handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay) });
     const filePath = path.join(root, `${handoffId}.gz`);
     await writeFile(filePath, bytes);
     await receiver.receive("pwr_sender", { handoffId, file: { path: filePath, sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") } });
@@ -336,7 +364,7 @@ it("rejects tampered checksums and unsafe file paths before importing", async ()
   await expect(receiver.receive("pwr_sender", { handoffId, file: { path: file, sizeBytes: 7, sha256: "incorrect" } })).rejects.toThrow("checksum");
   expect(backend.forkThread).not.toHaveBeenCalled();
   const pkg: ThreadHandoffPackage = {
-    version: 2, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay),
+    version: 2, historyMode: "legacy", handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay),
     git: { head: "a".repeat(40), ref: "refs/heads/main", origin: "example/repo", cwdRelative: ".git/config" },
   };
   await expect(decodeThreadHandoff(await encodeThreadHandoff(pkg))).rejects.toThrow("Unsafe");

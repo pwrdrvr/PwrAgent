@@ -1789,10 +1789,23 @@ describe("CodexAppServerClient", () => {
       thread: { id: "handoff-source", path: "/private/codex/history.jsonl", cwd: "/fixture/workspace", name: "Source title", status: { type: "idle" }, turns: [] },
     });
     const result = await client.exportThreadForHandoff("handoff-source");
-    expect(result).toMatchObject({ title: "Source title", cwd: "/fixture/workspace", rolloutBase64: Buffer.from("opaque handoff fixture").toString("base64") });
+    expect(result).toMatchObject({ historyMode: "legacy", title: "Source title", cwd: "/fixture/workspace", rolloutBase64: Buffer.from("opaque handoff fixture").toString("base64") });
     const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
     expect(requests.find((request) => request.method === "fs/readFile")?.params).toEqual({ path: "/private/codex/history.jsonl" });
     await client.close();
+  });
+
+  it.each(["legacy", "paginated", "future-mode"])("exports Codex's authoritative %s history mode for receiver preflight", async (historyMode) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      MockTransport.readThreadResultByThreadId.set("handoff-format", {
+        thread: { id: "handoff-format", path: "/private/codex/history.jsonl", historyMode, status: { type: "idle" }, turns: [] },
+      });
+      expect((await client.exportThreadForHandoff("handoff-format")).historyMode).toBe(historyMode);
+    } finally {
+      await client.close();
+    }
   });
 
   it("rejects handoff of an active provider thread before reading its file", async () => {

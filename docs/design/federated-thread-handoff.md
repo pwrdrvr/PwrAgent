@@ -32,6 +32,32 @@ protocol. A source that cannot serve `fs/readFile` fails explicitly, before Git
 capture. There is no storage-reading fallback. See the [Codex App Server
 documentation](https://learn.chatgpt.com/docs/app-server).
 
+## Portable history requirement
+
+The sender forwards `thread/read.thread.historyMode` in `thread.handoff.prepare`.
+The receiver accepts only `legacy` and acknowledges that format explicitly;
+missing or unknown formats fail before file push or destination workspace creation.
+Both peers must run a PwrAgent version with this acknowledgement. The incoming
+PwrAgent package also declares the accepted format, which is checked before import.
+
+Codex's `thread/fork.path` does not make paginated history portable. In Codex
+0.163.0, an exported paginated file is accepted by path, then Codex resolves its
+source ID through receiver-local history. An empty receiver answers
+`no rollout found for thread id`, even when every PwrAgent layer forwarded the
+path. The upstream implementations in 0.100.0, 0.135.0, 0.153.0, and 0.164.0
+all honor a nonempty path; 0.153.0 and 0.164.0 additionally resolve paginated
+history through the local thread store. Upgrading Codex alone is not a remedy.
+
+The live oracle runs two real App Servers with isolated, empty homes and
+contrived fixtures. It covers Copy, Move, a published Git workspace, and
+paginated rejection before upload. It reads Codex data only through protocol
+requests and makes no model calls. Run it separately from hermetic unit tests:
+
+```sh
+PWRAGENT_CODEX_HANDOFF_ORACLE_COMMAND=/absolute/path/to/codex \
+  pnpm exec vitest run --config apps/desktop/scripts/thread-handoff-oracle.config.ts
+```
+
 ## Transfer sequence
 
 ```mermaid
