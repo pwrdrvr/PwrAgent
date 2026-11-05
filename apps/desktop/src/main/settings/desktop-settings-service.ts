@@ -3839,8 +3839,23 @@ export class DesktopSettingsService {
   /**
    * Settings → Git → Updates. Every action is one the operator asked for:
    * nothing here runs on a timer, and only `select` changes which Git runs.
+   * Only install, select and remove change the Git list, so only they probe
+   * every Git again.
    */
-  async managedGitAction(request: ManagedGitActionRequest): Promise<string | undefined> {
+  async managedGitAction(
+    request: ManagedGitActionRequest,
+  ): Promise<{ snapshot: DesktopSettingsSnapshot; error?: string }> {
+    const error = await this.runManagedGitAction(request);
+    const changesGit = request.action === "install"
+      || request.action === "select"
+      || request.action === "remove";
+    const snapshot = changesGit
+      ? await this.refreshGitDiscovery()
+      : await this.readSettingsProjection();
+    return { snapshot, ...(error ? { error } : {}) };
+  }
+
+  private async runManagedGitAction(request: ManagedGitActionRequest): Promise<string | undefined> {
     if (!managedGitSupported()) return "PwrDrvr Git updates are not available on this platform.";
     try {
       switch (request.action) {
@@ -3866,8 +3881,6 @@ export class DesktopSettingsService {
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") return undefined;
       return error instanceof Error ? error.message : String(error);
-    } finally {
-      this.gitDiscoveryCache = undefined;
     }
   }
 

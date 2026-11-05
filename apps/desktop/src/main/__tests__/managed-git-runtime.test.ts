@@ -13,6 +13,7 @@ import {
   onManagedGitVerificationFailed,
   pruneManagedGitGenerations,
   removeManagedGitGeneration,
+  removeManagedGitInUseMarkers,
   resolveManagedGitRuntime,
   setManagedGitBackgroundVerifyDelay,
   verifyManagedGitGeneration,
@@ -243,6 +244,23 @@ posixDescribe("cancelling and concurrent installs", () => {
     await expect(running).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("refuses a tag that is not a PwrDrvr Git release before reading anything", async () => {
+    const { rootDir, options } = setup(fakeGithub([buildRelease("2.56.0-dev-pwrgit.5")]));
+    let asked = false;
+    const guarded: ManagedGitOptions = {
+      ...options,
+      fetchReleases: async () => {
+        asked = true;
+        throw new Error("offline");
+      },
+    };
+    for (const tag of ["../../escape", "v2.56.0-dev-pwrgit.5/../../x", "2.56.0-dev-pwrgit.5", ""]) {
+      await expect(installManagedGit({ ...guarded, tag })).rejects.toThrow(/Not a PwrDrvr Git release/);
+    }
+    expect(asked).toBe(false);
+    expect(existsSync(path.join(rootDir, "releases"))).toBe(false);
+  });
+
   it("refuses while another process holds the install lock", async () => {
     const release = buildRelease("2.56.0-dev-pwrgit.5");
     const { rootDir, options } = setup(fakeGithub([release]));
@@ -293,6 +311,19 @@ posixDescribe("running a chosen release", () => {
     forgetManagedGitResolution(installed.generation);
   });
 
+  it("removes this process's in-use marker on exit, so a reused PID cannot pin the release", async () => {
+    const release = buildRelease("2.56.0-dev-pwrgit.5");
+    const { options } = setup(fakeGithub([release]));
+    const installed = await installManagedGit({ ...options, tag: release.tag });
+    forgetManagedGitResolution(installed.generation);
+    resolveManagedGitRuntime(installed.generation, options);
+    const marker = path.join(path.dirname(installed.root), `.pwragent-use-${process.pid}`);
+    expect(existsSync(marker)).toBe(true);
+    removeManagedGitInUseMarkers();
+    expect(existsSync(marker)).toBe(false);
+    forgetManagedGitResolution(installed.generation);
+  });
+
   it("is unavailable when the release is not installed", () => {
     const { options } = setup(fakeGithub([]));
     expect(() => resolveManagedGitRuntime("2.56.0-dev-pwrgit.7-abcdef0", options)).toThrow(/not installed/);
@@ -317,6 +348,23 @@ posixDescribe("pruning and removal", () => {
     expect((await listManagedGitGenerations(options)).map((g) => g.generation).sort()).toEqual([g5, g6, g8].sort());
     // The removed release's archive went with it.
     expect(readdirSync(path.join(rootDir, "archives"))).toHaveLength(3);
+  });
+
+  it("never prunes or removes while another window holds the install lock", async () => {
+    const releases = ["5", "6"].map((n) => buildRelease(`2.56.0-dev-pwrgit.${n}`));
+    const { rootDir, options } = setup(fakeGithub(releases));
+    const installed = [];
+    for (const release of releases) installed.push(await installManagedGit({ ...options, tag: release.tag }));
+    const older = installed[0]!.generation;
+    const unlock = await lock(path.join(rootDir, "install"), { realpath: false });
+    try {
+      await expect(pruneManagedGitGenerations(new Set(), options)).resolves.toEqual([]);
+      await expect(removeManagedGitGeneration(older, new Set(), options)).rejects.toBeInstanceOf(ManagedGitBusyError);
+      expect(existsSync(path.join(rootDir, "versions", older))).toBe(true);
+    } finally {
+      await unlock();
+    }
+    await expect(pruneManagedGitGenerations(new Set(), options)).resolves.toEqual([older]);
   });
 
   it("refuses to remove a release a profile still names or another process runs", async () => {

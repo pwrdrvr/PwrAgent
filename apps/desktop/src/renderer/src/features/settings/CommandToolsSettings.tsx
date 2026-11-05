@@ -318,8 +318,8 @@ export function GitToolSection(props: {
                 envForced={envForced}
                 manualPathSelected={configuredCommand.length > 0}
                 disabled={props.saving || loading}
-                onRefresh={async () => {
-                  if (desktopApi?.refreshGitDiscovery) await desktopApi.refreshGitDiscovery();
+                onRefresh={async (rescan) => {
+                  if (rescan && desktopApi?.refreshGitDiscovery) await desktopApi.refreshGitDiscovery();
                   await props.onRefresh();
                 }}
               />

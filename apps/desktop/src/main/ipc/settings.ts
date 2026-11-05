@@ -2150,10 +2150,9 @@ export function registerSettingsIpcHandlers(
   ipcMain.handle(
     SETTINGS_MANAGED_GIT_ACTION_CHANNEL,
     async (_event, request: ManagedGitActionRequest): Promise<ManagedGitActionResponse> => {
-      const activeService = getService(service);
-      const error = await activeService.managedGitAction(request);
+      const { snapshot, error } = await getService(service).managedGitAction(request);
       return {
-        snapshot: applyRuntimeMessagingSnapshot(await activeService.refreshGitDiscovery()),
+        snapshot: applyRuntimeMessagingSnapshot(snapshot),
         ...(error ? { error } : {}),
       };
     },

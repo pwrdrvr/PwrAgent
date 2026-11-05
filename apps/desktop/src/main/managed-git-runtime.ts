@@ -27,6 +27,7 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import {
@@ -65,6 +66,7 @@ import {
   managedGitGenerationId,
   managedGitPlatformKey,
   parseCustomGitCatalog,
+  parseManagedGitVersion,
   runCommand,
   selectManagedGitReleases,
   sha256Bytes,
@@ -206,11 +208,15 @@ export async function readManagedGitCheck(
   }
 }
 
-async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+async function writeBytesAtomic(file: string, bytes: Buffer | string): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(temporary, bytes, { mode: 0o600 });
   await rename(temporary, file);
+}
+
+async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+  await writeBytesAtomic(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function downloadBytes(
@@ -224,6 +230,11 @@ async function downloadBytes(
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
   });
   if (!response.ok) throw new Error(`Download failed with HTTP ${response.status}: ${url}`);
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > MAX_METADATA_BYTES) {
+    await response.body?.cancel();
+    throw new ManagedGitTrustError(`Release file is too large: ${url}`);
+  }
   const bytes = Buffer.from(await response.arrayBuffer());
   if (bytes.length > MAX_METADATA_BYTES) throw new ManagedGitTrustError(`Release file is too large: ${url}`);
   return bytes;
@@ -393,8 +404,8 @@ function describeCheckError(error: unknown): string {
 async function saveReleaseFiles(rootDir: string, verified: VerifiedRelease): Promise<void> {
   const directory = path.join(rootDir, "releases", verified.release.tag);
   await mkdir(directory, { recursive: true });
-  await writeFile(path.join(directory, "runtime-manifest.json"), verified.catalogBytes);
-  await writeFile(path.join(directory, "SHA256SUMS"), verified.sums);
+  await writeBytesAtomic(path.join(directory, "runtime-manifest.json"), verified.catalogBytes);
+  await writeBytesAtomic(path.join(directory, "SHA256SUMS"), verified.sums);
   await writeJsonAtomic(path.join(directory, "release.json"), {
     tag: verified.release.tag,
     version: verified.release.version,
@@ -430,6 +441,23 @@ async function readSavedRelease(
 // ---------------------------------------------------------------------------
 // Install
 
+/**
+ * One writer at a time across windows: installs, removals and prunes all
+ * rename into or out of versions/.
+ */
+async function lockManagedGitRoot(rootDir: string): Promise<() => Promise<void>> {
+  await mkdir(rootDir, { recursive: true });
+  try {
+    return await lock(path.join(rootDir, "install"), {
+      realpath: false, retries: 0, stale: 60_000, update: 10_000,
+      onCompromised: (error) => log.warn("managed_git_install_lock_compromised", { error: String(error) }),
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOCKED") throw new ManagedGitBusyError();
+    throw error;
+  }
+}
+
 const activeInstalls = new Map<string, {
   tag: string;
   controller: AbortController;
@@ -456,6 +484,10 @@ export async function installManagedGit(
   options: ManagedGitOptions & { tag: string; signal?: AbortSignal },
 ): Promise<ManagedGitGenerationInfo> {
   const s = settings(options);
+  // The tag comes from the renderer and names a directory under releases/.
+  if (!options.tag.startsWith("v") || !parseManagedGitVersion(options.tag)) {
+    throw new Error(`Not a PwrDrvr Git release: ${options.tag}`);
+  }
   const running = activeInstalls.get(s.rootDir);
   if (running) {
     if (running.tag === options.tag) return await running.promise;
@@ -486,17 +518,7 @@ async function installInner(
   progress.checking();
   let release: ManagedGitRelease | undefined;
   try {
-    await mkdir(s.rootDir, { recursive: true });
-    let unlock: () => Promise<void>;
-    try {
-      unlock = await lock(path.join(s.rootDir, "install"), {
-        realpath: false, retries: 0, stale: 60_000, update: 10_000,
-        onCompromised: (error) => log.warn("managed_git_install_lock_compromised", { error: String(error) }),
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ELOCKED") throw new ManagedGitBusyError();
-      throw error;
-    }
+    const unlock = await lockManagedGitRoot(s.rootDir);
     try {
       // Re-read the release so nothing older than this moment is trusted.
       // Offline, the files a check already verified are enough to reuse a
@@ -895,16 +917,37 @@ function scheduleBackgroundVerify(generation: string, options: ManagedGitOptions
 }
 
 const markedRoots = new Set<string>();
+let markerCleanupInstalled = false;
+
+function markerPath(directory: string, pid: number = process.pid): string {
+  return path.join(directory, `.pwragent-use-${pid}`);
+}
+
+/** Exit removes this process's markers, so a reused PID cannot pin a release. */
+export function removeManagedGitInUseMarkers(): void {
+  for (const directory of markedRoots) {
+    try {
+      unlinkSync(markerPath(directory));
+    } catch {
+      // Already gone with its release.
+    }
+  }
+  markedRoots.clear();
+}
 
 /** A live process's marker keeps its release on disk until it exits. */
 function markInUse(root: string): void {
   const directory = path.dirname(root);
   if (markedRoots.has(directory)) return;
   try {
-    writeFileSync(path.join(directory, `.pwragent-use-${process.pid}`), `${Date.now()}\n`);
+    writeFileSync(markerPath(directory), `${Date.now()}\n`);
     markedRoots.add(directory);
   } catch (error) {
     log.warn("managed_git_in_use_marker_failed", { directory, error: String(error) });
+  }
+  if (!markerCleanupInstalled) {
+    markerCleanupInstalled = true;
+    process.once("exit", removeManagedGitInUseMarkers);
   }
 }
 
@@ -941,6 +984,19 @@ export async function removeManagedGitGeneration(
   protectedGenerations: ReadonlySet<string>,
   options: ManagedGitOptions = {},
 ): Promise<void> {
+  const unlock = await lockManagedGitRoot(settings(options).rootDir);
+  try {
+    await removeGenerationLocked(generation, protectedGenerations, options);
+  } finally {
+    await unlock().catch(() => undefined);
+  }
+}
+
+async function removeGenerationLocked(
+  generation: string,
+  protectedGenerations: ReadonlySet<string>,
+  options: ManagedGitOptions,
+): Promise<void> {
   const s = settings(options);
   if (!MANAGED_GIT_GENERATION_PATTERN.test(generation)) throw new Error("Not a PwrDrvr Git release.");
   if (protectedGenerations.has(generation)) {
@@ -968,6 +1024,25 @@ export async function pruneManagedGitGenerations(
   protectedGenerations: ReadonlySet<string>,
   options: ManagedGitOptions = {},
 ): Promise<string[]> {
+  let unlock: () => Promise<void>;
+  try {
+    unlock = await lockManagedGitRoot(settings(options).rootDir);
+  } catch (error) {
+    // Another window is installing or pruning; its own prune covers this.
+    if (error instanceof ManagedGitBusyError) return [];
+    throw error;
+  }
+  try {
+    return await pruneLocked(protectedGenerations, options);
+  } finally {
+    await unlock().catch(() => undefined);
+  }
+}
+
+async function pruneLocked(
+  protectedGenerations: ReadonlySet<string>,
+  options: ManagedGitOptions,
+): Promise<string[]> {
   const s = settings(options);
   const alive = options.isProcessAlive ?? defaultProcessAlive;
   const generations = await listManagedGitGenerations(options);
@@ -982,7 +1057,7 @@ export async function pruneManagedGitGenerations(
       continue;
     }
     try {
-      await removeManagedGitGeneration(info.generation, protectedGenerations, options);
+      await removeGenerationLocked(info.generation, protectedGenerations, options);
       removed.push(info.generation);
     } catch (error) {
       keep.add(info.generation);

@@ -29,11 +29,16 @@ export function ManagedGitUpdates(props: {
   /** A manual or installed Git path is selected, which wins over a download. */
   manualPathSelected: boolean;
   disabled: boolean;
-  onRefresh: () => Promise<void>;
+  /**
+   * Re-read settings. `rescan` probes every Git again; an action's own reply
+   * has already done that when the action changed the list.
+   */
+  onRefresh: (rescan: boolean) => Promise<void>;
 }) {
   const { desktopApi, managed } = props;
   const progress = useManagedRuntimeProgress(desktopApi, "git");
   const [pending, setPending] = useState<ManagedGitActionRequest["action"]>();
+  const installingHereRef = useRef(false);
   const [error, setError] = useState<string>();
   const onRefreshRef = useRef(props.onRefresh);
   onRefreshRef.current = props.onRefresh;
@@ -44,13 +49,15 @@ export function ManagedGitUpdates(props: {
       setPending(request.action);
       setError(undefined);
     }
+    if (request.action === "install") installingHereRef.current = true;
     try {
       const response = await desktopApi.managedGitAction(request);
       if (response.error && !quiet) setError(response.error);
-      await onRefreshRef.current();
+      await onRefreshRef.current(false);
     } catch (caught) {
       if (!quiet) setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
+      if (request.action === "install") installingHereRef.current = false;
       if (!quiet) setPending(undefined);
     }
   };
@@ -65,7 +72,8 @@ export function ManagedGitUpdates(props: {
   // Another window finished an install; the rows behind this one are stale.
   const readyAt = progress?.phase === "ready" ? progress.updatedAt : undefined;
   useEffect(() => {
-    if (readyAt !== undefined) void onRefreshRef.current();
+    // This window's own install re-probes in its reply.
+    if (readyAt !== undefined && !installingHereRef.current) void onRefreshRef.current(true);
   }, [readyAt]);
 
   if (!managed.supported) return null;

@@ -22,8 +22,10 @@ import {
 import { resolveDesktopConfigPath } from "./desktop-config";
 import { readEvalManagedRuntime } from "../eval-managed-runtime";
 import { closeSharedCommandDiscovery } from "./command-discovery";
+import { onManagedGitVerificationFailed } from "../managed-git-runtime";
 
 let unsubscribeAuth: (() => void) | undefined;
+let unsubscribeManagedGitFailure: (() => void) | undefined;
 let desktopSettingsService: DesktopSettingsService | undefined;
 let commandDiscoveryClosed = false;
 
@@ -109,10 +111,16 @@ export function getDesktopSettingsService(): DesktopSettingsService {
     const service = desktopSettingsService;
     setGitCommandResolver(() => service.resolveGitCommandPreference());
     setManagedGitSelectionResolver(() => service.resolveManagedGitSelection());
-    unsubscribeAuth = codexAuthState.subscribe(() => {
+    const announceRuntimeChange = (): void => {
       for (const webContents of subscribersForChannel(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL)) {
         webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL);
       }
+    };
+    unsubscribeAuth = codexAuthState.subscribe(announceRuntimeChange);
+    // The full check of the selected release runs after startup; when it
+    // rejects the release, Settings must stop showing it as healthy.
+    unsubscribeManagedGitFailure = onManagedGitVerificationFailed(() => {
+      void service.refreshGitDiscovery().catch(() => undefined).finally(announceRuntimeChange);
     });
     configStore.subscribe(["general"], ({ values }) => {
       broadcastAppearanceChange(values.general.appearance);
@@ -140,6 +148,8 @@ export function getDesktopSettingsService(): DesktopSettingsService {
 export function resetDesktopSettingsServiceForTests(): void {
   unsubscribeAuth?.();
   unsubscribeAuth = undefined;
+  unsubscribeManagedGitFailure?.();
+  unsubscribeManagedGitFailure = undefined;
   desktopSettingsService = undefined;
   commandDiscoveryClosed = false;
   setGitCommandResolver(undefined);
