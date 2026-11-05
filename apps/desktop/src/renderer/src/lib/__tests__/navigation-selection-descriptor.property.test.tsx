@@ -11,6 +11,7 @@ it("keeps selected-project counts equal to the owner when a sibling turn changes
   await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { maxLength: 6 }), async (changes) => {
     let active = false;
     let revision = 0;
+    let gated = false;
     let holdSelection = false;
     const replies: Array<() => void> = [];
     const selected: NavigationRow = { id: "selected", source: "codex", ref: { backend: "codex", threadId: "selected" },
@@ -28,7 +29,7 @@ it("keeps selected-project counts equal to the owner when a sibling turn changes
         entries: exact ? [{ row: selected, placement: { kind: "root" }, orderKey: "0" }] : [],
         ...(exact ? { selectionDirectory: descriptor } : { directories: [descriptor] }),
       };
-      if (exact && holdSelection) await new Promise<void>((resolve) => replies.push(resolve));
+      if (gated && exact === holdSelection) await new Promise<void>((resolve) => replies.push(resolve));
       return response;
     } };
     const hook = renderHook(() => useBoundedNavigationWindow({ desktopApi: api, enabled: true, visible: true,
@@ -38,6 +39,7 @@ it("keeps selected-project counts equal to the owner when a sibling turn changes
     try {
       await act(async () => {});
       expect(hook.result.current.presentationReady).toBe(true);
+      gated = true;
       for (const [index, next] of [true, ...changes, false].entries()) {
         active = next;
         revision += 1;
@@ -51,7 +53,8 @@ it("keeps selected-project counts equal to the owner when a sibling turn changes
           hook.result.current.invalidate([{ scope: "local" }], event);
           refreshing = hook.result.current.refresh([{ scope: "local" }], true);
         });
-        expect(hook.result.current.resources.get("directory-index")?.state.page?.countsRevision).toBe(String(revision));
+        const first = holdSelection ? "directory-index" : "selected-context";
+        expect(hook.result.current.resources.get(first)?.state.page?.countsRevision).toBe(String(revision));
         expect(hook.result.current.directories.find((directory) => directory.key === key)?.counts.active).toBe(Number(active));
         await act(async () => { replies.splice(0).forEach((reply) => reply()); await refreshing; });
         expect(hook.result.current.directories.find((directory) => directory.key === key)?.counts.active).toBe(Number(active));
