@@ -90,7 +90,7 @@ async function buildGitCandidate(
   if (!candidate || options.signal?.aborted) {
     return undefined;
   }
-  if (input.managed) candidate.generation = input.managed.generation;
+  const generation = input.managed ? { generation: input.managed.generation } : {};
 
   if (candidate.version) {
     try {
@@ -102,9 +102,9 @@ async function buildGitCandidate(
       });
       const lfsVersion = stdout.match(/git-lfs\/([^\s]+)/)?.[1];
       if (!lfsVersion) throw new Error("Git LFS did not report a version.");
-      return { ...candidate, lfsVersion };
+      return { ...candidate, ...generation, lfsVersion };
     } catch {
-      return { ...candidate, executable: false, failureReason: GIT_LFS_UNAVAILABLE_REASON };
+      return { ...candidate, ...generation, executable: false, failureReason: GIT_LFS_UNAVAILABLE_REASON };
     }
   }
 
@@ -114,6 +114,7 @@ async function buildGitCandidate(
     ?? "version_not_reported";
   return {
     ...candidate,
+    ...generation,
     executable: false,
     failureReason,
     versionFailureReason: undefined,
