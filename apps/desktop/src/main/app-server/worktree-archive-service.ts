@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdtemp, mkdir, readdir, realpath, rm, stat, unlink } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -166,6 +166,46 @@ function findWorktree(
   return worktrees.find((worktree) => path.resolve(worktree.path) === resolvedPath);
 }
 
+async function checkArchiveRegistration(params: {
+  worktreePath: string;
+  gitDirectory: string;
+  commonDirectory: string;
+  removing?: boolean;
+}): Promise<void> {
+  const { worktreePath, gitDirectory, commonDirectory } = params;
+  const unregistered = () => new Error(`Worktree is ${params.removing ? "no longer" : "not"} registered with Git: ${worktreePath}`);
+  try {
+    // A linked checkout and its one admin entry must point at each other in
+    // the expected repository. Never enumerate sibling admin entries here.
+    const gitFile = path.join(worktreePath, ".git");
+    const contents = await readFile(gitFile, "utf8");
+    const target = /^gitdir: (.+?)[\r\n]*$/.exec(contents)?.[1];
+    if (!target || path.dirname(gitDirectory) !== await realpath(path.join(commonDirectory, "worktrees"))) throw unregistered();
+    const registeredFile = (await readFile(path.join(gitDirectory, "gitdir"), "utf8")).trim();
+    const registeredCommon = (await readFile(path.join(gitDirectory, "commondir"), "utf8")).trim();
+    const backlink = path.resolve(gitDirectory, registeredFile);
+    if (await realpath(path.resolve(worktreePath, target)) !== gitDirectory
+      // Resolve the owning checkout, preserving a valid final .git symlink.
+      // Resolving that symlink would also hide a backlink to another checkout.
+      || path.basename(backlink) !== ".git"
+      || await realpath(path.dirname(backlink)) !== worktreePath
+      || await realpath(path.resolve(gitDirectory, registeredCommon)) !== commonDirectory) {
+      throw unregistered();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT"
+      || (error as NodeJS.ErrnoException).code === "ENOTDIR") throw unregistered();
+    throw error;
+  }
+  try {
+    await lstat(path.join(gitDirectory, "locked"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
+}
+
 async function unlinkWindowsWorktreeLinks(worktreePath: string, assertRemoval?: () => void): Promise<void> {
   const directories = [worktreePath];
   for (let index = 0; index < directories.length; index++) {
@@ -207,25 +247,32 @@ export class WorktreeArchiveService {
       }
       throw error;
     }
-    const worktreeListPath = params.repositoryPath
+    const repositoryAnchor = params.repositoryPath
       ? await realpath(path.resolve(params.repositoryPath))
       : worktreePath;
-    const worktrees = await this.listWorktrees(worktreeListPath);
-    const repositoryPath = await this.resolvePrimaryRepositoryPath({
-      worktreeListPath,
-      worktrees,
-    });
-    const worktree = findWorktree(worktrees, worktreePath);
-
-    if (!worktree) {
-      throw new Error(`Worktree is not registered with Git: ${worktreePath}`);
-    }
-    if (worktree.locked) {
-      throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
-    }
-    if (path.resolve(repositoryPath) === worktreePath) {
+    const commonDirectory = await realpath(trimGitOutput((await this.runGit(repositoryAnchor, [
+      "rev-parse", "--path-format=absolute", "--git-common-dir",
+    ])).stdout));
+    const gitDirectory = await realpath(trimGitOutput((await this.runGit(worktreePath, [
+      "rev-parse", "--absolute-git-dir",
+    ])).stdout));
+    if (gitDirectory === commonDirectory) {
       throw new Error("Refusing to archive the primary checkout as a worktree.");
     }
+    await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory });
+    // Git's primary worktree is the common directory with a trailing /.git
+    // removed, or the common directory itself for a bare/separate Git dir.
+    const repositoryPath = path.basename(commonDirectory) === ".git" ? path.dirname(commonDirectory) : commonDirectory;
+    const head = trimGitOutput((await this.runGit(worktreePath, ["rev-parse", "--verify", "HEAD"])).stdout);
+    let branch: string | undefined;
+    try {
+      branch = trimGitOutput((await this.runGit(worktreePath, ["symbolic-ref", "--quiet", "HEAD"])).stdout).replace(/^refs\/heads\//, "");
+    } catch (error) {
+      // symbolic-ref exits 1 for a detached HEAD. Other Git failures must keep
+      // the checkout rather than silently changing its saved source identity.
+      if ((error as { code?: number }).code !== 1) throw error;
+    }
+    const worktree: WorktreeInfo = { path: worktreePath, head, branch, detached: !branch };
 
     const snapshotCommit = await this.createSnapshotCommit({
       backend: params.backend,
@@ -240,13 +287,7 @@ export class WorktreeArchiveService {
     await withWorktreeTerminalsClosed(worktreePath, async () => {
       // Removal admission and terminal teardown can await other work. Recheck
       // Git's lock protection before modifying even ignored link entries.
-      const currentWorktree = findWorktree(await this.listWorktrees(repositoryPath), worktreePath);
-      if (!currentWorktree) {
-        throw new Error(`Worktree is no longer registered with Git: ${worktreePath}`);
-      }
-      if (currentWorktree.locked) {
-        throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
-      }
+      await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory, removing: true });
       assertRemoval?.();
       if (process.platform === "win32") {
         await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);
@@ -557,18 +598,6 @@ export class WorktreeArchiveService {
     } finally {
       await rm(tempDir, { force: true, recursive: true });
     }
-  }
-
-  private async resolvePrimaryRepositoryPath(params: {
-    worktreeListPath: string;
-    worktrees: WorktreeInfo[];
-  }): Promise<string> {
-    const primary = params.worktrees[0]?.path;
-    if (!primary) {
-      throw new Error(`Unable to resolve repository root for ${params.worktreeListPath}.`);
-    }
-
-    return await realpath(path.resolve(primary));
   }
 
   private async listWorktrees(repositoryPath: string): Promise<WorktreeInfo[]> {
