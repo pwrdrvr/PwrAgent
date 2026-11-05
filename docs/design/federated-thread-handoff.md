@@ -44,7 +44,8 @@ Codex's `thread/fork.path` does not make paginated history portable. In Codex
 0.163.0, an exported paginated file is accepted by path, then Codex resolves its
 source ID through receiver-local history. An empty receiver answers
 `no rollout found for thread id`, even when every PwrAgent layer forwarded the
-path. The upstream implementations in 0.100.0, 0.135.0, 0.153.0, and 0.164.0
+path. `thread/fork` first appears in stable Codex 0.80.0 and honors `path` there;
+0.79.0 has no fork handler. The implementations in 0.100.0, 0.135.0, 0.153.0, and 0.164.0
 all honor a nonempty path; 0.153.0 and 0.164.0 additionally resolve paginated
 history through the local thread store. Upgrading Codex alone is not a remedy.
 
