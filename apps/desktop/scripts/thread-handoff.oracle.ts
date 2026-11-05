@@ -4,6 +4,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { createServer } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import { createGitHandoffService, type HandoffGitRunner } from "@pwragent/federation/git-instance-handoff";
 import { ThreadInstanceHandoffService } from "@pwragent/federation/thread-instance-handoff-service";
@@ -28,22 +29,22 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture() {
+async function fixture(config?: Record<string, unknown>) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-oracle-"));
   roots.push(root);
   const sourceCwd = path.join(root, "source-workspace");
   await mkdir(sourceCwd);
-  const createClient = async (name: string) => {
+  const createClient = async (name: string, executable = command) => {
     const codexHome = path.join(root, name);
     await mkdir(codexHome);
     const client = new CodexAppServerClient({
-      command, authenticationRecovery: false,
+      command: executable, authenticationRecovery: false,
       env: { ...process.env, CODEX_HOME: codexHome }, directoryResolver: async () => [],
     });
     clients.push(client);
     return client;
   };
-  const sourceClient = await createClient("sender-codex");
+  const sourceClient = await createClient("sender-codex", process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND || command);
   const targetClient = await createClient("receiver-codex");
   const target = createProviderRuntimeClient(targetClient, {
     resolveProviders: () => [], create: () => { throw new Error("Unexpected provider runtime"); },
@@ -53,7 +54,7 @@ async function fixture() {
     withThreadHandoff: async <T>(_id: string, work: () => Promise<T>) => await work(),
     exportThreadForHandoff: (id: string) => client.exportThreadForHandoff(id),
     forkThread: async (request: { sourceThreadId: string; sourceThreadPath: string; directoryPath: string }) =>
-      await client.forkThread({ threadId: request.sourceThreadId, path: request.sourceThreadPath, cwd: request.directoryPath }),
+      await client.forkThread({ threadId: request.sourceThreadId, path: request.sourceThreadPath, cwd: request.directoryPath, config }),
     readThread: async ({ threadId }: { threadId: string }) => ({ replay: await client.readThread({ threadId }) }),
     archiveThread: async ({ threadId }: { threadId: string }) => await client.archiveThread({ threadId }),
     renameThread: async ({ threadId, name }: { threadId: string; name: string }) => await client.renameThread({ threadId, name }),
@@ -137,6 +138,7 @@ it("copies a published Git workspace and its thread through real Codex path fork
 });
 
 it("refuses a real paginated source during prepare before pushing bytes", async () => {
+  if (process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND) return;
   const f = await fixture();
   const { threadId } = await f.sourceClient.startThread({ cwd: f.sourceCwd });
   await f.sourceClient.injectThreadItems({ threadId, items: [
@@ -155,3 +157,77 @@ it("refuses a real paginated source during prepare before pushing bytes", async 
   expect(f.push).not.toHaveBeenCalled();
   expect(f.sourceLookup).not.toHaveBeenCalled();
 });
+
+async function completeTurn(client: CodexAppServerClient, threadId: string, text: string) {
+  let stop = () => {};
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const completed = new Promise<void>((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("Oracle turn did not complete")), 20_000);
+    stop = client.onNotification((notification) => {
+      const params = notification.params as { threadId?: string; turn?: { status?: string; error?: unknown } };
+      if (notification.method === "turn/completed" && params.threadId === threadId) {
+        if (params.turn?.status === "failed") reject(new Error(JSON.stringify(params.turn.error)));
+        else resolve();
+      }
+    });
+  });
+  try {
+    await client.startTurn({ threadId, input: [{ type: "text", text }] });
+    await completed;
+  } finally {
+    stop();
+    clearTimeout(timer);
+  }
+}
+
+it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND))(
+  "copies paginated fork ancestry into stock Codex and preserves context for the next turn",
+  async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const server = createServer(async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += chunk.toString();
+      requests.push(JSON.parse(body));
+      const index = requests.length;
+      const item = { type: "message", id: `oracle-message-${index}`, role: "assistant", status: "completed",
+        content: [{ type: "output_text", text: `Contrived answer ${index}` }] };
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      for (const event of [
+        { type: "response.created", response: { id: `oracle-response-${index}` } },
+        { type: "response.output_item.done", output_index: 0, item },
+        { type: "response.completed", response: { id: `oracle-response-${index}`, status: "completed", output: [item],
+          usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 } } },
+      ]) response.write(`data: ${JSON.stringify(event)}\n\n`);
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("No model fixture port");
+      const config = { model_provider: "handoff-fixture", model: "gpt-5.5",
+        "model_providers.handoff-fixture": { name: "Handoff oracle", base_url: `http://127.0.0.1:${address.port}`,
+          wire_api: "responses", requires_openai_auth: false } };
+      const f = await fixture(config);
+      const { threadId } = await f.sourceClient.startThread({ cwd: f.sourceCwd, config });
+      await completeTurn(f.sourceClient, threadId, "Keep the contrived first fact: amber.");
+      const child = await f.sourceClient.forkThread({ threadId, cwd: f.sourceCwd, config });
+      await completeTurn(f.sourceClient, child.threadId, "Keep the contrived second fact: cedar.");
+      const before = await f.sourceClient.readThread({ threadId: child.threadId });
+      expect(before.messages).toHaveLength(4);
+      const result = await f.sender.send({ sourceThreadId: child.threadId, operation: "copy", targetInstanceId: "receiver" });
+      const after = await f.targetClient.readThread({ threadId: result.threadId });
+      expect(after.messages.map(({ role, text }) => ({ role, text })))
+        .toEqual(before.messages.map(({ role, text }) => ({ role, text })));
+      await completeTurn(f.targetClient, result.threadId, "Continue using both contrived facts.");
+      const nextInput = JSON.stringify(requests.at(-1)?.input);
+      expect(nextInput).toContain("amber");
+      expect(nextInput).toContain("cedar");
+      expect(nextInput).toContain("Contrived answer 1");
+      expect(nextInput).toContain("Contrived answer 2");
+      expect(f.sourceLookup).not.toHaveBeenCalled();
+      expect(f.push).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  },
+);
