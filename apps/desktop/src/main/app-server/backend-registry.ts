@@ -2480,7 +2480,6 @@ type ArchiveCleanupDiscoveryRequest = {
   context?: ArchiveCleanupContext;
   targetThread?: AppServerThreadSummary;
   codexRolloutMissing?: boolean;
-  reuseInventory?: boolean;
   /** Complete membership/overlays before candidate discovery; no Git probes. */
   identityOnly?: boolean;
   /** Fresh global membership/overlays, with Git probes limited to this scope. */
@@ -2497,10 +2496,6 @@ type ArchiveWorktreeRemovalAdmission = {
   containerPath?: string;
   scope: ArchiveWorkspaceAdmission;
 };
-
-type ArchiveCleanupInventory = Pick<ArchiveCleanupMetadata,
-  "activeThreads" | "archivedThreads" | "overlaysByThreadKey" | "worktreeEvidence" | "workspaceRevision"
->;
 
 function archiveWorkspacePaths(thread: Pick<AppServerThreadSummary, "projectKey" | "linkedDirectories">): string[] {
   return [thread.projectKey, ...thread.linkedDirectories.flatMap((directory) => [linkedDirectoryWorktreePath(directory), directory.path])]
@@ -9670,12 +9665,7 @@ export class DesktopBackendRegistry {
   private readonly pendingArchiveCleanupIntents = new Map<string, ArchiveCleanupIntent>();
   private archiveCleanupResumeStarted = false;
   private archivedWorktreeRepair?: Promise<ArchivedWorktreeRepairReport>;
-  private archiveCleanupInventories = new WeakMap<object, {
-    revision: number;
-    includesArchived: boolean;
-    identityOnly?: boolean;
-    inventory: ArchiveCleanupInventory;
-  }>();
+  /** Orders deferred ownership observations against reference releases. */
   private archiveWorkspaceRevision = 0;
   /** Additions (reference rows plus queued intents) at the last checkpoint. */
   private archiveCheckpointedAdditions = -1;
@@ -17439,14 +17429,9 @@ export class DesktopBackendRegistry {
     try {
       cleanupMetadata = await this.traceArchiveCleanupStage(params, "metadata", async () => {
         let targetThread: AppServerThreadSummary | undefined;
-        const cached = context.batch ? this.archiveCleanupInventories.get(context.batch) : undefined;
-        // A full, current batch inventory already contains each archived target.
-        // Do not deserialize every target again through thread/read. The lookup
-        // below rechecks the revision after its checkpoint and removal still
-        // obtains its own fresh ownership admission.
-        // The batch's fleet index already holds the target once it is built.
-        const canReuseTarget = (cached?.includesArchived && cached.revision === this.archiveWorkspaceRevision)
-          || (context.batch !== undefined && this.archiveFleet?.batch === context.batch && !this.archiveFleet.index.needsRebuild);
+        // A built fleet index holds the target. Discovery refreshes its dirty
+        // identities, and removal obtains its own fresh ownership admission.
+        const canReuseTarget = context.batch !== undefined && this.archiveFleet?.batch === context.batch && !this.archiveFleet.index.needsRebuild;
         if (!this.codexClient.enrichArchiveCleanupThreads && !canReuseTarget && !params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
           targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
         } else if (isAcpBackendId(backend)) {
@@ -17469,7 +17454,6 @@ export class DesktopBackendRegistry {
         return await this.findThreadForArchiveCleanup({
           backend, threadId: result.threadId, context, codexRolloutMissing,
           targetThread: needsWorktreeOwnership ? undefined : targetThread,
-          reuseInventory: true,
         });
       });
     } catch (error) {
@@ -17539,7 +17523,6 @@ export class DesktopBackendRegistry {
       });
       // A missing rollout can leave this owner in the provider's active list.
       // Subsequent jobs must apply the new tombstone before checking sharing.
-      this.invalidateArchiveCleanupInventory();
       this.noteArchiveFleetChange({ backend, threadId: result.threadId }, "overlay", "tombstone");
       this.pendingStartedThreads.delete(key);
       this.invalidateThreadListCache(backend);
@@ -39656,35 +39639,16 @@ export class DesktopBackendRegistry {
     return { ...inventory, thread: archivedTarget };
   }
 
+  /** Queue jobs use the fleet index. Broad repair and the identity-only read
+   * that builds the index each perform one complete, uncached read. */
   private async readPacedArchiveCleanupInventory(params: ArchiveCleanupDiscoveryRequest): Promise<
     Omit<ArchiveCleanupMetadata, "thread"> & { thread?: AppServerThreadSummary; activeTarget?: AppServerThreadSummary; targetIsActive: boolean; codexWatermark?: number }
   > {
     if (this.isBootstrapModeFn()) throw new Error("Archive discovery is unavailable in bootstrap mode.");
     const fleet = this.archiveFleetIndexFor(params);
     if (fleet) return await this.readFleetArchiveCleanupInventory(fleet, params);
-    if (params.reuseInventory && !params.identityOnly && this.codexClient.enrichArchiveCleanupThreads) {
-      return await this.readCandidateScopedArchiveCleanupInventory(params);
-    }
     const context = params.context;
     const revision = this.archiveWorkspaceRevision;
-    const inventories = this.archiveCleanupInventories;
-    const batch = params.reuseInventory ? context?.batch : undefined;
-    const cached = batch ? inventories.get(batch) : undefined;
-    // Reuse only preliminary discovery within one uninterrupted queue batch.
-    // Removal admission and repair always request a new authoritative scan.
-    // Workspace or membership changes fence reuse even while a scan awaits I/O.
-    if (batch && cached && cached.revision === revision
-      && Boolean(cached.identityOnly) === Boolean(params.identityOnly)
-      && (params.targetThread || cached.includesArchived)) {
-      await context?.checkpoint();
-      if (this.archiveWorkspaceRevision === revision && this.archiveCleanupInventories.get(batch) === cached) {
-        backendRegistryLog.info("archive cleanup inventory reused", {
-          backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId,
-          activeThreads: cached.inventory.activeThreads.length, archivedThreads: cached.inventory.archivedThreads.length,
-        });
-        return this.selectArchiveCleanupInventory(cached.inventory, params);
-      }
-    }
     const activeThreads: AppServerThreadSummary[] = [];
     const archivedThreads: AppServerThreadSummary[] = [];
     const activeChildren: AppServerThreadSummary[] = [];
@@ -39836,10 +39800,6 @@ export class DesktopBackendRegistry {
       directoryObservations: directoryObservations.size, workspaceObservations: workspaceObservations.size,
       ownershipScope: params.ownershipScope, providerPageSize,
     });
-    if (batch && revision === this.archiveWorkspaceRevision && inventories === this.archiveCleanupInventories) {
-      inventories.set(batch, { revision, includesArchived: !params.targetThread, identityOnly: params.identityOnly,
-        inventory: { activeThreads, archivedThreads, overlaysByThreadKey, worktreeEvidence, workspaceRevision: revision } });
-    }
     // A confirmed missing rollout can leave retained metadata in the active
     // provider listing. Use that exact identity for recovery while still
     // scanning every checkout user. Actual restore intent cancels this job.
@@ -39848,112 +39808,8 @@ export class DesktopBackendRegistry {
       codexWatermark: this.isCodexBootstrapDeferredFn() ? undefined : codexWatermark };
   }
 
-  /** Share only complete identity/overlay evidence across a preliminary batch.
-   * Candidate discovery and scoped Git observations belong to this job. A later
-   * job with different roots must enrich those roots, even at the same revision.
-   * Admission deliberately bypasses this cache and reads providers afresh. */
-  private async readCandidateScopedArchiveCleanupInventory(params: ArchiveCleanupDiscoveryRequest) {
-    const raw = await this.readPacedArchiveCleanupInventory({ ...params, identityOnly: true, targetThread: undefined });
-    const target = raw.thread ?? (params.codexRolloutMissing ? raw.activeTarget : undefined);
-    if (!target) return raw;
-    const startedAt = Date.now();
-    const directoryObservations = new Map<string, Promise<ThreadDirectoryEnrichment>>();
-    const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
-    const checkpoint = async () => { await params.context?.checkpoint(); };
-    const enrich = async (rows: AppServerThreadSummary[], directoryFilter?: (cwd: string | undefined) => Promise<boolean>) => {
-      const result: AppServerThreadSummary[] = [];
-      for (let offset = 0; offset < rows.length; offset += ARCHIVE_CLEANUP_SLICE_SIZE) {
-        await checkpoint();
-        const slice = rows.slice(offset, offset + ARCHIVE_CLEANUP_SLICE_SIZE);
-        const codex = slice.filter((row) => row.source === "codex");
-        const enrichedCodex = codex.length ? await this.codexClient.enrichArchiveCleanupThreads!(codex, {
-          checkpoint, directoryObservations, directoryFilter,
-        }) : [];
-        let codexIndex = 0;
-        for (const row of slice) {
-          params.context?.assertCurrent();
-          const overlay = raw.overlaysByThreadKey?.get(buildThreadIdentityKey(row.source, row.id));
-          const enrichedRow = row.source === "codex" ? enrichedCodex[codexIndex++]! : row;
-          let directories = enrichedRow.linkedDirectories;
-          if (row.source !== "codex") {
-            const cwd = resolveThreadWorkspaceCwd(row, overlay?.extraLinkedDirectories ?? []);
-            if (cwd && (!directoryFilter || await directoryFilter(cwd))) {
-              let observation = workspaceObservations.get(cwd);
-              if (!observation) {
-                await checkpoint();
-                observation = this.acpWorktreeRepositoryResolver(cwd);
-                workspaceObservations.set(cwd, observation);
-              }
-              const directory = await observation;
-              if (directory) directories = [directory];
-            }
-          }
-          result.push({ ...enrichedRow, linkedDirectories: withRetainedWorktrees(
-            mergeThreadLinkedDirectories([...directories, ...(overlay?.extraLinkedDirectories ?? [])]), overlay,
-          ) });
-        }
-      }
-      return result;
-    };
-    // Only the authoritative target's cwd and overlay can introduce candidates.
-    // Do not use the primary repository path of a linked worktree as a scope:
-    // that would unnecessarily include every other checkout of the repository.
-    const [candidate] = await enrich([target]);
-    const roots = [...new Set(candidate!.linkedDirectories.map(linkedDirectoryWorktreePath)
-      .filter((value): value is string => Boolean(value)))];
-    const filters = roots.map(archiveCleanupWorkspaceFilter);
-    const directoryFilter = async (cwd: string | undefined) => {
-      for (const filter of filters) if (await filter(cwd)) return true;
-      return false;
-    };
-    const activeThreads = await enrich(raw.activeThreads, directoryFilter);
-    const archivedThreads = await enrich(raw.archivedThreads, directoryFilter);
-    const worktreeEvidence: NonNullable<ArchiveCleanupMetadata["worktreeEvidence"]> = {
-      externalPaths: new Set(), activeByPath: new Map(), archivedByPath: new Map(),
-    };
-    for (const [threads, index] of [[activeThreads, worktreeEvidence.activeByPath], [archivedThreads, worktreeEvidence.archivedByPath]] as const) {
-      for (const thread of threads) {
-        const paths = new Set(thread.projectKey ? [normalizeWorktreePathForComparison(thread.projectKey)] : []);
-        for (const directory of thread.linkedDirectories) {
-          const worktreePath = linkedDirectoryWorktreePath(directory);
-          if (!worktreePath) continue;
-          const key = normalizeWorktreePathForComparison(worktreePath);
-          paths.add(key);
-          if (directory.worktreeOwnership === "external") worktreeEvidence.externalPaths.add(key);
-        }
-        for (const key of paths) {
-          const users = index.get(key) ?? [];
-          users.push(thread);
-          index.set(key, users);
-        }
-      }
-    }
-    params.context?.assertCurrent();
-    backendRegistryLog.info("archive cleanup candidates enriched", {
-      backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId,
-      durationMs: Date.now() - startedAt, candidateRoots: roots.length,
-      directoryObservations: directoryObservations.size, workspaceObservations: workspaceObservations.size,
-    });
-    return this.selectArchiveCleanupInventory({ ...raw, activeThreads, archivedThreads, worktreeEvidence }, { ...params, targetThread: undefined });
-  }
-
-  private selectArchiveCleanupInventory(inventory: ArchiveCleanupInventory, params: ArchiveCleanupDiscoveryRequest) {
-    const { activeThreads, overlaysByThreadKey } = inventory;
-    const matchesTarget = (thread: AppServerThreadSummary) => thread.source === params.backend && thread.id === params.threadId;
-    const activeTarget = activeThreads.find(matchesTarget);
-    return {
-      ...inventory,
-      archivedThreads: params.targetThread ? [...inventory.archivedThreads.filter((thread) => !matchesTarget(thread)), params.targetThread] : inventory.archivedThreads,
-      thread: params.targetThread ?? inventory.archivedThreads.find(matchesTarget),
-      activeTarget, targetIsActive: Boolean(activeTarget),
-      activeChildren: activeThreads.filter((thread) => overlaysByThreadKey?.get(buildThreadIdentityKey(thread.source, thread.id))?.parentThreadId === params.threadId),
-      legacyParentBackends: new Set([params.backend, ...[...activeThreads, ...inventory.archivedThreads]
-        .filter((thread) => thread.id === params.threadId).map((thread) => thread.source)]),
-    };
-  }
-
   /** The current queue batch's fleet index, when this read can use one.
-   * Repair's complete audit and alternate adapters keep the complete read. */
+   * Repair keeps its complete audit; alternate adapters use aggregate discovery. */
   private archiveFleetIndexFor(params: ArchiveCleanupDiscoveryRequest): ArchiveFleetIndex | undefined {
     const batch = params.context?.batch;
     if (!batch || params.identityOnly || params.fleetRows || !params.threadId || !this.codexClient.listArchiveCleanupThreadsPage) return undefined;
@@ -40769,7 +40625,6 @@ export class DesktopBackendRegistry {
           } : undefined,
         });
         removedSnapshot = snapshot;
-        this.invalidateArchiveCleanupInventory();
         backendRegistryLog.info("archive thread worktree cleanup removed worktree", {
           backend: params.backend,
           threadId: params.thread.id,
@@ -52823,10 +52678,6 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private invalidateArchiveCleanupInventory(): void {
-    this.archiveCleanupInventories = new WeakMap();
-  }
-
   /**
    * Fleet admission observes only related identities. Before an unobserved
    * identity's change or in-flight mutation reaches the scope, give it the
@@ -52984,7 +52835,6 @@ export class DesktopBackendRegistry {
       : notification?.method === "thread/deleted" ? "deleted"
         : notification?.method === "thread/unarchived" ? "active" : "provider",
   ): void {
-    this.invalidateArchiveCleanupInventory();
     // Membership-only refreshes without an identity (navigation observing its
     // own archive) change no checkout user; their added identities are marked
     // through recordArchiveWorkspaceChange.
@@ -53010,7 +52860,6 @@ export class DesktopBackendRegistry {
         source === "local" && this.archiveWorkspaceOwnership.isControlled(buildThreadIdentityKey(backend, threadId)) ? "controlled" : "observed") });
     };
     if (notification.method === "thread/parent/set" || notification.method === "thread/parent/cleared") {
-      this.invalidateArchiveCleanupInventory();
       const threadId = readNonEmptyString(readRecord(notification.params)?.threadId);
       this.noteArchiveFleetChange(threadId ? { backend, threadId } : undefined, "overlay", "grouping change without an identity");
     }
