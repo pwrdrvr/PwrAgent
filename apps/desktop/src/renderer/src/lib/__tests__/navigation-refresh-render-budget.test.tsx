@@ -83,7 +83,9 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
     threads = threads.map((thread) => /^parent-[01]-.*child-0$/.test(thread.id) ? { ...thread, title: `${thread.title} fresh` } : thread);
     await act(async () => {
       const emit = (method: string, params: Record<string, unknown>) => {
-        for (const listener of listeners) listener({ backend: "codex", notification: { method, params } } as AgentEvent);
+        for (const listener of listeners) listener({ backend: "codex", navigationDirectoryScope: { version: 1, directoryKeys: [
+          `directory:${params.worktreePath ?? (String(params.threadId).startsWith("parent-0-") ? "/project-0" : "/project-1")}`,
+        ] }, notification: { method, params } } as AgentEvent);
       };
       // Seven canonical events, with one repeated Git probe. The Git events
       // patch rows without reading until background/seen schedules the burst.
@@ -113,11 +115,12 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
       pageSizes, sizedBytes, incomingBytes });
     expect(unrelatedChildCalls).toHaveLength(0);
     expect(childCalls).toHaveLength(8);
-    // Directory counts include off-page descendants. Until the owner names
-    // their project scope, each directory section must revalidate once.
-    expect(read.mock.calls.filter(([sent]) => sent.query.kind === "directory")).toHaveLength(24);
-    expect(read).toHaveBeenCalledTimes(34);
-    expect(new Set(read.mock.calls.map(([sent]) => JSON.stringify(sent.query))).size).toBe(34);
+    const directoryCalls = read.mock.calls.filter(([sent]) => sent.query.kind === "directory");
+    expect(directoryCalls).toHaveLength(4);
+    expect(directoryCalls.every(([sent]) => sent.query.kind === "directory"
+      && [directories[0]!.key, directories[1]!.key].includes(sent.query.directoryKey))).toBe(true);
+    expect(read).toHaveBeenCalledTimes(14);
+    expect(new Set(read.mock.calls.map(([sent]) => JSON.stringify(sent.query))).size).toBe(14);
     expect(commits).toBeLessThanOrEqual(2 * read.mock.calls.length + 3);
     expect(rowRenders).toBeLessThanOrEqual(32);
     expect(childOrder.mock.calls.length).toBeLessThanOrEqual(commits);
