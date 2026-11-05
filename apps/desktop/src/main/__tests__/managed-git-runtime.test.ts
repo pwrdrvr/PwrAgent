@@ -86,7 +86,11 @@ function leftovers(rootDir: string): string[] {
   return found;
 }
 
-describe("downloading a PwrDrvr Git release", () => {
+// No PwrDrvr Git runtime ships for Windows, which keeps Dugite's MinGit; the
+// fixtures build POSIX tar archives with modes and symlinks.
+const posixDescribe = describe.skipIf(process.platform === "win32");
+
+posixDescribe("downloading a PwrDrvr Git release", () => {
   it("installs the newest release into its own immutable directory, unchanged", async () => {
     const r5 = buildRelease("2.56.0-dev-pwrgit.5");
     const r6 = buildRelease("2.56.0-dev-pwrgit.6");
@@ -152,7 +156,7 @@ describe("downloading a PwrDrvr Git release", () => {
     const outside = path.join(makeRoot("pwragent-outside-"), "planted");
     roots.push(path.dirname(outside));
     writeFileSync(outside, "original");
-    const release = buildRelease("2.56.0-dev-pwrgit.5", { mutate: { tarArgs: () => ["-P", outside] } });
+    const release = buildRelease("2.56.0-dev-pwrgit.5", { mutate: { absoluteMembers: () => [outside] } });
     writeFileSync(outside, "untouched");
     const { rootDir, options } = setup(fakeGithub([release]));
     await expect(installManagedGit({ ...options, tag: release.tag })).rejects.toThrow(/Unsafe path/);
@@ -197,7 +201,7 @@ describe("downloading a PwrDrvr Git release", () => {
   });
 });
 
-describe("cancelling and concurrent installs", () => {
+posixDescribe("cancelling and concurrent installs", () => {
   async function untilDownloading(progress: { phases: string[] }): Promise<void> {
     for (let i = 0; i < 200 && !progress.phases.includes("downloading"); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -252,7 +256,7 @@ describe("cancelling and concurrent installs", () => {
   });
 });
 
-describe("running a chosen release", () => {
+posixDescribe("running a chosen release", () => {
   it("resolves the payload root, and fails closed once its sealed list changes", async () => {
     const release = buildRelease("2.56.0-dev-pwrgit.5");
     const { options } = setup(fakeGithub([release]));
@@ -296,7 +300,7 @@ describe("running a chosen release", () => {
   });
 });
 
-describe("pruning and removal", () => {
+posixDescribe("pruning and removal", () => {
   it("keeps the newest release, every release a profile names, and every release a live process ran", async () => {
     const releases = ["5", "6", "7", "8"].map((n) => buildRelease(`2.56.0-dev-pwrgit.${n}`));
     const { rootDir, options } = setup(fakeGithub(releases));

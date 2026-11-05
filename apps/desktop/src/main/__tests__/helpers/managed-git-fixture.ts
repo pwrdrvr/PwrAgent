@@ -40,8 +40,8 @@ export type ReleaseMutation = {
   afterSeal?: (root: string) => void;
   /** Change the catalog object before it is serialized. */
   catalog?: (catalog: Record<string, any>) => void;
-  /** Extra tar members, added after the payload (e.g. unsafe paths). */
-  tarArgs?: (staging: string) => string[];
+  /** Absolute paths added to the archive as absolute members. */
+  absoluteMembers?: (staging: string) => string[];
   /** Replace the archive bytes after the catalog pins the originals. */
   archive?: (bytes: Buffer) => Buffer;
 };
@@ -109,9 +109,12 @@ export function buildRelease(
     const inventorySha256 = sealPayload(payload);
     options.mutate?.afterSeal?.(payload);
     const archivePath = path.join(staging, archiveName);
+    const absolute = options.mutate?.absoluteMembers?.(staging) ?? [];
+    // BSD tar reads options only before the first operand.
     execFileSync("tar", [
+      ...(absolute.length > 0 ? ["-P"] : []),
       "-czf", archivePath, "-C", payload, ".",
-      ...(options.mutate?.tarArgs?.(staging) ?? []),
+      ...absolute,
     ]);
     let archive: Buffer = readFileSync(archivePath);
     const archiveSha256 = sha256(archive);

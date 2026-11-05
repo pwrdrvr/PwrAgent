@@ -85,7 +85,8 @@ describe("release catalog rules", () => {
   });
 });
 
-describe("release selection", () => {
+// The fixtures build POSIX tar archives; Windows has no PwrDrvr Git runtime.
+describe.skipIf(process.platform === "win32")("release selection", () => {
   const releaseFor = (version: string) => githubRelease(buildRelease(version));
 
   it("finds prereleases, skips drafts and anything not newer than the bundle, and orders by build number", () => {
