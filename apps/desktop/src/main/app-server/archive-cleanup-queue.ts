@@ -9,7 +9,7 @@ export class ArchiveCleanupCancelledError extends Error {
 }
 
 export type ArchiveCleanupContext = {
-  /** Shared only until this queue drains; discovery must also fence revisions. */
+  /** Shared until this queue drains; writers keep the fleet index current. */
   batch?: object;
   assertCurrent: () => void;
   checkpoint: () => Promise<void>;
