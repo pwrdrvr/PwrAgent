@@ -174,8 +174,11 @@ test("repository intake preflights before file transfer or source archive, then 
   const viewer = await peer(source);
   t.after(() => viewer.connection.close());
   const thread = await viewer.call("backend.startThread", { cwd: sourceProject.path });
-  await viewer.call("backend.startTurn", { threadId: thread.threadId, input: [{ type: "text", text: "intake history" }] });
-  await eventually(() => existsSync(path.join(sourceProject.path, "fixture-result.txt")));
+  const turn = await viewer.call("backend.startTurn", { threadId: thread.threadId, input: [{ type: "text", text: "intake history" }] });
+  // A result file precedes persisted history and turn/completed in the fixture.
+  // The owning runtime must observe this exact turn's completion before handoff.
+  await eventually(async () => (await source.rpc("list")).some((job) =>
+    job.threadId === thread.threadId && job.turnId === turn.turnId && job.status === "completed"));
   git(sourceProject.path, "add", ".");
   git(sourceProject.path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture result");
   git(sourceProject.path, "push", "origin", "main");
