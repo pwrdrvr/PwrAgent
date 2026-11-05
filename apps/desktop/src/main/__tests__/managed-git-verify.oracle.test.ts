@@ -23,10 +23,11 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function sealed(): { root: string; pin: CustomGitPin } {
+function sealed(beforeSeal?: (root: string) => void): { root: string; pin: CustomGitPin } {
   const root = makeRoot();
   roots.push(root);
   writePayload(root, version, revision);
+  beforeSeal?.(root);
   const inventorySha256 = sealPayload(root);
   return {
     root,
@@ -131,6 +132,20 @@ describe.skipIf(process.platform === "win32")("downloaded Git verifier against t
       // tamper the seal must catch.
       expect(expected).toBe(change.kind === "none");
     }), { numRuns: 120 });
+  });
+
+  it("rejects a sealed link that leaves the payload, as the script does", async () => {
+    // The seal lists the link, so only the escape rule can catch it.
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("bin/escape", "share/git-core/escape"),
+      fc.constantFrom("/etc/hosts", "../../..", "../../../.."),
+      async (file, target) => {
+        const { root, pin } = sealed((payload) => symlinkSync(target, path.join(payload, file)));
+        expect(oracle(root, pin)).toBe(false);
+        await expect(verifyManagedGitPayload(root, pin, { probe: false, requireSigned: false }))
+          .rejects.toThrow(/escapes payload/);
+      },
+    ), { numRuns: 6 });
   });
 
   it("also rejects a Linux payload built for the other architecture", async () => {

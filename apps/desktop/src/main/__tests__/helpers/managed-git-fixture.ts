@@ -113,7 +113,7 @@ export function buildRelease(
       "-czf", archivePath, "-C", payload, ".",
       ...(options.mutate?.tarArgs?.(staging) ?? []),
     ]);
-    let archive = readFileSync(archivePath);
+    let archive: Buffer = readFileSync(archivePath);
     const archiveSha256 = sha256(archive);
     if (options.mutate?.archive) archive = options.mutate.archive(archive);
     const catalogObject: Record<string, any> = {

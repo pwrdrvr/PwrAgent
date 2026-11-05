@@ -43,7 +43,8 @@ const scenario = fc.record({
 });
 
 describe("Git precedence with downloaded releases", () => {
-  it("runs exactly the Git the model picks, and fails rather than switching for a rejected release", async () => {
+  // No PwrDrvr Git runtime exists for Windows, and the model's paths are POSIX.
+  it.skipIf(process.platform === "win32")("runs exactly the Git the model picks, and fails rather than switching for a rejected release", async () => {
     await fc.assert(fc.asyncProperty(scenario, async ({ env, manual, managed, healthy }) => {
       managedRoots.clear();
       if (managed) {
@@ -58,6 +59,23 @@ describe("Git precedence with downloaded releases", () => {
         await expect(resolveRuntimeGitExecutable(source)).rejects.toThrow(/failed verification/);
       } else {
         await expect(resolveRuntimeGitExecutable(source)).resolves.toBe(expected);
+      }
+      // A shell or helper PwrAgent starts finds the same Git first on PATH,
+      // and only PwrAgent's own Git gets PwrAgent's helper directory.
+      const env = gitRuntimeEnvironment(source);
+      const first = env.PATH?.split(path.delimiter)[0];
+      if (expected === "error") {
+        expect(env.GIT_EXEC_PATH).toBeUndefined();
+        expect(env.PATH).toBe("/usr/bin:/bin");
+      } else if (env.PWRAGENT_GIT_PATH || manual) {
+        expect(first).toBe(path.dirname(expected));
+        expect(env.GIT_EXEC_PATH).toBeUndefined();
+      } else if (managed) {
+        expect(first).toBe(path.dirname(expected));
+        expect(env.GIT_EXEC_PATH).toBe(path.join(path.dirname(path.dirname(expected)), "libexec", "git-core"));
+      } else {
+        expect(env.GIT_EXEC_PATH).toBeDefined();
+        expect(env.GIT_EXEC_PATH).not.toContain("/pwragent/runtimes/git/");
       }
     }), { numRuns: 80 });
   });
