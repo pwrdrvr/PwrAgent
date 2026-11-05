@@ -29,7 +29,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture(config?: Record<string, unknown>) {
+async function fixture(config?: Parameters<CodexAppServerClient["forkThread"]>[0]["config"]) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-oracle-"));
   roots.push(root);
   const sourceCwd = path.join(root, "source-workspace");
@@ -143,14 +143,8 @@ it.runIf(!process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)("refuses a r
   await f.sourceClient.injectThreadItems({ threadId, items: [
     { type: "message", role: "user", content: [{ type: "input_text", text: "Contrived paginated context" }] },
   ] });
-  const exported = await f.sourceClient.exportThreadForHandoff(threadId);
-  expect(exported.historyMode).toBe("paginated");
-  // Reproduce the reported error with the path forwarded by the production
-  // client. These opaque protocol bytes are staged in a test-owned file.
-  const staged = path.join(f.root, "paginated-import.jsonl");
-  await writeFile(staged, Buffer.from(exported.rolloutBase64, "base64"));
-  await expect(f.targetClient.forkThread({ threadId, path: staged, cwd: f.root }))
-    .rejects.toThrow(`no rollout found for thread id ${threadId}`);
+  await expect(f.sourceClient.exportThreadForHandoff(threadId))
+    .rejects.toThrow(/update the managed Codex runtime on the sending machine/i);
   await expect(f.sender.send({ sourceThreadId: threadId, operation: "copy", targetInstanceId: "receiver" }))
     .rejects.toThrow(/paginated history/i);
   expect(f.push).not.toHaveBeenCalled();
