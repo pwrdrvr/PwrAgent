@@ -29,6 +29,8 @@ type ArchiveWorktreeParams = {
   worktreePath: string;
   repositoryPath?: string;
   now?: number;
+  /** One reviewed approval to snapshot past the service limit. Never lower. */
+  maxSnapshotBytes?: number;
   /** Returns a synchronous admission check for the actual removal dispatch. */
   beforeRemove?: () => Promise<() => void>;
 };
@@ -68,6 +70,41 @@ export class MissingArchiveWorktreeError extends Error {
   constructor(worktreePath: string) {
     super(`Worktree directory no longer exists: ${worktreePath}`);
     this.name = "MissingArchiveWorktreeError";
+  }
+}
+
+/** The checkout exists but its repository does not, so it cannot be
+ * snapshotted. Archive cleanup keeps it; this is a skip, not a failure. */
+export class MissingArchiveRepositoryError extends Error {
+  constructor(readonly worktreePath: string, readonly repositoryPath: string) {
+    super(`Repository no longer exists for worktree ${worktreePath}: ${repositoryPath}`);
+    this.name = "MissingArchiveRepositoryError";
+  }
+}
+
+/** The repository a linked worktree's `.git` file points at, when that
+ * repository is gone. A main checkout (a `.git` directory) is never orphaned. */
+export async function missingWorktreeRepository(worktreePath: string): Promise<string | undefined> {
+  let pointer: string;
+  try {
+    pointer = await readFile(path.join(worktreePath, ".git"), "utf8");
+  } catch {
+    return undefined;
+  }
+  const match = /^gitdir:\s*(.+)$/m.exec(pointer);
+  if (!match) return undefined;
+  const gitDirectory = path.resolve(worktreePath, match[1]!.trim());
+  // A linked worktree's gitdir is <common git dir>/worktrees/<name>. A pruned
+  // entry under a live repository is not this case and still fails loudly.
+  const commonDirectory = path.basename(path.dirname(gitDirectory)) === "worktrees"
+    ? path.dirname(path.dirname(gitDirectory))
+    : gitDirectory;
+  try {
+    await stat(commonDirectory);
+    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return path.basename(commonDirectory) === ".git" ? path.dirname(commonDirectory) : commonDirectory;
   }
 }
 
@@ -240,16 +277,28 @@ export class WorktreeArchiveService {
     try {
       worktreePath = await realpath(path.resolve(params.worktreePath));
     } catch (error) {
-      // Only a missing target before snapshot preparation is a routine skip.
-      // Missing repository paths and later filesystem failures remain errors.
+      // A missing target or repository before snapshot preparation is a
+      // routine skip. Later filesystem failures remain errors.
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         throw new MissingArchiveWorktreeError(params.worktreePath);
       }
       throw error;
     }
-    const repositoryAnchor = params.repositoryPath
-      ? await realpath(path.resolve(params.repositoryPath))
-      : worktreePath;
+    // A checkout whose repository is gone cannot be snapshotted or removed
+    // through Git. Report it as kept, never as a failure.
+    const missingRepository = await missingWorktreeRepository(worktreePath);
+    if (missingRepository) throw new MissingArchiveRepositoryError(params.worktreePath, missingRepository);
+    let repositoryAnchor = worktreePath;
+    if (params.repositoryPath) {
+      try {
+        repositoryAnchor = await realpath(path.resolve(params.repositoryPath));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new MissingArchiveRepositoryError(params.worktreePath, params.repositoryPath);
+        }
+        throw error;
+      }
+    }
     const commonDirectory = await realpath(trimGitOutput((await this.runGit(repositoryAnchor, [
       "rev-parse", "--path-format=absolute", "--git-common-dir",
     ])).stdout));
@@ -279,6 +328,7 @@ export class WorktreeArchiveService {
       threadId: params.threadId,
       worktree,
       worktreePath,
+      maxSnapshotBytes: params.maxSnapshotBytes,
     });
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
@@ -535,6 +585,7 @@ export class WorktreeArchiveService {
   }
 
   private async createSnapshotCommit(params: {
+    maxSnapshotBytes?: number;
     backend: AppServerBackendKind;
     threadId: string;
     worktree: WorktreeInfo;
@@ -555,6 +606,7 @@ export class WorktreeArchiveService {
       if (files.size > MAX_WORKTREE_SNAPSHOT_FILES) {
         throw new Error(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
       }
+      const limit = Math.max(this.maxSnapshotBytes, params.maxSnapshotBytes ?? 0);
       let bytes = 0;
       for (const file of files) {
         try {
@@ -564,8 +616,8 @@ export class WorktreeArchiveService {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
-        if (bytes > this.maxSnapshotBytes) {
-          throw new Error(`Snapshot size limit exceeded (${this.maxSnapshotBytes} bytes); the worktree was kept.`);
+        if (bytes > limit) {
+          throw new Error(`Snapshot size limit exceeded (${limit} bytes); the worktree was kept.`);
         }
       }
       await this.runGit(params.worktreePath, ["add", "-A", "--", "."], { env });

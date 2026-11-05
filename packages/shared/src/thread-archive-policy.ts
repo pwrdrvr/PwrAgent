@@ -52,7 +52,31 @@ export type DesktopThreadArchiveSweepStatus = {
     emptyContainers?: number;
     processedContainers?: number;
     removedContainers?: number;
+    /** Checkouts left in place, counted by reason. */
+    kept?: Record<string, number>;
+  };
+  /** The conversation archive pass. Absent while it has not started. */
+  threads?: {
+    /** Root threads read; native sub-agents travel with their root. */
+    checked: number;
+    eligible: number;
+    archived: number;
+    /** Threads left active, counted by reason. */
+    kept: Record<string, number>;
+    /** Why the pass did not run, for example when automatic archiving is off. */
+    skipped?: string;
   };
   /** First failure of the last finished sweep. */
   error?: string;
+  /** Up to THREAD_ARCHIVE_SWEEP_FAILURE_LIMIT failures; `failed` is the full count. */
+  failures?: DesktopThreadArchiveSweepFailure[];
+};
+
+export const THREAD_ARCHIVE_SWEEP_FAILURE_LIMIT = 20;
+
+export type DesktopThreadArchiveSweepFailure = {
+  phase: "worktrees" | "retention" | "threads";
+  message: string;
+  path?: string;
+  threadId?: string;
 };

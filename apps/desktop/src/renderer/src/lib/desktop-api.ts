@@ -174,6 +174,10 @@ import type {
   CodexAppServerRestartResult,
   CodexAppServerRestartStatus,
   DesktopThreadArchiveSweepStatus,
+  ThreadMaintenanceApplyRequest,
+  ThreadMaintenanceRules,
+  ThreadMaintenanceRun,
+  ThreadMaintenanceScan,
   DraftAutomationPromptRequest,
   DraftAutomationPromptResponse,
   ConfigureFederationTailscaleRequest,
@@ -1028,6 +1032,17 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   getThreadArchiveSweepStatus?: () => Promise<DesktopThreadArchiveSweepStatus>;
   /** Resolves with the status of the finished sweep, joining a running one. */
   runThreadArchiveSweep?: () => Promise<DesktopThreadArchiveSweepStatus>;
+  /** Read-only scan for the Thread maintenance dialog. Changes nothing. */
+  scanThreadMaintenance?: (request?: {
+    rules?: Partial<ThreadMaintenanceRules>;
+    projectKey?: string;
+  }) => Promise<ThreadMaintenanceScan>;
+  /** Starts a run of selections from one scan. Resolves once it starts;
+   * progress and the result arrive through onThreadMaintenanceRunChanged. */
+  applyThreadMaintenance?: (request: ThreadMaintenanceApplyRequest) => Promise<ThreadMaintenanceRun>;
+  getThreadMaintenanceRun?: () => Promise<ThreadMaintenanceRun | null>;
+  /** Stops after the item in progress. Nothing already done is undone. */
+  stopThreadMaintenance?: () => Promise<void>;
   analyzeFocusedDiff?: (
     request: FocusedDiffAnalysisRequest
   ) => Promise<FocusedDiffAnalysisResponse>;
@@ -1801,6 +1816,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => () => void;
   onThreadArchiveSweepStatusChanged?: (
     callback: (status: DesktopThreadArchiveSweepStatus) => void,
+  ) => () => void;
+  onThreadMaintenanceRunChanged?: (
+    callback: (run: ThreadMaintenanceRun) => void,
+  ) => () => void;
+  /** File → Thread Maintenance…, an agent, or a project's context menu. */
+  onOpenThreadMaintenanceRequested?: (
+    callback: (request: { projectKey?: string }) => void,
   ) => () => void;
   onGithubPrSamlEnforcement?: (
     callback: (event: GithubPrSamlEnforcementEvent) => void,

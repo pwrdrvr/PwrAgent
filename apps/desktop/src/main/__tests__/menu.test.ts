@@ -57,6 +57,7 @@ function buildTemplate(
       openSecurityReporter: vi.fn(),
       openSettings: vi.fn(),
       openSource: vi.fn(),
+      openThreadMaintenance: vi.fn(),
       openThreadSearch: vi.fn(),
       openWebsite: vi.fn(),
       quit: vi.fn(),
@@ -192,6 +193,8 @@ describe("buildApplicationMenuTemplate", () => {
       expect(flatten(submenuItems(template, "File"))).toEqual([
         "New Thread",
         "---",
+        "Thread Maintenance…",
+        "---",
         "Close Window",
       ]);
     });
@@ -235,6 +238,8 @@ describe("buildApplicationMenuTemplate", () => {
     it("pins File", () => {
       expect(flatten(submenuItems(template, "File"))).toEqual([
         "New Thread",
+        "---",
+        "Thread Maintenance…",
         "---",
         "Settings…",
         "Usage Activity",
@@ -368,6 +373,7 @@ describe("buildApplicationMenuTemplate", () => {
       openSecurityReporter: vi.fn(),
       openSettings: vi.fn(),
       openSource: vi.fn(),
+      openThreadMaintenance: vi.fn(),
       openThreadSearch: vi.fn(),
       openWebsite: vi.fn(),
       quit: vi.fn(),
@@ -390,6 +396,7 @@ describe("buildApplicationMenuTemplate", () => {
     click(items, "Settings…");
     click(items, "Usage Activity");
     click(items, "Search Threads");
+    click(items, "Thread Maintenance…");
     click(items, "Automations");
     click(items, "PwrAgent Documentation");
     click(items, "Replay Onboarding…");
@@ -597,6 +604,8 @@ describe("buildApplicationMenuTemplate", () => {
 
       expect(flatten(items)).toEqual([
         "New Thread",
+        "---",
+        "Thread Maintenance…",
         "---",
         "Close Window",
       ]);

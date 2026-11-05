@@ -64237,7 +64237,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it.each([true, false])("only treats a missing cleanup target as a quiet skip (target missing: %s)", async (targetMissing) => {
+  it.each([true, false])("treats a missing cleanup target or repository as a quiet skip (target missing: %s)", async (targetMissing) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-missing-archive-"));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     const worktreePath = path.join(root, "worktree");
@@ -64294,14 +64294,18 @@ script = "printf setup"
         expect.anything(),
       );
     } else {
-      expect(response.cleanup).toEqual([expect.objectContaining({
+      // The checkout exists but its repository does not: it is kept, as a
+      // skip, because there is nothing to snapshot it into.
+      expect(response.cleanup).toEqual([{
         worktreePath,
+        branch: undefined,
         removedWorktree: false,
-        error: expect.stringContaining("ENOENT"),
-      })]);
-      expect(mainLoggerMock.warn).toHaveBeenCalledWith(
+        deletedBranch: false,
+        skippedReason: "Its repository no longer exists; the checkout was kept.",
+      }]);
+      expect(mainLoggerMock.warn).not.toHaveBeenCalledWith(
         "archive thread worktree cleanup failed",
-        expect.objectContaining({ worktreePath, error: expect.stringContaining("ENOENT") }),
+        expect.anything(),
       );
     }
     expect(mainLoggerMock.info.mock.calls.some(([event]) =>
@@ -72520,6 +72524,163 @@ describe("mark_project_read dynamic tool", () => {
       code: "internal_error", message: "Owner directory membership is still checking",
     } });
     expect(markProjectRead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("thread maintenance agent tools", () => {
+  const scan = {
+    scanId: "scan-1", startedAt: 1, finishedAt: 2,
+    rules: { mode: "count" as const, keepPerProject: 20, inactivityDays: 7, rebuildableOutputIsClean: true },
+    spaceSource: "none" as const,
+    threads: { checked: 3, kept: { "Pinned thread": 1 }, projects: [{
+      key: "/repo", label: "repo", path: "/repo", kept: { "Pinned thread": 1 }, idle: [
+        { backend: "codex", threadId: "idle-clean", title: "Old fix", lastActivityAt: 1, subThreads: 0,
+          workspace: { kind: "clean" as const } },
+        { backend: "codex", threadId: "idle-big", title: "Load harness", lastActivityAt: 1, subThreads: 0,
+          workspace: { kind: "overLimit" as const, files: 3, bytes: 2_000_000_000, limitBytes: 104_857_600, largest: [] } },
+      ],
+    }] },
+    checkouts: { kept: {}, emptyFolders: 2, items: [
+      { backend: "codex", threadId: "archived", worktreePath: "/wt/a/repo", kind: "removable" as const },
+      { backend: "codex", threadId: "orphan", worktreePath: "/wt/b/kit", kind: "repositoryGone" as const, missingRepositoryPath: "/tmp/kit" },
+    ] },
+    expired: { enabled: false, retentionDays: 0 },
+    failures: [],
+  };
+  const finished = { runId: "run-1", scanId: "scan-1", running: false, startedAt: 3, finishedAt: 4,
+    steps: [{ step: "threads" as const, ran: true, done: 1, kept: 0, failed: 0 }], problems: [] };
+
+  async function setup() {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } }),
+    });
+    onTestFinished(() => registry.close());
+    const handler = {
+      scan: vi.fn(async () => scan),
+      getScan: vi.fn((scanId: string) => scanId === "scan-1" ? scan : undefined),
+      getRun: vi.fn((): typeof finished | undefined => undefined),
+      start: vi.fn(() => ({ run: { ...finished, running: true }, done: Promise.resolve(finished) })),
+      open: vi.fn(() => true),
+    };
+    registry.setThreadMaintenanceToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: {
+      threadId: "agent-thread", turnId: "turn-1", turn: { id: "turn-1" },
+    } } });
+    const events: AgentEvent[] = [];
+    onTestFinished(registry.onEvent((event) => { events.push(event); }));
+    const call = (tool: string, args: Record<string, unknown>, callId = "maint-call") =>
+      codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: "agent-thread", turnId: "turn-1", callId, requestId: callId,
+        namespace: "pwragent", tool, arguments: args,
+      } } as AppServerPendingRequestNotification) as Promise<{ success: boolean; contentItems: Array<{ text: string }> }>;
+    const payload = (response: { contentItems: Array<{ text: string }> }) => JSON.parse(response.contentItems[0]!.text);
+    const answer = async (label: string) => {
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "item/tool/requestUserInput")).toBe(true));
+      const request = events.find((event) => event.notification.method === "item/tool/requestUserInput")!.notification;
+      if (request.method !== "item/tool/requestUserInput") throw new Error("Expected a confirmation card");
+      await registry.submitServerRequest({ backend: "codex", threadId: "agent-thread", turnId: "turn-1",
+        requestId: request.params.requestId,
+        response: { answers: { thread_maintenance: { answers: [label] } } },
+      });
+      return request.params;
+    };
+    return { registry, handler, call, payload, answer, events };
+  }
+
+  it("scans read-only and returns a bounded summary", async () => {
+    const { handler, call, payload } = await setup();
+    const response = await call("scan_thread_maintenance", { projectKey: "/repo", rules: { mode: "age", inactivityDays: 30 } });
+    expect(response.success).toBe(true);
+    expect(handler.scan).toHaveBeenCalledExactlyOnceWith({ projectKey: "/repo", rules: { mode: "age", inactivityDays: 30 } });
+    expect(payload(response).maintenanceScan).toMatchObject({
+      scanId: "scan-1",
+      threads: { checked: 3, idleCount: 2, truncated: false, projects: [{ key: "/repo", idleCount: 2 }] },
+      checkouts: { removable: [{ worktreePath: "/wt/a/repo" }], repositoryGone: [{ worktreePath: "/wt/b/kit" }], emptyFolders: 2 },
+    });
+    expect(handler.start).not.toHaveBeenCalled();
+  });
+
+  it("opens the dialog for the operator without starting a run", async () => {
+    const { handler, call, payload } = await setup();
+    expect(payload(await call("open_thread_maintenance", { projectKey: "/repo" }))).toEqual({ maintenanceDialog: { opened: true } });
+    expect(handler.open).toHaveBeenCalledExactlyOnceWith({ projectKey: "/repo" });
+    expect(handler.start).not.toHaveBeenCalled();
+  });
+
+  it("previews a dry run without a card or a run", async () => {
+    const { handler, call, payload, events } = await setup();
+    const response = await call("apply_thread_maintenance", { scanId: "scan-1", dryRun: true,
+      archive: [{ backend: "codex", threadId: "idle-big", overLimit: "snapshotAll" }] });
+    expect(payload(response)).toMatchObject({ dryRun: true, maintenancePlan: {
+      archive: 1, snapshotApprovals: [{ threadId: "idle-big", bytes: 2_000_000_000 }],
+    } });
+    expect(events.some((event) => event.notification.method === "item/tool/requestUserInput")).toBe(false);
+    expect(handler.start).not.toHaveBeenCalled();
+  });
+
+  it("runs the reviewed selection only after the operator approves the card", async () => {
+    const { handler, call, payload, answer } = await setup();
+    const pending = call("apply_thread_maintenance", { scanId: "scan-1",
+      archive: [{ backend: "codex", threadId: "idle-clean" }],
+      removeCheckouts: [{ backend: "codex", threadId: "archived", worktreePath: "/wt/a/repo" }],
+      trashCheckouts: [{ worktreePath: "/wt/b/kit" }] });
+    const card = await answer("Run maintenance");
+    expect(card.itemId).toBe("maint-call");
+    expect((card.questions as Array<{ question: string }>)[0]!.question).toContain("archive 1 thread, remove 1 archived checkout and move 1 orphaned checkout to the Trash");
+    const response = await pending;
+    expect(response.success).toBe(true);
+    expect(handler.start).toHaveBeenCalledExactlyOnceWith({ scanId: "scan-1",
+      archive: [{ backend: "codex", threadId: "idle-clean" }],
+      removeCheckouts: [{ backend: "codex", threadId: "archived", worktreePath: "/wt/a/repo" }],
+      trashCheckouts: [{ worktreePath: "/wt/b/kit" }], removeEmptyFolders: false });
+    expect(payload(response).maintenanceRun).toMatchObject({ runId: "run-1", running: false });
+  });
+
+  it("changes nothing when the operator declines the card", async () => {
+    const { handler, call, payload, answer } = await setup();
+    const pending = call("apply_thread_maintenance", { scanId: "scan-1", archive: [{ backend: "codex", threadId: "idle-clean" }] });
+    await answer("Cancel");
+    const response = await pending;
+    expect(response.success).toBe(false);
+    expect(payload(response)).toMatchObject({ code: "forbidden" });
+    expect(payload(response).message).toContain("Do not retry it");
+    expect(handler.start).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ scanId: "scan-1", archive: [{ backend: "codex", threadId: "agent-thread" }] }, "running this tool"],
+    [{ scanId: "scan-1", archive: [{ backend: "codex", threadId: "idle-big" }] }, "over the snapshot limit"],
+    [{ scanId: "scan-1", archive: [{ backend: "codex", threadId: "idle-clean", overLimit: "snapshotAll" }] }, "under the snapshot limit"],
+    [{ scanId: "scan-1", archive: [{ backend: "codex", threadId: "elsewhere" }] }, "not an idle thread"],
+    [{ scanId: "scan-1", trashCheckouts: [{ worktreePath: "/wt/a/repo" }] }, "repository is gone"],
+    [{ scanId: "scan-1" }, "at least one"],
+    [{ scanId: "scan-1", archive: [], extra: true }, "Pass only"],
+  ])("refuses %j before any card", async (args, message) => {
+    const { handler, call, payload, events } = await setup();
+    const response = await call("apply_thread_maintenance", args);
+    expect(response.success).toBe(false);
+    expect(payload(response)).toMatchObject({ code: "invalid_arguments" });
+    expect(payload(response).message).toContain(message);
+    expect(events.some((event) => event.notification.method === "item/tool/requestUserInput")).toBe(false);
+    expect(handler.start).not.toHaveBeenCalled();
+  });
+
+  it("reports an expired scan as not found", async () => {
+    const { call, payload } = await setup();
+    expect(payload(await call("apply_thread_maintenance", { scanId: "gone", archive: [] }))).toMatchObject({ code: "not_found" });
+  });
+
+  it("gates apply on the archive permission for messaging turns", async () => {
+    const { registry, handler, call } = await setup();
+    const checkDynamicToolPermission = vi.fn(() => ({ owns: true, allowed: false, permission: "thread.control.archive" }));
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(), checkDynamicToolPermission });
+    expect(await call("apply_thread_maintenance", { scanId: "scan-1", archive: [{ backend: "codex", threadId: "idle-clean" }] }))
+      .toMatchObject({ success: false });
+    expect(checkDynamicToolPermission).toHaveBeenCalledWith(expect.objectContaining({
+      category: "thread_inspection", tool: "apply_thread_maintenance",
+    }));
+    expect(handler.start).not.toHaveBeenCalled();
   });
 });
 

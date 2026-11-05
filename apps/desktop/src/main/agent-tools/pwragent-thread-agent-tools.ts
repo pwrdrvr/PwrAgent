@@ -113,6 +113,16 @@ export function buildPwrAgentThreadToolRouter(
   });
 }
 
+/** Operations advertised only in the unified namespace, never the frozen
+ * pwragent_threads one. */
+const PWRAGENT_ONLY_THREAD_OPERATIONS: ReadonlySet<PwrAgentThreadInspectionOperationName> = new Set([
+  "manage_thread_dependencies",
+  "manage_thread_merge_holds",
+  "scan_thread_maintenance",
+  "apply_thread_maintenance",
+  "open_thread_maintenance",
+]);
+
 export function buildPwrAgentThreadToolDefinitions(
   handler: PwrAgentThreadInspectionHandler | undefined,
   options: { namespace?: string } = {},
@@ -120,12 +130,12 @@ export function buildPwrAgentThreadToolDefinitions(
   const operations = PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES
     .filter((operation) => options.namespace !== PWRAGENT_THREAD_TOOL_NAMESPACE || operation !== "rename_current_thread")
     .filter((operation) =>
-      !["manage_thread_dependencies", "manage_thread_merge_holds"].includes(operation) || !options.namespace || options.namespace === PWRAGENT_TOOL_NAMESPACE);
+      !PWRAGENT_ONLY_THREAD_OPERATIONS.has(operation) || !options.namespace || options.namespace === PWRAGENT_TOOL_NAMESPACE);
   return operations.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
     // PR status checks refresh stored PR associations. Dependency tools can write.
-    annotations: { readOnlyHint: ["search_threads", "read_thread", "get_thread_status"].includes(operation) },
+    annotations: { readOnlyHint: ["search_threads", "read_thread", "get_thread_status", "scan_thread_maintenance"].includes(operation) },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,
@@ -141,7 +151,9 @@ export function buildPwrAgentThreadToolDefinitions(
         context: {
           backend: context.backend,
           threadId: context.threadId,
-          ...(operation === "mutate_thread" && context.turnId ? { turnId: context.turnId } : {}),
+          ...((operation === "mutate_thread" || operation === "apply_thread_maintenance") && context.turnId
+            ? { turnId: context.turnId } : {}),
+          ...(operation === "apply_thread_maintenance" && context.callId ? { callId: context.callId } : {}),
         },
         args,
       } as PwrAgentThreadInspectionRequest);
@@ -174,6 +186,12 @@ function descriptionForOperation(
       return "Manage durable prerequisites (Continue After) that resume this thread after another local thread reaches a turn or PR milestone. Conditions include successful turn completion, reviewable PR attachment, passing CI, and PR merge. Use dependencies instead of polling read_thread, gh, or a Job Monitor for prerequisites. Find the owning threads with search_threads. Their PRs need not be attached to this thread. For example, wait for three PRs to merge with mode all and one pr_merged condition per owning thread. Supports all/any conditions and rejects cycles. Create requires continuation: the concrete instructions the resumed turn will follow, since this conversation may be compacted by then. Set deliver to operator when only the human can do the follow-up. PwrAgent then raises a to-do card instead of resuming this thread. Omit backend/threadId for the calling thread. For turn_completed, omit turnId to pin the current or latest turn. For PR conditions, omit prUrl only for an unambiguous primary-workspace PR, which may be attached later. Omit headSha to follow the current head. CI must be fresh and complete. onFailure defaults to notify once. The wait option tolerates CI repairs. After creation, end this turn if no unrelated work remains. Do not poll the dependency. List returns failures and uncertain delivery for operator review. Cancel cannot undo an admitted continuation. Use dismiss only after the operator has inspected an uncertain admission. It retires the claim without cancelling any turn. Dependencies currently stay within this PwrAgent instance/profile.";
     case "mutate_thread":
       return "Change guarded settings on a PwrAgent thread: title, model, execution mode, project, pin, read state, lock, parent, or archived state. Use rename_current_thread when the user asks to rename this thread. To mark a whole project read, use mark_project_read once instead of looping through threads. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. Confirm an archive with the user first. archive false restores it. Lock a thread whose worktree you hand to another agent, with a lockNote saying why. A locked thread refuses every new turn until it is unlocked. parentThreadId groups threads sharing an owner, locally or on a connected peer. detachFromParent makes it top-level again. Grouping is sidebar-only and shares no transcript.";
+    case "scan_thread_maintenance":
+      return "Find idle threads that can be archived and archived checkouts still on disk. Use it when asked to clean up old threads, worktrees, or disk space. The scan changes nothing. It applies the operator's archive rules from Settings unless you pass rules. Each idle thread reports whether its checkout is clean, has changes, or is over the 100 MB snapshot limit. Kept threads are counted by reason. Show the operator the summary before acting. Pass projectKey to limit it to one project. The latest run's result is included when one exists.";
+    case "apply_thread_maintenance":
+      return "Archive idle threads and remove archived checkouts chosen from one scan_thread_maintenance result. Pass its scanId and only items it listed. Ask the operator which items to clean up first. PwrAgent then shows them one confirmation card. A declined card is final, so do not retry. Uncommitted changes are saved to recovery snapshots before a checkout is removed. A thread over the snapshot limit needs overLimit keepCheckout or snapshotAll, chosen by the operator. trashCheckouts moves checkouts whose repository is gone to the Trash. Every item is checked again before it runs, and one failure never stops the rest. Use dryRun to preview without a card. Use this instead of looping mutate_thread archive.";
+    case "open_thread_maintenance":
+      return "Open the Thread maintenance dialog in this machine's PwrAgent window for the operator. Prefer it when the operator wants to review and choose themselves. Pass projectKey to open it on one project. It changes nothing by itself. Returns opened false when no window can show it.";
     case "mark_project_read":
       return "Mark every unread thread in one project read in a single call, across all backends and beyond listing limits. Use the exact projectKey from list_instance_projects (directory:<absolute path> for a checkout). Omit instanceId for this machine. Pass it for a known peer. Returns projectRead.changedCount. Uses the same guarded, atomic action as the sidebar. Does not archive threads or stop turns. Prefer this over repeated mutate_thread calls. For several projects in Code Mode, call tools.pwragent__mark_project_read for each and print only aggregate results.";
   }
@@ -257,6 +275,82 @@ function inputSchemaForOperation(
               },
             },
           },
+        },
+      };
+    case "scan_thread_maintenance":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          projectKey: { type: "string", minLength: 1, description: "Main checkout path of one project. Omit to scan every project." },
+          rules: {
+            type: "object",
+            additionalProperties: false,
+            description: "Override the Settings archive rules for this scan only.",
+            properties: {
+              mode: { type: "string", enum: ["count", "age"], description: "count keeps the newest threads per project. age keeps threads touched recently." },
+              keepPerProject: { type: "integer", minimum: 0, description: "Threads kept in each project in count mode." },
+              inactivityDays: { type: "integer", minimum: 0, description: "Days without activity before a thread is idle in age mode." },
+              rebuildableOutputIsClean: { type: "boolean", description: "Count node_modules, dist, target and similar output as clean. Defaults to true." },
+            },
+          },
+        },
+      };
+    case "apply_thread_maintenance":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["scanId"],
+        properties: {
+          scanId: { type: "string", minLength: 1, description: "scanId from scan_thread_maintenance." },
+          archive: {
+            type: "array",
+            description: "Idle threads to archive, from the scan.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["backend", "threadId"],
+              properties: {
+                backend: { type: "string", minLength: 1 },
+                threadId: { type: "string", minLength: 1 },
+                overLimit: { type: "string", enum: ["keepCheckout", "snapshotAll"], description: "Only for a thread over the snapshot limit. The operator chooses." },
+              },
+            },
+          },
+          removeCheckouts: {
+            type: "array",
+            description: "Removable archived checkouts, from the scan.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["backend", "threadId", "worktreePath"],
+              properties: {
+                backend: { type: "string", minLength: 1 },
+                threadId: { type: "string", minLength: 1 },
+                worktreePath: { type: "string", minLength: 1 },
+              },
+            },
+          },
+          trashCheckouts: {
+            type: "array",
+            description: "Checkouts whose repository is gone, to move to the Trash.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["worktreePath"],
+              properties: { worktreePath: { type: "string", minLength: 1 } },
+            },
+          },
+          removeEmptyFolders: { type: "boolean", description: "Also remove empty worktree folders the scan counted." },
+          dryRun: { type: "boolean", description: "Return the plan without a confirmation card or any change." },
+        },
+      };
+    case "open_thread_maintenance":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          projectKey: { type: "string", minLength: 1, description: "Main checkout path of one project. Omit for every project." },
         },
       };
     case "mark_project_read":
