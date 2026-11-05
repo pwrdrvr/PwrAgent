@@ -19,6 +19,7 @@ import { GitHubIcon, GitLabIcon, GitIcon } from "../../icons";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { GitHubCliSetup, isGhVersionTooOldForAttachments } from "./github-cli-setup";
 import {
+  SegmentedField,
   SettingsField,
   SettingsSection,
   type SettingsChipTone,
@@ -31,6 +32,7 @@ import {
 import { codeSignatureChip } from "./code-signature-chip";
 import { useCodeSignatures } from "./useCodeSignatures";
 import { ManagedGitUpdates } from "./ManagedGitUpdates";
+import { MANAGED_GIT_BUILD_TRACK_SUB, managedGitTrackOptions } from "./managed-git-updates-copy";
 import {
   commandDiscoveryFailureDetail as sharedCommandDiscoveryFailureDetail,
   describeCommandDiscoveryFailure as describeSharedCommandDiscoveryFailure,
@@ -68,6 +70,7 @@ export function GitToolSection(props: {
   const desktopApi = props.desktopApi;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [trackError, setTrackError] = useState<string | undefined>(undefined);
   const discovery = props.snapshot.applications.git.discovery;
   const gitPath = props.snapshot.applications.git.path;
   const envForced = gitPath.source === "env";
@@ -307,6 +310,24 @@ export function GitToolSection(props: {
             </div>
           }
         />
+        {props.snapshot.applications.git.managed?.supported && desktopApi?.managedGitAction ? (
+          <SegmentedField
+            label="Build track"
+            sub={MANAGED_GIT_BUILD_TRACK_SUB}
+            disabled={props.saving || loading || props.snapshot.applications.git.managed.installing !== undefined}
+            error={trackError}
+            options={managedGitTrackOptions(props.snapshot.applications.git.managed)}
+            value={props.snapshot.applications.git.managed.track}
+            onChange={async (track) => {
+              setTrackError(undefined);
+              // Writes the track only: what Updates offers changes, the Git
+              // in use does not, and nothing downloads.
+              const response = await desktopApi.managedGitAction?.({ action: "track", track });
+              if (response?.error) setTrackError(response.error);
+              await props.onRefresh();
+            }}
+          />
+        ) : null}
         {props.snapshot.applications.git.managed?.supported ? (
           <SettingsField
             label="Updates"

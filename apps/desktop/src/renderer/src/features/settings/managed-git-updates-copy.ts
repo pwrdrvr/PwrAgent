@@ -4,10 +4,13 @@
 // the states and their buttons are the interesting part, and neither needs a
 // DOM to be checked.
 
-import type {
-  DesktopGitRuntimeChoice,
-  DesktopManagedGitSnapshot,
+import {
+  compareManagedGitVersions,
+  type DesktopGitRuntimeChoice,
+  type DesktopManagedGitSnapshot,
+  type DesktopUpdateChannel,
 } from "@pwragent/shared";
+import { managedBuildTrackOptions } from "./acp-agent-copy";
 import { formatByteCount } from "../../lib/format-bytes";
 
 export type ManagedGitUpdatesTone = "ok" | "notice" | "error" | "idle";
@@ -40,6 +43,55 @@ export function managedGitChoiceLabel(
     case "path":
       return "Custom path";
   }
+}
+
+/** The Build track row's sub-line: Git downloads only on request. */
+export const MANAGED_GIT_BUILD_TRACK_SUB =
+  "Latest offers promoted builds only. Prerelease offers the newest build, promoted or not. Switching never downloads anything or changes which Git runs.";
+
+/**
+ * Both tracks, each with the version it offers. A checked track with nothing
+ * newer than the bundle offers the bundle, so it names that version.
+ */
+export function managedGitTrackOptions(
+  managed: Pick<DesktopManagedGitSnapshot, "bundledVersion" | "tracks" | "check">,
+): Array<{ label: string; meta: string; value: DesktopUpdateChannel }> {
+  const fallback = managed.check ? managed.bundledVersion : undefined;
+  return managedBuildTrackOptions({
+    ...(managed.tracks.latestTag ?? fallback ? { latestTag: managed.tracks.latestTag ?? fallback } : {}),
+    ...(managed.tracks.prereleaseTag ?? fallback ? { prereleaseTag: managed.tracks.prereleaseTag ?? fallback } : {}),
+  });
+}
+
+/**
+ * The version this profile runs, for deciding what is an update: the
+ * downloaded release chosen with Use, else the bundle. A manual path is not
+ * a PwrDrvr build, so the bundle stands in for it.
+ */
+function versionInUse(
+  managed: DesktopManagedGitSnapshot,
+  manualPathSelected: boolean,
+): string {
+  const selected = managed.selected && !manualPathSelected
+    ? managed.releases.find((release) => release.generation === managed.selected)
+    : undefined;
+  return selected?.version ?? managed.bundledVersion;
+}
+
+/**
+ * The release Updates offers: the track's newest, only when it is newer than
+ * the build in use. On Latest, a prerelease build already in use is never
+ * offered an older promoted build as an update.
+ */
+export function offeredManagedGitRelease(
+  managed: DesktopManagedGitSnapshot,
+  manualPathSelected: boolean,
+): NonNullable<DesktopManagedGitSnapshot["check"]>["available"] {
+  const available = managed.check?.available;
+  if (!available) return undefined;
+  return compareManagedGitVersions(available.version, versionInUse(managed, manualPathSelected)) > 0
+    ? available
+    : undefined;
 }
 
 function checkedAgo(checkedAt: number, now: number): string {
@@ -93,7 +145,7 @@ export function managedGitUpdatesCopy(
     }
   }
 
-  const available = check?.available;
+  const available = offeredManagedGitRelease(managed, options.manualPathSelected);
   const installedAvailable = available
     ? managed.releases.find((release) => release.generation === available.generation)
     : undefined;
@@ -126,7 +178,7 @@ export function managedGitUpdatesCopy(
     tone = "ok";
     tag = managed.bundledVersion;
     message = check && !check.error
-      ? `is the newest PwrDrvr Git. ${checkedAgo(check.checkedAt, options.now)}`
+      ? `is the newest ${managed.track === "latest" ? "promoted " : ""}PwrDrvr Git. ${checkedAgo(check.checkedAt, options.now)}`
       : "is bundled with PwrAgent.";
     actions.push(checkAction("Check for updates"));
   }
@@ -135,8 +187,21 @@ export function managedGitUpdatesCopy(
   if (check?.error) {
     tone = "notice";
     note = `Could not check for updates: ${check.error}${managed.releases.length > 0 ? " Installed builds still work." : ""}`;
-  } else if (check?.needsAppUpdate) {
+  } else if (
+    check?.needsAppUpdate
+    && compareManagedGitVersions(check.needsAppUpdate.version, versionInUse(managed, options.manualPathSelected)) > 0
+  ) {
     note = `${check.needsAppUpdate.version} needs a newer PwrAgent. Update PwrAgent to use it.`;
   }
+  // Latest offers nothing newer: say what Prerelease would, so an operator
+  // waiting on a promotion knows a build exists.
+  const prerelease = managed.tracks.prereleaseTag;
+  const prereleaseNote = !available
+    && managed.track === "latest"
+    && prerelease !== undefined
+    && compareManagedGitVersions(prerelease, versionInUse(managed, options.manualPathSelected)) > 0
+    ? `Prerelease offers ${prerelease}, not yet promoted.`
+    : undefined;
+  if (prereleaseNote) note = note ? `${note} ${prereleaseNote}` : prereleaseNote;
   return { tone, ...(tag ? { tag } : {}), message, ...(note ? { note } : {}), actions };
 }

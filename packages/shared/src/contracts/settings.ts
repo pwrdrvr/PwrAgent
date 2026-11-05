@@ -91,6 +91,13 @@ export const MANAGED_GROK_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
 export const MANAGED_CODEX_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
   "latest";
 
+/**
+ * PwrDrvr Git releases follow the same two tracks. huntharo/git publishes a
+ * build for testing as a GitHub pre-release; Latest offers only promoted ones.
+ */
+export const MANAGED_GIT_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
+  "latest";
+
 export const DESKTOP_UPDATE_TRAINS = ["stable", "beta"] as const;
 
 export type DesktopUpdateTrain = (typeof DESKTOP_UPDATE_TRAINS)[number];
@@ -1198,11 +1205,16 @@ export type DesktopManagedGitRelease = {
 export type DesktopManagedGitSnapshot = {
   supported: boolean;
   bundledVersion: string;
+  /** The build track this profile follows. */
+  track: DesktopUpdateChannel;
+  /** Each track's newest release as of the last check, newer than the bundle. */
+  tracks: { latestTag?: string; prereleaseTag?: string };
   /** The release chosen with Use, by generation id, when one is. */
   selected?: string;
   /** What Roll back returns to. */
   previous?: DesktopGitRuntimeChoice;
   releases: DesktopManagedGitRelease[];
+  /** The last check's answer for `track`. */
   check?: {
     checkedAt: number;
     available?: {
@@ -1224,7 +1236,9 @@ export type ManagedGitActionRequest =
   | { action: "install"; tag: string }
   | { action: "cancel" }
   | { action: "select"; choice: DesktopGitRuntimeChoice }
-  | { action: "remove"; generation: string };
+  | { action: "remove"; generation: string }
+  /** Writes the track only: no network, no download, no change of Git. */
+  | { action: "track"; track: DesktopUpdateChannel };
 
 export type ManagedGitActionResponse = {
   snapshot: DesktopSettingsSnapshot;
@@ -2008,6 +2022,8 @@ export type DesktopSettingsConfigPatch = {
        */
       managed?: string;
       managedPrevious?: string;
+      /** Build track Settings offers releases from. Never changes which Git runs. */
+      managedBuildChannel?: DesktopUpdateChannel;
     };
   };
   worktrees?: {

@@ -105,6 +105,8 @@ import {
   resolveDesktopUpdateSelection,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
   MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
+  MANAGED_GIT_BUILD_CHANNEL_DEFAULT,
+  parseDesktopUpdateChannel,
   MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
@@ -3773,10 +3775,16 @@ export class DesktopSettingsService {
   }
 
   private async readManagedGitSnapshot(
-    git: { path?: string; managed?: string; managedPrevious?: string } | undefined,
+    git: {
+      path?: string;
+      managed?: string;
+      managedPrevious?: string;
+      managedBuildChannel?: DesktopUpdateChannel;
+    } | undefined,
   ): Promise<DesktopManagedGitSnapshot> {
     const supported = managedGitSupported();
-    if (!supported) return { supported, bundledVersion: BUNDLED_GIT_VERSION, releases: [] };
+    const track = git?.managedBuildChannel ?? MANAGED_GIT_BUILD_CHANNEL_DEFAULT;
+    if (!supported) return { supported, bundledVersion: BUNDLED_GIT_VERSION, track, tracks: {}, releases: [] };
     const [releases, check] = await Promise.all([
       listManagedGitGenerations().catch(() => []),
       readManagedGitCheck(),
@@ -3784,9 +3792,19 @@ export class DesktopSettingsService {
     const selected = this.resolveManagedGitSelection();
     const previous = decodeGitRuntimeChoice(git?.managedPrevious);
     const installing = managedGitInstallInProgress();
+    const answer = check?.tracks[track];
+    const latestTag = check?.tracks.latest.available?.version;
+    const prereleaseTag = check?.tracks.prerelease.available?.version;
+    // The whole check failing outranks one track having nothing usable.
+    const error = check?.error ?? (answer?.available ? undefined : answer?.error);
     return {
       supported,
       bundledVersion: BUNDLED_GIT_VERSION,
+      track,
+      tracks: {
+        ...(latestTag ? { latestTag } : {}),
+        ...(prereleaseTag ? { prereleaseTag } : {}),
+      },
       ...(selected ? { selected } : {}),
       ...(previous ? { previous } : {}),
       releases: releases.map((release) => {
@@ -3805,20 +3823,20 @@ export class DesktopSettingsService {
         ? {
           check: {
             checkedAt: check.checkedAt,
-            ...(check.available
+            ...(answer?.available
               ? {
                 available: {
-                  tag: check.available.tag,
-                  version: check.available.version,
-                  generation: check.available.generation,
-                  ...(check.available.archiveBytes !== undefined
-                    ? { archiveBytes: check.available.archiveBytes }
+                  tag: answer.available.tag,
+                  version: answer.available.version,
+                  generation: answer.available.generation,
+                  ...(answer.available.archiveBytes !== undefined
+                    ? { archiveBytes: answer.available.archiveBytes }
                     : {}),
                 },
               }
               : {}),
-            ...(check.needsAppUpdate ? { needsAppUpdate: check.needsAppUpdate } : {}),
-            ...(check.error ? { error: check.error } : {}),
+            ...(answer?.needsAppUpdate ? { needsAppUpdate: answer.needsAppUpdate } : {}),
+            ...(error ? { error } : {}),
           },
         }
         : {}),
@@ -3876,12 +3894,26 @@ export class DesktopSettingsService {
         case "remove":
           await removeManagedGitGeneration(request.generation, this.protectedManagedGitGenerations());
           break;
+        case "track":
+          await this.setManagedGitTrack(request.track);
+          break;
       }
       return undefined;
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") return undefined;
       return error instanceof Error ? error.message : String(error);
     }
+  }
+
+  /**
+   * A track changes only what Updates offers. Both tracks' answers are
+   * already stored, so this writes the track and nothing else: no release
+   * check, no download, and the selected Git stays as it is.
+   */
+  private async setManagedGitTrack(track: unknown): Promise<void> {
+    const channel = parseDesktopUpdateChannel(track);
+    if (!channel) throw new Error("Not a build track.");
+    await this.writeConfigPatchTargeted({ applications: { git: { managedBuildChannel: channel } } });
   }
 
   /** Settings opening Git asks GitHub at most every few hours. */

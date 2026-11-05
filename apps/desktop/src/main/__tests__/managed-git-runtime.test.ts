@@ -12,6 +12,7 @@ import {
   ManagedGitUnavailableError,
   onManagedGitVerificationFailed,
   pruneManagedGitGenerations,
+  readManagedGitCheck,
   removeManagedGitGeneration,
   removeManagedGitInUseMarkers,
   resolveManagedGitRuntime,
@@ -98,7 +99,7 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
     const gh = fakeGithub([r5, r6]);
     const { rootDir, options, progress } = setup(gh);
     const check = await checkManagedGitReleases({ ...options, manual: true });
-    expect(check?.available?.version).toBe("2.56.0-dev-pwrgit.6");
+    expect(check?.tracks.prerelease.available?.version).toBe("2.56.0-dev-pwrgit.6");
     const installed = await installManagedGit({ ...options, tag: r6.tag });
     expect(installed.generation).toBe(`2.56.0-dev-pwrgit.6-${r6.revision.slice(0, 7)}`);
     expect(installed.root).toBe(path.join(rootDir, "versions", installed.generation, "linux-x64"));
@@ -127,8 +128,8 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
     const disagree = fakeGithub([release], [githubRelease(release, { digests: { [release.archiveName]: "0".repeat(64) } })]);
     const a = setup(disagree);
     const check = await checkManagedGitReleases({ ...a.options, manual: true });
-    expect(check?.available).toBeUndefined();
-    expect(check?.error).toMatch(/digest and SHA256SUMS disagree/);
+    expect(check?.tracks.prerelease.available).toBeUndefined();
+    expect(check?.tracks.prerelease.error).toMatch(/digest and SHA256SUMS disagree/);
     await expect(installManagedGit({ ...a.options, tag: release.tag })).rejects.toThrow(/disagree/);
 
     const missing = fakeGithub([release], [githubRelease(release, { digests: { [release.archiveName]: null, "runtime-manifest.json": null } })]);
@@ -141,8 +142,8 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
     const usable = buildRelease("2.56.0-dev-pwrgit.5");
     const { options } = setup(fakeGithub([newer, usable]));
     const check = await checkManagedGitReleases({ ...options, manual: true });
-    expect(check?.needsAppUpdate).toEqual({ version: "2.56.0-dev-pwrgit.6" });
-    expect(check?.available?.version).toBe("2.56.0-dev-pwrgit.5");
+    expect(check?.tracks.prerelease.needsAppUpdate).toEqual({ version: "2.56.0-dev-pwrgit.6" });
+    expect(check?.tracks.prerelease.available?.version).toBe("2.56.0-dev-pwrgit.5");
     await expect(installManagedGit({ ...options, tag: newer.tag })).rejects.toThrow(/needs a newer PwrAgent/);
   });
 
@@ -150,7 +151,7 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
     const release = buildRelease("2.56.0-dev-pwrgit.6", { mutate: { catalog: (c) => { c.version = "2.56.0-dev-pwrgit.5"; } } });
     const { options } = setup(fakeGithub([release]));
     const check = await checkManagedGitReleases({ ...options, manual: true });
-    expect(check?.available).toBeUndefined();
+    expect(check?.tracks.prerelease.available).toBeUndefined();
   });
 
   it("refuses an archive with an absolute member before extracting anything", async () => {
@@ -199,6 +200,77 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
     gh.calls.length = 0;
     await installManagedGit({ ...options, tag: release.tag });
     expect(gh.calls.filter((url) => url.endsWith(".tar.gz"))).toHaveLength(1);
+  });
+});
+
+posixDescribe("build tracks", () => {
+  const FLAGS = [true, false, undefined, "false"] as const;
+  let pool: ReturnType<typeof buildRelease>[] | undefined;
+  const releases = () => (pool ??= ["5", "6", "7", "8"].map((n) => buildRelease(`2.56.0-dev-pwrgit.${n}`)));
+  const listed = (flags: readonly unknown[]) =>
+    releases().map((release, index) => githubRelease(release, { prerelease: flags[index] }));
+  const sumsFetched = (gh: FakeGithub) =>
+    gh.calls.filter((url) => url.endsWith("/SHA256SUMS")).map((url) => /dev-pwrgit\.(\d+)\//u.exec(url)?.[1]).sort();
+
+  it("answers both tracks in one check, and reads only the releases a track still needs", async () => {
+    // Oracle: Prerelease is the newest release, Latest the newest whose flag
+    // is exactly false. Every assignment of four flags to four releases.
+    for (let mask = 0; mask < FLAGS.length ** 4; mask += 1) {
+      const flags = [0, 1, 2, 3].map((index) => FLAGS[Math.floor(mask / FLAGS.length ** index) % FLAGS.length]);
+      const gh = fakeGithub(releases(), listed(flags));
+      const { options } = setup(gh);
+      const check = await checkManagedGitReleases({ ...options, manual: true });
+      const versions = releases().map((release) => release.tag.slice(1));
+      const promoted = versions.filter((_, index) => flags[index] === false);
+      const newestPromoted = promoted.at(-1);
+      const label = JSON.stringify(flags);
+      expect(check?.tracks.prerelease.available?.version, label).toBe(versions.at(-1));
+      expect(check?.tracks.latest.available?.version, label).toBe(newestPromoted);
+      expect(check?.tracks.latest.error, label).toBeUndefined();
+      // Never an older prerelease while looking for a promoted build.
+      const expected = [...new Set([versions.at(-1), newestPromoted].filter(Boolean))]
+        .map((version) => version!.split(".").at(-1))
+        .sort();
+      expect(sumsFetched(gh), label).toEqual(expected);
+    }
+  });
+
+  it("offers nothing on Latest while every release is a prerelease, and says no error", async () => {
+    const gh = fakeGithub(releases());
+    const { options } = setup(gh);
+    const check = await checkManagedGitReleases({ ...options, manual: true });
+    expect(check?.tracks.latest).toEqual({});
+    expect(check?.tracks.prerelease.available?.version).toBe("2.56.0-dev-pwrgit.8");
+    expect(check?.error).toBeUndefined();
+  });
+
+  it("keeps needs-a-newer-PwrAgent on the track it belongs to", async () => {
+    const newer = buildRelease("2.56.0-dev-pwrgit.6", { consumer: "e".repeat(64) });
+    const usable = buildRelease("2.56.0-dev-pwrgit.5");
+    const { options } = setup(fakeGithub([newer, usable], [
+      githubRelease(newer, { prerelease: true }),
+      githubRelease(usable, { prerelease: false }),
+    ]));
+    const check = await checkManagedGitReleases({ ...options, manual: true });
+    expect(check?.tracks.latest).toMatchObject({ available: { version: "2.56.0-dev-pwrgit.5" } });
+    expect(check?.tracks.latest.needsAppUpdate).toBeUndefined();
+    expect(check?.tracks.prerelease).toMatchObject({
+      available: { version: "2.56.0-dev-pwrgit.5" },
+      needsAppUpdate: { version: "2.56.0-dev-pwrgit.6" },
+    });
+  });
+
+  it("drops a check saved before tracks existed", async () => {
+    const { rootDir, options } = setup(fakeGithub(releases()));
+    await checkManagedGitReleases({ ...options, manual: true });
+    const file = path.join(rootDir, "managed-release.json");
+    const saved = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    const { tracks, ...rest } = saved as { tracks: { prerelease: { available: unknown } } };
+    writeFileSync(file, JSON.stringify({ ...rest, schemaVersion: 1, available: tracks.prerelease.available }));
+    await expect(readManagedGitCheck(options)).resolves.toBeUndefined();
+    // The next check refills it.
+    await checkManagedGitReleases({ ...options, manual: true });
+    await expect(readManagedGitCheck(options)).resolves.toMatchObject({ schemaVersion: 2 });
   });
 });
 

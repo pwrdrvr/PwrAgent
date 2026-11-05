@@ -16,6 +16,7 @@ import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { compareManagedGitVersions } from "@pwragent/shared";
 
 export const PWRDRVR_TEAM_ID = "T44CNHC4UH";
 export const PWRDRVR_SIGNING_IDENTITY =
@@ -185,25 +186,11 @@ export const MANAGED_GIT_GENERATION_PATTERN =
 // ---------------------------------------------------------------------------
 // Releases
 
-export type ManagedGitVersion = [number, number, number, number];
-
-/** Base version, then the pwrgit build number. Never publish order. */
-export function parseManagedGitVersion(value: string): ManagedGitVersion | undefined {
-  const match = TAG_PATTERN.exec(value.startsWith("v") ? value : `v${value}`);
-  return match
-    ? [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4])]
-    : undefined;
-}
-
-export function compareManagedGitVersions(left: string, right: string): number {
-  const a = parseManagedGitVersion(left);
-  const b = parseManagedGitVersion(right);
-  if (!a || !b) return a ? 1 : b ? -1 : 0;
-  for (let index = 0; index < 4; index += 1) {
-    if (a[index] !== b[index]) return a[index] - b[index];
-  }
-  return 0;
-}
+export {
+  compareManagedGitVersions,
+  parseManagedGitVersion,
+  type ManagedGitVersion,
+} from "@pwragent/shared";
 
 export type ManagedGitReleaseAsset = {
   name: string;
@@ -216,6 +203,11 @@ export type ManagedGitReleaseAsset = {
 export type ManagedGitRelease = {
   tag: string;
   version: string;
+  /**
+   * Promoted out of testing: GitHub's prerelease flag is exactly `false`.
+   * Anything else is a prerelease, which only the Prerelease track offers.
+   */
+  promoted: boolean;
   publishedAt?: string;
   catalog: ManagedGitReleaseAsset;
   checksums: ManagedGitReleaseAsset;
@@ -225,6 +217,7 @@ export type ManagedGitRelease = {
 type GithubRelease = {
   tag_name?: unknown;
   draft?: unknown;
+  prerelease?: unknown;
   published_at?: unknown;
   assets?: unknown;
 };
@@ -249,12 +242,11 @@ function normalizeAsset(value: unknown, tag: string): ManagedGitReleaseAsset | u
 }
 
 /**
- * Complete custom releases newer than `floorVersion`, newest first.
+ * Complete custom releases newer than `floorVersion`, newest by version first.
  *
- * Every custom release is a GitHub prerelease, so the prerelease flag is not
- * a filter and `/releases/latest` would never find one. A release counts only
- * when it carries the catalog and SHA256SUMS, which the release workflow
- * uploads last. Upstream Git and Dugite assets are never candidates: only
+ * GitHub's prerelease flag decides only the track (`promoted`), never whether
+ * a release counts. A release counts only when it carries the catalog and
+ * SHA256SUMS, which the release workflow uploads last. Upstream Git and Dugite assets are never candidates: only
  * this repository's tags of this exact shape are.
  */
 export function selectManagedGitReleases(
@@ -279,6 +271,7 @@ export function selectManagedGitReleases(
     selected.push({
       tag,
       version,
+      promoted: entry.prerelease === false,
       ...(typeof entry.published_at === "string" ? { publishedAt: entry.published_at } : {}),
       catalog,
       checksums,

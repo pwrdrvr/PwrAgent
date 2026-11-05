@@ -15,7 +15,7 @@
 //   under it by the next.
 //
 // Layout under `managedGitRoot()`:
-//   managed-release.json            last release check (reporting only)
+//   managed-release.json            last release check, both tracks (reporting only)
 //   releases/<tag>/                 that release's verified catalog + SHA256SUMS
 //   archives/<sha256>.tar.gz        downloaded archives, reused offline
 //   versions/<generation>/<key>/    the unmodified payload
@@ -43,6 +43,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { lock } from "proper-lockfile";
+import { DESKTOP_UPDATE_CHANNELS, type DesktopUpdateChannel } from "@pwragent/shared";
 import bundledCatalog from "../../custom-git-runtime.json";
 import {
   fetchGitHubReleaseMetadata,
@@ -92,6 +93,12 @@ const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 /** Releases newer than the bundle whose catalogs one check may read. */
 const MAX_RELEASES_PER_CHECK = 3;
 const STATE_VERSION = 1;
+/**
+ * The check file's own version. Version 1 knew one list with no promotion
+ * in it, so it answers for neither track: it is dropped and the next check
+ * refills it.
+ */
+const CHECK_STATE_VERSION = 2;
 const USER_AGENT = "PwrAgent-managed-git-runtime";
 
 /** The catalog this build shipped: its verifier contract and bundled version. */
@@ -108,14 +115,23 @@ export type ManagedGitAvailable = {
   publishedAt?: string;
 };
 
+/** What one build track offered at the last check. */
+export type ManagedGitTrackAnswer = {
+  /** Newest release on the track this build can install, newer than the bundle. */
+  available?: ManagedGitAvailable;
+  /** A newer release on the track whose catalog needs a newer PwrAgent. */
+  needsAppUpdate?: { version: string };
+  /** Why the track offers nothing, when releases were listed but none was usable. */
+  error?: string;
+};
+
+/** Every check answers both tracks, so switching tracks needs no network. */
 export type ManagedGitCheck = {
   schemaVersion: number;
   platformKey: ManagedGitPlatformKey;
   checkedAt: number;
-  /** Newest release this build can install, when it is newer than the bundle. */
-  available?: ManagedGitAvailable;
-  /** Newest release whose catalog needs a newer PwrAgent. */
-  needsAppUpdate?: { version: string };
+  tracks: Record<DesktopUpdateChannel, ManagedGitTrackAnswer>;
+  /** The whole check failed (offline, GitHub refused); the answers are the last good ones. */
   error?: string;
 };
 
@@ -198,9 +214,10 @@ export async function readManagedGitCheck(
       await readFile(path.join(rootDir, "managed-release.json"), "utf8"),
     ) as ManagedGitCheck;
     if (
-      check?.schemaVersion !== STATE_VERSION
+      check?.schemaVersion !== CHECK_STATE_VERSION
       || check.platformKey !== key
       || typeof check.checkedAt !== "number"
+      || !DESKTOP_UPDATE_CHANNELS.every((track) => typeof check.tracks?.[track] === "object" && check.tracks[track] !== null)
     ) return undefined;
     return check;
   } catch {
@@ -341,10 +358,18 @@ async function fetchReleaseList(
   return selectManagedGitReleases(await response.json(), s.bundledVersion);
 }
 
+function emptyTracks(): Record<DesktopUpdateChannel, ManagedGitTrackAnswer> {
+  return { latest: {}, prerelease: {} };
+}
+
 /**
- * Ask GitHub for releases newer than the bundled runtime and record the
- * newest one this build can install. Downloads nothing but the small catalog
- * and checksum files of at most three releases.
+ * Ask GitHub for releases newer than the bundled runtime and record, for
+ * each track, the newest one this build can install: Prerelease takes the
+ * newest release, Latest the newest promoted one. Releases are walked newest
+ * by version first, and one is fetched only while a track it belongs to
+ * still has no answer, so older prereleases are never read while looking
+ * for a promoted build. Downloads nothing but the small catalog and checksum
+ * files of at most three releases.
  */
 export async function checkManagedGitReleases(
   options: ManagedGitOptions & { manual: boolean; signal?: AbortSignal },
@@ -355,29 +380,35 @@ export async function checkManagedGitReleases(
   let result: ManagedGitCheck;
   try {
     const releases = await fetchReleaseList(options, options.manual, options.signal);
-    result = { schemaVersion: STATE_VERSION, platformKey: s.key, checkedAt: s.now() };
-    const failures: string[] = [];
-    for (const release of releases.slice(0, MAX_RELEASES_PER_CHECK)) {
+    const tracks = emptyTracks();
+    result = { schemaVersion: CHECK_STATE_VERSION, platformKey: s.key, checkedAt: s.now(), tracks };
+    let fetched = 0;
+    for (const release of releases) {
+      const open = DESKTOP_UPDATE_CHANNELS.filter(
+        (track) => !tracks[track].available && (track === "prerelease" || release.promoted),
+      );
+      if (open.length === 0) continue;
+      if (fetched >= MAX_RELEASES_PER_CHECK) break;
+      fetched += 1;
       try {
         const verified = await verifyReleaseMetadata(release, options, options.signal);
         await saveReleaseFiles(s.rootDir, verified);
-        result.available = verified.available;
-        break;
+        for (const track of open) tracks[track].available = verified.available;
       } catch (error) {
         if (error instanceof ManagedGitNeedsAppUpdateError) {
-          result.needsAppUpdate ??= { version: error.version };
+          for (const track of open) tracks[track].needsAppUpdate ??= { version: error.version };
           continue;
         }
         if (!(error instanceof ManagedGitTrustError)) throw error;
-        failures.push(`${release.tag}: ${error.message}`);
+        for (const track of open) tracks[track].error ??= `${release.tag}: ${error.message}`;
         log.warn("managed_git_release_rejected", { tag: release.tag, error: error.message });
       }
+      if (tracks.latest.available) break;
     }
-    if (!result.available && failures.length > 0) result.error = failures[0];
   } catch (error) {
     if (error instanceof ReleaseCheckDeferredError && previous && !options.manual) return previous;
     result = {
-      ...(previous ?? { schemaVersion: STATE_VERSION, platformKey: s.key, checkedAt: s.now() }),
+      ...(previous ?? { schemaVersion: CHECK_STATE_VERSION, platformKey: s.key, checkedAt: s.now(), tracks: emptyTracks() }),
       error: describeCheckError(error),
     };
   }
@@ -409,6 +440,7 @@ async function saveReleaseFiles(rootDir: string, verified: VerifiedRelease): Pro
   await writeJsonAtomic(path.join(directory, "release.json"), {
     tag: verified.release.tag,
     version: verified.release.version,
+    promoted: verified.release.promoted,
     ...(verified.release.publishedAt ? { publishedAt: verified.release.publishedAt } : {}),
     catalog: verified.release.catalog,
     checksums: verified.release.checksums,
@@ -1068,7 +1100,10 @@ async function pruneLocked(
     generations.filter((info) => keep.has(info.generation)).map((info) => `${info.archiveSha256}.tar.gz`),
   );
   const check = await readManagedGitCheck(options);
-  if (check?.available) keptArchives.add(`${check.available.archiveSha256}.tar.gz`);
+  for (const track of DESKTOP_UPDATE_CHANNELS) {
+    const offered = check?.tracks[track].available;
+    if (offered) keptArchives.add(`${offered.archiveSha256}.tar.gz`);
+  }
   try {
     for (const name of await readdir(path.join(s.rootDir, "archives"))) {
       if (/^[0-9a-f]{64}\.tar\.gz$/u.test(name) && !keptArchives.has(name)) {

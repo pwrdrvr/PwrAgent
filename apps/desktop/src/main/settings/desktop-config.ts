@@ -418,6 +418,8 @@ export type DesktopSettingsConfig = {
       managed?: string;
       /** What Roll back returns to: `bundled`, `managed:<id>` or `path:<path>`. */
       managedPrevious?: string;
+      /** Build track Settings → Git → Updates offers releases from. */
+      managedBuildChannel?: DesktopUpdateChannel;
     };
   };
   worktrees?: {
@@ -2151,6 +2153,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.applications?.git?.managedPrevious !== undefined) {
     set(["applications", "git", "managed_previous"], patch.applications.git.managedPrevious);
   }
+  if (patch.applications?.git?.managedBuildChannel !== undefined) {
+    set(["applications", "git", "managed_build_channel"], patch.applications.git.managedBuildChannel);
+  }
 
   if (patch.worktrees?.archive) {
     const archive = patch.worktrees.archive;
@@ -2696,6 +2701,7 @@ function normalizeDesktopConfig(
         path: readString(gitApplication?.path),
         managed: readString(gitApplication?.managed),
         managedPrevious: readString(gitApplication?.managed_previous),
+        managedBuildChannel: readUpdateChannel(gitApplication?.managed_build_channel),
       },
     },
     worktrees: {

@@ -149,7 +149,13 @@ export function buildRelease(
 
 export function githubRelease(
   release: FixtureRelease,
-  options: { digests?: Partial<Record<string, string | null>>; draft?: boolean; publishedAt?: string } = {},
+  options: {
+    digests?: Partial<Record<string, string | null>>;
+    draft?: boolean;
+    /** GitHub's flag; huntharo/git publishes every build as a prerelease first. */
+    prerelease?: unknown;
+    publishedAt?: string;
+  } = {},
 ): Record<string, unknown> {
   const asset = (name: string, bytes: Buffer | string) => {
     const digest = options.digests?.[name];
@@ -163,7 +169,7 @@ export function githubRelease(
   return {
     tag_name: release.tag,
     draft: options.draft ?? false,
-    prerelease: true,
+    prerelease: "prerelease" in options ? options.prerelease : true,
     published_at: options.publishedAt ?? "2026-11-05T15:33:24Z",
     assets: [
       asset("runtime-manifest.json", release.catalog),
