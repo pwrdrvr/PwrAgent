@@ -4998,3 +4998,29 @@ it("rejects no-deadline requests when their relayed owner disconnects", async ()
     }
   }), { numRuns: 10 });
 });
+
+it("an upstream disconnect preserves requests on an independent live direct connection", async () => {
+  await fc.assert(fc.asyncProperty(fc.uuid(), async (peerId) => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      rpcByPeer: Map<string, FederationRpcEndpoint>;
+      disconnectAdvertisedPeers: (reason: string) => void;
+    };
+    runtime.router = new FederationRouter({ localInstanceId: "viewer" });
+    runtime.router.registerConnection({ peerId, capabilities: [], sendEnvelope: () => undefined });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: peerId, sendEnvelope: () => undefined });
+    runtime.rpcByPeer.set(peerId, rpc);
+    let rejected = false;
+    const pending = rpc.request({ method: "file.push.checkpoint", params: {}, timeoutMs: null })
+      .catch(() => { rejected = true; });
+    try {
+      runtime.disconnectAdvertisedPeers("The upstream gateway dropped.");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(rejected).toBe(false);
+      expect(runtime.rpcByPeer.get(peerId)).toBe(rpc);
+    } finally {
+      rpc.rejectAll(new Error("fixture cleanup"));
+      await pending;
+    }
+  }), { numRuns: 10 });
+});
