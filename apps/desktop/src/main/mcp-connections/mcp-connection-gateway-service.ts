@@ -35,6 +35,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { McpInitializationTransport } from "./mcp-initialization-transport";
 import { McpDiscovery, McpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { SandboxerConnection } from "./sandboxer-connection";
 import {
   McpStdioLaunchError,
   OwnedStdioClientTransport,
@@ -73,8 +74,8 @@ import {
   PWRSNAP_MCP_CONNECTION_ID,
   isMcpIpcUrl,
   PWRGIT_MCP_CONNECTION_ID,
-  RETIRED_COMPUTE_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
+  SANDBOXER_MCP_CONNECTION_ID,
   isAcpBackendId,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
@@ -95,7 +96,11 @@ import {
   type TestMcpStdioConnectionResponse,
   type ConnectPwrSnapResponse,
   type OpenPwrSnapResponse,
+  type OpenSandboxerLinkResponse,
   type PwrSnapConnectionStatus,
+  type SandboxerLinkTarget,
+  type SandboxerTransport,
+  isSandboxerTransport,
   buildThreadIdentityKey,
 } from "@pwragent/shared";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
@@ -107,7 +112,9 @@ import {
   type RuntimeLeaseHolder,
 } from "../runtime-lease-manager";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { getAppStateMode, getAppOverlayStore } from "../state/app-state";
+import { getAppStateDb, getAppStateMode, getAppOverlayStore } from "../state/app-state";
+import { ThreadSandboxStore } from "../state/thread-sandbox-store";
+import { readCreatedSandbox, type SandboxerCleanupTransport } from "./sandboxer-pr-cleanup";
 import {
   McpConnectionRegistry,
 } from "./mcp-connection-registry";
@@ -165,6 +172,7 @@ const MAX_BRIDGE_ATTACHMENTS = 1_024;
  * what arrived rather than a spinner that never ends.
  */
 const MAX_TOOL_LIST_PAGES = 20;
+const MAX_SERVER_INSTRUCTIONS_CHARS = 2_000;
 /**
  * How long a Settings test waits for a local command to answer the MCP
  * handshake and list its tools. A first `npx -y` run downloads the package,
@@ -295,13 +303,8 @@ type FetchLike = (
   init?: RequestInit,
 ) => Promise<Response>;
 
-export type McpToolSession = {
-  listToolNames: () => Promise<string[]>;
-  callTool: (name: string, args: Record<string, unknown>) => Promise<CallToolResult>;
-  close: () => void | Promise<void>;
-};
-
 export type McpConnectionGatewayServiceOptions = {
+  sandboxer?: SandboxerConnection;
   /**
    * A thread's directories, read in the instance that runs the thread. The
    * backend registry sets it with `setThreadRootsResolver` when it is not
@@ -335,6 +338,19 @@ export type McpConnectionGatewayServiceOptions = {
   resolveStdioSearchEnv?: () => Promise<NodeJS.ProcessEnv>;
   /** How long a Settings test waits for a local command to answer. */
   stdioTestTimeoutMs?: number;
+  /**
+   * Records a sandbox a thread created through the built-in Sandboxer
+   * connection, so PwrAgent can release exactly that one when the thread's
+   * PRs close. Defaults to the profile state database.
+   */
+  recordCreatedSandbox?: (params: {
+    connectionId: string;
+    sandboxId: string;
+    name?: string;
+    backend?: string;
+    threadId: string;
+    now: number;
+  }) => void;
 };
 
 function resolveDefaultPwrSnapInstallPaths(): string[] {
@@ -664,6 +680,8 @@ export class McpConnectionGatewayService {
   private leaseHeld = false;
   private brokerToken?: string;
   private nonOwnerHolder?: RuntimeLeaseHolder;
+
+  private readonly sandboxer: SandboxerConnection;
   private readonly changeListeners = new Set<(event: McpConnectionsChangedEvent) => void>();
   private readonly stdioSecrets: McpStdioSecretVault;
   private readonly stdioSpawn?: StdioSpawn;
@@ -701,8 +719,14 @@ export class McpConnectionGatewayService {
   private threadRootsResolver?: (scope: ThreadRootsScope) => Promise<ThreadRootDirectory[]>;
   /** Links a native host opened, per session, so the server's completion can follow. */
   private readonly openedUrlElicitations = new WeakMap<Client, Map<string, string>>();
+  private readonly recordCreatedSandbox: NonNullable<McpConnectionGatewayServiceOptions["recordCreatedSandbox"]>;
 
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
+    this.recordCreatedSandbox = options.recordCreatedSandbox
+      ?? ((params) => {
+        if (!getAppStateMode()) return;
+        new ThreadSandboxStore(getAppStateDb().raw).recordCreated(params);
+      });
     this.threadRootsResolver = options.resolveThreadRoots;
     this.readGatewaySelection = options.readGatewaySelection
       ?? (async (context) => (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? []);
@@ -710,6 +734,9 @@ export class McpConnectionGatewayService {
       options.bridgeEntryPath ?? join(__dirname, "mcp-connection-bridge.js");
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url));
+    this.sandboxer = options.sandboxer
+      ?? new SandboxerConnection(undefined, { openExternal: this.openExternal });
+    this.sandboxer.onStatusChanged(() => this.announceChanged([SANDBOXER_MCP_CONNECTION_ID]));
     this.openPath = options.openPath ?? ((path) => shell.openPath(path));
     this.resolveInstallPaths =
       options.resolveInstallPaths ?? resolveDefaultPwrSnapInstallPaths;
@@ -817,8 +844,8 @@ export class McpConnectionGatewayService {
 
   /**
    * Hear when a connection's status may have changed through this instance:
-   * a mutation it made or forwarded to the owner broker.
-   * See `McpConnectionsChangedEvent`.
+   * a mutation it made (or forwarded to the owner broker), or a Sandboxer
+   * CLI answer that differs from the last. See `McpConnectionsChangedEvent`.
    */
   onConnectionsChanged(
     listener: (event: McpConnectionsChangedEvent) => void,
@@ -846,21 +873,22 @@ export class McpConnectionGatewayService {
   }
 
   async listConnections(
-    options: { cachedLocalStatus?: boolean } = {},
+    options: { cachedLocalStatus?: boolean; sandboxerStatusMaxAgeMs?: number } = {},
   ): Promise<McpConnectionStatus[]> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      const connections = await this.requestOwnerBroker<McpConnectionStatus[]>(
+      return await this.requestOwnerBroker<McpConnectionStatus[]>(
         ownership.holder,
         "broker/list",
         options,
       );
-      return connections.filter((connection) => connection.id !== RETIRED_COMPUTE_CONNECTION_ID);
     }
     return await Promise.all(
       this.registry.list().map(async (connection) =>
         await this.connectionStatus(
           connection,
+          options.cachedLocalStatus,
+          options.sandboxerStatusMaxAgeMs,
         ),
       ),
     );
@@ -1108,6 +1136,19 @@ export class McpConnectionGatewayService {
     });
   }
 
+  /**
+   * Opens a Sandboxer page from this machine. Local mode uses the CLI
+   * dashboard handoff; hosted mode leaves sign-in to the browser.
+   */
+  async openSandboxerLink(target: SandboxerLinkTarget): Promise<OpenSandboxerLinkResponse> {
+    const connection = this.requireConnection(SANDBOXER_MCP_CONNECTION_ID);
+    if (connection.authMode === "oauth" && target === "dashboard") {
+      await this.openExternal("https://sandboxer.com/dashboard");
+      return { opened: true };
+    }
+    return await this.sandboxer.openLink(target);
+  }
+
   async authorizeConnection(connectionId: string): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
@@ -1123,6 +1164,18 @@ export class McpConnectionGatewayService {
     }
     if (connection.kind === "stdio") {
       throw new Error(`${connection.displayName} is a local command. It has nothing to sign in to.`);
+    }
+    if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
+      // The CLI may have logged into a different account since this process
+      // started. Only then retire servers holding the previous login and its
+      // catalog: Settings refreshes on window focus during setup, and closing
+      // a live `sbx mcp` drops the sandbox a thread was implicitly using.
+      const { accountChanged } = await this.sandboxer.refreshStatus();
+      if (accountChanged) {
+        await this.closeConnectionSessions(connectionId);
+        this.invalidateConnectionTools(connectionId);
+      }
+      return this.announced(await this.connectionStatus(connection));
     }
     // Restore the first attempt's state before its callback rejection runs.
     this.coordinatorFor(connection).abandonAuthorization();
@@ -1195,7 +1248,7 @@ export class McpConnectionGatewayService {
       ));
     }
     const connection = this.requireConnection(connectionId);
-    if (connection.authMode === "none") return this.announced(await this.connectionStatus(connection));
+    if (connection.authMode === "local_cli" || connection.authMode === "none") return this.announced(await this.connectionStatus(connection));
     // Retire the attempt in the coordinator *before* ending its wait, so the
     // rejection that follows lands on a stale attempt and cannot report a
     // called-off authorization as `reauthorization_required`. Doing it the
@@ -1385,6 +1438,9 @@ export class McpConnectionGatewayService {
       this.invalidateConnectionTools(connectionId);
       return this.announced(await this.connectionStatus(this.registry.setEnabled(connectionId, false)));
     }
+    if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
+      return this.announced(await this.connectionStatus(this.registry.setEnabled(connectionId, false)));
+    }
     // A local command holds no credentials to discard; stopping its running
     // copies is all a disconnect can mean.
     if (connection.kind === "stdio") return this.announced(await this.connectionStatus(connection));
@@ -1453,6 +1509,28 @@ export class McpConnectionGatewayService {
   }
 
   /**
+   * Choose whether PwrAgent cleans up the sandboxes a thread created once
+   * every PR attached to that thread has merged or closed.
+   *
+   * Nothing live changes. The flag is read when a thread's last open PR
+   * merges or closes, so the next such PR follows it.
+   */
+  async setSandboxerCleanupOnPrClose(
+    enabled: boolean,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/set-sandboxer-cleanup-on-pr-close",
+        { enabled },
+      ));
+    }
+    const connection = this.registry.setSandboxerCleanupOnPrClose(enabled);
+    return this.announced(await this.connectionStatus(connection));
+  }
+
+  /**
    * Choose whether images in text pasted from Linear are fetched through a
    * Linear connection. Nothing live changes: the next paste reads it.
    */
@@ -1483,8 +1561,8 @@ export class McpConnectionGatewayService {
 
   /**
    * The Linear connections a paste may fetch images through, or `undefined`
-   * when the setting is off. Reads the local registry: config.toml is
-   * profile-local.
+   * when the setting is off. Reads the local registry, like
+   * `isSandboxerCleanupOnPrCloseEnabled`: config.toml is profile-local.
    * Signed-in state is checked when the session opens.
    */
   linearPasteConnectionIds(): string[] | undefined {
@@ -1494,6 +1572,41 @@ export class McpConnectionGatewayService {
     return this.registry.list()
       .filter((connection) => connection.linearPasteImages !== undefined && connection.enabled)
       .map((connection) => connection.id);
+  }
+
+  async setSandboxerTransport(transport: SandboxerTransport): Promise<McpConnectionStatus> {
+    if (!isSandboxerTransport(transport)) throw new Error("Choose a Sandboxer transport.");
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder, "broker/set-sandboxer-transport", { transport },
+      ));
+    }
+    const previous = this.requireConnection(SANDBOXER_MCP_CONNECTION_ID);
+    if ((previous.authMode === "oauth" ? "hosted" : "local_cli") === transport) {
+      return this.announced(await this.connectionStatus(previous));
+    }
+    this.coordinators.get(previous.id)?.abandonAuthorization();
+    this.abandonPendingAuthorization(previous.id, "Sandboxer connection method changed.");
+    await this.closeConnectionSessions(previous.id);
+    // Keep endpoint-bound credentials for a later explicit switch back.
+    this.coordinators.delete(previous.id);
+    this.invalidateConnectionTools(previous.id);
+    const connection = this.registry.setSandboxerTransport(transport);
+    return this.announced(await this.connectionStatus(connection));
+  }
+
+  /**
+   * Whether Sandboxer cleanup on PR close is on.
+   *
+   * Reads the local registry rather than asking the owner broker: config.toml
+   * is profile-local, so every instance on the profile reads the same value.
+   */
+  isSandboxerCleanupOnPrCloseEnabled(): boolean {
+    return (
+      this.registry.get(SANDBOXER_MCP_CONNECTION_ID)?.sandboxerCleanupOnPrClose
+      !== false
+    );
   }
 
   /**
@@ -1684,9 +1797,6 @@ export class McpConnectionGatewayService {
     backend: AppServerBackendKind | undefined,
   ): Promise<McpConnectionBridgeRegistration> {
     signal?.throwIfAborted();
-    if (connectionId === RETIRED_COMPUTE_CONNECTION_ID) {
-      throw new Error("That MCP connection has been retired.");
-    }
     const ownership = await this.ensureOwnerBroker();
     signal?.throwIfAborted();
     if (!ownership.owned) {
@@ -1711,7 +1821,7 @@ export class McpConnectionGatewayService {
       && !(connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked)
     ) {
       throw new Error(
-        connection.kind === "stdio" ? status.detail
+        connection.authMode === "local_cli" || connection.kind === "stdio" ? status.detail
           : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
       );
     }
@@ -2368,6 +2478,7 @@ export class McpConnectionGatewayService {
         connectionId: connection.id,
         serverUrl,
         ...(connection.kind === "pwrsnap" ? { scope: PWRSNAP_SCOPES } : {}),
+        ...(connection.kind === "sandboxer" ? { scope: "sandboxer" } : {}),
         ...(connection.kind === "pwrgit" ? {
           scope: "repository.roots.read repository.checkout.locate repository.metadata.read forge.status.read status.subscribe",
           discardRejectedCredentials: true,
@@ -2417,10 +2528,32 @@ export class McpConnectionGatewayService {
 
   private async connectionStatus(
     connection: McpConnectionRecord,
+    cachedLocalStatus = false,
+    sandboxerStatusMaxAgeMs?: number,
   ): Promise<McpConnectionStatus> {
     if (isMcpIpcUrl(connection.serverUrl)) {
       return {
         ...connection, configured: true, state: "ready",
+        discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
+      };
+    }
+    if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
+      // New-thread defaults have a two-second total budget. Refresh enabled
+      // compute in the background without delaying unrelated defaults. A cold
+      // cache skips only Sandboxer until a probe has established its login.
+      if (cachedLocalStatus && connection.enabled) {
+        void this.sandboxer.readStatus();
+      }
+      const status = cachedLocalStatus
+        ? this.sandboxer.cachedStatus()
+        : await this.sandboxer.readStatus(
+          sandboxerStatusMaxAgeMs === undefined
+            ? false
+            : { maxAgeMs: sandboxerStatusMaxAgeMs },
+        );
+      return {
+        ...connection,
+        ...status,
         discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
       };
     }
@@ -2604,6 +2737,10 @@ export class McpConnectionGatewayService {
     if (isMcpIpcUrl(connection.serverUrl)) {
       const credential = await this.credentialVault.read(connection.id, connection.serverUrl);
       transport = createMcpIpcTransport(connection.serverUrl, { bearerToken: credential?.ipcBearerToken });
+    } else if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
+      const status = await this.sandboxer.readStatus();
+      if (!status.configured) throw new Error(status.detail);
+      transport = this.sandboxer.createTransport();
     } else {
       const coordinator = this.coordinatorFor(connection);
       if (!(await coordinator.configured())) {
@@ -3319,6 +3456,10 @@ export class McpConnectionGatewayService {
     if (operation === "broker/list") {
       return await this.listConnections({
         cachedLocalStatus: values.cachedLocalStatus === true,
+        ...(typeof values.sandboxerStatusMaxAgeMs === "number"
+          && Number.isFinite(values.sandboxerStatusMaxAgeMs)
+          ? { sandboxerStatusMaxAgeMs: values.sandboxerStatusMaxAgeMs }
+          : {}),
       });
     }
     if (operation === "broker/pwrsnap-status") {
@@ -3404,6 +3545,16 @@ export class McpConnectionGatewayService {
         values.selectForNewThreads,
       );
     }
+    if (operation === "broker/set-sandboxer-transport") {
+      if (!isSandboxerTransport(values.transport)) throw new Error("Choose a Sandboxer transport.");
+      return await this.setSandboxerTransport(values.transport);
+    }
+    if (operation === "broker/set-sandboxer-cleanup-on-pr-close") {
+      if (typeof values.enabled !== "boolean") {
+        throw new Error("Invalid Sandboxer cleanup on PR close request.");
+      }
+      return await this.setSandboxerCleanupOnPrClose(values.enabled);
+    }
     if (operation === "broker/set-linear-paste-images") {
       if (typeof values.enabled !== "boolean") {
         throw new Error("Invalid Linear paste images request.");
@@ -3475,7 +3626,7 @@ export class McpConnectionGatewayService {
       const status = await this.connectionStatus(connection);
       if (!status.configured) {
         throw new Error(
-          connection.kind === "stdio" ? status.detail
+          connection.authMode === "local_cli" || connection.kind === "stdio" ? status.detail
             : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
         );
       }
@@ -3650,6 +3801,16 @@ export class McpConnectionGatewayService {
         serverInfo: client.getServerVersion?.(), metadata: this.initializations.get(client)?._meta,
       } };
     }
+    // Sandboxer's say to stop each sandbox when done; dropping them left the
+    // agent nothing telling it a forgotten machine keeps billing. Only the
+    // built-in Sandboxer connection's: a third-party server's instructions would be
+    // untrusted text the agent is told to follow.
+    const instructions = connection.kind === "sandboxer"
+      ? client.getInstructions?.()?.trim()
+      : undefined;
+    if (instructions && tools[0]) {
+      tools[0] = { ...tools[0], serverInstructions: instructions.slice(0, MAX_SERVER_INSTRUCTIONS_CHARS) };
+    }
     return tools;
   }
 
@@ -3738,6 +3899,7 @@ export class McpConnectionGatewayService {
               }
               throw error;
             }
+            this.observeToolResult(grant, tool.toolName, result as CallToolResult);
             return result;
           }
           case "describe": {
@@ -3775,6 +3937,7 @@ export class McpConnectionGatewayService {
               }
               throw error;
             }
+            this.observeToolResult(grant, values.name, result as CallToolResult);
             return result;
           }
           // The caller's cancel reaches the server; it no longer waits out
@@ -3813,11 +3976,48 @@ export class McpConnectionGatewayService {
     return await mcpDiscoveryContext.exit(async () => await mcpDiscoveryPhaseContext.exit(dispatch));
   }
 
+  /**
+   * Every Sandboxer tool call reaches the upstream server here, on the
+   * profile's owner, whether it came through a thread's native MCP bridge or
+   * `call_mcp_tool`. A successful `create_sandbox` is recorded against the
+   * calling thread. Recording never affects the call's result.
+   */
+  private observeToolResult(
+    grant: BridgeGrant,
+    toolName: unknown,
+    result: CallToolResult,
+  ): void {
+    if (grant.connectionId !== SANDBOXER_MCP_CONNECTION_ID || toolName !== "create_sandbox") return;
+    const thread = readGrantThread(grant.threadId);
+    if (!thread) return;
+    try {
+      const sandbox = readCreatedSandbox(result);
+      if (!sandbox) return;
+      this.recordCreatedSandbox({
+        connectionId: grant.connectionId,
+        ...sandbox,
+        ...thread,
+        now: Date.now(),
+      });
+    } catch (error) {
+      connectionLog.warn("failed to record a created sandbox", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * A tool session for PwrAgent's own calls, such as releasing a closed PR's
+   * sandboxes. It uses the same owner-broker path as an agent's call, so it
+   * works for a local process or a hosted endpoint alike, but it is not tied
+   * to a thread's MCP selection: the operator's cleanup switch governs it.
+   * The connection must still be enabled and signed in. Close it when done.
+   */
   async openPwrAgentToolSession(params: {
     connectionId: string;
     scopeKey: string;
     signal: AbortSignal;
-  }): Promise<McpToolSession> {
+  }): Promise<SandboxerCleanupTransport> {
     const registration = await this.registerBridge(
       params.connectionId,
       params.scopeKey,

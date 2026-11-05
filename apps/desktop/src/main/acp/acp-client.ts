@@ -132,7 +132,7 @@ export function mergeMcpServerRegistrations(
 // Grok accepts an MCP server name only when it starts with a letter or an
 // underscore and holds only letters, digits, `_` and `-`. It connects a server
 // with any other name and then drops all of its tools. Custom connection IDs
-// always pass. Names with punctuation do not. A rewritten name
+// always pass. The built-in `builtin:sandboxer` does not. A rewritten name
 // starts with `_`, so it cannot collide with a custom ID, which must start
 // with a letter.
 const ACP_MCP_SERVER_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/u;

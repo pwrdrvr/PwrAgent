@@ -46,19 +46,19 @@ const remoteThread: NavigationThreadSummary = {
 
 describe("ThreadView remote MCP access", () => {
   it.each([false, true])("opens the owner's connections from a remote thread (remote window: %s)", async (remoteWindow) => {
-    const fixturecloud: McpConnectionStatus = {
-      id: "remote-fixture", displayName: "FixtureCloud", kind: "remote",
-      authMode: "oauth", serverUrl: "", enabled: true,
+    const sandboxer: McpConnectionStatus = {
+      id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer",
+      authMode: "local_cli", serverUrl: "", enabled: true,
       createdAt: 0, updatedAt: 0, configured: true, state: "ready",
     };
     const read: NonNullable<DesktopApi["readThreadMcpConnections"]> = vi.fn(async (request) => ({
-      connectionIds: request.federationTarget?.instanceId === target.instanceId ? [] : [fixturecloud.id],
+      connectionIds: request.federationTarget?.instanceId === target.instanceId ? [] : [sandboxer.id],
       providerServersEnabled: true,
     }));
     const list: NonNullable<DesktopApi["listMcpConnections"]> = vi.fn(async (request) => ({
       connections: [request?.federationTarget?.instanceId === target.instanceId
-        ? { ...fixturecloud, configured: false, state: "disconnected" as const, detail: "FixtureCloud is not set up on Studio." }
-        : fixturecloud],
+        ? { ...sandboxer, configured: false, state: "disconnected" as const, detail: "Sandboxer is not set up on Studio." }
+        : sandboxer],
     }));
     const openSettings = vi.fn();
     render(<ThreadView
@@ -73,9 +73,9 @@ describe("ThreadView remote MCP access", () => {
     await waitFor(() => expect(screen.getByRole("complementary", { name: "PwrAgent MCPs" })).toBeInTheDocument());
     await waitFor(() => expect(list).toHaveBeenCalledWith({ federationTarget: target }));
     expect(read).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", federationTarget: target });
-    expect(await screen.findByText("FixtureCloud is not set up on Studio.")).toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "Use FixtureCloud in this thread" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Authorize" })).toBeDisabled();
+    expect(await screen.findByText("Sandboxer is not set up on Studio.")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Use Sandboxer in this thread" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up in Settings" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Manage connections" })).not.toBeInTheDocument();
     expect(openSettings).not.toHaveBeenCalled();
   });

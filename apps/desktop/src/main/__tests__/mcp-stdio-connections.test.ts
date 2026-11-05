@@ -1,3 +1,4 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import fs from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import os from "node:os";
@@ -149,6 +150,7 @@ function createService(fixture: Fixture, overrides: { gatewayEnabled?: () => boo
   const registry = new McpConnectionRegistry({ configPath: path.join(fixture.root, "config.toml") });
   const secretSettings = memorySecretSettings();
   const service = new McpConnectionGatewayService({
+    sandboxer: sandboxerStub(),
     bridgeEntryPath: "/test/mcp-connection-bridge.js",
     gatewayEnabled: overrides.gatewayEnabled ?? (() => true),
     leaseManager: null,

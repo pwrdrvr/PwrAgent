@@ -105,7 +105,7 @@ This is a new row shape, not a change to an existing key, so the
 
 **One process per thread and connection.** Stdio servers keep state per
 process: a filesystem server's allowed roots, a browser server's open page, a
-database server's transaction, a compute server's current workspace. Sharing a
+database server's transaction, Sandboxer's "last sandbox used". Sharing a
 process between threads would let one thread's state answer another's call,
 which is the isolation the gateway gives remote servers through one upstream
 session per grant. Each bridge grant (thread × connection) therefore gets its

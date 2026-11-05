@@ -1,3 +1,4 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ import { ConnectionRpcClient, type McpBridgeEvent } from "../mcp-connections/mcp
 import type { ElicitationRoute } from "../mcp-connections/mcp-elicitation-relay";
 import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
+import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import type { ThreadRootDirectory } from "../mcp-connections/mcp-upstream-roots";
 
 /*
@@ -147,6 +149,7 @@ async function createService(
 ) {
   const selection = { ids: [] as string[] };
   const service = new McpConnectionGatewayService({
+    sandboxer: sandboxerStub(),
     bridgeEntryPath: "/test/mcp-connection-bridge.js",
     gatewayEnabled: () => true,
     leaseManager: null,
@@ -531,14 +534,16 @@ describe.skipIf(process.platform === "win32")("MCP links on managed connections"
 });
 
 describe("MCP links and roots on a connection that is not a local command", () => {
-  function remoteFixture() {
+  function sandboxerFixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-mcp-links-remote-"));
     temporaryDirectories.push(root);
     const registry = new McpConnectionRegistry({ configPath: path.join(root, "config.toml") });
-    const connection = registry.create({ displayName: "Fixture remote", serverUrl: "https://remote.example/mcp" });
+    registry.setSandboxerTransport("local_cli");
+    registry.setEnabled("builtin:sandboxer", true);
+    const sandboxer = new SandboxerConnection(async () => '{"signedIn":true,"apiReachable":true}');
     const declared: Array<ClientCapabilities | undefined> = [];
     const servers: Server[] = [];
-    const createTransport = () => {
+    vi.spyOn(sandboxer, "createTransport").mockImplementation(() => {
       const [client, remote] = InMemoryTransport.createLinkedPair();
       const server = new Server({ name: "fixture-remote", version: "1" }, { capabilities: { tools: {} } });
       server.oninitialized = () => declared.push(server.getClientCapabilities());
@@ -561,11 +566,11 @@ describe("MCP links and roots on a connection that is not a local command", () =
       void server.connect(remote);
       servers.push(server);
       return client;
-    };
+    });
     const read = vi.fn(async () => undefined);
     const service = new McpConnectionGatewayService({
-      registry, leaseManager: null,
-      readGatewaySelection: async () => [connection.id],
+      registry, sandboxer, leaseManager: null,
+      readGatewaySelection: async () => ["builtin:sandboxer"],
       resolveThreadRoots: async () => [{ path: root }],
       settings: {
         resolveMcpConnectionCredentials: read,
@@ -578,28 +583,16 @@ describe("MCP links and roots on a connection that is not a local command", () =
         savePwrSnapMcpCredential: vi.fn(async () => undefined),
       },
     });
-    const internal = service as unknown as {
-      createUpstreamClient: (connection: unknown, name: string, handlers: unknown) => import("@modelcontextprotocol/sdk/client/index.js").Client;
-    };
-    Object.assign(service, { connectUpstreamClient: async (record: unknown, options: { clientName: string; handlers: unknown }) => {
-      const transport = createTransport();
-      const client = internal.createUpstreamClient(record, options.clientName, options.handlers);
-      await client.connect(transport);
-      return { client, transport };
-    } });
-    vi.spyOn(service as unknown as { connectionStatus: () => Promise<unknown> }, "connectionStatus").mockResolvedValue({
-      ...connection, configured: true, state: "ready",
-    });
     services.push(service);
     disposals.push(async () => { await Promise.all(servers.map(async (server) => await server.close())); });
     const scopeKey = JSON.stringify(["gateway", "codex", "thread-r"]);
     const signal = new AbortController().signal;
     const call = async (url: string, elicit: ElicitationRoute) => {
       const tools = await service.requestGatewayToolOperation({
-        connectionId: connection.id, scopeKey, operation: "gateway/tools/list", signal,
+        connectionId: "builtin:sandboxer", scopeKey, operation: "gateway/tools/list", signal,
       }) as McpGatewayTool[];
       const reply = await service.requestGatewayToolOperation({
-        connectionId: connection.id, scopeKey, operation: "gateway/tools/call", signal,
+        connectionId: "builtin:sandboxer", scopeKey, operation: "gateway/tools/call", signal,
         invocation: { ...tools[0]!, arguments: { url } }, elicitUrl: true, elicit,
       }) as { content: Array<{ text: string }> };
       return JSON.parse(reply.content[0]!.text) as { answer?: unknown; error?: number };
@@ -608,7 +601,7 @@ describe("MCP links and roots on a connection that is not a local command", () =
   }
 
   it("declares links but never roots, and refuses a remote server's http link to this machine", async () => {
-    const f = remoteFixture();
+    const f = sandboxerFixture();
     const elicit = vi.fn(async () => ({ action: "accept" }));
 
     expect(await f.call("https://auth.fixture.test/remote", elicit)).toEqual({ answer: { action: "accept" } });

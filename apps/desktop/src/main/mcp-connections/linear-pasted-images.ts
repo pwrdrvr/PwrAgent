@@ -1,4 +1,3 @@
-import type { McpToolSession } from "./mcp-connection-gateway-service";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   findLinearPastedImages,
@@ -6,6 +5,7 @@ import {
   type LinearPastedImage,
   type LinearPastedImageData,
 } from "@pwragent/shared";
+import type { SandboxerCleanupTransport } from "./sandboxer-pr-cleanup";
 
 /**
  * Fetch the images in text pasted from Linear. Loaded on the first paste that
@@ -38,7 +38,7 @@ export type LinearPastedImagesOptions = {
     connectionId: string;
     scopeKey: string;
     signal: AbortSignal;
-  }) => Promise<Pick<McpToolSession, "callTool" | "close">>;
+  }) => Promise<Pick<SandboxerCleanupTransport, "callTool" | "close">>;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
   timeoutMs?: number;

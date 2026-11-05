@@ -1,3 +1,5 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
+import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -68,6 +70,7 @@ function temporaryRegistry(): McpConnectionRegistry {
   const registry = new McpConnectionRegistry({
     configPath: path.join(directory, "config.toml"),
   });
+  registry.setSandboxerTransport("local_cli");
   return registry;
 }
 
@@ -86,7 +89,7 @@ describe("McpConnectionGatewayService", () => {
     const settings = createSettings();
     const fetchFn = vi.fn(async () => new Response("unexpected network request"));
     const openExternal = vi.fn(async () => undefined);
-    const service = new McpConnectionGatewayService({ registry, settings, fetchFn, openExternal, leaseManager: null });
+    const service = new McpConnectionGatewayService({ registry, settings, fetchFn, openExternal, sandboxer: sandboxerStub(), leaseManager: null });
     services.push(service);
     await expect(service.authorizeConnection(connection.id)).rejects.toThrow("not browser OAuth");
     expect(openExternal).not.toHaveBeenCalled();
@@ -101,7 +104,7 @@ describe("McpConnectionGatewayService", () => {
   it("encrypts IPC session tokens without returning them and clears them on endpoint change or disconnect", async () => {
     const registry = temporaryRegistry();
     const settings = createSettings();
-    const service = new McpConnectionGatewayService({ registry, settings, leaseManager: null });
+    const service = new McpConnectionGatewayService({ registry, settings, sandboxer: sandboxerStub(), leaseManager: null });
     services.push(service);
     const serverUrl = process.platform === "win32" ? "pipe:///pipe/token-fixture#/mcp" : "unix:///tmp/private/token-fixture.sock#/mcp";
     const connection = await service.createConnection({ displayName: "Token fixture", serverUrl, ipcBearerToken: "native-session-ticket" });
@@ -117,7 +120,7 @@ describe("McpConnectionGatewayService", () => {
     await expect(service.createConnection({ displayName: "Network", serverUrl: "https://example.org/mcp", ipcBearerToken: "secret" })).rejects.toThrow("local IPC");
   });
   it("serves a changing full catalog and validates calls over the revocable socket", async () => {
-    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
     services.push(service);
     let requiredType = "string";
     const listTools = vi.fn(async () => ({ tools: [{ name: "lookup", inputSchema: {
@@ -131,7 +134,8 @@ describe("McpConnectionGatewayService", () => {
     const first = await service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }) as McpGatewayTool[];
     const other = await service.requestGatewayToolOperation({ ...base, scopeKey: JSON.stringify(["gateway", "codex", "fixture-thread-b"]), operation: "gateway/tools/list" }) as McpGatewayTool[];
     expect(first[0].definition.inputSchema.properties).toEqual({ id: { type: "string" } });
-    // Server instructions are untrusted text and must not reach the agent.
+    // Only the built-in Sandboxer CLI's instructions reach the agent. Any
+    // other server's would be untrusted text the agent is told to follow.
     expect(first.some((tool) => tool.serverInstructions)).toBe(false);
     expect(first[0].schemaRevision).not.toEqual(other[0].schemaRevision);
     expect(connectUpstreamClient).toHaveBeenCalledTimes(2);
@@ -156,7 +160,7 @@ describe("McpConnectionGatewayService", () => {
   });
 
   it("gives live gateway catalog pages one 60-second budget", async () => {
-    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
     services.push(service);
     let now = Date.now();
     const timeouts: number[] = [];
@@ -180,7 +184,7 @@ describe("McpConnectionGatewayService", () => {
   });
 
   it("rejects repeated pagination cursors instead of approving an incomplete catalog", async () => {
-    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
     services.push(service);
     const listTools = vi.fn(async () => ({ tools: [], nextCursor: "same" }));
     Object.assign(service, { connectUpstreamClient: async () => ({ client: { listTools, close: vi.fn(async () => undefined) }, transport: { close: vi.fn(async () => undefined) } }) });
@@ -190,7 +194,7 @@ describe("McpConnectionGatewayService", () => {
   });
 
   it("propagates cancellation without closing the shared session", async () => {
-    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
     services.push(service);
     let entered!: () => void;
     const started = new Promise<void>((resolve) => { entered = resolve; });
@@ -221,7 +225,7 @@ describe("McpConnectionGatewayService", () => {
   });
 
   it("does not resurrect a session whose authorization changed during connection", async () => {
-    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
     services.push(service);
     let opened!: () => void;
     let release!: () => void;
@@ -244,6 +248,7 @@ describe("McpConnectionGatewayService", () => {
     const acquire = vi.fn();
     const publish = vi.spyOn(McpConnectionBrokerDiscovery.prototype, "publish");
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       settings: createSettings(),
       leaseManager: { id: "bootstrap-test", profile: "dev", acquire, release: vi.fn(), snapshot: vi.fn(), shouldRetryAcquisition: vi.fn() },
     });
@@ -269,6 +274,7 @@ describe("McpConnectionGatewayService", () => {
 
   it("distinguishes an absent install from a running MCP endpoint", async () => {
     const absent = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       fetchFn: vi.fn(async () => {
         throw new Error("connection refused");
       }),
@@ -284,6 +290,7 @@ describe("McpConnectionGatewayService", () => {
     });
 
     const running = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
       resolveInstallPaths: () => [],
       settings: createSettings(JSON.stringify({
@@ -302,6 +309,7 @@ describe("McpConnectionGatewayService", () => {
   it("requires the operator to start an installed PwrSnap before connecting", async () => {
     const openPath = vi.fn(async () => "");
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       fetchFn: vi.fn(async () => {
         throw new Error("connection refused");
       }),
@@ -321,6 +329,7 @@ describe("McpConnectionGatewayService", () => {
 
   it("reuses one revocable stdio bridge grant for a configured thread", async () => {
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       bridgeEntryPath: "/test/mcp-connection-bridge.js",
       settings: createSettings(JSON.stringify({
         tokens: { access_token: "secret", token_type: "bearer" },
@@ -354,6 +363,7 @@ describe("McpConnectionGatewayService", () => {
     });
     let gatewayEnabled = true;
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       bridgeEntryPath: "/test/mcp-connection-bridge.js",
       gatewayEnabled: () => gatewayEnabled,
       registry,
@@ -382,6 +392,7 @@ describe("McpConnectionGatewayService", () => {
   it("keeps blocking upstream tool calls alive beyond the SDK default", async () => {
     const callTool = vi.fn(async () => ({ content: [] }));
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       settings: createSettings(JSON.stringify({
         tokens: { access_token: "secret", token_type: "bearer" },
       })),
@@ -442,9 +453,81 @@ describe("McpConnectionGatewayService", () => {
     );
   });
 
+  it("records sandboxes a thread creates through Sandboxer, and nothing else", async () => {
+    const created = JSON.stringify({ id: "sb_abc123", name: "pwragent-feat-x", state: "ready" });
+    const callTool = vi.fn(async (request: { name: string }) => request.name === "create_sandbox"
+      ? { content: [{ type: "text", text: created }] }
+      : { content: [{ type: "text", text: "{}" }] });
+    const recordCreatedSandbox = vi.fn();
+    const registry = temporaryRegistry();
+    registry.setEnabled("builtin:sandboxer", true);
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      settings: createSettings(),
+      registry,
+      leaseManager: null,
+      recordCreatedSandbox,
+    });
+    services.push(service);
+    const token = "sandboxer-token";
+    Object.assign(service, {
+      upstreamSessions: new Map([[token, {
+        client: { callTool, close: vi.fn(async () => undefined) },
+        transport: { close: vi.fn(async () => undefined) },
+      }]]),
+    });
+    const bridge = service as unknown as {
+      dispatchBridgeOperation: (
+        token: string,
+        grant: { connectionId: string; threadId?: string },
+        operation: unknown,
+        params: unknown,
+      ) => Promise<unknown>;
+    };
+    const call = async (threadId: string | undefined, name = "create_sandbox", connectionId = "builtin:sandboxer") =>
+      await bridge.dispatchBridgeOperation(
+        token,
+        { connectionId, ...(threadId === undefined ? {} : { threadId }) },
+        "tools/call",
+        { name, arguments: {} },
+      );
+
+    // A thread's native bridge names only the thread.
+    await call("thread-native");
+    expect(recordCreatedSandbox).toHaveBeenLastCalledWith(expect.objectContaining({
+      connectionId: "builtin:sandboxer",
+      sandboxId: "sb_abc123",
+      name: "pwragent-feat-x",
+      threadId: "thread-native",
+    }));
+    expect(recordCreatedSandbox.mock.calls[0]?.[0]).not.toHaveProperty("backend");
+
+    // Not recorded: other tools, other connections, Settings discovery (no
+    // thread), and PwrAgent's own cleanup sessions.
+    await call("thread-native", "list_sandboxes");
+    await call("thread-native", "create_sandbox", "pwrsnap");
+    await call(undefined);
+    await call(JSON.stringify(["pwragent-cleanup", "codex", "thread-1"]));
+    expect(recordCreatedSandbox).toHaveBeenCalledTimes(1);
+
+    // A failed create records nothing, and the result still reaches the caller.
+    callTool.mockResolvedValueOnce({ isError: true, content: [{ type: "text", text: created }] } as never);
+    await expect(call("thread-native")).resolves.toMatchObject({ isError: true });
+    expect(recordCreatedSandbox).toHaveBeenCalledTimes(1);
+
+    // A recorder failure never fails the tool call.
+    recordCreatedSandbox.mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    await expect(call("thread-native")).resolves.toMatchObject({
+      content: [{ type: "text", text: created }],
+    });
+  });
+
   it("clears a PwrSnap credential rejected by the MCP endpoint", async () => {
     const settings = createSettings(createAuthorizedCredential());
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
       resolveInstallPaths: () => [],
       settings,
@@ -498,6 +581,7 @@ describe("McpConnectionGatewayService", () => {
       serverUrl: "https://mcp.atlassian.com/v2/mcp",
     });
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       registry,
       settings: createSettings(),
       leaseManager: null,
@@ -566,6 +650,7 @@ describe("McpConnectionGatewayService", () => {
       serverUrl: "https://mcp.datadoghq.com/mcp",
     });
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       registry,
       settings: createSettings(),
       leaseManager: null,
@@ -601,6 +686,7 @@ describe("McpConnectionGatewayService", () => {
       serverUrl: "https://mcp.datadoghq.com/mcp",
     });
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       registry,
       settings: createSettings(),
       leaseManager: null,
@@ -685,6 +771,7 @@ describe("McpConnectionGatewayService", () => {
         });
       });
       const service = new McpConnectionGatewayService({
+        sandboxer: sandboxerStub(),
         registry: temporaryRegistry(),
         settings,
         fetchFn,
@@ -729,6 +816,7 @@ describe("McpConnectionGatewayService", () => {
         serverUrl: "https://mcp.datadoghq.com/mcp",
       });
       const service = new McpConnectionGatewayService({
+        sandboxer: sandboxerStub(),
         gatewayEnabled: params.gatewayEnabled ?? (() => true),
         registry,
         settings: createSettings(),
@@ -851,6 +939,7 @@ describe("McpConnectionGatewayService", () => {
     it("reports PwrSnap's revocation through the same session opener threads use", async () => {
       const settings = createSettings(createAuthorizedCredential());
       const service = new McpConnectionGatewayService({
+        sandboxer: sandboxerStub(),
         fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
         resolveInstallPaths: () => [],
         settings,
@@ -892,6 +981,7 @@ describe("McpConnectionGatewayService", () => {
       serverUrl: "https://mcp.datadoghq.com/mcp",
     });
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       registry,
       settings: createSettings(),
       leaseManager: null,
@@ -920,9 +1010,42 @@ describe("McpConnectionGatewayService", () => {
     ).rejects.toThrow("Unknown MCP connection");
   });
 
+  it("stores Sandboxer cleanup on PR close through the owner broker, on by default", async () => {
+    const registry = temporaryRegistry();
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+    const broker = service as unknown as {
+      dispatchBrokerOperation: (op: unknown, params: unknown) => Promise<unknown>;
+    };
+
+    expect(service.isSandboxerCleanupOnPrCloseEnabled()).toBe(true);
+    await expect(
+      service.setSandboxerCleanupOnPrClose(false),
+    ).resolves.toMatchObject({
+      id: "builtin:sandboxer",
+      sandboxerCleanupOnPrClose: false,
+    });
+    expect(service.isSandboxerCleanupOnPrCloseEnabled()).toBe(false);
+    await expect(
+      broker.dispatchBrokerOperation("broker/set-sandboxer-cleanup-on-pr-close", {
+        enabled: true,
+      }),
+    ).resolves.toMatchObject({ sandboxerCleanupOnPrClose: true });
+    expect(service.isSandboxerCleanupOnPrCloseEnabled()).toBe(true);
+    await expect(
+      broker.dispatchBrokerOperation("broker/set-sandboxer-cleanup-on-pr-close", {}),
+    ).rejects.toThrow("Invalid Sandboxer cleanup on PR close request.");
+  });
+
   it("offers pasted Linear images through enabled Linear connections until the profile turns it off", async () => {
     const registry = temporaryRegistry();
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       registry,
       settings: createSettings(),
       leaseManager: null,
@@ -953,13 +1076,15 @@ describe("McpConnectionGatewayService", () => {
     ).rejects.toThrow("Invalid Linear paste images request.");
   });
 
-  it("announces successful connection mutations to this instance's windows", async () => {
+  it("announces each change to this instance's windows, including a Sandboxer answer that changed", async () => {
     const registry = temporaryRegistry();
     const connection = registry.create({
       displayName: "Datadog",
       serverUrl: "https://mcp.datadoghq.com/mcp",
     });
+    const sbxStatus = vi.fn(async () => '{"signedIn":false}');
     const service = new McpConnectionGatewayService({
+      sandboxer: new SandboxerConnection(sbxStatus),
       registry,
       settings: createSettings(),
       leaseManager: null,
@@ -971,19 +1096,32 @@ describe("McpConnectionGatewayService", () => {
     const changes: string[][] = [];
     const stop = service.onConnectionsChanged((event) => changes.push(event.connectionIds));
 
+    // The first answer is news; the same answer again is not.
+    await service.listConnections({ sandboxerStatusMaxAgeMs: 0 });
+    await service.listConnections({ sandboxerStatusMaxAgeMs: 0 });
+    expect(sbxStatus).toHaveBeenCalledTimes(2);
+    expect(changes).toEqual([["builtin:sandboxer"]]);
+    // A list without a max age keeps the ordinary cache.
+    await service.listConnections();
+    expect(sbxStatus).toHaveBeenCalledTimes(2);
+    sbxStatus.mockResolvedValue('{"signedIn":true,"apiReachable":true}');
+    await broker.dispatchBrokerOperation("broker/list", { sandboxerStatusMaxAgeMs: 0 });
+    expect(changes).toEqual([["builtin:sandboxer"], ["builtin:sandboxer"]]);
+
     // Mutations, whether made here or forwarded by another instance. A
     // failed one announces nothing.
     changes.length = 0;
+    await service.setSandboxerCleanupOnPrClose(false);
     await broker.dispatchBrokerOperation("broker/set-enabled", {
       connectionId: connection.id,
       enabled: false,
     });
     await expect(service.setConnectionEnabled("ghost", true)).rejects.toThrow();
-    expect(changes).toEqual([[connection.id]]);
+    expect(changes).toEqual([["builtin:sandboxer"], [connection.id]]);
 
     stop();
-    await service.setConnectionEnabled(connection.id, true);
-    expect(changes).toHaveLength(1);
+    await service.setSandboxerCleanupOnPrClose(true);
+    expect(changes).toHaveLength(2);
   });
 
   it("sets a connection's tool approval through the owner broker and rejects an unknown mode", async () => {
@@ -993,6 +1131,7 @@ describe("McpConnectionGatewayService", () => {
       serverUrl: "https://mcp.datadoghq.com/mcp",
     });
     const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       registry,
       settings: createSettings(),
       leaseManager: null,

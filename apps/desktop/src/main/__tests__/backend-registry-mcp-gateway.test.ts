@@ -3,6 +3,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { DEFAULT_FORGE_AGENT_TOOL_POLICY } from "@pwragent/shared";
 import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
+import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -349,20 +351,20 @@ describe("backend MCP gateway dispatch", () => {
     expect(operation).not.toHaveBeenCalled();
   });
 
-  it("uses the selected FixtureCloud connection to inspect a detached cloud verification", async () => {
-    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["remote-fixture"] });
+  it("uses the selected Sandboxer connection to inspect a detached cloud verification", async () => {
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
     internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
     operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
-      ? [{ connectionId: "remote-fixture", serverName: "FixtureCloud", toolName: "read_file", schemaRevision: "fixturecloud-r1", definition: {
+      ? [{ connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: "read_file", schemaRevision: "sandboxer-r1", definition: {
           name: "read_file", inputSchema: { type: "object", properties: { sandboxId: { type: "string" }, path: { type: "string" } }, required: ["sandboxId", "path"] },
         } }]
       : { content: [{ type: "text", text: "unit exit=0\nlint exit=0" }] });
     const call = await createMonitor();
-    const discovered = await call("search_mcp_tools", { query: "read_file", connectionId: "remote-fixture" });
+    const discovered = await call("search_mcp_tools", { query: "read_file", connectionId: "builtin:sandboxer" });
     expect(discovered.success).toBe(true);
     const tool = JSON.parse((discovered.contentItems[0] as { text: string }).text).tools[0];
     const response = await call("call_mcp_tool", { connectionId: tool.connectionId, toolName: tool.toolName,
-      schemaRevision: tool.schemaRevision, arguments: { sandboxId: "sb_fixture", path: "/home/user/pwragent/wt/fixture/.local/fixturecloud/status" } });
+      schemaRevision: tool.schemaRevision, arguments: { sandboxId: "sb_fixture", path: "/home/user/pwragent/wt/fixture/.local/sandboxer/status" } });
     expect(response.success).toBe(true);
     expect(JSON.stringify(response)).toContain("unit exit=0");
   });
@@ -511,50 +513,110 @@ describe("backend MCP gateway dispatch", () => {
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "parent-call"))).success).toBe(true);
   });
 
-  it.each(["full-access", "connection-approval", "automation"])("hides FixtureCloud exec and denies guessed monitor calls under %s", async (authority) => {
-    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["remote-fixture"] });
+  it.each(["full-access", "connection-approval", "automation"])("hides Sandboxer exec and denies guessed monitor calls under %s", async (authority) => {
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
     internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
     if (authority === "connection-approval") {
       await registry.close();
       createRegistry({ registerBridge, requestGatewayToolOperation: operation,
-        listConnections: async () => [{ id: "remote-fixture", toolApproval: "approve" }],
+        listConnections: async () => [{ id: "builtin:sandboxer", toolApproval: "approve" }],
       } as unknown as McpConnectionGatewayService);
     }
     if (authority === "automation") {
       internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
         agentThreadId: "thread-1", backend: "codex", automationRunId: "run-1", executionMode: "full-access",
         executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
-        mcpConnectionIds: ["remote-fixture"], toolAllowlist: ["exec"],
+        mcpConnectionIds: ["builtin:sandboxer"], toolAllowlist: ["exec"],
       });
     }
     operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
-      ? [{ connectionId: "remote-fixture", serverName: "FixtureCloud", toolName: "exec", schemaRevision: "exec-r1", definition: {
+      ? [{ connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: "exec", schemaRevision: "exec-r1", definition: {
           name: "exec", annotations: { readOnlyHint: false, destructiveHint: true }, inputSchema: { type: "object" },
         } }]
       : { content: [{ type: "text", text: "must not run" }] });
     const call = await createMonitor();
-    const discovered = await call("search_mcp_tools", { query: "exec", connectionId: "remote-fixture" });
+    const discovered = await call("search_mcp_tools", { query: "exec", connectionId: "builtin:sandboxer" });
     expect(JSON.parse((discovered.contentItems[0] as { text: string }).text).tools).toEqual([]);
-    expect((await call("call_mcp_tool", { connectionId: "remote-fixture", toolName: "exec", schemaRevision: "exec-r1", arguments: {} })).success).toBe(false);
+    expect((await call("call_mcp_tool", { connectionId: "builtin:sandboxer", toolName: "exec", schemaRevision: "exec-r1", arguments: {} })).success).toBe(false);
     expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(false);
   });
 
-  it("keeps legacy fixturecloud credentials and existing thread selection on the remote connection", async () => {
+  it.each(["disabled", "cold", "expired"] as const)(
+    "keeps unrelated new-thread defaults when Sandboxer status is slow (%s)",
+    async (cache) => {
+      await registry.close();
+      const connections = new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") });
+      connections.setSandboxerTransport("local_cli");
+      const remote = connections.create({ displayName: "Remote", serverUrl: "https://fixture.example/mcp" });
+      for (const id of ["pwrsnap", "pwrgit", remote.id, "builtin:sandboxer"]) {
+        connections.setSelectForNewThreads(id, true);
+      }
+      connections.setEnabled("builtin:sandboxer", cache !== "disabled");
+      let finishProbe!: (output: string) => void;
+      const probe = vi.fn(() => new Promise<string>((resolve) => { finishProbe = resolve; }));
+      const sandboxer = new SandboxerConnection(probe);
+      if (cache === "expired") {
+        probe.mockResolvedValueOnce('{"signedIn":true}');
+        await sandboxer.readStatus();
+      }
+      const credentials = JSON.stringify({ version: 1, credentials: Object.fromEntries(
+        connections.list().filter((connection) => connection.authMode === "oauth").map((connection) => [connection.id, {
+          resourceUrl: connection.serverUrl, tokens: { access_token: "fixture", token_type: "bearer" },
+        }]),
+      ) });
+      const broker = new McpConnectionGatewayService({
+        registry: connections, sandboxer, leaseManager: null,
+        settings: {
+          resolveMcpConnectionCredentials: async () => credentials,
+          resolvePwrSnapMcpCredential: async () => undefined,
+          resolvePwrGitMcpCredential: async () => undefined,
+          clearMcpConnectionCredentials: async () => {}, clearPwrSnapMcpCredential: async () => {},
+          clearPwrGitMcpCredential: async () => {}, saveMcpConnectionCredentials: async () => {},
+          savePwrSnapMcpCredential: async () => {},
+        },
+      });
+      brokers.push(broker);
+      await broker.start();
+      createRegistry(broker);
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(Date.now() + 16_000);
+        const defaults = (registry as unknown as {
+          resolveNewThreadMcpConnectionIds: () => Promise<string[] | undefined>;
+        }).resolveNewThreadMcpConnectionIds();
+        await vi.advanceTimersByTimeAsync(2_001);
+        expect(await defaults).toEqual(cache === "expired"
+          ? ["pwrsnap", "pwrgit", "builtin:sandboxer", remote.id]
+          : ["pwrsnap", "pwrgit", remote.id]);
+        expect(probe).toHaveBeenCalledTimes(cache === "disabled" ? 0 : cache === "expired" ? 2 : 1);
+      } finally {
+        if (finishProbe) {
+          finishProbe('{"signedIn":false}');
+          await sandboxer.readStatus();
+        }
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps legacy sandboxer credentials and existing thread selection on the remote connection", async () => {
     await registry.close();
     const configPath = path.join(directory, "config.toml");
     writeFileSync(configPath, `[[mcp_connections.connections]]
-id = "fixturecloud"
-display_name = "FixtureCloud"
+id = "sandboxer"
+display_name = "Sandboxer"
 server_url = "https://legacy.example/mcp"
 select_for_new_threads = true
 `);
     const connections = new McpConnectionRegistry({ configPath });
-    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["fixturecloud"] });
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["sandboxer"] });
+    const sandboxer = sandboxerStub();
+    const probe = vi.spyOn(sandboxer, "readStatus");
     const credentialRead = vi.fn(async () => JSON.stringify({ version: 1, credentials: {
-      fixturecloud: { resourceUrl: "https://legacy.example/mcp", tokens: { access_token: "legacy-token", token_type: "bearer" } },
+      sandboxer: { resourceUrl: "https://legacy.example/mcp", tokens: { access_token: "legacy-token", token_type: "bearer" } },
     } }));
     const broker = new McpConnectionGatewayService({
-      registry: connections, leaseManager: null,
+      registry: connections, sandboxer, leaseManager: null,
       settings: {
         resolveMcpConnectionCredentials: credentialRead,
         resolvePwrSnapMcpCredential: async () => undefined, resolvePwrGitMcpCredential: async () => undefined,
@@ -565,15 +627,16 @@ select_for_new_threads = true
     });
     brokers.push(broker);
     createRegistry(broker);
-    expect((await broker.listConnections({ cachedLocalStatus: true })).find((connection) => connection.id === "fixturecloud"))
+    expect((await broker.listConnections({ cachedLocalStatus: true })).find((connection) => connection.id === "sandboxer"))
       .toMatchObject({ kind: "remote", configured: true, serverUrl: "https://legacy.example/mcp" });
     expect(await (registry as unknown as {
       resolveNewThreadMcpConnectionIds: () => Promise<string[] | undefined>;
-    }).resolveNewThreadMcpConnectionIds()).toEqual(["fixturecloud"]);
+    }).resolveNewThreadMcpConnectionIds()).toEqual(["sandboxer"]);
     const selection = (await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))!.mcpConnectionIds!;
-    expect(selection).toEqual(["fixturecloud"]);
+    expect(selection).toEqual(["sandboxer"]);
     const bridge = await broker.registerBridge(selection[0]!, "thread-1");
-    expect(bridge.server.env.PWRAGENT_MCP_CONNECTION_NAME).toBe("fixturecloud");
+    expect(bridge.server.env.PWRAGENT_MCP_CONNECTION_NAME).toBe("sandboxer");
+    expect(probe).not.toHaveBeenCalled();
     expect(credentialRead).toHaveBeenCalled();
     bridge.revoke();
   });
@@ -585,6 +648,7 @@ select_for_new_threads = true
     const connections = new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") });
     if (readOnly) connections.setToolApproval("pwrsnap", "prompt");
     const broker = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       registry: connections,
       leaseManager: null,
       readGatewaySelection: async (context) => (await store.getThreadOverlayState(context))?.mcpConnectionIds ?? [],
@@ -1524,25 +1588,24 @@ select_for_new_threads = true
     expect(events).toHaveLength(prompts);
   });
 
-  it.each(["default", "auto"] as const)("runs an explicitly approved remote connection's full workflow without approval in %s", async (executionMode) => {
+  it.each(["default", "auto"] as const)("runs the opted-in Sandboxer's full workflow without approval in %s", async (executionMode) => {
     await registry.close();
     const connections = new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") });
-    connections.create({ displayName: "Remote fixture", serverUrl: "https://compute.example/mcp" });
-    connections.setToolApproval("remote-fixture", "approve");
+    connections.setEnabled("builtin:sandboxer", true);
     const names = ["list_sandboxes", "create_sandbox", "write_file", "exec", "stop_sandbox", "resume_sandbox"];
     operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
       ? names.map((name) => ({
-          connectionId: "remote-fixture", serverName: "FixtureCloud", toolName: name, schemaRevision: name,
+          connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: name, schemaRevision: name,
           definition: { name, inputSchema: { type: "object" }, annotations: { readOnlyHint: name === "list_sandboxes", destructiveHint: ["exec", "write_file"].includes(name), openWorldHint: true } },
         }))
       : { content: [{ type: "text", text: "sandbox result" }] });
-    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["remote-fixture"] });
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
     createRegistry({ registerBridge, requestGatewayToolOperation: operation, listConnections: async () => connections.list() } as never);
     internals.activeCodexTurnModes.set("thread-1:turn-1", executionMode);
     const unexpected = declineUnexpectedApproval();
     for (const toolName of names) {
       expect((await internals.handleServerRequest("codex", request("call_mcp_tool", {
-        connectionId: "remote-fixture", toolName, schemaRevision: toolName, arguments: {},
+        connectionId: "builtin:sandboxer", toolName, schemaRevision: toolName, arguments: {},
       }, `sandbox-${toolName}`))).success).toBe(true);
     }
     expect(unexpected).toEqual([]);

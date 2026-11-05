@@ -121,7 +121,12 @@
 - Run unit tests, lint and typecheck locally using the commands below or in repository CI.
 - Desktop E2E uses the existing local and CI routes. Linux checks do not verify
   macOS or Windows behavior; use the corresponding native CI or PwrSuiteLab skills.
+- Do not use Sandboxer for repository development or verification.
 - Do not provision a cloud compute provider for repository verification.
+- Keep remote-compute product features and integration documentation intact.
+  A replacement development provider will be selected separately.
+- The [former Sandboxer workflow](docs/sandboxer-verification-history.md) is
+  historical reference, not an active verification skill.
 
 ### Desktop test operations
 

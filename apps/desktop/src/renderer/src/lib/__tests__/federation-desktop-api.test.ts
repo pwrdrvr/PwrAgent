@@ -17,6 +17,8 @@ describe("scopeDesktopApiToFederationTarget", () => {
 
     await api.listMcpConnections!();
     expect(listMcpConnections).toHaveBeenLastCalledWith({ federationTarget: target });
+    await api.listMcpConnections!({ sandboxerStatusMaxAgeMs: 2_000 });
+    expect(listMcpConnections).toHaveBeenLastCalledWith({ sandboxerStatusMaxAgeMs: 2_000, federationTarget: target });
     await api.readThreadMcpConnections!(thread);
     expect(readThreadMcpConnections).toHaveBeenCalledExactlyOnceWith({ ...thread, federationTarget: target });
     await api.setThreadMcpConnections!({ ...thread, connectionIds: [], providerServersEnabled: false, federationTarget: { scope: "remote", instanceId: "viewer" } });

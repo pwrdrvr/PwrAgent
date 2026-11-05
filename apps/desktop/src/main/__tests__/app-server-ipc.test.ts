@@ -4708,6 +4708,23 @@ describe("app server ipc", () => {
       ]);
     });
 
+    it("keeps Sandboxer cleanup waiting for the old project's open PR", async () => {
+      const { service } = await startMovedThread();
+      const cleanupThread = vi.fn(async () => ({}));
+      const internals = service as unknown as {
+        getSandboxerPrCleanup: () => unknown;
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        cleanupThreadSandboxesIfDone: (backend: "codex", threadId: string) => Promise<unknown>;
+      };
+      vi.spyOn(internals, "getSandboxerPrCleanup").mockReturnValue({ cleanupThread });
+      internals.rememberPrStatuses([{
+        ...newProjectPr, lifecycleState: "merged", mergedAt: Date.parse("2026-10-31T12:00:00.000Z"),
+      }], Date.now(), "test-merge");
+
+      await expect(internals.cleanupThreadSandboxesIfDone("codex", "thread-1")).resolves.toBeUndefined();
+      expect(cleanupThread).not.toHaveBeenCalled();
+    });
+
     it.each([
       ["has no GitHub remote", ""],
       ["belongs to a third repository", "PwrSnap"],
