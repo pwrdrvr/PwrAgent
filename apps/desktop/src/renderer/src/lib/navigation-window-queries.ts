@@ -258,7 +258,7 @@ export class NavigationWindowQueries {
       } else {
         // Replace the lifetime rather than revive a released token or pending read.
         const next: Resource = { ...resource, token: `${this.prefix}:${++this.nextResource}`,
-          released: false, pending: undefined, refreshAfterPending: false, invalidated: false };
+          released: false, pending: undefined, refreshAfterPending: false, invalidated: false, membershipUncertain: true };
         // Hiding the window ends a restore early. Showing it is a new opening.
         if (!next.resumeExpansion) budget = this.armResume(next, budget);
         this.resources.set(resource.value.id, next);
@@ -276,6 +276,10 @@ export class NavigationWindowQueries {
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget)))).map(async (resource) => {
       if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
       resource.diagnosticTrigger ??= trigger;
+      // An unscoped refresh can discover membership missed while hidden or
+      // between provider observations. A scoped row refresh already knows
+      // exactly why its baseline is stale.
+      if (!invalidatedOnly && !resource.invalidated) resource.membershipUncertain = true;
       if (resource.pending) resource.refreshAfterPending = true;
       await this.read(resource, false);
       // A caller awaiting refresh owns the coalesced replacement too, not
@@ -370,8 +374,7 @@ export class NavigationWindowQueries {
           || page.entries.some(({ row }) => navigationIdentitiesEqual(row.ref, ref));
       }
       if (method === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string") {
-        return page.entries.some(({ row }) => row.ref.backend === event.backend
-          && (row.ref.ownerInstanceId ?? undefined) === ownerInstanceId
+        return page.entries.some(({ row }) => (row.ref.ownerInstanceId ?? undefined) === ownerInstanceId
           && navigationWorkingStatePath(row) === params.worktreePath);
       }
     }
@@ -390,8 +393,8 @@ export class NavigationWindowQueries {
     if (method === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string"
       && page?.coverage.state === "complete" && page.complete
       && request.query.identities.every((ref) => page.entries.some(({ row }) => row.ref.backend === ref.backend && row.ref.threadId === ref.threadId))) {
-      return page.entries.some(({ row }) => row.ref.backend === event.backend
-        && (row.ref.ownerInstanceId ?? undefined) === ownerInstanceId && navigationWorkingStatePath(row) === params.worktreePath);
+      return page.entries.some(({ row }) => (row.ref.ownerInstanceId ?? undefined) === ownerInstanceId
+        && navigationWorkingStatePath(row) === params.worktreePath);
     }
     return true;
   }

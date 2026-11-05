@@ -111,3 +111,86 @@ it("sizes each immutable transport page once and never serializes unrelated reta
     expect(pageSizes()).toBe(1);
   } finally { queries.dispose(); encode.mockRestore(); }
 });
+
+it("matches the owner revision oracle across generated event, timer and response orderings", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.record({
+    kind: fc.constantFrom("event", "response", "timer"), group: fc.integer({ min: 0, max: 7 }),
+  }), { minLength: 1, maxLength: 40 }), async (operations) => {
+    const revisions = Array.from({ length: 8 }, () => 0);
+    const observations = new Set<string>();
+    const replies: Array<() => void> = [];
+    let gated = false;
+    const read = async (sent: NavigationQueryRequest) => {
+      const group = sent.query.kind === "children" ? Number(sent.query.parent.threadId.slice(7)) : -1;
+      const observed = revisions[group]!;
+      const snapshot = page(sent, String(observed));
+      if (gated) {
+        // Model budget: each resource observes a given owner generation at
+        // most once, regardless of timer and completion interleavings.
+        const key = `${group}:${observed}`;
+        expect(observations.has(key)).toBe(false);
+        observations.add(key);
+        await new Promise<void>((resolve) => replies.push(resolve));
+      }
+      return snapshot;
+    };
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    queries.setDemand(new Map(Array.from({ length: 8 }, (_, i) => [`group-${i}`, request(i)])));
+    const advance = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+    const assertOwner = () => {
+      for (const [id, resource] of queries.getSnapshot().resources) {
+        if (resource.state.stale) continue;
+        const group = Number(id.slice(6));
+        expect(resource.state.page?.countsRevision).toBe(String(revisions[group]));
+      }
+    };
+    try {
+      await until(() => idle(queries));
+      gated = true;
+      for (const operation of operations) {
+        if (operation.kind === "event") {
+          revisions[operation.group]! += 1;
+          queries.invalidate(undefined, undefined, event(operation.group));
+          void queries.refresh(undefined, undefined, true);
+        } else if (operation.kind === "response" && replies.length) {
+          replies.splice(operation.group % replies.length, 1)[0]!();
+        } else {
+          void queries.refresh(undefined, undefined, true);
+        }
+        await advance();
+        assertOwner();
+      }
+      for (let step = 0; step < 100 && !idle(queries); step++) {
+        replies.splice(0).forEach((reply) => reply());
+        await advance();
+        assertOwner();
+      }
+      expect(idle(queries)).toBe(true);
+      assertOwner();
+      expect([...queries.getSnapshot().resources.values()].every((resource) => !resource.state.stale && !resource.state.error)).toBe(true);
+    } finally { queries.dispose(); replies.splice(0).forEach((reply) => reply()); }
+  }), { numRuns: 25 });
+});
+
+it("does not narrow discovery during an unscoped refresh, and Git paths cross backend boundaries only within their owner", async () => {
+  let finish!: (value: NavigationQueryPage) => void;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["group-0", request(0)]]));
+  try {
+    await until(() => idle(queries));
+    read.mockClear();
+    queries.invalidate(undefined, undefined, { ...event(0, "navigation/threadGitWorkingState/updated"), backend: "claude" });
+    await queries.refresh(undefined, undefined, true);
+    expect(read).toHaveBeenCalledTimes(1);
+    read.mockClear();
+    read.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const refreshing = queries.refresh();
+    await until(() => read.mock.calls.length === 1);
+    queries.invalidate(undefined, undefined, event(1));
+    finish(page(request(0), "old"));
+    await refreshing;
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(queries.getSnapshot().resources.get("group-0")?.state.page?.countsRevision).toBe("0");
+  } finally { queries.dispose(); }
+});

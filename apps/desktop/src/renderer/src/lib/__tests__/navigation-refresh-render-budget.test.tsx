@@ -78,16 +78,16 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
     read.mockClear(); childOrder.mockClear(); encode.mockClear(); commits = 0; rowRenders = 0;
     gated = true;
     revision += 1;
-    threads = threads.map((thread) => thread.id.endsWith("child-0") ? { ...thread, title: `${thread.title} fresh` } : thread);
+    threads = threads.map((thread) => /^parent-[01]-.*child-0$/.test(thread.id) ? { ...thread, title: `${thread.title} fresh` } : thread);
     await act(async () => {
       const emit = (method: string, params: Record<string, unknown>) => {
         for (const listener of listeners) listener({ backend: "codex", notification: { method, params } } as AgentEvent);
       };
       // Seven canonical events, with one repeated Git probe. The Git events
       // patch rows without reading until background/seen schedules the burst.
-      emit("navigation/threadGitWorkingState/updated", { worktreePath: "/project-0", state: "clean" });
-      emit("navigation/threadGitWorkingState/updated", { worktreePath: "/project-1", state: "clean" });
-      emit("navigation/threadGitWorkingState/updated", { worktreePath: "/project-0", state: "clean" });
+      emit("navigation/threadGitWorkingState/updated", { worktreePath: "/project-0", gitWorkingState: null, fetchedAt: 101 });
+      emit("navigation/threadGitWorkingState/updated", { worktreePath: "/project-1", gitWorkingState: null, fetchedAt: 101 });
+      emit("navigation/threadGitWorkingState/updated", { worktreePath: "/project-0", gitWorkingState: null, fetchedAt: 101 });
       for (const i of [0, 1]) {
         emit("thread/backgroundTasks/updated", { threadId: `parent-${i}-0-child-0`, tasks: [] });
         emit("navigation/thread/seen", { threadId: `parent-${i}-0-child-0`, seenUpdatedAt: 101 });
@@ -107,6 +107,13 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
       unrelatedChildCalls: unrelatedChildCalls.length, commits, rowRenders, childProjections: childOrder.mock.calls.length, pageSizes });
     expect(unrelatedChildCalls).toHaveLength(0);
     expect(childCalls).toHaveLength(8);
+    // Directory counts include off-page descendants. Until the owner names
+    // their project scope, each directory section must revalidate once.
+    expect(read.mock.calls.filter(([sent]) => sent.query.kind === "directory")).toHaveLength(24);
+    expect(read).toHaveBeenCalledTimes(34);
+    expect(new Set(read.mock.calls.map(([sent]) => JSON.stringify(sent.query))).size).toBe(34);
+    expect(commits).toBeLessThanOrEqual(2 * read.mock.calls.length + 3);
+    expect(rowRenders).toBeLessThanOrEqual(32);
     expect(childOrder.mock.calls.length).toBeLessThanOrEqual(commits);
     expect(pageSizes).toBeLessThanOrEqual(read.mock.calls.length);
   } finally { mounted.unmount(); rows.restore(); completions.splice(0).forEach((finish) => finish()); }
