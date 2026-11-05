@@ -22,7 +22,6 @@ describe("replay main-process timing bridge", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-timing-"));
     const fixture = path.join(root, "replay.fixture.json");
     fs.writeFileSync(fixture, JSON.stringify({ metadata: { backend: "codex", scenario: "timing" }, steps: [] }));
-    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     try {
       fc.assert(fc.property(
         fc.constantFrom(undefined, "", "0", "true", "1", " 1 "), fc.boolean(), fc.boolean(),
@@ -40,11 +39,12 @@ describe("replay main-process timing bridge", () => {
             // The existing rings are the oracle: export their sanitized snapshots unchanged.
             listingDiagnostics.record("workflow", "start", { query: "thread-start" });
             gitSubprocessDiagnostics.startGit("/contrived/private/path", ["status", "request-text"])(false);
-            expect(snapshot!()).toEqual({
-              listings: listingDiagnostics.snapshot(), git: gitSubprocessDiagnostics.snapshot(),
-            });
-            expect(JSON.stringify(snapshot!())).not.toContain("/contrived/private/path");
-            expect(JSON.stringify(snapshot!())).not.toContain("request-text");
+            const timing = snapshot!();
+            // Independent reads have different capture times; their retained data must agree.
+            expect({ ...timing.listings, capturedAtMs: 0 }).toEqual({ ...listingDiagnostics.snapshot(), capturedAtMs: 0 });
+            expect({ ...timing.git, capturedAtMs: 0 }).toEqual({ ...gitSubprocessDiagnostics.snapshot(), capturedAtMs: 0 });
+            expect(JSON.stringify(timing)).not.toContain("/contrived/private/path");
+            expect(JSON.stringify(timing)).not.toContain("request-text");
           }
         },
       ), { examples: [["1", true, false], ["1", true, true], ["1", false, false]] });
