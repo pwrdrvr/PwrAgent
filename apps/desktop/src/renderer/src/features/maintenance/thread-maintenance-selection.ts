@@ -117,6 +117,7 @@ export function workspaceLead(workspace: ThreadMaintenanceWorkspace): { text: st
       tone: "warn",
     };
     case "notGit": return { text: "Not a Git folder; it stays in place", tone: "muted" };
+    case "inPlace": return { text: "Main checkout; it stays in place", tone: "muted" };
     case "missing": return { text: "Folder already gone", tone: "muted" };
   }
 }

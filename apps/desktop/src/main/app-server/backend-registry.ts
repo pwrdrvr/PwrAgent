@@ -16789,8 +16789,14 @@ export class DesktopBackendRegistry {
     const cwd = directory?.worktreePath ?? directory?.path;
     if (!cwd) return thread.projectKey;
     try {
-      const { stdout } = await runGitCommand(cwd, ["worktree", "list", "--porcelain"], { timeout: 10_000 });
-      return stdout.split("\n").find((line) => line.startsWith("worktree "))?.slice(9);
+      // Constant output per checkout. Listing every worktree made one scan
+      // quadratic in a repository's worktree count. Git's primary checkout is
+      // the common directory without its trailing /.git, or the common
+      // directory itself for a bare or separate Git dir.
+      const { stdout } = await runGitCommand(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"], { timeout: 10_000 });
+      const commonDirectory = stdout.trim();
+      if (!commonDirectory) return directory?.path ?? thread.projectKey;
+      return path.basename(commonDirectory) === ".git" ? path.dirname(commonDirectory) : commonDirectory;
     } catch {
       // The managed checkout may already be gone; its linked repository
       // still identifies the project without making each old worktree a quota.

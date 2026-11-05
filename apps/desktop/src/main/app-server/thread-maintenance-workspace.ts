@@ -2,7 +2,7 @@ import { lstat, stat } from "node:fs/promises";
 import path from "node:path";
 import { REBUILDABLE_OUTPUT_NAMES, type ThreadMaintenanceWorkspace } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
-import { WORKSPACE_KEEP_REASONS } from "./thread-archive-sweeper";
+import { isOutsideAnyGitRepository, WORKSPACE_KEEP_REASONS } from "./thread-archive-sweeper";
 
 /** Snapshot accounting stops here, matching the archive service's file limit. */
 const MAX_MEASURED_FILES = 10_000;
@@ -37,6 +37,19 @@ export async function inspectMaintenanceWorkspace(
     // A broken worktree link reports a different message and fails closed.
     if (isOutsideAnyGitRepository(error)) return { workspace: { kind: "notGit" } };
     throw error;
+  }
+  // Archive removes only linked worktrees. A primary checkout stays where it
+  // is, so its changes and ignored files are never at risk.
+  const [gitDirectory, commonDirectory] = await Promise.all([
+    git(["rev-parse", "--absolute-git-dir"]),
+    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+  ]);
+  if (path.resolve(gitDirectory.trim()) === path.resolve(commonDirectory.trim())) return { workspace: { kind: "inPlace" } };
+  try {
+    await git(["rev-parse", "--verify", "--quiet", "HEAD"]);
+  } catch {
+    // An unborn branch has nothing a branch retains and no HEAD to diff.
+    return { keep: "No commits yet" };
   }
   const changedOutput = await git(["diff", "--name-only", "-z", "HEAD", "--", "."]);
   const untracked = (await git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
@@ -80,16 +93,13 @@ export async function inspectMaintenanceWorkspace(
   return { workspace: { kind: "changes", files: files.size, bytes, ...(rebuildableOutput ? { rebuildableOutput } : {}) } };
 }
 
-function isOutsideAnyGitRepository(error: unknown): boolean {
-  const stderr = (error as { stderr?: unknown })?.stderr;
-  const text = `${error instanceof Error ? error.message : String(error)}\n${typeof stderr === "string" ? stderr : ""}`;
-  return text.includes("not a git repository (or any of the parent directories)");
-}
-
-/** The rebuildable folder an ignored path lives in, as a relative path such
- * as `packages/web/node_modules`. Undefined for any other ignored path. */
-export function rebuildableOutputFolder(ignoredPath: string): string | undefined {
-  const segments = ignoredPath.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
-  const index = segments.findIndex((segment) => REBUILDABLE_OUTPUT_NAMES.has(segment));
-  return index < 0 ? undefined : segments.slice(0, index + 1).join("/");
+/** The rebuildable folder an ignored entry is, as a relative path such as
+ * `packages/web/node_modules`. `ls-files --directory` lists an ignored folder
+ * with a trailing slash, so only a folder whose own name is rebuildable
+ * qualifies. An ignored file inside a tracked folder named `build` does not. */
+export function rebuildableOutputFolder(ignoredEntry: string): string | undefined {
+  const normalized = ignoredEntry.replace(/\\/g, "/");
+  if (!normalized.endsWith("/")) return undefined;
+  const folder = normalized.replace(/\/+$/, "");
+  return REBUILDABLE_OUTPUT_NAMES.has(folder.split("/").pop() ?? "") ? folder : undefined;
 }

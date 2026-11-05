@@ -24,13 +24,6 @@ export const REBUILDABLE_OUTPUT_NAMES: ReadonlySet<string> = new Set([
   ".gradle", "DerivedData", ".build", "Pods", "obj",
 ]);
 
-/** True when an ignored path from `git status --ignored` is rebuildable
- * output: one of its segments is a known output directory name. */
-export function isRebuildableOutputPath(ignoredPath: string): boolean {
-  const segments = ignoredPath.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
-  return segments.some((segment) => REBUILDABLE_OUTPUT_NAMES.has(segment));
-}
-
 export type ThreadMaintenanceWorkspace =
   /** Nothing to save. Commits are on a branch, so removing the checkout loses nothing. */
   | { kind: "clean"; rebuildableOutput?: string[] }
@@ -40,6 +33,8 @@ export type ThreadMaintenanceWorkspace =
   | { kind: "overLimit"; files: number; bytes: number; limitBytes: number; largest: { path: string; bytes: number }[] }
   /** Not a Git checkout (a scratch folder). Archive leaves the folder in place. */
   | { kind: "notGit" }
+  /** A repository's primary checkout. Archive never removes it. */
+  | { kind: "inPlace" }
   /** The folder no longer exists. */
   | { kind: "missing" };
 

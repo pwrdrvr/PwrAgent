@@ -84,7 +84,7 @@ export class MissingArchiveRepositoryError extends Error {
 
 /** The repository a linked worktree's `.git` file points at, when that
  * repository is gone. A main checkout (a `.git` directory) is never orphaned. */
-async function missingWorktreeRepository(worktreePath: string): Promise<string | undefined> {
+export async function missingWorktreeRepository(worktreePath: string): Promise<string | undefined> {
   let pointer: string;
   try {
     pointer = await readFile(path.join(worktreePath, ".git"), "utf8");

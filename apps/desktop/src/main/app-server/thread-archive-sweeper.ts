@@ -114,7 +114,7 @@ export async function workspaceArchiveBlocker(
   return retained.stdout.trim() === "0" ? undefined : WORKSPACE_KEEP_REASONS.unretained;
 }
 
-function isOutsideAnyGitRepository(error: unknown): boolean {
+export function isOutsideAnyGitRepository(error: unknown): boolean {
   const stderr = (error as { stderr?: unknown })?.stderr;
   const text = `${error instanceof Error ? error.message : String(error)}\n${typeof stderr === "string" ? stderr : ""}`;
   return text.includes("not a git repository (or any of the parent directories)");

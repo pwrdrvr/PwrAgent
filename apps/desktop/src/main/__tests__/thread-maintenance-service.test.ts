@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_THREAD_ARCHIVE_POLICY, type ThreadMaintenanceWorkspace } from "@pwragent/shared";
+import fc from "fast-check";
+import { DEFAULT_THREAD_ARCHIVE_POLICY, REBUILDABLE_OUTPUT_NAMES, type ThreadMaintenanceWorkspace } from "@pwragent/shared";
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import {
-  missingRepositoryFor,
   ThreadMaintenanceService,
   type ArchivedCheckoutRemoval,
   type ThreadMaintenanceDeps,
@@ -244,6 +244,38 @@ describe("ThreadMaintenanceService.apply", () => {
     expect(run.problems).toEqual([expect.objectContaining({ kind: "kept", path: unselected, reason: "Repository no longer exists" })]);
   });
 
+  it("reports checkouts a stop skipped as kept instead of dropping them", async () => {
+    const root = await tempRoot();
+    const removable = path.join(root, "worktrees", "r1", "app");
+    const orphan = path.join(root, "worktrees", "o1", "app");
+    await mkdir(removable, { recursive: true });
+    await mkdir(orphan, { recursive: true });
+    await writeFile(path.join(orphan, ".git"), `gitdir: ${path.join(root, "gone", ".git", "worktrees", "app")}\n`);
+    let service!: ThreadMaintenanceService;
+    const built = harness([candidate("a", { cwd: "/w/a" })], {
+      getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age", inactivityDays: 7 }),
+      archiveFamily: vi.fn(async () => { service.stop(); return true; }),
+      auditArchivedCheckouts: vi.fn(async () => ({
+        candidates: [removable, orphan].map((worktreePath, index) => ({ backend: "codex", threadId: `c${index}`, worktreePath })),
+        kept: {}, emptyFolders: 0,
+      })),
+    });
+    service = built.service;
+    const scan = await service.scan();
+    const run = await service.apply({
+      scanId: scan.scanId, archive: [{ backend: "codex", threadId: "a" }],
+      removeCheckouts: [{ backend: "codex", threadId: "c0", worktreePath: removable }],
+      trashCheckouts: [{ worktreePath: orphan }], removeEmptyFolders: false,
+    });
+    expect(built.deps.removeArchivedCheckouts).not.toHaveBeenCalled();
+    expect(built.deps.trashItem).not.toHaveBeenCalled();
+    expect(run.steps[1]).toEqual(expect.objectContaining({ step: "checkouts", kept: 2, done: 0 }));
+    expect(run.problems.map((problem) => [problem.path, problem.reason])).toEqual([
+      [removable, "Stopped before removing"],
+      [orphan, "Stopped before removing"],
+    ]);
+  });
+
   it("refuses a second run and an unknown scan", async () => {
     const { service } = harness([]);
     expect(() => service.start({ scanId: "missing", archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false }))
@@ -265,62 +297,133 @@ describe("ThreadMaintenanceService.apply", () => {
   });
 });
 
+/** A linked worktree of a fresh repository, on its own branch. Archive
+ * removes only linked worktrees, so that is what most cases inspect. */
+async function linkedWorktree(root: string): Promise<{ repo: string; worktree: string; git: (...args: string[]) => Promise<unknown> }> {
+  const { repo, git: repoGit } = await gitRepo(root);
+  const worktree = path.join(root, "worktrees", "abc123", "repo");
+  await mkdir(path.dirname(worktree), { recursive: true });
+  await repoGit("worktree", "add", "-b", "feature", worktree);
+  const git = async (...args: string[]) => await execFileAsync("git", ["-C", worktree, ...args]);
+  return { repo, worktree, git };
+}
+
 describe("inspectMaintenanceWorkspace", () => {
   const options = (rebuildableOutputIsClean: boolean) => ({ signal: new AbortController().signal, limitBytes: 64, rebuildableOutputIsClean });
 
   it("treats dependency output as clean only when the rule says so, and other ignored files never", async () => {
     const root = await tempRoot();
-    const { repo } = await gitRepo(root);
-    expect(await inspectMaintenanceWorkspace(repo, options(true))).toEqual({ workspace: { kind: "clean" } });
-    await mkdir(path.join(repo, "node_modules", "left-pad"), { recursive: true });
-    await writeFile(path.join(repo, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n");
-    expect(await inspectMaintenanceWorkspace(repo, options(true)))
+    const { worktree } = await linkedWorktree(root);
+    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ workspace: { kind: "clean" } });
+    await mkdir(path.join(worktree, "node_modules", "left-pad"), { recursive: true });
+    await writeFile(path.join(worktree, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n");
+    expect(await inspectMaintenanceWorkspace(worktree, options(true)))
       .toEqual({ workspace: { kind: "clean", rebuildableOutput: ["node_modules"] } });
-    expect(await inspectMaintenanceWorkspace(repo, options(false))).toEqual({ keep: "Ignored files only" });
-    await writeFile(path.join(repo, ".env.local"), "TOKEN=secret\n");
-    expect(await inspectMaintenanceWorkspace(repo, options(true))).toEqual({ keep: "Other ignored files" });
+    expect(await inspectMaintenanceWorkspace(worktree, options(false))).toEqual({ keep: "Ignored files only" });
+    await writeFile(path.join(worktree, ".env.local"), "TOKEN=secret\n");
+    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ keep: "Other ignored files" });
+  });
+
+  it("keeps an ignored secret that sits inside a tracked folder with a rebuildable name", async () => {
+    const root = await tempRoot();
+    const { worktree, git } = await linkedWorktree(root);
+    await mkdir(path.join(worktree, "src", "build"), { recursive: true });
+    await writeFile(path.join(worktree, "src", "build", "config.ts"), "export {};\n");
+    await git("add", ".");
+    await git("-c", "commit.gpgsign=false", "commit", "-m", "tracked build folder");
+    await writeFile(path.join(worktree, "src", "build", ".env.local"), "TOKEN=secret\n");
+    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ keep: "Other ignored files" });
   });
 
   it("measures the files a snapshot would hold and flags changes over the limit", async () => {
     const root = await tempRoot();
-    const { repo } = await gitRepo(root);
-    await writeFile(path.join(repo, "notes.txt"), "small\n");
-    expect(await inspectMaintenanceWorkspace(repo, options(true)))
+    const { worktree } = await linkedWorktree(root);
+    await writeFile(path.join(worktree, "notes.txt"), "small\n");
+    expect(await inspectMaintenanceWorkspace(worktree, options(true)))
       .toEqual({ workspace: { kind: "changes", files: 1, bytes: 6 } });
-    await writeFile(path.join(repo, "fixture.bin"), "x".repeat(100));
-    expect(await inspectMaintenanceWorkspace(repo, options(true))).toEqual({ workspace: {
+    await writeFile(path.join(worktree, "fixture.bin"), "x".repeat(100));
+    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ workspace: {
       kind: "overLimit", files: 2, bytes: 106, limitBytes: 64,
       largest: [{ path: "fixture.bin", bytes: 100 }, { path: "notes.txt", bytes: 6 }],
     } });
   });
 
+  it("leaves a primary checkout in place whatever it holds", async () => {
+    const root = await tempRoot();
+    const { repo } = await gitRepo(root);
+    await writeFile(path.join(repo, ".env.local"), "TOKEN=secret\n");
+    await writeFile(path.join(repo, "notes.txt"), "work in progress\n");
+    expect(await inspectMaintenanceWorkspace(repo, options(true))).toEqual({ workspace: { kind: "inPlace" } });
+  });
+
   it("keeps commits that no branch holds and reports missing and non-Git folders", async () => {
     const root = await tempRoot();
-    const { repo, git } = await gitRepo(root);
+    const { worktree, git } = await linkedWorktree(root);
     await git("checkout", "--detach");
-    await writeFile(path.join(repo, "file.txt"), "detached\n");
+    await writeFile(path.join(worktree, "file.txt"), "detached\n");
     await git("-c", "commit.gpgsign=false", "commit", "-am", "detached only");
-    expect(await inspectMaintenanceWorkspace(repo, options(true))).toEqual({ keep: "Commits on no branch" });
+    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ keep: "Commits on no branch" });
     expect(await inspectMaintenanceWorkspace(path.join(root, "nope"), options(true))).toEqual({ workspace: { kind: "missing" } });
     const scratch = path.join(root, "scratch");
     await mkdir(scratch);
     expect(await inspectMaintenanceWorkspace(scratch, options(true))).toEqual({ workspace: { kind: "notGit" } });
   });
 
-  it("names the rebuildable folder an ignored path lives in", () => {
-    expect(rebuildableOutputFolder("packages/web/node_modules/")).toBe("packages/web/node_modules");
-    expect(rebuildableOutputFolder("target")).toBe("target");
-    expect(rebuildableOutputFolder(".env.local")).toBeUndefined();
+  it("keeps a worktree on an unborn branch instead of failing", async (context) => {
+    const root = await tempRoot();
+    const { git: repoGit } = await gitRepo(root);
+    const orphan = path.join(root, "worktrees", "def456", "repo");
+    await mkdir(path.dirname(orphan), { recursive: true });
+    try {
+      await repoGit("worktree", "add", "--orphan", "-b", "empty", orphan);
+    } catch {
+      context.skip(); // git older than 2.42 has no --orphan worktrees
+    }
+    expect(await inspectMaintenanceWorkspace(orphan, options(true))).toEqual({ keep: "No commits yet" });
   });
 });
 
-describe("missingRepositoryFor", () => {
-  it("is undefined for a healthy checkout and a main checkout", async () => {
+describe("rebuildableOutputFolder", () => {
+  it("names only an ignored folder whose own name is rebuildable", () => {
+    expect(rebuildableOutputFolder("packages/web/node_modules/")).toBe("packages/web/node_modules");
+    expect(rebuildableOutputFolder("target/")).toBe("target");
+    expect(rebuildableOutputFolder("target")).toBeUndefined();
+    expect(rebuildableOutputFolder("src/build/.env.local")).toBeUndefined();
+    expect(rebuildableOutputFolder(".env.local")).toBeUndefined();
+  });
+
+  it("never treats an ignored file as rebuildable, whatever folders it sits in", () => {
+    const segment = fc.oneof(fc.constantFrom(...REBUILDABLE_OUTPUT_NAMES), fc.stringMatching(/^[a-z.]{1,8}$/));
+    fc.assert(fc.property(fc.array(segment, { minLength: 1, maxLength: 5 }), (segments) => {
+      const file = segments.join("/");
+      expect(rebuildableOutputFolder(file)).toBeUndefined();
+      expect(rebuildableOutputFolder(`${file}/`) !== undefined).toBe(REBUILDABLE_OUTPUT_NAMES.has(segments.at(-1)!));
+    }));
+  });
+});
+
+describe("project-scoped checkout scan", () => {
+  it("keeps only checkouts whose own repository is the project, even when names overlap", async () => {
     const root = await tempRoot();
-    const { repo, git } = await gitRepo(root);
-    expect(await missingRepositoryFor(repo)).toBeUndefined();
-    const linked = path.join(root, "linked");
-    await git("worktree", "add", "-b", "linked", linked);
-    expect(await missingRepositoryFor(linked)).toBeUndefined();
+    const pointTo = async (checkout: string, repository: string) => {
+      await mkdir(checkout, { recursive: true });
+      await writeFile(path.join(checkout, ".git"), `gitdir: ${path.join(repository, ".git", "worktrees", path.basename(checkout))}\n`);
+    };
+    const app = path.join(root, "src", "app");
+    const appWeb = path.join(root, "src", "app-web");
+    await mkdir(path.join(app, ".git", "worktrees", "app"), { recursive: true });
+    await mkdir(path.join(appWeb, ".git", "worktrees", "app-web"), { recursive: true });
+    const ours = path.join(root, "worktrees", "a1", "app");
+    const theirs = path.join(root, "worktrees", "b2", "app-web");
+    await pointTo(ours, app);
+    await pointTo(theirs, appWeb);
+    const { service } = harness([], {
+      auditArchivedCheckouts: vi.fn(async () => ({
+        candidates: [ours, theirs].map((worktreePath, index) => ({ backend: "codex", threadId: `t${index}`, worktreePath })),
+        kept: {}, emptyFolders: 0,
+      })),
+    });
+    const scan = await service.scan({ projectKey: app });
+    expect(scan.checkouts.items.map((item) => item.worktreePath)).toEqual([ours]);
   });
 });

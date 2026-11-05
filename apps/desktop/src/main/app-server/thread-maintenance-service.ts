@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   buildThreadIdentityKey,
@@ -25,6 +25,7 @@ import {
   type ThreadArchiveCandidate,
 } from "./thread-archive-sweeper";
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
+import { missingWorktreeRepository } from "./worktree-archive-service";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
 const FAILURE_LIMIT = 50;
@@ -210,7 +211,7 @@ export class ThreadMaintenanceService {
         fail("threads", error, { threadId: root.thread.id });
         return undefined;
       }
-      if (projectFilter && project !== projectFilter) return undefined;
+      if (projectFilter && (!project || path.resolve(project) !== path.resolve(projectFilter))) return undefined;
       const listed = familyKeepReason(family, now, reviewPolicy, this.deps.isBusy);
       if (listed) return { root, family, project, reason: listed };
       try {
@@ -307,9 +308,9 @@ export class ThreadMaintenanceService {
     const kept = { ...audit.kept };
     const items = await mapLimit(audit.candidates, INSPECT_CONCURRENCY, async (candidate): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
       if (this.abort.signal.aborted) return undefined;
-      if (projectFilter && !candidate.worktreePath.includes(`${path.sep}${path.basename(projectFilter)}`)) return undefined;
+      if (projectFilter && await checkoutProjectPath(candidate.worktreePath) !== path.resolve(projectFilter)) return undefined;
       try {
-        const missingRepository = await missingRepositoryFor(candidate.worktreePath);
+        const missingRepository = await missingWorktreeRepository(candidate.worktreePath);
         if (missingRepository) {
           return { ...candidate, kind: "repositoryGone" as const, missingRepositoryPath: missingRepository };
         }
@@ -389,7 +390,13 @@ export class ThreadMaintenanceService {
         addProblem({ step: "checkouts", kind: "failed", object: item.worktreePath, reason: "Not in this scan", path: item.worktreePath });
       }
     }
-    if ((removable.length || request.removeEmptyFolders) && !stopped()) {
+    const keepStopped = (worktreePath: string) => {
+      checkoutStep.kept += 1;
+      addProblem({ step: "checkouts", kind: "kept", object: worktreePath, reason: "Stopped before removing", path: worktreePath });
+    };
+    if ((removable.length || request.removeEmptyFolders) && stopped()) {
+      for (const item of removable) keepStopped(item.worktreePath);
+    } else if (removable.length || request.removeEmptyFolders) {
       update({ current: { step: "checkouts", processed: 0, total: removable.length, object: removable[0]?.worktreePath } });
       try {
         const removal = await this.deps.removeArchivedCheckouts({
@@ -414,12 +421,15 @@ export class ThreadMaintenanceService {
     }
     for (const item of request.trashCheckouts) {
       const checkout = retained.checkouts.get(item.worktreePath);
-      if (stopped()) break;
+      if (stopped()) {
+        keepStopped(item.worktreePath);
+        continue;
+      }
       try {
         // Re-check at the moment of the move: only a managed checkout whose
         // repository is still missing is ever moved to the Trash.
         if (checkout?.kind !== "repositoryGone" || !this.deps.isManagedCheckoutPath(item.worktreePath)
-          || !await missingRepositoryFor(item.worktreePath)) {
+          || !await missingWorktreeRepository(item.worktreePath)) {
           checkoutStep.kept += 1;
           addProblem({ step: "checkouts", kind: "kept", object: item.worktreePath, reason: "No longer safe to move",
             detail: "Its repository is back, or it is outside a managed worktree folder.", path: item.worktreePath });
@@ -434,8 +444,9 @@ export class ThreadMaintenanceService {
           detail: errorMessage(error), path: item.worktreePath });
       }
     }
-    // Repository-gone checkouts the operator left unselected are kept on purpose.
-    for (const checkout of retained.checkouts.values()) {
+    // Repository-gone checkouts the operator left unselected are kept on
+    // purpose. A run that skipped this step reports nothing about them.
+    for (const checkout of checkoutStep.ran ? retained.checkouts.values() : []) {
       if (checkout.kind === "repositoryGone" && !request.trashCheckouts.some((item) => item.worktreePath === checkout.worktreePath)) {
         addProblem({ step: "checkouts", kind: "kept", object: checkout.worktreePath, reason: "Repository no longer exists",
           detail: checkout.missingRepositoryPath, path: checkout.worktreePath });
@@ -511,7 +522,8 @@ function workspaceRank(workspace: ThreadMaintenanceWorkspace): number {
     case "overLimit": return 4;
     case "changes": return 3;
     case "clean": return 2;
-    case "notGit": return 1;
+    case "notGit":
+    case "inPlace": return 1;
     case "missing": return 0;
   }
 }
@@ -529,27 +541,22 @@ function clampInteger(value: number, min: number, max: number): number {
   return Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : min;
 }
 
-/** The repository path a linked worktree points at, when that repository is
- * gone. Undefined for a healthy checkout, a main checkout, or a non-Git folder. */
-export async function missingRepositoryFor(worktreePath: string): Promise<string | undefined> {
+/** The primary checkout a linked worktree belongs to, read from its `.git`
+ * pointer (`<checkout>/.git/worktrees/<name>`). It works when the repository is
+ * gone too. Undefined when the folder is not a linked worktree. */
+async function checkoutProjectPath(worktreePath: string): Promise<string | undefined> {
   let pointer: string;
   try {
     pointer = await readFile(path.join(worktreePath, ".git"), "utf8");
   } catch {
     return undefined;
   }
-  const match = /^gitdir:\s*(.+)\s*$/m.exec(pointer);
+  const match = /^gitdir:\s*(.+)$/m.exec(pointer);
   if (!match) return undefined;
-  const gitdir = path.resolve(worktreePath, match[1]!.trim());
-  try {
-    await stat(gitdir);
-    return undefined;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
-  }
-  const marker = `${path.sep}.git${path.sep}worktrees${path.sep}`;
-  const index = gitdir.indexOf(marker);
-  return index >= 0 ? gitdir.slice(0, index) : gitdir;
+  const gitDirectory = path.resolve(worktreePath, match[1]!.trim());
+  if (path.basename(path.dirname(gitDirectory)) !== "worktrees") return undefined;
+  const commonDirectory = path.dirname(path.dirname(gitDirectory));
+  return path.basename(commonDirectory) === ".git" ? path.dirname(commonDirectory) : commonDirectory;
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
