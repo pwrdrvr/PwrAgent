@@ -300,8 +300,14 @@ describe("Windows natural pipe evidence", () => {
     const result = await promisify(execFile)(process.execPath, [path.join(import.meta.dirname, "windows-pipe-diagnostics-probe.mjs")], {
       windowsHide: true, timeout: 35000,
     });
-    expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({
+    const proof = JSON.parse(result.stdout);
+    expect(proof).toEqual(expect.objectContaining({
       creationIdentityVerified: true, nativeExitTimeVerified: true,
     }));
+    // The owned live process is the oracle: readiness must lead to frames,
+    // a moving heartbeat during attach, and survival of cancellation and q.
+    if (process.env.PWRAGENT_WINDOWS_CDB_EXE) {
+      expect(proof).toMatchObject({ noninvasiveDebuggerVerified: true, debuggerQuitVerified: true });
+    }
   }, 40000);
 });
