@@ -821,6 +821,8 @@ export const SETTINGS_PICK_GIT_COMMAND_CHANNEL =
 export const SETTINGS_RECEIVING_FOLDER_CHANNEL = "settings:receiving-folder";
 export const SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL =
   "settings:refresh-git-discovery";
+export const SETTINGS_MANAGED_GIT_ACTION_CHANNEL =
+  "settings:managed-git-action";
 export const SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL =
   "settings:inspect-code-signatures";
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =

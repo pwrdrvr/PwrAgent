@@ -45,6 +45,9 @@ import type {
   DesktopCodexProfileModel,
   DesktopFederationMode,
   DesktopGitDiscoverySnapshot,
+  DesktopGitRuntimeChoice,
+  DesktopManagedGitSnapshot,
+  ManagedGitActionRequest,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
@@ -247,6 +250,31 @@ import {
 } from "@pwrdrvr/codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
 import { GIT_COMMAND_ENV, discoverGitCommands } from "./git-discovery";
+import {
+  cancelManagedGitInstall,
+  checkManagedGitReleases,
+  installManagedGit,
+  listManagedGitGenerations,
+  managedGitInstallInProgress,
+  managedGitResolutionFailure,
+  managedGitSupported,
+  MANAGED_GIT_CHECK_TTL_MS,
+  noteManagedGitVerified,
+  pruneManagedGitGenerations,
+  readManagedGitCheck,
+  removeManagedGitGeneration,
+  resolveManagedGitRuntime,
+  verifyManagedGitGeneration,
+  BUNDLED_GIT_VERSION,
+} from "../managed-git-runtime";
+import {
+  currentGitRuntimeChoice,
+  decodeGitRuntimeChoice,
+  gitRuntimeSelectionPatch,
+  managedGenerationsNamed,
+  readProfileManagedGitSelections,
+} from "./managed-git-selection";
+import { resolvePwragentRoot } from "../profile";
 import { discoverGlabCommands } from "./glab-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
@@ -883,6 +911,7 @@ export class DesktopSettingsService {
     const glabDiscovery = this.glabDiscoveryCache?.result ?? { candidates: [] };
     const ghDiscovery = this.ghDiscoveryCache?.result ?? { candidates: [] };
     const gitDiscovery = this.gitDiscoveryCache?.result ?? { candidates: [] };
+    const managedGit = await this.readManagedGitSnapshot(config.applications?.git);
     const applications = this.applicationsDiscovery
       ?? emptyApplicationsSnapshot();
     const preferredEditorId = this.resolveConfigString(
@@ -1729,6 +1758,7 @@ export class DesktopSettingsService {
         git: {
           path: this.resolveString(config.applications?.git?.path, GIT_COMMAND_ENV),
           discovery: gitDiscovery,
+          managed: managedGit,
         },
       },
       git: {
@@ -1963,13 +1993,23 @@ export class DesktopSettingsService {
   private discoverGitCommandsCached(
     configuredCommand?: string,
   ): Promise<DesktopGitDiscoverySnapshot> {
-    const key = configuredCommand?.trim() ?? "";
+    const selectedManaged = this.resolveManagedGitSelection();
+    const key = `${configuredCommand?.trim() ?? ""}\0${selectedManaged ?? ""}`;
     if (this.gitDiscoveryCache?.key !== key) {
       const promise = this.commandDiscoveryLifetime.run(
-        () => discoverGitCommands({
+        async () => discoverGitCommands({
           configuredCommand,
           env: this.env,
           signal: this.commandDiscoveryLifetime.signal,
+          managed: (await listManagedGitGenerations().catch(() => [])).map((release) => ({
+            generation: release.generation,
+            executable: release.executable,
+            root: release.root,
+            ...(managedGitResolutionFailure(release.generation)
+              ? { failure: managedGitResolutionFailure(release.generation) }
+              : {}),
+          })),
+          ...(selectedManaged ? { selectedManaged } : {}),
         }),
         { candidates: [] },
       );
@@ -3159,7 +3199,7 @@ export class DesktopSettingsService {
         ? this.options.resolveActiveManagedGrokCommand?.()
         : undefined);
     const gitCommand = this.resolveGitCommandPreference();
-    return [gitCommand ?? bundledGitExecutable(), ...(gitCommand ? [] : [bundledGitLfsExecutable()]), codexCommand, grokCommand].filter(
+    return [...(gitCommand ? [gitCommand] : this.resolveRuntimeGitCommands()), codexCommand, grokCommand].filter(
       (command): command is string => command !== undefined,
     );
   }
@@ -3705,6 +3745,154 @@ export class DesktopSettingsService {
   resolveGitCommandPreference(): string | undefined {
     return readEnvString(this.env, GIT_COMMAND_ENV)
       ?? (this.configStore.read("applications").git?.path?.trim() || undefined);
+  }
+
+  /**
+   * The downloaded PwrDrvr Git release this profile chose with Use. Git
+   * resolution consults it only when no explicit command is set.
+   */
+  resolveManagedGitSelection(): string | undefined {
+    if (!managedGitSupported()) return undefined;
+    const choice = currentGitRuntimeChoice({
+      managed: this.configStore.read("applications").git?.managed,
+    });
+    return choice.kind === "managed" ? choice.generation : undefined;
+  }
+
+  /** git and git-lfs of the bundle or the selected release, for terminals. */
+  private resolveRuntimeGitCommands(): string[] {
+    const managed = this.resolveManagedGitSelection();
+    if (!managed) return [bundledGitExecutable(), bundledGitLfsExecutable()];
+    try {
+      const { root, executable } = resolveManagedGitRuntime(managed);
+      return [executable, path.join(root, "libexec", "git-core", "git-lfs")];
+    } catch {
+      // A rejected release puts nothing of PwrAgent's on a terminal's PATH.
+      return [];
+    }
+  }
+
+  private async readManagedGitSnapshot(
+    git: { path?: string; managed?: string; managedPrevious?: string } | undefined,
+  ): Promise<DesktopManagedGitSnapshot> {
+    const supported = managedGitSupported();
+    if (!supported) return { supported, bundledVersion: BUNDLED_GIT_VERSION, releases: [] };
+    const [releases, check] = await Promise.all([
+      listManagedGitGenerations().catch(() => []),
+      readManagedGitCheck(),
+    ]);
+    const selected = this.resolveManagedGitSelection();
+    const previous = decodeGitRuntimeChoice(git?.managedPrevious);
+    const installing = managedGitInstallInProgress();
+    return {
+      supported,
+      bundledVersion: BUNDLED_GIT_VERSION,
+      ...(selected ? { selected } : {}),
+      ...(previous ? { previous } : {}),
+      releases: releases.map((release) => {
+        const failure = managedGitResolutionFailure(release.generation);
+        return {
+          generation: release.generation,
+          version: release.version,
+          tag: release.tag,
+          executable: release.executable,
+          ...(release.lfsVersion ? { lfsVersion: release.lfsVersion } : {}),
+          installedAt: release.installedAt,
+          ...(failure ? { failure } : {}),
+        };
+      }),
+      ...(check
+        ? {
+          check: {
+            checkedAt: check.checkedAt,
+            ...(check.available
+              ? {
+                available: {
+                  tag: check.available.tag,
+                  version: check.available.version,
+                  generation: check.available.generation,
+                  ...(check.available.archiveBytes !== undefined
+                    ? { archiveBytes: check.available.archiveBytes }
+                    : {}),
+                },
+              }
+              : {}),
+            ...(check.needsAppUpdate ? { needsAppUpdate: check.needsAppUpdate } : {}),
+            ...(check.error ? { error: check.error } : {}),
+          },
+        }
+        : {}),
+      ...(installing ? { installing } : {}),
+    };
+  }
+
+  /** Releases a profile under this PwrAgent root still names. */
+  private protectedManagedGitGenerations(): Set<string> {
+    const named = readProfileManagedGitSelections(resolvePwragentRoot());
+    // This profile's live config, in case its file is mid-write or elsewhere.
+    for (const generation of managedGenerationsNamed(this.configStore.read("applications").git)) {
+      named.add(generation);
+    }
+    return named;
+  }
+
+  /**
+   * Settings → Git → Updates. Every action is one the operator asked for:
+   * nothing here runs on a timer, and only `select` changes which Git runs.
+   */
+  async managedGitAction(request: ManagedGitActionRequest): Promise<string | undefined> {
+    if (!managedGitSupported()) return "PwrDrvr Git updates are not available on this platform.";
+    try {
+      switch (request.action) {
+        case "check":
+          if (request.ifStale) await this.refreshManagedGitCheckIfStale();
+          else await checkManagedGitReleases({ manual: true });
+          break;
+        case "install": {
+          await installManagedGit({ tag: request.tag });
+          break;
+        }
+        case "cancel":
+          cancelManagedGitInstall();
+          break;
+        case "select":
+          await this.selectGitRuntime(request.choice);
+          break;
+        case "remove":
+          await removeManagedGitGeneration(request.generation, this.protectedManagedGitGenerations());
+          break;
+      }
+      return undefined;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return undefined;
+      return error instanceof Error ? error.message : String(error);
+    } finally {
+      this.gitDiscoveryCache = undefined;
+    }
+  }
+
+  /** Settings opening Git asks GitHub at most every few hours. */
+  async refreshManagedGitCheckIfStale(): Promise<void> {
+    if (!managedGitSupported()) return;
+    const check = await readManagedGitCheck();
+    if (check && Date.now() - check.checkedAt < MANAGED_GIT_CHECK_TTL_MS) return;
+    await checkManagedGitReleases({ manual: false }).catch(() => undefined);
+  }
+
+  private async selectGitRuntime(choice: DesktopGitRuntimeChoice): Promise<void> {
+    if (readEnvString(this.env, GIT_COMMAND_ENV)) {
+      throw new Error(`${GIT_COMMAND_ENV} is set, so it wins over anything chosen here.`);
+    }
+    if (choice.kind === "managed") {
+      // Every check again, signatures included, before this profile runs it.
+      noteManagedGitVerified(await verifyManagedGitGeneration(choice.generation));
+    }
+    const git = this.configStore.read("applications").git;
+    const patch = gitRuntimeSelectionPatch(currentGitRuntimeChoice(git), choice);
+    await this.writeConfigPatchTargeted({ applications: { git: patch } });
+    // Commands already running keep the executable they started with;
+    // releases nobody names any more are removed once nothing runs them.
+    await pruneManagedGitGenerations(this.protectedManagedGitGenerations()).catch(() => undefined);
   }
 
   private readConfig(): ConfigReadResult {

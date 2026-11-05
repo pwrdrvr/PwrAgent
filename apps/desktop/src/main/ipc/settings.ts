@@ -50,6 +50,8 @@ import type {
   InspectCodeSignaturesResponse,
   PickGhCommandResponse,
   PickGitCommandResponse,
+  ManagedGitActionRequest,
+  ManagedGitActionResponse,
   RefreshDesktopCodexDiscoveryRequest,
   SetCodexModelProviderApiKeyRequest,
   SetCodexModelProviderApiKeyResponse,
@@ -115,6 +117,7 @@ import {
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
+  SETTINGS_MANAGED_GIT_ACTION_CHANNEL,
 } from "../../shared/ipc";
 import type { ManagedRuntimeProgress } from "../../shared/managed-runtime-progress";
 import { readManagedRuntimeProgress } from "../managed-runtime-progress";
@@ -1785,6 +1788,12 @@ export function registerSettingsIpcHandlers(
       request: WriteDesktopSettingsConfigRequest,
     ): Promise<DesktopSettingsWriteResponse> => {
       const activeService = getService(service);
+      // A downloaded Git is chosen only through the managed-Git action,
+      // which verifies the release first.
+      if (request.patch.applications?.git) {
+        delete request.patch.applications.git.managed;
+        delete request.patch.applications.git.managedPrevious;
+      }
       const previousProviderDefaults = request.patch.models?.providerDefaults !== undefined
         ? activeService.resolveProviderModelDefaults()
         : undefined;
@@ -2135,6 +2144,19 @@ export function registerSettingsIpcHandlers(
         await getService(service).refreshGitDiscovery(),
       ),
     }),
+  );
+
+  ipcMain.removeHandler(SETTINGS_MANAGED_GIT_ACTION_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_MANAGED_GIT_ACTION_CHANNEL,
+    async (_event, request: ManagedGitActionRequest): Promise<ManagedGitActionResponse> => {
+      const activeService = getService(service);
+      const error = await activeService.managedGitAction(request);
+      return {
+        snapshot: applyRuntimeMessagingSnapshot(await activeService.refreshGitDiscovery()),
+        ...(error ? { error } : {}),
+      };
+    },
   );
 
   ipcMain.removeHandler(SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL);

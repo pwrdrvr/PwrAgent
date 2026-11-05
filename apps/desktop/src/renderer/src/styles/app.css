@@ -16503,6 +16503,19 @@ a.button {
   line-height: 1.45;
 }
 
+/* Settings → Git → Updates: the build line or the progress strip, then a
+   quieter note. Uses the Grok build line and the shared strip as they are. */
+.managed-git-updates {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.managed-git-updates__note {
+  margin: 0;
+}
+
 /* ------------------------------------------------------------------
    Managed build progress strip (Codex + Grok). One layout for every phase:
    state line, track, byte meter, four-step rail. The track copies

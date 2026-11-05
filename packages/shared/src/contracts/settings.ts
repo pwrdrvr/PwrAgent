@@ -1086,6 +1086,8 @@ export type DesktopGlabDiscoverySnapshot = {
 
 export type DesktopGitCandidateSource =
   | "bundled"
+  /** A PwrDrvr Git release downloaded from Settings → Git → Updates. */
+  | "managed"
   | "env"
   | "config"
   | "path"
@@ -1110,6 +1112,8 @@ export type DesktopGitDiscoveryCandidate = {
   lfsVersion?: string;
   versionFailureReason?: string;
   failureReason?: string;
+  /** `managed` only: the release's generation id, `<version>-<rev7>`. */
+  generation?: string;
 };
 
 export type DesktopGitDiscoverySnapshot = {
@@ -1165,7 +1169,66 @@ export type DesktopApplicationsSnapshot = {
   git: {
     path: DesktopSettingsValue<string>;
     discovery: DesktopGitDiscoverySnapshot;
+    /** Settings snapshots only; the applications list leaves it out. */
+    managed?: DesktopManagedGitSnapshot;
   };
+};
+
+/** A Git selection Settings can make, and the one Roll back returns to. */
+export type DesktopGitRuntimeChoice =
+  | { kind: "bundled" }
+  | { kind: "managed"; generation: string }
+  | { kind: "path"; path: string };
+
+export type DesktopManagedGitRelease = {
+  generation: string;
+  version: string;
+  tag: string;
+  executable: string;
+  lfsVersion?: string;
+  installedAt: number;
+  /** Set when the release failed a check in this run; it will not be run. */
+  failure?: string;
+};
+
+/**
+ * PwrDrvr Git releases downloaded after this build shipped. Absent on
+ * platforms with no custom runtime (Windows keeps Dugite's MinGit).
+ */
+export type DesktopManagedGitSnapshot = {
+  supported: boolean;
+  bundledVersion: string;
+  /** The release chosen with Use, by generation id, when one is. */
+  selected?: string;
+  /** What Roll back returns to. */
+  previous?: DesktopGitRuntimeChoice;
+  releases: DesktopManagedGitRelease[];
+  check?: {
+    checkedAt: number;
+    available?: {
+      tag: string;
+      version: string;
+      generation: string;
+      archiveBytes?: number;
+    };
+    needsAppUpdate?: { version: string };
+    error?: string;
+  };
+  /** Tag downloading in this window, while one is. */
+  installing?: string;
+};
+
+export type ManagedGitActionRequest =
+  /** `ifStale`: Settings opening; asks GitHub only when the last check is old. */
+  | { action: "check"; ifStale?: boolean }
+  | { action: "install"; tag: string }
+  | { action: "cancel" }
+  | { action: "select"; choice: DesktopGitRuntimeChoice }
+  | { action: "remove"; generation: string };
+
+export type ManagedGitActionResponse = {
+  snapshot: DesktopSettingsSnapshot;
+  error?: string;
 };
 
 export type DesktopFederationSettingsSnapshot = {
@@ -1939,6 +2002,12 @@ export type DesktopSettingsConfigPatch = {
     };
     git?: {
       path?: string;
+      /**
+       * Main process only: written by the managed-Git select action after it
+       * verifies the release. The generic settings write drops both keys.
+       */
+      managed?: string;
+      managedPrevious?: string;
     };
   };
   worktrees?: {

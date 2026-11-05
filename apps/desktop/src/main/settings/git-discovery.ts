@@ -47,15 +47,37 @@ export function gitCandidateInputs(env: NodeJS.ProcessEnv): Array<{
   ];
 }
 
+export type ManagedGitDiscoveryInput = {
+  generation: string;
+  executable: string;
+  root: string;
+  /** A check this release already failed in this run; it is never probed. */
+  failure?: string;
+};
+
 async function buildGitCandidate(
-  input: { command: string | undefined; source: DesktopGitCandidateSource },
+  input: { command: string | undefined; source: DesktopGitCandidateSource; managed?: ManagedGitDiscoveryInput },
   options: {
     env: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
     signal?: AbortSignal;
   },
 ): Promise<DesktopGitDiscoveryCandidate | undefined> {
-  const probeEnv = input.source === "bundled" ? bundledGitEnvironment(options.env) : customGitEnvironment(options.env, input.command ?? "git");
+  if (input.managed?.failure) {
+    return {
+      command: input.managed.executable,
+      source: "managed",
+      generation: input.managed.generation,
+      executable: false,
+      selected: false,
+      failureReason: input.managed.failure,
+    };
+  }
+  const probeEnv = input.managed
+    ? bundledGitEnvironment(options.env, { root: input.managed.root })
+    : input.source === "bundled"
+      ? bundledGitEnvironment(options.env)
+      : customGitEnvironment(options.env, input.command ?? "git");
   const candidate = await buildCommandDiscoveryCandidate<DesktopGitCandidateSource>(
     input,
     {
@@ -68,6 +90,7 @@ async function buildGitCandidate(
   if (!candidate || options.signal?.aborted) {
     return undefined;
   }
+  if (input.managed) candidate.generation = input.managed.generation;
 
   if (candidate.version) {
     try {
@@ -117,19 +140,28 @@ export async function discoverGitCommands(params?: {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   signal?: AbortSignal;
+  /** Downloaded PwrDrvr Git releases, newest first. */
+  managed?: ManagedGitDiscoveryInput[];
+  /** The release chosen with Use, by generation id. */
+  selectedManaged?: string;
 }): Promise<DesktopGitDiscoverySnapshot> {
   const env = params?.env ?? process.env;
   const configuredCommand = params?.configuredCommand?.trim();
   const build = (input: {
     command: string | undefined;
     source: DesktopGitCandidateSource;
+    managed?: ManagedGitDiscoveryInput;
   }): Promise<DesktopGitDiscoveryCandidate | undefined> =>
     buildGitCandidate(input, { env, platform: params?.platform, signal: params?.signal });
 
   const inputs = gitCandidateInputs(env);
+  const managed = params?.managed ?? [];
+  const selectedManaged = managed.find((release) => release.generation === params?.selectedManaged);
   const [configured, ...discovered] = await Promise.all([
     build({ command: configuredCommand, source: "config" }),
     build(inputs[0]),
+    // Downloaded releases sit beside the bundle they update.
+    ...managed.map((release) => build({ command: release.executable, source: "managed", managed: release })),
     build({ command: bundledGitExecutable(), source: "bundled" }),
     ...inputs.slice(1).map(build),
   ]);
@@ -148,10 +180,16 @@ export async function discoverGitCommands(params?: {
   // The candidates' own commands, because discovery resolves a bare `git`
   // against PATH: comparing the raw setting would match no row and leave the
   // pane reporting no Git at all while every spawn ran that one.
-  const requested = discovered[0]?.command || configured?.command || bundledGitExecutable();
+  const requested = discovered[0]?.command
+    || configured?.command
+    || selectedManaged?.executable
+    || bundledGitExecutable();
+  const requestedSource: DesktopGitCandidateSource = env[GIT_COMMAND_ENV]?.trim()
+    ? "env"
+    : configuredCommand ? "config" : selectedManaged ? "managed" : "bundled";
   // An explicit but broken selection remains selected; never silently switch.
   const selected = candidates.find((candidate) => candidate.command === requested)
-    ?? candidates.find((candidate) => candidate.source === (env[GIT_COMMAND_ENV]?.trim() ? "env" : configuredCommand ? "config" : "bundled"));
+    ?? candidates.find((candidate) => candidate.source === requestedSource);
   if (selected) selected.selected = true;
   return {
     selectedCommand: selected?.command,
