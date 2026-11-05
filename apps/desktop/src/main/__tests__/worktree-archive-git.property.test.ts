@@ -30,11 +30,11 @@ async function repository(root: string): Promise<string> {
 
 // The Git boundary is measured, not replaced: every snapshot and removal runs
 // against the owning Git repository. Archive-all must not read sibling entries
-// for each checkout. This deliberately uses 200+ worktrees, so its process cost
-// exceeds the ordinary single-checkout test timeout, especially on Windows.
-it("bounds archive-all Git output independently of the remaining worktree fleet", async () => {
+// for each checkout. A small fleet checks this on every platform; the 200+
+// measurement runs on POSIX because each real Windows removal owns a separate
+// PowerShell Job launcher (0.7-2.1 seconds warm, before the Git work itself).
+async function checkArchiveAllGitBudget(count: number): Promise<void> {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-git-fleet-")));
-  const count = 201;
   const measurements = { listings: 0, listingLines: 0, outputLines: 0, removals: 0 };
   let boundary: ReturnType<typeof vi.spyOn> | undefined;
   try {
@@ -70,7 +70,15 @@ it("bounds archive-all Git output independently of the remaining worktree fleet"
     boundary?.mockRestore();
     await rm(root, { recursive: true, force: true });
   }
-}, process.platform === "win32" ? 300_000 : 120_000);
+}
+
+it("bounds archive-all Git output for a small fleet on every platform", async () => {
+  await checkArchiveAllGitBudget(3);
+});
+
+it.runIf(process.platform !== "win32")("bounds archive-all Git output independently of a 201-checkout fleet", async () => {
+  await checkArchiveAllGitBudget(201);
+}, 120_000);
 
 // Git owns checkout identity, branch/HEAD and lock state. Generate layouts and
 // late mutations at the admission boundary, and compare preservation/removal
@@ -134,7 +142,13 @@ it("agrees with Git about archive eligibility across layouts and late registrati
           admissionReached = true;
           if (mutation === "late-lock") await git(repo, "worktree", "lock", checkout);
           if (mutation === "late-backlink") await writeFile(path.join(admin, "gitdir"), `${path.join(repo, ".git")}\n`);
-          if (mutation === "late-gitfile") await writeFile(path.join(checkout, ".git"), `gitdir: ${path.join(root, "missing-admin")}\n`);
+          if (mutation === "late-gitfile") {
+            // Git for Windows hides this file; opening a hidden file with
+            // writeFile's CREATE_ALWAYS fails with EPERM. Replace the pointer
+            // so the fixture reaches the registration check on every OS.
+            await rm(path.join(checkout, ".git"), { force: true });
+            await writeFile(path.join(checkout, ".git"), `gitdir: ${path.join(root, "missing-admin")}\n`);
+          }
           if (mutation === "late-common") await writeFile(path.join(admin, "commondir"), `${root}\n`);
           if (mutation === "late-unregister") await rm(admin, { recursive: true });
           return () => {};
