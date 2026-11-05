@@ -276,7 +276,7 @@ export type PushFederationFileOptions = {
   /** Called after each acknowledged chunk with bytes the receiver holds. */
   onProgress?: (sentBytes: number, totalBytes: number) => void;
   onTransferProgress?: (progress: {
-    bytesCommitted: number; bytesTotal: number; resumedFromBytes?: number;
+    bytesCommitted: number; bytesSent: number; bytesTotal: number; resumedFromBytes?: number;
     link: "connected" | "waiting"; disconnectedAt?: string; transport: "resumable" | "single_shot";
   }) => void;
 };

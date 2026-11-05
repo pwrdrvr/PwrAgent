@@ -76,6 +76,8 @@ export interface ThreadHandoffProgress {
   phase: ThreadHandoffPhase;
   /** Send phase only. Bytes the receiver has committed, which never decreases. */
   bytesCommitted?: number;
+  /** Send phase only. Receiver-acknowledged bytes; may return to the durable offset on reconnect. */
+  bytesSent?: number;
   bytesTotal?: number;
   /** Set once a transfer resumes from a non-zero committed offset. */
   resumedFromBytes?: number;

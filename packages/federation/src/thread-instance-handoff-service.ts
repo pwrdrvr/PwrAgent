@@ -138,7 +138,7 @@ export class ThreadInstanceHandoffService {
         const file = await this.options.push(request.targetInstanceId, filePath, {
           signal,
           onProgress: (bytesCommitted, bytesTotal) => {
-            if (!resumable) progress("send", { bytesCommitted, bytesTotal });
+            if (!resumable) progress("send", { bytesCommitted, bytesSent: bytesCommitted, bytesTotal });
           },
           onTransferProgress: (update) => progress("send", update),
         });

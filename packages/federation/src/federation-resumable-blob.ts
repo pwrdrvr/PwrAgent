@@ -8,7 +8,8 @@ import type { FilePushResult } from "./federation-file-push";
 
 export const BLOB_CHUNK_BYTES = 256 * 1024;
 export const BLOB_WINDOW_CHUNKS = 4;
-export const BLOB_COMMIT_BYTES = 4 * 1024 * 1024;
+/** Every acknowledged window has a durable resume boundary, including small files. */
+export const BLOB_COMMIT_BYTES = BLOB_CHUNK_BYTES * BLOB_WINDOW_CHUNKS;
 export const BLOB_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_BYTES = 512 * 1024 * 1024;
 
