@@ -655,7 +655,8 @@ export class NavigationWindowQueries {
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
         let next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor });
         assertRetained(next);
-        if (resuming && loadedRows(next.page) >= restoring) {
+        if (resuming && next.page?.nextCursor && loadedRows(next.page) >= restoring
+          && loadedRows(next.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {
           // Saved expansion must not withhold the ordinary first page, nor
           // replace a longer cached range with it.
           this.acceptState(resource, next);

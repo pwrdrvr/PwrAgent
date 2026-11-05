@@ -112,6 +112,29 @@ it("sizes each immutable transport page once and never serializes unrelated reta
   } finally { queries.dispose(); encode.mockRestore(); }
 });
 
+it("admits exactly the pages allowed by an independent UTF-8 retained-byte oracle", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("x", "é", "😀"), fc.integer({ min: 235_000, max: 245_000 }), async (glyph, size) => {
+    const title = glyph.repeat(Math.floor(size / Buffer.byteLength(glyph, "utf8")));
+    const accepted: NavigationQueryPage[] = [];
+    let bytes = 0;
+    const read = async (sent: NavigationQueryRequest) => {
+      const response = page(sent);
+      response.entries[0]!.row.title = title;
+      const exact = Buffer.byteLength(JSON.stringify(response), "utf8");
+      if (bytes + exact <= 8 * 1024 * 1024) { accepted.push(response); bytes += exact; }
+      return response;
+    };
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    queries.setDemand(new Map(Array.from({ length: 38 }, (_, i) => [`group-${i}`, request(i)])));
+    try {
+      await until(() => idle(queries));
+      const resources = [...queries.getSnapshot().resources.values()];
+      expect(resources.flatMap((resource) => resource.state.page ? [resource.state.page] : [])).toEqual(accepted);
+      expect(resources.filter((resource) => resource.state.error?.includes("retained-page budget"))).toHaveLength(38 - accepted.length);
+    } finally { queries.dispose(); }
+  }), { numRuns: 5 });
+});
+
 it("matches the owner revision oracle across generated event, timer and response orderings", async () => {
   await fc.assert(fc.asyncProperty(fc.array(fc.record({
     kind: fc.constantFrom("event", "response", "timer"), group: fc.integer({ min: 0, max: 7 }),
