@@ -148,6 +148,26 @@ describe.skipIf(process.platform === "win32")("downloaded Git verifier against t
     ), { numRuns: 6 });
   });
 
+  it("rejects resealed build metadata that names another source, as the script does", async () => {
+    // Resealing defeats the inventory hash, so only the metadata rule is left.
+    await fc.assert(fc.asyncProperty(
+      fc.oneof(
+        fc.record({ field: fc.constant("version"), value: fc.constantFrom("2.56.0-dev-pwrgit.8", "2.56.0", "") }),
+        fc.record({ field: fc.constant("source_revision"), value: fc.constantFrom("b".repeat(40), revision.slice(0, 39), "") }),
+        fc.record({ field: fc.constant("primary_sha1"), value: fc.constantFrom("OPENSSL", "sha1dc", "") }),
+      ),
+      async ({ field, value }) => {
+        const { root, pin } = sealed((payload) => {
+          const file = path.join(payload, "pwrgit-build.json");
+          writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), [field]: value }));
+        });
+        expect(oracle(root, pin)).toBe(false);
+        await expect(verifyManagedGitPayload(root, pin, { probe: false, requireSigned: false }))
+          .rejects.toThrow(/mismatch/);
+      },
+    ), { numRuns: 12 });
+  });
+
   it("also rejects a Linux payload built for the other architecture", async () => {
     const { root, pin } = sealed();
     const arm = { ...pin, key: "linux-arm64" as const };
