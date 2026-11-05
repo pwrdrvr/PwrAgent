@@ -25,6 +25,7 @@ afterEach(() => vi.restoreAllMocks());
 async function archiveFromSidebar(size: number, completionGroups: number[][], options?: {
   failed?: number[];
   remote?: number[];
+  navigateAfterCompletionGroup?: number;
 }) {
   const archived = new Set<string>();
   const listeners = new Set<(event: AgentEvent) => void>();
@@ -110,7 +111,7 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     expect(hook.result.current.archivedThreadKeys.size).toBe(size);
     expect(hook.result.current.threads.map((thread) => thread.id)).toEqual([`thread-${size}`]);
     expect(hook.result.current.selectedThreadKey).toBe(`codex:thread-${size}`);
-    for (const group of completionGroups) {
+    for (const [groupIndex, group] of completionGroups.entries()) {
       await act(async () => { for (const index of group) gates[index]!.resolve(); });
       // Deliver the same timer tasks production runs between staggered IPC
       // replies, without depending on wall time or fake timers.
@@ -122,6 +123,10 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
           await Promise.resolve();
         }
       });
+      if (options?.navigateAfterCompletionGroup === groupIndex) {
+        await act(async () => { fireEvent.click(screen.getByRole("button", { name: `Thread ${size}` })); });
+        expect(hook.result.current.selectedThreadKey).toBe(`codex:thread-${size}`);
+      }
     }
     await waitFor(() => expect(onThreadsArchived).toHaveBeenCalledOnce());
     for (let index = 0; index < size; index++) {
@@ -158,6 +163,28 @@ it.each([2, 3])("refreshes once for the shrunk %i-thread counterexample", async 
 it("rolls back failed rows and selection while removing only successfully archived remote pins", async () => {
   const outcome = await archiveFromSidebar(4, [[3], [2], [1], [0]], { failed: [0, 2], remote: [1, 2] });
   expect(outcome.selectedThreadKey).toBe("codex:thread-0");
+});
+
+it("keeps a newer user selection when a partial archive failure finishes later", async () => {
+  const outcome = await archiveFromSidebar(2, [[0], [1]], { failed: [0], navigateAfterCompletionGroup: 0 });
+  expect(outcome.selectedThreadKey).toBe("codex:thread-2");
+  expect(outcome.lensLoads).toBe(1);
+});
+
+it("batch completion preserves user navigation after any earlier archive failure", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.array(fc.integer({ min: 0, max: 4 }), { minLength: 2, maxLength: 8 }), fc.nat(),
+    async (completionOrder, failureIndex) => {
+      const failed = failureIndex % completionOrder.length;
+      const groups = [[failed], ...[...new Set(completionOrder)].sort().map((rank) => completionOrder
+        .flatMap((value, index) => index !== failed && value === rank ? [index] : [])).filter((group) => group.length > 0)];
+      const outcome = await archiveFromSidebar(completionOrder.length, groups, {
+        failed: [failed], navigateAfterCompletionGroup: 0,
+      });
+      expect(outcome.selectedThreadKey).toBe(`codex:thread-${completionOrder.length}`);
+      expect(outcome.lensLoads).toBe(1);
+    },
+  ), { numRuns: 25 });
 });
 
 it("loads per bulk archive do not grow with the number of threads or completion groups", async () => {
