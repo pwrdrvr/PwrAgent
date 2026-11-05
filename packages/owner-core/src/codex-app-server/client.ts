@@ -10787,6 +10787,8 @@ export class CodexAppServerClient {
       this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
     if (typeof file?.dataBase64 !== "string") throw new Error("Codex does not support exporting thread bytes through fs/readFile.");
     return {
+      // Older protocol versions predate paginated history and omit this field.
+      historyMode: typeof thread.historyMode === "string" ? thread.historyMode : "legacy",
       rolloutBase64: file.dataBase64,
       replay,
       ...(typeof thread.cwd === "string" ? { cwd: thread.cwd } : {}),
