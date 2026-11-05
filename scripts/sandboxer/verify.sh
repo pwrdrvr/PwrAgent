@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs PwrAgent's Linux CI checks inside a Sandboxer sandbox (Ubuntu).
-# The procedure and the transfer steps are in
-# .agents/skills/sandboxer-verification/SKILL.md.
+# Dormant Sandboxer verification helper (Ubuntu), retained pending a replacement provider.
+# Do not automatically invoke it for development checks; use local commands or CI.
+# Preserved procedure: .agents/skills/sandboxer-verification/SKILL.md.
 #
 #   scripts/sandboxer/verify.sh setup        Node from .nvmrc, pnpm, E2E packages, pnpm install
 #   scripts/sandboxer/verify.sh unit [--shards N] [args]
