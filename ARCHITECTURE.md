@@ -176,6 +176,15 @@ What the reservation serializes, and what it cannot:
   removal. An unreported provider removal keeps the checkout protected until
   the next batch reads the fleet.
 
+Archive snapshot preparation and the final lock recheck resolve only the
+target's Git admin directory. The checkout's `.git` file, the admin entry's
+`gitdir` backlink and `commondir` must agree with the supplied repository;
+the common directory itself is refused as a primary checkout. Neither check
+lists sibling worktrees. The final check stays inside terminal teardown and
+before Windows link cleanup. `worktree-archive-git.property.test.ts` measures
+the real Git boundary while archiving 201 checkouts and uses Git as the
+registration, branch and snapshot oracle across layouts and late mutations.
+
 Only one physical cleanup runs at a time. A bulk archive beyond the queue's 256
 slots waits as an intent and is admitted as slots free; quit checkpoints it.
 Waiting references are indexed by blocker, checkout and supplied path, so a

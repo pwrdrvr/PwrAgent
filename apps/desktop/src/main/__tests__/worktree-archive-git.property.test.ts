@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
+import fc from "fast-check";
 import * as gitBoundary from "../app-server/git-executable";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 
@@ -69,3 +70,83 @@ it("bounds archive-all Git output independently of the remaining worktree fleet"
     await rm(root, { recursive: true, force: true });
   }
 }, process.platform === "win32" ? 300_000 : 120_000);
+
+// Git owns checkout identity, branch/HEAD and lock state. Generate layouts and
+// late mutations at the admission boundary, and compare preservation/removal
+// with Git's own registration rather than production's scoped predicate.
+it("agrees with Git about archive eligibility across layouts and late registration changes", async () => {
+  const layouts = ["ordinary", "linked-anchor", "alias", "bare", "separate"] as const;
+  const mutations = ["none", "locked", "late-lock", "late-backlink", "late-gitfile", "late-common", "late-unregister", "primary", "foreign", "subdirectory"] as const;
+  const property = fc.asyncProperty(fc.constantFrom(...layouts), fc.constantFrom(...mutations), fc.boolean(), async (layout, mutation, detached) => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-git-oracle-")));
+    try {
+      let repo = await repository(root);
+      if (layout === "bare") {
+        await git(root, "clone", "--bare", repo, path.join(root, "bare.git"));
+        repo = path.join(root, "bare.git");
+      } else if (layout === "separate") {
+        await git(repo, "init", "--separate-git-dir", path.join(root, "admin"));
+      }
+      const checkout = path.join(root, "checkout with spaces");
+      await git(repo, "worktree", "add", ...(detached ? ["--detach"] : ["-b", "owned"]), checkout);
+      const head = await git(checkout, "rev-parse", "HEAD");
+      const admin = await git(checkout, "rev-parse", "--absolute-git-dir");
+      let anchor = repo;
+      if (layout === "linked-anchor") {
+        anchor = path.join(root, "anchor");
+        await git(repo, "worktree", "add", "--detach", anchor);
+      }
+      let target = checkout;
+      if (layout === "alias") {
+        target = path.join(root, "alias");
+        await symlink(checkout, target, process.platform === "win32" ? "junction" : "dir");
+      }
+      if (mutation === "primary") target = layout === "bare" ? repo : path.join(root, "repo");
+      if (mutation === "subdirectory") {
+        target = path.join(checkout, "child");
+        await mkdir(target);
+      }
+      if (mutation === "foreign") {
+        anchor = path.join(root, "foreign");
+        await mkdir(anchor);
+        await git(anchor, "init");
+      }
+      await writeFile(path.join(checkout, "preserved.txt"), "snapshot me");
+      if (mutation === "locked") await git(repo, "worktree", "lock", "--reason", "oracle lock", checkout);
+      const before = await git(repo, "worktree", "list", "--porcelain");
+      expect(before).toContain(checkout.replaceAll("\\", "/"));
+      if (mutation === "locked") expect(before).toContain("locked oracle lock");
+      let admissionReached = false;
+      const archive = new WorktreeArchiveService().archive({
+        backend: "codex", threadId: "oracle", repositoryPath: anchor, worktreePath: target,
+        beforeRemove: async () => {
+          admissionReached = true;
+          if (mutation === "late-lock") await git(repo, "worktree", "lock", checkout);
+          if (mutation === "late-backlink") await writeFile(path.join(admin, "gitdir"), `${path.join(repo, ".git")}\n`);
+          if (mutation === "late-gitfile") await writeFile(path.join(checkout, ".git"), `gitdir: ${path.join(root, "missing-admin")}\n`);
+          if (mutation === "late-common") await writeFile(path.join(admin, "commondir"), `${root}\n`);
+          if (mutation === "late-unregister") await rm(admin, { recursive: true });
+          return () => {};
+        },
+      });
+      if (mutation === "none") {
+        const snapshot = await archive;
+        expect(snapshot.sourceHead).toBe(head);
+        expect(snapshot.sourceBranch).toBe(detached ? undefined : "owned");
+        expect(await git(snapshot.repositoryPath, "show", `${snapshot.snapshotRef}:preserved.txt`)).toBe("snapshot me");
+        expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(checkout.replaceAll("\\", "/"));
+        await expect(readFile(path.join(checkout, "preserved.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(archive).rejects.toThrow();
+        expect(await readFile(path.join(checkout, "preserved.txt"), "utf8")).toBe("snapshot me");
+        expect(admissionReached).toBe(mutation.startsWith("late-"));
+      }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  await fc.assert(property, { numRuns: 8, examples: [
+    ["ordinary", "none", false], ["linked-anchor", "none", true], ["alias", "none", true],
+    ["bare", "none", false], ["separate", "none", true],
+    ...mutations.filter((mutation) => mutation !== "none").map((mutation): [typeof layouts[number], typeof mutations[number], boolean] => ["ordinary", mutation, true]),
+    ["bare", "primary", true], ["separate", "primary", false],
+  ] });
+}, process.platform === "win32" ? 120_000 : 30_000);
