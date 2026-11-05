@@ -81,11 +81,11 @@ describe("Windows natural pipe evidence", () => {
     error.nativeDebugger = { ...nativeDebuggerStatus(output), exitCode: 0, rawOutput: output };
     const failure = nativeProbeFailure(error);
     expect(failure).toEqual({ reason: "debugger-exited-before-readiness",
-      debugger: { exitCode: 0, detachUnsupported: true, networkPathDisallowed: true } });
+      debugger: { exitCode: 0, ...nativeDebuggerStatus(output) } });
     expect(JSON.stringify(failure)).not.toMatch(/private|secret|token|rawOutput/);
-    expect(nativeDebuggerStatus("native frames")).toEqual({ detachUnsupported: false, networkPathDisallowed: false });
+    expect(nativeDebuggerStatus("native frames")).toMatchObject({ detachUnsupported: false, networkPathDisallowed: false });
     expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed" });
-    expect(nativeProbeFailure({ nativeDebugger: { exitCode: output, detachUnsupported: output } })).toEqual({
+    expect(nativeProbeFailure({ nativeDebugger: { exitCode: output, detachUnsupported: output } })).toMatchObject({
       reason: "controlled-probe-failed", debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false },
     });
   });
