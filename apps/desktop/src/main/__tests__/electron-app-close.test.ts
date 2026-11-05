@@ -112,6 +112,7 @@ describe("closeElectronApplication", () => {
       expect(order.indexOf("owned-shutdown")).toBeLessThan(order.indexOf("production-before-quit"));
     }
     if (platform === "win32") {
+      expect(order.indexOf("complete-session-cache-writes")).toBeLessThan(order.indexOf("prepare-playwright-close"));
       expect(order.indexOf("complete-session-cache-writes")).toBeLessThan(order.indexOf("native-quit"));
     }
     expect(harness.app.listenerCount("before-quit")).toBe(1);
@@ -136,7 +137,7 @@ describe("closeElectronApplication", () => {
     const closing = closeElectronApplication(harness.electronApp);
     await vi.advanceTimersByTimeAsync(5_999);
     expect(ownedSession.clearData).toHaveBeenCalledOnce();
-    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.close).not.toHaveBeenCalled();
     expect(harness.child.exitCode).toBeNull();
     expect(execFile).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -147,7 +148,7 @@ describe("closeElectronApplication", () => {
     });
   });
 
-  it("overlaps application disposal and persistence without extending the six-second deadline", async () => {
+  it("completes session preparation and application disposal within the same six-second deadline", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.useFakeTimers();
@@ -156,20 +157,22 @@ describe("closeElectronApplication", () => {
     const harness = createCloseHarness([{
       closeAllConnections: async () => undefined,
       cookies: { flushStore: async () => undefined },
-      clearData: () => new Promise<void>((resolve) => { setTimeout(resolve, 4_500); }),
+      clearData: () => new Promise<void>((resolve) => { setTimeout(resolve, 3_500); }),
     }]);
     harness.app.prependOnceListener("before-quit", (event: { preventDefault(): void }) => {
       event.preventDefault();
       setTimeout(() => { harness.app.quit(); }, 2_000);
     });
     const closing = closeElectronApplication(harness.electronApp);
-    await vi.advanceTimersByTimeAsync(4_499);
+    await vi.advanceTimersByTimeAsync(3_499);
+    expect(harness.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(harness.child.exitCode).toBeNull();
     expect(childProcess.execFile).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2);
     expect(harness.child.exitCode).toBe(0);
     await expect(closing).resolves.toMatchObject({
-      gracefulCloseOutcome: "closed", forceExitOutcome: "not-needed", elapsedMs: 4_501,
+      gracefulCloseOutcome: "closed", forceExitOutcome: "not-needed", elapsedMs: 5_500,
     });
     expect(childProcess.execFile).not.toHaveBeenCalled();
   });
@@ -202,7 +205,7 @@ describe("closeElectronApplication", () => {
 });
 
 describe("closeElectronWithSessionDrain", () => {
-  it("holds before-quit until cache completion without entering will-quit", async () => {
+  it("finishes cache completion before entering before-quit", async () => {
     const model = new ElectronQuitModel(["main"]);
     let finishCache: () => void = () => undefined;
     let startedCache: () => void = () => undefined;
@@ -214,9 +217,9 @@ describe("closeElectronWithSessionDrain", () => {
     }], { quitModel: model });
     const closing = closeElectronWithSessionDrain(harness.electronApp);
     await cacheStarted;
-    expect(model.emitted).toContain("before-quit");
+    expect(model.emitted).not.toContain("before-quit");
     expect(model.emitted).not.toContain("will-quit");
-    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.close).not.toHaveBeenCalled();
     finishCache();
     await closing;
     await model.settle();
@@ -227,7 +230,7 @@ describe("closeElectronWithSessionDrain", () => {
     expect(harness.stderr.listenerCount("data")).toBe(0);
   });
 
-  it("keeps every distinct session alive after inspector detachment until completion", async () => {
+  it("keeps every distinct session and the inspector alive until completion", async () => {
     const completions: Array<() => void> = [];
     const makeSession = () => ({
       closeAllConnections: vi.fn(async () => undefined),
@@ -239,9 +242,9 @@ describe("closeElectronWithSessionDrain", () => {
     const harness = createCloseHarness([defaultSession, partitionSession, partitionSession]);
     const closing = closeElectronWithSessionDrain(harness.electronApp);
     await vi.waitFor(() => expect(completions).toHaveLength(2));
-    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.close).not.toHaveBeenCalled();
     expect(harness.child.exitCode).toBeNull();
-    await expect(harness.electronApp.evaluate(() => undefined)).rejects.toThrow("Inspector detached");
+    await expect(harness.electronApp.evaluate(() => undefined)).resolves.toBeUndefined();
     completions[0]();
     await Promise.resolve();
     expect(harness.child.exitCode).toBeNull();
@@ -258,7 +261,7 @@ describe("closeElectronWithSessionDrain", () => {
     }
   });
 
-  it("propagates cache failure after inspector detachment while before-quit stays held", async () => {
+  it("propagates cache failure before beginning close", async () => {
     const failure = new Error("Network Persistent State write failed");
     const harness = createCloseHarness([{
       closeAllConnections: async () => undefined,
@@ -266,9 +269,9 @@ describe("closeElectronWithSessionDrain", () => {
       clearData: async () => { throw failure; },
     }]);
     await expect(closeElectronWithSessionDrain(harness.electronApp)).rejects.toThrow("Network Persistent State write failed");
-    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.close).not.toHaveBeenCalled();
     expect(harness.child.exitCode).toBeNull();
-    expect(harness.app.listenerCount("before-quit")).toBe(1);
+    expect(harness.app.listenerCount("before-quit")).toBe(0);
     expect(harness.stderr.listenerCount("data")).toBe(0);
   });
 });
