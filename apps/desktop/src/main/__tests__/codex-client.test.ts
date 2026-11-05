@@ -115,6 +115,8 @@ class MockTransport implements JsonRpcTransport {
     Array<{ code: number; message: string }>
   >();
   static readThreadResultByThreadId = new Map<string, unknown>();
+  static threadExportResultByThreadId = new Map<string, unknown>();
+  static threadExportErrorByThreadId = new Map<string, { code: number; message: string }>();
   static threadTurnsListResultByRequest = new Map<string, unknown>();
   static threadTurnsListTransientErrorsByRequest = new Map<
     string,
@@ -779,6 +781,16 @@ class MockTransport implements JsonRpcTransport {
           }
         })
       );
+      return;
+    }
+
+    if (payload.method === "thread/export") {
+      const threadId = String(payload.params?.threadId);
+      const result = MockTransport.threadExportResultByThreadId.get(threadId);
+      this.messageHandler(JSON.stringify({ id: payload.id,
+        ...(result !== undefined ? { result } : { error: MockTransport.threadExportErrorByThreadId.get(threadId)
+          ?? { code: -32601, message: "thread/export is unavailable" } }),
+      }));
       return;
     }
 
@@ -1795,14 +1807,56 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it.each(["legacy", "paginated", "future-mode"])("exports Codex's authoritative %s history mode for receiver preflight", async (historyMode) => {
+  it.each(["legacy", "paginated", "future-mode"])("uses Codex's portable export for a %s source", async (historyMode) => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       MockTransport.readThreadResultByThreadId.set("handoff-format", {
         thread: { id: "handoff-format", path: "/private/codex/history.jsonl", historyMode, status: { type: "idle" }, turns: [] },
       });
-      expect((await client.exportThreadForHandoff("handoff-format")).historyMode).toBe(historyMode);
+      MockTransport.threadExportResultByThreadId.set("handoff-format", {
+        threadId: "handoff-format", format: "legacy-rollout-v1", dataBase64: "cG9ydGFibGU=",
+      });
+      expect(await client.exportThreadForHandoff("handoff-format"))
+        .toMatchObject({ historyMode: "legacy", rolloutBase64: "cG9ydGFibGU=" });
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.some((request) => request.method === "fs/readFile")).toBe(false);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each([
+    { threadId: "different-thread", format: "legacy-rollout-v1", dataBase64: "cG9ydGFibGU=" },
+    { threadId: "handoff-format", format: "future-format", dataBase64: "cG9ydGFibGU=" },
+    { threadId: "handoff-format", format: "legacy-rollout-v1", dataBase64: "" },
+  ])("refuses invalid portable exports without falling back to private file bytes: %j", async (exported) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      MockTransport.readThreadResultByThreadId.set("handoff-format", {
+        thread: { id: "handoff-format", path: "/private/codex/history.jsonl", status: { type: "idle" }, turns: [] },
+      });
+      MockTransport.threadExportResultByThreadId.set("handoff-format", exported);
+      await expect(client.exportThreadForHandoff("handoff-format")).rejects.toThrow("invalid portable thread export");
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.some((request) => request.method === "fs/readFile")).toBe(false);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each([-32601, -32603])("never substitutes a paginated file when portable export fails with %s", async (code) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      MockTransport.readThreadResultByThreadId.set("handoff-format", {
+        thread: { id: "handoff-format", path: "/private/codex/history.jsonl", historyMode: "paginated", status: { type: "idle" }, turns: [] },
+      });
+      MockTransport.threadExportErrorByThreadId.set("handoff-format", { code, message: "Export failed" });
+      await expect(client.exportThreadForHandoff("handoff-format")).rejects.toThrow();
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.some((request) => request.method === "fs/readFile")).toBe(false);
     } finally {
       await client.close();
     }
@@ -2145,6 +2199,8 @@ describe("CodexAppServerClient", () => {
     MockTransport.readThreadErrorByThreadId.clear();
     MockTransport.readThreadTransientErrorsByThreadId.clear();
     MockTransport.readThreadResultByThreadId.clear();
+    MockTransport.threadExportResultByThreadId.clear();
+    MockTransport.threadExportErrorByThreadId.clear();
     MockTransport.threadTurnsListResultByRequest.clear();
     MockTransport.threadTurnsListTransientErrorsByRequest.clear();
     MockTransport.threadItemsListResultByRequest.clear();

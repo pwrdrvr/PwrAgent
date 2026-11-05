@@ -229,6 +229,27 @@ test("paginated outpost history is refused before file transfer for Copy and Mov
   assert.equal(source.calls().filter((call) => call.method === "thread/archive").length, 0);
 });
 
+test("outposts copy and move paginated history using Codex's portable export", { timeout: 30000 }, async (t) => {
+  const source = await setup(t);
+  const destination = await setup(t);
+  const enrollment = await source.rpc("federation-invite", { port: 0 });
+  await destination.rpc("federation-join", { invite: enrollment.invite });
+  await eventually(async () => (await destination.rpc("federation-status")).gateway.status === "connected");
+  const targetInstanceId = (await destination.rpc("federation-status")).instanceId;
+  const viewer = await peer(source);
+  t.after(() => viewer.connection.close());
+  const thread = await viewer.call("backend.startThread", { cwd: source.workspace });
+  await viewer.call("backend.startTurn", { threadId: thread.threadId, input: [{ type: "text", text: "portable paginated history" }] });
+  await eventually(() => existsSync(path.join(source.workspace, "fixture-result.txt")));
+  for (const operation of ["copy", "move"]) {
+    const result = await viewer.call("thread.handoff.send", { sourceThreadId: thread.threadId, targetInstanceId, operation });
+    assert.equal(result.sourceArchived, operation === "move");
+    assert.ok(result.threadId);
+  }
+  assert.equal(source.calls().filter((call) => call.method === "fs/readFile").length, 0);
+  assert.equal(destination.calls().filter((call) => call.method === "thread/fork").length, 2);
+});
+
 test("handoffs validate trusted gateway destinations and transfer between sibling clients", { timeout: 30000 }, async (t) => {
   const source = await setup(t);
   const destination = await setup(t);

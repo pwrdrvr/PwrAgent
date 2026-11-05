@@ -137,8 +137,7 @@ it("copies a published Git workspace and its thread through real Codex path fork
   expect(f.sourceLookup).not.toHaveBeenCalled();
 });
 
-it("refuses a real paginated source during prepare before pushing bytes", async () => {
-  if (process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND) return;
+it.runIf(!process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)("refuses a real paginated source before pushing bytes when portable export is unavailable", async () => {
   const f = await fixture();
   const { threadId } = await f.sourceClient.startThread({ cwd: f.sourceCwd });
   await f.sourceClient.injectThreadItems({ threadId, items: [
@@ -180,9 +179,9 @@ async function completeTurn(client: CodexAppServerClient, threadId: string, text
   }
 }
 
-it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND))(
-  "copies paginated fork ancestry into stock Codex and preserves context for the next turn",
-  async () => {
+it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each(["copy", "move"] as const)(
+  "%s preserves paginated fork ancestry in stock Codex and context for the next turn",
+  async (operation) => {
     const requests: Array<Record<string, unknown>> = [];
     const server = createServer(async (request, response) => {
       let body = "";
@@ -214,7 +213,8 @@ it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND))(
       await completeTurn(f.sourceClient, child.threadId, "Keep the contrived second fact: cedar.");
       const before = await f.sourceClient.readThread({ threadId: child.threadId });
       expect(before.messages).toHaveLength(4);
-      const result = await f.sender.send({ sourceThreadId: child.threadId, operation: "copy", targetInstanceId: "receiver" });
+      const result = await f.sender.send({ sourceThreadId: child.threadId, operation, targetInstanceId: "receiver" });
+      expect(result.sourceArchived).toBe(operation === "move");
       const after = await f.targetClient.readThread({ threadId: result.threadId });
       expect(after.messages.map(({ role, text }) => ({ role, text })))
         .toEqual(before.messages.map(({ role, text }) => ({ role, text })));
