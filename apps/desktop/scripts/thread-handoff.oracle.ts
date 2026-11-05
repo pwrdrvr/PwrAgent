@@ -188,8 +188,15 @@ it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each
       for await (const chunk of request) body += chunk.toString();
       requests.push(JSON.parse(body));
       const index = requests.length;
-      const item = { type: "message", id: `oracle-message-${index}`, role: "assistant", status: "completed",
-        content: [{ type: "output_text", text: `Contrived answer ${index}` }] };
+      const tools = JSON.stringify(requests[0].tools);
+      const toolName = tools.includes('"exec_command"') ? "exec_command" : "shell_command";
+      const item = index === 1
+        ? { type: "function_call", id: "oracle-tool", call_id: "oracle-tool-call", name: toolName,
+          arguments: JSON.stringify(toolName === "exec_command"
+            ? { cmd: "printf handoff-tool-evidence" }
+            : { command: "printf handoff-tool-evidence" }) }
+        : { type: "message", id: `oracle-message-${index}`, role: "assistant", status: "completed",
+          content: [{ type: "output_text", text: `Contrived answer ${index - 1}` }] };
       response.writeHead(200, { "content-type": "text/event-stream" });
       for (const event of [
         { type: "response.created", response: { id: `oracle-response-${index}` } },
@@ -229,6 +236,9 @@ it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each
       expect(nextInput).toContain("cedar");
       expect(nextInput).toContain("Contrived answer 1");
       expect(nextInput).toContain("Contrived answer 2");
+      const toolOutputs = (requests.at(-1)?.input as Array<{ type: string; output?: unknown }>)
+        .filter((item) => item.type === "function_call_output");
+      expect(JSON.stringify(toolOutputs)).toContain("handoff-tool-evidence");
       expect(f.sourceLookup).not.toHaveBeenCalled();
       expect(f.push).toHaveBeenCalledOnce();
     } finally {

@@ -790,7 +790,7 @@ class MockTransport implements JsonRpcTransport {
       const result = MockTransport.threadExportResultByThreadId.get(threadId);
       this.messageHandler(JSON.stringify({ id: payload.id,
         ...(result !== undefined ? { result } : { error: MockTransport.threadExportErrorByThreadId.get(threadId)
-          ?? { code: -32601, message: "thread/export is unavailable" } }),
+          ?? { code: -32601, message: "Method not found: thread/export" } }),
       }));
       return;
     }
