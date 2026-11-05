@@ -8821,11 +8821,12 @@ export function useThreadNavigation(
     options?: ArchiveThreadOptions,
   ): Promise<ArchivedThreadRef[]> => {
     let refreshOptions: NavigationRefreshOptions | undefined;
-    let preferredSelectionKey: string | undefined;
     // Each archive still owns its optimistic removal, rollback and viewer
     // pin cleanup. Only its final read waits for the whole sidebar action.
-    const collectRefresh: typeof refresh = async (selectionKey, _thread, _force, requestOptions) => {
-      if (selectionKey !== undefined) preferredSelectionKey = selectionKey;
+    const collectRefresh: typeof refresh = async (selectionKey, _thread, forceSelection, requestOptions) => {
+      // Roll back selection when the failure arrives, so a later user
+      // selection survives batch completion. Only the reads are deferred.
+      if (selectionKey) setSelectedItemKey((current) => forceSelection || !current ? selectionKey : current);
       refreshOptions = refreshOptions
         ? { owners: mergeNavigationRefreshOwners(refreshOptions.owners, requestOptions?.owners) }
         : requestOptions;
@@ -8844,15 +8845,15 @@ export function useThreadNavigation(
       }
       if (refreshOptions) {
         try {
-          await refresh(preferredSelectionKey, undefined, preferredSelectionKey !== undefined, refreshOptions);
+          await refresh(undefined, undefined, false, refreshOptions);
         } catch (error) {
           setArchiveThreadError(error instanceof Error ? error.message : String(error));
-          await refresh(preferredSelectionKey, undefined, preferredSelectionKey !== undefined, refreshOptions);
+          await refresh(undefined, undefined, false, refreshOptions);
         }
       }
     }
     return results.flat();
-  }, [archiveThread, refresh]);
+  }, [archiveThread, refresh, setSelectedItemKey]);
 
   /**
    * Undo an archive: restore each thread this window owns (its worktrees come
