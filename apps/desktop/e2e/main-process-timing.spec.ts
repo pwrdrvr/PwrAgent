@@ -10,8 +10,8 @@ test.describe("main-process timing attachments", () => {
   let failedAttempt: TestInfo;
   let passingAttempt: TestInfo;
 
-  test("retains timing when an assertion fails before finally closes Electron", async ({}, testInfo) => {
-    failedAttempt = testInfo;
+  test("retains timing when an assertion fails before finally closes Electron", async () => {
+    failedAttempt = test.info();
     const app = await launchElectronApp({ fixturePath });
     test.fail();
     try {
@@ -21,12 +21,13 @@ test.describe("main-process timing attachments", () => {
     }
   });
 
-  test("carries both owner snapshots on the failed Playwright result", async ({}, testInfo) => {
-    passingAttempt = testInfo;
+  test("carries both owner snapshots on the failed Playwright result", async () => {
+    passingAttempt = test.info();
     const attachments = failedAttempt.attachments.filter((item) => item.name.startsWith("main-process-timing-"));
     expect(attachments).toHaveLength(1);
     expect(attachments[0].contentType).toBe("application/json");
-    const snapshot = JSON.parse(await readFile(attachments[0].path!, "utf8"));
+    const body = attachments[0].body ?? await readFile(attachments[0].path!);
+    const snapshot = JSON.parse(body.toString("utf8"));
     expect(snapshot.listings).toMatchObject({ schemaVersion: 1, capacity: 4096, retentionMs: 120_000 });
     expect(Array.isArray(snapshot.listings.events)).toBe(true);
     expect(snapshot.git).toMatchObject({ schemaVersion: 1, retentionMs: 120_000 });

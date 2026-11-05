@@ -6,7 +6,7 @@ export * from "@playwright/test";
 const attempts = new WeakMap<TestInfo, ElectronFailureDiagnostics>();
 
 export const test = base.extend<{ mainProcessTiming: void }>({
-  mainProcessTiming: [async ({}, use, testInfo) => {
+  mainProcessTiming: [async ({ playwright: _playwright }, use, testInfo) => {
     const diagnostics = new ElectronFailureDiagnostics();
     attempts.set(testInfo, diagnostics);
     try {
