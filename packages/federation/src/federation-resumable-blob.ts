@@ -108,7 +108,8 @@ export class FederationResumableBlobReceiver {
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      state = { ...args, peerId, committedOffset: 0, updatedAt: this.now() };
+      state = { peerId, sha256: args.sha256, sizeBytes: args.sizeBytes, name: args.name,
+        senderToken: args.senderToken, committedOffset: 0, updatedAt: this.now() };
     }
     if (state.senderToken !== args.senderToken && !state.result) {
       throw new Error("This blob belongs to another send. Cancel that send or wait for its expiry.");
@@ -232,6 +233,7 @@ export class FederationResumableBlobReceiver {
   async disconnect(peerId: string): Promise<void> {
     for (const [id, transfer] of this.transfers) {
       if (transfer.state.peerId !== peerId) continue;
+      await this.persist(transfer);
       await transfer.file.close();
       this.transfers.delete(id);
     }
@@ -239,7 +241,10 @@ export class FederationResumableBlobReceiver {
 
   async dispose(): Promise<void> {
     clearInterval(this.expiry);
-    for (const transfer of this.transfers.values()) await transfer.file.close();
+    for (const transfer of this.transfers.values()) {
+      await this.persist(transfer);
+      await transfer.file.close();
+    }
     this.transfers.clear();
   }
 
@@ -279,8 +284,10 @@ export class FederationResumableBlobReceiver {
       const folder = path.join(root, entry);
       const active = [...this.transfers.entries()].filter(([, transfer]) => transfer.folder === folder);
       if (active.some(([, transfer]) => transfer.state.updatedAt >= this.now() - BLOB_RETENTION_MS)) continue;
-      const info = await stat(path.join(folder, "offset.json")).catch(() => undefined);
-      if ((info?.mtimeMs ?? (await stat(folder)).mtimeMs) >= this.now() - BLOB_RETENTION_MS) continue;
+      const metadata = await readFile(path.join(folder, "offset.json"), "utf8")
+        .then((value) => JSON.parse(value) as Sidecar).catch(() => undefined);
+      const updatedAt = metadata && Number.isFinite(metadata.updatedAt) ? metadata.updatedAt : (await stat(folder)).mtimeMs;
+      if (updatedAt >= this.now() - BLOB_RETENTION_MS) continue;
       for (const [id, transfer] of active) {
         await transfer.file.close();
         this.transfers.delete(id);
