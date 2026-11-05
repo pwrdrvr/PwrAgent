@@ -8,7 +8,12 @@ import {
   ThreadHandoffToastCard,
 } from "../ThreadHandoffProgress";
 import { threadHandoffMeter } from "../thread-handoff-copy";
-import { reduceThreadHandoffTransfers, type ThreadHandoffTransfer } from "../thread-handoff-transfer";
+import {
+  reduceThreadHandoffTransfers,
+  type ThreadHandoffTransfer,
+  type ThreadHandoffTransferEvent,
+} from "../thread-handoff-transfer";
+import { createThreadHandoffStore } from "../thread-handoff-store";
 import { threadHandoffErrorMessage } from "../useThreadHandoffTransfers";
 
 afterEach(() => {
@@ -18,19 +23,19 @@ afterEach(() => {
 const HANDOFF = "0f0e0d0c-0b0a-4908-8706-050403020100";
 const MIB = 1024 * 1024;
 
-function transfer(reports: Partial<ThreadHandoffProgress>[]): ThreadHandoffTransfer {
-  let state = reduceThreadHandoffTransfers({}, {
-    type: "started",
-    at: 0,
-    handoffId: HANDOFF,
-    sourceThreadId: "thread-1",
-    threadKey: "codex:thread-1",
-    title: "Release v0.17",
-    targetLabel: "studio-mac / default",
-    choice: { targetInstanceId: "pwr_studio", operation: "copy", targetRepositoryPath: "/src/PwrRoute" },
-  });
-  reports.forEach((report, index) => {
-    state = reduceThreadHandoffTransfers(state, {
+function events(reports: Partial<ThreadHandoffProgress>[]): ThreadHandoffTransferEvent[] {
+  return [
+    {
+      type: "started",
+      at: 0,
+      handoffId: HANDOFF,
+      sourceThreadId: "thread-1",
+      threadKey: "codex:thread-1",
+      title: "Release v0.17",
+      targetLabel: "studio-mac / default",
+      choice: { targetInstanceId: "pwr_studio", operation: "copy", targetRepositoryPath: "/src/PwrRoute" },
+    },
+    ...reports.map((report, index): ThreadHandoffTransferEvent => ({
       type: "progress",
       at: (index + 1) * 1000,
       progress: {
@@ -42,9 +47,18 @@ function transfer(reports: Partial<ThreadHandoffProgress>[]): ThreadHandoffTrans
         transport: "resumable",
         ...report,
       },
-    });
-  });
-  return state[HANDOFF]!;
+    })),
+  ];
+}
+
+function transfer(reports: Partial<ThreadHandoffProgress>[]): ThreadHandoffTransfer {
+  return events(reports).reduce(reduceThreadHandoffTransfers, {})[HANDOFF]!;
+}
+
+function storeWith(reports: Partial<ThreadHandoffProgress>[]) {
+  const store = createThreadHandoffStore();
+  events(reports).forEach(store.dispatch);
+  return store;
 }
 
 function renderCard(value: ThreadHandoffTransfer) {
@@ -111,9 +125,9 @@ describe("thread handoff meter", () => {
 
 describe("thread handoff composer band", () => {
   it("says why only the thread being sent is locked", () => {
-    const running = transfer([{ bytesCommitted: MIB, bytesTotal: 4 * MIB }]);
+    const store = storeWith([{ bytesCommitted: MIB, bytesTotal: 4 * MIB }]);
     const showProgress = vi.fn();
-    const value = { runningByThreadKey: new Map([[running.threadKey, running]]), showProgress };
+    const value = { store, showProgress };
     const { rerender } = render(
       <ThreadHandoffBandContext.Provider value={value}>
         <ThreadHandoffComposerBand threadKey="codex:other" />

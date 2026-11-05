@@ -1,14 +1,10 @@
-import { useCallback, useEffect, useReducer } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { HandoffInstanceThreadResult } from "@pwragent/shared";
 import { THREAD_HANDOFF_CANCELLED_MESSAGE } from "../../../../shared/ipc";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { cleanComposerErrorMessage } from "../composer/composer-error-message";
-import {
-  reduceThreadHandoffTransfers,
-  type ThreadHandoffChoice,
-  type ThreadHandoffTransferView,
-  type ThreadHandoffTransfers,
-} from "./thread-handoff-transfer";
+import { createThreadHandoffStore } from "./thread-handoff-store";
+import type { ThreadHandoffChoice, ThreadHandoffTransferView } from "./thread-handoff-transfer";
 
 type HandoffApi = Pick<
   DesktopApi,
@@ -38,9 +34,15 @@ export function threadHandoffErrorMessage(error: unknown): string {
  * The handoffs this window started. They live above the dialog, so closing
  * the dialog into the toast stack never stops one. The caller decides what a
  * settled handoff shows and removes it once it has.
+ *
+ * `transfers` holds only summaries, which do not change while bytes move, so
+ * the caller re-renders on a step of the outcome, not on every byte report.
+ * Components that draw progress read `store` for the one handoff they show.
  */
 export function useThreadHandoffTransfers(api: HandoffApi | undefined) {
-  const [transfers, dispatch] = useReducer(reduceThreadHandoffTransfers, {} as ThreadHandoffTransfers);
+  const [store] = useState(createThreadHandoffStore);
+  const transfers = useSyncExternalStore(store.subscribe, store.getSummaries);
+  const dispatch = store.dispatch;
 
   const onProgress = api?.onThreadHandoffProgress;
   useEffect(() => {
@@ -48,7 +50,7 @@ export function useThreadHandoffTransfers(api: HandoffApi | undefined) {
     return onProgress((progress) => {
       dispatch({ type: "progress", at: performance.now(), progress });
     });
-  }, [onProgress]);
+  }, [dispatch, onProgress]);
 
   const handoff = api?.handoffThreadToInstance;
   const start = useCallback(
@@ -76,14 +78,14 @@ export function useThreadHandoffTransfers(api: HandoffApi | undefined) {
         return undefined;
       }
     },
-    [handoff],
+    [dispatch, handoff],
   );
 
   const cancelApi = api?.cancelThreadHandoff;
   const cancel = useCallback((handoffId: string): void => {
     dispatch({ type: "cancel-requested", handoffId });
     void cancelApi?.({ handoffId });
-  }, [cancelApi]);
+  }, [cancelApi, dispatch]);
 
   const retryApi = api?.retryThreadHandoffNow;
   const retryNow = useCallback((handoffId: string): void => {
@@ -92,11 +94,11 @@ export function useThreadHandoffTransfers(api: HandoffApi | undefined) {
 
   const show = useCallback((handoffId: string, view: ThreadHandoffTransferView): void => {
     dispatch({ type: "show", handoffId, view });
-  }, []);
+  }, [dispatch]);
 
   const remove = useCallback((handoffId: string): void => {
     dispatch({ type: "removed", handoffId });
-  }, []);
+  }, [dispatch]);
 
-  return { transfers, start, cancel, retryNow, show, remove };
+  return { store, transfers, start, cancel, retryNow, show, remove };
 }

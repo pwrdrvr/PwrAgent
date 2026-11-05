@@ -78,10 +78,12 @@ import {
 } from "./features/federation/SendThreadToMachineDialog";
 import {
   ThreadHandoffBandContext,
-  ThreadHandoffToastCard,
+  LiveThreadHandoff,
+  LiveThreadHandoffToastCard,
   type ThreadHandoffBandValue,
 } from "./features/federation/ThreadHandoffProgress";
-import type { ThreadHandoffChoice, ThreadHandoffTransfer } from "./features/federation/thread-handoff-transfer";
+import type { ThreadHandoffChoice } from "./features/federation/thread-handoff-transfer";
+import type { ThreadHandoffSummary } from "./features/federation/thread-handoff-store";
 import { useThreadHandoffTransfers } from "./features/federation/useThreadHandoffTransfers";
 import { flyBetween } from "./lib/fly-between";
 import { ContinueAfterDialog } from "./features/thread-dependencies/ContinueAfterDialog";
@@ -3570,7 +3572,7 @@ function DesktopAppShell(props: {
   // A handoff is drawn in the dialog only while the dialog is open for its
   // thread and the operator has not minimised it. Every other running one
   // is a card in the toast stack.
-  const isHandoffInDialog = (transfer: ThreadHandoffTransfer): boolean =>
+  const isHandoffInDialog = (transfer: ThreadHandoffSummary): boolean =>
     transfer.view === "dialog" && transfer.threadKey === sendToMachineKey;
   // The thread's running send, wherever it is drawn, or else the outcome the
   // dialog is still showing. Opening the dialog from the thread menu while
@@ -3644,13 +3646,13 @@ function DesktopAppShell(props: {
     if (card) flyBetween(handoffFlight.from, card);
     setHandoffFlight(undefined);
   }, [handoffFlight]);
-  const minimiseHandoff = (transfer: ThreadHandoffTransfer, from: DOMRect | undefined): void => {
+  const minimiseHandoff = (transfer: ThreadHandoffSummary, from: DOMRect | undefined): void => {
     threadHandoffs.show(transfer.handoffId, "toast");
     if (from) setHandoffFlight({ handoffId: transfer.handoffId, from });
     setSendToMachineEntry({});
     setSendToMachineThread(undefined);
   };
-  const expandHandoff = (transfer: ThreadHandoffTransfer): void => {
+  const expandHandoff = (transfer: ThreadHandoffSummary): void => {
     const card = document.querySelector<HTMLElement>(
       `[data-thread-handoff-card="${transfer.handoffId}"]`,
     );
@@ -3661,19 +3663,16 @@ function DesktopAppShell(props: {
   // send the way the toast's own button does.
   const expandHandoffRef = useRef(expandHandoff);
   expandHandoffRef.current = expandHandoff;
-  const threadHandoffBand = useMemo((): ThreadHandoffBandValue => {
-    const runningByThreadKey = new Map<string, ThreadHandoffTransfer>();
-    for (const transfer of Object.values(handoffTransfers)) {
-      if (transfer.status === "running") runningByThreadKey.set(transfer.threadKey, transfer);
-    }
-    return {
-      runningByThreadKey,
-      showProgress: (handoffId) => {
-        const transfer = handoffTransfers[handoffId];
-        if (transfer) expandHandoffRef.current(transfer);
-      },
-    };
-  }, [handoffTransfers]);
+  // The value holds the store, not its contents: the band subscribes to it,
+  // and this context never changes while bytes move.
+  const threadHandoffStore = threadHandoffs.store;
+  const threadHandoffBand = useMemo((): ThreadHandoffBandValue => ({
+    store: threadHandoffStore,
+    showProgress: (handoffId) => {
+      const transfer = threadHandoffStore.getSummaries()[handoffId];
+      if (transfer) expandHandoffRef.current(transfer);
+    },
+  }), [threadHandoffStore]);
   // Each outcome is shown once. One the dialog is showing stays there; any
   // other becomes a notice, because the operator has moved on.
   const settledHandoffsRef = useRef(new Set<string>());
@@ -4606,28 +4605,32 @@ function DesktopAppShell(props: {
       threads={navigation.threads}
     >
       {sendToMachineThread && sendToMachineSource ? (
-        <SendThreadToMachineDialog
-          key={sendToMachineKey}
-          source={sendToMachineSource}
-          targets={threadHandoffTargets}
-          findRepository={findThreadHandoffRepository}
-          {...(dialogHandoff ? { transfer: dialogHandoff } : {})}
-          {...(sendToMachineEntry.flyFrom ? { flyFrom: sendToMachineEntry.flyFrom } : {})}
-          {...(sendToMachineEntry.initialChoice
-            ? { initialChoice: sendToMachineEntry.initialChoice }
-            : {})}
-          onClose={closeSendToMachine}
-          onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
-          onMinimise={(from) => {
-            if (dialogHandoff) minimiseHandoff(dialogHandoff, from);
-          }}
-          onCancelTransfer={() => {
-            if (dialogHandoff) threadHandoffs.cancel(dialogHandoff.handoffId);
-          }}
-          onRetryNow={() => {
-            if (dialogHandoff) threadHandoffs.retryNow(dialogHandoff.handoffId);
-          }}
-        />
+        <LiveThreadHandoff store={threadHandoffStore} handoffId={dialogHandoff?.handoffId}>
+          {(liveHandoff) => (
+            <SendThreadToMachineDialog
+              key={sendToMachineKey}
+              source={sendToMachineSource}
+              targets={threadHandoffTargets}
+              findRepository={findThreadHandoffRepository}
+              {...(liveHandoff ? { transfer: liveHandoff } : {})}
+              {...(sendToMachineEntry.flyFrom ? { flyFrom: sendToMachineEntry.flyFrom } : {})}
+              {...(sendToMachineEntry.initialChoice
+                ? { initialChoice: sendToMachineEntry.initialChoice }
+                : {})}
+              onClose={closeSendToMachine}
+              onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
+              onMinimise={(from) => {
+                if (dialogHandoff) minimiseHandoff(dialogHandoff, from);
+              }}
+              onCancelTransfer={() => {
+                if (dialogHandoff) threadHandoffs.cancel(dialogHandoff.handoffId);
+              }}
+              onRetryNow={() => {
+                if (dialogHandoff) threadHandoffs.retryNow(dialogHandoff.handoffId);
+              }}
+            />
+          )}
+        </LiveThreadHandoff>
       ) : null}
       {continueAfter ? (
         <ContinueAfterDialog
@@ -5254,9 +5257,10 @@ function DesktopAppShell(props: {
             .filter((transfer) => transfer.status === "running" && !isHandoffInDialog(transfer))
             .sort((a, b) => a.startedAt - b.startedAt)
             .map((transfer) => (
-              <ThreadHandoffToastCard
+              <LiveThreadHandoffToastCard
                 key={transfer.handoffId}
-                transfer={transfer}
+                store={threadHandoffStore}
+                handoffId={transfer.handoffId}
                 onExpand={() => expandHandoff(transfer)}
                 onCancel={() => threadHandoffs.cancel(transfer.handoffId)}
                 onRetryNow={() => threadHandoffs.retryNow(transfer.handoffId)}

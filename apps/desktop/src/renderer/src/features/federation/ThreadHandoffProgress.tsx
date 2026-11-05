@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { CheckIcon, CloseIcon, ExpandIcon } from "../../icons";
 import {
   threadHandoffCancelBlockedReason,
@@ -8,6 +8,11 @@ import {
   threadHandoffVerb,
 } from "./thread-handoff-copy";
 import { threadHandoffPercent, type ThreadHandoffTransfer } from "./thread-handoff-transfer";
+import {
+  useRunningThreadHandoff,
+  useThreadHandoffTransfer,
+  type ThreadHandoffStore,
+} from "./thread-handoff-store";
 
 /**
  * Re-renders once a second while `active`, for "lost 0:14 ago" and the rate.
@@ -197,9 +202,40 @@ export function ThreadHandoffToastCard(props: {
   );
 }
 
+/**
+ * Draws one handoff's live state. Only this subtree subscribes to the
+ * handoff's progress, so a byte report re-renders it and not its parent.
+ */
+export function LiveThreadHandoff(props: {
+  store: ThreadHandoffStore;
+  handoffId: string | undefined;
+  children: (transfer: ThreadHandoffTransfer | undefined) => ReactNode;
+}) {
+  return <>{props.children(useThreadHandoffTransfer(props.store, props.handoffId))}</>;
+}
+
+/** A toast card for one handoff, reading its own progress from the store. */
+export function LiveThreadHandoffToastCard(props: {
+  store: ThreadHandoffStore;
+  handoffId: string;
+  onExpand: () => void;
+  onCancel: () => void;
+  onRetryNow: () => void;
+}) {
+  const transfer = useThreadHandoffTransfer(props.store, props.handoffId);
+  if (!transfer) return null;
+  return (
+    <ThreadHandoffToastCard
+      transfer={transfer}
+      onExpand={props.onExpand}
+      onCancel={props.onCancel}
+      onRetryNow={props.onRetryNow}
+    />
+  );
+}
+
 export type ThreadHandoffBandValue = {
-  /** Running handoffs by source thread identity key. */
-  runningByThreadKey: ReadonlyMap<string, ThreadHandoffTransfer>;
+  store: ThreadHandoffStore;
   showProgress: (handoffId: string) => void;
 };
 
@@ -208,12 +244,12 @@ export const ThreadHandoffBandContext = createContext<ThreadHandoffBandValue | u
 /**
  * The composer band row of a thread being sent. The thread takes no turns
  * until the send finishes, and with the send minimised nothing else on the
- * thread says why. It reads the context itself, so a byte count re-renders
- * this row and not the composer around it.
+ * thread says why. It subscribes to the store itself, so a byte count
+ * re-renders this row and not the composer around it.
  */
 export function ThreadHandoffComposerBand(props: { threadKey: string | undefined }) {
   const band = useContext(ThreadHandoffBandContext);
-  const transfer = props.threadKey ? band?.runningByThreadKey.get(props.threadKey) : undefined;
+  const transfer = useRunningThreadHandoff(band?.store, props.threadKey);
   if (!band || !transfer) return null;
   const percent = threadHandoffPercent(transfer);
   return (
