@@ -166,3 +166,25 @@ it("cancels promptly while the socket has a blocked blob send", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("one send cannot replace or cancel another send of identical content", async () => {
+  await fc.assert(fc.asyncProperty(fc.uuid(), fc.uuid(), async (first, second) => {
+    fc.pre(first !== second);
+    const root = await mkdtemp(path.join(os.tmpdir(), "blob-ownership-"));
+    const receiver = new FederationFilePushReceiver({ allowed: () => true, directory: () => root });
+    const identity = { sha256: "0".repeat(64), sizeBytes: 1 };
+    try {
+      const active = await receiver.handle("source", FILE_PUSH_METHODS.begin, {
+        ...identity, name: "fixture", binary: true, senderToken: first,
+      }) as { transferId: string };
+      await expect(receiver.handle("source", FILE_PUSH_METHODS.begin, {
+        ...identity, name: "fixture", binary: true, senderToken: second,
+      })).rejects.toThrow("another send");
+      await receiver.handle("source", FILE_PUSH_METHODS.cancel, { ...identity, senderToken: second });
+      await expect(receiver.handle("source", FILE_PUSH_METHODS.checkpoint, active)).resolves.toMatchObject({ committedOffset: 0 });
+    } finally {
+      await receiver.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }), { numRuns: 10 });
+});
