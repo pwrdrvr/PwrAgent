@@ -210,7 +210,9 @@ it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each
     try {
       const address = server.address();
       if (!address || typeof address === "string") throw new Error("No model fixture port");
+      // This isolated fixture executes only the contrived printf above.
       const config = { model_provider: "handoff-fixture", model: "gpt-5.5",
+        sandbox_mode: "danger-full-access", approval_policy: "never",
         "model_providers.handoff-fixture": { name: "Handoff oracle", base_url: `http://127.0.0.1:${address.port}`,
           wire_api: "responses", requires_openai_auth: false } };
       const f = await fixture(config);
