@@ -166,7 +166,7 @@ it("agrees with Git about archive eligibility across layouts and late registrati
     ...mutations.filter((mutation) => mutation !== "none").map((mutation): [typeof layouts[number], typeof mutations[number], boolean] => ["ordinary", mutation, true]),
     ["bare", "primary", true], ["separate", "primary", false],
   ];
-  await fc.assert(property, { numRuns: 8, examples });
+  await fc.assert(property, { numRuns: examples.length + 24, examples });
   // fast-check includes explicit examples in numRuns. Keep generated coverage
   // after every example, including when the table grows.
   expect(completedRuns).toBe(examples.length + 24);

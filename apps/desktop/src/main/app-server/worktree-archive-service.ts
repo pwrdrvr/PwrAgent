@@ -180,11 +180,15 @@ async function checkArchiveRegistration(params: {
     const gitFile = path.join(worktreePath, ".git");
     const contents = await readFile(gitFile, "utf8");
     const target = /^gitdir: (.+?)[\r\n]*$/.exec(contents)?.[1];
-    if (!target || path.dirname(gitDirectory) !== path.join(commonDirectory, "worktrees")) throw unregistered();
+    if (!target || path.dirname(gitDirectory) !== await realpath(path.join(commonDirectory, "worktrees"))) throw unregistered();
     const registeredFile = (await readFile(path.join(gitDirectory, "gitdir"), "utf8")).trim();
     const registeredCommon = (await readFile(path.join(gitDirectory, "commondir"), "utf8")).trim();
+    const backlink = path.resolve(gitDirectory, registeredFile);
     if (await realpath(path.resolve(worktreePath, target)) !== gitDirectory
-      || await realpath(path.resolve(gitDirectory, registeredFile)) !== gitFile
+      // Resolve the owning checkout, preserving a valid final .git symlink.
+      // Resolving that symlink would also hide a backlink to another checkout.
+      || path.basename(backlink) !== ".git"
+      || await realpath(path.dirname(backlink)) !== worktreePath
       || await realpath(path.resolve(gitDirectory, registeredCommon)) !== commonDirectory) {
       throw unregistered();
     }
