@@ -145,7 +145,7 @@ describe("Electron E2E fixture teardown", () => {
     await expect(closeElectronWithSessionDrain(harness.electronApp)).rejects.toThrow("cookie store failed to flush");
     expect(harness.close).toHaveBeenCalledOnce();
     expect(harness.child.exitCode).toBeNull();
-    expect(harness.app.listenerCount("before-quit")).toBe(0);
+    expect(harness.app.listenerCount("before-quit")).toBe(1);
   });
 
   it("keeps keychain access disabled while enabling writable screenshot storage", () => {

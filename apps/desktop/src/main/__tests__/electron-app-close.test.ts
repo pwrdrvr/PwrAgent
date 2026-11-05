@@ -206,6 +206,29 @@ describe("closeElectronApplication", () => {
 });
 
 describe("closeElectronWithSessionDrain", () => {
+  it("does not drain while the product still holds quit for resource disposal", async () => {
+    let releaseResources: () => void = () => undefined;
+    const resources = new Promise<void>((resolve) => { releaseResources = resolve; });
+    const ownedSession = {
+      closeAllConnections: vi.fn(async () => undefined),
+      cookies: { flushStore: vi.fn(async () => undefined) },
+      clearData: vi.fn(async () => undefined),
+    };
+    const harness = createCloseHarness([ownedSession]);
+    harness.app.prependOnceListener("before-quit", (event: { preventDefault(): void }) => {
+      event.preventDefault();
+      void resources.then(() => setImmediate(() => { harness.app.quit(); }));
+    });
+    const closing = closeElectronWithSessionDrain(harness.electronApp);
+    await vi.waitFor(() => expect(harness.close).toHaveBeenCalledOnce());
+    expect(ownedSession.closeAllConnections).not.toHaveBeenCalled();
+    expect(harness.child.exitCode).toBeNull();
+    releaseResources();
+    await closing;
+    expect(ownedSession.clearData).toHaveBeenCalledOnce();
+    expect(harness.child.exitCode).toBe(0);
+  });
+
   it("finishes cache completion after renderer closure and before native shutdown", async () => {
     const model = new ElectronQuitModel(["main"]);
     let finishCache: () => void = () => undefined;
@@ -219,13 +242,13 @@ describe("closeElectronWithSessionDrain", () => {
     const closing = closeElectronWithSessionDrain(harness.electronApp);
     await cacheStarted;
     expect(model.emitted).toContain("closed:main");
-    expect(model.emitted).toContain("will-quit");
+    expect(model.emitted).not.toContain("will-quit");
     expect(model.hasQuit).toBe(false);
     expect(harness.close).toHaveBeenCalledOnce();
     finishCache();
     await closing;
     await model.settle();
-    expect(model.emitted.filter((event) => event === "will-quit")).toHaveLength(2);
+    expect(model.emitted.filter((event) => event === "will-quit")).toHaveLength(1);
     expect(model.reentrantQuits).toBe(0);
     expect(model.hasQuit).toBe(true);
     expect(harness.child.exitCode).toBe(0);
@@ -274,7 +297,7 @@ describe("closeElectronWithSessionDrain", () => {
     await expect(closeElectronWithSessionDrain(harness.electronApp)).rejects.toThrow("Network Persistent State write failed");
     expect(harness.close).toHaveBeenCalledOnce();
     expect(harness.child.exitCode).toBeNull();
-    expect(harness.app.listenerCount("before-quit")).toBe(0);
+    expect(harness.app.listenerCount("before-quit")).toBe(1);
     expect(harness.stderr.listenerCount("data")).toBe(0);
   });
 });

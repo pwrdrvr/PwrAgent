@@ -1330,21 +1330,29 @@ export async function closeElectronWithSessionDrain(
         })}\n`);
       };
       record("installed");
+      const contents = webContents.getAllWebContents();
       const sessions = new Set([
         session.defaultSession,
-        ...webContents.getAllWebContents().map((contents) => contents.session),
+        ...contents.map((contents) => contents.session),
       ]);
       let released = false;
       let draining = false;
       const holdNativeQuit = (event: Electron.Event) => {
-        record("will-quit");
-        if (released) return;
+        record("before-quit");
+        // The product listener runs first and prevents quit until renderer
+        // closure and resource disposal finish. Its final allowed pass is the
+        // boundary before native quit, not the first before-quit notification.
+        if (released || event.defaultPrevented) return;
         event.preventDefault();
         if (draining) return;
+        if (contents.some((contents) => !contents.isDestroyed())) {
+          record("failed", undefined, "Native quit allowed before renderer disposal completed");
+          return;
+        }
         draining = true;
         // Renderer unload can produce final storage writes. Drain only once
-        // its producers have closed, while preventing Browser::Shutdown from
-        // tearing down the native session context that owns these callbacks.
+        // its producers have closed, before native window/context shutdown
+        // starts. Holding will-quit is too late for Windows cache callbacks.
         // The callback belongs to the app, not the detached inspector RPC.
         void Promise.all([...sessions].map(async (ownedSession, index) => {
           record("close-connections-start", index);
@@ -1364,10 +1372,10 @@ export async function closeElectronWithSessionDrain(
           record("failed", undefined, error instanceof Error ? error.message : String(error));
         });
       };
-      app.once("before-quit", () => record("before-quit"));
-      app.on("will-quit", holdNativeQuit);
+      app.on("before-quit", holdNativeQuit);
+      app.once("will-quit", () => record("will-quit"));
       app.once("quit", () => {
-        app.removeListener("will-quit", holdNativeQuit);
+        app.removeListener("before-quit", holdNativeQuit);
         record("quit");
       });
     }, errorPrefix);

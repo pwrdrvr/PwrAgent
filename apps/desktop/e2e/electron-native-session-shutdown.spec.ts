@@ -117,11 +117,11 @@ test("retains native session callbacks after renderers and inspector close", asy
     // Session ownership outlives both renderers and Playwright's inspector.
     // Native shutdown must remain held while this callback awaits real I/O.
     expect(stages).toContain("remaining-renderers:0");
-    expect(stages).toContain("will-quit");
+    expect(stages).not.toContain("will-quit");
     expect(child.exitCode).toBeNull();
     response!.end("released");
     await closing;
-    expect(stages.indexOf("will-quit")).toBeLessThan(stages.indexOf("callback-complete"));
+    expect(stages.indexOf("callback-complete")).toBeLessThan(stages.indexOf("will-quit"));
     expect(stages).toContain("before-quit");
     expect(stages.at(-1)).toBe("will-quit");
   } finally {
