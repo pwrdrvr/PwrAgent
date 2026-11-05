@@ -78,6 +78,7 @@ it("bounds archive-all Git output independently of the remaining worktree fleet"
 it("agrees with Git about archive eligibility across layouts and late registration changes", async () => {
   const layouts = ["ordinary", "linked-anchor", "alias", "bare", "separate"] as const;
   const mutations = ["none", "locked", "late-lock", "late-terminal-lock", "late-backlink", "late-gitfile", "late-common", "late-unregister", "primary", "foreign", "subdirectory"] as const;
+  let completedRuns = 0;
   const property = fc.asyncProperty(fc.constantFrom(...layouts), fc.constantFrom(...mutations), fc.boolean(), async (layout, mutation, detached) => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-git-oracle-")));
     let unregisterTerminals: (() => void) | undefined;
@@ -157,14 +158,70 @@ it("agrees with Git about archive eligibility across layouts and late registrati
       unregisterTerminals?.();
       await rm(root, { recursive: true, force: true });
     }
+    completedRuns++;
   });
-  await fc.assert(property, { numRuns: 8, examples: [
+  const examples: [typeof layouts[number], typeof mutations[number], boolean][] = [
     ["ordinary", "none", false], ["linked-anchor", "none", true], ["alias", "none", true],
     ["bare", "none", false], ["separate", "none", true],
     ...mutations.filter((mutation) => mutation !== "none").map((mutation): [typeof layouts[number], typeof mutations[number], boolean] => ["ordinary", mutation, true]),
     ["bare", "primary", true], ["separate", "primary", false],
-  ] });
+  ];
+  await fc.assert(property, { numRuns: 8, examples });
+  // fast-check includes explicit examples in numRuns. Keep generated coverage
+  // after every example, including when the table grows.
+  expect(completedRuns).toBe(examples.length + 24);
 }, process.platform === "win32" ? 120_000 : 30_000);
+
+async function checkSymlinkLayout(layout: "admin-parent" | "gitfile", lockDuringAdmission: boolean): Promise<void> {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-valid-git-link-")));
+  try {
+    const repo = await repository(root);
+    const checkout = path.join(root, "checkout");
+    await git(repo, "worktree", "add", "--detach", checkout);
+    const admin = await git(checkout, "rev-parse", "--absolute-git-dir");
+    if (layout === "admin-parent") {
+      const parent = path.join(repo, ".git", "worktrees");
+      const moved = path.join(root, "admin-entries");
+      await rename(parent, moved);
+      await writeFile(path.join(moved, path.basename(admin), "commondir"), `${path.join(repo, ".git")}\n`);
+      await symlink(moved, parent, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      const moved = path.join(root, "gitfile");
+      await rename(path.join(checkout, ".git"), moved);
+      await symlink(moved, path.join(checkout, ".git"));
+    }
+    await writeFile(path.join(checkout, "preserved.txt"), "snapshot me");
+    // Git recognizes the checkout at its original path in both layouts.
+    expect(await git(repo, "worktree", "list", "--porcelain")).toContain(`worktree ${checkout.replaceAll("\\", "/")}\n`);
+    expect(await git(checkout, "rev-parse", "--show-toplevel")).toBe(checkout.replaceAll("\\", "/"));
+    let admissionReached = false;
+    const archive = new WorktreeArchiveService().archive({
+      backend: "codex", threadId: "valid-link", repositoryPath: repo, worktreePath: checkout,
+      beforeRemove: async () => {
+        admissionReached = true;
+        if (lockDuringAdmission) await git(repo, "worktree", "lock", checkout);
+        return () => {};
+      },
+    });
+    if (lockDuringAdmission) {
+      await expect(archive).rejects.toThrow(/locked worktree/);
+      expect(await readFile(path.join(checkout, "preserved.txt"), "utf8")).toBe("snapshot me");
+    } else {
+      const snapshot = await archive;
+      expect(await git(repo, "show", `${snapshot.snapshotRef}:preserved.txt`)).toBe("snapshot me");
+      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(checkout.replaceAll("\\", "/"));
+    }
+    expect(admissionReached).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+}
+
+it.each([false, true])("archives a Git-registered symlink admin parent (late lock: %s)", async (lockDuringAdmission) => {
+  await checkSymlinkLayout("admin-parent", lockDuringAdmission);
+});
+
+it.runIf(process.platform !== "win32").each([false, true])("archives a Git-registered symlink gitfile (late lock: %s)", async (lockDuringAdmission) => {
+  await checkSymlinkLayout("gitfile", lockDuringAdmission);
+});
 
 it.runIf(process.platform !== "win32")("refuses a Git backlink redirected through a .git file symlink", async () => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-git-link-")));
