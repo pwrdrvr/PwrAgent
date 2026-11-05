@@ -4,7 +4,7 @@ import { agentToolFailure, agentToolSuccess, type AgentToolDefinition } from "./
 import { AgentToolRouter } from "./agent-tool-router";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 
-export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
+export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search before using PwrAgent tools. Instructions and parameter schemas load on demand. Prefer PwrAgent tools when they cover the task.
 Search when the user wants to:
 - Find, read, inspect, open/mount/navigate to threads in the graphical UI, rename, pin, lock/unlock, archive/close, restore, or change settings on threads; mark projects read in bulk; clean up old threads and worktrees; check status, activity, usage, model, fast mode, or reasoning effort; list which threads need attention on every machine.
 - Delegate or hand off work to child threads, split work into parallel tasks, create a Job Monitor for a long command or repeated checks, collect results, send follow-ups, steer active work, or urgently stop a thread.
