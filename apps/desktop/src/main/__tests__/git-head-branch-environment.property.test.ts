@@ -1,13 +1,10 @@
-import { execFile as execFileCallback } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import fc from "fast-check";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "../app-server/git-head-branch";
-
-const execFile = promisify(execFileCallback);
+import { isolateProcessGitEnvironment, runIsolatedGit } from "./helpers/isolated-git";
 
 // The probe exists so a thread start or turn end in a folder with no
 // repository launches no Git (PowerShell plus Git on Windows, #3226). Git
@@ -20,24 +17,14 @@ const execFile = promisify(execFileCallback);
 // send, and over 5 s when composer-image-thread-switch.spec.ts became the
 // first thread start in its lane.
 
-const isolatedGitKeys = /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|INDEX_FILE|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG.*))$/i;
-let savedGitEnv: Map<string, string>;
+let restoreGitEnv: () => void;
 
 beforeEach(() => {
-  savedGitEnv = new Map();
-  for (const [key, value] of Object.entries(process.env)) {
-    if (isolatedGitKeys.test(key) && value !== undefined) {
-      savedGitEnv.set(key, value);
-      delete process.env[key];
-    }
-  }
+  restoreGitEnv = isolateProcessGitEnvironment();
 });
 
 afterEach(() => {
-  for (const key of Object.keys(process.env)) {
-    if (isolatedGitKeys.test(key)) delete process.env[key];
-  }
-  for (const [key, value] of savedGitEnv) process.env[key] = value;
+  restoreGitEnv();
 });
 
 type ConfigEntry = { key: string; value: string };
@@ -55,22 +42,7 @@ function gitEnvironment(entries: readonly ConfigEntry[]): Record<string, string>
 
 /** Git with the same environment configuration, and nothing from the machine. */
 async function git(cwd: string, args: string[], entries: readonly ConfigEntry[] = []) {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (isolatedGitKeys.test(key)) delete env[key];
-  }
-  return await execFile("git", ["-C", cwd, ...args], {
-    env: {
-      ...env,
-      ...gitEnvironment(entries),
-      GIT_CONFIG_GLOBAL: path.join(cwd, "missing-global-config"),
-      GIT_CONFIG_SYSTEM: path.join(cwd, "missing-system-config"),
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    },
-    encoding: "utf8",
-    windowsHide: true,
-  });
+  return await runIsolatedGit(cwd, args, gitEnvironment(entries));
 }
 
 /** What `readCurrentGitBranch` would report, according to Git itself. */
