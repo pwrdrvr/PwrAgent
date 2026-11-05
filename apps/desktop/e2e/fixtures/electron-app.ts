@@ -1309,9 +1309,6 @@ export async function closeElectronWithSessionDrain(
   const child = electronApp.process();
   const errorPrefix = `[pwragent-e2e-session-drain:${randomUUID()}]`;
   let buffered = "";
-  let rejectDrain: (error: Error) => void = () => undefined;
-  const drainFailed = new Promise<never>((_resolve, reject) => { rejectDrain = reject; });
-  drainFailed.catch(() => undefined);
   const onStderr = (chunk: Buffer | string) => {
     buffered += chunk.toString();
     for (;;) {
@@ -1328,8 +1325,6 @@ export async function closeElectronWithSessionDrain(
               ...message,
             })}\n`);
           }
-        } else if (typeof message === "string") {
-          rejectDrain(new Error(`Electron session drain failed: ${message}`));
         }
       } catch {
         // Other app stderr cannot change the owned close result.
@@ -1340,7 +1335,7 @@ export async function closeElectronWithSessionDrain(
   };
   child.stderr?.on("data", onStderr);
   try {
-    await electronApp.evaluate(({ app, session, webContents }, errorPrefix) => {
+    await electronApp.evaluate(async ({ app, session, webContents }, errorPrefix) => {
       const record = (stage: string, index?: number) => {
         process.stderr.write(`${errorPrefix}${JSON.stringify({
           stage, index, at: Date.now(), pid: process.pid,
@@ -1351,20 +1346,10 @@ export async function closeElectronWithSessionDrain(
         session.defaultSession,
         ...webContents.getAllWebContents().map((contents) => contents.session),
       ]);
-      let quitHeld = false;
-      const holdNativeQuit = (event: Electron.Event) => {
-        record("before-quit");
-        event.preventDefault();
-        quitHeld = true;
-      };
-      // Application disposal can run while sessions drain, but Chromium
-      // must not enter its window/context shutdown until the callbacks finish.
-      // The app owns this before-quit barrier after Playwright detaches its
-      // inspector. A will-quit barrier is too late to preserve those contexts.
-      app.on("before-quit", holdNativeQuit);
-      app.once("will-quit", () => record("will-quit"));
-      app.once("quit", () => record("quit"));
-      void Promise.all([...sessions].map(async (ownedSession, index) => {
+      // before-quit also starts application-owned renderer disposal. Holding
+      // native quit cannot keep those contexts alive for pending callbacks.
+      // Finish preparation before Playwright can emit before-quit at all.
+      await Promise.all([...sessions].map(async (ownedSession, index) => {
         record("close-connections-start", index);
         await ownedSession.closeAllConnections();
         record("close-connections-complete", index);
@@ -1372,23 +1357,14 @@ export async function closeElectronWithSessionDrain(
         record("flush-cookies-complete", index);
         await ownedSession.clearData({ dataTypes: ["cache"] });
         record("clear-cache-complete", index);
-      })).then(() => {
-        record("released");
-        app.removeListener("before-quit", holdNativeQuit);
-        // Completion can run inside a native before-quit checkpoint. Retry
-        // from a fresh task after that dispatch has settled (quit-retry.ts).
-        if (quitHeld) setImmediate(() => { record("retry-quit"); app.quit(); });
-      }, (error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        try {
-          process.stderr.write(`${errorPrefix}${JSON.stringify(message.slice(0, 2_000))}\n`);
-        } catch {
-          // The unchanged deadline still rejects an unfinished drain.
-        }
-      });
+      }));
+      record("released");
+      app.once("before-quit", () => record("before-quit"));
+      app.once("will-quit", () => record("will-quit"));
+      app.once("quit", () => record("quit"));
     }, errorPrefix);
     // Session preparation and application disposal share the close deadline.
-    await Promise.race([electronApp.close(), drainFailed]);
+    await electronApp.close();
   } finally {
     child.stderr?.removeListener("data", onStderr);
   }
