@@ -3656,6 +3656,8 @@ export function useThreadNavigation(
   const manuallySelectedThreadKeysRef = useRecoverableRef("navigation.manualSelections", () => new Set<string>());
   const submittedSeenUpdatedAtByThreadKeyRef = useRecoverableRef("navigation.submittedSeenUpdates", () => new Map<string, number | undefined>());
   const refreshInFlightRef = useRef(false);
+  const archiveRefreshBatchesRef = useRef(0);
+  const archiveEventRefreshOwnersRef = useRef(new Map<string, FederationTarget>());
   const mountedRef = useRef(true);
   const actionAbortControllerRef = useRef(new AbortController());
   const queuedRefreshRef = useRef<
@@ -4284,9 +4286,18 @@ export function useThreadNavigation(
       const method = event.notification.method as string;
       const owners: FederationTarget[] = [event.federationTarget ?? { scope: "local" }];
       if (event.federationTarget?.scope === "remote" && windowTarget?.scope !== "remote") owners.push({ scope: "local" });
-      const scheduleEventRefresh: typeof scheduleRefresh = (selection, optimistic, forceSelection, options) =>
+      const scheduleEventRefresh: typeof scheduleRefresh = (selection, optimistic, forceSelection, options) => {
+        if (archiveRefreshBatchesRef.current > 0
+          && (method === "thread/archived" || method === "navigation/remoteThreadPins/changed")) {
+          // Archive replies and their notifications are one sidebar action.
+          // Keep invalidation and row patches immediate; read these owners
+          // with the action's final refresh, including any concurrent archive.
+          for (const owner of owners) archiveEventRefreshOwnersRef.current.set(JSON.stringify(owner), owner);
+          return;
+        }
         scheduleRefresh(selection, optimistic, forceSelection, { ...options, owners,
           invalidatedOnly: navigationQueryEventRequiresRefresh(method, event.notification.params) });
+      };
       if (federationTargetsEqual(event.federationTarget, windowTarget) && navigationQueryEventRequiresRefresh(method, event.notification.params)) {
         invalidateNavigation(owners, event);
         // These notifications contain the complete replacement for every
@@ -8819,13 +8830,25 @@ export function useThreadNavigation(
         ? { owners: mergeNavigationRefreshOwners(refreshOptions.owners, requestOptions?.owners) }
         : requestOptions;
     };
-    const results = await Promise.all(threads.map((thread) => archiveThread(thread, options, collectRefresh)));
-    if (refreshOptions) {
-      try {
-        await refresh(preferredSelectionKey, undefined, preferredSelectionKey !== undefined, refreshOptions);
-      } catch (error) {
-        setArchiveThreadError(error instanceof Error ? error.message : String(error));
-        await refresh(preferredSelectionKey, undefined, preferredSelectionKey !== undefined, refreshOptions);
+    archiveRefreshBatchesRef.current++;
+    let results: ArchivedThreadRef[][];
+    try {
+      results = await Promise.all(threads.map((thread) => archiveThread(thread, options, collectRefresh)));
+    } finally {
+      archiveRefreshBatchesRef.current--;
+      const eventOwners = [...archiveEventRefreshOwnersRef.current.values()];
+      archiveEventRefreshOwnersRef.current.clear();
+      if (eventOwners.length > 0) {
+        refreshOptions = { owners: refreshOptions
+          ? mergeNavigationRefreshOwners(refreshOptions.owners, eventOwners) : eventOwners };
+      }
+      if (refreshOptions) {
+        try {
+          await refresh(preferredSelectionKey, undefined, preferredSelectionKey !== undefined, refreshOptions);
+        } catch (error) {
+          setArchiveThreadError(error instanceof Error ? error.message : String(error));
+          await refresh(preferredSelectionKey, undefined, preferredSelectionKey !== undefined, refreshOptions);
+        }
       }
     }
     return results.flat();

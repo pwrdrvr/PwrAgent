@@ -74,7 +74,8 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     archiveThread: archive, getNavigationQueryPage: read, releaseNavigationQuery: async () => undefined,
     removeRemoteThreadPin: vi.fn(async ({ ref }) => {
       removedPins.add(ref.threadId);
-      emit({ backend: "codex", notification: { method: "navigation/remoteThreadPins/changed", params: {} } });
+      emit({ backend: "codex", notification: { method: "navigation/remoteThreadPins/changed",
+        params: { instanceId: owner.instanceId, threadId: ref.threadId, pinned: false } } });
       return { removed: true };
     }),
     getNavigationSelectedDetail: async ({ ref }) => ({ protocol: 2, ref, revision: "r", readiness: "ready",
@@ -149,8 +150,9 @@ it.each([50, 200])("bounds navigation IPC loads for %i sidebar archives, even wh
   expect(staggered.lensLoads).toBe(1);
 });
 
-it("refreshes once when a pair completes before the final archive (the shrunk counterexample)", async () => {
-  expect((await archiveFromSidebar(3, [[0, 1], [2]])).lensLoads).toBe(1);
+it.each([2, 3])("refreshes once for the shrunk %i-thread counterexample", async (size) => {
+  const groups = size === 2 ? [[0], [1]] : [[0, 1], [2]];
+  expect((await archiveFromSidebar(size, groups)).lensLoads).toBe(1);
 });
 
 it("rolls back failed rows and selection while removing only successfully archived remote pins", async () => {
