@@ -151,7 +151,7 @@ it.runIf(!process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)("refuses a r
   expect(f.sourceLookup).not.toHaveBeenCalled();
 });
 
-async function completeTurn(client: CodexAppServerClient, threadId: string, text: string) {
+async function completeTurn(client: CodexAppServerClient, threadId: string, text: string, start?: () => Promise<unknown>) {
   let stop = () => {};
   let timer: ReturnType<typeof setTimeout> | undefined;
   const completed = new Promise<void>((resolve, reject) => {
@@ -165,7 +165,7 @@ async function completeTurn(client: CodexAppServerClient, threadId: string, text
     });
   });
   try {
-    await client.startTurn({ threadId, input: [{ type: "text", text }] });
+    await (start ? start() : client.startTurn({ threadId, input: [{ type: "text", text }] }));
     await completed;
   } finally {
     stop();
@@ -173,10 +173,14 @@ async function completeTurn(client: CodexAppServerClient, threadId: string, text
   }
 }
 
-it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each(["copy", "move"] as const)(
-  "%s preserves paginated fork ancestry in stock Codex and context for the next turn",
-  async (operation) => {
+it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each([
+  { operation: "copy", compact: false }, { operation: "move", compact: false },
+  { operation: "copy", compact: true }, { operation: "move", compact: true },
+] as const)(
+  "$operation preserves paginated fork ancestry and next-turn context (compacted=$compact)",
+  async ({ operation, compact }) => {
     const requests: Array<Record<string, unknown>> = [];
+    let compacting = false;
     const server = createServer(async (request, response) => {
       let body = "";
       for await (const chunk of request) body += chunk.toString();
@@ -190,7 +194,9 @@ it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each
             ? { cmd: "printf handoff-tool-evidence" }
             : { command: "printf handoff-tool-evidence" }) }
         : { type: "message", id: `oracle-message-${index}`, role: "assistant", status: "completed",
-          content: [{ type: "output_text", text: `Contrived answer ${index - 1}` }] };
+          content: [{ type: "output_text", text: compacting
+            ? "portable-summary-token: amber, cedar, Contrived answer 1, Contrived answer 2, handoff-tool-evidence"
+            : `Contrived answer ${index - 1}` }] };
       response.writeHead(200, { "content-type": "text/event-stream" });
       for (const event of [
         { type: "response.created", response: { id: `oracle-response-${index}` } },
@@ -214,6 +220,11 @@ it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each
       await completeTurn(f.sourceClient, threadId, "Keep the contrived first fact: amber.");
       const child = await f.sourceClient.forkThread({ threadId, cwd: f.sourceCwd, config });
       await completeTurn(f.sourceClient, child.threadId, "Keep the contrived second fact: cedar.");
+      if (compact) {
+        compacting = true;
+        await completeTurn(f.sourceClient, child.threadId, "", () => f.sourceClient.compactThread({ threadId: child.threadId }));
+        compacting = false;
+      }
       const before = await f.sourceClient.readThread({ threadId: child.threadId });
       expect(before.messages).toHaveLength(4);
       const reads = vi.spyOn(f.targetClient, "readThread");
@@ -235,7 +246,8 @@ it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each
       expect(nextInput).toContain("Contrived answer 1");
       expect(nextInput).toContain("Contrived answer 2");
       const toolOutputs = nextItems.filter((item) => item.type === "function_call_output");
-      expect(JSON.stringify(toolOutputs)).toContain("handoff-tool-evidence");
+      if (compact) expect(nextInput).toContain("portable-summary-token");
+      else expect(JSON.stringify(toolOutputs)).toContain("handoff-tool-evidence");
       expect(f.sourceLookup).not.toHaveBeenCalled();
       expect(f.push).toHaveBeenCalledOnce();
     } finally {
