@@ -18,10 +18,12 @@ it("native quit observes the final writes produced by renderer closure", async (
         window.once("closed", () => { written[index] += 1; });
       }
       let atNativeQuit: number[] = [];
+      const nativeQuitAlreadyStarted: boolean[] = [];
       const harness = createCloseHarness(written.map((_, index) => ({
         closeAllConnections: async () => undefined,
         cookies: { flushStore: async () => undefined },
         clearData: async () => {
+          nativeQuitAlreadyStarted.push(model.emitted.includes("will-quit"));
           for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
           flushed[index] = written[index];
         },
@@ -31,6 +33,9 @@ it("native quit observes the final writes produced by renderer closure", async (
       });
       await closeElectronWithSessionDrain(harness.electronApp);
       expect(atNativeQuit).toEqual(written);
+      // Windows cache callbacks must finish before native quit begins. Holding
+      // will-quit is too late, even though the JavaScript session still exists.
+      expect(nativeQuitAlreadyStarted).toEqual(written.map(() => false));
       expect(written).toEqual(Array.from({ length: count }, () => 1));
       expect(model.reentrantQuits).toBe(0);
     },
