@@ -10440,6 +10440,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           }
 
           const normalized = await normalizeImageFile(file, {
+            preserveOriginalIfLarger: filesystemFederationTarget?.scope === "remote",
             fallback: props.desktopApi?.normalizeImageForUpload,
             maxPatchCount: props.pastedImageMaxPatches,
             sourceMimeType: type,

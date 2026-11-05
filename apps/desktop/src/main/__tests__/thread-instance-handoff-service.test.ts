@@ -8,7 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ThreadHandoffExport, ThreadHandoffPackage } from "@pwragent/shared";
 import { computeWorktreePath } from "../app-server/git-directory-service";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
-import { ThreadInstanceHandoffService } from "../federation/thread-instance-handoff-service";
+import { ThreadInstanceHandoffService, THREAD_HANDOFF_RETRY_NOW_EVENT } from "../federation/thread-instance-handoff-service";
 import type { ImportInstanceThreadRequest } from "../federation/thread-instance-handoff-service";
 import { decodeThreadHandoff, encodeThreadHandoff, threadHistoryDigest } from "../federation/thread-handoff-package";
 
@@ -18,7 +18,7 @@ const replay: ThreadHandoffExport["replay"] = {
 };
 const source: ThreadHandoffExport = { rolloutBase64: Buffer.from("opaque fixture history\n").toString("base64"), replay, title: "Windows fixture" };
 
-async function setup(options: { createHistoryWorkspace?: () => Promise<string> } = {}) {
+async function setup(options: { createHistoryWorkspace?: () => Promise<string>; retryNow?: (instanceId: string) => void } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-handoff-"));
   roots.push(root);
   const archive = vi.fn(async () => {});
@@ -48,7 +48,7 @@ async function setup(options: { createHistoryWorkspace?: () => Promise<string> }
   const sender = new ThreadInstanceHandoffService({
     backend, directory: path.join(root, "sender"), localInstanceId: () => "pwr_sender",
     assertTarget: vi.fn(), receipt: vi.fn(), remoteImport,
-    prepareTarget, push,
+    prepareTarget, push, retryNow: options.retryNow,
   });
   return { root, backend, sender, receiver, receipt, remoteImport, archive, prepareTarget, push };
 }
@@ -340,4 +340,18 @@ it("rejects tampered checksums and unsafe file paths before importing", async ()
     git: { head: "a".repeat(40), ref: "refs/heads/main", origin: "example/repo", cwdRelative: ".git/config" },
   };
   await expect(decodeThreadHandoff(await encodeThreadHandoff(pkg))).rejects.toThrow("Unsafe");
+});
+
+it("routes the per-send Retry Now event to its target and removes the listener", async () => {
+  const retryNow = vi.fn();
+  const events = new EventTarget();
+  const { sender, backend } = await setup({ retryNow });
+  backend.exportThreadForHandoff.mockImplementationOnce(async () => {
+    events.dispatchEvent(new Event(THREAD_HANDOFF_RETRY_NOW_EVENT));
+    return source;
+  });
+  await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" }, { retryNow: events });
+  expect(retryNow).toHaveBeenCalledExactlyOnceWith("pwr_receiver");
+  events.dispatchEvent(new Event(THREAD_HANDOFF_RETRY_NOW_EVENT));
+  expect(retryNow).toHaveBeenCalledTimes(1);
 });

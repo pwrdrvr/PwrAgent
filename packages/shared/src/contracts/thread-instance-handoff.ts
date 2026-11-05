@@ -1,6 +1,7 @@
 import type { AppServerThreadReplay } from "./normalized-app-server";
 
 export type HandoffInstanceThreadRequest = {
+  handoffId?: string;
   sourceThreadId: string;
   targetInstanceId: string;
   operation: "copy" | "move";
@@ -66,3 +67,28 @@ export type ThreadHandoffExport = {
   cwd?: string;
   title?: string;
 };
+
+export type ThreadHandoffPhase = "package" | "send" | "import" | "verify" | "archive";
+
+export interface ThreadHandoffProgress {
+  handoffId: string;
+  sourceThreadId: string;
+  phase: ThreadHandoffPhase;
+  /** Send phase only. Bytes the receiver has committed, which never decreases. */
+  bytesCommitted?: number;
+  /** Send phase only. Receiver-acknowledged bytes; may return to the durable offset on reconnect. */
+  bytesSent?: number;
+  bytesTotal?: number;
+  /** Set once a transfer resumes from a non-zero committed offset. */
+  resumedFromBytes?: number;
+  /** "waiting": the connection dropped and a resumable transfer is held. */
+  link: "connected" | "waiting";
+  disconnectedAt?: string;
+  /** False once thread.handoff.import has been sent. */
+  cancelable: boolean;
+  /** "single_shot": an older peer, where a drop fails the send. */
+  transport: "resumable" | "single_shot";
+}
+
+export type CancelThreadHandoffRequest = { handoffId: string };
+export type RetryThreadHandoffNowRequest = { handoffId: string };
