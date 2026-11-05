@@ -11,10 +11,15 @@ const event = (keys: string[], method = "thread/backgroundTasks/updated", remote
   notification: { method, params: { threadId: "hidden-descendant" } },
 } as AgentEvent);
 function page(sent: NavigationQueryRequest, active: number): NavigationQueryPage {
+  const ref = { backend: "codex" as const, threadId: `visible-${sent.query.kind === "directory" ? sent.query.directoryKey : "root"}`,
+    ...(sent.federationTarget?.scope === "remote" ? { ownerInstanceId: sent.federationTarget.instanceId } : {}) };
   return { protocol: 2, queryKey: JSON.stringify(sent.query), ownerEpoch: "owner", generation: String(active),
     countsRevision: String(active), coverage: { state: "complete" }, counts: { total: 200, active, unread: 0, review: 0 },
     // No loaded row or linked path can establish where the hidden descendant belongs.
-    entries: [], complete: false, nextCursor: `cursor-${active}` };
+    entries: [{ orderKey: "0", placement: { kind: "root" }, row: { ref, id: ref.threadId, source: ref.backend,
+      title: "Visible root", titleSource: "explicit", rowRevision: "stable", inbox: { inInbox: false }, linkedDirectories: [],
+      ordinaryChildCount: 10, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown",
+    } }], complete: false, nextCursor: `cursor-${active}` };
 }
 const idle = (queries: NavigationWindowQueries) => [...queries.getSnapshot().resources.values()].every((r) => !r.loading);
 async function advance() { for (let i = 0; i < 80; i++) await Promise.resolve(); }

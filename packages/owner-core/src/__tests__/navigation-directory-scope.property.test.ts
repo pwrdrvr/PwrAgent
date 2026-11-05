@@ -8,6 +8,7 @@ import { projectNavigationQuery, type NavigationQueryIndex } from "../navigation
 function population(memberships: number[]): NavigationQueryIndex {
   const threads: NavigationThreadSummary[] = memberships.map((_, i) => ({
     id: `thread-${Math.floor(i / 2)}`, source: i % 2 ? "claude" : "codex", title: `Row ${i}`, titleSource: "explicit",
+    ...(i >= 4 ? { parentThreadId: "thread-0", parentThreadBackend: "codex" as const } : {}),
     // Deliberately unrelated to membership: aliases, worktrees and directory
     // relationships are resolved by the owner index, not by a viewer's paths.
     linkedDirectories: [], projectKey: `/worktree-${i % 3}`, inbox: { inInbox: false },

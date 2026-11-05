@@ -3338,7 +3338,7 @@ describe("DesktopBackendRegistry", () => {
       const gate = new Promise<void>((resolve) => { finish = resolve; });
       recording = vi.spyOn(internal, "prepareArchiveReferenceChanges").mockReturnValueOnce(gate);
       const membership = registry.publishLocalEvent({ backend: "codex", notification: {
-        method: "navigation/threadDirectories/updated", params: { threadIds: ["hidden"] },
+        method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["hidden"] },
       } });
       expect(registry.navigationDirectoryScope.forEvent(row)).toBeUndefined();
       expect(events).toHaveLength(1);
