@@ -1,0 +1,81 @@
+import { describe, expect, it } from "vitest";
+import type { DesktopManagedGitSnapshot } from "@pwragent/shared";
+import { managedGitUpdatesCopy } from "../managed-git-updates-copy";
+
+const NOW = Date.UTC(2026, 10, 5, 16, 0);
+const base: DesktopManagedGitSnapshot = {
+  supported: true,
+  bundledVersion: "2.56.0-dev-pwrgit.4",
+  releases: [],
+};
+const release5 = {
+  generation: "2.56.0-dev-pwrgit.5-1a2b3c4",
+  version: "2.56.0-dev-pwrgit.5",
+  tag: "v2.56.0-dev-pwrgit.5",
+  executable: "/x/bin/git",
+  installedAt: NOW,
+};
+const available5 = { tag: release5.tag, version: release5.version, generation: release5.generation, archiveBytes: 38_890_030 };
+const copy = (managed: Partial<DesktopManagedGitSnapshot>, manualPathSelected = false) =>
+  managedGitUpdatesCopy({ ...base, ...managed }, { now: NOW, manualPathSelected });
+const kinds = (result: ReturnType<typeof copy>) => result.actions.map((action) => `${action.kind}${action.primary ? "!" : ""}`);
+
+describe("Settings → Git → Updates", () => {
+  it("says the bundle is current after a check", () => {
+    const result = copy({ check: { checkedAt: NOW - 2 * 60_000 } });
+    expect(result.tag).toBe("2.56.0-dev-pwrgit.4");
+    expect(result.message).toBe("is the newest PwrDrvr Git. Checked 2 minutes ago.");
+    expect(kinds(result)).toEqual(["check"]);
+  });
+
+  it("offers a download, never a switch, for a newer release", () => {
+    const result = copy({ check: { checkedAt: NOW, available: available5 } });
+    expect(result.tag).toBe("2.56.0-dev-pwrgit.5");
+    expect(result.message).toBe("is available (37 MB). Bundled: 2.56.0-dev-pwrgit.4.");
+    expect(result.note).toBe("Downloading does not switch Git. You choose when to use it.");
+    expect(kinds(result)).toEqual(["download!", "check"]);
+  });
+
+  it("offers Use once the release is downloaded, even while a manual path stays selected", () => {
+    const result = copy({ check: { checkedAt: NOW, available: available5 }, releases: [release5] }, true);
+    expect(result.message).toBe("is downloaded and verified. Not in use yet.");
+    expect(result.actions[0]).toMatchObject({ kind: "use", generation: release5.generation, primary: true });
+  });
+
+  it("offers Roll back to exactly the Git it replaced", () => {
+    const result = copy({
+      selected: release5.generation,
+      releases: [release5],
+      previous: { kind: "path", path: "/usr/local/bin/git" },
+      check: { checkedAt: NOW, available: available5 },
+    });
+    expect(result.message).toMatch(/^is in use\./u);
+    expect(result.note).toBe("Commands already running finish on the Git they started with.");
+    expect(result.actions.at(-1)).toMatchObject({ kind: "rollback", label: "Roll back to Custom path", choice: { kind: "path", path: "/usr/local/bin/git" } });
+  });
+
+  it("puts Roll back first when the chosen release failed its checks", () => {
+    const result = copy({
+      selected: release5.generation,
+      releases: [{ ...release5, failure: "A file changed after the release was sealed: bin/git" }],
+      previous: { kind: "bundled" },
+    });
+    expect(result.tone).toBe("error");
+    expect(result.message).toMatch(/Git commands fail until you choose another Git\.$/u);
+    expect(result.actions).toEqual([
+      expect.objectContaining({ kind: "rollback", primary: true, label: "Roll back to Bundled 2.56.0-dev-pwrgit.4" }),
+    ]);
+  });
+
+  it("reports an offline check without hiding installed releases", () => {
+    const result = copy({ releases: [release5], check: { checkedAt: NOW, error: "GitHub could not be reached." } });
+    expect(result.tone).toBe("notice");
+    expect(result.note).toBe("Could not check for updates: GitHub could not be reached. Installed builds still work.");
+  });
+
+  it("names a release that needs a newer PwrAgent and offers no download for it", () => {
+    const result = copy({ check: { checkedAt: NOW, needsAppUpdate: { version: "2.56.0-dev-pwrgit.6" } } });
+    expect(result.note).toBe("2.56.0-dev-pwrgit.6 needs a newer PwrAgent. Update PwrAgent to use it.");
+    expect(kinds(result)).toEqual(["check"]);
+  });
+});
