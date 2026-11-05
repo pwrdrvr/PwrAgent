@@ -233,13 +233,14 @@ it.runIf(Boolean(process.env.PWRAGENT_CODEX_HANDOFF_ORACLE_SOURCE_COMMAND)).each
       expect(after.messages.map(({ role, text }) => ({ role, text })))
         .toEqual(before.messages.map(({ role, text }) => ({ role, text })));
       await completeTurn(f.targetClient, result.threadId, "Continue using both contrived facts.");
-      const nextInput = JSON.stringify(requests.at(-1)?.input);
+      const nextItems = requests.at(-1)?.input;
+      if (!Array.isArray(nextItems)) throw new Error("Codex did not send continuation input");
+      const nextInput = JSON.stringify(nextItems);
       expect(nextInput).toContain("amber");
       expect(nextInput).toContain("cedar");
       expect(nextInput).toContain("Contrived answer 1");
       expect(nextInput).toContain("Contrived answer 2");
-      const toolOutputs = (requests.at(-1)?.input as Array<{ type: string; output?: unknown }>)
-        .filter((item) => item.type === "function_call_output");
+      const toolOutputs = nextItems.filter((item) => item.type === "function_call_output");
       expect(JSON.stringify(toolOutputs)).toContain("handoff-tool-evidence");
       expect(f.sourceLookup).not.toHaveBeenCalled();
       expect(f.push).toHaveBeenCalledOnce();
