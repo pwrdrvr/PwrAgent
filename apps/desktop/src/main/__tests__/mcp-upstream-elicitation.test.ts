@@ -1,4 +1,3 @@
-import { sandboxerStub } from "./helpers/sandboxer-stub";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -131,7 +130,6 @@ function readLog(fixture: Fixture): LogEntry[] {
 
 async function createService(fixture: Fixture, selection: { ids: string[] } = { ids: [] }) {
   const service = new McpConnectionGatewayService({
-    sandboxer: sandboxerStub(),
     bridgeEntryPath: "/test/mcp-connection-bridge.js",
     gatewayEnabled: () => true,
     leaseManager: null,

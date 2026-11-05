@@ -38,85 +38,6 @@ describe("McpConnectionRegistry", () => {
     });
     expect(registry.update({ connectionId: connection.id, serverUrl }).connection.authMode).toBe("none");
   });
-  it("synthesizes Sandboxer with opt-in compute and persists independent profile choices", () => {
-    const target = configPath();
-    const registry = new McpConnectionRegistry({ configPath: target, randomId: () => "custom" });
-    expect(registry.get("builtin:sandboxer")).toMatchObject({
-      kind: "sandboxer", authMode: "oauth", serverUrl: "https://sandboxer.com/mcp", sandboxerRole: "compute",
-      enabled: false, selectForNewThreads: false, toolApproval: "approve",
-    });
-    expect(registry.get("pwrsnap")?.toolApproval).toBe("auto");
-    expect(registry.get("pwrgit")?.toolApproval).toBe("auto");
-    registry.setEnabled("builtin:sandboxer", true);
-    registry.setSelectForNewThreads("builtin:sandboxer", true);
-    registry.setToolApproval("builtin:sandboxer", "auto");
-    const reread = new McpConnectionRegistry({ configPath: target });
-    expect(reread.get("builtin:sandboxer")).toMatchObject({ enabled: true, selectForNewThreads: true, toolApproval: "auto" });
-    registry.setEnabled("builtin:sandboxer", false);
-    expect(registry.get("builtin:sandboxer")?.selectForNewThreads).toBe(true);
-    registry.setToolApproval("builtin:sandboxer", "prompt");
-    expect(fs.readFileSync(target, "utf8")).toContain("sandboxer_tool_approval = \"prompt\"");
-    expect(registry.get("builtin:sandboxer")?.toolApproval).toBe("prompt");
-    registry.setToolApproval("builtin:sandboxer", "approve");
-    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer_tool_approval");
-    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.toolApproval).toBe("approve");
-    expect(() => registry.remove("builtin:sandboxer")).toThrow("Built-in");
-    expect(() => registry.update({ connectionId: "builtin:sandboxer", serverUrl: "https://example.com" })).toThrow("Built-in");
-    expect(registry.create({ displayName: "Sandboxer", serverUrl: "https://example.com/mcp" }).id).toBe("sandboxer");
-    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer:compute");
-  });
-
-  it("retains legacy local transport without writing on read and switches explicitly", () => {
-    const target = configPath();
-    const legacy = "# Keep my comment\n[mcp_connections]\nsandboxer_enabled = true\nsandboxer_tool_approval = \"prompt\"\n";
-    fs.writeFileSync(target, legacy);
-    const registry = new McpConnectionRegistry({ configPath: target });
-    expect(registry.get("builtin:sandboxer")).toMatchObject({ authMode: "local_cli", serverUrl: "sandboxer:compute" });
-    expect(fs.readFileSync(target, "utf8")).toBe(legacy);
-    registry.setSandboxerTransport("hosted");
-    expect(registry.get("builtin:sandboxer")).toMatchObject({ authMode: "oauth", enabled: true, toolApproval: "prompt" });
-    expect(fs.readFileSync(target, "utf8")).toContain("# Keep my comment");
-    registry.setSandboxerTransport("local_cli");
-    expect(registry.get("builtin:sandboxer")?.authMode).toBe("local_cli");
-  });
-
-  it("pins the fresh hosted default before saving preferences and falls back from invalid modes", () => {
-    const target = configPath();
-    const registry = new McpConnectionRegistry({ configPath: target });
-    registry.setEnabled("builtin:sandboxer", true);
-    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.authMode).toBe("oauth");
-    fs.writeFileSync(target, '[mcp_connections]\nsandboxer_transport = "invalid"\nsandboxer_enabled = true\n');
-    expect(registry.get("builtin:sandboxer")?.authMode).toBe("local_cli");
-    expect(() => registry.setSandboxerTransport("invalid" as "hosted")).toThrow("transport");
-  });
-
-  it("pins only Sandboxer saves and preserves unrelated config on mode changes", () => {
-    const target = configPath();
-    fs.writeFileSync(target, '# operator comment\n[mcp_connections]\npwrsnap_enabled = false\n');
-    const registry = new McpConnectionRegistry({ configPath: target });
-    registry.setEnabled("pwrsnap", true);
-    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer_transport");
-    registry.setSandboxerTransport("hosted");
-    registry.setSandboxerTransport("hosted");
-    const saved = fs.readFileSync(target, "utf8");
-    expect(saved).toContain("# operator comment");
-    expect(saved).toContain("pwrsnap_enabled = true");
-    expect(saved.match(/sandboxer_transport/g)).toHaveLength(1);
-  });
-
-  it("cleans up Sandboxer sandboxes on PR close unless the profile turns it off", () => {
-    const target = configPath();
-    const registry = new McpConnectionRegistry({ configPath: target });
-    expect(registry.get("builtin:sandboxer")?.sandboxerCleanupOnPrClose).toBe(true);
-    expect(registry.setSandboxerCleanupOnPrClose(false).sandboxerCleanupOnPrClose).toBe(false);
-    expect(fs.readFileSync(target, "utf8")).toContain("sandboxer_cleanup_on_pr_close = false");
-    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.sandboxerCleanupOnPrClose)
-      .toBe(false);
-    expect(registry.setSandboxerCleanupOnPrClose(true).sandboxerCleanupOnPrClose).toBe(true);
-    expect(fs.readFileSync(target, "utf8")).toContain("sandboxer_cleanup_on_pr_close = true");
-    // Only Sandboxer has the setting.
-    expect(registry.get("pwrgit")?.sandboxerCleanupOnPrClose).toBeUndefined();
-  });
 
   it("marks Linear connections with the profile's pasted-image setting", () => {
     const target = configPath();
@@ -133,50 +54,6 @@ describe("McpConnectionRegistry", () => {
       .toBe(false);
     // Only a Linear connection carries it.
     expect(registry.get(other.id)?.linearPasteImages).toBeUndefined();
-    expect(registry.get("builtin:sandboxer")?.linearPasteImages).toBeUndefined();
-  });
-
-  it("reads a hand-written sandboxer_cleanup_on_pr_close = false as off", () => {
-    const target = configPath();
-    fs.writeFileSync(target, "[mcp_connections]\nsandboxer_cleanup_on_pr_close = false\n");
-    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.sandboxerCleanupOnPrClose)
-      .toBe(false);
-  });
-
-  it("preserves a pre-existing sandboxer custom identity alongside the built-in", () => {
-    const target = configPath();
-    const legacy = `[mcp_connections]
-# Existing operator configuration
-[[mcp_connections.connections]]
-id = "sandboxer"
-display_name = "Sandboxer"
-server_url = "https://legacy.example/mcp"
-auth_mode = "oauth"
-enabled = true
-select_for_new_threads = true
-tool_approval = "approve"
-created_at = 123
-updated_at = 456
-`;
-    fs.writeFileSync(target, legacy);
-    const registry = new McpConnectionRegistry({ configPath: target });
-    expect(registry.get("sandboxer")).toMatchObject({
-      id: "sandboxer", kind: "remote", authMode: "oauth",
-      serverUrl: "https://legacy.example/mcp", selectForNewThreads: true,
-      toolApproval: "approve", createdAt: 123, updatedAt: 456,
-    });
-    expect(registry.get("builtin:sandboxer")).toMatchObject({ kind: "sandboxer", enabled: false });
-    expect(fs.readFileSync(target, "utf8")).toBe(legacy);
-    registry.setEnabled("builtin:sandboxer", true);
-    expect(registry.get("sandboxer")?.enabled).toBe(true);
-    registry.setEnabled("sandboxer", false);
-    expect(registry.get("builtin:sandboxer")?.enabled).toBe(true);
-    registry.update({ connectionId: "sandboxer", displayName: "Existing remote" });
-    expect(new McpConnectionRegistry({ configPath: target }).get("sandboxer")).toMatchObject({
-      kind: "remote", enabled: false, displayName: "Existing remote", selectForNewThreads: true,
-    });
-    expect(registry.remove("sandboxer")).toBe(true);
-    expect(registry.get("builtin:sandboxer")).toBeDefined();
   });
 
   it("reserves PwrGit's routing ID when creating a custom connection", () => {
@@ -297,7 +174,6 @@ updated_at = 456
     expect(registry.list()).toMatchObject([
       { id: "pwrsnap", kind: "pwrsnap" },
       { id: "pwrgit", kind: "pwrgit" },
-      { id: "builtin:sandboxer", kind: "sandboxer" },
       {
         id: "atlassian-rovo",
         kind: "remote",
@@ -310,7 +186,6 @@ updated_at = 456
     expect(registry.list().map((connection) => connection.id)).toEqual([
       "pwrsnap",
       "pwrgit",
-      "builtin:sandboxer",
     ]);
     expect(fs.readFileSync(target, "utf8")).toContain("theme = \"dark\"");
   });
@@ -382,7 +257,7 @@ updated_at = 456
     });
 
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer", "acme"]);
+      .toEqual(["pwrsnap", "pwrgit", "acme"]);
 
     registry.setEnabled("acme", false);
 
@@ -436,7 +311,7 @@ updated_at = 456
 
     expect(registry.remove("acme")).toBe(true);
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer"]);
+      .toEqual(["pwrsnap", "pwrgit"]);
     expect(fs.readFileSync(target, "utf8")).not.toContain("acme");
   });
 

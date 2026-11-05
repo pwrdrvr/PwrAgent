@@ -119,9 +119,9 @@ test("shows structured native tool arguments and long sandbox names", async ({ b
     ), "utf8")) as ReplayFixture;
     const step = fixture.steps.find((entry) => entry.id === "mcp-elicitation-1");
     if (!step || step.kind !== "request") throw new Error("Missing MCP elicitation fixture");
-    const name = "pwragent-hosted-sandboxer-smoke-fixture";
+    const name = "pwragent-hosted-fixturecloud-smoke-fixture";
     step.request.params = {
-      ...step.request.params, serverName: "Sandboxer", message: 'Allow Sandboxer to run tool "create_sandbox"?',
+      ...step.request.params, serverName: "FixtureCloud", message: 'Allow FixtureCloud to run tool "create_sandbox"?',
       _meta: {
         codex_approval_kind: "mcp_tool_call", persist: ["session", "always"],
         tool_params_display: [

@@ -486,7 +486,7 @@ export function buildPrTerminalWatchPrompt(params: {
     "",
     (extraLines.length > 0
       ? "PwrAgent has already acted on the sandboxes listed above: do not stop or delete them yourself, and report any it could not clean up. Release anything else this thread created only for this PR, unless the operator asked to keep it. "
-      : "Release what this thread created only for this PR, such as a Sandboxer sandbox used to test it, unless the operator asked to keep it. ")
+      : "Release what this thread created only for this PR, such as temporary compute used to test it, unless the operator asked to keep it. ")
       + (merged
         ? "Report the merge, and continue only if the operator's prior request asked for follow-up after it lands."
         : "Report the close, and do not reopen or recreate the PR unless the operator asked for that.")

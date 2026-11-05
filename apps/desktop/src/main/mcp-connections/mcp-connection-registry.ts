@@ -7,10 +7,6 @@ import {
   parseMcpIpcUrl,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
-  SANDBOXER_MCP_CONNECTION_ID,
-  SANDBOXER_MCP_URL,
-  isSandboxerTransport,
-  type SandboxerTransport,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
   isLinearMcpServerUrl,
@@ -38,13 +34,11 @@ const PWRSNAP_ENABLED_PATH = ["mcp_connections", "pwrsnap_enabled"] as const;
 const BUILT_IN_SELECT_FOR_NEW_THREADS_KEYS = {
   [PWRSNAP_MCP_CONNECTION_ID]: "pwrsnap_select_for_new_threads",
   [PWRGIT_MCP_CONNECTION_ID]: "pwrgit_select_for_new_threads",
-  [SANDBOXER_MCP_CONNECTION_ID]: "sandboxer_select_for_new_threads",
 } as const;
 // And the tool approval mode, the third.
 const BUILT_IN_TOOL_APPROVAL_KEYS = {
   [PWRSNAP_MCP_CONNECTION_ID]: "pwrsnap_tool_approval",
   [PWRGIT_MCP_CONNECTION_ID]: "pwrgit_tool_approval",
-  [SANDBOXER_MCP_CONNECTION_ID]: "sandboxer_tool_approval",
 } as const;
 const CONNECTION_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const PWRSNAP_SERVER_URL = "http://127.0.0.1:51729/mcp";
@@ -73,14 +67,13 @@ export class McpConnectionRegistry {
   }
 
   list(): McpConnectionRecord[] {
-    // One read, one parse. Each of these three used to open and parse
+    // One read, one parse. Each built-in used to open and parse
     // config.toml for itself, so a single `list()` cost three -- and `get()`
     // goes through `list()`, so every connection lookup did too.
     const table = this.readConnectionsTable();
     return [
       this.pwrSnapConnection(table),
       this.pwrGitConnection(table),
-      this.sandboxerConnection(table),
       ...this.readStoredConnections(table),
     ];
   }
@@ -97,10 +90,6 @@ export class McpConnectionRegistry {
    * and `remove`, which discards the connection outright.
    */
   setEnabled(connectionId: string, enabled: boolean): McpConnectionRecord {
-    if (connectionId === SANDBOXER_MCP_CONNECTION_ID) {
-      this.writeScalar(["mcp_connections", "sandboxer_enabled"], enabled);
-      return this.sandboxerConnection();
-    }
     if (connectionId === PWRGIT_MCP_CONNECTION_ID) {
       this.writeScalar(["mcp_connections", "pwrgit_enabled"], enabled);
       return this.pwrGitConnection();
@@ -167,22 +156,6 @@ export class McpConnectionRegistry {
   }
 
   /**
-   * Choose whether PwrAgent cleans up the sandboxes a thread created once
-   * every PR attached to that thread has merged or closed.
-   *
-   * Only Sandboxer has the setting. The default is on, so absence reads as
-   * `true`; the scalar is written either way so the operator's choice is
-   * visible in config.toml.
-   */
-  setSandboxerCleanupOnPrClose(enabled: boolean): McpConnectionRecord {
-    this.writeScalar(
-      ["mcp_connections", "sandboxer_cleanup_on_pr_close"],
-      enabled,
-    );
-    return this.sandboxerConnection();
-  }
-
-  /**
    * Choose whether images in text pasted from Linear are fetched through a
    * Linear connection and attached to the message.
    *
@@ -203,7 +176,7 @@ export class McpConnectionRegistry {
   /**
    * Choose when a gateway call to this connection asks first.
    *
-   * The default is stored as absence: `auto` except for Sandboxer's `approve`.
+   * The default is stored as absence: `auto`.
    * Older rows and a connection reset to its default therefore read the same.
    */
   setToolApproval(
@@ -213,10 +186,9 @@ export class McpConnectionRegistry {
     if (isBuiltInMcpConnectionId(connectionId)) {
       const path = ["mcp_connections", BUILT_IN_TOOL_APPROVAL_KEYS[connectionId]];
       this.writeConfig((source) =>
-        applyTomlEdits(source, [toolApproval === (connectionId === SANDBOXER_MCP_CONNECTION_ID ? "approve" : "auto")
+        applyTomlEdits(source, [toolApproval === "auto"
           ? { op: "delete", path }
           : { op: "set", path, value: toolApproval }]),
-        connectionId === SANDBOXER_MCP_CONNECTION_ID,
       );
       return this.get(connectionId)!;
     }
@@ -276,38 +248,9 @@ export class McpConnectionRegistry {
     };
   }
 
-  private sandboxerConnection(table = this.readConnectionsTable()): McpConnectionRecord {
-    const transport = readSandboxerTransport(table);
-    return {
-      id: SANDBOXER_MCP_CONNECTION_ID,
-      displayName: "Sandboxer",
-      // Keep the built-in identity across both transports.
-      serverUrl: transport === "hosted" ? SANDBOXER_MCP_URL : "sandboxer:compute",
-      authMode: transport === "hosted" ? "oauth" : "local_cli",
-      kind: "sandboxer",
-      sandboxerRole: "compute",
-      enabled: table?.sandboxer_enabled === true,
-      selectForNewThreads: table?.sandboxer_select_for_new_threads === true,
-      toolApproval: isMcpConnectionToolApproval(table?.sandboxer_tool_approval)
-        ? table.sandboxer_tool_approval : "approve",
-      sandboxerCleanupOnPrClose: table?.sandboxer_cleanup_on_pr_close !== false,
-      createdAt: 0,
-      updatedAt: 0,
-    };
-  }
-
-  setSandboxerTransport(transport: SandboxerTransport): McpConnectionRecord {
-    if (!isSandboxerTransport(transport)) throw new Error("Choose a Sandboxer transport.");
-    this.writeConfig((source) => applyTomlEdits(source, [{
-      op: "set", path: ["mcp_connections", "sandboxer_transport"], value: transport,
-    }]));
-    return this.sandboxerConnection();
-  }
-
   private writeScalar(path: readonly string[], value: boolean): void {
     this.writeConfig((source) =>
       applyTomlEdits(source, [{ op: "set", path, value }]),
-      path[1]?.startsWith("sandboxer_") === true,
     );
   }
 
@@ -361,7 +304,6 @@ export class McpConnectionRegistry {
     const duplicate = [
       this.pwrSnapConnection(table),
       this.pwrGitConnection(table),
-      this.sandboxerConnection(table),
       ...current,
     ].find((connection) => connection.serverUrl === serverUrl);
     if (duplicate) {
@@ -565,19 +507,12 @@ export class McpConnectionRegistry {
     );
   }
 
-  private writeConfig(edit: (source: string) => string, pinSandboxerTransport = false): void {
+  private writeConfig(edit: (source: string) => string): void {
     fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
     const source = fs.existsSync(this.configPath)
       ? fs.readFileSync(this.configPath, "utf8")
       : "";
-    const edited = edit(source);
-    const table = parseTomlTables(source, this.configPath).mcp_connections as Record<string, unknown> | undefined;
-    const next = pinSandboxerTransport && edited !== source
-      ? applyTomlEdits(edited, [{
-          op: "set", path: ["mcp_connections", "sandboxer_transport"],
-          value: readSandboxerTransport(table),
-        }])
-      : edited;
+    const next = edit(source);
     if (next === source) return;
     const temporaryPath = `${this.configPath}.${process.pid}.mcp.tmp`;
     fs.writeFileSync(temporaryPath, next, "utf8");
@@ -849,15 +784,4 @@ function connectionFromRow(
   } catch {
     return undefined;
   }
-}
-
-/** Additive mode key: absence preserves profiles with saved local preferences.
- * Reads never migrate the file. Existing preference scalars remain readable by
- * older clients; a fresh profile is pinned before its first preference save.
- */
-function readSandboxerTransport(table: Record<string, unknown> | undefined): SandboxerTransport {
-  if (isSandboxerTransport(table?.sandboxer_transport)) return table.sandboxer_transport;
-  return table && ["sandboxer_enabled", "sandboxer_select_for_new_threads", "sandboxer_tool_approval", "sandboxer_cleanup_on_pr_close"]
-    .some((key) => Object.hasOwn(table, key))
-    ? "local_cli" : "hosted";
 }

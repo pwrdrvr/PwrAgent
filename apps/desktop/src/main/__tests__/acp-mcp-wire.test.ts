@@ -1,4 +1,3 @@
-import { sandboxerStub } from "./helpers/sandboxer-stub";
 import schema from "@agentclientprotocol/sdk/schema/schema.json";
 import Ajv2020 from "ajv/dist/2020.js";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
@@ -53,7 +52,6 @@ describe("ACP MCP request serialization", () => {
     cleanup.push(() => db.close());
     const store = new AcpSessionStore(db);
     const snap = new McpConnectionGatewayService({
-      sandboxer: sandboxerStub(),
       leaseManager: null,
       gatewayEnabled: () => true,
       settings: {} as never,
@@ -114,14 +112,14 @@ describe("ACP MCP request serialization", () => {
     const store = new AcpSessionStore(db);
     const { transport, requests } = validatingTransport();
     cleanup.push(() => transport.close?.());
-    const sandboxer = { name: "builtin:sandboxer", command: "node", args: ["bridge.js"], env: { TOKEN: "test" } };
+    const fixturecloud = { name: "builtin:fixturecloud", command: "node", args: ["bridge.js"], env: { TOKEN: "test" } };
     const client = new AcpAgentClient({
       backendId: "acp:grok", store, transport,
       mcpServers: () => ({
         servers: [
           { name: "pwragent", type: "http" as const, url: "http://127.0.0.1:1/mcp", headers: [] },
           { name: "pwrgit", command: "node" },
-          sandboxer,
+          fixturecloud,
         ],
       }),
     });
@@ -137,11 +135,11 @@ describe("ACP MCP request serialization", () => {
     }
     const request = requests.find((request) => request.method === method)!;
     const servers = request.params?.mcpServers as Array<Record<string, unknown>>;
-    expect(servers.map((server) => server.name)).toEqual(["pwragent", "pwrgit", "_builtin_sandboxer"]);
+    expect(servers.map((server) => server.name)).toEqual(["pwragent", "pwrgit", "_builtin_fixturecloud"]);
     for (const server of servers) expect(server.name).toMatch(/^[A-Za-z_][A-Za-z0-9_-]*$/u);
     expect(servers[2]).toMatchObject({ command: "node", args: ["bridge.js"], env: [{ name: "TOKEN", value: "test" }] });
     // The bridge keeps its connection ID everywhere else.
-    expect(sandboxer.name).toBe("builtin:sandboxer");
+    expect(fixturecloud.name).toBe("builtin:fixturecloud");
   });
 
   it("keeps rewritten server names unique within a session", async () => {
@@ -176,7 +174,7 @@ describe("acpSafeMcpServerName", () => {
   });
 
   it("rewrites other names so they cannot collide with a custom connection ID", () => {
-    expect(acpSafeMcpServerName("builtin:sandboxer")).toBe("_builtin_sandboxer");
+    expect(acpSafeMcpServerName("builtin:fixturecloud")).toBe("_builtin_fixturecloud");
     expect(acpSafeMcpServerName("9lives")).toBe("_9lives");
     expect(acpSafeMcpServerName("a.b c")).toBe("_a_b_c");
   });

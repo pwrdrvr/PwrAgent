@@ -59,15 +59,15 @@ function renderPanel(
 
 describe("McpAccessPanel", () => {
   const owner = { scope: "remote" as const, instanceId: "owner" };
-  const localSandboxer = connection({ id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer" });
-  const remoteSandboxer = connection({
-    ...localSandboxer, configured: false, state: "disconnected",
-    sandboxerCliState: "cli_missing", detail: "Sandboxer CLI is not installed on the owner.",
+  const localFixtureCloud = connection({ id: "remote-fixture", displayName: "FixtureCloud", kind: "remote" });
+  const remoteFixtureCloud = connection({
+    ...localFixtureCloud, configured: false, state: "disconnected",
+    detail: "The owner has not connected this fixture server.",
   });
 
-  it("shows the owner's missing Sandboxer setup when the viewer is signed in", async () => {
+  it("shows the owner's missing FixtureCloud setup when the viewer is signed in", async () => {
     const listMcpConnections: NonNullable<DesktopApi["listMcpConnections"]> = vi.fn(async (request) => ({
-      connections: [request?.federationTarget?.instanceId === owner.instanceId ? remoteSandboxer : localSandboxer],
+      connections: [request?.federationTarget?.instanceId === owner.instanceId ? remoteFixtureCloud : localFixtureCloud],
     }));
     render(<McpAccessPanel
       backend="codex"
@@ -77,8 +77,8 @@ describe("McpAccessPanel", () => {
       onSelectionChange={vi.fn()}
     />);
 
-    expect(await screen.findByText(remoteSandboxer.detail!)).toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "Use Sandboxer in this thread" })).not.toBeInTheDocument();
+    expect(await screen.findByText(remoteFixtureCloud.detail!)).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Use FixtureCloud in this thread" })).not.toBeInTheDocument();
     expect(listMcpConnections).toHaveBeenCalledExactlyOnceWith({ federationTarget: owner });
   });
 
@@ -86,20 +86,20 @@ describe("McpAccessPanel", () => {
     let finishRemote!: (value: { connections: McpConnectionStatus[] }) => void;
     const remoteRead = new Promise<{ connections: McpConnectionStatus[] }>((resolve) => { finishRemote = resolve; });
     const listMcpConnections: NonNullable<DesktopApi["listMcpConnections"]> = vi.fn(async (request) =>
-      request?.federationTarget ? await remoteRead : { connections: [localSandboxer] });
+      request?.federationTarget ? await remoteRead : { connections: [localFixtureCloud] });
     const props = {
       backend: "codex" as const, desktopApi: { listMcpConnections },
       selection: { connectionIds: [], providerServersEnabled: true },
       onDismiss: vi.fn(), onSelectionChange: vi.fn(),
     };
     const view = render(<McpAccessPanel {...props} />);
-    await screen.findByRole("switch", { name: "Use Sandboxer in this thread" });
+    await screen.findByRole("switch", { name: "Use FixtureCloud in this thread" });
     view.rerender(<McpAccessPanel {...props} federationTarget={owner} />);
 
-    expect(screen.queryByRole("switch", { name: "Use Sandboxer in this thread" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Use FixtureCloud in this thread" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Reading connections");
-    await act(async () => { finishRemote({ connections: [remoteSandboxer] }); });
-    expect(await screen.findByText(remoteSandboxer.detail!)).toBeInTheDocument();
+    await act(async () => { finishRemote({ connections: [remoteFixtureCloud] }); });
+    expect(await screen.findByText(remoteFixtureCloud.detail!)).toBeInTheDocument();
   });
 
   it.each([false, true])("ignores a late viewer inventory result after switching to the owner (failure: %s)", async (fail) => {
@@ -110,7 +110,7 @@ describe("McpAccessPanel", () => {
       failLocal = reject;
     });
     const listMcpConnections: NonNullable<DesktopApi["listMcpConnections"]> = vi.fn(async (request) =>
-      request?.federationTarget ? { connections: [remoteSandboxer] } : await localRead);
+      request?.federationTarget ? { connections: [remoteFixtureCloud] } : await localRead);
     const props = {
       backend: "codex" as const, desktopApi: { listMcpConnections },
       selection: { connectionIds: [], providerServersEnabled: true },
@@ -118,14 +118,14 @@ describe("McpAccessPanel", () => {
     };
     const view = render(<McpAccessPanel {...props} />);
     view.rerender(<McpAccessPanel {...props} federationTarget={owner} />);
-    await screen.findByText(remoteSandboxer.detail!);
+    await screen.findByText(remoteFixtureCloud.detail!);
     await act(async () => {
       if (fail) failLocal(new Error("Viewer connection failed"));
-      else finishLocal({ connections: [localSandboxer] });
+      else finishLocal({ connections: [localFixtureCloud] });
     });
 
-    expect(screen.getByText(remoteSandboxer.detail!)).toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "Use Sandboxer in this thread" })).not.toBeInTheDocument();
+    expect(screen.getByText(remoteFixtureCloud.detail!)).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Use FixtureCloud in this thread" })).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 

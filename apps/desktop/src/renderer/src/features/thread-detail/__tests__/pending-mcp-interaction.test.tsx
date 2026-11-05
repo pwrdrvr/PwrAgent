@@ -46,11 +46,11 @@ afterEach(() => {
 
 describe("PendingMcpInteraction", () => {
   it("renders native tool argument objects and long display names without hiding credentials", () => {
-    const name = "pwragent-hosted-sandboxer-smoke-fixture";
+    const name = "pwragent-hosted-fixturecloud-smoke-fixture";
     const state = createMcpElicitationState({
       method: "mcpServer/elicitation/request",
       params: {
-        threadId: "thread-1", turnId: "turn-1", requestId: "native-1", serverName: "Sandboxer",
+        threadId: "thread-1", turnId: "turn-1", requestId: "native-1", serverName: "FixtureCloud",
         mode: "form", message: "Create a sandbox?", requestedSchema: { type: "object", properties: {} },
         _meta: {
           codex_approval_kind: "mcp_tool_call",
@@ -94,7 +94,7 @@ describe("PendingMcpInteraction", () => {
       method: "mcpServer/elicitation/request",
       params: {
         threadId: "thread-1", turnId: "turn-1", requestId: "mcp-gateway:server",
-        serverName: "Sandboxer", mode: "form", message: "Allow the agent to call exec on Sandboxer?",
+        serverName: "FixtureCloud", mode: "form", message: "Allow the agent to call exec on FixtureCloud?",
         requestedSchema: { type: "object", properties: {} },
         _meta: { pwragent_approval_kind: "mcp_tool_call", persist: ["session", "server-session"] },
       },
@@ -104,10 +104,10 @@ describe("PendingMcpInteraction", () => {
     expect(onSubmit).toHaveBeenLastCalledWith(state, "accept");
     fireEvent.click(screen.getByRole("button", { name: "Allow this tool for this conversation" }));
     expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", "session");
-    fireEvent.click(screen.getByRole("button", { name: "Allow Sandboxer for this conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow FixtureCloud for this conversation" }));
     expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", "server-session");
     rerender(<PendingMcpInteraction busy state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
-    expect(screen.getByRole("button", { name: "Allow Sandboxer for this conversation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Allow FixtureCloud for this conversation" })).toBeDisabled();
   });
 
   it.each([
@@ -540,7 +540,7 @@ describe("PendingMcpInteraction forge remember menu", () => {
       method: "mcpServer/elicitation/request",
       params: {
         threadId: "thread-1", turnId: "turn-1", requestId: "native-remember",
-        serverName: "Sandboxer", mode: "form", message: "Create a sandbox?",
+        serverName: "FixtureCloud", mode: "form", message: "Create a sandbox?",
         requestedSchema: { type: "object", properties: {} },
         _meta: {
           codex_approval_kind: "mcp_tool_call",

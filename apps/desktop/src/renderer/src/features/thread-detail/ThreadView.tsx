@@ -78,7 +78,6 @@ import {
   parseCodexAsyncQuestionReply,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
-  SANDBOXER_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
   resolveThreadTerminalCwd,
   withoutSupersededCodexEnvironmentActionRuns,
@@ -193,10 +192,6 @@ import {
   PwrGitConnectionPrompt,
   pwrGitConnectionIds,
 } from "./PwrGitConnectionPrompt";
-import {
-  SandboxerConnectionPrompt,
-  sandboxerConnectionIds,
-} from "./SandboxerConnectionPrompt";
 import {
   buildQuestionnaireResponse,
   type PendingQuestionnaireState,
@@ -4537,30 +4532,6 @@ export function ThreadView(props: ThreadViewProps) {
             },
           );
         }}
-      />
-      {/* A third-party service, advertised until set up. Its remote
-          owner's CLI is invisible here, so a remote thread shows none. */}
-      <SandboxerConnectionPrompt
-        backend={composerLaunchpad.backend}
-        desktopApi={props.desktopApi}
-        enabled={
-          composerLaunchpad.mcpConnectionIds?.includes(
-            SANDBOXER_MCP_CONNECTION_ID,
-          ) === true
-        }
-        remote={props.activeFederationTarget !== undefined}
-        onEnabledChange={async (enabled) => {
-          await props.onUpdateLaunchpad?.(
-            composerLaunchpad.directoryKey,
-            {
-              mcpConnectionIds: sandboxerConnectionIds(
-                composerLaunchpad.mcpConnectionIds,
-                enabled,
-              ),
-            },
-          );
-        }}
-        onOpenSettings={openMcpConnectionSettings}
       />
     </>
   ) : null;

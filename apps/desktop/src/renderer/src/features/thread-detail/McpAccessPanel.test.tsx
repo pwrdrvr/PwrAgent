@@ -543,7 +543,7 @@ describe("thread verification", () => {
 describe("remote MCP connection count", () => {
   const owner = { scope: "remote" as const, instanceId: "owner" };
   const threeConnections = {
-    connectionIds: ["rovo", "datadog", "sandboxer"],
+    connectionIds: ["rovo", "datadog", "fixturecloud"],
     providerServersEnabled: true,
   };
   function pendingRead() {

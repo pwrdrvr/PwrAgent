@@ -20,7 +20,7 @@ After this worktree's dependency installation, from the repository root:
 pnpm probe:electron-native-quit --samples 3
 ```
 
-Linux needs a working display, such as the repository's Sandboxer Xvfb setup.
+Linux needs a working display, such as Xvfb in the desktop E2E CI job.
 Windows and macOS need an interactive desktop. The probe opens visible windows.
 Do not run it against an operator's application profile.
 

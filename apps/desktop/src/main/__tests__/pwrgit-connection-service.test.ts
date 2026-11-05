@@ -1,4 +1,3 @@
-import { sandboxerStub } from "./helpers/sandboxer-stub";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,7 +46,6 @@ function create(options: ConstructorParameters<typeof PwrGitConnectionService>[0
   const directory = mkdtempSync(join(tmpdir(), "pwrgit-gateway-test-"));
   directories.push(directory);
   const gateway = new McpConnectionGatewayService({
-    sandboxer: sandboxerStub(),
     settings: options.settings ?? settings(),
     fetchFn: options.fetchFn ?? reachable,
     openExternal: options.openExternal,

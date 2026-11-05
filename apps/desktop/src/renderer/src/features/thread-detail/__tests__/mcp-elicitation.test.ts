@@ -345,7 +345,7 @@ describe("MCP elicitation helpers", () => {
   });
 
   it("shows long names and structured arguments while redacting nested credentials", () => {
-    const name = "pwragent-hosted-sandboxer-smoke-fixture";
+    const name = "pwragent-hosted-fixturecloud-smoke-fixture";
     expect(redactDisplayValue(name, { key: "name" })).toBe(name);
     expect(redactDisplayValue("Bearer private-value", { key: "name" })).toBe("[redacted]");
     expect(redactDisplayValue("short-secret", { key: "api_key" })).toBe("[redacted]");

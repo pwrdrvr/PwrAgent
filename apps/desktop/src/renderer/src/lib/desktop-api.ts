@@ -390,8 +390,6 @@ import type {
   ConnectPwrSnapResponse,
   ConnectPwrGitResponse,
   OpenPwrGitResponse,
-  OpenSandboxerLinkResponse,
-  SandboxerLinkTarget,
   PwrGitConnectionStatus,
   OpenPwrSnapResponse,
   PwrSnapConnectionStatus,
@@ -402,11 +400,9 @@ import type {
   SetMcpConnectionEnabledRequest,
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
-  SetSandboxerCleanupOnPrCloseRequest,
   SetLinearPasteImagesRequest,
   FetchLinearPastedImagesRequest,
   FetchLinearPastedImagesResponse,
-  SetSandboxerTransportRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
@@ -705,10 +701,6 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setMcpConnectionToolApproval?: (
     request: SetMcpConnectionToolApprovalRequest,
   ) => Promise<MutateMcpConnectionResponse>;
-  setSandboxerTransport?: (request: SetSandboxerTransportRequest) => Promise<MutateMcpConnectionResponse>;
-  setSandboxerCleanupOnPrClose?: (
-    request: SetSandboxerCleanupOnPrCloseRequest,
-  ) => Promise<MutateMcpConnectionResponse>;
   setLinearPasteImages?: (request: SetLinearPasteImagesRequest) => Promise<void>;
   /** Images in text pasted from Linear, read through a Linear connection. */
   fetchLinearPastedImages?: (
@@ -736,7 +728,6 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   connectPwrGit?: () => Promise<ConnectPwrGitResponse>;
   openPwrGit?: () => Promise<OpenPwrGitResponse>;
   openPwrGitDownload?: () => Promise<OpenPwrGitResponse>;
-  openSandboxerLink?: (target: SandboxerLinkTarget) => Promise<OpenSandboxerLinkResponse>;
   readPwrSuiteInstaller?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
   startPwrSuiteDownload?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
   cancelPwrSuiteDownload?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;

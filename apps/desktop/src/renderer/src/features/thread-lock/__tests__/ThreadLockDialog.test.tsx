@@ -17,7 +17,7 @@ function recentNotesApi(notes: string[] = RECENTS) {
 
 async function renderDialog(overrides: Partial<ThreadLockDialogProps> = {}) {
   const props: ThreadLockDialogProps = {
-    threadTitle: "Sandboxer remote compute",
+    threadTitle: "FixtureCloud remote compute",
     mode: "lock",
     onCancel: vi.fn(),
     onSubmit: vi.fn(async () => undefined),
@@ -62,7 +62,7 @@ describe("ThreadLockDialog recent notes", () => {
       <ThreadLockDialog
         mode="lock"
         recentNotesApi={api}
-        threadTitle="Sandboxer remote compute"
+        threadTitle="FixtureCloud remote compute"
         onCancel={vi.fn()}
         onSubmit={vi.fn(async () => undefined)}
       />,

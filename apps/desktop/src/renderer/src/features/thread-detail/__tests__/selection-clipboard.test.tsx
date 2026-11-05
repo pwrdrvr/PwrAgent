@@ -3,11 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
 const FEATURE_REQUEST = [
-  "**Sandboxer feature request**",
+  "**FixtureCloud feature request**",
   "",
-  "We want agents to drive Sandboxer only through MCP: no `sbx` install, no CLI calls.",
+  "We want agents to drive FixtureCloud only through MCP: no `sbx` install, no CLI calls.",
   "",
-  "1. **Hosted MCP endpoint.** Streamable HTTP at `https://mcp.sandboxer.com/`:",
+  "1. **Hosted MCP endpoint.** Streamable HTTP at `https://mcp.fixturecloud.com/`:",
   "   - OAuth sign-in on first use.",
   "   - Keep `sbx mcp` for people who want it local.",
   "2. **Full lifecycle tools in the MCP, so nothing needs the CLI:**",
@@ -70,7 +70,7 @@ function copy(container: HTMLElement) {
 describe("copying a transcript selection", () => {
   it("copies a whole rendered message back to its Markdown", () => {
     const { container } = render(<ThreadMarkdown text={FEATURE_REQUEST} />);
-    select(container, "Sandboxer feature request", "Items 1 and 2 matter most.");
+    select(container, "FixtureCloud feature request", "Items 1 and 2 matter most.");
 
     const { html, notPrevented, text } = copy(container);
 
@@ -122,13 +122,13 @@ describe("copying a transcript selection", () => {
     select(container, "We want agents", "Hosted MCP endpoint.", { endOffset: 0 });
 
     expect(copy(container).text).toBe(
-      "We want agents to drive Sandboxer only through MCP: no `sbx` install, no CLI calls.",
+      "We want agents to drive FixtureCloud only through MCP: no `sbx` install, no CLI calls.",
     );
   });
 
   it("leaves a selection inside one text node to the browser", () => {
     const { container } = render(<ThreadMarkdown text={FEATURE_REQUEST} />);
-    select(container, "drive Sandboxer", "only through");
+    select(container, "drive FixtureCloud", "only through");
 
     const { notPrevented, text } = copy(container);
 

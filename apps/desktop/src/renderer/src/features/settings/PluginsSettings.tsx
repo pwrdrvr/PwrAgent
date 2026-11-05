@@ -12,7 +12,6 @@ import type {
   McpConnectionSetupState,
   McpConnectionStatus,
   McpConnectionToolApproval,
-  SandboxerTransport,
   ProbeMcpConnectionResponse,
   PwrSnapConnectionStatus,
   PwrGitConnectionStatus,
@@ -65,14 +64,6 @@ import {
   type ManagedMcpToolInventory,
 } from "./mcp-server-health";
 import { SettingsCopyValue } from "./SettingsCopyValue";
-import {
-  SandboxerCompactRow,
-  SandboxerDrawerDetail,
-  SandboxerSetupAction,
-  SandboxerSetupDetail,
-  sandboxerCannotStart,
-  sandboxerNeedsSetup,
-} from "./SandboxerConnectionSetup";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 
@@ -102,7 +93,6 @@ type ConnectionPendingAction = {
     | "probe"
     | "linearPasteImages"
     | "remove"
-    | "sandboxerCleanup"
     | "testLocal"
     | "toolApproval"
     | "update";
@@ -580,7 +570,7 @@ export function PluginsSettings(props: {
     void loadConnections();
   }, [loadConnections, loadServers]);
 
-  // A connection an agent added, or a Sandboxer answer that changed, shows
+  // A connection an agent added, or a connection status that changed, shows
   // without a manual refresh. This pane's own actions reload already; the
   // extra read is answered from main's caches.
   useEffect(
@@ -1256,37 +1246,6 @@ export function PluginsSettings(props: {
     }
   };
 
-  const setSandboxerCleanupOnPrClose = async (
-    connection: McpConnectionStatus,
-    enabled: boolean,
-  ) => {
-    if (
-      connectionPending
-      || !props.desktopApi?.setSandboxerCleanupOnPrClose
-    ) return;
-    setConnectionPending({
-      kind: "sandboxerCleanup",
-      connectionId: connection.id,
-    });
-    try {
-      await props.desktopApi.setSandboxerCleanupOnPrClose({ enabled });
-      await loadConnections();
-      setConnectionNotice({
-        kind: "success",
-        text: enabled
-          ? "PwrAgent stops or deletes a thread's sandboxes once all of its PRs merge or close."
-          : "PwrAgent leaves sandboxes running when a thread's PRs merge or close.",
-      });
-    } catch (error) {
-      setConnectionNotice({
-        kind: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setConnectionPending(undefined);
-    }
-  };
-
   const setLinearPasteImages = async (enabled: boolean) => {
     if (connectionPending || !props.desktopApi?.setLinearPasteImages) return;
     setConnectionPending({ kind: "linearPasteImages" });
@@ -1525,13 +1484,6 @@ export function PluginsSettings(props: {
                     props.desktopApi?.setMcpConnectionToolApproval
                       ? (toolApproval) =>
                           void setConnectionToolApproval(connection, toolApproval)
-                      : undefined
-                  }
-                  onSandboxerCleanupOnPrCloseChange={
-                    connection.kind === "sandboxer"
-                    && props.desktopApi?.setSandboxerCleanupOnPrClose
-                      ? (enabled) =>
-                          void setSandboxerCleanupOnPrClose(connection, enabled)
                       : undefined
                   }
                   onChanged={() => void loadConnections()}
@@ -2316,8 +2268,6 @@ function ManagedMcpConnectionRow(props: {
   onAvailabilityChange?: (enabled: boolean) => void;
   onSelectForNewThreadsChange?: (selectForNewThreads: boolean) => void;
   onToolApprovalChange?: (toolApproval: McpConnectionToolApproval) => void;
-  /** Sandboxer only. */
-  onSandboxerCleanupOnPrCloseChange?: (enabled: boolean) => void;
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;
@@ -2329,11 +2279,7 @@ function ManagedMcpConnectionRow(props: {
   const toolApprovalLabelId = useId();
   const toolApprovalHintId = useId();
   const [expanded, setExpanded] = useState(false);
-  const [sandboxerSetupOpen, setSandboxerSetupOpen] = useState(false);
   const toolApproval = connection.toolApproval ?? "auto";
-  const sandboxer = connection.kind === "sandboxer";
-  const localSandboxer = sandboxer && connection.authMode === "local_cli";
-  const [transportBusy, setTransportBusy] = useState(false);
   const stdio = connection.kind === "stdio";
   const ipc = isMcpIpcUrl(connection.serverUrl);
   const app = connection.kind === "pwrgit"
@@ -2392,53 +2338,7 @@ function ManagedMcpConnectionRow(props: {
       .length > 0;
   // A sign-in in flight holds this row only. Its switches wait for it, since
   // it replaces the credentials they describe; every other row stays live.
-  const disabled = props.disabled || props.authorizing || transportBusy;
-  // Setup happens in a terminal, so the operator comes back to this window
-  // when it is done. Checking again then saves a trip to Refresh status. Only
-  // while setup is unfinished: a refresh retires the connection's sessions.
-  const sandboxerSetupPending = localSandboxer && sandboxerNeedsSetup(connection);
-  const refreshSandboxerRef = useRef(props.onAuthorize);
-  refreshSandboxerRef.current = props.onAuthorize;
-  const authorizing = props.authorizing;
-  const changeSandboxerTransport = async (transport: SandboxerTransport, connect = false) => {
-    const change = props.desktopApi?.setSandboxerTransport;
-    if (!change || transportBusy) return;
-    setTransportBusy(true);
-    setSandboxerSetupOpen(true);
-    try {
-      await change({ transport });
-      props.onChanged();
-      if (connect) props.onAuthorize();
-    } catch (cause) {
-      props.onNotice({ kind: "error", text: cause instanceof Error ? cause.message : String(cause) });
-    } finally {
-      setTransportBusy(false);
-    }
-  };
-  const connectHosted = props.desktopApi?.setSandboxerTransport
-    ? () => void changeSandboxerTransport("hosted", true)
-    : undefined;
-  useEffect(() => {
-    if (!sandboxerSetupPending || authorizing) return;
-    const refresh = () => refreshSandboxerRef.current();
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, [authorizing, sandboxerSetupPending]);
-  if (
-    localSandboxer
-    && connection.sandboxerCliState === "cli_missing"
-    && !sandboxerSetupOpen
-  ) {
-    return (
-      <SandboxerCompactRow
-        desktopApi={props.desktopApi}
-        onNotice={props.onNotice}
-        disabled={disabled}
-        onConnect={connectHosted}
-        onSetUp={() => setSandboxerSetupOpen(true)}
-      />
-    );
-  }
+  const disabled = props.disabled || props.authorizing;
   const toolsMeta = describeManagedMcpConnectionTools(setup, inventory);
   return (
     <article
@@ -2459,16 +2359,13 @@ function ManagedMcpConnectionRow(props: {
             {connection.displayName}
           </span>
           <span className="settings-mcp-row__meta">
-            {sandboxer
-              ? listable ? `remote Linux compute \u00b7 ${toolsMeta}` : "remote Linux compute"
-              : stdio
+            {stdio
                 ? listable ? `local command \u00b7 ${toolsMeta}` : "local command"
                 : toolsMeta}
           </span>
         </button>
         <div className="settings-mcp-row__chips">
-          {AVAILABILITY_CHIP_STATES.has(setup.state)
-            || (sandboxer && sandboxerCannotStart(connection)) ? (
+          {AVAILABILITY_CHIP_STATES.has(setup.state) ? (
             <span className={`settings-pathrow__chip${chipToneClass(setup.tone)}`}>
               {setup.headline}
             </span>
@@ -2497,8 +2394,7 @@ function ManagedMcpConnectionRow(props: {
           ) : null}
         </div>
         <div className="settings-mcp-row__actions">
-          {/* Nothing to test until the CLI is signed in to a usable account. */}
-          {sandboxer && !listable ? null : (
+
             <button
               className="button button--secondary"
               disabled={disabled || !listable || inventory?.status === "loading" || inventory?.status === "unavailable"}
@@ -2511,14 +2407,14 @@ function ManagedMcpConnectionRow(props: {
             >
               {testResult?.status === "testing" ? "Testing..." : "Test connection"}
             </button>
-          )}
+
           {/*
             * The wait stands where the Authorize the operator clicked was,
             * with its way out beside it. It used to be a disabled "Working..."
             * here and a Stop waiting at the top of the card, which on a long
             * list was a screen away from the row it stopped.
             */}
-          {props.authorizing && !localSandboxer ? (
+          {props.authorizing ? (
             <SignInWait
               name={connection.displayName}
               title={`Stop waiting for ${connection.displayName}. The sign-in page already open in your browser stops working; start again for a fresh one.`}
@@ -2526,29 +2422,7 @@ function ManagedMcpConnectionRow(props: {
             />
           ) : (
             <>
-              {localSandboxer ? (
-                <>
-                  {!connection.configured && connectHosted ? (
-                    <button className="button button--secondary" disabled={disabled} type="button" onClick={connectHosted}>
-                      Connect Sandboxer
-                    </button>
-                  ) : null}
-                  <SandboxerSetupAction
-                    connection={connection}
-                    desktopApi={props.desktopApi}
-                    disabled={disabled}
-                    onNotice={props.onNotice}
-                  />
-                  <button
-                    className="button button--secondary"
-                    disabled={disabled}
-                    type="button"
-                    onClick={props.onAuthorize}
-                  >
-                    {props.authorizing ? "Checking status..." : "Refresh status"}
-                  </button>
-                </>
-              ) : app ? (
+              {app ? (
                 <LocalConnectionActions
                   app={app}
                   busy={props.busy}
@@ -2577,7 +2451,7 @@ function ManagedMcpConnectionRow(props: {
                 >
                   {props.busy
                     ? "Working..."
-                    : connection.configured ? "Reauthorize" : sandboxer ? "Connect Sandboxer" : "Authorize"}
+                    : connection.configured ? "Reauthorize" : "Authorize"}
                 </button>
               )}
               {/*
@@ -2586,8 +2460,7 @@ function ManagedMcpConnectionRow(props: {
                 * by side with no way to tell which one you wanted.
                 */}
               {connection.configured
-                && (ipc || (connection.authMode !== "local_cli"
-                  && connection.authMode !== "none")) ? (
+                && (ipc || connection.authMode !== "none") ? (
                 <button
                   className="button button--ghost"
                   disabled={props.disabled}
@@ -2647,43 +2520,31 @@ function ManagedMcpConnectionRow(props: {
           * selectable text in a row full of buttons, which in practice means
           * a drag that catches the row instead.
           */}
-        {sandboxer ? (
-          // The launched command moves to the drawer: nobody pastes it.
-          <SandboxerSetupDetail
-            connection={connection}
+        {connection.stdio ? (
+          <SettingsCopyValue
+            compact
             desktopApi={props.desktopApi}
-            detail={setup.detail}
-            onNotice={props.onNotice}
+            label={`${connection.displayName} command`}
+            value={formatMcpCommandLine(connection.stdio)}
           />
         ) : (
-          <>
-            {connection.stdio ? (
-              <SettingsCopyValue
-                compact
-                desktopApi={props.desktopApi}
-                label={`${connection.displayName} command`}
-                value={formatMcpCommandLine(connection.stdio)}
-              />
-            ) : (
-              <SettingsCopyValue
-                compact
-                desktopApi={props.desktopApi}
-                label={`${connection.displayName} MCP URL`}
-                value={connection.serverUrl}
-              />
-            )}
-            {/*
-              * While it waits, the remedy line would still be telling the operator
-              * to authorize -- the thing they just did. It says where the sign-in
-              * actually is instead.
-              */}
-            <p className="settings-mcp-row__state">
-              {props.authorizing
-                ? `Finish signing in to ${connection.displayName} in your browser.`
-                : setup.detail}
-            </p>
-          </>
+          <SettingsCopyValue
+            compact
+            desktopApi={props.desktopApi}
+            label={`${connection.displayName} MCP URL`}
+            value={connection.serverUrl}
+          />
         )}
+        {/*
+          * While it waits, the remedy line would still be telling the operator
+          * to authorize -- the thing they just did. It says where the sign-in
+          * actually is instead.
+          */}
+        <p className="settings-mcp-row__state">
+          {props.authorizing
+            ? `Finish signing in to ${connection.displayName} in your browser.`
+            : setup.detail}
+        </p>
         {props.authorizationError ? (
           <p
             className="settings-mcp-row__error settings-mcp-row__error--sign-in"
@@ -2733,30 +2594,7 @@ function ManagedMcpConnectionRow(props: {
                     : "Reading tools..."}
             </p>
           )}
-          {sandboxer ? (
-            <SandboxerDrawerDetail
-              hosted={!localSandboxer}
-              desktopApi={props.desktopApi}
-              onNotice={props.onNotice}
-            />
-          ) : null}
         </div>
-      ) : null}
-      {sandboxer && props.desktopApi?.setSandboxerTransport ? (
-        <label className="settings-mcp-row__state">
-          Connection method
-          <Select
-            aria-label="Sandboxer connection method"
-            className="settings-select settings-select--chip"
-            disabled={disabled}
-            value={localSandboxer ? "local_cli" : "hosted"}
-            options={[
-              { value: "hosted", label: "Hosted · browser sign-in" },
-              { value: "local_cli", label: "Local CLI · existing login or API key" },
-            ]}
-            onChange={(value) => void changeSandboxerTransport(value as SandboxerTransport)}
-          />
-        </label>
       ) : null}
       {/*
         * The two switches answer different questions, and side by side with
@@ -2821,26 +2659,6 @@ function ManagedMcpConnectionRow(props: {
               </span>
             </div>
           ) : null}
-          {sandboxer && props.onSandboxerCleanupOnPrCloseChange ? (
-            <div className="settings-mcp-row__policy-item">
-              <SettingsSwitch
-                // Absent reads as on: an older owner answers without it.
-                checked={connection.sandboxerCleanupOnPrClose !== false}
-                disabled={disabled}
-                label="Clean up Sandboxer sandboxes when PRs close"
-                onChange={props.onSandboxerCleanupOnPrCloseChange}
-              />
-              <span className="settings-mcp-row__policy-text">
-                <span className="settings-mcp-row__policy-label">
-                  Clean up when PRs close
-                </span>
-                <span className="settings-mcp-row__policy-hint">
-                  Delete each sandbox a thread created once all of its PRs
-                  merge or close. Without a delete tool, PwrAgent stops it.
-                </span>
-              </span>
-            </div>
-          ) : null}
           {/*
             * A choice of three, not a switch: each mode is a different
             * question about every tool, and its line under the field says
@@ -2863,9 +2681,7 @@ function ManagedMcpConnectionRow(props: {
                   onChange={props.onToolApprovalChange}
                 />
                 <span className="settings-mcp-row__policy-hint" id={toolApprovalHintId}>
-                  {sandboxer && toolApproval === "approve"
-                    ? "Selecting Sandboxer in a conversation allows its sandbox tools, including commands and file writes. Creating or resuming starts billing."
-                    : TOOL_APPROVAL_OPTIONS.find((option) => option.value === toolApproval)?.description}
+                  {TOOL_APPROVAL_OPTIONS.find((option) => option.value === toolApproval)?.description}
                   {" "}Full Access threads never ask.
                 </span>
               </span>

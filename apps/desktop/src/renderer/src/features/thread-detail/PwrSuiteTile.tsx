@@ -33,8 +33,7 @@ export type PwrSuiteTileAbout = {
 
 /**
  * One launchpad tile for a sister app: icon, name, one line, one action.
- * A third-party service that PwrAgent integrates (Sandboxer) uses the same
- * tile, passing its own site instead of a PwrSuite app id.
+ * A tile can pass its own site instead of a PwrSuite app id.
  *
  * The tiles are ads for the other PwrSuite apps, so they stay one line tall.
  * Everything the old cards said in a paragraph now sits behind the Info

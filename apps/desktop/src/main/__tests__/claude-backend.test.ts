@@ -3837,13 +3837,13 @@ describe("Claude transcript fidelity", () => {
   });
 
   it("names an MCP call's tool and keeps its arguments and result inside the row", async () => {
-    const sandboxer = "mcp__pwragent_builtin_sandboxer_e96ab96f1443b1279de4ece773af16df__stop_sandbox";
+    const fixturecloud = "mcp__pwragent_builtin_fixturecloud_e96ab96f1443b1279de4ece773af16df__stop_sandbox";
     const f = await fixture(async function* () {
       yield init;
       yield call("search-1", "ToolSearch", { query: "select:stop_sandbox" });
       yield { type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "search-1",
-        content: [{ type: "tool_reference", tool_name: sandboxer }] }] } } as SDKMessage;
-      yield call("stop-1", sandboxer, { sandboxId: "sb_fixture" });
+        content: [{ type: "tool_reference", tool_name: fixturecloud }] }] } } as SDKMessage;
+      yield call("stop-1", fixturecloud, { sandboxId: "sb_fixture" });
       yield answer("stop-1", "{\"status\":\"archiving\"}");
       yield result;
     });
@@ -3857,20 +3857,20 @@ describe("Claude transcript fidelity", () => {
     expect(group.details).toEqual([
       expect.objectContaining({
         id: "search-1", kind: "command", label: "ToolSearch", status: "completed",
-        command: expect.objectContaining({ rawCommand: "ToolSearch", source: "tool", output: "sandboxer/stop_sandbox" }),
+        command: expect.objectContaining({ rawCommand: "ToolSearch", source: "tool", output: "fixturecloud/stop_sandbox" }),
       }),
       expect.objectContaining({
-        id: "stop-1", kind: "command", label: "Used MCP sandboxer/stop_sandbox", status: "completed",
+        id: "stop-1", kind: "command", label: "Used MCP fixturecloud/stop_sandbox", status: "completed",
         command: {
-          displayCommand: "sandboxer/stop_sandbox\n{\n  \"sandboxId\": \"sb_fixture\"\n}",
-          rawCommand: "sandboxer/stop_sandbox", source: "tool", output: "{\"status\":\"archiving\"}",
+          displayCommand: "fixturecloud/stop_sandbox\n{\n  \"sandboxId\": \"sb_fixture\"\n}",
+          rawCommand: "fixturecloud/stop_sandbox", source: "tool", output: "{\"status\":\"archiving\"}",
         },
       }),
     ]);
     const completed = f.events.find((event) => event.notification.method === "item/completed"
       && getNotificationItem(event.notification.params)?.id === "stop-1");
     expect(buildLiveToolDetails(getNotificationItem(completed!.notification.params)!)).toEqual([expect.objectContaining({
-      command: expect.objectContaining({ rawCommand: "sandboxer/stop_sandbox", output: "{\"status\":\"archiving\"}" }),
+      command: expect.objectContaining({ rawCommand: "fixturecloud/stop_sandbox", output: "{\"status\":\"archiving\"}" }),
     })]);
   });
 

@@ -69,7 +69,7 @@ export function isActionRunsDock(value: unknown): value is ActionRunsDock {
 }
 
 /**
- * Where the new-thread connection cards (PwrGit, PwrSnap, Sandboxer) render:
+ * Where the new-thread connection cards (PwrGit, PwrSnap) render:
  * in the launchpad above the composer (default), or only in the context
  * rail's Connections tab. Persisted to `config.toml`
  * `[ui] launchpad_connections_dock`.

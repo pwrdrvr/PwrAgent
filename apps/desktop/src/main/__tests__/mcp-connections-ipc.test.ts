@@ -109,8 +109,6 @@ describe("MCP connection IPC", () => {
     connect: vi.fn(),
     openApplication: vi.fn(),
     openDownload: vi.fn(),
-    openSandboxerLink: vi.fn(async () => ({ opened: true })),
-    setSandboxerTransport: vi.fn(async () => managedConnection),
     testStdioConnection: vi.fn(async () => ({
       ok: true as const,
       command: "/opt/fixture/bin/server",
@@ -227,10 +225,10 @@ describe("MCP connection IPC", () => {
       registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
       // Registering again replaces the subscription rather than doubling it.
       registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
-      announce?.({ connectionIds: ["builtin:sandboxer"] });
+      announce?.({ connectionIds: ["remote-fixture"] });
       expect(live.send).toHaveBeenCalledOnce();
       expect(live.send).toHaveBeenCalledWith(MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL, {
-        connectionIds: ["builtin:sandboxer"],
+        connectionIds: ["remote-fixture"],
       });
       expect(closed.send).not.toHaveBeenCalled();
 
@@ -239,19 +237,6 @@ describe("MCP connection IPC", () => {
     } finally {
       mocks.subscribers = [];
     }
-  });
-
-  it("passes a local list's Sandboxer max age through, never fresher than a second", async () => {
-    const { MCP_CONNECTION_LIST_CHANNEL } = await import("../../shared/ipc");
-    registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
-    const list = mocks.handlers.get(MCP_CONNECTION_LIST_CHANNEL)!;
-
-    await list({ sender: { id: 18 } }, { sandboxerStatusMaxAgeMs: 2_000 });
-    expect(service.listConnections).toHaveBeenLastCalledWith({ sandboxerStatusMaxAgeMs: 2_000 });
-    await list({ sender: { id: 18 } }, { sandboxerStatusMaxAgeMs: 0 });
-    expect(service.listConnections).toHaveBeenLastCalledWith({ sandboxerStatusMaxAgeMs: 1_000 });
-    await list({ sender: { id: 18 } }, {});
-    expect(service.listConnections).toHaveBeenLastCalledWith({});
   });
 
   it("surfaces an unavailable owner without falling back to local connections", async () => {
@@ -447,41 +432,6 @@ describe("MCP connection IPC", () => {
       ),
     ).rejects.toThrow(/machine that owns this window/i);
     expect(service.testStdioConnection).not.toHaveBeenCalled();
-  });
-
-  it("validates Sandboxer transport and restricts changes to a local window", async () => {
-    service.setSandboxerTransport.mockClear();
-    registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
-    const change = mocks.handlers.get("mcp-connection:set-sandboxer-transport")!;
-    await expect(change({ sender: remoteSender }, { transport: "hosted" })).rejects.toThrow("machine that owns");
-    await expect(change({ sender: { id: 18 } }, { transport: "arbitrary" })).rejects.toThrow("transport");
-    expect(service.setSandboxerTransport).not.toHaveBeenCalled();
-    await change({ sender: { id: 18 } }, { transport: "hosted" });
-    expect(service.setSandboxerTransport).toHaveBeenCalledWith("hosted");
-  });
-
-  it("opens Sandboxer pages only from a local window, and only known ones", async () => {
-    const { MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL } = await import("../../shared/ipc");
-    service.openSandboxerLink.mockClear();
-    registerMcpConnectionIpcHandlers(
-      service as never,
-      pwrGit as never,
-      installer as never,
-    );
-    const open = mocks.handlers.get(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL)!;
-
-    // The dashboard link signs in with this machine's CLI login.
-    await expect(open({ sender: remoteSender }, { target: "dashboard" })).resolves.toMatchObject({
-      opened: false,
-    });
-    await expect(open({ sender: { id: 18 } }, { target: "https://example.com" })).resolves.toMatchObject({
-      opened: false,
-      error: "Unknown Sandboxer page.",
-    });
-    await expect(open({ sender: { id: 18 } }, undefined)).resolves.toMatchObject({ opened: false });
-    expect(service.openSandboxerLink).not.toHaveBeenCalled();
-    await expect(open({ sender: { id: 18 } }, { target: "pricing" })).resolves.toEqual({ opened: true });
-    expect(service.openSandboxerLink).toHaveBeenCalledWith("pricing");
   });
 
   it("refuses installer downloads from a remote window and unknown apps", async () => {

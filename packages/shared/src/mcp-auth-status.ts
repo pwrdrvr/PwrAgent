@@ -1,6 +1,5 @@
 import type { CodexMcpAuthStatus } from "./contracts/agent";
 import {
-  isSandboxerAccountLimited,
   type McpConnectionStatus,
 } from "./contracts/mcp-connections";
 
@@ -94,7 +93,7 @@ export function formatMcpAuthStatus(status: CodexMcpAuthStatus): string {
  * PwrAgent here, Codex there.
  */
 export function describeMcpConnectionAuth(
-  connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "sandboxerCliState" | "detail">>,
+  connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "detail">>,
 ): McpAuthStatusPresentation {
   if (connection.authMode === "none") {
     // A local command signs in to nothing. What it can be missing is a
@@ -112,20 +111,6 @@ export function describeMcpConnectionAuth(
           tone: "warn",
           canSignIn: false,
         };
-  }
-  if (connection.authMode === "local_cli") {
-    // An account that can't start a machine is still signed in. Its own
-    // chip names what the account lacks; this one says the login is fine.
-    const cliState = connection.sandboxerCliState;
-    const signedIn = connection.configured || isSandboxerAccountLimited(cliState);
-    return {
-      label: cliState === "cli_missing" ? "CLI missing"
-        : cliState === "unavailable" ? "Status unavailable"
-        : signedIn ? "Signed in" : "Not signed in",
-      description: connection.detail ?? "Uses the Sandboxer CLI login on this machine.",
-      tone: signedIn ? "ok" : "warn",
-      canSignIn: false,
-    };
   }
   const signedIn =
     connection.configured

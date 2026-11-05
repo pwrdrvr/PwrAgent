@@ -4,104 +4,8 @@ import { isAcpBackendId } from "./navigation";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 export const PWRGIT_MCP_CONNECTION_ID = "pwrgit" as const;
-// The colon cannot appear in a stored custom ID. Keep legacy `sandboxer`
-// connections, credentials, and thread selections on their original identity.
-export const SANDBOXER_MCP_CONNECTION_ID = "builtin:sandboxer" as const;
-
-// Docker also installs an unrelated `sbx`. Never resolve this name on PATH.
-export const SANDBOXER_CLI_PATH = "/usr/local/bin/sbx";
-export const SANDBOXER_MCP_ARGS = ["mcp", "--type", "small", "--ttl", "1800"] as const;
-/** Exactly what the gateway launches; Settings shows this line verbatim. */
-export const SANDBOXER_MCP_LAUNCH_ARGS = [...SANDBOXER_MCP_ARGS, "--no-update"] as const;
-// `onboard` signs in an existing account or creates one, then asks only for
-// what the account still lacks (the plan checkout). `login` only signs in, so
-// a new account would reach "Signed in" and still fail its first create.
-export const SANDBOXER_SETUP_COMMAND = `${SANDBOXER_CLI_PATH} onboard`;
-
-/** Hosted OAuth or the optional existing local CLI login. */
-export type SandboxerTransport = "hosted" | "local_cli";
-
-export function isSandboxerTransport(value: unknown): value is SandboxerTransport {
-  return value === "hosted" || value === "local_cli";
-}
-
-export const SANDBOXER_MCP_URL = "https://sandboxer.com/mcp";
-
-export type SetSandboxerTransportRequest = { transport: SandboxerTransport };
-
-/** Remote compute today; a remote PwrAgent runtime is reserved for later work. */
-export type SandboxerRole = "compute" | "remote_agent";
-/**
- * What `sbx status --json` says about this machine's Sandboxer setup.
- *
- * Signed in is not ready: an account without a plan, with a card that can't
- * be charged, or with no machine time left signs in fine and then fails its
- * first create. Those states come from the status's `plan.canStart`.
- */
-export type SandboxerCliState =
-  | "signed_in"
-  | "not_signed_in"
-  | "no_plan"
-  | "billing_issue"
-  | "out_of_credit"
-  | "cannot_start"
-  | "cli_missing"
-  | "unavailable";
-
-/** Signed in, but Sandboxer will not start a machine for this account. */
-export function isSandboxerAccountLimited(state: SandboxerCliState | undefined): boolean {
-  return state === "no_plan"
-    || state === "billing_issue"
-    || state === "out_of_credit"
-    || state === "cannot_start";
-}
-
-/**
- * The account the local CLI login bills. Shown in Settings only; federation
- * strips it, and no agent tool returns it.
- */
-export type SandboxerAccountSummary = {
-  email?: string;
-  /** The plan's monthly price, as the CLI reports it. */
-  planDollars?: number;
-  creditBalanceHours?: number;
-};
-
-/** Sandboxer pages Settings can open. Main maps each to a fixed URL. */
-export const SANDBOXER_LINK_TARGETS = [
-  "home",
-  "pricing",
-  "quickstart",
-  "docs_mcp",
-  "docs_machines",
-  "docs_billing",
-  "dashboard",
-] as const;
-
-export type SandboxerLinkTarget = (typeof SANDBOXER_LINK_TARGETS)[number];
-
-export function isSandboxerLinkTarget(value: unknown): value is SandboxerLinkTarget {
-  return SANDBOXER_LINK_TARGETS.some((target) => target === value);
-}
-
-export const SANDBOXER_ORIGIN = "https://sandboxer.com";
-
-/**
- * Every fixed Sandboxer page, for main's link handler and the launchpad
- * tile. The local dashboard link comes from the CLI.
- */
-export const SANDBOXER_LINKS: Readonly<Record<Exclude<SandboxerLinkTarget, "dashboard">, string>> = {
-  home: `${SANDBOXER_ORIGIN}/`,
-  pricing: `${SANDBOXER_ORIGIN}/pricing`,
-  quickstart: `${SANDBOXER_ORIGIN}/docs/quickstart`,
-  docs_mcp: `${SANDBOXER_ORIGIN}/docs/mcp`,
-  docs_machines: `${SANDBOXER_ORIGIN}/docs/machines`,
-  docs_billing: `${SANDBOXER_ORIGIN}/docs/billing`,
-};
-
-export type OpenSandboxerLinkRequest = { target: SandboxerLinkTarget };
-export type OpenSandboxerLinkResponse = { opened: boolean; error?: string };
-
+/** Tombstone for selections and responses from older gateway owners. */
+export const RETIRED_COMPUTE_CONNECTION_ID = "builtin:sandboxer" as const;
 /**
  * Shown on the New thread PwrSnap band next to the Connect to PwrSnap button
  * after PwrSnap rejected the stored session.
@@ -112,7 +16,6 @@ export const PWRSNAP_SESSION_REVOKED_DETAIL =
 export const MCP_CONNECTION_IDS = [
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
-  SANDBOXER_MCP_CONNECTION_ID,
 ] as const;
 /**
  * Any connection id. Remote connections are slugged from their display name,
@@ -128,10 +31,10 @@ export type BuiltInMcpConnectionId = (typeof MCP_CONNECTION_IDS)[number];
  * is nothing to sign in to, and any secrets it needs travel as environment
  * variables PwrAgent stores encrypted.
  */
-export type McpConnectionAuthMode = "oauth" | "local_cli" | "none";
+export type McpConnectionAuthMode = "oauth" | "none";
 
 /** `stdio` is an operator-configured local command (an MCP stdio server). */
-export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "sandboxer" | "stdio";
+export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "stdio";
 
 /** One environment variable a local command server receives. */
 export type McpStdioEnvironmentEntry = {
@@ -197,8 +100,6 @@ export type McpConnectionRecord = {
   serverUrl: string;
   authMode: McpConnectionAuthMode;
   kind: McpConnectionKind;
-  /** Only Sandboxer uses this domain role. remote_agent is not implemented. */
-  sandboxerRole?: SandboxerRole;
   /**
    * The launch of a `stdio` connection. Absent for every other kind, and also
    * absent on a federation peer's copy: the command, its folder and its
@@ -236,15 +137,6 @@ export type McpConnectionRecord = {
    */
   toolApproval?: McpConnectionToolApproval;
   /**
-   * Only the Sandboxer connection uses this. When true, PwrAgent stops or
-   * deletes the sandboxes a thread created through this connection once
-   * every PR attached to that thread has merged or closed.
-   *
-   * Optional because an owner broker from an older build answers without it;
-   * absent reads as `true`.
-   */
-  sandboxerCleanupOnPrClose?: boolean;
-  /**
    * Present only on a connection to Linear's hosted MCP server: whether
    * images in text pasted from Linear are attached to the message, read
    * through this connection once their links expire. One profile-wide
@@ -277,8 +169,6 @@ export type McpConnectionRuntimeState =
 
 export type McpConnectionStatus = McpConnectionRecord & {
   state: McpConnectionRuntimeState;
-  sandboxerCliState?: SandboxerCliState;
-  sandboxerAccount?: SandboxerAccountSummary;
   configured: boolean;
   detail?: string;
   /**
@@ -303,13 +193,13 @@ export type McpConnectionStatus = McpConnectionRecord & {
 };
 
 /**
- * A connection list for a federation peer. The account a local CLI login
- * bills (its email and balance) stays on the machine that holds the login.
+ * A connection list for a federation peer. Local command paths, variables
+ * and failure output stay on the machine that runs the command.
  */
 export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpConnectionStatus[] {
   // A local command's executable path, folder and variables describe the
   // owner's machine; a peer only ever needs the name and the switch.
-  return connections.map(({ sandboxerAccount: _account, stdio: _stdio, ...connection }) => {
+  return connections.map(({ stdio: _stdio, ...connection }) => {
     const failure = connection.discovery?.lastFailure;
     if (!failure?.output) return connection;
     const { output: _output, ...lastFailure } = failure;
@@ -319,12 +209,6 @@ export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpCo
 
 export type ListMcpConnectionsRequest = {
   federationTarget?: FederationRemoteTarget;
-  /**
-   * Accept a cached Sandboxer status only this recent, in milliseconds.
-   * Absent uses the ordinary cache. An owner broker from an older build
-   * ignores it.
-   */
-  sandboxerStatusMaxAgeMs?: number;
 };
 
 export type ListMcpConnectionsResponse = {
@@ -342,7 +226,7 @@ export type ListMcpConnectionsResponse = {
 
 /**
  * Pushed to this instance's windows when a connection's status may have
- * changed: a setting, a sign-in, a removal, or a Sandboxer CLI answer that
+ * changed: a setting, a sign-in, a removal, or a connection status that
  * differs from the last one. Carries ids only; re-read the list for status.
  * A change made from another PwrAgent instance on the same profile is not
  * announced here, so status reads still happen on window focus.
@@ -412,11 +296,6 @@ export type SetMcpConnectionSelectForNewThreadsRequest = {
   selectForNewThreads: boolean;
 };
 
-/** See `McpConnectionRecord.sandboxerCleanupOnPrClose`. */
-export type SetSandboxerCleanupOnPrCloseRequest = {
-  enabled: boolean;
-};
-
 /** See `McpConnectionRecord.linearPasteImages`. */
 export type SetLinearPasteImagesRequest = {
   enabled: boolean;
@@ -476,7 +355,8 @@ export function mcpConnectionIdsForNewThread(
 ): McpConnectionId[] {
   return connections
     .filter((connection) =>
-      connection.selectForNewThreads === true
+      connection.id !== RETIRED_COMPUTE_CONNECTION_ID
+      && connection.selectForNewThreads === true
       && connection.enabled
       && connection.configured
       && connection.state !== "disconnected"
@@ -536,7 +416,6 @@ export function isBuiltInMcpConnectionId(
 export const MCP_CONNECTION_DISPLAY_NAMES: Record<BuiltInMcpConnectionId, string> = {
   [PWRSNAP_MCP_CONNECTION_ID]: "PwrSnap",
   [PWRGIT_MCP_CONNECTION_ID]: "PwrGit",
-  [SANDBOXER_MCP_CONNECTION_ID]: "Sandboxer",
 };
 
 /**
@@ -683,9 +562,9 @@ export function canIsolateMcpProviderServers(
   return backend === "codex";
 }
 
-/** A built-in connection reached through a local application or CLI. */
+/** A built-in connection reached through a local application. */
 export function isLocalMcpConnectionKind(kind: McpConnectionKind): boolean {
-  return kind === "pwrsnap" || kind === "pwrgit" || kind === "sandboxer";
+  return kind === "pwrsnap" || kind === "pwrgit";
 }
 
 /**
@@ -743,14 +622,6 @@ export type ResolveMcpConnectionSetupInput = {
   localAvailability?: McpConnectionAvailability;
 };
 
-// Signed in, but every create would fail. The chip names the reason.
-const SANDBOXER_ACCOUNT_HEADLINES: Partial<Record<SandboxerCliState, string>> = {
-  no_plan: "No plan",
-  billing_issue: "Billing issue",
-  out_of_credit: "Out of credit",
-  cannot_start: "Can't start",
-};
-
 export function resolveMcpConnectionSetup(
   input: ResolveMcpConnectionSetupInput,
 ): McpConnectionSetupSummary {
@@ -781,31 +652,6 @@ export function resolveMcpConnectionSetup(
       "No thread can reach this while the managed gateway is off. Credentials stay stored.",
       "idle",
     );
-  }
-
-  if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
-    const detail = connection.detail ?? "Check Sandboxer with /usr/local/bin/sbx status.";
-    if (connection.sandboxerCliState === "cli_missing") {
-      return build("app_not_installed", "CLI missing", detail, "idle");
-    }
-    if (connection.sandboxerCliState === "unavailable") {
-      return build("unavailable", "Unavailable", detail, "err");
-    }
-    const account = SANDBOXER_ACCOUNT_HEADLINES[connection.sandboxerCliState ?? "signed_in"];
-    // No plan means no sandbox exists yet, so threads are not offered it.
-    if (account && !configured) return build("login_required", account, detail, "warn");
-    if (!configured) return build("login_required", "Not signed in", detail, "warn");
-    // A billing problem stops new machines, not running ones. Threads keep
-    // reaching it so the agent can still list and stop what is running.
-    if (account) {
-      return build(connection.enabled ? "ready" : "parked", account, detail, "warn");
-    }
-    // A sandbox outlives its thread, so the ready line says who stops it.
-    const billing =
-      "Sandboxes bill per second while they run. Closing the thread does not stop one; auto-stop or the agent does.";
-    return connection.enabled
-      ? build("ready", "Signed in", `Turn Sandboxer on in a thread's MCP access. ${billing}`, "ok")
-      : build("parked", "Parked", `Turn on Offer to threads, then turn Sandboxer on in a thread's MCP access. ${billing}`, "warn");
   }
 
   if (connection.kind === "stdio") {

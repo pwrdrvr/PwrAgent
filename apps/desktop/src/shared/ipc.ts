@@ -308,8 +308,6 @@ export const MCP_CONNECTION_PWRGIT_OPEN_CHANNEL =
   "mcp-connection:pwrgit-open";
 export const MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL =
   "mcp-connection:pwrgit-download";
-export const MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL =
-  "mcp-connection:sandboxer-open";
 export const PWRSUITE_INSTALLER_READ_CHANNEL = "pwrsuite-installer:read";
 export const PWRSUITE_INSTALLER_START_CHANNEL = "pwrsuite-installer:start";
 export const PWRSUITE_INSTALLER_CANCEL_CHANNEL = "pwrsuite-installer:cancel";
@@ -333,10 +331,6 @@ export const MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL =
   "mcp-connection:set-select-for-new-threads";
 export const MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL =
   "mcp-connection:set-tool-approval";
-export const MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL =
-  "mcp-connection:set-sandboxer-transport";
-export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =
-  "mcp-connection:set-sandboxer-cleanup-on-pr-close";
 export const MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL =
   "mcp-connection:set-linear-paste-images";
 export const MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL =

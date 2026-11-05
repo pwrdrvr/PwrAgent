@@ -4,7 +4,7 @@ Experimental Node-only daemon and CLI for a dedicated Linux outpost. The daemon
 owns a local Codex App Server and keeps an accepted turn running after the CLI
 or its SSH connection disconnects. Federation uses the same encrypted transport,
 signed enrollment and capability-checked routing as the desktop. There is no
-Electron, display server, provider SDK, or Sandboxer API dependency. Remote
+Electron, display server, or compute-provider API dependency. Remote
 terminals use the pinned `node-pty` native dependency, loaded when a terminal
 opens. The packaged CLI bundles its shared JavaScript services and their notices.
 
@@ -233,34 +233,6 @@ encoded invite into a private file on the outpost, then import it with
 `federation-join`. No SaaS login is required. A future login flow can mint the
 same enrollment material without replacing the peer identity.
 
-For an already provisioned Sandboxer test machine, the laptop can establish a
-reverse forward to its desktop gateway. These are manual examples, not commands
-run by PwrAgent. Replace the example ID and paths, and use the actual gateway
-port. The official CLI on the development Mac is `/usr/local/bin/sbx`; another
-program named `sbx` may be on PATH.
-
-```sh
-# Laptop: copy an unexpired desktop gateway invite, then keep the forward open.
-/usr/local/bin/sbx scp ./outpost-invite.txt sb_EXAMPLE:/home/user/outpost-invite.txt
-/usr/local/bin/sbx forward sb_EXAMPLE --reverse --local 47830 --remote 47830
-```
-
-```sh
-# Outpost: the daemon is already running under its service manager.
-chmod 600 /home/user/outpost-invite.txt
-node packages/pwragent/bin/pwragent.js federation-join --profile outpost \
-  --invite-file /home/user/outpost-invite.txt \
-  --gateway ws://127.0.0.1:47830 --label "Research outpost"
-node packages/pwragent/bin/pwragent.js federation-status --profile outpost
-```
-
-The endpoint override changes reachability only. The original invite's gateway
-identity, Ed25519 public key and Noise key remain pinned. Plain `ws://` overrides
-must be loopback; `wss://` is also accepted. SSH can alternatively carry the same
-reverse forward using a `ProxyCommand` of `/usr/local/bin/sbx ssh %h --stdio`.
-The laptop initiates the authenticated outbound HTTPS connection. The outpost
-does not need to reach home through Cloudflare Access or Tailscale.
-
 `federation-join` persists enrollment intent before dialing. It returns current
 connection status; an unavailable forward appears as `unreachable`. Transient
 failures retry with bounded backoff. Authentication failures stop retries and
@@ -270,11 +242,16 @@ reconnects using its retained identity, including after a restart. A lost
 acknowledgment is recovered by trying authenticated reconnect before reusing a
 one-time invite.
 
+The endpoint override changes reachability only: the invite's gateway identity,
+Ed25519 public key and Noise key remain pinned. Plain `ws://` overrides must be
+loopback; `wss://` is also accepted. See the connectivity reference below for
+operator-managed forwarding.
+
 An outpost can also accept a viewer directly: `federation-invite --port 47831`
-starts a loopback listener and returns a 15-minute one-use encoded invite. A
-laptop-side `/usr/local/bin/sbx forward sb_EXAMPLE --remote 47831 --local 47831`
-then lets a separate desktop viewer profile import that invite. Issued invite
-tokens are stored only as HMACs. The listener resumes on daemon restart.
+starts a loopback listener and returns a 15-minute one-use encoded invite. An
+authenticated SSH forward or another operator-managed secure transport lets a
+separate desktop viewer profile import that invite. Issued invite tokens are
+stored only as HMACs. The listener resumes on daemon restart.
 `federation-revoke --peer ID` revokes an inbound peer and closes its connection;
 `federation-leave` removes the upstream pairing while retaining the outpost's
 identity, listener and jobs. Neither command deletes compute or thread data.
@@ -461,11 +438,7 @@ both five minutes without agent work and twenty minutes without interaction.
 Those clocks are reference research, not policies implemented here. Amp's
 server-side thread ownership also differs from this outpost's local ownership.
 
-[Sandboxer SSH](https://sandboxer.com/docs/ssh.md) documents authenticated
-outbound WebSocket transport, SCP, forward/reverse-forward and `ssh --stdio`.
-[Sandboxer long-running tasks](https://sandboxer.com/docs/long-running.md)
-documents systemd and memory-preserving stop/resume. The repository's
-[federation architecture](../../docs/federation-architecture.md) and
+The repository's [federation architecture](../../docs/federation-architecture.md) and
 [connectivity reference](../../docs/federation-connectivity-reference.md) describe
 the shared trust and routing contract. Research was checked on 2026-10-23.
 

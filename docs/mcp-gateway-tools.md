@@ -40,10 +40,7 @@ rules for the tool still apply. See [Claude provider](claude-provider.md).
 Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 
-Default and Auto access follow the connection's tool-approval policy. The
-built-in Sandboxer defaults to allowing tools: enabling and selecting remote
-compute authorizes sandbox commands, file writes and lifecycle operations.
-Other connections default to the server's annotation-based policy, which runs
+Default and Auto access follow the connection's tool-approval policy. Connections default to the server's annotation-based policy, which runs
 read-only tools without confirmation. An explicit `prompt` policy also asks
 for reads; an explicit `approve` policy allows every tool on that connection.
 When required, confirmation shows the original connection, tool and complete
@@ -232,7 +229,7 @@ with no backend, answers an empty list. A Job Monitor's delegated scope gets
 its own thread's directories. Headless automation runs are answered like any
 other thread, because roots need no person.
 
-Remote URL, PwrSnap, PwrGit and Sandboxer connections never declare roots.
+Remote URL, PwrSnap and PwrGit connections never declare roots.
 A `file://` path means nothing to them, and it would expose the operator's
 home directory, user name and repository names.
 

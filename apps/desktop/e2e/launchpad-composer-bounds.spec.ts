@@ -208,10 +208,10 @@ test("launchpad send controls stay on screen under the connection cards and past
     const composerInput = app.window.getByRole("textbox", { name: "New thread" });
     await expect(composerInput).toBeVisible();
 
-    // PwrGit and PwrSnap, plus Sandboxer, whose tile shows in every local
-    // state: an ad while its CLI is missing, a switch once it is set up.
+    // The remaining launchpad cards advertise the two PwrSuite apps.
     const cards = app.window.locator(".mcp-connection");
-    await expect(cards).toHaveCount(3);
+    await expect(cards).toHaveCount(2);
+    await app.window.screenshot({ path: test.info().outputPath("launchpad-connections.png") });
 
     await pastePng(composerInput, "bounds-one.png", "#3478f6");
     await expect(app.window.getByAltText("bounds-one.png")).toBeVisible();
