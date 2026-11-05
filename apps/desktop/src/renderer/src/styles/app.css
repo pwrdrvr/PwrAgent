@@ -12307,10 +12307,6 @@ a.button {
 }
 
 /* Overflow menu for the rarer, destructive row actions. */
-.automations-table__menu {
-  position: relative;
-}
-
 .automations-table__menu-button {
   display: inline-flex;
   align-items: center;

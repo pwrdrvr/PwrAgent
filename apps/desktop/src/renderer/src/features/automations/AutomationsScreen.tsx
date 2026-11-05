@@ -28,6 +28,8 @@ import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { ChevronRightIcon, MoreVerticalIcon } from "../../icons";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { portalViewportTop } from "../../lib/useViewportTooltip";
+import { useCloseOnOutsidePointer } from "../thread-todos/TodoFactMenu";
+import { placeAutomationRowMenu } from "./automation-row-menu-placement";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import {
   formatCostTodayMicros,
@@ -705,36 +707,32 @@ function AutomationRowMenu(props: {
   const close = useCallback(() => setOpen(false), []);
   useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
 
+  // Placed on every render, not once: an agent event can re-render the list
+  // and move this row while the menu is open, without any scroll.
   useLayoutEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current?.getBoundingClientRect();
     const menu = menuRef.current?.getBoundingClientRect();
     if (!trigger || !menu) return;
-    const floor = window.innerHeight - 8;
-    const below = trigger.bottom + 4;
-    const top = below + menu.height <= floor ? below : trigger.top - menu.height - 4;
-    setPosition({
-      left: Math.max(
-        8,
-        Math.min(trigger.right - menu.width, window.innerWidth - menu.width - 8),
-      ),
-      top: Math.max(portalViewportTop(), Math.min(top, floor - menu.height)),
+    const next = placeAutomationRowMenu({
+      trigger,
+      menuWidth: menu.width,
+      menuHeight: menu.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      viewportTop: portalViewportTop(),
     });
-  }, [open]);
+    setPosition((current) =>
+      current.left === next.left && current.top === next.top ? current : next);
+  });
+
+  useCloseOnOutsidePointer({ open, triggerRef, menuRef, onClose: close });
 
   useEffect(() => {
     if (!open) return;
-    const outside = (event: PointerEvent): void => {
-      if (
-        !triggerRef.current?.contains(event.target as Node)
-        && !menuRef.current?.contains(event.target as Node)
-      ) close();
-    };
-    document.addEventListener("pointerdown", outside);
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
     return () => {
-      document.removeEventListener("pointerdown", outside);
       window.removeEventListener("scroll", close, true);
       window.removeEventListener("resize", close);
     };
