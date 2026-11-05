@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, test, type CDPSession } from "@playwright/test";
+import { expect, test, type CDPSession } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 // Explicit local diagnostic mode only. The three-second recording and stream

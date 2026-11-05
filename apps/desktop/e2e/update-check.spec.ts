@@ -16,7 +16,7 @@ import {
   test,
   type ElectronApplication,
   type Locator,
-} from "@playwright/test";
+} from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 test("main-process release transports are isolated before startup", async () => {

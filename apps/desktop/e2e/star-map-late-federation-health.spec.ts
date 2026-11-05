@@ -23,7 +23,7 @@
 // the fix stays covered.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { recordDomTrajectory } from "./fixtures/dom-trajectory";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { openStarMapWindow } from "./fixtures/star-map-window";

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { APP_UPDATE_STATUS_EVENT_CHANNEL } from "../src/shared/ipc";
 import type { AppUpdateStatus } from "../src/shared/app-metadata";
