@@ -76,17 +76,22 @@ describe("Windows natural pipe evidence", () => {
   });
 
   it("retains known preflight failure reasons without exception text or debugger output", () => {
+    const noProgress = { bannerObserved: false, extensionInitializationStarted: false,
+      extensionInitializationCompleted: false, commandPromptObserved: false, readinessMarkerObserved: false };
     const output = "cdb: The system does not support detach on exit\nWARNING: Network path disallowed\nC:\\private\\secret.pdb token";
     const error = new Error("Noninvasive debugger exited before readiness");
     error.nativeDebugger = { ...nativeDebuggerStatus(output), exitCode: 0, rawOutput: output };
     const failure = nativeProbeFailure(error);
     expect(failure).toEqual({ reason: "debugger-exited-before-readiness",
-      debugger: { exitCode: 0, ...nativeDebuggerStatus(output) } });
+      debugger: { exitCode: 0, detachUnsupported: true, networkPathDisallowed: true,
+        ...noProgress, outputBytes: Buffer.byteLength(output) } });
     expect(JSON.stringify(failure)).not.toMatch(/private|secret|token|rawOutput/);
-    expect(nativeDebuggerStatus("native frames")).toMatchObject({ detachUnsupported: false, networkPathDisallowed: false });
+    expect(nativeDebuggerStatus("native frames")).toEqual({ detachUnsupported: false, networkPathDisallowed: false,
+      ...noProgress, outputBytes: 13 });
     expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed" });
-    expect(nativeProbeFailure({ nativeDebugger: { exitCode: output, detachUnsupported: output } })).toMatchObject({
-      reason: "controlled-probe-failed", debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false },
+    expect(nativeProbeFailure({ nativeDebugger: { exitCode: output, detachUnsupported: output } })).toEqual({
+      reason: "controlled-probe-failed", debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false,
+        ...noProgress, outputBytes: undefined },
     });
   });
 
