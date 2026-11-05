@@ -184,7 +184,7 @@ async function checkArchiveRegistration(params: {
     const registeredFile = (await readFile(path.join(gitDirectory, "gitdir"), "utf8")).trim();
     const registeredCommon = (await readFile(path.join(gitDirectory, "commondir"), "utf8")).trim();
     if (await realpath(path.resolve(worktreePath, target)) !== gitDirectory
-      || await realpath(path.resolve(gitDirectory, registeredFile)) !== await realpath(gitFile)
+      || await realpath(path.resolve(gitDirectory, registeredFile)) !== gitFile
       || await realpath(path.resolve(gitDirectory, registeredCommon)) !== commonDirectory) {
       throw unregistered();
     }

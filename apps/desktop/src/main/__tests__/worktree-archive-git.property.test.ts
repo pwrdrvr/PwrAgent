@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -165,3 +165,26 @@ it("agrees with Git about archive eligibility across layouts and late registrati
     ["bare", "primary", true], ["separate", "primary", false],
   ] });
 }, process.platform === "win32" ? 120_000 : 30_000);
+
+it.runIf(process.platform !== "win32")("refuses a Git backlink redirected through a .git file symlink", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-git-link-")));
+  try {
+    const repo = await repository(root);
+    const checkout = path.join(root, "checkout");
+    await git(repo, "worktree", "add", "--detach", checkout);
+    const admin = await git(checkout, "rev-parse", "--absolute-git-dir");
+    const elsewhere = path.join(root, "elsewhere");
+    await mkdir(elsewhere);
+    await rename(path.join(checkout, ".git"), path.join(elsewhere, ".git"));
+    await symlink(path.join(elsewhere, ".git"), path.join(checkout, ".git"));
+    await writeFile(path.join(admin, "gitdir"), `${path.join(elsewhere, ".git")}\n`);
+    await writeFile(path.join(checkout, "preserved.txt"), "keep me");
+    // Git now registers elsewhere; resolving both files through the symlink
+    // would incorrectly make the original checkout appear registered too.
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(checkout);
+    await expect(new WorktreeArchiveService().archive({
+      backend: "codex", threadId: "redirected", repositoryPath: repo, worktreePath: checkout,
+    })).rejects.toThrow(/not registered with Git/);
+    expect(await readFile(path.join(checkout, "preserved.txt"), "utf8")).toBe("keep me");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
