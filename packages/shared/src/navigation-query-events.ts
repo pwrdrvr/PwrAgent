@@ -21,8 +21,15 @@ export function readNavigationDirectoryScope(value: unknown): readonly string[] 
     if (typeof key !== "string" || !key || key.length > 1_024) return undefined;
     characters += key.length;
   }
-  if (characters > NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES
-    || new TextEncoder().encode(JSON.stringify({ version: 1, directoryKeys: scope.directoryKeys })).byteLength > NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES) return undefined;
+  if (characters > NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES) return undefined;
+  // Shared runs without DOM or Node globals. JSON escapes lone surrogates;
+  // iteration counts paired supplementary code points as four UTF-8 bytes.
+  let bytes = 0;
+  for (const character of JSON.stringify({ version: 1, directoryKeys: scope.directoryKeys })) {
+    const point = character.codePointAt(0)!;
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+    if (bytes > NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES) return undefined;
+  }
   return scope.directoryKeys as string[];
 }
 

@@ -3313,6 +3313,41 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("supplies authoritative directory scope and withdraws it before asynchronous membership recording", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+    const events: AgentEvent[] = [];
+    const row: AgentEvent = { backend: "codex", notification: {
+      method: "thread/backgroundTasks/updated", params: { threadId: "hidden", tasks: [] },
+    } };
+    const internal = registry as unknown as {
+      prepareArchiveReferenceChanges(...args: unknown[]): Promise<void> | undefined;
+    };
+    let finish!: () => void;
+    let recording: ReturnType<typeof vi.spyOn> | undefined;
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      registry.navigationDirectoryScope.remember({ coverage: { state: "complete" },
+        threads: [{ id: "hidden", source: "codex", title: "Hidden", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false } }],
+        directories: [{ key: "project", kind: "directory", label: "Project", threadKeys: ["codex:hidden"], needsAttentionCount: 0 }],
+      }, registry.navigationDirectoryScope.checkpoint());
+      await registry.publishLocalEvent(row);
+      expect(events.at(-1)?.navigationDirectoryScope).toEqual({ version: 1, directoryKeys: ["project"] });
+      const gate = new Promise<void>((resolve) => { finish = resolve; });
+      recording = vi.spyOn(internal, "prepareArchiveReferenceChanges").mockReturnValueOnce(gate);
+      const membership = registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "navigation/threadDirectories/updated", params: { threadIds: ["hidden"] },
+      } });
+      expect(registry.navigationDirectoryScope.forEvent(row)).toBeUndefined();
+      expect(events).toHaveLength(1);
+      finish(); await membership;
+      await registry.publishLocalEvent(row);
+      expect(events.at(-1)?.navigationDirectoryScope).toBeUndefined();
+    } finally { finish?.(); recording?.mockRestore(); await registry.close(); }
+  });
+
   it.each(["turn/completed", "turn/failed", "turn/cancelled"] as const)(
     "orders %s, idle queue release, and the next turn behind pending images",
     async (terminalMethod) => {

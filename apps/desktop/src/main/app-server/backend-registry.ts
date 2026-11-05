@@ -53045,6 +53045,7 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
+    this.navigationDirectoryScope.invalidate(event);
     const archiveWorkspaceChanged = this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
     if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
       this.cancelArchiveCleanups(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
@@ -53247,7 +53248,6 @@ export class DesktopBackendRegistry {
   }
 
   private emitEvent(event: AgentEvent): Promise<void> {
-    this.navigationDirectoryScope.invalidate(event);
     this.trackLiveCodexToolItem(event);
     if (event.backend === "codex" && event.notification.method === "turn/started") {
       const notification = event.notification as {

@@ -70,7 +70,7 @@ it("omits unknown identities, membership changes, foreign owners and scopes over
   expect(scopes.forEvent(change({ ...index.threads[0]!, id: "unknown" }))).toBeUndefined();
   expect(scopes.forEvent(change(index.threads[0]!, "thread/parent/set"))).toBeUndefined();
   expect(scopes.forEvent({ ...change(index.threads[0]!), federationTarget: { scope: "remote", instanceId: "peer" } })).toBeUndefined();
-  for (const glyph of ["a", "é", "😀", '"', "\\"]) {
+  for (const glyph of ["a", "é", "😀", '"', "\\", "\ud800"]) {
     for (const count of [15, 16, 17, 100, 101]) {
       const value = { version: 1, directoryKeys: Array.from({ length: count }, () => glyph.repeat(1_000 / glyph.length)) };
       const admitted = count <= 100 && Buffer.byteLength(JSON.stringify(value), "utf8") <= NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES;
@@ -78,9 +78,26 @@ it("omits unknown identities, membership changes, foreign owners and scopes over
       const large = { ...index, directories: value.directoryKeys.map((key, i) => ({ ...index.directories[0]!, key: `${i}:${key}` })) };
       scopes.remember(large, scopes.checkpoint());
       const result = scopes.forEvent(change(index.threads[0]!));
-      if (result) expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES);
+      const wire = { version: 1, directoryKeys: large.directories.map((d) => d.key) };
+      expect(Boolean(result)).toBe(count <= 100 && Buffer.byteLength(JSON.stringify(wire), "utf8") <= NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES);
     }
   }
   expect(readNavigationDirectoryScope({ version: 2, directoryKeys: [] })).toBeUndefined();
   expect(readNavigationDirectoryScope({ version: 1, directoryKeys: [null] })).toBeUndefined();
+});
+
+it("agrees with the independent UTF-8 oracle at the exact admission boundary", () => {
+  fc.assert(fc.property(fc.constantFrom("a", "é", "😀", "\ud800", '"', "\\"), fc.integer({ min: 0, max: 4 }), (glyph, extra) => {
+    // Keep every individual key below 1,024 code units while filling the wire
+    // to within one encoded glyph of the 16 KiB limit.
+    const key = glyph.repeat(Math.floor(900 / glyph.length));
+    const keys: string[] = [];
+    const bytes = () => Buffer.byteLength(JSON.stringify({ version: 1, directoryKeys: keys }), "utf8");
+    while (bytes() + Buffer.byteLength(JSON.stringify(key), "utf8") + 1 < NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES) keys.push(key);
+    keys.push("");
+    while (bytes() + Buffer.byteLength(JSON.stringify(glyph), "utf8") - 2 <= NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES) keys[keys.length - 1] += glyph;
+    keys[keys.length - 1] += glyph.repeat(extra);
+    const value = { version: 1, directoryKeys: keys };
+    expect(Boolean(readNavigationDirectoryScope(value))).toBe(bytes() <= NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES);
+  }));
 });

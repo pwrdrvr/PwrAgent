@@ -79,6 +79,8 @@ it("keeps unknown peers, membership transitions and viewer placements conservati
     for (const change of [
       { ...event([]), navigationDirectoryScope: undefined },
       { ...event([]), navigationDirectoryScope: { version: 2, directoryKeys: [] } },
+      { ...event([]), navigationDirectoryScope: { version: 1, directoryKeys: Array.from({ length: 101 }, () => "x") } },
+      { ...event([]), navigationDirectoryScope: { version: 1, directoryKeys: [null] } },
       event([], "thread/parent/set"),
       event([], "navigation/threadDirectories/updated"),
       event([], "new/future/membership"),
@@ -100,5 +102,33 @@ it("keeps unknown peers, membership transitions and viewer placements conservati
     queries.invalidate(undefined, undefined, event([]));
     finish(); await pending;
     expect(read.mock.calls.some(([sent]) => sent.query.kind === "directory" && sent.query.directoryKey === "project-0")).toBe(true);
+  } finally { queries.dispose(); }
+});
+
+it("keeps remote scope owner-local and preserves an unrelated pending page and its cursor", async () => {
+  const releases: string[] = [];
+  let finish!: (value: NavigationQueryPage) => void;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent, 0));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read,
+    releaseNavigationQuery: async (token) => { releases.push(token); } });
+  const remote = (i: number, owner: string) => ({ ...request(i), inventory: "owner" as const,
+    federationTarget: { scope: "remote" as const, instanceId: owner } });
+  queries.setDemand(new Map([["a0", remote(0, "a")], ["a1", remote(1, "a")], ["b0", remote(0, "b")]]));
+  try {
+    await advance();
+    const baseline = queries.getSnapshot().resources.get("a1")!.state.page;
+    read.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    queries.invalidate("a1", undefined, event(["project-1"], "thread/backgroundTasks/updated", "a"));
+    const pending = queries.refresh("a1", undefined, true);
+    await advance(); read.mockClear();
+    queries.invalidate(undefined, [{ scope: "remote", instanceId: "a" }], event(["project-0"], "thread/backgroundTasks/updated", "a"));
+    await queries.refresh(undefined, [{ scope: "remote", instanceId: "a" }], true);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]![0]).toMatchObject({ federationTarget: { instanceId: "a" }, query: { directoryKey: "project-0" } });
+    finish({ ...baseline!, countsRevision: "fresh" }); await pending;
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(queries.getSnapshot().resources.get("a1")!.state.page).toMatchObject({ countsRevision: "fresh", nextCursor: baseline!.nextCursor });
+    // Disposal releases the same transport tokens without another page read.
+    queries.dispose(); expect(releases).toHaveLength(3);
   } finally { queries.dispose(); }
 });
