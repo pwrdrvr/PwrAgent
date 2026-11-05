@@ -96,8 +96,9 @@ export class FederationFilePushReceiver {
   async dispose(): Promise<void> {
     this.disposed = true;
     await this.tail;
-    await this.blobs.dispose();
-    await Promise.all([...this.transfers.keys()].map((id) => this.remove(id)));
+    try { await this.blobs.dispose(); } finally {
+      await Promise.all([...this.transfers.keys()].map((id) => this.remove(id)));
+    }
   }
 
   private async receive(peerId: string, method: string, input: unknown): Promise<unknown> {

@@ -127,9 +127,13 @@ it("expires abandoned partials after 24 hours using the receiver's clock", async
   const receiver = new FederationResumableBlobReceiver({ directory: () => root, now: () => now });
   try {
     await receiver.begin("source", { sha256: "0".repeat(64), sizeBytes: 1, name: "old" });
+    now += BLOB_RETENTION_MS - 1000;
     await receiver.disconnect("source");
     const [old] = await readdir(path.join(root, ".pwragent-resumable"));
-    now += BLOB_RETENTION_MS + 1000;
+    now += 2000;
+    await receiver.initialize();
+    expect(await readdir(path.join(root, ".pwragent-resumable"))).toContain(old);
+    now += BLOB_RETENTION_MS;
     await receiver.initialize();
     await receiver.begin("source", { sha256: "1".repeat(64), sizeBytes: 1, name: "new" });
     expect(await readdir(path.join(root, ".pwragent-resumable"))).not.toContain(old);
@@ -190,22 +194,24 @@ it("one send cannot replace or cancel another send of identical content", async 
 });
 
 it("peer-supplied begin fields cannot forge a completed file receipt", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "blob-receipt-"));
-  const completed: unknown[] = [];
-  const receiver = new FederationFilePushReceiver({ allowed: () => true, directory: () => root,
-    onCompleted: (_peer, file) => { completed.push(file); } });
-  try {
-    const victim = path.join(root, "other-owned-fixture");
-    await writeFile(victim, "x");
-    const begin = await receiver.handle("source", FILE_PUSH_METHODS.begin, {
-      name: "fixture", binary: true, sha256: "0".repeat(64), sizeBytes: 1,
-      result: { path: victim, sizeBytes: 1, sha256: "0".repeat(64) },
-      committedOffset: 1, receivedOffset: 1,
-    }) as { transferId: string };
-    await expect(receiver.handle("source", FILE_PUSH_METHODS.finish, begin)).rejects.toThrow("Incomplete blob");
-    expect(completed).toEqual([]);
-  } finally {
-    await receiver.dispose();
-    await rm(root, { recursive: true, force: true });
-  }
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 128 }), async (sizeBytes) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blob-receipt-"));
+    const completed: unknown[] = [];
+    const receiver = new FederationFilePushReceiver({ allowed: () => true, directory: () => root,
+      onCompleted: (_peer, file) => { completed.push(file); } });
+    try {
+      const victim = path.join(root, "other-owned-fixture");
+      await writeFile(victim, Buffer.alloc(sizeBytes));
+      const begin = await receiver.handle("source", FILE_PUSH_METHODS.begin, {
+        name: "fixture", binary: true, sha256: "0".repeat(64), sizeBytes,
+        result: { path: victim, sizeBytes, sha256: "0".repeat(64) },
+        committedOffset: sizeBytes, receivedOffset: sizeBytes,
+      }) as { transferId: string };
+      await expect(receiver.handle("source", FILE_PUSH_METHODS.finish, begin)).rejects.toThrow("Incomplete blob");
+      expect(completed).toEqual([]);
+    } finally {
+      await receiver.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }), { numRuns: 10 });
 });

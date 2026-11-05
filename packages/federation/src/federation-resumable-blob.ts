@@ -231,21 +231,22 @@ export class FederationResumableBlobReceiver {
   }
 
   async disconnect(peerId: string): Promise<void> {
-    for (const [id, transfer] of this.transfers) {
-      if (transfer.state.peerId !== peerId) continue;
-      await this.persist(transfer);
-      await transfer.file.close();
-      this.transfers.delete(id);
-    }
+    await this.closeTransfers([...this.transfers].filter(([, transfer]) => transfer.state.peerId === peerId));
   }
 
   async dispose(): Promise<void> {
     clearInterval(this.expiry);
-    for (const transfer of this.transfers.values()) {
-      await this.persist(transfer);
-      await transfer.file.close();
-    }
-    this.transfers.clear();
+    await this.closeTransfers([...this.transfers]);
+  }
+
+  private async closeTransfers(entries: [string, Transfer][]): Promise<void> {
+    const results = await Promise.allSettled(entries.map(async ([id, transfer]) => {
+      try { await this.persist(transfer); } finally {
+        try { await transfer.file.close(); } finally { this.transfers.delete(id); }
+      }
+    }));
+    const failures = results.filter((result) => result.status === "rejected");
+    if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Unable to suspend incoming blobs.");
   }
 
   private get(peerId: string, id: string): Transfer {
