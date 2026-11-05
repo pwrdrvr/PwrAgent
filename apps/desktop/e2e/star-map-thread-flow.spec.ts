@@ -11,7 +11,7 @@
 // it. Nothing below the E2E level exercises that cross-window handoff.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { openStarMapWindow } from "./fixtures/star-map-window";
 

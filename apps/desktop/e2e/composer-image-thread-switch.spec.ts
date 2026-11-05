@@ -2,7 +2,7 @@ import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../src/renderer/src/t
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { mastheadAction } from "./fixtures/window-chrome";
 
