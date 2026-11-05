@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import {
+  hasStoppableSubAgentRun,
   isCodexNativeSubAgent,
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
@@ -234,8 +235,7 @@ export function ActiveSubAgentsStrip(props: {
               (subAgent.status === "pending"
                 || subAgent.status === "running"
                 || blockedRow)
-              && Boolean(subAgent.monitorThreadId)
-              && Boolean(subAgent.monitorTurnId)
+              && hasStoppableSubAgentRun(subAgent)
               && Boolean(props.desktopApi?.stopSubAgent);
             return (
               <li

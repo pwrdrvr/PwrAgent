@@ -6534,6 +6534,17 @@ a.button {
   opacity: 0.62;
 }
 
+/* A Claude sub-agent row names a task in the parent's session; nothing opens. */
+.native-subagents__agent--static {
+  cursor: default;
+}
+
+.native-subagents__agent--static:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
 .native-subagents__status {
   width: 7px;
   height: 7px;

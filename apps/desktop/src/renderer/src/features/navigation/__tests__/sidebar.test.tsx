@@ -1946,6 +1946,61 @@ describe("Sidebar", () => {
     delete (window as Window & { pwragent?: unknown }).pwragent;
   });
 
+  it("lists Claude's own sub-agents in the same disclosure, without a transcript to open", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: { openSubAgentTranscriptWindow },
+    });
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      source: "claude",
+      id: "thread-claude-parent",
+      title: "Audit the router",
+      codexNativeSubAgents: [
+        {
+          threadId: "claude-native:agent-1",
+          title: "Cluster: rules & matching",
+          agentNickname: "general-purpose",
+          threadStatus: "active",
+        },
+        {
+          threadId: "claude-native:agent-2",
+          title: "Cluster: browser launch",
+          agentNickname: "general-purpose",
+          threadStatus: "idle",
+        },
+      ],
+    };
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[parentThread]}
+        loading={false}
+        selectedItemKey="claude:thread-claude-parent"
+        threads={[parentThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand 2 Claude sub-agents for Audit the router" }));
+
+    const workerList = screen.getByRole("list", { name: "Claude sub-agents for Audit the router" });
+    expect(within(workerList).getAllByRole("listitem")).toHaveLength(2);
+    expect(container.querySelectorAll(".native-subagents__agent")).toHaveLength(2);
+    expect(screen.getByText("1 working")).toBeInTheDocument();
+    // A Claude sub-agent is a task in the parent's session, not a thread.
+    expect(screen.queryByRole("button", { name: /^Open transcript for/ })).not.toBeInTheDocument();
+    expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
+
+    delete (window as Window & { pwragent?: unknown }).pwragent;
+  });
+
   it("keeps native Codex workers out of directory thread rows", () => {
     const parentThread: NavigationThreadSummary = {
       ...sharedThread,

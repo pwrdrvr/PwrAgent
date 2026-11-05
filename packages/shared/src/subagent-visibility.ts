@@ -2,6 +2,7 @@ import type {
   CodexNativeSubAgentSummary,
 } from "./contracts/normalized-app-server";
 import type { ThreadActiveSubAgent, ThreadSubAgentSummary } from "./contracts/navigation";
+import { isHarnessSubAgent } from "./subagent-kind";
 
 export const CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS = 60 * 60 * 1000;
 export const CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -59,14 +60,15 @@ export function projectActiveThreadSubAgents(
 }
 
 /**
- * The selected thread's panel retains completed native workers longer than
- * navigation does. Other monitor kinds keep their existing durable history.
+ * The selected thread's panel retains completed native workers, Codex's and
+ * Claude's, longer than navigation does. Other monitor kinds keep their
+ * existing durable history.
  */
 export function isThreadSubAgentVisibleInPanel(
   subAgent: ThreadSubAgentSummary,
   now: number,
 ): boolean {
-  if (!subAgent.monitorId.startsWith("codex-native:")) {
+  if (!isHarnessSubAgent(subAgent)) {
     return true;
   }
   if (!hasTerminalEvidence(subAgent)) {

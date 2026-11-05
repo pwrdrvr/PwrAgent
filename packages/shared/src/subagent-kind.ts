@@ -23,6 +23,29 @@ export function isCodexNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "mon
   return subAgent.monitorId.startsWith("codex-native:");
 }
 
+/** A sub-agent Claude Code runs with its Agent tool; the id after it is the task id. */
+export const CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX = "claude-native:";
+
+export function isClaudeNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitorId">): boolean {
+  return subAgent.monitorId.startsWith(CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX);
+}
+
+/** A worker the agent harness itself started, rather than PwrAgent. */
+export function isHarnessSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitorId">): boolean {
+  return isCodexNativeSubAgent(subAgent) || isClaudeNativeSubAgent(subAgent);
+}
+
+/**
+ * Whether a running card can be stopped: a thread turn to interrupt, or a
+ * Claude task, which Claude stops by its id. A Claude sub-agent has no thread.
+ */
+export function hasStoppableSubAgentRun(
+  subAgent: Pick<ThreadSubAgentSummary, "monitorId" | "monitorThreadId" | "monitorTurnId">,
+): boolean {
+  return (Boolean(subAgent.monitorThreadId) && Boolean(subAgent.monitorTurnId))
+    || isClaudeNativeSubAgent(subAgent);
+}
+
 /** Execution thread IDs also exist for ephemeral workers; they do not imply a reloadable transcript. */
 export function hasDurableSubAgentTranscript(
   subAgent: Pick<AppServerThreadSubAgentCallDetail, "backend" | "origin">,
@@ -51,14 +74,13 @@ export function isTokenMiserSubAgent(
 
 /**
  * Groups sub-agents by the system that owns their lifecycle. The harness lens
- * is intentionally provider-neutral even though Codex is the only harness
- * that projects native workers today.
+ * holds the workers Codex and Claude Code start on their own.
  */
 export function subAgentLens(subAgent: ThreadSubAgentSummary): SubAgentLens {
   if (isTokenMiserSubAgent(subAgent)) {
     return "token-miser";
   }
-  if (isCodexNativeSubAgent(subAgent)) {
+  if (isHarnessSubAgent(subAgent)) {
     return "harness";
   }
   return "pwragent";

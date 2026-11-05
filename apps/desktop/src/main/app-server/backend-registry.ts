@@ -5,6 +5,7 @@ import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse, ThreadTodoMessageTarget } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
+import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
@@ -264,6 +265,9 @@ import {
   resolveMcpConnectionSetup,
   estimateTokenUsageCost,
   formatTokenUsageUsd,
+  CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+  type AppServerBackgroundTask,
+  isClaudeNativeSubAgent,
   isCodexNativeSubAgentVisibleInNavigation,
   isToolManagedWorktreePath,
   normalizeRenamedTitleSource,
@@ -4207,6 +4211,18 @@ function codexNativeSubAgentOutcome(
     return "cancelled";
   }
   return undefined;
+}
+
+/** The thread list's tray row for a stored native sub-agent card. */
+function nativeSubAgentRowFromCard(card: ThreadSubAgentSummary, threadId: string): CodexNativeSubAgentSummary {
+  return {
+    threadId,
+    title: card.task,
+    createdAt: card.createdAt,
+    updatedAt: card.updatedAt,
+    threadStatus: codexNativeSubAgentIsTerminal(card.status) ? "idle" : "active",
+    ...(card.agentName ? { agentNickname: card.agentName } : {}),
+  };
 }
 
 function codexNativeSubAgentIsTerminal(status: ThreadSubAgentSummary["status"]): boolean {
@@ -11926,6 +11942,7 @@ export class DesktopBackendRegistry {
       holdSelfStartedTurn: async ({ threadId, prompt, source }) => await this.holdBackendSelfStartedTurn({
         backend: "claude", threadId, prompt, source,
       }),
+      recordSubAgents: async (params) => await this.recordClaudeSubAgents(params),
       planLimits: this.planLimits,
       ...options?.claudeBackendOptions,
     });
@@ -14524,7 +14541,11 @@ export class DesktopBackendRegistry {
     diagnostics: { callerReason: ThreadListCallerReason; ownerId: string },
   ): Promise<{ threads: AppServerThreadSummary[]; enriched: boolean }> {
     if (backend === "claude") {
-      return { threads: await this.claudeBackend.listThreads(params), enriched: true };
+      const threads = await this.claudeBackend.listThreads(params);
+      return {
+        threads: params.archived ? threads : await this.withClaudeNativeSubAgents(threads),
+        enriched: true,
+      };
     }
     if (backend === "codex") {
       const archiveGeneration = this.archiveCleanupReads.generation("codex");
@@ -26194,6 +26215,28 @@ export class DesktopBackendRegistry {
       };
     }
 
+    if (isClaudeNativeSubAgent(subAgent)) {
+      const taskId = subAgent.monitorId.slice(CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX.length);
+      if (this.claudeBackend.runsTask(params.threadId, taskId)) {
+        // Claude stops the task; its notification then settles the card.
+        await this.claudeBackend.stopBackgroundTask(params.threadId, taskId);
+      } else {
+        // Claude's process is gone and the card missed its end. Nothing runs
+        // to stop, so end the card here rather than refuse forever.
+        await this.recordClaudeSubAgents({ threadId: params.threadId, subAgents: [{
+          monitorId: subAgent.monitorId, taskId, task: subAgent.task, status: "cancelled",
+          lastMessage: "Stopped by user.",
+          ...(subAgent.agentName ? { agentName: subAgent.agentName } : {}),
+        }] });
+      }
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        monitorId: params.monitorId,
+        stoppedAt: Date.now(),
+      };
+    }
+
     if (!subAgent.monitorThreadId || !subAgent.monitorTurnId) {
       throw new Error("Sub-agent does not expose an active turn to stop.");
     }
@@ -29973,6 +30016,15 @@ export class DesktopBackendRegistry {
         };
       },
     );
+  }
+
+  /**
+   * The backend tasks a thread waits on, for Waiting For. Only Claude takes
+   * another turn when one ends, and its sub-agents count: the Actions list
+   * leaves them out because they have Sub-agents cards.
+   */
+  listBackendTaskWakes(thread: { backend: AppServerBackendKind; threadId: string }): AppServerBackgroundTask[] {
+    return thread.backend === "claude" ? this.claudeBackend.listWaitingTasks(thread.threadId) : [];
   }
 
   async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
@@ -34272,14 +34324,7 @@ export class DesktopBackendRegistry {
       ) {
         continue;
       }
-      const agent: CodexNativeSubAgentSummary = {
-        threadId: card.monitorThreadId,
-        title: card.task,
-        createdAt: card.createdAt,
-        updatedAt: card.updatedAt,
-        threadStatus: codexNativeSubAgentIsTerminal(card.status) ? "idle" : "active",
-        agentNickname: card.agentName,
-      };
+      const agent = nativeSubAgentRowFromCard(card, card.monitorThreadId);
       if (isCodexNativeSubAgentVisibleInNavigation(agent, Date.now())) {
         agents.set(agent.threadId, agent);
       }
@@ -37175,6 +37220,88 @@ export class DesktopBackendRegistry {
         },
       });
     }
+  }
+
+  /**
+   * Saves the cards for sub-agents Claude Code runs with its Agent tool, the
+   * way native Codex workers are saved. They have no thread of their own: the
+   * card names the task, and Claude stops it by the task id. A card that
+   * already ended keeps its end.
+   */
+  private async recordClaudeSubAgents(params: {
+    threadId: string;
+    subAgents: readonly ClaudeSubAgentCard[];
+  }): Promise<void> {
+    const existing = new Map((await this.overlayStore.getThreadSubAgents({
+      backend: "claude",
+      threadId: params.threadId,
+      monitorIds: params.subAgents.map((card) => card.monitorId),
+    })).map((card) => [card.monitorId, card]));
+    const now = Date.now();
+    const subAgents = params.subAgents.flatMap((card): ThreadSubAgentSummary[] => {
+      const previous = existing.get(card.monitorId);
+      if (previous && codexNativeSubAgentIsTerminal(previous.status)) return [];
+      const outcome = codexNativeSubAgentOutcome(card.status);
+      const createdAt = previous?.createdAt ?? card.startedAt ?? now;
+      return [{
+        ...previous,
+        monitorId: card.monitorId,
+        task: card.task,
+        status: card.status,
+        createdAt,
+        updatedAt: Math.max(now, createdAt),
+        ownerRuntimeInstanceId: previous?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
+        ownerRegistrySessionId: previous?.ownerRegistrySessionId ?? this.registrySessionId,
+        backend: "claude",
+        ...(card.agentName ? { agentName: card.agentName } : {}),
+        ...(card.lastMessage ? { lastMessage: truncateSubAgentText(card.lastMessage, 360) } : {}),
+        ...(outcome ? { outcome, completedAt: previous?.completedAt ?? Math.max(now, createdAt) } : {}),
+      }];
+    });
+    if (subAgents.length === 0) return;
+    // One transaction for the batch where the store offers it.
+    if (this.overlayStore.upsertThreadSubAgents) {
+      await this.overlayStore.upsertThreadSubAgents({ backend: "claude", threadId: params.threadId, subAgents });
+    } else {
+      for (const subAgent of subAgents) {
+        await this.overlayStore.upsertThreadSubAgent({ backend: "claude", threadId: params.threadId, subAgent });
+      }
+    }
+    this.invalidateThreadListCache("claude");
+    await this.emit({
+      backend: "claude",
+      notification: { method: "thread/subAgents/updated", params: { threadId: params.threadId } },
+    });
+  }
+
+  /**
+   * The thread list's sub-agent tray for Claude threads, from their saved
+   * sub-agent cards: running ones, and ones that ended within the hour.
+   */
+  private async withClaudeNativeSubAgents(
+    threads: AppServerThreadSummary[],
+  ): Promise<AppServerThreadSummary[]> {
+    if (threads.length === 0) return threads;
+    const cardsByThreadId = await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
+      backend: "claude",
+      threadIds: threads.map((thread) => thread.id),
+      monitorIdPrefix: CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+    });
+    const now = Date.now();
+    return threads.map((thread) => {
+      // A Claude sub-agent has no thread; its row is keyed by its card.
+      const agents = (cardsByThreadId[thread.id] ?? [])
+        .map((card) => nativeSubAgentRowFromCard(card, card.monitorId))
+        .filter((agent) => isCodexNativeSubAgentVisibleInNavigation(agent, now))
+        .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)
+          || left.threadId.localeCompare(right.threadId));
+      if (agents.length === 0) {
+        if (!thread.codexNativeSubAgents) return thread;
+        const { codexNativeSubAgents: _stale, ...rest } = thread;
+        return rest;
+      }
+      return { ...thread, codexNativeSubAgents: agents };
+    });
   }
 
   private async persistCodexNativeSubAgent(params: {
@@ -49159,10 +49286,10 @@ export class DesktopBackendRegistry {
     }
   }
 
-  /** Background tasks a Claude monitor's session runs, such as its watcher. */
+  /** Background tasks a Claude monitor's session runs, such as its watcher or a sub-agent. */
   private claudeMonitorTaskCount(record: TaskMonitorDelegationRecord): number {
     if (record.backend !== "claude" || !record.monitorThreadId) return 0;
-    return this.claudeBackend.listBackgroundTasks(record.monitorThreadId).terminals.length;
+    return this.claudeBackend.activeTaskCount(record.monitorThreadId);
   }
 
   /**
