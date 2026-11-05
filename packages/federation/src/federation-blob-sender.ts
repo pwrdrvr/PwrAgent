@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import path from "node:path";
 import { FEDERATION_PROTOCOL_VERSION, type FederationBlobChunkEnvelope } from "@pwragent/shared";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 import type { FilePushResult, PushFederationFileOptions } from "./federation-file-push";
-import { BLOB_CHUNK_BYTES, BLOB_WINDOW_CHUNKS, hashBlobFile } from "./federation-resumable-blob";
+import { BLOB_CHUNK_BYTES, BLOB_WINDOW_CHUNKS, hashBlobFile, type BlobIdentity } from "./federation-resumable-blob";
 
 export type BlobConnection = {
   rpc: Pick<FederationRpcEndpoint, "request">;
@@ -19,7 +20,7 @@ export type ResumableBlobTransport = {
   connection: () => BlobConnection;
   isConnected?: () => boolean;
   waitForReconnect: (signal?: AbortSignal) => Promise<void>;
-  cancel: (identity: { sha256: string; sizeBytes: number }) => void;
+  cancel: (identity: BlobIdentity) => void;
 };
 
 /** Four chunks followed by an ordered barrier bound both endpoints' work.
@@ -34,12 +35,12 @@ export async function pushResumableBlob(
   signal?.throwIfAborted();
   if (!path.isAbsolute(sourcePath)) throw new Error("Blob source must be absolute.");
   const file = await open(sourcePath, constants.O_RDONLY | constants.O_NONBLOCK);
-  let identity: { sha256: string; sizeBytes: number } | undefined;
+  let identity: BlobIdentity | undefined;
   let completed = false;
   try {
     const before = await file.stat();
     if (!before.isFile() || before.size > 512 * 1024 * 1024) throw new Error("Select a regular file of at most 512 MiB.");
-    identity = { sha256: await hashBlobFile(sourcePath), sizeBytes: before.size };
+    identity = { sha256: await hashBlobFile(sourcePath), sizeBytes: before.size, senderToken: randomUUID() };
     let committed = 0;
     let resumedFromBytes: number | undefined;
     let disconnectedAt: string | undefined;

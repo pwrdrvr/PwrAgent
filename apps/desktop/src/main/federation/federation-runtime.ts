@@ -5035,10 +5035,11 @@ export class DesktopFederationRuntime {
       );
     }
     for (const [peerId, rpc] of this.rpcByPeer) {
+      if (this.router?.getConnection(peerId)) continue;
       rpc.rejectAll(new FederationPeerUnavailableError(peerId, reason));
+      this.rpcByPeer.delete(peerId);
       void this.filePushReceiver?.disconnect(peerId).catch((error) => log.warn("Unable to suspend incoming blobs", { error }));
     }
-    this.rpcByPeer.clear();
   }
 
   private async receiveEnvelope(

@@ -12,8 +12,11 @@ export const BLOB_COMMIT_BYTES = 4 * 1024 * 1024;
 export const BLOB_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_BYTES = 512 * 1024 * 1024;
 
+export type BlobIdentity = { sha256: string; sizeBytes: number; senderToken?: string };
+
 type Sidecar = {
   peerId: string;
+  senderToken?: string;
   sha256: string;
   sizeBytes: number;
   name: string;
@@ -75,10 +78,13 @@ export class FederationResumableBlobReceiver {
     this.expiry.unref();
   }
 
-  async begin(peerId: string, args: { sha256: string; sizeBytes: number; name: string }): Promise<{
+  async begin(peerId: string, args: BlobIdentity & { name: string }): Promise<{
     transferId: string; committedOffset: number;
   }> {
     const key = contentKey(peerId, args.sha256, args.sizeBytes);
+    if (args.senderToken !== undefined && (typeof args.senderToken !== "string" || !/^[a-f0-9-]{36}$/.test(args.senderToken))) {
+      throw new Error("Invalid blob send owner.");
+    }
     const directory = this.options.directory();
     if (!path.isAbsolute(directory)) throw new Error("Incoming files folder must be absolute.");
     const root = path.join(directory, ".pwragent-resumable");
@@ -87,13 +93,9 @@ export class FederationResumableBlobReceiver {
     await this.expire(root);
     this.startExpiry();
     const folder = path.join(root, key);
-    for (const [id, transfer] of this.transfers) {
-      if (transfer.folder === folder) {
-        await transfer.file.close();
-        this.transfers.delete(id);
-      }
+    if (this.transfers.size >= 4 && ![...this.transfers.values()].some((transfer) => transfer.folder === folder)) {
+      throw new Error("Incoming blob transfer limit reached.");
     }
-    if (this.transfers.size >= 4) throw new Error("Incoming blob transfer limit reached.");
     await mkdir(folder, { recursive: true, mode: 0o700 });
     let state: Sidecar;
     try {
@@ -107,6 +109,16 @@ export class FederationResumableBlobReceiver {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       state = { ...args, peerId, committedOffset: 0, updatedAt: this.now() };
+    }
+    if (state.senderToken !== args.senderToken && !state.result) {
+      throw new Error("This blob belongs to another send. Cancel that send or wait for its expiry.");
+    }
+    state.senderToken = args.senderToken;
+    for (const [id, transfer] of this.transfers) {
+      if (transfer.folder === folder) {
+        await transfer.file.close();
+        this.transfers.delete(id);
+      }
     }
     const filePath = path.join(folder, "data.part");
     const file = await open(filePath, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
@@ -198,9 +210,16 @@ export class FederationResumableBlobReceiver {
     return state.result;
   }
 
-  async cancel(peerId: string, args: { sha256: string; sizeBytes: number }): Promise<void> {
+  async cancel(peerId: string, args: BlobIdentity): Promise<void> {
     const key = contentKey(peerId, args.sha256, args.sizeBytes);
     const folder = path.join(this.options.directory(), ".pwragent-resumable", key);
+    const state = await readFile(path.join(folder, "offset.json"), "utf8").then((value) => JSON.parse(value) as Sidecar).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    // A cancellation held offline must not erase a newer send of the same
+    // content when the link returns. Its logical owner survives reconnects.
+    if (state && state.senderToken !== args.senderToken) return;
     for (const [id, transfer] of this.transfers) {
       if (transfer.folder === folder) {
         await transfer.file.close();
