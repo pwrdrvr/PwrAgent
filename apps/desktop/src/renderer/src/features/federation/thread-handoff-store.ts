@@ -89,13 +89,14 @@ export function createThreadHandoffStore() {
   return {
     getTransfers: (): ThreadHandoffTransfers => transfers,
     getSummaries: (): ThreadHandoffSummaries => summaries,
-    subscribe(listener: () => void): () => void {
+    // Arrow properties, not methods: React and callers take these unbound.
+    subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
       };
     },
-    dispatch(event: ThreadHandoffTransferEvent): void {
+    dispatch: (event: ThreadHandoffTransferEvent): void => {
       const next = reduceThreadHandoffTransfers(transfers, event);
       if (next === transfers) return;
       transfers = next;
