@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { AgentEvent, BackendSummary, NavigationRow } from "@pwragent/shared";
@@ -90,7 +90,8 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     expect([...hook.result.current.pagedNavigation.resources.values()].every((resource) => !resource.loading)).toBe(true);
   });
   const navigation = hook.result.current;
-  const onThreadsArchived = vi.fn();
+  const completed = deferred();
+  const onThreadsArchived = vi.fn((_archived: Array<{ threadId: string }>) => completed.resolve());
   // Mount the real sidebar against the hook's admitted page. Keep that
   // presentation stable while driving IPC completions; hook state still
   // renders on every optimistic removal and accepted owner page.
@@ -100,10 +101,17 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     onBrowseModeChange={navigation.setBrowseMode} onSelectThread={navigation.selectThread}
     onArchiveThread={navigation.archiveThread} onArchiveThreads={navigation.archiveThreads} onThreadsArchived={onThreadsArchived}
     onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
+  const threadButton = (index: number) => {
+    // Keep the accessible-button assertion, but avoid computing accessible
+    // names for every control in the sidebar for each generated operation.
+    const row = sidebar.getByText(`Thread ${index}`, { exact: true }).closest<HTMLElement>("[data-thread-key]");
+    expect(row).not.toBeNull();
+    return within(row!).getByRole("button", { name: `Thread ${index}` });
+  };
   try {
-    const first = screen.getByRole("button", { name: "Thread 0" });
+    const first = threadButton(0);
     fireEvent.click(first);
-    fireEvent.click(screen.getByRole("button", { name: `Thread ${size - 1}` }), { shiftKey: true });
+    fireEvent.click(threadButton(size - 1), { shiftKey: true });
     fireEvent.contextMenu(first);
     read.mockClear();
     await act(async () => { fireEvent.click(screen.getByRole("menuitem", { name: `Archive ${size} Threads` })); });
@@ -124,17 +132,20 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
         }
       });
       if (options?.navigateAfterCompletionGroup === groupIndex) {
-        await act(async () => { fireEvent.click(screen.getByRole("button", { name: `Thread ${size}` })); });
+        await act(async () => { fireEvent.click(threadButton(size)); });
         expect(hook.result.current.selectedThreadKey).toBe(`codex:thread-${size}`);
       }
     }
-    await waitFor(() => expect(onThreadsArchived).toHaveBeenCalledOnce());
+    // The final refresh also updates selected detail. Own that continuation
+    // inside act instead of letting it run between waitFor polling attempts.
+    await act(async () => { await completed.promise; });
+    expect(onThreadsArchived).toHaveBeenCalledOnce();
     for (let index = 0; index < size; index++) {
       const failed = options?.failed?.includes(index) === true;
       expect(hook.result.current.threads.some((thread) => thread.id === `thread-${index}`)).toBe(failed);
       expect(removedPins.has(`thread-${index}`)).toBe(!failed && options?.remote?.includes(index) === true);
     }
-    const successes = onThreadsArchived.mock.calls[0]![0] as Array<{ threadId: string }>;
+    const successes = onThreadsArchived.mock.calls[0]![0];
     expect(successes.map((thread) => thread.threadId)).toEqual(rows.slice(0, size)
       .filter((_, index) => !options?.failed?.includes(index)).map((row) => row.id));
     const loads = read.mock.calls.length;
@@ -142,8 +153,10 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     console.info("bulk archive navigation IPC", { size, groups: completionGroups.length, loads, lensLoads });
     return { loads, lensLoads, selectedThreadKey: hook.result.current.selectedThreadKey };
   } finally {
-    sidebar.unmount();
-    hook.unmount();
+    await act(async () => {
+      sidebar.unmount();
+      hook.unmount();
+    });
   }
 }
 
