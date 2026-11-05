@@ -10,7 +10,7 @@ import { FederationFilePushReceiver, FILE_PUSH_METHODS } from "../federation/fed
 
 type Progress = { bytesCommitted: number; bytesSent?: number; bytesTotal: number; link: "connected" | "waiting" };
 
-async function transferSmallBlob(fill: number, dropAfterChunks?: number) {
+async function transferSmallBlob(fill: number, dropAfterChunks?: number, lagAcknowledgement = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), "small-blob-model-"));
   const source = path.join(root, "source");
   const data = Buffer.alloc(2 * 1024 * 1024, fill);
@@ -40,6 +40,12 @@ async function transferSmallBlob(fill: number, dropAfterChunks?: number) {
             expect(begins).toHaveLength(current);
             resumedOffset = (result as { committedOffset: number }).committedOffset;
             begins.push(resumedOffset);
+          }
+          if (request.method === FILE_PUSH_METHODS.checkpoint && lagAcknowledgement) {
+            const ack = result as { receivedOffset: number; committedOffset: number };
+            // A conservative durable acknowledgement is legal. The receiver's
+            // received offset still owns the byte meter, independently.
+            if (ack.receivedOffset < data.length) return { ...ack, committedOffset: 0 } as T;
           }
           return result as T;
         } },
@@ -89,9 +95,15 @@ it("a 2 MiB transfer resumes its durable first MiB after a drop at 1.5 MiB", asy
 
 it("a 2 MiB transfer reports increasing acknowledged bytesSent before finish", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 255 }), async (fill) => {
-    const { begins, progressBeforeFinish } = await transferSmallBlob(fill);
+    const { begins, progressBeforeFinish } = await transferSmallBlob(fill, undefined, true);
     expect(begins).toEqual([0]);
     expect(progressBeforeFinish.map((update) => update.bytesSent)).toEqual([0, 1024 * 1024, 2 * 1024 * 1024]);
-    expect(progressBeforeFinish[1].bytesCommitted).toBe(1024 * 1024);
+    expect(progressBeforeFinish[1].bytesCommitted).toBe(0);
   }), { numRuns: 5 });
+});
+
+it("bytesSent returns to the known durable offset while waiting for reconnect", async () => {
+  const { progress } = await transferSmallBlob(0x57, 6, true);
+  expect(progress.find((update) => update.bytesSent === 1024 * 1024)).toMatchObject({ bytesCommitted: 0 });
+  expect(progress.find((update) => update.link === "waiting")).toMatchObject({ bytesSent: 0, bytesCommitted: 0 });
 });
