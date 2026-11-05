@@ -56,7 +56,7 @@ export class ThreadInstanceHandoffService {
     localInstanceId: () => string;
     push: (instanceId: string, source: string, options?: PushFederationFileOptions) => Promise<FilePushResult>;
     supportsResumable?: (instanceId: string) => boolean;
-    retryNow?: () => void;
+    retryNow?: (instanceId: string) => void;
     remoteImport: (instanceId: string, request: ImportInstanceThreadRequest) => Promise<HandoffInstanceThreadResult>;
     assertTarget: (instanceId: string) => void;
     prepareTarget: (instanceId: string, request: ThreadHandoffPrepareRequest) => Promise<ThreadHandoffPrepareResult>;
@@ -66,7 +66,7 @@ export class ThreadInstanceHandoffService {
     receipt: (sourceInstanceId: string, file: FilePushResult) => boolean;
   }) {}
 
-  retryNow(): void { this.options.retryNow?.(); }
+  retryNow(instanceId: string): void { this.options.retryNow?.(instanceId); }
 
   async send(request: HandoffInstanceThreadRequest, sendOptions: ThreadHandoffSendOptions = {}): Promise<HandoffInstanceThreadResult> {
     const { signal } = sendOptions;
@@ -87,7 +87,7 @@ export class ThreadInstanceHandoffService {
         transport: resumable ? "resumable" : "single_shot", ...extra });
     };
     progress("package");
-    const retryNow = (): void => this.options.retryNow?.();
+    const retryNow = (): void => this.options.retryNow?.(request.targetInstanceId);
     sendOptions.retryNow?.addEventListener(THREAD_HANDOFF_RETRY_NOW_EVENT, retryNow);
     return await this.options.backend.withThreadHandoff(request.sourceThreadId, async () => {
       if (request.operation === "move") await this.options.assertMovable?.(request.sourceThreadId);

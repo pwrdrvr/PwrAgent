@@ -5024,3 +5024,28 @@ it("an upstream disconnect preserves requests on an independent live direct conn
     }
   }), { numRuns: 10 });
 });
+
+it("Retry Now wakes a target's upstream route without waking an unrelated link", () => {
+  fc.assert(fc.property(fc.boolean(), (usesUpstream) => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      stopping: boolean;
+      reconnectTimer?: ReturnType<typeof setTimeout>;
+      remotePeerDirectory: Map<string, unknown>;
+      connectToGateway: () => Promise<void>;
+      retryHandoffNow: (targetInstanceId: string) => void;
+    };
+    runtime.stopping = false;
+    runtime.gatewayInstanceId = "upstream-gateway";
+    runtime.remotePeerDirectory.set("upstream-owner", { id: "upstream-owner" });
+    const connect = vi.fn(async () => undefined);
+    runtime.connectToGateway = connect;
+    const timer = setTimeout(() => undefined, 0);
+    runtime.reconnectTimer = timer;
+    try {
+      runtime.retryHandoffNow(usesUpstream ? "upstream-owner" : "independent-peer");
+      expect(connect).toHaveBeenCalledTimes(usesUpstream ? 1 : 0);
+    } finally {
+      clearTimeout(timer);
+    }
+  }));
+});

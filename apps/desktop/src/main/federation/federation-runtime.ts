@@ -3013,9 +3013,11 @@ export class DesktopFederationRuntime {
     return await pushFederationFile(this.rpcFor(target), sourcePath, name, options);
   }
 
-  /** Shared reconnect timer: Retry Now on any waiting handoff wakes the link. */
-  retryHandoffNow(_handoffId?: string): void {
-    if (!this.reconnectTimer || this.stopping) return;
+  /** Wake only the upstream link that routes this handoff's target. */
+  retryHandoffNow(targetInstanceId: string): void {
+    if (!this.reconnectTimer || this.stopping || this.router?.getConnection(targetInstanceId)) return;
+    const gateway = this.gatewayInstanceId ?? getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
+    if (!gateway || (targetInstanceId !== gateway && !this.remotePeerDirectory.has(targetInstanceId))) return;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     void this.connectToGateway().catch((error) => this.handleClientConnectionFailure(error));
@@ -4051,7 +4053,7 @@ export class DesktopFederationRuntime {
       localInstanceId: () => this.ensureLocalInstanceId(),
       push: (instanceId, source, options) => this.pushFile({ scope: "remote", instanceId }, source, undefined, options),
       supportsResumable: (instanceId) => this.supportsResumableBlobs(instanceId),
-      retryNow: () => this.retryHandoffNow(),
+      retryNow: (instanceId) => this.retryHandoffNow(instanceId),
       remoteImport: (instanceId, request) => this.rpcFor({ scope: "remote", instanceId }).request({
         method: THREAD_HANDOFF_METHODS.import, params: request, timeoutMs: null,
       }),
