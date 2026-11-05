@@ -1,4 +1,5 @@
 import { formatByteCount } from "../../lib/format-bytes";
+import { formatElapsedMs } from "../../lib/format-duration";
 import {
   threadHandoffPercent,
   threadHandoffRate,
@@ -60,11 +61,6 @@ export function threadHandoffSteps(transfer: ThreadHandoffTransfer): ThreadHando
   });
 }
 
-function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
 /** The mono line under the steps and on the card, as the update banner's meter. */
 export function threadHandoffMeter(
   transfer: ThreadHandoffTransfer,
@@ -89,7 +85,7 @@ export function threadHandoffMeter(
   if (transfer.link === "waiting") {
     const lostAt = transfer.disconnectedAt ? Date.parse(transfer.disconnectedAt) : Number.NaN;
     return Number.isFinite(lostAt)
-      ? `${sent} on ${label} · lost ${formatElapsed(now.wall - lostAt)} ago`
+      ? `${sent} on ${label} · lost ${formatElapsedMs(now.wall - lostAt)} ago`
       : `${sent} on ${label}`;
   }
   const parts = [sent];
@@ -108,17 +104,19 @@ export function threadHandoffVerb(transfer: ThreadHandoffTransfer): string {
   return transfer.choice.operation === "move" ? "Moving" : "Copying";
 }
 
-/** The card's uppercase eyebrow: the step, and the percent while sending. */
+/**
+ * The card's uppercase eyebrow: the step alone. The card is a polite live
+ * region and announces each step change; the percent beside it ticks and
+ * stays out of the announcement.
+ */
 export function threadHandoffEyebrow(transfer: ThreadHandoffTransfer): string {
   if (transfer.cancelRequested) return "Cancelling";
   if (transfer.link === "waiting") return `Waiting for ${transfer.targetLabel}`;
   switch (transfer.phase) {
     case "package":
       return "Packaging";
-    case "send": {
-      const percent = threadHandoffPercent(transfer);
-      return percent === undefined ? "Sending" : `Sending · ${percent}%`;
-    }
+    case "send":
+      return "Sending";
     case "import":
       return `Opening on ${transfer.targetLabel}`;
     case "verify":

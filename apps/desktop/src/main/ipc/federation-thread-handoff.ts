@@ -12,6 +12,7 @@ import {
   FEDERATION_HANDOFF_THREAD_CHANNEL,
   FEDERATION_HANDOFF_THREAD_PROGRESS_CHANNEL,
   FEDERATION_RETRY_HANDOFF_THREAD_NOW_CHANNEL,
+  THREAD_HANDOFF_CANCELLED_MESSAGE,
 } from "../../shared/ipc";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import {
@@ -132,6 +133,14 @@ export function createThreadHandoffController(options: {
             onProgress: report,
           },
         );
+      } catch (error) {
+        // Only the abort itself is a cancel. An abort after the import began is
+        // ignored by the sender, so a later failure there is still a failure.
+        const signal = handoff.controller.signal;
+        if (signal.aborted && (error === signal.reason || (error instanceof Error && error.name === "AbortError"))) {
+          throw new Error(THREAD_HANDOFF_CANCELLED_MESSAGE);
+        }
+        throw error;
       } finally {
         handoffs.delete(handoffId);
       }

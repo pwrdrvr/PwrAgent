@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useReducer } from "react";
 import type { HandoffInstanceThreadResult } from "@pwragent/shared";
+import { THREAD_HANDOFF_CANCELLED_MESSAGE } from "../../../../shared/ipc";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { cleanComposerErrorMessage } from "../composer/composer-error-message";
 import {
   reduceThreadHandoffTransfers,
   type ThreadHandoffChoice,
@@ -21,16 +23,15 @@ export type StartThreadHandoff = {
   choice: ThreadHandoffChoice;
 };
 
-/** An abort from Cancel reaches the renderer as a rejected invoke. */
-function isAbort(error: unknown): boolean {
-  const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
-  return /AbortError|operation was aborted/i.test(text);
+/** Main ends a handoff that Cancel stopped with one fixed message. */
+function isCancelled(message: string): boolean {
+  return message === THREAD_HANDOFF_CANCELLED_MESSAGE;
 }
 
-/** Electron prefixes a rejected invoke with the channel; the operator needs the cause. */
+/** The cause, without Electron's invoke wrapper or the peer's handler prefix. */
 export function threadHandoffErrorMessage(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error);
-  return text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
+  const raw = error instanceof Error ? error.message : String(error);
+  return cleanComposerErrorMessage(raw) || raw;
 }
 
 /**
@@ -68,9 +69,10 @@ export function useThreadHandoffTransfers(api: HandoffApi | undefined) {
         dispatch({ type: "succeeded", handoffId, result });
         return result;
       } catch (error) {
-        dispatch(isAbort(error)
+        const message = threadHandoffErrorMessage(error);
+        dispatch(isCancelled(message)
           ? { type: "cancelled", handoffId }
-          : { type: "failed", handoffId, error: threadHandoffErrorMessage(error) });
+          : { type: "failed", handoffId, error: message });
         return undefined;
       }
     },

@@ -83,7 +83,9 @@ export function ThreadHandoffSteps(props: { transfer: ThreadHandoffTransfer }) {
                 <ThreadHandoffTrack transfer={transfer} label={step.label} />
               ) : null}
             </span>
-            {step.value ? <span className="thread-handoff-steps__value">{step.value}</span> : null}
+            {step.value ? (
+              <span className="thread-handoff-steps__value" aria-live="off">{step.value}</span>
+            ) : null}
           </li>
         ))}
       </ol>
@@ -120,7 +122,14 @@ export function ThreadHandoffToastCard(props: {
     >
       <div className="thread-handoff-card__head">
         <div className="app-update-banner__content">
-          <p className="app-update-banner__eyebrow">{threadHandoffEyebrow(transfer)}</p>
+          <p className="app-update-banner__eyebrow">
+            {threadHandoffEyebrow(transfer)}
+            {/* Ticks several times a second; a live region would read each one. */}
+            {transfer.phase === "send" && transfer.link === "connected" && !transfer.cancelRequested
+              && threadHandoffPercent(transfer) !== undefined ? (
+              <span aria-live="off"> · {threadHandoffPercent(transfer)}%</span>
+            ) : null}
+          </p>
           <button
             className="thread-handoff-card__title"
             type="button"
@@ -216,7 +225,7 @@ export function ThreadHandoffComposerBand(props: { threadKey: string | undefined
       {transfer.phase === "send" && percent !== undefined ? (
         <>
           <ThreadHandoffTrack transfer={transfer} label={`${threadHandoffVerb(transfer)} progress`} />
-          <span className="thread-handoff-band__value">{percent}%</span>
+          <span className="thread-handoff-band__value" aria-live="off">{percent}%</span>
         </>
       ) : null}
       <button

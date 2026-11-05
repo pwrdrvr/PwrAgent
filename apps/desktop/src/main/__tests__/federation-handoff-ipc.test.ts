@@ -5,6 +5,7 @@ import {
   FEDERATION_HANDOFF_THREAD_CHANNEL,
   FEDERATION_HANDOFF_THREAD_PROGRESS_CHANNEL,
   FEDERATION_RETRY_HANDOFF_THREAD_NOW_CHANNEL,
+  THREAD_HANDOFF_CANCELLED_MESSAGE,
 } from "../../shared/ipc";
 import type { ThreadHandoffSendOptions } from "../federation/thread-instance-handoff-service";
 
@@ -216,5 +217,38 @@ describe("federation handoff-thread ipc", () => {
     expect(seen.signal?.aborted).toBe(true);
     finish();
     await expect(running).resolves.toEqual(result);
+  });
+
+  it("tells the window a Cancel apart from a failure that follows it", async () => {
+    const request = {
+      sourceThreadId: "thread-1", targetInstanceId: "pwr_studio", operation: "copy", handoffId: HANDOFF_ID,
+    };
+    const owner = windowSender(1);
+    await register();
+    runtime.handoffInstanceThread.mockImplementation(async (
+      _request: unknown,
+      _source: unknown,
+      options: ThreadHandoffSendOptions,
+    ) => await new Promise((_resolve, reject) => {
+      options.signal?.addEventListener("abort", () => reject(options.signal?.reason));
+    }));
+    const cancelled = handlers.get(FEDERATION_HANDOFF_THREAD_CHANNEL)!({ sender: owner }, request);
+    await vi.waitFor(() => expect(runtime.handoffInstanceThread).toHaveBeenCalled());
+    await handlers.get(FEDERATION_CANCEL_HANDOFF_THREAD_CHANNEL)!({ sender: owner }, { handoffId: HANDOFF_ID });
+    await expect(cancelled).rejects.toThrow(THREAD_HANDOFF_CANCELLED_MESSAGE);
+
+    // The sender ignores an abort once the import began; a failure after that
+    // is the receiver's, and the window must show it as one.
+    runtime.handoffInstanceThread.mockImplementation(async (
+      _request: unknown,
+      _source: unknown,
+      options: ThreadHandoffSendOptions,
+    ) => await new Promise((_resolve, reject) => {
+      options.signal?.addEventListener("abort", () => reject(new Error("no rollout found for thread id")));
+    }));
+    const failed = handlers.get(FEDERATION_HANDOFF_THREAD_CHANNEL)!({ sender: owner }, request);
+    await vi.waitFor(() => expect(runtime.handoffInstanceThread).toHaveBeenCalledTimes(2));
+    await handlers.get(FEDERATION_CANCEL_HANDOFF_THREAD_CHANNEL)!({ sender: owner }, { handoffId: HANDOFF_ID });
+    await expect(failed).rejects.toThrow("no rollout found for thread id");
   });
 });

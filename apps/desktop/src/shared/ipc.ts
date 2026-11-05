@@ -24,6 +24,11 @@ export const FEDERATION_RETRY_HANDOFF_THREAD_NOW_CHANNEL =
   "federation:handoff-thread-retry-now";
 export const FEDERATION_HANDOFF_THREAD_PROGRESS_CHANNEL =
   "federation:handoff-thread-progress";
+/**
+ * The rejection a handoff call ends with when the operator's Cancel stopped
+ * it, so the window can tell a cancel from a failure without reading prose.
+ */
+export const THREAD_HANDOFF_CANCELLED_MESSAGE = "thread_handoff_cancelled";
 export const FEDERATION_PUSH_COMPOSER_FILE_CHANNEL =
   "federation:push-composer-file";
 export const FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL =

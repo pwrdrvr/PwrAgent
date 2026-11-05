@@ -102,6 +102,8 @@ describe("thread handoff transfer", () => {
             expect(before.cancelable).toBe(true);
           }
           if (after.status !== "running") expect(after.cancelRequested).toBe(false);
+          // A pending Cancel is only ever shown while it can still take effect.
+          if (after.cancelRequested) expect(after.cancelable).toBe(true);
           // A report for another handoff or thread changes nothing.
           if (
             event.type === "progress"

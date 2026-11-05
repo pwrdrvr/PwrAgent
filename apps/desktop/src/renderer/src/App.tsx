@@ -3678,6 +3678,16 @@ function DesktopAppShell(props: {
   // other becomes a notice, because the operator has moved on.
   const settledHandoffsRef = useRef(new Set<string>());
   useEffect(() => {
+    // Forget what no handoff needs any more: a removed handoff's id, and the
+    // source row of a thread with no handoff left. A failed send's Retry finds
+    // its thread in the list, where a source that was not moved still is.
+    for (const handoffId of settledHandoffsRef.current) {
+      if (!handoffTransfers[handoffId]) settledHandoffsRef.current.delete(handoffId);
+    }
+    const liveThreadKeys = new Set(Object.values(handoffTransfers).map((transfer) => transfer.threadKey));
+    for (const threadKey of handoffThreadsRef.current.keys()) {
+      if (!liveThreadKeys.has(threadKey)) handoffThreadsRef.current.delete(threadKey);
+    }
     for (const transfer of Object.values(handoffTransfers)) {
       if (transfer.status === "running" || settledHandoffsRef.current.has(transfer.handoffId)) continue;
       settledHandoffsRef.current.add(transfer.handoffId);

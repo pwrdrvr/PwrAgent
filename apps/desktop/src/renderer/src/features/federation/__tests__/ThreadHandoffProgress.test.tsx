@@ -9,6 +9,7 @@ import {
 } from "../ThreadHandoffProgress";
 import { threadHandoffMeter } from "../thread-handoff-copy";
 import { reduceThreadHandoffTransfers, type ThreadHandoffTransfer } from "../thread-handoff-transfer";
+import { threadHandoffErrorMessage } from "../useThreadHandoffTransfers";
 
 afterEach(() => {
   cleanup();
@@ -55,7 +56,10 @@ function renderCard(value: ThreadHandoffTransfer) {
 describe("thread handoff toast card", () => {
   it("names the step and lets the operator expand or cancel a live send", () => {
     const handlers = renderCard(transfer([{ bytesCommitted: 0, bytesTotal: 2 * MIB }, { bytesCommitted: MIB, bytesTotal: 2 * MIB }]));
-    expect(screen.getByText("Sending · 50%")).toBeInTheDocument();
+    const eyebrow = screen.getByText("Sending");
+    expect(eyebrow).toHaveTextContent("Sending · 50%");
+    // The card is a polite live region: the step is announced, the ticking percent is not.
+    expect(screen.getByText("· 50%", { exact: false })).toHaveAttribute("aria-live", "off");
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
     act(() => screen.getByRole("button", { name: "Show progress" }).click());
     act(() => screen.getByRole("button", { name: /Copying “Release v0.17”/ }).click());
@@ -94,6 +98,15 @@ describe("thread handoff meter", () => {
     expect(threadHandoffMeter(resumed, { monotonic: 2000, wall: Date.now() }))
       .toMatch(/^1\.5 MB of 2\.0 MB · resumed at 1\.0 MB/);
   });
+
+  it("times a dropped link with the app's live clock", () => {
+    const lostAt = Date.parse("2026-11-05T10:00:00Z");
+    const held = transfer([
+      { bytesCommitted: MIB, bytesTotal: 2 * MIB, link: "waiting", disconnectedAt: new Date(lostAt).toISOString() },
+    ]);
+    expect(threadHandoffMeter(held, { monotonic: 0, wall: lostAt + 66_000 }))
+      .toBe("1.0 MB of 2.0 MB on studio-mac / default · lost 1m 06s ago");
+  });
 });
 
 describe("thread handoff composer band", () => {
@@ -113,8 +126,16 @@ describe("thread handoff composer band", () => {
       </ThreadHandoffBandContext.Provider>,
     );
     expect(screen.getByRole("status")).toHaveTextContent("Copying to studio-mac / default");
-    expect(screen.getByText("25%")).toBeInTheDocument();
+    expect(screen.getByText("25%")).toHaveAttribute("aria-live", "off");
     act(() => screen.getByRole("button", { name: "Show Progress" }).click());
     expect(showProgress).toHaveBeenCalledWith(HANDOFF);
+  });
+});
+
+describe("thread handoff error message", () => {
+  it("shows the peer's cause without the invoke wrapper or handler prefix", () => {
+    expect(threadHandoffErrorMessage(new Error(
+      "Error invoking remote method 'federation:handoff-thread': Error: handler_failed: Destination creation could not be confirmed.",
+    ))).toBe("Destination creation could not be confirmed.");
   });
 });

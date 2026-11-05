@@ -108,12 +108,15 @@ function applyProgress(
       .filter((sample) => at - sample.at <= RATE_WINDOW_MS)
       .slice(-MAX_SAMPLES);
   }
+  // Once the receiver may be creating the thread, nothing takes that back,
+  // and a Cancel that raced the import was ignored: it is no longer pending.
+  const cancelable = transfer.cancelable && progress.cancelable;
   const next: ThreadHandoffTransfer = {
     ...transfer,
     phase: progress.phase,
     link: progress.link,
-    // Once the receiver may be creating the thread, nothing takes that back.
-    cancelable: transfer.cancelable && progress.cancelable,
+    cancelable,
+    cancelRequested: cancelable && transfer.cancelRequested,
     transport: progress.transport,
     samples,
   };
