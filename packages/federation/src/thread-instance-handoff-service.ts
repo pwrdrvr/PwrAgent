@@ -183,7 +183,7 @@ export class ThreadInstanceHandoffService {
       throw new Error("Git handoff preflight requires a published ref and an absolute existing receiver repository path.");
     }
     if (request.historyMode === "paginated") {
-      throw new Error("This thread uses Codex paginated history, which Send to Another Machine cannot transfer yet. Codex requires source-local history that is not included in a single exported file. Continue this thread on the sending machine.");
+      throw new Error("This thread uses Codex paginated history and the sender did not provide a portable export. Update PwrAgent and the managed Codex runtime on the sending machine, then retry.");
     }
     if (request.historyMode !== "legacy") {
       throw new Error("The receiver could not confirm a portable history format. Update PwrAgent on the sending machine and retry.");
