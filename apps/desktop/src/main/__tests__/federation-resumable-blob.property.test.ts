@@ -188,3 +188,24 @@ it("one send cannot replace or cancel another send of identical content", async 
     }
   }), { numRuns: 10 });
 });
+
+it("peer-supplied begin fields cannot forge a completed file receipt", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "blob-receipt-"));
+  const completed: unknown[] = [];
+  const receiver = new FederationFilePushReceiver({ allowed: () => true, directory: () => root,
+    onCompleted: (_peer, file) => { completed.push(file); } });
+  try {
+    const victim = path.join(root, "other-owned-fixture");
+    await writeFile(victim, "x");
+    const begin = await receiver.handle("source", FILE_PUSH_METHODS.begin, {
+      name: "fixture", binary: true, sha256: "0".repeat(64), sizeBytes: 1,
+      result: { path: victim, sizeBytes: 1, sha256: "0".repeat(64) },
+      committedOffset: 1, receivedOffset: 1,
+    }) as { transferId: string };
+    await expect(receiver.handle("source", FILE_PUSH_METHODS.finish, begin)).rejects.toThrow("Incomplete blob");
+    expect(completed).toEqual([]);
+  } finally {
+    await receiver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
