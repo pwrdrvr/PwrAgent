@@ -40,7 +40,7 @@ it("only reads owner-named directory pages while hidden descendant counts follow
       return response;
     });
     const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
-    queries.setDemand(new Map(counts.map((_, i) => [String(i), request(i)])));
+    queries.setDemand(new Map(counts.map((_, i) => [String(i), { ...request(i), ...(i % 2 ? { backend: "all" as const } : {}) }])));
     const check = () => {
       for (const [id, r] of queries.getSnapshot().resources) {
         if (!r.state.stale) expect(r.state.page?.counts.active).toBe(counts[Number(id)]);

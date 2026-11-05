@@ -1512,7 +1512,7 @@ export type AgentEvent = {
   federationTarget?: FederationTarget;
   notification: AppServerNotification;
   /**
-   * Complete owner-local directory dependencies for this row-only event,
+   * Complete all-provider owner-local directory dependencies for this row-only event,
    * including off-page descendants. Absence (or an unknown version) grants
    * no exclusion authority. Never applies to another owner's viewer mounts
    * or to membership changes. Owners omit the field when it exceeds bounds.

@@ -14,7 +14,6 @@ export class NavigationDirectoryScope {
   private revision = 0;
   private byThread?: Map<string, Set<string>>;
   private byPath?: Map<string, Set<string>>;
-  private directoryKeys?: Set<string>;
 
   checkpoint(): number { return this.revision; }
 
@@ -30,7 +29,6 @@ export class NavigationDirectoryScope {
     this.revision += 1;
     this.byThread = undefined;
     this.byPath = undefined;
-    this.directoryKeys = undefined;
   }
 
   /** Only the latest unfiltered owner scan may call this, with its ingress fence. */
@@ -38,7 +36,6 @@ export class NavigationDirectoryScope {
     if (checkpoint !== this.revision) return;
     this.byThread = undefined;
     this.byPath = undefined;
-    this.directoryKeys = undefined;
     if (index.coverage?.state !== "complete") return;
     const members = new Map<string, Set<string>>();
     for (const directory of index.directories) {
@@ -66,7 +63,6 @@ export class NavigationDirectoryScope {
     }
     this.byThread = byThread;
     this.byPath = byPath;
-    this.directoryKeys = new Set(index.directories.map((directory) => directory.key));
   }
 
   forEvent(event: AgentEvent): AgentEvent["navigationDirectoryScope"] {
@@ -74,10 +70,11 @@ export class NavigationDirectoryScope {
     const params = event.notification.params as Record<string, unknown>;
     const method = event.notification.method === "navigation/invalidated" ? params.sourceMethod : event.notification.method;
     if (navigationInvalidationMayChangeMembership(method)) return undefined;
+    // Directory Git metadata also stamps rows homed elsewhere through their
+    // secondary links. Membership alone cannot exclude those dependencies.
+    if (method === "navigation/directoryGitStatus/updated") return undefined;
     let keys: Set<string> | undefined;
-    if (method === "navigation/directoryGitStatus/updated" && typeof params.directoryKey === "string"
-      && this.directoryKeys?.has(params.directoryKey)) keys = new Set([params.directoryKey]);
-    else if (method === "navigation/threadGitWorkingState/updated" && typeof params.worktreePath === "string") {
+    if (method === "navigation/threadGitWorkingState/updated" && typeof params.worktreePath === "string") {
       keys = this.byPath?.get(params.worktreePath);
     } else if (typeof params.threadId === "string") {
       keys = this.byThread.get(buildThreadIdentityKey(event.backend, params.threadId));

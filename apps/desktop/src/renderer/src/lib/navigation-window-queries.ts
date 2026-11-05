@@ -358,10 +358,15 @@ export class NavigationWindowQueries {
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
     if (request.query.kind === "directory" && directoryScope && !resource.membershipUncertain
+      && (!request.backend || request.backend === "all")
       && !navigationInvalidationMayChangeMembership(method)
+      && method !== "navigation/directoryGitStatus/updated"
       && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
-      // The owner's complete membership includes off-page descendants. Loaded
-      // roots and linked paths can never supply this negative membership proof.
+      // The owner's all-provider membership includes off-page descendants.
+      // Provider-filtered indexes can group the same thread under another key.
+      // Directory Git updates also affect rows through secondary links, which
+      // membership-only v1 scopes from earlier peers do not cover.
+      // Loaded roots and linked paths cannot supply a negative membership proof.
       // A pending membership read retains its broad fence until accepted.
       return directoryScope.includes(request.query.directoryKey);
     }
