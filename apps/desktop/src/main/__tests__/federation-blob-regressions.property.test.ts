@@ -13,7 +13,7 @@ it("packages raw history within the raw gzip budget", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 40, max: 100 }), async (count) => {
     const raw = Buffer.from(Array.from({ length: count }, (_, i) =>
       JSON.stringify({ type: "message", index: i, text: "repeatable source text and tool output ".repeat(30 + i % 7) })).join("\n"));
-    const encoded = await encodeThreadHandoff({ version: 2,
+    const encoded = await encodeThreadHandoff({ version: 2, historyMode: "legacy",
       handoffId: "00000000-0000-0000-0000-000000000000", sourceThreadId: "fixture",
       historyDigest: "0".repeat(64), rolloutBase64: raw.toString("base64") });
     expect(encoded.length).toBeLessThanOrEqual(gzipSync(raw).length + 300);
@@ -23,7 +23,7 @@ it("packages raw history within the raw gzip budget", async () => {
 it("round-trips arbitrary opaque rollout and archive bytes in both peer formats", async () => {
   await fc.assert(fc.asyncProperty(fc.uint8Array({ minLength: 1, maxLength: 4096 }),
     fc.uint8Array({ maxLength: 1024 }), fc.boolean(), async (rollout, archive, binary) => {
-      const pkg = { version: 2 as const, handoffId: "00000000-0000-0000-0000-000000000000",
+      const pkg = { version: 2 as const, historyMode: "legacy" as const, handoffId: "00000000-0000-0000-0000-000000000000",
         sourceThreadId: "fixture", historyDigest: "0".repeat(64), rolloutBase64: Buffer.from(rollout).toString("base64"),
         workspace: { format: "zip" as const, dataBase64: Buffer.from(archive).toString("base64"), warnings: [] } };
       const encoded = await encodeThreadHandoff(pkg, binary);
