@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import fc from "fast-check";
 import * as gitBoundary from "../app-server/git-executable";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 
 const execFileAsync = promisify(execFile);
 
@@ -76,9 +77,10 @@ it("bounds archive-all Git output independently of the remaining worktree fleet"
 // with Git's own registration rather than production's scoped predicate.
 it("agrees with Git about archive eligibility across layouts and late registration changes", async () => {
   const layouts = ["ordinary", "linked-anchor", "alias", "bare", "separate"] as const;
-  const mutations = ["none", "locked", "late-lock", "late-backlink", "late-gitfile", "late-common", "late-unregister", "primary", "foreign", "subdirectory"] as const;
+  const mutations = ["none", "locked", "late-lock", "late-terminal-lock", "late-backlink", "late-gitfile", "late-common", "late-unregister", "primary", "foreign", "subdirectory"] as const;
   const property = fc.asyncProperty(fc.constantFrom(...layouts), fc.constantFrom(...mutations), fc.boolean(), async (layout, mutation, detached) => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-git-oracle-")));
+    let unregisterTerminals: (() => void) | undefined;
     try {
       let repo = await repository(root);
       if (layout === "bare") {
@@ -116,6 +118,14 @@ it("agrees with Git about archive eligibility across layouts and late registrati
       const before = await git(repo, "worktree", "list", "--porcelain");
       expect(before).toContain(checkout.replaceAll("\\", "/"));
       if (mutation === "locked") expect(before).toContain("locked oracle lock");
+      if (mutation === "late-terminal-lock") {
+        unregisterTerminals = registerWorktreeTerminalOwner({
+          async withWorktreeClosed(_worktreePath, work) {
+            await git(repo, "worktree", "lock", checkout);
+            return await work();
+          },
+        });
+      }
       let admissionReached = false;
       const archive = new WorktreeArchiveService().archive({
         backend: "codex", threadId: "oracle", repositoryPath: anchor, worktreePath: target,
@@ -137,11 +147,16 @@ it("agrees with Git about archive eligibility across layouts and late registrati
         expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(checkout.replaceAll("\\", "/"));
         await expect(readFile(path.join(checkout, "preserved.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
       } else {
-        await expect(archive).rejects.toThrow();
+        const reason = mutation === "primary" ? /primary checkout/
+          : mutation.includes("lock") ? /locked worktree/ : /registered with Git/;
+        await expect(archive).rejects.toThrow(reason);
         expect(await readFile(path.join(checkout, "preserved.txt"), "utf8")).toBe("snapshot me");
         expect(admissionReached).toBe(mutation.startsWith("late-"));
       }
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally {
+      unregisterTerminals?.();
+      await rm(root, { recursive: true, force: true });
+    }
   });
   await fc.assert(property, { numRuns: 8, examples: [
     ["ordinary", "none", false], ["linked-anchor", "none", true], ["alias", "none", true],
