@@ -1,5 +1,5 @@
 {
-  "1000-active-threads": { "aggregateLists": 0, "archiveMutations": 1, "providerPages": 41, "largestProviderPage": 25, "overlayReads": 41, "largestOverlaySlice": 25 },
+  "1000-active-threads": { "aggregateLists": 0, "archiveMutations": 1, "providerPages": 11, "largestProviderPage": 100, "overlayReads": 41, "largestOverlaySlice": 25 },
   "harold-discovery": { "identities": 1876, "providerPages": 76, "gitDiscoveries": 1876 },
   "harold-admission": { "identities": 1876, "providerPages": 19, "gitDiscoveries": 1 }
 }
