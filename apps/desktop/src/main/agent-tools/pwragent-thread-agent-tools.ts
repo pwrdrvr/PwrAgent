@@ -120,7 +120,7 @@ export function buildPwrAgentThreadToolDefinitions(
   const operations = PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES
     .filter((operation) => options.namespace !== PWRAGENT_THREAD_TOOL_NAMESPACE || operation !== "rename_current_thread")
     .filter((operation) =>
-      operation !== "manage_thread_dependencies" || !options.namespace || options.namespace === PWRAGENT_TOOL_NAMESPACE);
+      !["manage_thread_dependencies", "manage_thread_merge_holds"].includes(operation) || !options.namespace || options.namespace === PWRAGENT_TOOL_NAMESPACE);
   return operations.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
@@ -168,6 +168,8 @@ function descriptionForOperation(
       return "Create a durable, one-time watch for an attached pull request. success and failure wake the thread after CI success, early failure, or a merge conflict at the current head. The oldest duplicate CI watch receives the result. merged and closed wake the thread when the PR merges or closes without merge. Pushes and CI results do not end that watch. Each watching thread receives the wake. It reports the merge method (merge, squash, rebase, or unknown), merge commit SHA, merger, time, and base branch. Request merged and closed when this thread must release resources after the PR lands, such as a Sandboxer sandbox. Only a primary-workspace PR is eligible. A merged or closed PR returns currentOutcome and terminal details without a new watch. Omit backend and threadId for the current thread. Omit url only when one eligible PR exists. armed true means every requested event has a waiting watch (reason armed or already_armed). If armed is false, read message: outcome_already_final means checks already finished at this head. PwrAgent records its own rerun_failed_ci_jobs re-runs, so the replaced attempt cannot fire the watch. For a re-run started elsewhere, pass waitForNextResult: true. After creation, end the turn. Do not poll CI or create a monitor. Auto-fix PR handles failure wake-ups for new pushes without a duplicate turn. Pass action list to read this thread's waiting watches and their watchId values. Pass action cancel with a watchId to stop one watch.";
     case "rename_current_thread":
       return "Rename the PwrAgent thread running this turn, including an ordinary coding thread. Use when the user asks to rename this thread. Choose a concise title from the conversation when no title is supplied. The calling thread is resolved automatically. The rename applies immediately and appears in the notification rail. No additional approval is required. Do not overwrite a user-set title without a request. This does not rename an attached messaging topic or conversation. Use rename_current_messaging_conversation for that.";
+    case "manage_thread_merge_holds":
+      return "Wait Until Done marks this thread waiting for work that someone must call finished. It holds this thread's PR merge and reminds the operator afterwards. Use it for 'mark us waiting on', 'do not merge until', or 'when X is done, remind me to'. Rebase, CI repair, review, and conversation remain available. Create requires reason, which says what has to finish. Put what the operator wants to do afterwards in followUp, one step per item. Set offerToSend only when the operator wants the reminder to offer sending those steps here. Optionally link dependency with its backend, threadId, and local or remote target. That prerequisite can be offline. Omit backend/threadId for the calling thread. federationTarget selects the waiting thread's owner for remote operations. List returns this thread's waits and threads waiting on it, including connected peers. Resolve a specific hold when the work is done, with what finished in note. Resolving raises the operator's reminder card on the waiting thread, listing followUp. It starts no turn and merges nothing. Cancel only when the operator stops waiting. Cancel raises no card. Turn completion, idle, archive, and disconnection never resolve holds. After finishing work another thread waits on, list this thread to find that hold and its owner. Then resolve it there. Use manage_thread_dependencies instead for automatic milestones such as a finished turn, passing CI, or a merge.";
     case "manage_thread_dependencies":
       return "Manage durable prerequisites (Continue After) that resume this thread after another local thread reaches a turn or PR milestone. Conditions include successful turn completion, reviewable PR attachment, passing CI, and PR merge. Use dependencies instead of polling read_thread, gh, or a Job Monitor for prerequisites. Find the owning threads with search_threads. Their PRs need not be attached to this thread. For example, wait for three PRs to merge with mode all and one pr_merged condition per owning thread. Supports all/any conditions and rejects cycles. Create requires continuation: the concrete instructions the resumed turn will follow, since this conversation may be compacted by then. Set deliver to operator when only the human can do the follow-up. PwrAgent then raises a to-do card instead of resuming this thread. Omit backend/threadId for the calling thread. For turn_completed, omit turnId to pin the current or latest turn. For PR conditions, omit prUrl only for an unambiguous primary-workspace PR, which may be attached later. Omit headSha to follow the current head. CI must be fresh and complete. onFailure defaults to notify once. The wait option tolerates CI repairs. After creation, end this turn if no unrelated work remains. Do not poll the dependency. List returns failures and uncertain delivery for operator review. Cancel cannot undo an admitted continuation. Use dismiss only after the operator has inspected an uncertain admission. It retires the claim without cancelling any turn. Dependencies currently stay within this PwrAgent instance/profile.";
     case "mutate_thread":
@@ -181,6 +183,31 @@ function inputSchemaForOperation(
   operation: PwrAgentThreadInspectionOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "manage_thread_merge_holds":
+      return {
+        type: "object", additionalProperties: false, required: ["action"],
+        properties: {
+          action: { type: "string", enum: ["create", "list", "resolve", "cancel"] },
+          backend: { type: "string" }, threadId: { type: "string" },
+          federationTarget: { type: "object", additionalProperties: false, required: ["scope"], properties: { scope: { type: "string", enum: ["local", "remote"] }, instanceId: { type: "string" } } },
+          holdId: { type: "string" },
+          reason: { type: "string", maxLength: 2000, description: "Required for create. What has to finish, such as \"Windows validation of the shutdown fix in thread Atlas\"." },
+          releaseWhen: { type: "string", maxLength: 2000, description: "Optional. What counts as done, when that is more than the reason says." },
+          followUp: {
+            type: "array", maxItems: 12, items: { type: "string", maxLength: 200 },
+            description: "What the operator wants to do once it is done, one step per item. Write each step to stand alone without this conversation. The steps become the reminder card's checklist, such as [\"Rebase onto #3291\", \"Merge #17\"].",
+          },
+          offerToSend: { type: "boolean", description: "With followUp, the reminder card also offers to send the steps to this thread. The operator still decides. Nothing starts automatically." },
+          note: { type: "string", maxLength: 2000, description: "Required for resolve and cancel. For resolve, say what finished and any findings. The reminder card shows it." },
+          dependency: {
+            type: "object", additionalProperties: false, required: ["backend", "threadId", "target"],
+            properties: {
+              backend: { type: "string" }, threadId: { type: "string" }, title: { type: "string", maxLength: 200 },
+              target: { type: "object", additionalProperties: false, required: ["scope"], properties: { scope: { type: "string", enum: ["local", "remote"] }, instanceId: { type: "string" } } },
+            },
+          },
+        },
+      };
     case "rename_current_thread":
       return {
         type: "object",

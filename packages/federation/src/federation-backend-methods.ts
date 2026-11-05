@@ -42,6 +42,7 @@ export const FEDERATION_BACKEND_METHODS = {
   acknowledgeThreadEnvironmentFailure: "backend.acknowledgeThreadEnvironmentFailure",
   setThreadReaction: "backend.setThreadReaction",
   setThreadLock: "backend.setThreadLock",
+  manageThreadMergeHolds: "backend.manageThreadMergeHolds",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
   mountRemoteChild: "backend.mountRemoteChild",
@@ -193,6 +194,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // A lock refuses every turn on the owner's thread, so it takes the same
   // capability as starting one.
   [FEDERATION_BACKEND_METHODS.setThreadLock]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.manageThreadMergeHolds]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",

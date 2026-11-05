@@ -1,3 +1,4 @@
+import { useThreadMergeHolds } from "../thread-merge-holds/useThreadMergeHolds";
 import { TodoDispatchFacts, useTodoDispatchTarget } from "./TodoDispatchFacts";
 import { TodoPullRequestChip } from "./TodoPullRequestChip";
 import { todoDispatchPickKey, useTodoDispatchContext, type TodoDispatchChoices } from "./TodoDispatchProvider";
@@ -627,6 +628,9 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     && (!messageTarget.instanceId || messageTarget.instanceId === todo.federationTarget?.instanceId);
   const canSendMessage = !todo.federationTarget
     || props.instances?.some((instance) => instance.instanceId === todo.federationTarget?.instanceId && instance.messageTarget);
+  const mergeHolds = useThreadMergeHolds(todo.backend, todo.threadId, todo.federationTarget, undefined, action?.type === "merge_pull_request" && todo.status === "open", action?.type === "merge_pull_request" ? action.pullRequest : undefined);
+  const blockingMergeHolds = mergeHolds.data?.blockingHolds ?? mergeHolds.data?.holds;
+  const mergeHeld = blockingMergeHolds?.some((hold) => hold.status === "waiting");
   const titleId = `thread-todo-title-${todo.id}`;
   const prompt = action?.type === "start_thread" || action?.type === "send_message" ? action.prompt : undefined;
   const hasFacts = action?.type === "merge_pull_request";
@@ -789,6 +793,9 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           </>
         );
       case "merge_pull_request": {
+        if (mergeHeld || !mergeHolds.ready || mergeHolds.error) return <span role="status" className="thread-todo-card__hint">{mergeHeld
+          ? `Merge waits for ${blockingMergeHolds?.filter((hold) => hold.status === "waiting").map((hold) => hold.reason).join("; ")}`
+          : mergeHolds.error ? "Could not check what merging waits for. Reopen this card to try again." : "Checking what merging waits for…"}</span>;
         if (confirmingMerge) {
           return (
             <>
@@ -1059,8 +1066,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               </button>
             </div>
           ) : null}
-          {todo.error ? (
-            <p className="thread-todo-card__error" role="alert">{todo.error}</p>
+          {todo.error && !(mergeHeld && todo.error.startsWith("Merge held:")) ? (
+            <p className="thread-todo-card__error" role="alert">{todo.error.startsWith("Merge held:")
+              ? "The previous merge attempt was held. You can retry once the wait is marked done."
+              : todo.error}</p>
           ) : null}
         </div>
       ) : null}

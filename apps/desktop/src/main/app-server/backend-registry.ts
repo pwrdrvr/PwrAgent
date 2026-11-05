@@ -1,5 +1,7 @@
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
+import type { ManageThreadMergeHoldsRequest, ManageThreadMergeHoldsResponse, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
+import { blockingMergeHolds, buildMergeHoldReminder, validateMergeHoldRequest, type MergeHoldReminderCard } from "../thread-merge-holds/thread-merge-holds";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
@@ -9231,10 +9233,19 @@ type CodexRetryableTurnStart = {
   turnId?: string;
 };
 
+/** The to-do service seen from a wait marked done. `raise` runs inside the hold's transaction. */
+export type MergeHoldReminderDelivery = {
+  prepare: (thread: { backend: AppServerBackendKind; threadId: string }) => Promise<{ cwd?: string; sourceProject?: ThreadTodoProject }>;
+  raise: (card: MergeHoldReminderCard, placement: { cwd?: string; sourceProject?: ThreadTodoProject }) => ThreadTodo;
+  publish: (todo: ThreadTodo) => void;
+};
+
 type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
     | "acknowledgeThreadEnvironmentFailure"
+    | "manageThreadMergeHolds"
+    | "listActiveThreadMergeHolds"
     | "adoptLegacyRemoteDirectoryLaunchpad"
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
@@ -13057,6 +13068,54 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestWatchToolHandler | null | undefined,
   ): void {
     this.threadPullRequestWatchToolHandler = handler ?? undefined;
+  }
+
+  private threadMergeHoldToolHandler?: (request: ManageThreadMergeHoldsRequest, actor: string) => Promise<ManageThreadMergeHoldsResponse>;
+
+  setThreadMergeHoldToolHandler(handler: typeof this.threadMergeHoldToolHandler): void {
+    this.threadMergeHoldToolHandler = handler;
+  }
+
+  private mergeHoldReminders?: MergeHoldReminderDelivery;
+
+  /** Where a wait marked done raises the operator's reminder card. */
+  setMergeHoldReminderDelivery(delivery: MergeHoldReminderDelivery | undefined): void {
+    this.mergeHoldReminders = delivery;
+  }
+
+  /** Local authority. This does not start, stop, or steer a turn. */
+  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, actor: string): Promise<ManageThreadMergeHoldsResponse> {
+    if (!this.overlayStore.manageThreadMergeHolds || !this.overlayStore.listActiveThreadMergeHolds) throw new Error("Merge holds are unavailable on this instance.");
+    const normalized = { ...request, backend: request.backend ?? "codex", threadId: request.threadId ?? "" };
+    validateMergeHoldRequest(normalized);
+    const all = this.overlayStore.listActiveThreadMergeHolds();
+    if (request.action === "active") return { holds: all, dependents: [] };
+    if (request.action === "create") await this.readThread({ backend: normalized.backend, threadId: normalized.threadId, includeTurns: false });
+    // Placement is async, so it is read before the transaction, as for a
+    // dependency's reminder. The card itself commits with the resolve.
+    const delivery = request.action === "resolve" ? this.mergeHoldReminders : undefined;
+    const placement = delivery ? await delivery.prepare(normalized).catch(() => ({})) : {};
+    let reminder: ThreadTodo | undefined;
+    const holds = this.overlayStore.manageThreadMergeHolds(normalized, actor, Date.now(), delivery ? (hold, stillWaiting) => {
+      reminder = delivery.raise(buildMergeHoldReminder(hold, stillWaiting), placement);
+      return reminder.id;
+    } : undefined);
+    if (reminder) delivery?.publish(reminder);
+    if (request.action !== "list") {
+      await this.emit({ backend: normalized.backend, notification: {
+        method: "thread/mergeHolds/updated",
+        params: { threadId: normalized.threadId, mergeHolds: holds.filter((hold) => hold.status === "waiting") },
+      } });
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState(normalized);
+    const prUrl = request.pullRequest && /^\d+$/.test(request.pullRequest)
+      ? overlay?.prs?.find((pr) => pr.number === Number(request.pullRequest))?.url
+      : request.pullRequest;
+    return {
+      holds, blockingHolds: blockingMergeHolds(all, { ...normalized, pullRequest: prUrl }),
+      dependents: request.includeDependents === false ? [] : all.filter((hold) => hold.dependency?.target.scope === "local"
+        && hold.dependency.backend === normalized.backend && hold.dependency.threadId === normalized.threadId).map((hold) => ({ hold })),
+    };
   }
 
   setThreadDependencyToolHandler(
@@ -50015,6 +50074,20 @@ export class DesktopBackendRegistry {
       });
     }
 
+    if (request.operation === "manage_thread_merge_holds") {
+      if (!this.threadMergeHoldToolHandler) return threadInspectionFailure("unsupported_operation", "Merge holds are not available.");
+      if (request.args.action === "active") return threadInspectionFailure("invalid_arguments", "Use list for a thread's merge holds.");
+      try {
+        const response = await this.threadMergeHoldToolHandler({
+          ...request.args, backend: request.args.backend ?? request.context.backend,
+          threadId: request.args.threadId ?? request.context.threadId,
+        }, `agent:${request.context.backend}:${request.context.threadId}`);
+        return { ok: true, data: { threadMergeHolds: response } };
+      } catch (error) {
+        return threadInspectionFailure("invalid_arguments", error instanceof Error ? error.message : String(error));
+      }
+    }
+
     if (request.operation === "manage_thread_dependencies") {
       if (!this.threadDependencyToolHandler) return threadInspectionFailure("unsupported_operation", "Thread dependencies are not available.");
       // The resumed turn may have lost the plan to compaction, so an agent must
@@ -54477,6 +54550,7 @@ function toThreadInspectionSummary(
     linkedDirectories,
     linkedRepositories: summarizeLinkedRepositories(linkedDirectories),
     ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
+    ...(overlay?.mergeHolds?.some((hold) => hold.status === "waiting") ? { mergeHolds: overlay.mergeHolds.filter((hold) => hold.status === "waiting") } : {}),
   };
 }
 
@@ -54488,6 +54562,7 @@ function toThreadInspectionSummaryFromNavigation(
     agent: thread.agent,
     handoffOrigin: thread.handoffOrigin,
     ...(thread.prs?.length ? { pullRequests: thread.prs } : {}),
+    ...(thread.mergeHolds?.length ? { mergeHolds: thread.mergeHolds } : {}),
   };
 }
 

@@ -14304,7 +14304,7 @@ describe("DesktopBackendRegistry", () => {
     expect(acpClient.startPrompt).not.toHaveBeenCalled();
 
     releaseTurnStartup.resolve();
-    await turnPromise;
+    const turn = await turnPromise;
     const runtimeUpdatesAfterPromptStarted = setRuntimeOption.mock.calls.length;
     await settingsPromise;
 
@@ -14313,7 +14313,11 @@ describe("DesktopBackendRegistry", () => {
       runtimeUpdatesAfterPromptStarted,
     );
 
+    // This fixture owns the turn's terminal and branch adoption too. Drain
+    // them before close starts its shutdown deadline.
+    await emitCompletedTurn(registry, acpBackendId, "grok-session", turn.turnId);
     await registry.close();
+    expect(acpClient.cancelSession).not.toHaveBeenCalled();
   });
 
   describe("Kimi turn-start model writes", () => {

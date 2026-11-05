@@ -1,3 +1,4 @@
+import { ForgeReadError } from "../pr-status/forge-tool-contract";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -88,6 +89,15 @@ describe("GitLab merge request tools", () => {
     const detached = harness(() => ({ id: 42, ref: "refs/merge-requests/7/head", sha: "f".repeat(40) }));
     await expect(detached.client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx())).resolves
       .toMatchObject({ headSha: "f".repeat(40), providerRequests: 2 });
+  });
+
+  it("checks merge holds before issuing a provider write", async () => {
+    const { client, writeCalls } = harness(() => ({}));
+    const assertCanMerge = vi.fn(() => { throw new ForgeReadError("merge_held", "Merge held: Windows validation"); });
+    await expect(client.execute("merge_pull_request", { number: 17, expectedHeadSha: "a".repeat(40) }, ctx({ assertCanMerge })))
+      .rejects.toMatchObject({ code: "merge_held" });
+    expect(assertCanMerge).toHaveBeenCalledWith(repo, 17);
+    expect(writeCalls).toEqual([]);
   });
 
   it("finds the thread's merge request by source branch and reads it back", async () => {
