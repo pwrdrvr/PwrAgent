@@ -74,13 +74,15 @@ export function managedGitUpdatesCopy(
   // A chosen release that failed its checks: nothing else matters until the
   // operator picks another Git, because PwrAgent will not run this one.
   if (managed.selected && !options.manualPathSelected) {
-    const failure = selected?.failure
-      ?? (selected ? undefined : `${managed.selected} is no longer installed.`);
-    if (failure) {
+    const failure = selected?.failure;
+    if (failure || !selected) {
+      const reason = failure
+        ? `Failed verification: ${/[.!?]$/u.test(failure) ? failure : `${failure}.`}`
+        : "is no longer installed.";
       return {
         tone: "error",
-        tag: managed.selected,
-        message: `Failed verification: ${failure} Git commands fail until you choose another Git.`,
+        tag: selected?.version ?? managed.selected,
+        message: `${reason} Git commands fail until you choose another Git.`,
         actions: [
           ...rollback.map((action) => ({ ...action, primary: true })),
           ...(rollback.length === 0

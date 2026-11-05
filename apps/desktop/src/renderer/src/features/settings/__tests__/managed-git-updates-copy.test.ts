@@ -61,10 +61,19 @@ describe("Settings → Git → Updates", () => {
       previous: { kind: "bundled" },
     });
     expect(result.tone).toBe("error");
-    expect(result.message).toMatch(/Git commands fail until you choose another Git\.$/u);
+    expect(result.tag).toBe("2.56.0-dev-pwrgit.5");
+    expect(result.message).toBe(
+      "Failed verification: A file changed after the release was sealed: bin/git. Git commands fail until you choose another Git.",
+    );
     expect(result.actions).toEqual([
       expect.objectContaining({ kind: "rollback", primary: true, label: "Roll back to Bundled 2.56.0-dev-pwrgit.4" }),
     ]);
+  });
+
+  it("names a chosen release that is no longer installed", () => {
+    const result = copy({ selected: release5.generation, previous: { kind: "bundled" } });
+    expect(result.tag).toBe(release5.generation);
+    expect(result.message).toBe("is no longer installed. Git commands fail until you choose another Git.");
   });
 
   it("reports an offline check without hiding installed releases", () => {
