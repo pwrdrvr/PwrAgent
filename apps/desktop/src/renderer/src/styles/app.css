@@ -12319,10 +12319,9 @@ a.button {
 }
 
 .automations-table__menu-list {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 30;
+  /* Escape the table's rounded clipping and the pane's scrollport. */
+  position: fixed;
+  z-index: 150;
   display: flex;
   min-width: 132px;
   flex-direction: column;

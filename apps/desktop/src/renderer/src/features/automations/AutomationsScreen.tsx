@@ -1,6 +1,7 @@
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -9,6 +10,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   AutomationDetail,
   AutomationInboundMessageTriggerDefinition,
@@ -24,7 +26,8 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { ChevronRightIcon, MoreVerticalIcon } from "../../icons";
-import { useDismissableMenu } from "../composer/ComposerDropdown";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { portalViewportTop } from "../../lib/useViewportTooltip";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import {
   formatCostTodayMicros,
@@ -696,10 +699,51 @@ function AutomationRowMenu(props: {
 }) {
   const [open, setOpen] = useState(false);
   const menuId = useId();
-  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const close = useCallback(() => setOpen(false), []);
+  useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const trigger = triggerRef.current?.getBoundingClientRect();
+    const menu = menuRef.current?.getBoundingClientRect();
+    if (!trigger || !menu) return;
+    const floor = window.innerHeight - 8;
+    const below = trigger.bottom + 4;
+    const top = below + menu.height <= floor ? below : trigger.top - menu.height - 4;
+    setPosition({
+      left: Math.max(
+        8,
+        Math.min(trigger.right - menu.width, window.innerWidth - menu.width - 8),
+      ),
+      top: Math.max(portalViewportTop(), Math.min(top, floor - menu.height)),
+    });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent): void => {
+      if (
+        !triggerRef.current?.contains(event.target as Node)
+        && !menuRef.current?.contains(event.target as Node)
+      ) close();
+    };
+    document.addEventListener("pointerdown", outside);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open, close]);
+
   return (
-    <div className="automations-table__menu" ref={ref}>
+    <div className="automations-table__menu">
       <button
+        ref={triggerRef}
         aria-controls={open ? menuId : undefined}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -711,8 +755,14 @@ function AutomationRowMenu(props: {
       >
         <MoreVerticalIcon aria-hidden="true" size={14} />
       </button>
-      {open ? (
-        <div className="automations-table__menu-list" id={menuId} role="menu">
+      {open ? createPortal(
+        <div
+          className="automations-table__menu-list"
+          id={menuId}
+          ref={menuRef}
+          role="menu"
+          style={position}
+        >
           <button
             className="automations-table__menu-item"
             role="menuitem"
@@ -735,7 +785,8 @@ function AutomationRowMenu(props: {
           >
             Delete
           </button>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );
