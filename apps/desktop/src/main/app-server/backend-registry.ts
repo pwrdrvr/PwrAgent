@@ -1,4 +1,5 @@
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
+import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import type { ManageThreadMergeHoldsRequest, ManageThreadMergeHoldsResponse, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
 import { blockingMergeHolds, buildMergeHoldReminder, validateMergeHoldRequest, type MergeHoldReminderCard } from "../thread-merge-holds/thread-merge-holds";
@@ -9755,6 +9756,7 @@ export class DesktopBackendRegistry {
   private readonly reviewStartFailureNotices = new Map<string, string>();
   private readonly codexProtocolCaptureSession?: CodexProtocolCaptureSession;
   private readonly captureStores: ProtocolCaptureStore[] = [];
+  readonly navigationDirectoryScope = new NavigationDirectoryScope();
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
@@ -53330,6 +53332,7 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
+    this.navigationDirectoryScope.invalidate(event);
     const archiveWorkspaceChanged = this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
     if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
       this.cancelArchiveCleanups(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
@@ -54330,6 +54333,7 @@ export class DesktopBackendRegistry {
       this.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
     }
     event = this.withReviewRuntimeMetadata(event);
+    event = { ...event, navigationDirectoryScope: this.navigationDirectoryScope.forEvent(event) };
     await this.emitToListeners(event);
   }
 

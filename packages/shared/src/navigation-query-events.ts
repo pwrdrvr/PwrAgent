@@ -7,6 +7,32 @@
  */
 export const NAVIGATION_DIRECTORY_SET_CHANGED_METHOD = "navigation/directorySet/changed";
 
+export const NAVIGATION_DIRECTORY_SCOPE_MAX_KEYS = 100;
+export const NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES = 16 * 1024;
+
+/** Validate once per event, before a viewer uses an owner's exclusion proof. */
+export function readNavigationDirectoryScope(value: unknown): readonly string[] | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const scope = value as { version?: unknown; directoryKeys?: unknown };
+  if (scope.version !== 1 || !Array.isArray(scope.directoryKeys)
+    || scope.directoryKeys.length > NAVIGATION_DIRECTORY_SCOPE_MAX_KEYS) return undefined;
+  let characters = 0;
+  for (const key of scope.directoryKeys) {
+    if (typeof key !== "string" || !key || key.length > 1_024) return undefined;
+    characters += key.length;
+  }
+  if (characters > NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES) return undefined;
+  // Shared runs without DOM or Node globals. JSON escapes lone surrogates;
+  // iteration counts paired supplementary code points as four UTF-8 bytes.
+  let bytes = 0;
+  for (const character of JSON.stringify({ version: 1, directoryKeys: scope.directoryKeys })) {
+    const point = character.codePointAt(0)!;
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+    if (bytes > NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES) return undefined;
+  }
+  return scope.directoryKeys as string[];
+}
+
 const ROW_CHANGE_METHODS = new Set([
   "navigation/invalidated", "federation/eventStream/changed",
   "thread/started", "thread/archived", "thread/deleted", "thread/unarchived", "thread/status/changed",
