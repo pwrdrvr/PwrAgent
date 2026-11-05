@@ -35,6 +35,11 @@ export type ThreadHandoffTransfer = {
   view: ThreadHandoffTransferView;
   phase: ThreadHandoffPhase;
   bytesCommitted?: number;
+  /**
+   * Bytes the receiver has acknowledged, which the bar draws. It can fall back
+   * to `bytesCommitted` when a dropped link loses unsaved bytes, never below.
+   */
+  bytesSent?: number;
   bytesTotal?: number;
   resumedFromBytes?: number;
   link: "connected" | "waiting";
@@ -99,12 +104,18 @@ function applyProgress(
   const bytesCommitted = progress.bytesCommitted === undefined
     ? transfer.bytesCommitted
     : Math.max(transfer.bytesCommitted ?? 0, progress.bytesCommitted);
+  // Older peers report committed bytes only; those are what was sent.
+  const reportedSent = progress.bytesSent ?? progress.bytesCommitted;
+  const bytesSent = reportedSent === undefined
+    ? transfer.bytesSent
+    : Math.max(bytesCommitted ?? 0, reportedSent);
   const waiting = progress.link === "waiting";
   let samples = transfer.samples;
-  if (waiting) {
+  if (waiting || (bytesSent !== undefined && bytesSent < (transfer.bytesSent ?? 0))) {
+    // No rate across a gap, or across bytes the receiver lost.
     samples = [];
-  } else if (bytesCommitted !== undefined && bytesCommitted !== transfer.bytesCommitted) {
-    samples = [...samples, { at, bytes: bytesCommitted }]
+  } else if (bytesSent !== undefined && bytesSent !== transfer.bytesSent) {
+    samples = [...samples, { at, bytes: bytesSent }]
       .filter((sample) => at - sample.at <= RATE_WINDOW_MS)
       .slice(-MAX_SAMPLES);
   }
@@ -121,6 +132,7 @@ function applyProgress(
     samples,
   };
   if (bytesCommitted !== undefined) next.bytesCommitted = bytesCommitted;
+  if (bytesSent !== undefined) next.bytesSent = bytesSent;
   if (progress.bytesTotal !== undefined) next.bytesTotal = progress.bytesTotal;
   if (progress.resumedFromBytes !== undefined) next.resumedFromBytes = progress.resumedFromBytes;
   if (waiting && progress.disconnectedAt !== undefined) {
@@ -201,10 +213,15 @@ export function reduceThreadHandoffTransfers(
   }
 }
 
+/** The bytes the bar draws: acknowledged, else committed for an older peer. */
+export function threadHandoffBytesSent(transfer: ThreadHandoffTransfer): number {
+  return transfer.bytesSent ?? transfer.bytesCommitted ?? 0;
+}
+
 /** Whole percent of the send, or undefined before a total is known. */
 export function threadHandoffPercent(transfer: ThreadHandoffTransfer): number | undefined {
   if (!transfer.bytesTotal) return undefined;
-  const ratio = (transfer.bytesCommitted ?? 0) / transfer.bytesTotal;
+  const ratio = threadHandoffBytesSent(transfer) / transfer.bytesTotal;
   return Math.max(0, Math.min(100, Math.floor(ratio * 100)));
 }
 
@@ -230,6 +247,6 @@ export function threadHandoffSecondsLeft(
   if (!transfer.bytesTotal || transfer.link !== "connected" || transfer.phase !== "send") return undefined;
   const rate = threadHandoffRate(transfer, now);
   if (!rate || rate.spanMs < ETA_MIN_SAMPLE_MS || rate.bytesPerSecond <= 0) return undefined;
-  const left = transfer.bytesTotal - (transfer.bytesCommitted ?? 0);
+  const left = transfer.bytesTotal - threadHandoffBytesSent(transfer);
   return Math.max(0, Math.ceil(left / rate.bytesPerSecond));
 }

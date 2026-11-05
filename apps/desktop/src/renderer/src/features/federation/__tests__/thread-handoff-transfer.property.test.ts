@@ -33,6 +33,7 @@ const progressArb: fc.Arbitrary<ThreadHandoffProgress> = fc.record({
   sourceThreadId: fc.constantFrom("thread-1", "thread-1", "thread-2"),
   phase: fc.constantFrom(...THREAD_HANDOFF_PHASE_ORDER),
   bytesCommitted: fc.option(fc.integer({ min: 0, max: TOTAL }), { nil: undefined }),
+  bytesSent: fc.option(fc.integer({ min: 0, max: TOTAL }), { nil: undefined }),
   bytesTotal: fc.option(fc.constant(TOTAL), { nil: undefined }),
   resumedFromBytes: fc.option(fc.integer({ min: 0, max: TOTAL }), { nil: undefined }),
   link: fc.constantFrom("connected" as const, "waiting" as const),
@@ -86,8 +87,12 @@ describe("thread handoff transfer", () => {
           state = reduceThreadHandoffTransfers(state, event);
           const after = state[HANDOFF]!;
 
-          // The bar never moves backwards, and neither does the step list.
+          // The saved point never moves backwards, and neither does the step list.
           expect(after.bytesCommitted ?? 0).toBeGreaterThanOrEqual(before.bytesCommitted ?? 0);
+          // The bar may give back bytes a dropped link lost, never saved ones.
+          if (after.bytesSent !== undefined) {
+            expect(after.bytesSent).toBeGreaterThanOrEqual(after.bytesCommitted ?? 0);
+          }
           expect(THREAD_HANDOFF_PHASE_ORDER.indexOf(after.phase))
             .toBeGreaterThanOrEqual(THREAD_HANDOFF_PHASE_ORDER.indexOf(before.phase));
           // Once the receiver may be creating the thread, Cancel stays off.
@@ -149,5 +154,26 @@ describe("thread handoff transfer", () => {
     send(2_000, 200);
     // 100 bytes a second with 800 left.
     expect(threadHandoffSecondsLeft(state[HANDOFF]!, 2_000)).toBe(8);
+  });
+
+  it("draws acknowledged bytes ahead of the last saved point", () => {
+    let state = reduceThreadHandoffTransfers({}, started);
+    state = reduceThreadHandoffTransfers(state, {
+      type: "progress",
+      at: 100,
+      progress: {
+        handoffId: HANDOFF,
+        sourceThreadId: "thread-1",
+        phase: "send",
+        bytesCommitted: 0,
+        bytesSent: 600,
+        bytesTotal: TOTAL,
+        link: "connected",
+        cancelable: true,
+        transport: "resumable",
+      },
+    });
+    expect(state[HANDOFF]!.bytesCommitted).toBe(0);
+    expect(threadHandoffPercent(state[HANDOFF]!)).toBe(60);
   });
 });

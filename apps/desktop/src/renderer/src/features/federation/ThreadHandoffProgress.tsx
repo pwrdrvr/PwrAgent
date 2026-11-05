@@ -174,7 +174,7 @@ export function ThreadHandoffToastCard(props: {
         <>
           <p className="thread-handoff-card__note">
             The {transfer.choice.operation} continues from{" "}
-            {transfer.bytesCommitted ? "where it stopped" : "the start"} when{" "}
+            {transfer.bytesCommitted ? "the last saved point" : "the start"} when{" "}
             {transfer.targetLabel} reconnects. Nothing it already has is sent again.
           </p>
           <div className="app-update-banner__actions">

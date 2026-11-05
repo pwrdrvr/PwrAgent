@@ -1,6 +1,7 @@
 import { formatByteCount } from "../../lib/format-bytes";
 import { formatElapsedMs } from "../../lib/format-duration";
 import {
+  threadHandoffBytesSent,
   threadHandoffPercent,
   threadHandoffRate,
   threadHandoffSecondsLeft,
@@ -81,7 +82,7 @@ export function threadHandoffMeter(
       break;
   }
   if (!transfer.bytesTotal) return `Connecting to ${label}`;
-  const sent = `${formatByteCount(transfer.bytesCommitted ?? 0)} of ${formatByteCount(transfer.bytesTotal)}`;
+  const sent = `${formatByteCount(threadHandoffBytesSent(transfer))} of ${formatByteCount(transfer.bytesTotal)}`;
   if (transfer.link === "waiting") {
     const lostAt = transfer.disconnectedAt ? Date.parse(transfer.disconnectedAt) : Number.NaN;
     return Number.isFinite(lostAt)
