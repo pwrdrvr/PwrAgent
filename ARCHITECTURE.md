@@ -167,11 +167,16 @@ What the reservation serializes, and what it cannot:
   arrives after the final assertion cannot stop `git worktree remove`.
 - A Codex thread another client starts in, or moves into, the checkout without
   notifying this process is seen only if it advanced `updated_at` before the
-  admission's recency read. Another process's overlay or Claude-session write
-  is seen only if it committed before the token comparison.
-- Not seen within a batch: an external restore that does not advance
-  `updated_at`, a symlink retargeted after the batch's complete read, and
-  direct filesystem or Git use of the checkout by something that is not a
+  admission's recency read. External `thread/unarchive` also advances it:
+  protocol-only captures on 2026-11-05 with Codex 0.160.0 and 0.163.0 confirmed
+  visibility from another App Server's `thread/list` with
+  `sortKey: "updated_at"` and `useStateDbOnly: true`, both before and after
+  restarting the restoring client. `thread/resume` by ID or archived path and
+  `thread/fork` reject archived threads instead of reactivating them. Another
+  process's overlay or Claude-session write is seen only if it committed
+  before the token comparison.
+- Not seen within a batch: a symlink retargeted after the batch's complete
+  read, and direct filesystem or Git use of the checkout by something that is not a
   thread. The archive service still rechecks Git's lock immediately before
   removal. An unreported provider removal keeps the checkout protected until
   the next batch reads the fleet.
