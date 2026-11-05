@@ -215,7 +215,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       const thread = threads[params.threadId];
       if (thread?.portableExport) reply({ threadId: params.threadId, format: "legacy-rollout-v1",
         dataBase64: Buffer.from(JSON.stringify({ ...thread, historyMode: "legacy" })).toString("base64") });
-      else send({ id, error: { code: -32601, message: "Fixture portable export is unavailable" } });
+      else send({ id, error: { code: -32600, message: "unknown variant `thread/export`" } });
     } else if (method === "fs/readFile") {
       const thread = threads[path.basename(params.path)];
       assert.ok(thread);

@@ -35,7 +35,7 @@ export type ThreadHandoffGitReference = {
 };
 
 export type ThreadHandoffPrepareRequest = {
-  /** Codex's protocol-reported history contract; absent on older senders. */
+  /** Portable export contract; absent on older senders. */
   historyMode?: string;
   repository?: string;
   git?: ThreadHandoffGitReference;
