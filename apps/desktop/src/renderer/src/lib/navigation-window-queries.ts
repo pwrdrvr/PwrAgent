@@ -378,9 +378,11 @@ export class NavigationWindowQueries {
           && navigationWorkingStatePath(row) === params.worktreePath);
       }
     }
-    // A row event cannot change membership of an exact identity query.
-    // Other collections retain conservative invalidation for counts/order.
-    if (request.query.kind !== "exact") return true;
+    // Viewer exact pages also carry directory-wide selection descriptors.
+    // A sibling's activity can change those counts without changing any exact
+    // row, so their invalidation dependencies are wider than their identities.
+    // Keep owner exact row scoping and conservative viewer count refreshes.
+    if (request.federationTarget?.scope !== "remote" || request.query.kind !== "exact") return true;
     if (resource.membershipUncertain || navigationInvalidationMayChangeMembership(method)) return true;
     if (method === "navigation/directoryGitStatus/updated" && typeof params?.directoryKey === "string"
       && page?.coverage.state === "complete" && page.complete) {
