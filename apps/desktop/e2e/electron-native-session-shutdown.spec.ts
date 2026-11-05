@@ -42,7 +42,9 @@ test("flushes the final cookie written by renderer unload before native quit", a
         process.stderr.write(`${prefix}${JSON.stringify(cookies.map((cookie) => cookie.value))}\n`);
       };
     }, { prefix, url: `http://127.0.0.1:${address.port}/final-write` });
-    await closeElectronWithSessionDrain(app.electronApp);
+    await (process.platform === "win32"
+      ? app.closeApplication()
+      : closeElectronWithSessionDrain(app.electronApp));
     expect(output).toContain(`${prefix}["present"]`);
   } finally {
     try {
@@ -55,8 +57,7 @@ test("flushes the final cookie written by renderer unload before native quit", a
   }
 });
 
-test("Windows retains native session callbacks after renderers and inspector close", async () => {
-  test.skip(process.platform !== "win32", "Windows native storage shutdown");
+test("retains native session callbacks after renderers and inspector close", async () => {
   const app = await launchElectronApp({
     fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
   });
@@ -96,7 +97,7 @@ test("Windows retains native session callbacks after renderers and inspector clo
     if (!address || typeof address === "string") throw new Error("Expected the loopback server address");
     await app.electronApp.evaluate(({ app, BrowserWindow, net, session }, { prefix, url }) => {
       app.on("before-quit", () => process.stderr.write(`${prefix}before-quit\n`));
-      app.once("will-quit", () => process.stderr.write(`${prefix}will-quit\n`));
+      app.on("will-quit", () => process.stderr.write(`${prefix}will-quit\n`));
       const ownedSession = session.defaultSession;
       const clearData = ownedSession.clearData.bind(ownedSession);
       ownedSession.clearData = async (options) => {
@@ -106,7 +107,9 @@ test("Windows retains native session callbacks after renderers and inspector clo
         process.stderr.write(`${prefix}callback-complete\n`);
       };
     }, { prefix, url: `http://127.0.0.1:${address.port}/session-drain` });
-    const closing = app.closeApplication();
+    const closing = process.platform === "win32"
+      ? app.closeApplication()
+      : closeElectronWithSessionDrain(app.electronApp);
     await Promise.race([
       requestReceived,
       closing.then(() => { throw new Error("Closed before the controlled session callback was released"); }),

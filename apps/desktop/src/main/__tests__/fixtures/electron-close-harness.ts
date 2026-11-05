@@ -37,7 +37,7 @@ export function createCloseHarness(sessions: SessionDouble[], options: {
     for (const stage of ["before-quit", "will-quit"]) {
       options.quitModel.on(stage, (event) => { app.emit(stage, event); });
     }
-    options.quitModel.on("quit", completeNativeQuit);
+    options.quitModel.on("quit", () => { app.emit("quit"); completeNativeQuit(); });
   }
   let inspectorDetached = false;
   const quit = vi.fn(() => {
@@ -51,6 +51,7 @@ export function createCloseHarness(sessions: SessionDouble[], options: {
     const will = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
     app.emit("will-quit", will);
     if (!will.defaultPrevented) {
+      app.emit("quit");
       completeNativeQuit();
     }
   });

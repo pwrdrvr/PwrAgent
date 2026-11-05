@@ -136,14 +136,14 @@ describe("Electron E2E fixture teardown", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects failed cookie flushing before Playwright begins close", async () => {
+  it("rejects failed cookie flushing before native quit", async () => {
     const harness = createCloseHarness([{
       closeAllConnections: async () => undefined,
       cookies: { flushStore: async () => { throw new Error("cookie store failed to flush"); } },
       clearData: async () => undefined,
     }]);
     await expect(closeElectronWithSessionDrain(harness.electronApp)).rejects.toThrow("cookie store failed to flush");
-    expect(harness.close).not.toHaveBeenCalled();
+    expect(harness.close).toHaveBeenCalledOnce();
     expect(harness.child.exitCode).toBeNull();
     expect(harness.app.listenerCount("before-quit")).toBe(0);
   });

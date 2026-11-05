@@ -26,15 +26,13 @@ async function checkSessionReadiness(sessionCount: number, choices: number[]): P
     clearData: operation(index, true),
   }));
   const observeDisposal = (stage: string) => {
-    // Rule: every owned session must finish its callbacks before Playwright
-    // disposal or the product's shutdown signal can destroy renderer contexts.
-    // Record the violation independently of the close promise's outcome.
+    // Every owned session retains its native context until callbacks finish,
+    // even though Playwright has detached and renderers have already closed.
     if (cacheComplete.some((complete) => !complete)) prematureDisposal.push(stage);
   };
   const harness = createCloseHarness([...sessions, sessions[0]], {
     installed: true,
-    onPrepare: () => observeDisposal("playwright-close"),
-    onSignal: () => observeDisposal("renderer-shutdown"),
+    onNativeQuit: () => observeDisposal("native-quit"),
   });
   const closing = closeElectronApplication(harness.electronApp);
   // Only complete operations the real implementation has requested. Choose
@@ -54,7 +52,7 @@ async function checkSessionReadiness(sessionCount: number, choices: number[]): P
   expect(cacheComplete.every(Boolean)).toBe(true);
 }
 
-it("a pending cache callback retains its renderer until session preparation completes", async () => {
+it("a pending cache callback retains its native session context until completion", async () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   vi.spyOn(console, "log").mockImplementation(() => undefined);
   await checkSessionReadiness(1, Array.from({ length: 9 }, () => 0));

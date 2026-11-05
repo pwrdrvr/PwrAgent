@@ -1290,6 +1290,9 @@ export async function closeElectronWithSessionDrain(
 ): Promise<void> {
   const child = electronApp.process();
   const errorPrefix = `[pwragent-e2e-session-drain:${randomUUID()}]`;
+  let rejectDrain: (error: Error) => void = () => undefined;
+  const drainFailed = new Promise<never>((_resolve, reject) => { rejectDrain = reject; });
+  drainFailed.catch(() => undefined);
   let buffered = "";
   const onStderr = (chunk: Buffer | string) => {
     buffered += chunk.toString();
@@ -1300,6 +1303,9 @@ export async function closeElectronWithSessionDrain(
       try {
         const message: unknown = JSON.parse(buffered.slice(start + errorPrefix.length, end));
         if (typeof message === "object" && message !== null) {
+          if ("error" in message && typeof message.error === "string") {
+            rejectDrain(new Error(message.error));
+          }
           if (options.diagnosticsFile) {
             appendFileSync(options.diagnosticsFile, `${JSON.stringify({
               kind: "session-drain",
@@ -1317,10 +1323,10 @@ export async function closeElectronWithSessionDrain(
   };
   child.stderr?.on("data", onStderr);
   try {
-    await electronApp.evaluate(async ({ app, session, webContents }, errorPrefix) => {
-      const record = (stage: string, index?: number) => {
+    await electronApp.evaluate(({ app, session, webContents }, errorPrefix) => {
+      const record = (stage: string, index?: number, error?: string) => {
         process.stderr.write(`${errorPrefix}${JSON.stringify({
-          stage, index, at: Date.now(), pid: process.pid,
+          stage, index, error, at: Date.now(), pid: process.pid,
         })}\n`);
       };
       record("installed");
@@ -1328,25 +1334,45 @@ export async function closeElectronWithSessionDrain(
         session.defaultSession,
         ...webContents.getAllWebContents().map((contents) => contents.session),
       ]);
-      // before-quit also starts application-owned renderer disposal. Holding
-      // native quit cannot keep those contexts alive for pending callbacks.
-      // Finish preparation before Playwright can emit before-quit at all.
-      await Promise.all([...sessions].map(async (ownedSession, index) => {
-        record("close-connections-start", index);
-        await ownedSession.closeAllConnections();
-        record("close-connections-complete", index);
-        await ownedSession.cookies.flushStore();
-        record("flush-cookies-complete", index);
-        await ownedSession.clearData({ dataTypes: ["cache"] });
-        record("clear-cache-complete", index);
-      }));
-      record("released");
+      let released = false;
+      let draining = false;
+      const holdNativeQuit = (event: Electron.Event) => {
+        record("will-quit");
+        if (released) return;
+        event.preventDefault();
+        if (draining) return;
+        draining = true;
+        // Renderer unload can produce final storage writes. Drain only once
+        // its producers have closed, while preventing Browser::Shutdown from
+        // tearing down the native session context that owns these callbacks.
+        // The callback belongs to the app, not the detached inspector RPC.
+        void Promise.all([...sessions].map(async (ownedSession, index) => {
+          record("close-connections-start", index);
+          await ownedSession.closeAllConnections();
+          record("close-connections-complete", index);
+          await ownedSession.cookies.flushStore();
+          record("flush-cookies-complete", index);
+          await ownedSession.clearData({ dataTypes: ["cache"] });
+          record("clear-cache-complete", index);
+        })).then(() => {
+          released = true;
+          record("released");
+          // Native event dispatch performs a microtask checkpoint before
+          // resetting is_quitting_. Reenter only after that dispatch returns.
+          setImmediate(() => { record("retry-quit"); app.quit(); });
+        }).catch((error: unknown) => {
+          record("failed", undefined, error instanceof Error ? error.message : String(error));
+        });
+      };
       app.once("before-quit", () => record("before-quit"));
-      app.once("will-quit", () => record("will-quit"));
-      app.once("quit", () => record("quit"));
+      app.on("will-quit", holdNativeQuit);
+      app.once("quit", () => {
+        app.removeListener("will-quit", holdNativeQuit);
+        record("quit");
+      });
     }, errorPrefix);
     // Session preparation and application disposal share the close deadline.
-    await electronApp.close();
+    await Promise.race([electronApp.close(), drainFailed]);
   } finally {
     child.stderr?.removeListener("data", onStderr);
   }
