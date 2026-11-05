@@ -33,8 +33,10 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
   const completions: Array<() => void> = [];
   let gated = false;
   let revision = 0;
+  let incomingBytes = 0;
   const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (sent) => {
     const page = { ...navigationQueryFixture(sent, { directories, threads }), countsRevision: String(revision) };
+    incomingBytes += Buffer.byteLength(JSON.stringify(page), "utf8");
     if (gated) await new Promise<void>((resolve) => completions.push(resolve));
     return page;
   });
@@ -75,7 +77,7 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
       expect(navigation.pagedNavigation.resources.size).toBeGreaterThanOrEqual(73);
       expect(idle()).toBe(true);
     });
-    read.mockClear(); childOrder.mockClear(); encode.mockClear(); commits = 0; rowRenders = 0;
+    read.mockClear(); childOrder.mockClear(); encode.mockClear(); commits = 0; rowRenders = 0; incomingBytes = 0;
     gated = true;
     revision += 1;
     threads = threads.map((thread) => /^parent-[01]-.*child-0$/.test(thread.id) ? { ...thread, title: `${thread.title} fresh` } : thread);
@@ -102,9 +104,13 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
     const childCalls = read.mock.calls.filter(([sent]) => sent.query.kind === "children");
     const unrelatedChildCalls = childCalls.filter(([sent]) => sent.query.kind === "children"
       && !/^parent-[01]-/.test(sent.query.parent.threadId));
-    const pageSizes = encode.mock.calls.filter(([text]) => text?.includes('"countsRevision"')).length;
+    const sizedPages = encode.mock.calls.flatMap(([text], index) => text?.includes('"countsRevision"')
+      ? [encode.mock.results[index]!.value as Uint8Array] : []);
+    const pageSizes = sizedPages.length;
+    const sizedBytes = sizedPages.reduce((total, bytes) => total + bytes.byteLength, 0);
     console.info("navigation burst budget", { calls: read.mock.calls.length, childCalls: childCalls.length,
-      unrelatedChildCalls: unrelatedChildCalls.length, commits, rowRenders, childProjections: childOrder.mock.calls.length, pageSizes });
+      unrelatedChildCalls: unrelatedChildCalls.length, commits, rowRenders, childProjections: childOrder.mock.calls.length,
+      pageSizes, sizedBytes, incomingBytes });
     expect(unrelatedChildCalls).toHaveLength(0);
     expect(childCalls).toHaveLength(8);
     // Directory counts include off-page descendants. Until the owner names
@@ -116,5 +122,6 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
     expect(rowRenders).toBeLessThanOrEqual(32);
     expect(childOrder.mock.calls.length).toBeLessThanOrEqual(commits);
     expect(pageSizes).toBeLessThanOrEqual(read.mock.calls.length);
+    expect(sizedBytes).toBe(incomingBytes);
   } finally { mounted.unmount(); rows.restore(); completions.splice(0).forEach((finish) => finish()); }
 }, 30_000);
