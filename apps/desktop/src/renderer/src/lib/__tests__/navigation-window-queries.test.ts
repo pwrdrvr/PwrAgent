@@ -536,6 +536,26 @@ it("rebuilds an invalidated queued Load more before extending its fresh snapshot
   } finally { queries.dispose(); gates.splice(0).forEach((finish) => finish()); }
 });
 
+it("settles recovery readiness when a coalesced refresh cannot repeat an expired baseline", async () => {
+  const pending = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockResolvedValueOnce(page()).mockImplementationOnce(async () => {
+    await pending.promise;
+    throw new Error("navigation_cursor_expired");
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["lens", request()]]));
+  try {
+    await settled(queries, "lens");
+    const first = queries.refresh();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    const second = queries.refresh();
+    pending.resolve(page());
+    await Promise.all([first, second]);
+    expect(queries.getSnapshot().resources.get("lens")).toMatchObject({ loading: false, state: { rebaselineRequired: true } });
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally { queries.dispose(); pending.resolve(page()); }
+});
+
 it("schedules every expanded resource with four physical reads instead of dropping demand after eight", async () => {
   const gates: ReturnType<typeof deferred<NavigationQueryPage>>[] = [];
   const read = vi.fn(() => { const gate = deferred<NavigationQueryPage>(); gates.push(gate); return gate.promise; });

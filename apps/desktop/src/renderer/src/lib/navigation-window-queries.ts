@@ -706,8 +706,9 @@ export class NavigationWindowQueries {
         }
         if (resource.pending === promise) resource.pending = undefined;
         if (this.isCurrent(resource)) {
-          if (resource.refreshAfterPending) {
-            resource.refreshAfterPending = false;
+          const repeat = resource.refreshAfterPending;
+          resource.refreshAfterPending = false;
+          if (repeat && !resource.value.state.rebaselineRequired) {
             void this.read(resource, false);
           } else {
             resource.value = { ...resource.value, loading: false };
