@@ -17,6 +17,7 @@ export const ELECTRON_DEV_ENV_KEYS = [
 
 const TERMINAL_SHUTDOWN_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 export const DEV_SETUP_SCRIPTS = [
+  ["./scripts/build-mcp-ipc-relay.mjs", "--optional"],
   ["./scripts/stage-ripgrep-bundle.mjs", "--platform", "current"],
   "./scripts/ensure-electron-runtime.mjs",
   ["../../scripts/linux-sandbox.mjs", "--warn"],

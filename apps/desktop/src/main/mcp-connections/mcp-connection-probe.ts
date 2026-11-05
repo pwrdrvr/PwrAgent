@@ -1,7 +1,42 @@
 import { discoverOAuthServerInfo } from "@modelcontextprotocol/sdk/client/auth.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPError, type StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ProbeMcpConnectionResponse } from "@pwragent/shared";
 import { MCP_CONNECTION_PROBE_TIMEOUT_MS } from "./mcp-connection-timeouts";
+import { isMcpIpcUrl } from "@pwragent/shared";
+import { createMcpIpcTransport } from "./mcp-ipc-http";
+
+async function probeIpc(serverUrl: string, executable?: string): Promise<ProbeMcpConnectionResponse> {
+  let transport: StreamableHTTPClientTransport;
+  try {
+    transport = createMcpIpcTransport(serverUrl, { executable });
+  } catch (error) {
+    return { ok: false, problem: "not_a_url", message: error instanceof Error ? error.message : String(error) };
+  }
+  const client = new Client({ name: "PwrAgent", version: "probe" }, { capabilities: {} });
+  const signal = AbortSignal.timeout(MCP_CONNECTION_PROBE_TIMEOUT_MS);
+  const abort = (): void => { void transport.close().catch(() => undefined); };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    await client.connect(transport, { signal, timeout: MCP_CONNECTION_PROBE_TIMEOUT_MS });
+    return {
+      ok: true, serverUrl, authMode: "none", serverName: client.getServerVersion()?.name,
+    };
+  } catch (error) {
+    if (error instanceof StreamableHTTPError && error.code === 401) {
+      return { ok: true, serverUrl, authMode: "none", needsIpcBearer: true };
+    }
+    return {
+      ok: false, problem: "unreachable",
+      message: `Local HTTP MCP connection failed. Approve access in the server app if required; browser OAuth is unavailable for IPC. ${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    signal.removeEventListener("abort", abort);
+    await client.close().catch(() => undefined);
+    await transport.close().catch(() => undefined);
+  }
+}
 
 /**
  * Words that begin a stdio MCP server command rather than a URL.
@@ -167,7 +202,9 @@ async function probeInitialize(
 export async function probeMcpConnectionUrl(
   serverUrl: string,
   fetchFn: FetchLike,
+  options: { ipcExecutable?: string } = {},
 ): Promise<ProbeMcpConnectionResponse> {
+  if (isMcpIpcUrl(serverUrl)) return await probeIpc(serverUrl.trim(), options.ipcExecutable);
   if (looksLikeStdioCommand(serverUrl)) {
     return {
       ok: false,
