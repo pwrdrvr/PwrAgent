@@ -75,6 +75,8 @@ import {
 } from "./SandboxerConnectionSetup";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
+import { shortenCodexHome } from "./shorten-codex-home";
+import { getHomeDir } from "../../lib/tildify-path";
 
 
 type ActionNotice = {
@@ -186,17 +188,6 @@ function normalizeCodexHome(value: string): string {
     .replaceAll("\\", "/")
     .replace(/\/$/, "")
     .replace(/^([A-Z]):/, (_, drive: string) => `${drive.toLowerCase()}:`);
-}
-
-/**
- * `~/.codex/profiles/work` is the form operators recognise. Only the
- * conventional `.codex` root is abbreviated; a `CODEX_HOME` pointed somewhere
- * else is shown in full rather than given a misleading `~`.
- */
-function shortenCodexHome(value: string): string {
-  const normalized = value.replaceAll("\\", "/").replace(/\/$/, "");
-  const match = /^.*?(\/\.codex(?:\/.*)?)$/.exec(normalized);
-  return match ? `~${match[1]}` : normalized;
 }
 
 function readStartupStatus(
@@ -1784,7 +1775,7 @@ export function PluginsSettings(props: {
           <span className="settings-mcp-scope__value">
             <strong>{activeProfileLabel}</strong>
             <code>
-              {activeCodexHome ? shortenCodexHome(activeCodexHome) : "Loading..."}
+              {activeCodexHome ? shortenCodexHome(activeCodexHome, getHomeDir()) : "Loading..."}
             </code>
           </span>
           <span className="settings-mcp-scope__key">Codex</span>

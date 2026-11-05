@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from "../../../test/phase-probes";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AuthorizeMcpConnectionResponse,
   CodexMcpServerSummary,
@@ -20,8 +20,13 @@ import { PluginsSettings as PluginsSettingsComponent } from "../PluginsSettings"
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 
+beforeEach(() => {
+  vi.stubGlobal("__pwragentHomeDir", "/Users/operator");
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 const CODEX_HOME = "/Users/operator/.codex/profiles/work";
@@ -447,6 +452,33 @@ describe("PluginsSettings", () => {
     expect(
       screen.getByText(/have its own separate sign-ins|separate\s+sign-ins/),
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    "/Volumes/work/.codex",
+    "/srv/shared/.codex/profiles/ci",
+    "/Users/operator/projects/app/.codex",
+  ])("shows a custom Codex home in full: %s", async (codexHome) => {
+    render(
+      <PluginsSettings
+        desktopApi={createDesktopApi([], codexHome)}
+        snapshot={createSnapshot({ codexHome })}
+      />,
+    );
+
+    expect(await screen.findByText(codexHome, { selector: "code" })).toBeInTheDocument();
+  });
+
+  it("keeps the Codex home in full when preload has no home directory", async () => {
+    vi.stubGlobal("__pwragentHomeDir", undefined);
+    render(
+      <PluginsSettings
+        desktopApi={createDesktopApi([])}
+        snapshot={createSnapshot()}
+      />,
+    );
+
+    expect(await screen.findByText(CODEX_HOME, { selector: "code" })).toBeInTheDocument();
   });
 
   it("does not warn about a split that does not exist on System default", async () => {
