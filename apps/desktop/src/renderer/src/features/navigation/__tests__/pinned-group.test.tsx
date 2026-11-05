@@ -78,7 +78,7 @@ function renderRecents(props: Partial<ComponentProps<typeof Sidebar>> = {}) {
 }
 
 function pinnedGroup(): HTMLElement | null {
-  return document.querySelector<HTMLElement>(".pinned-group");
+  return document.querySelector<HTMLElement>(".pinned-group:not(.recents-group)");
 }
 
 function groupHeader(): HTMLElement {
@@ -92,7 +92,7 @@ function titlesIn(container: HTMLElement): string[] {
 
 function listTitles(): string[] {
   const list = [...document.querySelectorAll<HTMLElement>(".sidebar-list--compact[role='list']")]
-    .find((element) => !element.closest(".pinned-group"));
+    .find((element) => !element.closest(".pinned-group:not(.recents-group)"));
   return list ? titlesIn(list) : [];
 }
 
@@ -566,5 +566,83 @@ describe("Pinned group before its pages are read again", () => {
       "Glossary search index",
       "Flaky auth fixture",
     ]);
+  });
+});
+
+describe("Recents section", () => {
+  const recentsHeader = () => screen.getByRole("button", { name: /^Recents,/ });
+  const rerenderRecents = (view: ReturnType<typeof renderRecents>, props: Partial<ComponentProps<typeof Sidebar>>) =>
+    view.rerender(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={[]}
+        loading={false}
+        threads={population}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        {...props}
+      />,
+    );
+
+  it("heads the list under the Pinned group with its own collapsible header", () => {
+    renderRecents();
+
+    expect(recentsHeader()).toHaveAccessibleName("Recents, 3 threads");
+    expect(recentsHeader()).toHaveAttribute("aria-expanded", "true");
+    expect(listTitles()).toEqual([
+      "Dark-mode chart tokens",
+      "Glossary search index",
+      "Flaky auth fixture",
+    ]);
+  });
+
+  it("folds the list away and leaves the pins on screen", () => {
+    renderRecents();
+    fireEvent.click(recentsHeader());
+
+    expect(recentsHeader()).toHaveAttribute("aria-expanded", "false");
+    expect(recentsHeader()).toHaveAccessibleName("Recents, 3 threads, 0 active threads, 0 unread");
+    expect(listTitles()).toEqual([]);
+    expect(titlesIn(pinnedGroup()!)).toEqual([
+      "Release manager",
+      "Docs IA migration",
+      "Rate limiter rewrite",
+    ]);
+
+    fireEvent.click(recentsHeader());
+    expect(listTitles()).toHaveLength(3);
+  });
+
+  it("folds independently of the Pinned group", () => {
+    const onSetPinnedGroupCollapsed = vi.fn();
+    renderRecents({ onSetPinnedGroupCollapsed });
+    fireEvent.click(recentsHeader());
+
+    expect(onSetPinnedGroupCollapsed).not.toHaveBeenCalled();
+    expect(groupHeader()).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("draws no Recents header without a pin, so the lens never folds blank", () => {
+    renderRecents({ threads: [chartTokens, glossary, flakyFixture] });
+
+    expect(screen.queryByRole("button", { name: /^Recents,/ })).toBeNull();
+    expect(listTitles()).toHaveLength(3);
+  });
+
+  it("reopens for a newly selected thread inside it, and only then", () => {
+    const view = renderRecents({ selectedItemKey: "codex:glossary" });
+    // Folding with a list thread already open keeps it folded.
+    fireEvent.click(recentsHeader());
+    expect(listTitles()).toEqual([]);
+
+    rerenderRecents(view, { selectedItemKey: "codex:release" });
+    expect(listTitles()).toEqual([]);
+
+    rerenderRecents(view, { selectedItemKey: "codex:flaky" });
+    expect(recentsHeader()).toHaveAttribute("aria-expanded", "true");
+    expect(listTitles()).toContain("Flaky auth fixture");
   });
 });
