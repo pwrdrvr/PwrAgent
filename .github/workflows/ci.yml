@@ -368,8 +368,12 @@ jobs:
           cache-electron: "true"
 
       - name: Test
+        # Native diagnostic builds and SQLite fixtures use os.tmpdir(). Keep
+        # their outputs off the same stalling OS volume as the E2E fixtures.
         env:
           PWRAGENT_UNBORN_WORKSPACE_TRACE: "1"
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         timeout-minutes: 20
         # Keep a common MSYS parent alive while parallel workers launch Git
         # and Bash. Independent starts from PowerShell can race MSYS shared
