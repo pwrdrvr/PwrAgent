@@ -315,6 +315,18 @@ describe("review tracking runtime eligibility", () => {
       expect(readReviewAutoFixStatus(THREAD).runs[review!.id]).toBeUndefined();
       expect(broadcast).toHaveBeenCalledWith(expect.objectContaining({ backend: THREAD.backend, threadId: THREAD.threadId }));
     });
+
+    it("keeps a failed send when only the reviewer reports its own outcomes", async () => {
+      install();
+      submitTurn.mockRejectedValueOnce(new Error("Thread is locked."));
+      getReviewAutoFixArming().starting(THREAD, "auto-fix").accepted("review-turn");
+      onEvent(findingsOutput("review-turn", "refused-review"));
+      const [review] = getThreadReviewService().list();
+      await vi.waitFor(() => expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("failed"));
+      const settled = getThreadReviewService().applyReportedOutcomes(THREAD, review!.sourceKey, [{ index: 0, outcome: "fixed" }]);
+      expect(settled?.items[0]?.status).toBe("addressed");
+      expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("failed");
+    });
   });
 });
 
