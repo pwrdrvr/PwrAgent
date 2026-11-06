@@ -5,8 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import {
   archiveCandidateProtectionReason,
+  keepSubthreadParents,
+  subthreadChildren,
+  subthreadsFirst,
   isProtectedArchiveCandidate,
   isStaleArchiveCandidate,
   ThreadArchiveSweeper,
@@ -529,5 +533,55 @@ describe("archive policy selection", () => {
     policy = { ...policy, enabled: false };
     await sweeper.sweep();
     expect(deps.archive).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sub-thread parents", () => {
+  it("keeps a selected parent only while it would leave more than 2 sub-threads, repeating as parents drop out", () => {
+    // grand -> mid (selected) -> 3 unselected children; grand also has 2 more.
+    const children = new Map([
+      ["codex:grand", ["codex:mid", "codex:g1", "codex:g2"]],
+      ["codex:mid", ["codex:m1", "codex:m2", "codex:m3"]],
+    ]);
+    const selected = new Set(["codex:grand", "codex:mid", "codex:g1", "codex:g2"]);
+    // mid leaves 3 behind, so it stays; then grand would leave mid behind
+    // only, which is within the limit.
+    expect(keepSubthreadParents(selected, children)).toEqual(["codex:mid"]);
+    expect([...selected].sort()).toEqual(["codex:g1", "codex:g2", "codex:grand"]);
+  });
+
+  it("never leaves a selected parent with more than 2 unselected sub-threads", () => {
+    const ids = fc.constantFrom(...Array.from({ length: 8 }, (_, index) => `codex:t${index}`));
+    fc.assert(fc.property(
+      fc.array(fc.tuple(ids, ids), { maxLength: 24 }),
+      fc.uniqueArray(ids, { maxLength: 8 }),
+      (edges, chosen) => {
+        const children = new Map<string, string[]>();
+        for (const [parent, child] of edges) {
+          if (parent !== child) children.set(parent, [...new Set([...children.get(parent) ?? [], child])]);
+        }
+        const selected = new Set(chosen);
+        const kept = keepSubthreadParents(selected, children);
+        for (const key of selected) {
+          expect((children.get(key) ?? []).filter((child) => !selected.has(child)).length).toBeLessThanOrEqual(2);
+        }
+        for (const key of kept) expect(selected.has(key)).toBe(false);
+      },
+    ));
+  });
+
+  it("counts only local, non-archived sub-threads and orders them before parents", () => {
+    const row = (id: string, overlay?: Record<string, unknown>) => ({
+      thread: { ...candidate(id).thread },
+      ...(overlay ? { overlay: overlay as ThreadArchiveCandidate["overlay"] } : {}),
+    });
+    const candidates = [
+      row("parent"),
+      row("local", { parentThreadId: "parent" }),
+      row("peer", { parentThreadId: "parent", parentThreadInstanceId: "pwr_peer" }),
+      row("archived", { parentThreadId: "parent", archiveRetentionStartedAt: 1 }),
+    ];
+    expect(subthreadChildren(candidates)).toEqual(new Map([["codex:parent", ["codex:local"]]]));
+    expect(subthreadsFirst(candidates).map(({ thread }) => thread.id)).toEqual(["local", "peer", "archived", "parent"]);
   });
 });

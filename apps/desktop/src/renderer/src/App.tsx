@@ -4669,6 +4669,10 @@ function DesktopAppShell(props: {
           desktopApi={desktopApi}
           policy={settings.snapshot?.worktrees?.archive}
           {...(threadMaintenance.projectKey ? { projectKey: threadMaintenance.projectKey } : {})}
+          onOpenThread={(thread) => {
+            setThreadMaintenance(undefined);
+            showThreadFromLink({ backend: thread.backend as AppServerBackendKind, threadId: thread.threadId });
+          }}
           onClose={() => setThreadMaintenance(undefined)}
         />
       ) : null}

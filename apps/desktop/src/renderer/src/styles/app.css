@@ -53895,8 +53895,36 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .thread-maintenance__problem-rows li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
   padding: 8px 14px 8px 44px;
   border-top: 1px solid var(--danger-border);
+}
+
+.thread-maintenance__problem-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.thread-maintenance__open-thread {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.thread-maintenance__open-thread:hover {
+  text-decoration: underline;
+}
+
+.thread-maintenance__open-thread:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .thread-maintenance__problem.is-kept .thread-maintenance__problem-rows li {

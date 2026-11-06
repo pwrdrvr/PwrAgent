@@ -34,6 +34,7 @@ import type {
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
+import { ThreadMaintenanceLauncherContext } from "../../maintenance/thread-maintenance-launcher";
 import {
   summarizeThreadPrWatches,
   ThreadPrWatchIndicatorsContext,
@@ -5572,6 +5573,49 @@ describe("Sidebar", () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Archive Threads and Remove Projects" }));
     });
     expect(onArchiveDirectories).toHaveBeenCalledWith(projects.map((project) => project.key));
+  });
+
+  it("offers Clean Up Project for one local project and opens maintenance scoped to its path", () => {
+    const openThreadMaintenance = vi.fn();
+    const projects = [0, 1].map((index) => ({ ...directories[0]!,
+      key: `directory:/project-${index}`, label: `Project ${index}`, path: `/project-${index}`, threadKeys: [],
+    }));
+    const placeholder = { ...projects[1]!, key: "directory:/placeholder", label: "Placeholder", path: "/placeholder",
+      localAvailability: "unconfigured" as const };
+    const sidebar = (launcher?: typeof openThreadMaintenance) => (
+      <ThreadMaintenanceLauncherContext.Provider value={launcher}>
+        <Sidebar backends={backends} browseMode="directories" directories={[...projects, placeholder]}
+          inboxThreads={[]} threads={[]} loading={false} onArchiveDirectories={async () => undefined}
+          onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined} />
+      </ThreadMaintenanceLauncherContext.Provider>
+    );
+    const { rerender } = render(sidebar(openThreadMaintenance));
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Placeholder, not configured on this instance/ }));
+    expect(screen.queryByRole("menuitem", { name: "Clean Up Project…" })).toBeNull();
+    pressEscape();
+
+    const first = screen.getByRole("button", { name: "Project 0" });
+    const last = screen.getByRole("button", { name: "Project 1" });
+    fireEvent.click(first, { metaKey: true });
+    fireEvent.click(last, { shiftKey: true });
+    fireEvent.contextMenu(last);
+    expect(screen.getByRole("menuitem", { name: "Archive Threads and Remove Projects" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Clean Up Project…" })).toBeNull();
+    pressEscape();
+    fireEvent.click(first);
+
+    fireEvent.contextMenu(first);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Clean Up Project…" }));
+    expect(openThreadMaintenance).toHaveBeenCalledWith({ projectKey: "/project-0" });
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    rerender(sidebar(undefined));
+    fireEvent.contextMenu(first);
+    expect(screen.getByRole("menuitem", { name: "Archive Threads and Remove Project" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Clean Up Project…" })).toBeNull();
   });
 
   it("marks unread threads read across a Shift-selected range of collapsed directories", async () => {

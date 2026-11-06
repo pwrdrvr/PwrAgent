@@ -101,9 +101,9 @@ function fixtureApi(overrides: Partial<DesktopApi> = {}) {
   return { api, emit, scan };
 }
 
-async function openReview(api: DesktopApi) {
+async function openReview(api: DesktopApi, onOpenThread?: (thread: { backend: string; threadId: string }) => void) {
   const onClose = vi.fn();
-  render(<ThreadMaintenanceDialog desktopApi={api} onClose={onClose} />);
+  render(<ThreadMaintenanceDialog desktopApi={api} onClose={onClose} onOpenThread={onOpenThread} />);
   const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
   await screen.findByText("3 idle threads");
@@ -217,6 +217,30 @@ describe("ThreadMaintenanceDialog", () => {
     const kept = within(dialog).getByRole("region", { name: "1 checkout kept" });
     expect(kept).toHaveClass("is-kept");
     expect(within(dialog).getByRole("button", { name: "New scan" })).toBeInTheDocument();
+  });
+
+  it("links each outcome row that names a thread, once the run has finished", async () => {
+    const { api, emit } = fixtureApi();
+    const onOpenThread = vi.fn();
+    const { dialog } = await openReview(api, onOpenThread);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Archive 2 and continue" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Remove 1 and finish" }));
+    await within(dialog).findByRole("button", { name: "Stop after this item" });
+    const problems: ThreadMaintenanceRun["problems"] = [
+      { step: "threads", kind: "kept", object: "Fix tooltip flicker", reason: "New activity during the run",
+        backend: "codex", threadId: "t-changes" },
+      { step: "checkouts", kind: "kept", object: "/home/.codex/worktrees/r4t7/kiln-sandbox", reason: "Repository no longer exists" },
+    ];
+    emit({ runId: "run-1", scanId: "scan-1", running: true, startedAt: NOW, steps: [], problems,
+      current: { step: "checkouts", processed: 0, total: 1 } });
+    expect(within(dialog).queryByRole("button", { name: /^Open thread/ })).toBeNull();
+
+    emit({ runId: "run-1", scanId: "scan-1", running: false, startedAt: NOW, finishedAt: NOW + 9_000, problems,
+      steps: [{ step: "threads", ran: true, done: 1, kept: 1, failed: 0 }] });
+    const links = await within(dialog).findAllByRole("button", { name: /^Open thread/ });
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual(["Open thread Fix tooltip flicker"]);
+    fireEvent.click(links[0]!);
+    expect(onOpenThread).toHaveBeenCalledWith({ backend: "codex", threadId: "t-changes" });
   });
 
   it("runs only the archived checkouts step from its tab", async () => {

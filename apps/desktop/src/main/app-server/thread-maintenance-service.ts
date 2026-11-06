@@ -22,6 +22,10 @@ import {
   archiveCandidateKeepReason,
   archiveCandidateLastActivity,
   archiveFamilies,
+  keepSubthreadParents,
+  MAX_SUBTHREADS_LEFT_BY_ARCHIVE,
+  SUBTHREAD_PARENT_KEEP_REASON,
+  subthreadChildren,
   type ThreadArchiveCandidate,
 } from "./thread-archive-sweeper";
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
@@ -77,6 +81,8 @@ export type ThreadMaintenanceDeps = {
 
 type RetainedScan = {
   scan: ThreadMaintenanceScan;
+  /** Direct, non-archived sub-threads per parent key, at scan time. */
+  subthreads: Map<string, string[]>;
   families: Map<string, { family: ThreadArchiveCandidate[]; row: ThreadMaintenanceIdleThread }>;
   checkouts: Map<string, ThreadMaintenanceArchivedCheckout>;
 };
@@ -124,6 +130,7 @@ export class ThreadMaintenanceService {
       scan: undefined as unknown as ThreadMaintenanceScan,
       families: new Map(),
       checkouts: new Map(),
+      subthreads: new Map(),
     };
     const threads = await this.scanThreads(rules, policy, now, request.projectKey, retained, fail);
     const checkouts = await this.scanCheckouts(rules, request.projectKey, retained, fail);
@@ -185,6 +192,7 @@ export class ThreadMaintenanceService {
     const reviewPolicy: DesktopThreadArchivePolicy = { ...policy, enabled: true,
       mode: rules.mode, keepPerProject: rules.keepPerProject, inactivityDays: rules.inactivityDays };
     const groupFor = archiveFamilies(candidates);
+    retained.subthreads = subthreadChildren(candidates);
     const projects = new Map<string, ThreadMaintenanceProject>();
     const projectFor = (key: string): ThreadMaintenanceProject => {
       let project = projects.get(key);
@@ -257,6 +265,19 @@ export class ThreadMaintenanceService {
         };
         project.idle.push(row);
         retained.families.set(buildThreadIdentityKey(row.backend as AppServerBackendKind, row.threadId), { family: item.family, row });
+      }
+    }
+    // A parent stays when archiving it would scatter 3 or more sub-threads.
+    // Its idle children are still offered; archiving them keeps their place.
+    const idleKeys = new Set(retained.families.keys());
+    for (const key of keepSubthreadParents(idleKeys, retained.subthreads)) {
+      const entry = retained.families.get(key)!;
+      retained.families.delete(key);
+      for (const project of projects.values()) {
+        const index = project.idle.indexOf(entry.row);
+        if (index < 0) continue;
+        project.idle.splice(index, 1);
+        keep(project, SUBTHREAD_PARENT_KEEP_REASON);
       }
     }
     result.projects = [...projects.values()]
@@ -349,10 +370,17 @@ export class ThreadMaintenanceService {
     // Step 1: archive idle threads.
     const threadStep: ThreadMaintenanceStepResult = { step: "threads", ran: request.archive.length > 0, done: 0, kept: 0, failed: 0 };
     steps.push(threadStep);
-    for (const [index, item] of request.archive.entries()) {
-      const entry = retained.families.get(buildThreadIdentityKey(item.backend as AppServerBackendKind, item.threadId));
+    // Sub-threads first, so their parent's check below sees them archived.
+    const keyOf = (item: { backend: string; threadId: string }) => buildThreadIdentityKey(item.backend as AppServerBackendKind, item.threadId);
+    const ordered = [
+      ...request.archive.filter((item) => retained.families.get(keyOf(item))?.family[0]?.overlay?.parentThreadId),
+      ...request.archive.filter((item) => !retained.families.get(keyOf(item))?.family[0]?.overlay?.parentThreadId),
+    ];
+    const archivedKeys = new Set<string>();
+    for (const [index, item] of ordered.entries()) {
+      const entry = retained.families.get(keyOf(item));
       const object = entry ? entry.row.title : item.threadId;
-      update({ current: { step: "threads", processed: index, total: request.archive.length, object } });
+      update({ current: { step: "threads", processed: index, total: ordered.length, object } });
       if (!entry) {
         threadStep.failed += 1;
         addProblem({ step: "threads", kind: "failed", object, reason: "Not in this scan", backend: item.backend, threadId: item.threadId });
@@ -363,10 +391,19 @@ export class ThreadMaintenanceService {
         addProblem({ step: "threads", kind: "kept", object, reason: "Stopped before archiving", backend: item.backend, threadId: item.threadId });
         continue;
       }
+      const left = (retained.subthreads.get(keyOf(item)) ?? []).filter((child) => !archivedKeys.has(child)).length;
+      if (left > MAX_SUBTHREADS_LEFT_BY_ARCHIVE) {
+        threadStep.kept += 1;
+        addProblem({ step: "threads", kind: "kept", object, reason: `Would leave ${left} sub-threads without their parent`,
+          detail: "Archive its sub-threads too, or keep it.", backend: item.backend, threadId: item.threadId });
+        continue;
+      }
       try {
         const outcome = await this.archiveReviewed(entry, item.overLimit, retained.scan.rules);
-        if (outcome === true) threadStep.done += 1;
-        else {
+        if (outcome === true) {
+          threadStep.done += 1;
+          archivedKeys.add(keyOf(item));
+        } else {
           threadStep.kept += 1;
           addProblem({ step: "threads", kind: "kept", object, reason: outcome, backend: item.backend, threadId: item.threadId });
         }

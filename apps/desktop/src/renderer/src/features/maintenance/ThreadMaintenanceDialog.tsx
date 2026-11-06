@@ -64,6 +64,9 @@ export function ThreadMaintenanceDialog(props: {
   desktopApi?: DesktopApi;
   policy?: DesktopThreadArchivePolicy;
   projectKey?: string;
+  /** Shows a thread from a finished run's outcome rows. The caller closes
+   * the dialog; a run still in progress keeps it open. */
+  onOpenThread?: (thread: { backend: string; threadId: string }) => void;
   onClose: () => void;
 }) {
   const api = props.desktopApi;
@@ -178,7 +181,7 @@ export function ThreadMaintenanceDialog(props: {
             </>
           ) : null}
           {(phase === "running" || phase === "finished") && run ? (
-            <RunView run={run} scan={scan} mode={mode} />
+            <RunView run={run} scan={scan} mode={mode} onOpenThread={busy ? undefined : props.onOpenThread} />
           ) : null}
           {error ? <p className="thread-maintenance__error" role="alert">{error}</p> : null}
         </div>
@@ -643,7 +646,9 @@ const STEP_TITLES: Record<ThreadMaintenanceStep, string> = {
   expired: "Expired archives",
 };
 
-function RunView(props: { run: ThreadMaintenanceRun; scan?: ThreadMaintenanceScan; mode: ThreadMaintenanceMode }) {
+type OpenThread = (thread: { backend: string; threadId: string }) => void;
+
+function RunView(props: { run: ThreadMaintenanceRun; scan?: ThreadMaintenanceScan; mode: ThreadMaintenanceMode; onOpenThread?: OpenThread }) {
   const { run, mode } = props;
   const failed = run.problems.filter((problem) => problem.kind === "failed");
   const done = run.steps.reduce((sum, step) => sum + step.done, 0);
@@ -663,7 +668,8 @@ function RunView(props: { run: ThreadMaintenanceRun; scan?: ThreadMaintenanceSca
       )}
       {run.running ? <Rail mode={mode} phase="running" run={run} /> : null}
       {(["threads", "checkouts"] as const).map((step) => (
-        <ProblemCards key={step} step={step} problems={run.problems.filter((problem) => problem.step === step)} run={run} />
+        <ProblemCards key={step} step={step} problems={run.problems.filter((problem) => problem.step === step)} run={run}
+          onOpenThread={props.onOpenThread} />
       ))}
       {run.running && run.current ? (
         <div className="thread-maintenance__progress-card" role="status">
@@ -712,7 +718,12 @@ function receiptLine(run: ThreadMaintenanceRun): string {
 
 /** One red card for what failed and one blue card for what was kept on
  * purpose, per step. Headline is count + object + what happened. */
-function ProblemCards(props: { step: ThreadMaintenanceStep; problems: ThreadMaintenanceProblem[]; run: ThreadMaintenanceRun }) {
+function ProblemCards(props: {
+  step: ThreadMaintenanceStep;
+  problems: ThreadMaintenanceProblem[];
+  run: ThreadMaintenanceRun;
+  onOpenThread?: OpenThread;
+}) {
   const failed = props.problems.filter((problem) => problem.kind === "failed");
   const kept = props.problems.filter((problem) => problem.kind === "kept");
   const noun = props.step === "threads" ? ["thread", "threads"] : ["checkout", "checkouts"];
@@ -720,12 +731,12 @@ function ProblemCards(props: { step: ThreadMaintenanceStep; problems: ThreadMain
   return (
     <>
       {failed.length ? (
-        <ProblemCard tone="failed" problems={failed}
+        <ProblemCard tone="failed" problems={failed} onOpenThread={props.onOpenThread}
           title={`${failed.length} ${failed.length === 1 ? noun[0] : noun[1]} ${props.step === "threads" ? "weren't archived" : "weren't removed"}`.replace(/^1 (\w+) weren't/, "1 $1 wasn't")}
           sub={`${failed.length === 1 ? "It is" : "They are"} unchanged.${result?.done ? ` The other ${result.done} ${props.step === "threads" ? "were archived" : "were removed"}.` : ""}`} />
       ) : null}
       {kept.length ? (
-        <ProblemCard tone="kept" problems={kept}
+        <ProblemCard tone="kept" problems={kept} onOpenThread={props.onOpenThread}
           title={`${kept.length} ${kept.length === 1 ? noun[0] : noun[1]} kept`}
           sub="Kept on purpose. Nothing about them changed." />
       ) : null}
@@ -733,7 +744,13 @@ function ProblemCards(props: { step: ThreadMaintenanceStep; problems: ThreadMain
   );
 }
 
-function ProblemCard(props: { tone: "failed" | "kept"; title: string; sub: string; problems: ThreadMaintenanceProblem[] }) {
+function ProblemCard(props: {
+  tone: "failed" | "kept";
+  title: string;
+  sub: string;
+  problems: ThreadMaintenanceProblem[];
+  onOpenThread?: OpenThread;
+}) {
   return (
     <section className={`thread-maintenance__problem is-${props.tone}`} aria-label={props.title}>
       <div className="thread-maintenance__problem-head">
@@ -746,8 +763,17 @@ function ProblemCard(props: { tone: "failed" | "kept"; title: string; sub: strin
       <ul className="thread-maintenance__problem-rows" tabIndex={props.problems.length > 4 ? 0 : undefined}>
         {props.problems.map((problem, index) => (
           <li key={`${problem.object}:${index}`}>
-            <p className="thread-maintenance__problem-object">{problem.object}</p>
-            <p className="thread-maintenance__problem-why"><b>{problem.reason}.</b>{problem.detail ? ` ${problem.detail}` : ""}</p>
+            <div className="thread-maintenance__problem-text">
+              <p className="thread-maintenance__problem-object">{problem.object}</p>
+              <p className="thread-maintenance__problem-why"><b>{problem.reason}.</b>{problem.detail ? ` ${problem.detail}` : ""}</p>
+            </div>
+            {props.onOpenThread && problem.backend && problem.threadId ? (
+              <button className="thread-maintenance__open-thread" type="button"
+                aria-label={`Open thread ${problem.object}`}
+                onClick={() => props.onOpenThread!({ backend: problem.backend!, threadId: problem.threadId! })}>
+                Open thread
+              </button>
+            ) : null}
           </li>
         ))}
       </ul>
