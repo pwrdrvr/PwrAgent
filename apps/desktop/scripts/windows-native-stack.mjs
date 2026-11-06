@@ -65,6 +65,7 @@ export function nativeProbeFailure(error) {
   // include private paths, command arguments and register contents.
   return {
     reason: probeReasons.get(error?.message) ?? "controlled-probe-failed",
+    triageGuide: "docs/playwright-worker-shutdown-diagnostics.md#controlled-native-debugger-setup-failures",
     debugger: error?.nativeDebugger && {
       exitCode: Number.isSafeInteger(error.nativeDebugger.exitCode) ? error.nativeDebugger.exitCode : undefined,
       detachUnsupported: error.nativeDebugger.detachUnsupported === true,

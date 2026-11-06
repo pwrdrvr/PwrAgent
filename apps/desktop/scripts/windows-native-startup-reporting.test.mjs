@@ -1,6 +1,16 @@
 import fc from "fast-check";
+import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { nativeDebuggerStatus, nativeProbeFailure } from "./windows-native-stack.mjs";
+
+it("links a probe failure to a checked-in triage guide", () => {
+  const { triageGuide } = nativeProbeFailure(new Error("Noninvasive debugger readiness was not observed"));
+  const [file, anchor] = triageGuide.split("#");
+  const document = readFileSync(new URL("../../../" + file, import.meta.url), "utf8");
+  const headings = [...document.matchAll(/^#{1,6}\s+(.+)$/gm)]
+    .map((match) => match[1].toLowerCase().replace(/[^a-z0-9 -]/g, "").replace(/\s+/g, "-"));
+  expect(headings).toContain(anchor);
+});
 
 it("reports emitted startup milestones while discarding the debugger transcript", () => {
   // CDB's emitted messages are the oracle. Prefixes model a debugger that
@@ -38,6 +48,7 @@ it("reports emitted startup milestones while discarding the debugger transcript"
       const failure = nativeProbeFailure(error);
       expect(failure).toEqual({
         reason: count === milestones.length ? "debugger-no-native-frames" : "debugger-readiness-timeout",
+        triageGuide: "docs/playwright-worker-shutdown-diagnostics.md#controlled-native-debugger-setup-failures",
         debugger: { exitCode: undefined, ...expected },
       });
       expect(JSON.stringify(failure)).not.toMatch(/private|secret|rawOutput/);

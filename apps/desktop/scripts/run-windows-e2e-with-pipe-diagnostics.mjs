@@ -253,6 +253,7 @@ async function prepareNativeStacks() {
     captureFormat: "module-offsets",
     electronSha256: createHash("sha256").update(readFileSync(electron)).digest("hex"),
     probe, probeFailed, probeFailure });
+  if (probeFailed) log("native-stack-setup-failed", { probeFailure });
 }
 
 function enqueue(task) {

@@ -76,21 +76,22 @@ describe("Windows natural pipe evidence", () => {
   });
 
   it("retains known preflight failure reasons without exception text or debugger output", () => {
+    const triageGuide = "docs/playwright-worker-shutdown-diagnostics.md#controlled-native-debugger-setup-failures";
     const noProgress = { bannerObserved: false, extensionInitializationStarted: false,
       extensionInitializationCompleted: false, commandPromptObserved: false, readinessMarkerObserved: false };
     const output = "cdb: The system does not support detach on exit\nWARNING: Network path disallowed\nC:\\private\\secret.pdb token";
     const error = new Error("Noninvasive debugger exited before readiness");
     error.nativeDebugger = { ...nativeDebuggerStatus(output), exitCode: 0, rawOutput: output };
     const failure = nativeProbeFailure(error);
-    expect(failure).toEqual({ reason: "debugger-exited-before-readiness",
+    expect(failure).toEqual({ reason: "debugger-exited-before-readiness", triageGuide,
       debugger: { exitCode: 0, detachUnsupported: true, networkPathDisallowed: true,
         ...noProgress, outputBytes: Buffer.byteLength(output) } });
     expect(JSON.stringify(failure)).not.toMatch(/private|secret|token|rawOutput/);
     expect(nativeDebuggerStatus("native frames")).toEqual({ detachUnsupported: false, networkPathDisallowed: false,
       ...noProgress, outputBytes: 13 });
-    expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed" });
+    expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed", triageGuide });
     expect(nativeProbeFailure({ nativeDebugger: { exitCode: output, detachUnsupported: output } })).toEqual({
-      reason: "controlled-probe-failed", debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false,
+      reason: "controlled-probe-failed", triageGuide, debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false,
         ...noProgress, outputBytes: undefined },
     });
   });
