@@ -245,6 +245,7 @@ export function GeneralSettings(props: {
   snapshot: DesktopSettingsSnapshot;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
   onAttentionPromoteOnTurnEndChange: (value: boolean) => Promise<void>;
+  onAutoFixReviewsChange: (value: boolean) => Promise<void>;
   onPinnedThreadsOnTopChange: (value: boolean) => Promise<void>;
   onInteractiveSvgChange: (patch: {
     interactiveSvgSkipNotice?: boolean;
@@ -264,6 +265,7 @@ export function GeneralSettings(props: {
     props.snapshot.general.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd =
     props.snapshot.general.attentionPromoteOnTurnEnd;
+  const autoFixReviews = props.snapshot.general.autoFixReviews;
   const pinnedThreadsOnTop = props.snapshot.general.pinnedThreadsOnTop;
   const interactiveSvgSkipNotice =
     props.snapshot.general.interactiveSvgSkipNotice;
@@ -497,6 +499,25 @@ export function GeneralSettings(props: {
             source={sourceBadge(pinnedThreadsOnTop)}
             onChange={(next) => {
               return props.onPinnedThreadsOnTopChange(next);
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="General"
+        title="Reviews"
+        chip={sourceBadge(autoFixReviews)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={autoFixReviews.value}
+            disabled={props.saving}
+            label="Start reviews with Auto-fix on"
+            sub="When a review finishes, this thread's agent fixes, defers, or declines each finding. The review panel's Auto-fix findings switch still changes one review."
+            source={sourceBadge(autoFixReviews)}
+            onChange={(next) => {
+              return props.onAutoFixReviewsChange(next);
             }}
           />
         </div>

@@ -533,6 +533,8 @@ export type ComposerProps = {
   readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
+  /** Settings -> General -> Reviews: whether a new review panel opens with Auto-fix on. */
+  reviewAutoFixDefault?: boolean;
   /** Token Miser experiment availability gate. */
   tokenMiserEnabled?: boolean;
   /** Inherited Token Miser state when a thread has no explicit override. */
@@ -932,8 +934,9 @@ type ReviewConfigState = {
   runMode: ReviewRunMode;
   runModeChosen?: boolean;
   /**
-   * Off only when the operator unticks Auto-fix findings. Like a reviewer
-   * override, the choice lasts for this one review.
+   * The operator's Auto-fix findings choice for this review. Unset follows
+   * Settings -> General -> Reviews. Like a reviewer override, a choice lasts
+   * for this one review.
    */
   waitAfterReview?: boolean;
   target?: ReviewTargetChoice;
@@ -1381,7 +1384,9 @@ function createReviewConfig(params: {
     customInstructions: "",
     runMode: "codex-sub-agent",
     // A review rebuilt from its command keeps the choice it was queued with.
-    ...(params.reviewCommand?.afterReview === "wait" ? { waitAfterReview: true } : {}),
+    ...(params.reviewCommand?.afterReview
+      ? { waitAfterReview: params.reviewCommand.afterReview === "wait" }
+      : {}),
     target: "baseBranch",
     workspaceCwd: params.reviewCommand?.cwd ?? (
       preferredWorkspaceCwd ??
@@ -7343,6 +7348,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     await submitReviewConfig(reviewConfig);
   };
 
+  // The review's own choice, else Settings -> General -> Reviews.
+  const reviewWaitsAfter = (config: ReviewConfigState | undefined): boolean =>
+    config?.waitAfterReview ?? props.reviewAutoFixDefault === false;
+
   const submitReviewConfig = async (
     config: ReviewConfigState | undefined,
   ): Promise<void> => {
@@ -7380,7 +7389,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       // An owner that predates auto-fix gets no field, so it is never told a
       // choice it would ignore.
       ...(reviewAutoFixSupported
-        ? { afterReview: config?.waitAfterReview ? "wait" as const : "auto-fix" as const }
+        ? { afterReview: reviewWaitsAfter(config) ? "wait" as const : "auto-fix" as const }
         : {}),
     };
     if (futureScheduledDraftSendAt) {
@@ -11193,6 +11202,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   );
   const reviewAutoFixSupported =
     reviewOwnerSummary?.capabilities.reviewAutoFix === true;
+  const reviewAutoFixChecked = !reviewWaitsAfter(reviewConfig);
   const reviewRunModeDecision = props.thread
     ? resolveReviewRunMode({
         ownerSummary: reviewOwnerSummary,
@@ -13951,14 +13961,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             <div className="composer__review-actions">
               {reviewAutoFixSupported ? (
                 <ReviewAutoFixSwitch
-                  checked={!reviewConfig?.waitAfterReview}
+                  checked={reviewAutoFixChecked}
                   onToggle={() => {
                     setReviewConfig((current) => {
                       const base = current ?? createReviewConfig({
                         directory: props.directory,
                         thread: props.thread,
                       });
-                      return { ...base, waitAfterReview: !base.waitAfterReview };
+                      return { ...base, waitAfterReview: !reviewWaitsAfter(base) };
                     });
                   }}
                 />
@@ -13991,7 +14001,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </button>
             </div>
             {reviewAutoFixSupported
-              && !reviewConfig?.waitAfterReview
+              && reviewAutoFixChecked
               && reviewerSelection.backend
               && reviewerSelection.backend !== props.thread?.source ? (
                 <p className="composer__review-note">

@@ -855,6 +855,11 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   pinnedThreadsOnTop: DesktopSettingsValue<boolean>;
   /**
+   * Whether a new review starts with the review panel's Auto-fix findings
+   * switch on. The switch still applies to one review.
+   */
+  autoFixReviews: DesktopSettingsValue<boolean>;
+  /**
    * Give agents the shell variables an environment's setup script captured
    * (PATH, NVM_DIR, ...; secrets are filtered out) when a thread or turn
    * starts. Off still runs setup, and Run actions still use the variables.
@@ -1734,6 +1739,7 @@ export type DesktopSettingsConfigPatch = {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
     pinnedThreadsOnTop?: boolean;
+    autoFixReviews?: boolean;
     passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;

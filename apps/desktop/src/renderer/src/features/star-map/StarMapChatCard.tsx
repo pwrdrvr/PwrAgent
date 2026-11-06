@@ -155,6 +155,8 @@ export type StarMapChatCardProps = {
   /** Stack position; the host owns the order, we only read our depth. */
   zIndex: number;
   pastedImageMaxPatches?: number;
+  /** Settings -> General -> Reviews: whether a new review panel opens with Auto-fix on. */
+  reviewAutoFixDefault?: boolean;
 };
 
 type DragState = {
@@ -2268,6 +2270,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             error={reviewError}
             onCancel={closeReviewSetup}
             onSubmit={submitReviewSetup}
+            reviewAutoFixDefault={props.reviewAutoFixDefault}
             submitting={reviewSubmitting}
             thread={thread}
           />

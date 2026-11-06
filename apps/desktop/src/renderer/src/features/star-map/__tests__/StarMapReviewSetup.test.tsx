@@ -20,7 +20,7 @@ function backend(reviewAutoFix: boolean): BackendSummary {
   return { kind: "codex", label: "Codex", capabilities, executionModes: [] } as unknown as BackendSummary;
 }
 
-function renderSetup(reviewAutoFix: boolean) {
+function renderSetup(reviewAutoFix: boolean, reviewAutoFixDefault?: boolean) {
   const onSubmit = vi.fn();
   render(
     <StarMapReviewSetup
@@ -29,6 +29,7 @@ function renderSetup(reviewAutoFix: boolean) {
       directories={[]}
       onCancel={vi.fn()}
       onSubmit={onSubmit}
+      reviewAutoFixDefault={reviewAutoFixDefault}
       submitting={false}
       thread={thread}
     />,
@@ -55,6 +56,35 @@ describe("Star Map review setup Auto-fix", () => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ afterReview: "wait" }));
+  });
+
+  it("starts off when Settings turns Auto-fix off, and a click still auto-fixes this review", () => {
+    const onSubmit = renderSetup(true, false);
+    const toggle = screen.getByRole("switch", { name: "Auto-fix findings" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ afterReview: "wait" }));
+
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ afterReview: "auto-fix" }));
+  });
+
+  it("follows a Settings default that arrives after the card opened, until clicked", () => {
+    const onSubmit = vi.fn();
+    const props = { busy: false, backend: backend(true), directories: [], onCancel: vi.fn(), onSubmit,
+      submitting: false, thread };
+    const { rerender } = render(<StarMapReviewSetup {...props} />);
+    const toggle = screen.getByRole("switch", { name: "Auto-fix findings" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    // The window's settings snapshot loads with the setting off.
+    rerender(<StarMapReviewSetup {...props} reviewAutoFixDefault={false} />);
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    rerender(<StarMapReviewSetup {...props} reviewAutoFixDefault={false} />);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ afterReview: "auto-fix" }));
   });
 
   it("offers no switch and sends no choice to an owner without the capability", () => {
