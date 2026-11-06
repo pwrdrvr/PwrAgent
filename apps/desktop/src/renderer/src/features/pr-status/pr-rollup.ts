@@ -116,9 +116,10 @@ export function resolvePrRollup(prs: readonly PrSummary[]): PrRollup | undefined
     ...newestFirst(open, "top"),
     ...newestFirst(finished, "bottom"),
   ];
+  // The chip wears the least ready open PR, else merged before closed.
   const representative = open.length > 0
-    ? leastReadyOpen(open.map((entry) => entry.pr))
-    : finishedRepresentative(finished.map((entry) => entry.pr));
+    ? lowestKey(open, openSortKey)
+    : lowestKey(finished, finishedSortKey);
   const mergedCount = finished.filter((entry) => finishedSortKey(entry.pr) === 0).length;
   return {
     representative,
@@ -129,16 +130,9 @@ export function resolvePrRollup(prs: readonly PrSummary[]): PrRollup | undefined
   };
 }
 
-/** The least ready open PR; the earliest attached wins a tie. */
-function leastReadyOpen(open: PrSummary[]): PrSummary {
-  return open.reduce((best, pr) => (openSortKey(pr) < openSortKey(best) ? pr : best));
-}
-
-/** Merged before closed; the earliest attached wins a tie. */
-function finishedRepresentative(finished: PrSummary[]): PrSummary {
-  return finished.reduce((best, pr) => (
-    finishedSortKey(pr) < finishedSortKey(best) ? pr : best
-  ));
+/** The entry with the lowest key; the earliest attached wins a tie. */
+function lowestKey(entries: Stacked[], key: (pr: PrSummary) => number): PrSummary {
+  return entries.reduce((best, entry) => (key(entry.pr) < key(best.pr) ? entry : best)).pr;
 }
 
 function rollupSummary(
