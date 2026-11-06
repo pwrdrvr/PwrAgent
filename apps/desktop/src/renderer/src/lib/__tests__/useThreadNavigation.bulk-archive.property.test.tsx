@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { AgentEvent, BackendSummary, NavigationRow } from "@pwragent/shared";
@@ -114,9 +114,13 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     onArchiveThread={navigation.archiveThread} onArchiveThreads={navigation.archiveThreads} onThreadsArchived={onThreadsArchived}
     onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
   const threadButton = (index: number) => {
+    const row = sidebar.container.querySelector<HTMLElement>(`[data-thread-key="codex:thread-${index}"]`);
+    if (!row) throw new Error(`Missing sidebar row for thread-${index}`);
     const styleReads = options?.auditLookup ? vi.spyOn(window, "getComputedStyle") : undefined;
     try {
-      const button = screen.getByRole("button", { name: `Thread ${index}` });
+      // Retain the accessible role, name and visibility checks, but only
+      // compute them for the row this fixture is about to interact with.
+      const button = within(row).getByRole("button", { name: `Thread ${index}` });
       if (styleReads) {
         // Fixture lookup work belongs to the requested row. Resolving its
         // accessible name must not compute styles for every other thread.
@@ -175,7 +179,7 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
       .filter((_, index) => !options?.failed?.includes(index)).map((row) => row.id));
     const loads = read.mock.calls.length;
     const lensLoads = read.mock.calls.filter(([request]) => request.query.kind === "lens" && request.query.roots !== "pinned").length;
-    console.info("bulk archive navigation IPC", { size, groups: completionGroups.length, loads, lensLoads });
+    if (size >= 50) console.info("bulk archive navigation IPC", { size, groups: completionGroups.length, loads, lensLoads });
     return { loads, lensLoads, selectedThreadKey: hook.result.current.selectedThreadKey };
   } finally {
     nextPhase("unmount");
@@ -187,6 +191,8 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
       totalMs: Math.round(performance.now() - startedAt),
       remainingListeners: listeners.size, remainingRefreshTasks: refreshTasks.size,
     });
+    expect(listeners.size).toBe(0);
+    expect(refreshTasks.size).toBe(0);
   }
 }
 
