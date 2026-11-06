@@ -79,6 +79,9 @@ const reporters: ReporterDescription[] = process.env.CI
       ["list"],
     ]
   : [["list"]];
+if (process.env.PWRAGENT_CI_TEST_REPORT) {
+  reporters.push(["../../scripts/ci/playwright-ci-reporter.mjs"]);
+}
 if (electronShutdownCircuitEnabled) {
   reporters.push([
     "./e2e/fixtures/electron-shutdown-circuit-reporter.ts",

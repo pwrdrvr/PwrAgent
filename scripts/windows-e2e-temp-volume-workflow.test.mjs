@@ -9,15 +9,17 @@ import { expect, test } from "vitest";
 // thread blocked in CreateFile, WriteFile or FlushFileBuffers on fixture
 // storage, while the same closes appended to a D: file in a median 61 ms.
 // Electron's main process then outlives its quit, holding the launcher pipe.
-test("Windows Desktop E2E keeps fixture storage on the runner temp volume", () => {
+test("every Windows Desktop E2E run keeps fixture storage on the runner temp volume", () => {
   const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const job = workflow.split(/\n  (?=[\w-]+:\n)/).find((block) => block.startsWith("windows-e2e:"));
   expect(job).toBeDefined();
   const testSteps = job.split("\n      - ").filter((step) => /\btest:desktop-e2e\b/.test(step));
-  expect(testSteps).toHaveLength(1);
+  expect(testSteps).toHaveLength(2);
   // Node reads TEMP and TMP on Windows; Electron and every child inherit them.
-  expect(testSteps[0]).toMatch(/^ {10}TEMP: \$\{\{ runner\.temp \}\}$/m);
-  expect(testSteps[0]).toMatch(/^ {10}TMP: \$\{\{ runner\.temp \}\}$/m);
+  for (const step of testSteps) {
+    expect(step).toMatch(/^ {10}TEMP: \$\{\{ runner\.temp \}\}$/m);
+    expect(step).toMatch(/^ {10}TMP: \$\{\{ runner\.temp \}\}$/m);
+  }
 });
 
 // CDB's startup loads its engine and extension packages from its install
