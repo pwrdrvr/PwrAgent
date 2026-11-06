@@ -5,6 +5,7 @@ import {
   FORGE_AGENT_TOOL_GROUPS,
   codexModelProviderApiKeyEnv,
   isValidCodexModelProviderId,
+  normalizeCheckoutHibernationPolicy,
   normalizeThreadArchivePolicy,
   upsertForgeAgentToolRule,
   type CodexModelProviderSettings,
@@ -1811,12 +1812,19 @@ export class DesktopSettingsService {
       worktrees: {
         ...this.resolveWorktrees(config.worktrees?.storage),
         archive: normalizeThreadArchivePolicy(config.worktrees?.archive),
+        hibernate: normalizeCheckoutHibernationPolicy(config.worktrees?.hibernate,
+          normalizeThreadArchivePolicy(config.worktrees?.archive)),
       },
     };
   }
 
   resolveThreadArchivePolicy() {
     return normalizeThreadArchivePolicy(this.configStore.read("worktrees")?.archive);
+  }
+
+  resolveCheckoutHibernationPolicy() {
+    const worktrees = this.configStore.read("worktrees");
+    return normalizeCheckoutHibernationPolicy(worktrees?.hibernate, normalizeThreadArchivePolicy(worktrees?.archive));
   }
 
   readMessagingConfig(): ConfigDomainMap["messaging"] {

@@ -85,6 +85,7 @@ function selectedCollectionService(): NavigationDetailService {
     getCachedThreadSummary: () => thread("selected"),
     listLiveTokenMiserSubAgents: () => [],
     readLiveSubAgentRevisionSource: () => [],
+    readCheckoutHibernation: () => ({ restoring: false }),
     mergeLiveTokenMiserSubAgents: (_id: string, cards: ThreadSubAgentSummary[]) => cards,
   } as unknown as DesktopBackendRegistry);
 }
@@ -172,6 +173,7 @@ describe("NavigationDetailService", () => {
       hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
       readSelectedWorkspaceGitStatus: read,
       listLiveTokenMiserSubAgents: () => [], readLiveSubAgentRevisionSource: () => [],
+      readCheckoutHibernation: () => ({ restoring: false }),
       mergeLiveTokenMiserSubAgents: (_id: string, cards: unknown[]) => cards,
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
@@ -381,6 +383,7 @@ describe("NavigationDetailService", () => {
       mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted ?? [],
       listLiveTokenMiserSubAgents: () => [],
       readLiveSubAgentRevisionSource: () => [],
+      readCheckoutHibernation: () => ({ restoring: false }),
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
     const first = await service.readSelectedDetail({
@@ -457,6 +460,7 @@ describe("NavigationDetailService", () => {
       mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype["mergeLiveTokenMiserSubAgents"],
       listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
       readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,
+      readCheckoutHibernation: () => ({ restoring: false }),
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
     const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
@@ -499,6 +503,7 @@ describe("NavigationDetailService", () => {
       mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted,
       listLiveTokenMiserSubAgents: () => [],
       readLiveSubAgentRevisionSource: () => [],
+      readCheckoutHibernation: () => ({ restoring: false }),
     } as unknown as DesktopBackendRegistry);
     const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
     const first = await service.readSelectedDetail(request);
@@ -531,6 +536,7 @@ describe("NavigationDetailService", () => {
       mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted,
       listLiveTokenMiserSubAgents: () => [],
       readLiveSubAgentRevisionSource: () => [],
+      readCheckoutHibernation: () => ({ restoring: false }),
     } as unknown as DesktopBackendRegistry);
     const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
 
@@ -557,6 +563,7 @@ describe("NavigationDetailService", () => {
       mergeLiveTokenMiserSubAgents: (_id: string, cards: ThreadSubAgentSummary[]) => cards,
       listLiveTokenMiserSubAgents: () => [],
       readLiveSubAgentRevisionSource: () => [],
+      readCheckoutHibernation: () => ({ restoring: false }),
     } as unknown as DesktopBackendRegistry);
     const monitor = { monitorId: "monitor-1", task: "Wait for CI", backend: "codex" as const,
       createdAt: 1, lastActivityAt: 2, pollIntervalSeconds: 60 };
@@ -731,6 +738,7 @@ describe("NavigationDetailService", () => {
         mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted ?? [],
         listLiveTokenMiserSubAgents: () => [],
         readLiveSubAgentRevisionSource: () => [],
+        readCheckoutHibernation: () => ({ restoring: false }),
       } as unknown as DesktopBackendRegistry;
       const service = new NavigationDetailService(registry);
 
@@ -747,6 +755,50 @@ describe("NavigationDetailService", () => {
       const present = await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" } });
       expect(present.thread).not.toHaveProperty("workspaceMissing");
       expect(present.revision).not.toBe(missing.revision);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("reports a hibernated checkout instead of a missing one until its restore fails", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-detail-hibernated-"));
+    try {
+      const worktreePath = path.join(root, "gone", "atlas");
+      const selected = {
+        ...thread("selected"),
+        linkedDirectories: [{ id: "wt", label: "atlas", kind: "worktree" as const, path: root, worktreePath }],
+        worktreeSnapshots: [{
+          id: "s", backend: "codex" as const, threadId: "selected", worktreePath, repositoryPath: root,
+          snapshotRef: "refs/codex/snapshots/s", snapshotCommit: "abc", sourceBranch: "fix/retry-backoff",
+          createdAt: 1, hibernatedAt: 2, state: "hibernated" as const, ignoredFilesExcluded: true,
+        }],
+      };
+      mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
+      let hibernation: { restoring: boolean; restoreFailure?: { worktreePath: string; message: string } } = { restoring: true };
+      const registry = {
+        readSelectedWorkspaceGitStatus: vi.fn(async () => ({ currentBranch: "main" })),
+        getCachedThreadSummary: vi.fn(() => selected),
+        getQueuedExecutionModeForThread: vi.fn(() => undefined),
+        hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
+        canonicalizeNavigationThreadPullRequests: vi.fn(async (threads) => threads),
+        mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted ?? [],
+        listLiveTokenMiserSubAgents: () => [],
+        readLiveSubAgentRevisionSource: () => [],
+        readCheckoutHibernation: () => hibernation,
+      } as unknown as DesktopBackendRegistry;
+      const service = new NavigationDetailService(registry);
+
+      const restoring = await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" } });
+      expect(restoring.thread).not.toHaveProperty("workspaceMissing");
+      expect(restoring.thread?.workspaceHibernated).toEqual({
+        worktreePath, repositoryPath: root, hibernatedAt: 2, branch: "fix/retry-backoff", restoring: true,
+      });
+
+      hibernation = { restoring: false, restoreFailure: { worktreePath, message: "fix/retry-backoff moved" } };
+      const failed = await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" } });
+      expect(failed.thread).not.toHaveProperty("workspaceHibernated");
+      expect(failed.thread?.workspaceMissing).toMatchObject({
+        worktreePath, checkpoint: { snapshotRef: "refs/codex/snapshots/s", snapshotCommit: "abc" },
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

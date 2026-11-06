@@ -28,6 +28,9 @@ export type RecreateWorktreeParams = {
   checkpoint?: { snapshotRef: string; snapshotCommit: string };
   skipCheckpoint?: boolean;
   detached?: boolean;
+  /** Refuse unless the branch still points here. A hibernated checkout comes
+   * back only onto the commit it was saved on. */
+  expectedHead?: string;
   now?: number;
 };
 
@@ -162,8 +165,16 @@ export class WorktreeRecoveryService {
           ?? "HEAD";
       } else {
         const branch = params.branch!;
-        if (!(await this.resolveCommit(repositoryPath, `refs/heads/${branch}`))) {
+        const tip = await this.resolveCommit(repositoryPath, `refs/heads/${branch}`);
+        if (!tip) {
           throw new RecoveryRefusal("branch-missing", "add-worktree", `The branch ${branch} no longer exists.`);
+        }
+        if (params.expectedHead && tip !== params.expectedHead) {
+          throw new RecoveryRefusal(
+            "branch-moved",
+            "add-worktree",
+            `${branch} moved since its checkout was hibernated. The saved changes are kept in ${checkpoint?.ref ?? "a snapshot"}.`,
+          );
         }
         const elsewhere = recorded.find((record) => record !== ownRecord && record.branch === branch);
         if (elsewhere) {

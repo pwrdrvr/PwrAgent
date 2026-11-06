@@ -36,6 +36,7 @@ import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   PWRAGENT_TOOL_NAMESPACE,
   TASK_MONITOR_TOOL_NAMESPACE,
+  DEFAULT_CHECKOUT_HIBERNATION_POLICY,
   DEFAULT_THREAD_ARCHIVE_POLICY,
   FORGE_AGENT_TOOL_GROUP_LABELS,
   isTokenMiserSubAgent,
@@ -44,6 +45,7 @@ import {
   classifyDirectory,
   finalTurnOutputText,
   readUuidV7Timestamp,
+  type DesktopCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
   type ForgeAgentToolAccess,
@@ -814,9 +816,18 @@ import {
   type AcpAvailableCommandsStoreLike,
 } from "../acp/acp-available-commands-store";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
-import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, WorktreeArchiveService } from "./worktree-archive-service";
+import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
-import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
+import { detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
+import {
+  HIBERNATION_KEEP_REASONS,
+  hibernationKeepReason,
+  hibernationTarget,
+  otherThreadsUsingPath,
+  type HibernationContext,
+} from "./checkout-hibernation";
+import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "./checkout-hibernation-workspace";
+import { hasWorktreeTerminalsOpenIn } from "../terminal/worktree-terminals";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, archiveCandidateLastActivity, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
@@ -1056,6 +1067,13 @@ const ACP_LISTINGS_ARE_ENRICHED = true;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const backendLifecycleLog = getMainLogger("pwragent:backend-lifecycle");
 class AutomaticArchiveCancelledError extends Error {}
+
+/** A hibernation check failed again just before removal. */
+class CheckoutHibernationKeptError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+  }
+}
 
 /**
  * A paused project refused an agent's message from another thread. The
@@ -10117,6 +10135,15 @@ export class DesktopBackendRegistry {
   private readonly reviewedSnapshotLimits = new Map<string, { bytes: number; expiresAt: number }>();
   private readonly threadArchiveSweepStatusListeners = new Set<(status: DesktopThreadArchiveSweepStatus) => void>();
   private readonly readThreadArchivePolicy: () => DesktopThreadArchivePolicy;
+  private readonly readCheckoutHibernationPolicy: () => DesktopCheckoutHibernationPolicy;
+  /** Single-flight restores of hibernated checkouts. Concurrent sends share
+   * one, and the turn queue treats the thread as busy until it settles. */
+  private readonly checkoutRestores = new Map<string, Promise<void>>();
+  /** The last failed restore per thread. Memory only: a failed restore writes
+   * nothing, and the next attempt or a relaunch tries again. */
+  private readonly checkoutRestoreFailures = new Map<string, { worktreePath: string; message: string }>();
+  /** Failures the next queued dispatch reports instead of retrying at once. */
+  private readonly undeliveredCheckoutRestoreFailures = new Set<string>();
   private readonly runtimeInstanceId: string;
   private readonly registrySessionId: string;
   private readonly resolveLiveProfileRuntimeInstanceIdsFn: () => string[];
@@ -11159,6 +11186,7 @@ export class DesktopBackendRegistry {
 
   constructor(options?: {
     getThreadArchivePolicy?: () => DesktopThreadArchivePolicy;
+    getCheckoutHibernationPolicy?: () => DesktopCheckoutHibernationPolicy;
     codexClient?: BackendClient;
     overlayStore?: BackendRegistryOverlayStoreLike;
     correspondenceStore?: ThreadCorrespondenceStore;
@@ -11280,6 +11308,10 @@ export class DesktopBackendRegistry {
     this.readThreadArchivePolicy = options?.getThreadArchivePolicy ?? (() => {
       try { return getDesktopSettingsService().resolveThreadArchivePolicy(); }
       catch { return { ...DEFAULT_THREAD_ARCHIVE_POLICY }; }
+    });
+    this.readCheckoutHibernationPolicy = options?.getCheckoutHibernationPolicy ?? (() => {
+      try { return getDesktopSettingsService().resolveCheckoutHibernationPolicy(); }
+      catch { return { ...DEFAULT_CHECKOUT_HIBERNATION_POLICY }; }
     });
     const processRuntimeIdentity = getProcessRuntimeIdentity();
     this.configStore = options?.configStore;
@@ -12313,7 +12345,9 @@ export class DesktopBackendRegistry {
       isThreadActive: ({ backend, threadId }) =>
         this.stoppingRunningTurnsForShutdown
         || this.threadHasActiveTurn(threadId, backend)
-        || this.threadHasBlockingWorkspaceMove({ backend, threadId }),
+        || this.threadHasBlockingWorkspaceMove({ backend, threadId })
+        // A send waits behind a checkout restore like a queued message.
+        || this.checkoutRestores.has(buildThreadIdentityKey(backend, threadId)),
       isDispatchHeld: (entry) => restartGateHolds(this.restartGate, {
         ...(entry.restartContinuation && entry.id ? { restartEntryId: entry.id } : {}),
       }, Date.now()),
@@ -16890,6 +16924,19 @@ export class DesktopBackendRegistry {
       isBusy: (candidate) => this.autoArchiveCandidateIsBusy(candidate),
       canArchive: async (candidates) => await this.autoArchiveCandidatesAreEligible(candidates),
       archive: async (_candidate, family) => await this.archiveInactiveThreadFamily(family),
+      hibernation: {
+        getPolicy: () => this.readCheckoutHibernationPolicy(),
+        keepReason: (candidate, candidates, policy, now) => {
+          const target = hibernationTarget(candidate);
+          if ("keep" in target) return {};
+          return { target: target.worktreePath,
+            keep: hibernationKeepReason(candidate, now, policy, this.checkoutHibernationContext(candidate, candidates)) };
+        },
+        inspectWorkspace: async (worktreePath, policy, signal) => (await inspectHibernationWorkspace(worktreePath, {
+          signal, limitBytes: policy.maxSnapshotMb * 1024 * 1024, removeRebuildableOutput: policy.removeRebuildableOutput,
+        })).keep,
+        hibernate: async (candidate, policy) => await this.hibernateIdleCheckout(candidate, policy),
+      },
       onError: (error, threadId) => backendRegistryLog.warn("inactive thread archive sweep failed", {
         threadId, error: error instanceof Error ? error.message : String(error),
       }),
@@ -17132,6 +17179,259 @@ export class DesktopBackendRegistry {
     } finally {
       for (const key of keys) this.automaticArchiveReservations.delete(key);
     }
+  }
+
+  private checkoutHibernationContext(
+    candidate: ThreadArchiveCandidate,
+    candidates: readonly ThreadArchiveCandidate[],
+  ): HibernationContext {
+    const runtime = candidate.overlay?.codexEnvironmentRuntime ?? candidate.thread.codexEnvironmentRuntime;
+    const target = hibernationTarget(candidate);
+    return {
+      busy: this.autoArchiveCandidateIsBusy(candidate)
+        || runtime?.actionStatus === "started"
+        || runtime?.actionRuns?.some((run) => run.status === "started") === true,
+      sharedPath: "keep" in target ? false : otherThreadsUsingPath(candidate, target.worktreePath, candidates) > 0,
+    };
+  }
+
+  /**
+   * Hibernates one idle thread's checkout: snapshot, re-check, remove, then
+   * one SQLite commit for the snapshot record. Housekeeping order matches
+   * automatic archive: the reservation (which any operator action on the
+   * thread cancels), then its lifecycle lock, then the workspace write.
+   * Resolves true when hibernated, false when cancelled, or a keep reason.
+   */
+  private async hibernateIdleCheckout(
+    candidate: ThreadArchiveCandidate,
+    policy: DesktopCheckoutHibernationPolicy,
+  ): Promise<boolean | string> {
+    const target = hibernationTarget(candidate);
+    if ("keep" in target) return target.keep;
+    const { source: backend, id: threadId } = candidate.thread;
+    const key = buildThreadIdentityKey(backend, threadId);
+    if (this.automaticArchiveReservations.has(key)) return false;
+    const reservation = { cancelled: false };
+    this.automaticArchiveReservations.set(key, reservation);
+    const policyKey = JSON.stringify(policy);
+    const paths = (item: ThreadArchiveCandidate) => JSON.stringify(
+      [...item.thread.linkedDirectories, ...item.overlay?.extraLinkedDirectories ?? []]
+        .map((directory) => directory.worktreePath ?? directory.path).sort());
+    try {
+      return await this.threadLifecycleLocks.run(key, async () => {
+        if (reservation.cancelled) return false;
+        let snapshot: WorktreeSnapshotSummary;
+        try {
+          snapshot = await this.withArchiveWorkspaceWrite([target.worktreePath], async () => await this.worktreeArchiveService.hibernate({
+            backend, threadId,
+            worktreePath: target.worktreePath,
+            repositoryPath: target.repositoryPath,
+            capSnapshotBytes: policy.maxSnapshotMb * 1024 * 1024,
+            beforeRemove: async () => {
+              // Checks 1 to 5 again, against fresh thread state.
+              const current = await this.refreshAutoArchiveCandidate(candidate);
+              const all = await this.listAutoArchiveCandidates();
+              const assertCurrent = () => {
+                if (reservation.cancelled || this.closed || JSON.stringify(this.readCheckoutHibernationPolicy()) !== policyKey) {
+                  throw new AutomaticArchiveCancelledError();
+                }
+                const reason = hibernationKeepReason(current, Date.now(), policy, this.checkoutHibernationContext(current, all));
+                if (reason) throw new CheckoutHibernationKeptError(reason);
+                if (archiveCandidateLastActivity(current) > archiveCandidateLastActivity(candidate)) {
+                  throw new CheckoutHibernationKeptError(HIBERNATION_KEEP_REASONS.recentlyActive);
+                }
+                if (paths(current) !== paths(candidate)) throw new CheckoutHibernationKeptError("Workspace moved");
+                // Never close an operator's terminal to hibernate.
+                if (hasWorktreeTerminalsOpenIn(target.worktreePath)) throw new CheckoutHibernationKeptError("Terminal open");
+              };
+              assertCurrent();
+              const workspace = await inspectHibernationWorkspace(target.worktreePath, {
+                signal: new AbortController().signal,
+                limitBytes: policy.maxSnapshotMb * 1024 * 1024,
+                removeRebuildableOutput: policy.removeRebuildableOutput,
+              });
+              if (workspace.keep) throw new CheckoutHibernationKeptError(workspace.keep);
+              assertCurrent();
+              return assertCurrent;
+            },
+          }));
+        } catch (error) {
+          if (error instanceof AutomaticArchiveCancelledError) return false;
+          if (error instanceof CheckoutHibernationKeptError) return error.reason;
+          if (error instanceof SnapshotTreeMismatchError) return "Changed while saving";
+          if (error instanceof MissingArchiveWorktreeError) return HIBERNATION_WORKSPACE_KEEP_REASONS.missing;
+          if (error instanceof MissingArchiveRepositoryError) return "Repository missing";
+          if (error instanceof Error && /^Snapshot (size|file) limit exceeded/.test(error.message)) {
+            return HIBERNATION_WORKSPACE_KEEP_REASONS.overLimit;
+          }
+          throw error;
+        }
+        // The one commit a hibernation makes. Recorded even if the operator
+        // acted meanwhile: the checkout is gone and this is its only record.
+        await this.overlayStore.upsertWorktreeSnapshot({ backend, threadId, snapshot });
+        this.checkoutRestoreFailures.delete(key);
+        this.undeliveredCheckoutRestoreFailures.delete(key);
+        backendRegistryLog.info("idle checkout hibernated", {
+          backend, threadId, worktreePath: snapshot.worktreePath, snapshotRef: snapshot.snapshotRef,
+        });
+        this.invalidateThreadListCache(backend, true, threadId);
+        this.threadInfoStore.invalidateSummaries({ backend, threadId });
+        await this.publishLocalEvent({ backend, notification: {
+          method: "navigation/threadDirectories/updated",
+          params: { reason: "selected-thread", threadIds: [threadId] },
+        } });
+        return true;
+      });
+    } finally {
+      if (this.automaticArchiveReservations.get(key) === reservation) this.automaticArchiveReservations.delete(key);
+    }
+  }
+
+  /** The detail read's view of a hibernated checkout, or undefined. A failed
+   * restore shows the missing-worktree card instead. */
+  readCheckoutHibernation(identity: { backend: AppServerBackendKind; threadId: string }): {
+    restoring: boolean;
+    restoreFailure?: { worktreePath: string; message: string };
+  } {
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    return {
+      restoring: this.checkoutRestores.has(key),
+      ...(this.checkoutRestoreFailures.has(key) ? { restoreFailure: this.checkoutRestoreFailures.get(key) } : {}),
+    };
+  }
+
+  /**
+   * Starts restoring a hibernated checkout without waiting for it, so a send
+   * made now queues behind the restore and starts when it ends. Resolves
+   * whether a restore is running.
+   */
+  async wakeHibernatedCheckout(identity: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    if (this.checkoutRestores.has(key)) return true;
+    const overlay = await this.overlayStore.getThreadOverlayState(identity);
+    if (!overlay?.worktreeSnapshots?.some((snapshot) => snapshot.state === "hibernated")) return false;
+    // A fresh request: the operator asked again, so a failure is retried.
+    this.undeliveredCheckoutRestoreFailures.delete(key);
+    void this.restoreHibernatedCheckout(identity).catch(() => {});
+    return this.checkoutRestores.has(key);
+  }
+
+  /** Restore on open, when the policy says so. */
+  async wakeHibernatedCheckoutOnOpen(identity: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
+    if (this.readCheckoutHibernationPolicy().restoreOn !== "open") return false;
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    // Opening again does not retry a failed restore; sending does.
+    if (this.checkoutRestoreFailures.has(key)) return false;
+    return await this.wakeHibernatedCheckout(identity);
+  }
+
+  /**
+   * Every turn start passes here. A hibernated checkout is put back first;
+   * concurrent callers share that restore. A failure the queue has not yet
+   * reported is reported once, without another attempt, so a held message
+   * carries the reason until the operator retries it.
+   */
+  private async ensureCheckoutAwake(identity: { backend: AppServerBackendKind; threadId: string }): Promise<void> {
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    const running = this.checkoutRestores.get(key);
+    if (running) {
+      await running;
+      return;
+    }
+    const failure = this.checkoutRestoreFailures.get(key);
+    if (failure && this.undeliveredCheckoutRestoreFailures.delete(key)) throw new Error(failure.message);
+    const overlay = await this.overlayStore.getThreadOverlayState(identity);
+    if (!overlay?.worktreeSnapshots?.some((snapshot) => snapshot.state === "hibernated")) return;
+    await this.restoreHibernatedCheckout(identity);
+  }
+
+  private restoreHibernatedCheckout(identity: { backend: AppServerBackendKind; threadId: string }): Promise<void> {
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    const existing = this.checkoutRestores.get(key);
+    if (existing) return existing;
+    const restore = this.withThreadLifecycleMutation(identity, async () => await this.restoreHibernatedCheckoutNow(identity))
+      .finally(() => {
+        this.checkoutRestores.delete(key);
+        // A message that queued behind the restore starts now, or is held
+        // with the restore's refusal.
+        this.threadTurnQueue.scheduleThreadDrain(identity);
+      });
+    this.checkoutRestores.set(key, restore);
+    return restore;
+  }
+
+  /** At most two commits: the snapshot record, and the environment runtime
+   * when setup ran. A refusal writes nothing. */
+  private async restoreHibernatedCheckoutNow(identity: { backend: AppServerBackendKind; threadId: string }): Promise<void> {
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    const overlay = await this.overlayStore.getThreadOverlayState(identity);
+    const thread = this.getCachedThreadSummary(identity);
+    const primary = thread ? primaryThreadWorktree(thread) : undefined;
+    const hibernated = (overlay?.worktreeSnapshots ?? []).filter((snapshot) => snapshot.state === "hibernated");
+    const snapshot = (primary ? hibernated.find((candidate) => path.resolve(candidate.worktreePath) === path.resolve(primary.worktreePath)) : undefined)
+      ?? hibernated[0];
+    if (!snapshot) return;
+    const fail = async (message: string): Promise<never> => {
+      this.checkoutRestoreFailures.set(key, { worktreePath: snapshot.worktreePath, message });
+      this.undeliveredCheckoutRestoreFailures.add(key);
+      backendRegistryLog.warn("hibernated checkout restore failed", { ...identity, worktreePath: snapshot.worktreePath, error: message });
+      await this.publishLocalEvent({ backend: identity.backend, notification: {
+        method: "navigation/threadDirectories/updated",
+        params: { reason: "selected-thread", threadIds: [identity.threadId] },
+      } });
+      throw new Error(message);
+    };
+    const result = await this.withArchiveWorkspaceWrite([snapshot.worktreePath], async () => await this.worktreeRecoveryService.recreate({
+      ...identity,
+      repositoryPath: snapshot.repositoryPath,
+      worktreePath: snapshot.worktreePath,
+      branch: snapshot.sourceBranch,
+      detached: !snapshot.sourceBranch,
+      checkpoint: { snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit },
+      expectedHead: snapshot.sourceHead,
+    }));
+    if (result.status === "failed") return await fail(result.message);
+    if (result.checkpoint && !result.checkpoint.restored) {
+      // The checkout came back without its changes. Remove it again so the
+      // snapshot stays the only copy and the next attempt starts clean.
+      await runGitCommand(snapshot.repositoryPath, ["worktree", "remove", "--force", snapshot.worktreePath]).catch(() => {});
+      return await fail("The saved changes did not apply to the restored checkout. They are kept in its snapshot.");
+    }
+    const restoredAt = Date.now();
+    await this.overlayStore.upsertWorktreeSnapshot({ ...identity, snapshot: { ...snapshot, state: "restored", restoredAt } });
+    this.checkoutRestoreFailures.delete(key);
+    this.undeliveredCheckoutRestoreFailures.delete(key);
+    backendRegistryLog.info("hibernated checkout restored", { ...identity, worktreePath: snapshot.worktreePath });
+    await this.rerunEnvironmentSetupAfterRestore(identity, overlay?.codexEnvironmentRuntime, snapshot.worktreePath);
+    this.invalidateThreadListCache(identity.backend, true, identity.threadId);
+    this.threadInfoStore.invalidateSummaries(identity);
+    await this.publishLocalEvent({ backend: identity.backend, notification: {
+      method: "navigation/threadDirectories/updated",
+      params: { reason: "selected-thread", threadIds: [identity.threadId] },
+    } });
+  }
+
+  /** A restored checkout has no rebuildable output, so a project
+   * environment with a setup script runs it again. A setup failure is
+   * recorded on the runtime; the checkout and the send go ahead. */
+  private async rerunEnvironmentSetupAfterRestore(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    sourceRuntime: CodexThreadEnvironmentRuntime | undefined,
+    cwd: string,
+  ): Promise<void> {
+    if (!sourceRuntime?.environmentId || sourceRuntime.executionTarget !== "local") return;
+    const environment = (await listCodexEnvironmentOptions(cwd).catch(() => []))
+      .find((candidate) => candidate.id === sourceRuntime.environmentId);
+    if (!environment?.setupScript) return;
+    let runtime: CodexThreadEnvironmentRuntime | undefined;
+    try {
+      runtime = await this.buildForkedCodexEnvironmentRuntime({ cwd, forceSetup: true, sourceRuntime, workMode: "worktree" });
+    } catch (error) {
+      if (!(error instanceof CodexEnvironmentStartupError)) throw error;
+      runtime = error.runtime;
+      backendRegistryLog.warn("environment setup failed after checkout restore", { ...identity, error: error.message });
+    }
+    if (runtime) await this.overlayStore.setThreadCodexEnvironmentRuntime?.({ ...identity, codexEnvironmentRuntime: runtime });
   }
 
   private async refreshAutoArchiveCandidate(candidate: ThreadArchiveCandidate): Promise<ThreadArchiveCandidate> {
@@ -18029,6 +18329,14 @@ export class DesktopBackendRegistry {
     if (!snapshot) {
       throw new Error("No archived worktree snapshot is available for this thread.");
     }
+    if (snapshot.state === "hibernated") {
+      // Same path, same branch: the restore a send would make.
+      this.undeliveredCheckoutRestoreFailures.delete(buildThreadIdentityKey(request.backend, request.threadId));
+      await this.restoreHibernatedCheckout(request);
+      const restored = (await this.overlayStore.getThreadOverlayState(request))?.worktreeSnapshots
+        ?.find((candidate) => candidate.id === snapshot.id) ?? snapshot;
+      return { backend: request.backend, threadId: request.threadId, restoredAt: restored.restoredAt ?? Date.now(), snapshot: restored };
+    }
 
     const restoredSnapshot = await this.withArchiveWorkspaceWrite([request.worktreePath], async () => await this.worktreeArchiveService.restore({
       backend: request.backend,
@@ -18487,7 +18795,7 @@ export class DesktopBackendRegistry {
       gitBranch: thread?.gitBranch,
       observedGitBranch: thread?.observedGitBranch,
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread?.worktreeSnapshots,
-    }, { readBranch: readCurrentGitBranch });
+    }, { readBranch: readCurrentGitBranch, includeHibernated: true });
     return { directory, missing };
   }
 
@@ -21867,6 +22175,8 @@ export class DesktopBackendRegistry {
     await this.assertRequestedThreadModelAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
+    // A hibernated checkout starts coming back now; the send queues behind it.
+    await this.wakeHibernatedCheckout(params);
     const { origin = "manual", queueEntryId, delivery, ...entry } = params;
     const hasTurnSettings = [
       entry.executionMode,
@@ -22703,6 +23013,7 @@ export class DesktopBackendRegistry {
       || isArchived()
       || this.threadHasActiveTurn(params.threadId, params.backend)
       || this.threadHasBlockingWorkspaceMove(params)
+      || this.checkoutRestores.has(buildThreadIdentityKey(params.backend, params.threadId))
     ) {
       return { status: "busy" };
     }
@@ -23859,6 +24170,7 @@ export class DesktopBackendRegistry {
       // this refusal as its reason until an unlock releases it.
       return await this.withThreadLifecycleMutation(params, async () => {
         await this.assertThreadNotLocked(params.backend, params.threadId);
+        await this.ensureCheckoutAwake(params);
         return await this.startTurnWithoutHandoff(params);
       });
     } finally {
@@ -24942,6 +25254,8 @@ export class DesktopBackendRegistry {
   ): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
     await this.assertThreadNotLocked(params.backend, params.threadId);
+    // A review reads the checkout, so a hibernated one comes back first.
+    await this.ensureCheckoutAwake(params);
     params = await this.prepareReviewRequest(params, trustedSnapshot);
     const acpManagedMode =
       isAcpBackendId(params.backend)
@@ -26626,6 +26940,7 @@ export class DesktopBackendRegistry {
     if (this.closed) throw new Error("Desktop backend registry is closed");
     // Compaction runs a backend turn, so a lock refuses it like any other.
     await this.assertThreadNotLocked(params.backend, params.threadId);
+    await this.ensureCheckoutAwake(params);
     if (
       this.reservedCodexStartThreadIds.has(params.threadId)
       || this.threadHasActiveTurn(params.threadId, "codex")
@@ -41597,7 +41912,9 @@ export class DesktopBackendRegistry {
         async (candidate): Promise<RestoreThreadWorktreeResult> => {
           try {
             if (await pathExists(candidate.worktreePath)) {
-              if (candidate.snapshot?.state === "archived") {
+              // A hibernated checkout is the archived case without a thread
+              // archive: another thread may have restored the same path.
+              if (candidate.snapshot?.state === "archived" || candidate.snapshot?.state === "hibernated") {
                 const sharedRestore = await this.findSharedWorktreeRestore(candidate.snapshot);
                 if (sharedRestore) {
                   await this.overlayStore.upsertWorktreeSnapshot({ backend: params.backend, threadId: params.threadId,
@@ -41645,7 +41962,9 @@ export class DesktopBackendRegistry {
                   snapshotCommit: snapshot.snapshotCommit,
                   snapshot,
                   allowDetachedFallback: params.backend !== "claude" && !isAcpBackendId(params.backend),
-                  ...(params.backend === "claude" || isAcpBackendId(params.backend) ? { restoreSourceCheckout: true } : {}),
+                  // A hibernated checkout goes back on its own branch.
+                  ...(params.backend === "claude" || isAcpBackendId(params.backend) || snapshot.state === "hibernated"
+                    ? { restoreSourceCheckout: true } : {}),
                 }))
               : await this.withArchiveWorkspaceWrite([candidate.worktreePath], async () => await this.worktreeArchiveService.restoreDetached({
                   backend: params.backend,

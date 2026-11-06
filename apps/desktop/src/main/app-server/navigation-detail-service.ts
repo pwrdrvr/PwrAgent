@@ -24,7 +24,7 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
-import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
+import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { readMergedSubAgentPage } from "./thread-display";
 import { collectConcurrent } from "../../shared/concurrent-work";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -276,11 +276,14 @@ export class NavigationDetailService {
     // reuses the active-watch read. SQLite wrappers still execute synchronously;
     // GitReadCache continues to own physical Git admission.
     const activePrWatchesRead = getDesktopOverlayStore().listActiveThreadPrStatusWatches({ backend: summary.source, threadId: summary.id });
+    // A hibernated checkout is not missing until a restore of it has failed.
+    const checkoutHibernation = this.registry.readCheckoutHibernation({ backend: summary.source, threadId: summary.id });
     const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories] = await Promise.all([
       this.subAgentCollectionManifest(request.ref, summary),
       detectMissingThreadWorkspace(thread, {
         readBranch: async (repositoryPath) =>
           (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
+        includeHibernated: checkoutHibernation.restoreFailure !== undefined,
       }),
       getDesktopOverlayStore().listActiveThreadSubAgents({ backend: summary.source, threadId: summary.id }),
       activePrWatchesRead,
@@ -302,7 +305,12 @@ export class NavigationDetailService {
         });
     // Checked on every detail read, never stored: one stat while the folder
     // exists. Viewers on other instances get the owner's answer.
-    const configuration = { ...thread, ...(workspaceMissing ? { workspaceMissing } : {}) };
+    const workspaceHibernated = workspaceMissing ? undefined : describeHibernatedThreadWorkspace(thread, checkoutHibernation.restoring);
+    const configuration = {
+      ...thread,
+      ...(workspaceMissing ? { workspaceMissing } : {}),
+      ...(workspaceHibernated ? { workspaceHibernated } : {}),
+    };
     for (const name of NAVIGATION_DETAIL_COLLECTION_NAMES) delete configuration[name];
     // Live gate events and selected-detail refreshes must expose the same
     // helpers before persistence at turn end; active cards come from the
