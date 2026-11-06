@@ -2394,6 +2394,8 @@ export type NavigationQueryEntry = {
   row: NavigationRow;
   /** Opaque within this query generation; compare only inside this page set. */
   orderKey: string;
+  /** Exact owner reads: position in the native parent's complete ordinary-child order, before batching. */
+  siblingOrder?: number;
   /** Owner/view-local turn rank. Never compare ranks from different owners. */
   attentionRank?: number;
   placement: NavigationQueryPlacement;

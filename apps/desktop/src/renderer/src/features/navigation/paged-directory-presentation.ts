@@ -121,10 +121,11 @@ export function buildPagedDirectoryPresentation(params: {
     childThreadsByParentKey = new Map(childThreadsByParentKey);
     const visibleParents = new Set([...directoryPinnedThreads, ...selectedUnpinnedThreads, ...unpinnedThreads].map(threadSummaryIdentityKey));
     for (const entry of selected.entries) {
+      const key = navigationThreadSelectionKey(entry.row.ref);
+      if (!ordinaryChildCounts.has(key)) ordinaryChildCounts.set(key, entry.row.ordinaryChildCount);
       if (entry.placement.kind !== "child") continue;
       const parentKey = navigationThreadSelectionKey(entry.placement.parent);
       if (!visibleParents.has(parentKey)) continue;
-      const key = navigationThreadSelectionKey(entry.row.ref);
       const child = params.threadsByKey.get(key);
       const children = childThreadsByParentKey.get(parentKey) ?? [];
       if (child && !children.some((row) => threadSummaryIdentityKey(row) === key)) {

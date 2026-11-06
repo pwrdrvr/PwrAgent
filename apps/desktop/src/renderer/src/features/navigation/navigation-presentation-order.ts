@@ -2,13 +2,18 @@ import type { NavigationQueryEntry } from "@pwragent/shared";
 import type { NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 
-export type NavigationPresentationEntry = { key: string; placement: NavigationQueryEntry["placement"] };
+export type NavigationPresentationEntry = {
+  key: string;
+  placement: NavigationQueryEntry["placement"];
+  siblingOrder?: number;
+};
 export type NavigationPresentationOrder = ReadonlyMap<string, readonly NavigationPresentationEntry[]>;
 
 /** Presentation metadata only: never a query page, cursor, generation or membership proof. */
 export function readNavigationPresentationOrder(resources: NavigationWindowQueriesState["resources"]): NavigationPresentationOrder {
   return new Map([...resources].map(([id, resource]) => [id,
-    (resource.state.page?.entries ?? []).map((entry) => ({ key: navigationThreadSelectionKey(entry.row.ref), placement: entry.placement })),
+    (resource.state.page?.entries ?? []).map((entry) => ({ key: navigationThreadSelectionKey(entry.row.ref), placement: entry.placement,
+      ...(entry.siblingOrder !== undefined ? { siblingOrder: entry.siblingOrder } : {}) })),
   ]));
 }
 
@@ -24,14 +29,34 @@ export function retainNavigationPresentationOrder(frozen: NavigationPresentation
 }
 
 /**
- * Each parent's child keys in the order its owner's child pages listed them:
- * the saved `subthreadOrder`, which navigation rows do not carry.
+ * Each parent's child keys in its native owner's order. Exact metadata reads
+ * retain sibling positions across batches; child pages supply the fallback.
  */
 export function readOwnerChildOrder(
   resources: NavigationWindowQueriesState["resources"],
   presentation: NavigationPresentationOrder,
 ): Map<string, string[]> {
   const order = new Map<string, Set<string>>();
+  const scopedParents = new Set([...resources.values()].flatMap(({ state: { request: { query } } }) =>
+    query.kind === "children" && query.directoryKey !== undefined ? [navigationThreadSelectionKey(query.parent)] : []));
+  const ranked = new Map<string, Map<string, number>>();
+  for (const resource of resources.values()) {
+    const request = resource.state.request;
+    if (request.inventory !== "owner" || request.query.kind !== "exact") continue;
+    const owner = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined;
+    for (const entry of presentation.get(resource.id) ?? []) {
+      if (entry.siblingOrder === undefined || entry.placement.kind !== "child"
+        || entry.placement.parent.ownerInstanceId !== owner) continue;
+      const parentKey = navigationThreadSelectionKey(entry.placement.parent);
+      if (!scopedParents.has(parentKey)) continue;
+      const children = ranked.get(parentKey) ?? new Map<string, number>();
+      children.set(entry.key, entry.siblingOrder);
+      ranked.set(parentKey, children);
+    }
+  }
+  for (const [parentKey, children] of ranked) {
+    order.set(parentKey, new Set([...children].sort(([, left], [, right]) => left - right).map(([key]) => key)));
+  }
   for (const resource of resources.values()) {
     if (resource.state.request.query.kind !== "children") continue;
     for (const entry of presentation.get(resource.id) ?? []) {

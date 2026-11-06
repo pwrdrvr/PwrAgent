@@ -1081,6 +1081,32 @@ export function projectNavigationQuery(params: {
   const directoryParentOf = directoryMembers ? directoryParentResolver(directoryMembers, parentCandidates) : undefined;
   const homeProjects = query.kind === "group-members"
     ? buildHomeProjects(params.index.directories, threadsByLegacyKey) : undefined;
+  // Exact metadata batches can contain only some mounted siblings. Keep the
+  // native parent's complete order as a scalar, without exporting its full
+  // subthreadOrder collection or depending on viewer pin summaries.
+  const siblingOrders = new Map<string, number>();
+  if (params.request.inventory === "owner" && query.kind === "exact") {
+    const parents = new Map<string, NavigationThreadSummary>();
+    for (const thread of selectedThreads) {
+      const parent = parentIdentity(thread, parentCandidates);
+      if (navigationIdentity(thread).ownerInstanceId || !parent || parent.ownerInstanceId) continue;
+      const parentThread = threadsByIdentity.get(identityKey(parent));
+      if (parentThread) parents.set(identityKey(parent), parentThread);
+    }
+    const siblings = new Map<string, NavigationThreadSummary[]>();
+    for (const thread of params.index.threads) {
+      if (!isOrdinaryThread(thread) || navigationIdentity(thread).ownerInstanceId) continue;
+      const parent = parentIdentity(thread, parentCandidates);
+      const key = parent && identityKey(parent);
+      if (!key || !parents.has(key)) continue;
+      const children = siblings.get(key) ?? [];
+      children.push(thread);
+      siblings.set(key, children);
+    }
+    for (const [key, children] of siblings) {
+      sortSubthreadSummaries(parents.get(key)!, children).forEach((thread, order) => siblingOrders.set(threadKey(thread), order));
+    }
+  }
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread, parentCandidates);
     const placementParent = attentionMemberKeys && parent && !attentionMemberKeys.has(identityKey(parent))
@@ -1100,6 +1126,7 @@ export function projectNavigationQuery(params: {
         homeProject: homeProjects?.get(thread),
       }),
       orderKey: rowOrderKey(index),
+      ...(siblingOrders.has(threadKey(thread)) ? { siblingOrder: siblingOrders.get(threadKey(thread))! } : {}),
       ...(params.attentionOrder?.members.has(navigationAttentionIdentity(thread))
         ? { attentionRank: params.attentionOrder.members.get(navigationAttentionIdentity(thread))!.rank }
         : {}),

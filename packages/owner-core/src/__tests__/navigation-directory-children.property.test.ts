@@ -93,3 +93,25 @@ it("keeps a cross-project audit and its fixes in their own directory", () => {
   expect(ownRoots.entries[0]?.row.parentThreadId).toBe("thread-0");
   expect(project(index, { kind: "children", parent: root }).entries.map(({ row }) => row.id)).toEqual(["thread-1"]);
 });
+
+// The native owner's complete child query is the ordering oracle. Exact
+// metadata batches must retain that order even when most siblings are absent.
+it("gives exact owner rows their position in the native parent's complete child order", () => {
+  fc.assert(fc.property(fc.uniqueArray(fc.integer(), { minLength: 2, maxLength: 32 }), (permutation) => {
+    const index = inventory(Array(permutation.length + 1).fill(0), [-1, ...permutation.map(() => 0)]);
+    const parent = index.threads[0]!;
+    index.threads.slice(1).forEach((thread, position) => { thread.createdAt = position; });
+    parent.subthreadOrder = permutation.map((value, position) => ({ value, id: index.threads[position + 1]!.id }))
+      .sort((a, b) => a.value - b.value).filter((_, position) => position % 3 !== 0).map(({ id }) => id);
+    const oracle = project(index, { kind: "children", parent: { backend: "codex", threadId: parent.id } });
+    for (let offset = 1; offset < index.threads.length; offset += 3) {
+      const query = { kind: "exact" as const, identities: index.threads.slice(offset, offset + 3)
+        .map((thread) => ({ backend: thread.source, threadId: thread.id })) };
+      const owner = projectNavigationQuery({ index, request: { protocol: 2, inventory: "owner", consumer: "main-sidebar", query } });
+      for (const entry of owner.entries) {
+        expect(entry.siblingOrder).toBe(oracle.entries.findIndex(({ row }) => row.id === entry.row.id));
+      }
+      expect(project(index, query).entries.every((entry) => entry.siblingOrder === undefined)).toBe(true);
+    }
+  }));
+});

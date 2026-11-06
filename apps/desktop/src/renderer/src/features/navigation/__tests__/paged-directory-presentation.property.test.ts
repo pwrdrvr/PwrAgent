@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import fc from "fast-check";
 import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared";
 import { createNavigationPageState, navigationIdentityKey } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import { buildPagedDirectoryChildren, buildPagedDirectoryPresentation } from "../paged-directory-presentation";
@@ -75,4 +76,75 @@ it("does not pull another project's audit or fixes into its global parent's tray
   const ownProject = buildPagedDirectoryPresentation({ ...data, directory: data.directories[1]! });
   expect(ownProject.unpinnedThreads.map((row) => row.id)).toEqual(["thread-1"]);
   expect(ownProject.childThreadsByParentKey.get("codex:thread-1")?.map((row) => row.id)).toEqual(["thread-2"]);
+});
+
+it("uses the selected exact page's scoped counts for off-page remote pins", () => {
+  fc.assert(fc.property(fc.integer({ min: 0, max: 30 }), fc.integer({ min: 1, max: 30 }), (scopedCount, otherChildren) => {
+    const data = fixture([0], [-1]);
+    const directory = data.directories[0]!;
+    const row = data.rows[0]!;
+    row.ref.ownerInstanceId = "peer";
+    row.federation = { ref: buildFederatedThreadRef({ backend: row.source, instanceId: "peer", threadId: row.id }), instanceLabel: "Peer", capabilities: [] };
+    row.pinnedRank = "1";
+    row.ordinaryChildCount = scopedCount + otherChildren;
+    const key = `remote:peer:codex:${row.id}`;
+    data.threadsByKey = new Map([[key, row]]);
+    const collection = data.resources.get(`directory:${directory.key}`)!;
+    collection.state.page!.entries = [];
+    data.resources.set(`directory-pins:${directory.key}`, { ...collection, id: `directory-pins:${directory.key}` });
+    const selection: NavigationWindowResource = { ...collection, id: "selected-viewer-mount", state: { ...collection.state,
+      request: { protocol: 2, inventory: "viewer", consumer: "main-sidebar", query: { kind: "exact", identities: [row.ref], ancestryScope: "directory" } },
+      page: { ...collection.state.page!, selectionDirectory: directory,
+        entries: [{ row: { ...row, ordinaryChildCount: scopedCount }, placement: { kind: "root" }, orderKey: "0" }] } } };
+    data.resources.set(selection.id, selection);
+    data.resources.set("selected-context", { ...selection, id: "selected-context", state: { ...selection.state,
+      page: { ...selection.state.page!, entries: [{ ...selection.state.page!.entries[0]!, row }] } } });
+    const model = buildPagedDirectoryPresentation({ ...data, directory });
+    expect(model.directoryPinnedThreads).toEqual([row]);
+    expect(model.ordinaryChildCounts.get(key)).toBe(scopedCount);
+    const otherDirectory = { ...directory, key: "directory:/elsewhere" };
+    expect(buildPagedDirectoryPresentation({ ...data, directory: otherDirectory }).ordinaryChildCounts.has(key)).toBe(false);
+    // A retained selection cannot replace a count already admitted by the
+    // directory's own collection page.
+    collection.state.page!.entries = [{ ...selection.state.page!.entries[0]!, row: { ...row, ordinaryChildCount: scopedCount + 1 } }];
+    expect(buildPagedDirectoryPresentation({ ...data, directory }).ordinaryChildCounts.get(key)).toBe(scopedCount + 1);
+  }));
+});
+
+it("orders only mounted directory children by native owner ranks across exact batches", () => {
+  fc.assert(fc.property(fc.uniqueArray(fc.integer(), { minLength: 3, maxLength: 32 }), (savedOrder) => {
+    const data = fixture(Array(savedOrder.length + 1).fill(0), [-1, ...savedOrder.map(() => 0)]);
+    const directory = data.directories[0]!;
+    const parent = data.rows[0]!;
+    const mounted = data.rows.slice(1).filter((_, index) => index % 3 !== 0);
+    const rank = new Map(savedOrder.map((value, index) => ({ value, id: data.rows[index + 1]!.id }))
+      .sort((a, b) => a.value - b.value).map(({ id }, index) => [id, index]));
+    for (const row of data.rows) {
+      row.ref.ownerInstanceId = "peer";
+      row.federation = { ref: buildFederatedThreadRef({ backend: row.source, instanceId: "peer", threadId: row.id }), instanceLabel: "Peer", capabilities: [] };
+      row.createdAt = Number(row.id.slice("thread-".length));
+    }
+    data.threadsByKey = new Map(data.rows.map((row) => [`remote:peer:codex:${row.id}`, row]));
+    const collection = data.resources.get(`directory:${directory.key}`)!;
+    const childId = `children:${navigationIdentityKey(parent.ref)}`;
+    data.resources.clear();
+    data.resources.set(collection.id, collection);
+    data.resources.set(childId, { ...collection, id: childId, state: { ...collection.state,
+      request: { protocol: 2, inventory: "viewer", consumer: "main-sidebar", query: { kind: "children", parent: parent.ref, directoryKey: directory.key } },
+      page: { ...collection.state.page!, entries: [...mounted].reverse().map((row, index) => ({ row,
+        placement: { kind: "child", parent: parent.ref }, orderKey: String(index) })) } } });
+    for (let offset = 0; offset < mounted.length; offset += 3) {
+      const batch = mounted.slice(offset, offset + 3);
+      const id = `visible-owner:peer:${offset}`;
+      data.resources.set(id, { ...collection, id, state: { ...collection.state,
+        request: { protocol: 2, inventory: "owner", consumer: "main-sidebar", federationTarget: { scope: "remote", instanceId: "peer" },
+          query: { kind: "exact", identities: batch.map((row) => row.ref) } },
+        page: { ...collection.state.page!, entries: batch.map((row, index) => ({ row, siblingOrder: rank.get(row.id),
+          placement: { kind: "child", parent: parent.ref }, orderKey: String(index) })) } } });
+    }
+    const model = buildPagedDirectoryPresentation({ ...data, directory });
+    const trays = createSubthreadTrays(model.childThreadsByParentKey, model.unpinnedThreads, model.ownerChildOrder);
+    expect(trays.subtree(`remote:peer:codex:${parent.id}`).map((row) => row.id))
+      .toEqual([...mounted].sort((a, b) => rank.get(a.id)! - rank.get(b.id)!).map((row) => row.id));
+  }));
 });
