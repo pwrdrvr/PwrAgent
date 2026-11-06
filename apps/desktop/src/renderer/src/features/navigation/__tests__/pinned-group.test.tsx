@@ -11,6 +11,7 @@ import {
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { RecentsList, readPinnedGroupCounts } from "../RecentsList";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
+import type { PendingLaunchpadCreation } from "../../../lib/useThreadNavigation";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 
@@ -657,5 +658,51 @@ describe("The list's section under the Pinned group", () => {
     rerenderRecents(view, { selectedItemKey: "codex:flaky" });
     expect(recentsHeader()).toHaveAttribute("aria-expanded", "true");
     expect(listTitles()).toContain("Flaky auth fixture");
+  });
+
+  it("reopens when a thread starts at its top", () => {
+    const view = renderRecents();
+    fireEvent.click(recentsHeader());
+    expect(listTitles()).toEqual([]);
+
+    const starting: PendingLaunchpadCreation = {
+      operationId: "startup-1",
+      submittedAt: 1_000,
+      selectionKey: "starting-launchpad:1",
+      directoryKey: "",
+      directoryLabel: "",
+      launchpad: {
+        backend: "codex",
+        executionMode: "default",
+        prompt: "Add a crop tool",
+      } as PendingLaunchpadCreation["launchpad"],
+      composerScopeKey: "launchpad:starting:1",
+      setupProgressKey: "starting-launchpad:1",
+      title: "Add a crop tool",
+      input: [],
+    };
+    rerenderRecents(view, { pendingLaunchpadCreations: [starting] });
+    expect(recentsHeader()).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // Oracle: for every way of pinning the population, the list has a header
+  // exactly when some root is left unpinned, and it counts those roots. The
+  // lens's pager is an array of controls, empty when nothing is left to load,
+  // and an array of nulls once drew "Created, 0 threads" over no rows.
+  it("draws a header exactly when a root is left unpinned, for every pin pattern", () => {
+    for (let mask = 1; mask < 1 << population.length; mask += 1) {
+      const threads = population.map((entry, index) => (mask & (1 << index)
+        ? { ...entry, pinnedRank: entry.pinnedRank ?? String(4096 + index) }
+        : { ...entry, pinnedRank: undefined }));
+      const unpinned = threads.filter((entry) => entry.pinnedRank === undefined).length;
+      renderRecents({ threads });
+      const header = screen.queryByRole("button", { name: /^Created,/ });
+      if (unpinned === 0) {
+        expect(header, `mask ${mask}`).toBeNull();
+      } else {
+        expect(header, `mask ${mask}`).toHaveAccessibleName(`Created, ${unpinned} thread${unpinned === 1 ? "" : "s"}`);
+      }
+      cleanup();
+    }
   });
 });

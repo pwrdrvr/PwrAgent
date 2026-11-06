@@ -2,7 +2,7 @@ import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPr
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
-import { Fragment, useEffect, useId, useRef, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Children, Fragment, useEffect, useId, useRef, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useRecoverableState } from "../../lib/RendererRecoveryState";
 import type {
@@ -195,7 +195,7 @@ export function RecentsList(props: RecentsListProps) {
     onSetThreadPin: props.onSetThreadPin,
     onNestThread: props.onNestThread,
   });
-  // The Recents section below the Pinned group folds like the group does, so
+  // The list's section below the Pinned group folds like the group does, so
   // only the pins stay on screen. Window-local view state: it costs no
   // persisted write, survives a renderer recovery, and a restart opens it.
   const [recentsCollapsedState, setRecentsCollapsed] = useRecoverableState<boolean>(
@@ -316,25 +316,29 @@ export function RecentsList(props: RecentsListProps) {
   // The list's section exists only under a drawn Pinned group: with no pin
   // the list is all there is, and folding it would leave the lens blank.
   const listSection = props.listSection;
+  // The pager is an array with a null per resource that has nothing to load,
+  // so count its rendered controls rather than test the array.
   const recentsSectionShown = listSection !== undefined && pinnedRoots.length > 0
-    && (topLevelThreads.length > 0 || startingRootThreads.length > 0 || Boolean(props.pager));
+    && (topLevelThreads.length > 0 || startingRootThreads.length > 0 || Children.toArray(props.pager).length > 0);
   const recentsCollapsed = recentsSectionShown && recentsCollapsedState;
   // A new selection inside the folded section (⌘K, a notification) or a
   // thread starting at its top would land out of sight, so either reopens
   // it, as a revealed pin reopens the Pinned group. Folding with a thread
-  // already open there must not, so the effects key on the change and read
-  // the current state through refs.
+  // already open there must not, so each effect acts only on a change it
+  // records itself.
   const selectionFolded = recentsCollapsed && props.selectedThreadKey !== undefined
     && topLevelThreads.some((thread) => {
       const key = threadSummaryIdentityKey(thread);
       return key === props.selectedThreadKey
         || trays.subtree(key).some((child) => threadSummaryIdentityKey(child) === props.selectedThreadKey);
     });
-  const selectionFoldedRef = useRef(selectionFolded);
-  selectionFoldedRef.current = selectionFolded;
+  const lastSelectionRef = useRef({ key: props.selectedThreadKey, reveal: props.revealSelectedThreadRequest });
   useEffect(() => {
-    if (selectionFoldedRef.current) setRecentsCollapsed(false);
-  }, [props.selectedThreadKey, props.revealSelectedThreadRequest, setRecentsCollapsed]);
+    const last = lastSelectionRef.current;
+    const changed = last.key !== props.selectedThreadKey || last.reveal !== props.revealSelectedThreadRequest;
+    lastSelectionRef.current = { key: props.selectedThreadKey, reveal: props.revealSelectedThreadRequest };
+    if (changed && selectionFolded) setRecentsCollapsed(false);
+  }, [props.selectedThreadKey, props.revealSelectedThreadRequest, selectionFolded, setRecentsCollapsed]);
   const startingRootCount = startingRootThreads.length;
   const startingRootCountRef = useRef(startingRootCount);
   useEffect(() => {
@@ -792,10 +796,10 @@ function formatUnreadThreadCount(count: number): string {
 }
 
 /**
- * A section of Updated and Created: the Pinned group, or the Recents list
- * under it. Both use a project header's primitives (the disclosure caret,
- * the label, the right-aligned meta), so each reads as the same kind of
- * thing a Directories project is.
+ * A section of Updated and Created: the Pinned group, or the time-sorted
+ * list under it, headed by its lens tab's name. Both use a project header's
+ * primitives (the disclosure caret, the label, the right-aligned meta), so
+ * each reads as the same kind of thing a Directories project is.
  *
  * Collapsed, the header carries the Attention tab's two readouts scoped to
  * the section, both on screen and grey at zero: closing a section must never

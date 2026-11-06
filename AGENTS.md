@@ -730,8 +730,9 @@ Render a brand through `BrandLockup`
   - While the group is drawn, the list sits in a section with the same header
     (caret, icon, count, collapsed readouts), so the operator can fold it and
     keep only the pins on screen. The header is the lens tab's own name and
-    icon (**Updated** or **Created**), never "Recents"; the icon stays neutral. Its collapse is
-    window-local view state, not persisted, and independent of the group's.
+    icon (**Updated** or **Created**), never "Recents"; the icon stays
+    neutral. Its collapse is window-local view state, not persisted, and
+    independent of the group's.
     A newly selected thread or a starting thread inside it reopens it.
 - Offer visible pin ordering in Directories and in the Pinned group.
   Both use `useThreadPinOrdering`; do not fork it.
