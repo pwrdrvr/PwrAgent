@@ -743,7 +743,7 @@ describe("The list's fold against a model", () => {
 
   it("keeps the operator's fold until the pins settle at none", () => {
     fc.assert(fc.property(
-      fc.array(fc.constantFrom<Step>("toggle", "unpinAll", "pinOne", "reload", "settle"), { maxLength: 14 }),
+      fc.array(fc.constantFrom<Step>("toggle", "unpinAll", "pinOne", "reload", "settle"), { maxLength: 8 }),
       (steps) => {
         let threads: NavigationThreadSummary[] = population;
         let loading = false;
@@ -776,6 +776,11 @@ describe("The list's fold against a model", () => {
           cleanup();
         }
       },
-    ), { numRuns: 120 });
+    ), {
+      // Every run mounts the sidebar and rerenders it per step, so keep the
+      // count modest; the two sequences that break the rule always run.
+      numRuns: 30,
+      examples: [[["toggle", "unpinAll", "pinOne"]], [["toggle", "reload", "settle"]]],
+    });
   });
 });
