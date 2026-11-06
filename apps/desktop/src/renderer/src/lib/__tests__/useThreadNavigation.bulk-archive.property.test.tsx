@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { AgentEvent, BackendSummary, NavigationRow } from "@pwragent/shared";
@@ -26,7 +26,19 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
   failed?: number[];
   remote?: number[];
   navigateAfterCompletionGroup?: number;
+  auditLookup?: boolean;
 }) {
+  const startedAt = performance.now();
+  const phases: Record<string, number> = {};
+  let phase = "mount hook";
+  let phaseStartedAt = startedAt;
+  let completedGroups = 0;
+  const nextPhase = (next: string) => {
+    const now = performance.now();
+    phases[phase] = Math.round(now - phaseStartedAt);
+    phase = next;
+    phaseStartedAt = now;
+  };
   const archived = new Set<string>();
   const listeners = new Set<(event: AgentEvent) => void>();
   const emit = (event: AgentEvent) => { for (const listener of listeners) listener(event); };
@@ -91,6 +103,7 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
   });
   const navigation = hook.result.current;
   const onThreadsArchived = vi.fn();
+  nextPhase("mount sidebar");
   // Mount the real sidebar against the hook's admitted page. Keep that
   // presentation stable while driving IPC completions; hook state still
   // renders on every optimistic removal and accepted owner page.
@@ -100,17 +113,42 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     onBrowseModeChange={navigation.setBrowseMode} onSelectThread={navigation.selectThread}
     onArchiveThread={navigation.archiveThread} onArchiveThreads={navigation.archiveThreads} onThreadsArchived={onThreadsArchived}
     onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
+  const threadButton = (index: number) => {
+    const row = sidebar.container.querySelector<HTMLElement>(`[data-thread-key="codex:thread-${index}"]`);
+    if (!row) throw new Error(`Missing sidebar row for thread-${index}`);
+    const styleReads = options?.auditLookup ? vi.spyOn(window, "getComputedStyle") : undefined;
+    try {
+      // Retain the accessible role, name and visibility checks, but only
+      // compute them for the row this fixture is about to interact with.
+      const button = within(row).getByRole("button", { name: `Thread ${index}` });
+      if (styleReads) {
+        // Fixture lookup work belongs to the requested row. Resolving its
+        // accessible name must not compute styles for every other thread.
+        const inspectedRows = new Set(styleReads.mock.calls.flatMap(([element]) => {
+          const key = element.closest("[data-thread-key]")?.getAttribute("data-thread-key");
+          return key ? [key] : [];
+        }));
+        expect(inspectedRows).toEqual(new Set([`codex:thread-${index}`]));
+      }
+      return button;
+    } finally {
+      styleReads?.mockRestore();
+    }
+  };
   try {
-    const first = screen.getByRole("button", { name: "Thread 0" });
+    nextPhase("select and open menu");
+    const first = threadButton(0);
     fireEvent.click(first);
-    fireEvent.click(screen.getByRole("button", { name: `Thread ${size - 1}` }), { shiftKey: true });
+    fireEvent.click(threadButton(size - 1), { shiftKey: true });
     fireEvent.contextMenu(first);
     read.mockClear();
+    nextPhase("start archive");
     await act(async () => { fireEvent.click(screen.getByRole("menuitem", { name: `Archive ${size} Threads` })); });
     expect(archive).toHaveBeenCalledTimes(size);
     expect(hook.result.current.archivedThreadKeys.size).toBe(size);
     expect(hook.result.current.threads.map((thread) => thread.id)).toEqual([`thread-${size}`]);
     expect(hook.result.current.selectedThreadKey).toBe(`codex:thread-${size}`);
+    nextPhase("complete archives");
     for (const [groupIndex, group] of completionGroups.entries()) {
       await act(async () => { for (const index of group) gates[index]!.resolve(); });
       // Deliver the same timer tasks production runs between staggered IPC
@@ -123,11 +161,13 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
           await Promise.resolve();
         }
       });
+      completedGroups++;
       if (options?.navigateAfterCompletionGroup === groupIndex) {
-        await act(async () => { fireEvent.click(screen.getByRole("button", { name: `Thread ${size}` })); });
+        await act(async () => { fireEvent.click(threadButton(size)); });
         expect(hook.result.current.selectedThreadKey).toBe(`codex:thread-${size}`);
       }
     }
+    nextPhase("assert outcome");
     await waitFor(() => expect(onThreadsArchived).toHaveBeenCalledOnce());
     for (let index = 0; index < size; index++) {
       const failed = options?.failed?.includes(index) === true;
@@ -139,13 +179,26 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
       .filter((_, index) => !options?.failed?.includes(index)).map((row) => row.id));
     const loads = read.mock.calls.length;
     const lensLoads = read.mock.calls.filter(([request]) => request.query.kind === "lens" && request.query.roots !== "pinned").length;
-    console.info("bulk archive navigation IPC", { size, groups: completionGroups.length, loads, lensLoads });
+    if (size >= 50) console.info("bulk archive navigation IPC", { size, groups: completionGroups.length, loads, lensLoads });
     return { loads, lensLoads, selectedThreadKey: hook.result.current.selectedThreadKey };
   } finally {
+    nextPhase("unmount");
     sidebar.unmount();
     hook.unmount();
+    nextPhase("done");
+    if (size >= 50) console.info("bulk archive fixture work", {
+      size, groups: completionGroups.length, completedGroups, phases,
+      totalMs: Math.round(performance.now() - startedAt),
+      remainingListeners: listeners.size, remainingRefreshTasks: refreshTasks.size,
+    });
+    expect(listeners.size).toBe(0);
+    expect(refreshTasks.size).toBe(0);
   }
 }
+
+it("sidebar archive fixture inspects only the requested row during accessible lookup", async () => {
+  await archiveFromSidebar(4, [[0, 1, 2, 3]], { auditLookup: true });
+});
 
 it.each([50, 200])("bounds navigation IPC loads for %i sidebar archives, even when responses are staggered", async (size) => {
   const indices = Array.from({ length: size }, (_, index) => index);
