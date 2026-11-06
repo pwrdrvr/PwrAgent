@@ -10,9 +10,31 @@ type CanonicalNotification = Extract<AgentEvent["notification"], { method:
   | "thread/prAutoDispatch/pendingUpdated" | "navigation/thread/seen"
   | "thread/pullRequests/updated" | "pullRequest/status/updated" | "navigation/threadGitWorkingState/updated"
   | "thread/parent/set" | "thread/parent/cleared" | "thread/subAgents/updated" | "thread/reactions/updated"
-  | "thread/lock/updated"
+  | "thread/lock/updated" | "thread/checkoutHibernation/updated"
   | "thread/subthreadOrder/updated" | "thread/subthreadsCollapsed/updated"
 }>;
+
+type CheckoutHibernationParams = Extract<AgentEvent["notification"], { method: "thread/checkoutHibernation/updated" }>["params"];
+
+/**
+ * A hibernation update: the card's checkout (absent leaves it), the row's
+ * hibernated mark, and Keep it awake. Rows and the selected detail share it.
+ */
+export function applyCheckoutHibernationUpdate<T extends NavigationThreadSummary>(thread: T, params: CheckoutHibernationParams): T {
+  let next = thread;
+  if (params.workspace !== undefined) {
+    const { workspaceHibernated: _previous, checkoutHibernated: _mark, ...rest } = next;
+    // A restore in progress is still the hibernated checkout until it ends.
+    next = (params.workspace
+      ? { ...rest, workspaceHibernated: params.workspace, checkoutHibernated: true }
+      : rest) as T;
+  }
+  if (params.keepAwake !== undefined) {
+    const { keepCheckoutAwake: _previous, ...rest } = next;
+    next = (params.keepAwake ? { ...rest, keepCheckoutAwake: true } : rest) as T;
+  }
+  return next;
+}
 
 /** Canonical owner events update a retained exact detail without any collection read. */
 export function applyNavigationThreadEvent(thread: NavigationThreadSummary, event: AgentEvent): NavigationThreadSummary {
@@ -44,6 +66,8 @@ export function applyNavigationThreadEvent(thread: NavigationThreadSummary, even
       return { ...thread, reactions: notification.params.reactions };
     case "thread/lock/updated":
       return { ...thread, lock: notification.params.lock };
+    case "thread/checkoutHibernation/updated":
+      return applyCheckoutHibernationUpdate(thread, notification.params);
     case "thread/subAgents/updated":
       return notification.params.subAgents
         ? { ...thread, subAgents: notification.params.subAgents } : thread;

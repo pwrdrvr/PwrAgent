@@ -246,6 +246,8 @@ import {
   type AcknowledgeThreadEnvironmentFailureResponse,
   type SetThreadReactionRequest,
   type SetThreadLockRequest,
+  type SetThreadCheckoutHibernationRequest,
+  type SetThreadCheckoutHibernationResponse,
   type SetThreadLockResponse,
   type SetThreadReactionResponse,
   type SetThreadPrAutoDispatchRequest,
@@ -759,6 +761,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/archived",
   "thread/automations/updated",
   "thread/backgroundTasks/updated",
+  "thread/checkoutHibernation/updated",
   "thread/codexEnvironment/updated",
   "thread/codexInvalidIdRecovery/updated",
   "thread/executionMode/queueCleared",
@@ -7514,6 +7517,14 @@ function localBackendOperations(): FederationBackendOperations {
       }, {
         source: "peer",
         ...(options?.requesterInstanceId ? { sourceInstanceId: options.requesterInstanceId } : {}),
+      });
+    },
+    async setThreadCheckoutHibernation(request: SetThreadCheckoutHibernationRequest): Promise<SetThreadCheckoutHibernationResponse> {
+      return await getDesktopBackendRegistry().setThreadCheckoutHibernation({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        ...(request.restore !== undefined ? { restore: request.restore } : {}),
+        ...(request.keepAwake !== undefined ? { keepAwake: request.keepAwake } : {}),
       });
     },
     async continueThreadEnvironmentStartup(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> {

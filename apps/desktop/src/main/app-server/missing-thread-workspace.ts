@@ -103,7 +103,7 @@ export async function detectMissingThreadWorkspace(
 
 /** The thread's hibernated checkout, which the next send restores. */
 export function describeHibernatedThreadWorkspace(
-  thread: Pick<AppServerThreadSummary, "linkedDirectories" | "worktreeSnapshots" | "archivedAt">,
+  thread: Pick<AppServerThreadSummary, "linkedDirectories" | "worktreeSnapshots" | "archivedAt" | "codexEnvironmentRuntime">,
   restoring = false,
 ): ThreadHibernatedWorkspace | undefined {
   if (thread.archivedAt !== undefined) return undefined;
@@ -118,6 +118,12 @@ export function describeHibernatedThreadWorkspace(
     repositoryPath: snapshot.repositoryPath,
     hibernatedAt: snapshot.hibernatedAt ?? snapshot.createdAt,
     ...(branch ? { branch } : {}),
+    ...(snapshot.changedFileCount !== undefined ? { changedFileCount: snapshot.changedFileCount } : {}),
+    ...(snapshot.changedBytes !== undefined ? { changedBytes: snapshot.changedBytes } : {}),
+    ...(snapshot.removedOutput?.length ? { removedOutput: snapshot.removedOutput } : {}),
+    // A local project environment runs its setup again after the restore.
+    ...(thread.codexEnvironmentRuntime?.environmentId && thread.codexEnvironmentRuntime.executionTarget === "local"
+      ? { runsSetup: true } : {}),
     ...(restoring ? { restoring: true } : {}),
   };
 }

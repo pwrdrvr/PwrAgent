@@ -6109,6 +6109,53 @@ describe("Sidebar", () => {
     ], { key: `codex:${pinnedTop.id}`, direction: "down" });
   });
 
+  it("toggles Keep Checkout Awake in place for a PwrAgent worktree, and only there", async () => {
+    const onSetThreadCheckoutHibernation = vi.fn(async () => undefined);
+    const owned = {
+      ...sharedThread,
+      id: "thread-owned",
+      title: "Rebuild checkout flow",
+      keepCheckoutAwake: true,
+      linkedDirectories: [{
+        ...sharedThread.linkedDirectories[0]!,
+        worktreePath: "/Users/fixture-user/.pwragent/worktrees/k3m9q2/PwrAgent",
+      }],
+    };
+    const codexOwned = { ...sharedThread, id: "thread-codex", title: "Codex worktree" };
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[owned, codexOwned]}
+        loading={false}
+        creatingThread={undefined}
+        threads={[owned, codexOwned]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadCheckoutHibernation={onSetThreadCheckoutHibernation}
+      />,
+    );
+    const row = (title: RegExp) => screen.getByRole("button", { name: title }).closest(".thread-row-shell") as HTMLElement;
+    fireEvent.click(row(/Rebuild checkout flow/).querySelector(".thread-row__overflow-button") as HTMLButtonElement);
+    const awake = await screen.findByRole("menuitemcheckbox", { name: "Keep Checkout Awake" });
+    expect(awake).toHaveAttribute("aria-checked", "true");
+    await clickElement(awake);
+    expect(onSetThreadCheckoutHibernation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "thread-owned" }), { keepAwake: false },
+    );
+    // A checkable item: the menu stays open after the toggle.
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    pressEscape();
+
+    // Codex's own worktrees never hibernate, so they offer no such item.
+    fireEvent.click(row(/Codex worktree/).querySelector(".thread-row__overflow-button") as HTMLButtonElement);
+    await screen.findByRole("menu");
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Keep Checkout Awake" })).toBeNull();
+  });
+
   it("keeps a pin at top from the context menu and moves only within its tier", async () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
     const kept = {

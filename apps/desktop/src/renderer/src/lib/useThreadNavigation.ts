@@ -5,6 +5,7 @@ import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagn
 import type { LaunchpadCreationStatus } from "@pwragent/shared";
 import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
+import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
 import { readBridgedNavigationResumeState } from "./navigation-resume-state";
 import { findPeerCounterpartDirectory, type ProjectIdentity } from "./federation-project-match";
 import { FederatedDirectoryIndexCache } from "./federated-directory-index-cache";
@@ -63,6 +64,7 @@ import type {
   ThreadAgentMetadata,
   ThreadExecutionMode,
   ThreadLock,
+  SetThreadCheckoutHibernationResponse,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import {
@@ -1228,6 +1230,38 @@ function updateThreadLockInLoadedRows(
     return params.lock ? { ...rest, lock: params.lock } : rest;
   });
 
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
+}
+
+function updateThreadCheckoutHibernationInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
+  update: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    params: Parameters<typeof applyCheckoutHibernationUpdate>[1];
+  },
+): NavigationLoadedRows | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+  const threadKey = buildThreadIdentityKey(update.backend, update.params.threadId);
+  let changed = false;
+  const threads = loadedThreadRows(snapshot).map((thread) => {
+    if (
+      buildThreadIdentityKey(thread.source, thread.id) !== threadKey
+      || !federationTargetsEqual(thread.federation?.ref.target, update.federationTarget)
+    ) {
+      return thread;
+    }
+    const next = applyCheckoutHibernationUpdate(thread, update.params);
+    if (next.checkoutHibernated === thread.checkoutHibernated && next.keepCheckoutAwake === thread.keepCheckoutAwake) {
+      return thread;
+    }
+    changed = true;
+    // Rows carry only the marks; the card's checkout is selected detail.
+    const { workspaceHibernated: _detail, ...row } = next;
+    return { ...row, ...(thread.workspaceHibernated ? { workspaceHibernated: thread.workspaceHibernated } : {}) };
+  });
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
@@ -3275,6 +3309,16 @@ export function useThreadNavigation(
     locked: boolean,
     note?: string,
   ) => Promise<void>;
+  /**
+   * Restore a hibernated checkout now, or set Keep it awake (which also
+   * restores). Runs on the thread's owner. Resolves the owner's answer; a
+   * refused restore resolves with `restoreError`, and the missing-worktree
+   * card takes over from the next detail read.
+   */
+  setThreadCheckoutHibernation?: (
+    thread: NavigationThreadSummary,
+    change: { restore?: boolean; keepAwake?: boolean },
+  ) => Promise<SetThreadCheckoutHibernationResponse>;
   setThreadPin: (
     thread: NavigationThreadSummary,
     pinned: boolean,
@@ -4331,6 +4375,7 @@ export function useThreadNavigation(
           || method === "thread/pullRequests/updated"
           || method === "thread/reactions/updated"
           || method === "thread/lock/updated"
+          || method === "thread/checkoutHibernation/updated"
           || method === "thread/mergeHolds/updated"
           || method === "thread/prAutoDispatch/pendingUpdated"
           || method === "thread/prAutoDispatch/updated"
@@ -4522,6 +4567,19 @@ export function useThreadNavigation(
             federationTarget: event.federationTarget,
             threadId,
             lock,
+          }),
+        }));
+        return;
+      }
+
+      if (method === "thread/checkoutHibernation/updated") {
+        const params = event.notification.params as Parameters<typeof applyCheckoutHibernationUpdate>[1];
+        setState((current) => ({
+          ...current,
+          rows: updateThreadCheckoutHibernationInLoadedRows(current.rows, {
+            backend: event.backend,
+            federationTarget: event.federationTarget,
+            params,
           }),
         }));
         return;
@@ -9119,6 +9177,7 @@ export function useThreadNavigation(
 
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
   const setThreadLockRequest = desktopApi?.setThreadLock;
+  const setThreadCheckoutHibernationRequest = desktopApi?.setThreadCheckoutHibernation;
   const setThreadPinRequest = desktopApi?.setThreadPin;
   const setRemoteThreadLocalPinRequest = desktopApi?.setRemoteThreadLocalPin;
   const setThreadAgentRequest = desktopApi?.setThreadAgent;
@@ -9217,6 +9276,36 @@ export function useThreadNavigation(
       }));
     },
     [setThreadLockRequest],
+  );
+
+  const setThreadCheckoutHibernation = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      change: { restore?: boolean; keepAwake?: boolean },
+    ): Promise<SetThreadCheckoutHibernationResponse> => {
+      if (!setThreadCheckoutHibernationRequest) {
+        throw new Error("Hibernated checkouts cannot be changed in this window.");
+      }
+      const federationTarget = thread.federation?.ref.target
+        ?? readRendererFederationTarget();
+      const result = await setThreadCheckoutHibernationRequest({
+        backend: thread.source,
+        federationTarget,
+        threadId: thread.id,
+        ...change,
+      });
+      // The owner's notification may arrive first; the answer settles the row.
+      setState((current) => ({
+        ...current,
+        rows: updateThreadCheckoutHibernationInLoadedRows(current.rows, {
+          backend: thread.source,
+          federationTarget,
+          params: { threadId: thread.id, keepAwake: result.keepAwake },
+        }),
+      }));
+      return result;
+    },
+    [setThreadCheckoutHibernationRequest],
   );
 
   const setThreadPin = useCallback(
@@ -10205,6 +10294,7 @@ export function useThreadNavigation(
     renameThread,
     setThreadReaction,
     setThreadLock,
+    ...(setThreadCheckoutHibernationRequest ? { setThreadCheckoutHibernation } : {}),
     setThreadPin,
     setThreadAgent,
     reorderThreadPins,

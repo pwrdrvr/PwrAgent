@@ -8,7 +8,7 @@ import {
   DraftIcon,
   FolderIcon,
   PauseIcon,
-  TerminalIcon,
+  MoonIcon, TerminalIcon,
   TodoIcon,
   WorktreeIcon,
 } from "../../icons";
@@ -525,6 +525,17 @@ export function ThreadMetaChips({
           <span aria-hidden="true" className="thread-row__chip-icon">
             <TerminalIcon size={12} />
           </span>
+        </span>
+      ) : null}
+
+      {/* A hibernated thread works the same, so the row carries no mark;
+          only the X-ray card says so. */}
+      {thread.checkoutHibernated ? (
+        <span className="thread-row__chip thread-row__chip--hibernated thread-row__chip--xray-only">
+          <span aria-hidden="true" className="thread-row__chip-icon">
+            <MoonIcon size={12} />
+          </span>
+          Checkout hibernated
         </span>
       ) : null}
 

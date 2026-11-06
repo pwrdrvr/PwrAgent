@@ -211,6 +211,21 @@ describe("navigation query projection", () => {
     expect(read({ prCiWatches: [] })).not.toHaveProperty("prCiWatches");
   });
 
+  it("carries a row's hibernation marks and moves its revision when they change", () => {
+    const read = (patch: Partial<NavigationThreadSummary>) => projectNavigationQuery({
+      index: snapshot([thread("hibernated", patch)]),
+      request: request({ kind: "lens", lens: "inbox" }),
+    }).entries[0]!.row;
+    const awake = read({});
+    const hibernated = read({ checkoutHibernated: true });
+    const keptAwake = read({ keepCheckoutAwake: true });
+    expect(awake).not.toHaveProperty("checkoutHibernated");
+    expect(awake).not.toHaveProperty("keepCheckoutAwake");
+    expect(hibernated.checkoutHibernated).toBe(true);
+    expect(keptAwake.keepCheckoutAwake).toBe(true);
+    expect(new Set([awake.rowRevision, hibernated.rowRevision, keptAwake.rowRevision]).size).toBe(3);
+  });
+
   it.each(["active", "unread"])("shows an Attention child whose parent is outside the lens (%s)", (signal) => {
     const child = thread("child", {
       parentThreadId: "parent", parentThreadBackend: "codex",

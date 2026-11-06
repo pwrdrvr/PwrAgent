@@ -20,6 +20,7 @@ const DAY_MS = 86_400_000;
 export const HIBERNATION_KEEP_REASONS = {
   off: "Hibernation is off",
   archived: "Already archived",
+  keptAwake: "Kept awake",
   noWorktree: "No worktree checkout",
   borrowed: "Checkout not created by PwrAgent",
   outsideRoot: "Checkout outside PwrAgent's worktrees",
@@ -99,6 +100,8 @@ export function hibernationKeepReason(
   if (!policy.enabled) return HIBERNATION_KEEP_REASONS.off;
   if (thread.archivedAt !== undefined || overlay?.archiveTombstonedAt !== undefined
     || overlay?.archiveRetentionStartedAt !== undefined) return HIBERNATION_KEEP_REASONS.archived;
+  // Keep it awake: the operator's own exemption, until they turn it off.
+  if (overlay?.keepCheckoutAwake) return HIBERNATION_KEEP_REASONS.keptAwake;
   const protection = archiveCandidateProtectionReason(candidate, { allowPinned: true });
   if (protection) return protection;
   const target = hibernationTarget(candidate);

@@ -567,6 +567,8 @@ import {
   type ThreadPricingSummary,
   type ThreadUsageLineRecord,
   type PrSummary,
+  type SetThreadCheckoutHibernationResponse,
+  type ThreadHibernatedWorkspace,
   type WorktreeSnapshotSummary,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
@@ -829,7 +831,7 @@ import {
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
-import { detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
+import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
 import {
   HIBERNATION_KEEP_REASONS,
   hibernationKeepReason,
@@ -10155,6 +10157,9 @@ export class DesktopBackendRegistry {
   private readonly checkoutRestoreFailures = new Map<string, { worktreePath: string; message: string }>();
   /** Failures the next queued dispatch reports instead of retrying at once. */
   private readonly undeliveredCheckoutRestoreFailures = new Set<string>();
+  /** What a running restore has done so far, for the thread card. Memory
+   * only; it outlives the snapshot record while setup runs. */
+  private readonly checkoutRestoreProgress = new Map<string, ThreadHibernatedWorkspace>();
   private readonly runtimeInstanceId: string;
   private readonly registrySessionId: string;
   private readonly resolveLiveProfileRuntimeInstanceIdsFn: () => string[];
@@ -17276,6 +17281,9 @@ export class DesktopBackendRegistry {
       return await this.threadLifecycleLocks.run(key, async () => {
         if (reservation.cancelled) return false;
         let snapshot: WorktreeSnapshotSummary;
+        // The last probe before removal. The tree check below proves the
+        // snapshot holds exactly these files.
+        let saved: Extract<Awaited<ReturnType<typeof inspectHibernationWorkspace>>, { keep?: undefined }> | undefined;
         try {
           snapshot = await this.withArchiveWorkspaceWrite([target.worktreePath], async () => await this.worktreeArchiveService.hibernate({
             backend, threadId,
@@ -17305,7 +17313,8 @@ export class DesktopBackendRegistry {
                 limitBytes: policy.maxSnapshotMb * 1024 * 1024,
                 removeRebuildableOutput: policy.removeRebuildableOutput,
               });
-              if (workspace.keep) throw new CheckoutHibernationKeptError(workspace.keep);
+              if (workspace.keep !== undefined) throw new CheckoutHibernationKeptError(workspace.keep);
+              saved = workspace;
               assertCurrent();
               return assertCurrent;
             },
@@ -17321,6 +17330,10 @@ export class DesktopBackendRegistry {
           }
           throw error;
         }
+        if (saved) {
+          snapshot = { ...snapshot, changedFileCount: saved.files, changedBytes: saved.bytes,
+            ...(saved.removedOutput ? { removedOutput: saved.removedOutput } : {}) };
+        }
         // The one commit a hibernation makes. Recorded even if the operator
         // acted meanwhile: the checkout is gone and this is its only record.
         await this.overlayStore.upsertWorktreeSnapshot({ backend, threadId, snapshot });
@@ -17328,6 +17341,10 @@ export class DesktopBackendRegistry {
         this.undeliveredCheckoutRestoreFailures.delete(key);
         backendRegistryLog.info("idle checkout hibernated", {
           backend, threadId, worktreePath: snapshot.worktreePath, snapshotRef: snapshot.snapshotRef,
+        });
+        await this.publishCheckoutHibernation({ backend, threadId }, {
+          workspace: describeHibernatedThreadWorkspace({ linkedDirectories: [target.directory], worktreeSnapshots: [snapshot],
+            codexEnvironmentRuntime: candidate.overlay?.codexEnvironmentRuntime ?? candidate.thread.codexEnvironmentRuntime }) ?? null,
         });
         this.invalidateThreadListCache(backend, true, threadId);
         this.threadInfoStore.invalidateSummaries({ backend, threadId });
@@ -17342,15 +17359,43 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /** Tells every surface what the thread card should show now: its
+   * checkout (null once awake), Keep it awake, or both. */
+  private async publishCheckoutHibernation(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    change: { workspace?: ThreadHibernatedWorkspace | null; keepAwake?: boolean },
+  ): Promise<void> {
+    await this.emit({ backend: identity.backend, notification: {
+      method: "thread/checkoutHibernation/updated",
+      params: { threadId: identity.threadId, ...change },
+    } });
+  }
+
+  /** Ends a restore that did not finish: the card goes back to the
+   * hibernated checkout it still is. */
+  private async endUnfinishedCheckoutRestore(identity: { backend: AppServerBackendKind; threadId: string }): Promise<void> {
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    const progress = this.checkoutRestoreProgress.get(key);
+    if (!progress) return;
+    this.checkoutRestoreProgress.delete(key);
+    const { restoring: _restoring, restorePhase: _phase, ...hibernated } = progress;
+    await this.publishCheckoutHibernation(identity, { workspace: hibernated });
+  }
+
   /** The detail read's view of a hibernated checkout, or undefined. A failed
    * restore shows the missing-worktree card instead. */
   readCheckoutHibernation(identity: { backend: AppServerBackendKind; threadId: string }): {
     restoring: boolean;
+    /** The running restore, while it lasts: kept after the snapshot record
+     * reads restored, so the card stays through project setup. */
+    progress?: ThreadHibernatedWorkspace;
     restoreFailure?: { worktreePath: string; message: string };
   } {
     const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    const progress = this.checkoutRestoreProgress.get(key);
     return {
       restoring: this.checkoutRestores.has(key),
+      ...(progress ? { progress } : {}),
       ...(this.checkoutRestoreFailures.has(key) ? { restoreFailure: this.checkoutRestoreFailures.get(key) } : {}),
     };
   }
@@ -17369,6 +17414,48 @@ export class DesktopBackendRegistry {
     this.undeliveredCheckoutRestoreFailures.delete(key);
     void this.restoreHibernatedCheckout(identity).catch(() => {});
     return this.checkoutRestores.has(key);
+  }
+
+  /**
+   * Restore now, Keep it awake, and the thread menu's toggle. Keeping a
+   * thread awake also restores a hibernated checkout. The exemption is one
+   * commit when it changes; the restore costs what a send's restore does.
+   */
+  async setThreadCheckoutHibernation(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    restore?: boolean;
+    keepAwake?: boolean;
+  }): Promise<SetThreadCheckoutHibernationResponse> {
+    const identity = { backend: request.backend, threadId: request.threadId };
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    let overlay = await this.overlayStore.getThreadOverlayState(identity);
+    let keepAwake = overlay?.keepCheckoutAwake === true;
+    if (request.keepAwake !== undefined && request.keepAwake !== keepAwake) {
+      overlay = await this.overlayStore.setThreadKeepCheckoutAwake({ ...identity, keepAwake: request.keepAwake });
+      keepAwake = request.keepAwake;
+      this.invalidateThreadListCache(identity.backend, true, identity.threadId);
+      await this.publishCheckoutHibernation(identity, { keepAwake });
+    }
+    const isHibernated = (state: ThreadOverlayState | undefined) =>
+      state?.worktreeSnapshots?.some((snapshot) => snapshot.state === "hibernated") === true;
+    let restoreError: string | undefined;
+    if ((request.restore === true || request.keepAwake === true) && isHibernated(overlay)) {
+      // The operator asked: a failure recorded earlier is retried.
+      this.undeliveredCheckoutRestoreFailures.delete(key);
+      try {
+        await this.restoreHibernatedCheckout(identity);
+      } catch (error) {
+        restoreError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    return {
+      backend: identity.backend,
+      threadId: identity.threadId,
+      keepAwake,
+      hibernated: isHibernated(await this.overlayStore.getThreadOverlayState(identity)),
+      ...(restoreError ? { restoreError } : {}),
+    };
   }
 
   /** Restore on open, when the policy says so. */
@@ -17405,7 +17492,9 @@ export class DesktopBackendRegistry {
     const existing = this.checkoutRestores.get(key);
     if (existing) return existing;
     const restore = this.withThreadLifecycleMutation(identity, async () => await this.restoreHibernatedCheckoutNow(identity))
-      .finally(() => {
+      .finally(async () => {
+        // A restore that threw before it finished still ends on every surface.
+        await this.endUnfinishedCheckoutRestore(identity).catch(() => {});
         this.checkoutRestores.delete(key);
         // A message that queued behind the restore starts now, or is held
         // with the restore's refusal.
@@ -17426,10 +17515,22 @@ export class DesktopBackendRegistry {
     const snapshot = (primary ? hibernated.find((candidate) => path.resolve(candidate.worktreePath) === path.resolve(primary.worktreePath)) : undefined)
       ?? hibernated[0];
     if (!snapshot) return;
+    const progress: ThreadHibernatedWorkspace = {
+      ...describeHibernatedThreadWorkspace({ linkedDirectories: [{ id: "restore", kind: "worktree", label: "",
+        path: snapshot.repositoryPath, worktreePath: snapshot.worktreePath }], worktreeSnapshots: [snapshot],
+        codexEnvironmentRuntime: overlay?.codexEnvironmentRuntime })!,
+      restoring: true,
+      restorePhase: "checkout",
+    };
+    this.checkoutRestoreProgress.set(key, progress);
+    await this.publishCheckoutHibernation(identity, { workspace: progress });
     const fail = async (message: string): Promise<never> => {
       this.checkoutRestoreFailures.set(key, { worktreePath: snapshot.worktreePath, message });
       this.undeliveredCheckoutRestoreFailures.add(key);
       backendRegistryLog.warn("hibernated checkout restore failed", { ...identity, worktreePath: snapshot.worktreePath, error: message });
+      // Still hibernated until the next detail read, where the
+      // missing-worktree card takes over with the refusal.
+      await this.endUnfinishedCheckoutRestore(identity);
       await this.publishLocalEvent({ backend: identity.backend, notification: {
         method: "navigation/threadDirectories/updated",
         params: { reason: "selected-thread", threadIds: [identity.threadId] },
@@ -17457,7 +17558,13 @@ export class DesktopBackendRegistry {
     this.checkoutRestoreFailures.delete(key);
     this.undeliveredCheckoutRestoreFailures.delete(key);
     backendRegistryLog.info("hibernated checkout restored", { ...identity, worktreePath: snapshot.worktreePath });
-    await this.rerunEnvironmentSetupAfterRestore(identity, overlay?.codexEnvironmentRuntime, snapshot.worktreePath);
+    await this.rerunEnvironmentSetupAfterRestore(identity, overlay?.codexEnvironmentRuntime, snapshot.worktreePath, async () => {
+      const setup = { ...progress, restorePhase: "setup" as const };
+      this.checkoutRestoreProgress.set(key, setup);
+      await this.publishCheckoutHibernation(identity, { workspace: setup });
+    });
+    this.checkoutRestoreProgress.delete(key);
+    await this.publishCheckoutHibernation(identity, { workspace: null });
     this.invalidateThreadListCache(identity.backend, true, identity.threadId);
     this.threadInfoStore.invalidateSummaries(identity);
     await this.publishLocalEvent({ backend: identity.backend, notification: {
@@ -17473,11 +17580,13 @@ export class DesktopBackendRegistry {
     identity: { backend: AppServerBackendKind; threadId: string },
     sourceRuntime: CodexThreadEnvironmentRuntime | undefined,
     cwd: string,
+    onSetupStart?: () => Promise<void>,
   ): Promise<void> {
     if (!sourceRuntime?.environmentId || sourceRuntime.executionTarget !== "local") return;
     const environment = (await listCodexEnvironmentOptions(cwd).catch(() => []))
       .find((candidate) => candidate.id === sourceRuntime.environmentId);
     if (!environment?.setupScript) return;
+    await onSetupStart?.();
     let runtime: CodexThreadEnvironmentRuntime | undefined;
     try {
       runtime = await this.buildForkedCodexEnvironmentRuntime({ cwd, forceSetup: true, sourceRuntime, workMode: "worktree" });

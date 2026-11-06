@@ -115,6 +115,31 @@ describe("materializeNavigationThreads", () => {
     expect(materialized?.tokenMiserEnabled).toBe(true);
   });
 
+  it("marks a hibernated checkout and Keep it awake on the row, and both move the hash", () => {
+    const thread = {
+      ...appServerThread(),
+      linkedDirectories: [{ id: "d", kind: "worktree" as const, label: "repo", path: "/repo", worktreePath: "/home/dev/.pwragent/worktrees/a/repo" }],
+    };
+    const overlay: ThreadOverlayState = {
+      backend: "codex", threadId: thread.id, executionMode: "default", extraLinkedDirectories: [],
+    };
+    const project = (state: ThreadOverlayState) => materializeNavigationThreads({
+      firstSnapshot: false, overlayByThreadKey: { [`codex:${thread.id}`]: state }, previousKnownThreadKeys: [], threads: [thread],
+    });
+    const awake = project(overlay);
+    expect(awake[0]).not.toHaveProperty("checkoutHibernated");
+    expect(awake[0]).not.toHaveProperty("keepCheckoutAwake");
+    const hibernated = project({ ...overlay, worktreeSnapshots: [{
+      id: "s", backend: "codex", threadId: thread.id, worktreePath: "/home/dev/.pwragent/worktrees/a/repo", repositoryPath: "/repo",
+      snapshotRef: "refs/codex/snapshots/s", snapshotCommit: "c", createdAt: 1, state: "hibernated", ignoredFilesExcluded: true,
+    }] });
+    expect(hibernated[0]?.checkoutHibernated).toBe(true);
+    const keptAwake = project({ ...overlay, keepCheckoutAwake: true });
+    expect(keptAwake[0]?.keepCheckoutAwake).toBe(true);
+    const hashes = [awake, hibernated, keptAwake].map((threads) => serializeNavigationSnapshotForHash({ backend: "codex", threads }));
+    expect(new Set(hashes).size).toBe(3);
+  });
+
   it("projects the persisted monitor job suggestion override onto navigation", () => {
     const thread = appServerThread();
     const overlay: ThreadOverlayState = {

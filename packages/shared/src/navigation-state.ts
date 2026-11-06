@@ -23,6 +23,7 @@ import {
   isToolManagedWorktreePath,
 } from "./worktree-paths.js";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
+import { isThreadCheckoutHibernated } from "./checkout-hibernation-policy";
 import { buildDirectorySummaries } from "./directory-navigation";
 
 type AppServerThreadSummaryWithEnvironmentOptions = AppServerThreadSummary & {
@@ -303,6 +304,9 @@ export function materializeNavigationThreads(params: {
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
       lock: overlay?.lock,
+      ...(isThreadCheckoutHibernated({ linkedDirectories, worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots,
+        archivedAt: thread.archivedAt }) ? { checkoutHibernated: true } : {}),
+      ...(overlay?.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
       mergeHolds: overlay?.mergeHolds?.filter((hold) => hold.status === "waiting"),
       scheduledStart: overlay?.scheduledStart,
       pinnedRank: overlay?.pinnedRank,
@@ -653,6 +657,7 @@ export function serializeNavigationSnapshotForHash(params: {
       },
       reactions: thread.reactions ?? [],
       lock: thread.lock ?? null,
+      keepCheckoutAwake: thread.keepCheckoutAwake ?? false,
       mergeHolds: thread.mergeHolds ?? [],
       pinnedRank: thread.pinnedRank ?? null,
       parentThreadId: thread.parentThreadId ?? null,

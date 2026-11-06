@@ -370,6 +370,8 @@ function projectNavigationRow(params: {
     ...(reactions.items ? { reactions: reactions.items } : {}),
     ...(reactions.truncated ? { reactionsTruncated: true } : {}),
     ...(thread.lock ? { lock: thread.lock } : {}),
+    ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
+    ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
     ...(thread.mergeHolds?.length ? { mergeHolds: thread.mergeHolds } : {}),
     ...(prs.items ? { prs: prs.items } : {}),
     ...(prs.truncated ? { prsTruncated: true } : {}),

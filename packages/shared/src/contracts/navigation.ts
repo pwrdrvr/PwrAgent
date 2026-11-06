@@ -273,6 +273,10 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   reactions?: string[];
   /** Present while the thread is locked against new turns. */
   lock?: ThreadLock;
+  /** The thread's worktree checkout is hibernated; the next send restores it. */
+  checkoutHibernated?: boolean;
+  /** The operator exempted this thread's checkout from hibernation. */
+  keepCheckoutAwake?: boolean;
   mergeHolds?: ThreadMergeHold[];
   /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
@@ -2161,6 +2165,8 @@ export type NavigationRow = {
   reactions?: string[];
   reactionsTruncated?: boolean;
   lock?: ThreadLock;
+  checkoutHibernated?: boolean;
+  keepCheckoutAwake?: boolean;
   mergeHolds?: ThreadMergeHold[];
   prs?: PrSummary[];
   prsTruncated?: boolean;
@@ -2639,6 +2645,31 @@ export type SetThreadLockResponse = {
   lock?: ThreadLock;
   /** The lock an unlock removed, so a caller can put it back. */
   previousLock?: ThreadLock;
+};
+
+/**
+ * Brings a hibernated checkout back now, or sets whether the thread is kept
+ * awake. Keeping it awake also restores a hibernated checkout. Runs on the
+ * thread's owner.
+ */
+export type SetThreadCheckoutHibernationRequest = {
+  backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** Restore the hibernated checkout now. */
+  restore?: boolean;
+  /** Exempt the thread from hibernation, or end the exemption. Omitted leaves it. */
+  keepAwake?: boolean;
+};
+
+export type SetThreadCheckoutHibernationResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  keepAwake: boolean;
+  /** The checkout is still hibernated, for example after a refused restore. */
+  hibernated: boolean;
+  /** Why the restore was refused. The missing-worktree card takes over. */
+  restoreError?: string;
 };
 
 /**
@@ -3229,6 +3260,9 @@ export type ThreadOverlayState = {
    * sensitive thread wants a way to opt out without touching Settings.
    */
   tokenMiserEnabled?: boolean;
+  /** The operator exempted this thread's checkout from idle hibernation,
+   * until they turn it back off. */
+  keepCheckoutAwake?: boolean;
   executionMode?: ThreadExecutionMode;
   /**
    * Timestamp of the source that last established `executionMode`.

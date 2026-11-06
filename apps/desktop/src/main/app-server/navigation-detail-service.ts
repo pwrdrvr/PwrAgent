@@ -305,7 +305,8 @@ export class NavigationDetailService {
         });
     // Checked on every detail read, never stored: one stat while the folder
     // exists. Viewers on other instances get the owner's answer.
-    const workspaceHibernated = workspaceMissing ? undefined : describeHibernatedThreadWorkspace(thread, checkoutHibernation.restoring);
+    const workspaceHibernated = workspaceMissing ? undefined
+      : checkoutHibernation.progress ?? describeHibernatedThreadWorkspace(thread, checkoutHibernation.restoring);
     const configuration = {
       ...thread,
       ...(workspaceMissing ? { workspaceMissing } : {}),

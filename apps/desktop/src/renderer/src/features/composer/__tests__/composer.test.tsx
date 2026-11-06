@@ -9116,6 +9116,42 @@ describe("Composer", () => {
       expect(screen.getByLabelText("Queued message")).not.toHaveTextContent("send_user_message");
     });
 
+    it("labels a reply that waits for a hibernated checkout's restore", async () => {
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "queue-entry-1",
+        queueStatus: "queued" as const,
+        queueEntryId: "queue-entry-1",
+      }));
+      const onReplySubmissionSettled = vi.fn();
+      const restoring = {
+        ...thread,
+        workspaceHibernated: {
+          worktreePath: "/home/dev/.pwragent/worktrees/k3m9q2/harbor-web", repositoryPath: "/home/dev/src/harbor-web",
+          hibernatedAt: 1, restoring: true, restorePhase: "checkout" as const,
+        },
+      };
+      const props = {
+        backends: [backendSummary("codex")],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+        onReplySubmissionSettled,
+        skills: [],
+        thread: restoring,
+        threadBusy: true,
+      };
+      const view = render(<Composer {...props} />);
+      view.rerender(<Composer {...props} replySubmission={{ id: 1, threadId: thread.id, backend: "codex", text: reply }} />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      const queued = screen.getByLabelText("Queued message");
+      expect(queued).toHaveClass("composer__queued--waiting-checkout");
+      expect(queued).toHaveTextContent("Waiting for checkout");
+
+      // Once the checkout is back the row reads as an ordinary queued message.
+      view.rerender(<Composer {...props} thread={thread} />);
+      expect(screen.getByLabelText("Queued message")).not.toHaveTextContent("Waiting for checkout");
+    });
+
     it.each([false, true])("honors a to-do's queue choice on a steerable thread (busy: %s)", async (busy) => {
       const text = "Implement the follow-up task";
       const startTurn = vi.fn(async (request: StartTurnRequest) => ({

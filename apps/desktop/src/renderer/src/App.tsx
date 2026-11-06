@@ -4216,6 +4216,13 @@ function DesktopAppShell(props: {
     if (!thread) throw new Error("Select the thread again, then try once more.");
     return await navigation.recreateThreadWorktree(thread, request);
   });
+  const handleSetThreadCheckoutHibernation = useEventCallback(async (
+    change: Parameters<NonNullable<ThreadViewProps["onSetThreadCheckoutHibernation"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (!thread || !navigation.setThreadCheckoutHibernation) throw new Error("Select the thread again, then try once more.");
+    return await navigation.setThreadCheckoutHibernation(thread, change);
+  });
   const handleMoveThreadToMainCheckout = useEventCallback(async (worktreePath: string) => {
     const thread = navigation.selectedThread;
     if (!thread) throw new Error("Select the thread again, then try once more.");
@@ -4496,6 +4503,8 @@ function DesktopAppShell(props: {
       ? handleRecreateThreadWorktree : undefined,
     onMoveThreadToMainCheckout: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
       ? handleMoveThreadToMainCheckout : undefined,
+    onSetThreadCheckoutHibernation: navigation.selectedThread && navigation.setThreadCheckoutHibernation
+      ? handleSetThreadCheckoutHibernation : undefined,
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,
@@ -4945,6 +4954,7 @@ function DesktopAppShell(props: {
           onThreadsArchived={offerArchiveUndo}
           onSetThreadReaction={navigation.setThreadReaction}
           onSetThreadLock={navigation.setThreadLock}
+          onSetThreadCheckoutHibernation={navigation.setThreadCheckoutHibernation}
           onSetThreadPin={navigation.setThreadPin}
           onReorderThreadPins={navigation.reorderThreadPins}
           onSetThreadParent={navigation.setThreadParent}

@@ -42,6 +42,7 @@ export const FEDERATION_BACKEND_METHODS = {
   acknowledgeThreadEnvironmentFailure: "backend.acknowledgeThreadEnvironmentFailure",
   setThreadReaction: "backend.setThreadReaction",
   setThreadLock: "backend.setThreadLock",
+  setThreadCheckoutHibernation: "backend.setThreadCheckoutHibernation",
   manageThreadMergeHolds: "backend.manageThreadMergeHolds",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
@@ -194,6 +195,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // A lock refuses every turn on the owner's thread, so it takes the same
   // capability as starting one.
   [FEDERATION_BACKEND_METHODS.setThreadLock]: "turn_control",
+  // Restoring writes the owner's checkout and can start setup, and Keep it
+  // awake changes what the owner's housekeeping may remove.
+  [FEDERATION_BACKEND_METHODS.setThreadCheckoutHibernation]: "turn_control",
   [FEDERATION_BACKEND_METHODS.manageThreadMergeHolds]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
