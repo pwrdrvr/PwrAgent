@@ -241,9 +241,10 @@ describe("PrRollupChip detach controls", () => {
       />,
     );
     fireEvent.click(view.container.querySelector("[data-pr-rollup]")!);
+    // Newest on top: the second row is the first attachment.
     const chip = document.querySelectorAll<HTMLElement>(".pr-rollup-popover__chip")[1]!;
     fireEvent.click(chip.querySelector(".pr-chip__label")!);
-    expect(onOpen).toHaveBeenCalledWith(prs[1]!.url);
+    expect(onOpen).toHaveBeenCalledWith(prs[0]!.url);
     expect(onDetach).not.toHaveBeenCalled();
   });
 });
@@ -296,7 +297,8 @@ describe("PrRollupChip detach focus and menus", () => {
     fireEvent.click(view.container.querySelector("[data-pr-rollup]")!);
     const chip = document.querySelectorAll<HTMLElement>(".pr-rollup-popover__chip")[1]!;
     fireEvent.contextMenu(chip.querySelector(".pr-chip__label")!, { clientX: 5, clientY: 6 });
-    expect(onOpenContextMenu).toHaveBeenCalledWith(prs[1], expect.objectContaining({ x: 5, y: 6 }));
+    // Newest on top: the second row is the first attachment.
+    expect(onOpenContextMenu).toHaveBeenCalledWith(prs[0], expect.objectContaining({ x: 5, y: 6 }));
   });
 
   it("hands focus to the chip before Detach all asks for confirmation", () => {

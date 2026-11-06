@@ -46,11 +46,12 @@ describe("resolvePrRollup", () => {
     expect(resolvePrRollup([])).toBeUndefined();
   });
 
-  it("shows the least ready open PR, in the operator's order", () => {
+  it("shows the least ready open PR on the chip, apart from the list order", () => {
     const rollup = resolvePrRollup([
       ready, running, failingRunning, failed, conflict,
     ])!;
     expect(rollup.representative).toBe(conflict);
+    // Unpolled, so newest attachment first: the reverse of the input.
     expect(numbers(rollup.ordered)).toEqual([1, 2, 3, 4, 5]);
     expect(rollup.summary).toBe("ready for review · merge conflict · checks passing");
   });
@@ -92,7 +93,8 @@ describe("resolvePrRollup", () => {
     const rollup = resolvePrRollup([closed, merged, ready])!;
     expect(rollup.representative).toBe(ready);
     expect(rollup.openCount).toBe(1);
-    // Finished PRs still list, after the open ones, merged first.
+    // Finished PRs still list, after the open ones. Without merge or close
+    // times, the later attachment is on top.
     expect(numbers(rollup.ordered)).toEqual([5, 8, 9]);
   });
 
@@ -109,6 +111,43 @@ describe("resolvePrRollup", () => {
     expect(resolvePrRollup([closed])!.summary).toBe("closed without merge");
     expect(resolvePrRollup([closed, pr(10, { lifecycleState: "closed" })])!.summary)
       .toBe("all closed");
+  });
+});
+
+describe("resolvePrRollup list order", () => {
+  const at = (minutes: number) => 1_700_000_000_000 + minutes * 60_000;
+
+  it("stacks open PRs newest first above finished PRs newest first", () => {
+    const rollup = resolvePrRollup([
+      pr(3376, { lifecycleState: "merged", createdAt: at(0), mergedAt: at(50) }),
+      pr(3399, { lifecycleState: "merged", createdAt: at(10), mergedAt: at(40) }),
+      pr(3404, { lifecycleState: "merged", createdAt: at(20), mergedAt: at(60) }),
+      pr(3430, { checkState: "pending", state: "pending", createdAt: at(70) }),
+      pr(3431, { createdAt: at(80) }),
+    ])!;
+    expect(numbers(rollup.ordered)).toEqual([3431, 3430, 3404, 3376, 3399]);
+    // The chip still wears the PR that needs the operator.
+    expect(rollup.representative.number).toBe(3430);
+  });
+
+  it("moves a PR that merges to the top of the finished stack", () => {
+    const finished = [
+      pr(3376, { lifecycleState: "merged", mergedAt: at(50) }),
+      pr(3399, { lifecycleState: "merged", mergedAt: at(40) }),
+    ];
+    const open = pr(3430, { createdAt: at(70) });
+    expect(numbers(resolvePrRollup([...finished, open])!.ordered)).toEqual([3430, 3376, 3399]);
+    const merged = { ...open, lifecycleState: "merged" as const, state: "merged" as const, mergedAt: at(90) };
+    expect(numbers(resolvePrRollup([...finished, merged])!.ordered)).toEqual([3430, 3376, 3399]);
+    const later = pr(3440, { lifecycleState: "closed", closedAt: at(95) });
+    expect(numbers(resolvePrRollup([...finished, merged, later])!.ordered))
+      .toEqual([3440, 3430, 3376, 3399]);
+  });
+
+  it("puts an unpolled attachment on top of the open stack", () => {
+    const polled = pr(20, { createdAt: at(5) });
+    const fresh = pr(10);
+    expect(numbers(resolvePrRollup([fresh, polled])!.ordered)).toEqual([10, 20]);
   });
 });
 
