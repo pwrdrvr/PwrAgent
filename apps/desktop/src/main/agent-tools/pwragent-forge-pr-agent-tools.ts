@@ -1,4 +1,4 @@
-import { PWRAGENT_TOOL_NAMESPACE, type ForgeAgentToolPolicy } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE, type ForgeAgentToolPolicy, type ThreadTodoMergeMethod } from "@pwragent/shared";
 import { ForgeReadError } from "../pr-status/forge-tool-contract";
 import {
   FORGE_ATTACHMENTS_MAX,
@@ -23,7 +23,20 @@ export type ForgePrToolPreflight = (
   operation: ForgePrToolOperation,
   args: ForgePrToolArgs,
   context: AgentToolCallContext,
-) => Promise<{ repository: ForgeRepository; args: ForgePrToolArgs }>;
+) => Promise<ForgePrToolPreflightResult>;
+
+export type ForgePrToolPreflightResult = {
+  repository: ForgeRepository;
+  args: ForgePrToolArgs;
+  /**
+   * A merge's choices. `args.method` is the one it runs with; the approval
+   * offers the rest, and `remember` keeps a pick for the thread's project.
+   */
+  mergeMethods?: {
+    offered: ThreadTodoMergeMethod[];
+    remember?: (method: ThreadTodoMergeMethod) => void;
+  };
+};
 
 const SCOPE = "Works on GitHub and GitLab, in this thread's repository, with the operator's gh or glab sign-in.";
 const ASKS = "The operator's Settings → Git policy may ask them first, or refuse.";
@@ -45,7 +58,7 @@ const descriptions: Record<ForgePrToolOperation, string> = {
   resolve_review_thread: `Resolve or reopen an inline review thread by reviewThreadId from list_pull_request_review_threads. GitLab also needs the pull request number. ${ASKS}`,
   create_issue: `Open an issue with optional labels and image or video attachments. ${ASKS}`,
   update_issue: `Edit an issue: title, body, open or closed state, and labels. stateReason applies on GitHub only. Attachments need the full new body. ${ASKS}`,
-  merge_pull_request: `Merge a pull request. expectedHeadSha must be the head SHA you checked with get_pull_request, so a later push is never merged unseen. method defaults to the operator's merge method. GitLab supports merge and squash. Does not delete the branch. ${ASKS}`,
+  merge_pull_request: `Merge a pull request. expectedHeadSha must be the head SHA you checked with get_pull_request, so a later push is never merged unseen. method defaults to the operator's merge method for this project. The operator can pick another method when approving, and the result's method is the one used. GitLab supports merge and squash. Does not delete the branch. ${ASKS}`,
   rerun_failed_ci_jobs: `Request a rerun of failed jobs on a CI run. Pass runId from list_ci_runs or get_ci_run. GitHub Actions reruns failed jobs and their dependent jobs. GitLab retries failed and canceled pipeline jobs. Uses this thread's repository and configured forge authentication. Returns request acceptance, not CI completion or success. Inspect the run afterward when needed. Do not retry an uncertain request automatically or duplicate Auto-fix monitoring. ${ASKS}`,
 };
 

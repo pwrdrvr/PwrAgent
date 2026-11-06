@@ -6,7 +6,8 @@ import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detac
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
-import { ForgePrToolService, type ForgePrToolPreparedCall, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import { ForgePrToolService, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import type { ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
@@ -4433,8 +4434,28 @@ class DesktopAppServerService {
   }
 
   /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
-  async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreparedCall> {
-    return await this.forgePrToolService().prepare(operation, args, await this.forgePrToolScope(context), context.signal);
+  async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreflightResult> {
+    const scope = await this.forgePrToolScope(context);
+    if (operation !== "merge_pull_request") {
+      return await this.forgePrToolService().prepare(operation, args, scope, context.signal);
+    }
+    // A merge reads and keeps the project's merge-method pick, the one a
+    // to-do merge card for this project would use.
+    const placement = await readThreadTodoPlacement(getDesktopBackendRegistry(), context)
+      .catch(() => undefined);
+    const projectKey = placement?.sourceProject?.key;
+    const todos = getThreadTodoService();
+    const prepared = await this.forgePrToolService().prepare(operation, args, scope, context.signal, {
+      rememberedMergeMethod: projectKey ? todos.projectMergeMethod(projectKey) : undefined,
+    });
+    if (!prepared.mergeMethods || !projectKey) return prepared;
+    return {
+      ...prepared,
+      mergeMethods: {
+        ...prepared.mergeMethods,
+        remember: (method) => todos.rememberProjectMergeMethod(projectKey, method),
+      },
+    };
   }
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */

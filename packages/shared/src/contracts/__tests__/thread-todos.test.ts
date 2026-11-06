@@ -11,7 +11,11 @@ import {
   threadTodoItemProgress,
   threadTodoMessageOriginFromUnknown,
   threadTodoOpenItems,
+  forgeMergeMethods,
+  settleMergeMethod,
+  THREAD_TODO_MERGE_METHODS,
   type ThreadTodoItem,
+  type ThreadTodoMergeMethod,
 } from "../thread-todos";
 
 function counter(prefix = "new"): () => string {
@@ -162,5 +166,31 @@ describe("threadTodoMessageOriginFromUnknown", () => {
     expect(threadTodoMessageOriginFromUnknown({ id: "todo-1", title: "   " })).toEqual({ id: "todo-1" });
     expect(threadTodoMessageOriginFromUnknown({ id: "todo-1", title: "t".repeat(400) })?.title)
       .toBe("t".repeat(THREAD_TODO_TITLE_MAX_LENGTH));
+  });
+});
+
+describe("settleMergeMethod", () => {
+  // A model of the rule, checked against every input: the request, else the
+  // project's pick, else the default, each only when the forge takes it.
+  const choices: Array<ThreadTodoMergeMethod | undefined> = [undefined, ...THREAD_TODO_MERGE_METHODS];
+  it.each(["github", "gitlab"] as const)("on %s, always runs an offered method in the card's order", (provider) => {
+    const offered = forgeMergeMethods(provider);
+    for (const requested of choices) {
+      for (const remembered of choices) {
+        for (const fallback of choices) {
+          const model = [requested, remembered, fallback].find(
+            (method) => method !== undefined && offered.includes(method),
+          ) ?? offered[0];
+          const settled = settleMergeMethod({ offered, requested, remembered, fallback });
+          expect(offered).toContain(settled);
+          expect({ requested, remembered, fallback, settled }).toEqual({ requested, remembered, fallback, settled: model });
+        }
+      }
+    }
+  });
+
+  it("offers GitLab merge and squash only", () => {
+    expect(forgeMergeMethods("gitlab")).toEqual(["squash", "merge"]);
+    expect(forgeMergeMethods("github")).toEqual(["squash", "rebase", "merge"]);
   });
 });

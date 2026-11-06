@@ -25,6 +25,7 @@ import type {
 import {
   THREAD_TODO_MERGE_METHODS,
   resolveThreadTodoMergeMethod,
+  THREAD_TODO_MERGE_METHOD_LABELS,
   resolveThreadTodoModelSettings,
   threadTodoBlockingItems,
   threadTodoItemNoun,
@@ -90,15 +91,8 @@ const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> =
   handoff: HandoffIcon,
 };
 
-/** The button says what it will do; the menu says it as GitHub does. */
-const MERGE_METHOD_LABELS: Record<
-  ThreadTodoMergeMethod,
-  { button: string; menu: string; verb: string }
-> = {
-  squash: { button: "Squash merge", menu: "Squash and merge", verb: "Squash merge" },
-  rebase: { button: "Rebase merge", menu: "Rebase and merge", verb: "Rebase and merge" },
-  merge: { button: "Merge", menu: "Create a merge commit", verb: "Merge" },
-};
+/** Shared with an agent's merge approval, so both say the same thing. */
+const MERGE_METHOD_LABELS = THREAD_TODO_MERGE_METHOD_LABELS;
 
 const COPIED_MS = 1_500;
 

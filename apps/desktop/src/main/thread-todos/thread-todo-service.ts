@@ -416,6 +416,19 @@ export class ThreadTodoService {
     return this.store.list(request);
   }
 
+  /** The operator's last merge-method pick for a project, if any. */
+  projectMergeMethod(projectKey: string): ThreadTodoMergeMethod | undefined {
+    return this.store.getProjectMergeMethod(projectKey);
+  }
+
+  /**
+   * Remember a merge-method pick for a project, as a pick from a card's menu
+   * is. An agent's merge approval offers the same menu and shares the pick.
+   */
+  rememberProjectMergeMethod(projectKey: string, method: ThreadTodoMergeMethod): void {
+    this.store.setProjectMergeMethod({ directoryKey: projectKey, method, now: this.now() });
+  }
+
   mergeMethodPreferences(): ThreadTodoMergeMethodPreferences {
     return {
       defaultMethod: this.defaultMergeMethod(),

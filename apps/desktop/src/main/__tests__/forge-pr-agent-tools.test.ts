@@ -366,4 +366,22 @@ describe("forge tool service", () => {
       .resolves.toEqual({ repository: repo, args: { number: 1, body: "Hi" } });
     expect(headBranchExists).toHaveBeenCalledTimes(3);
   });
+  it("settles a merge's method before approval the way a to-do merge card does", async () => {
+    const service = new ForgePrToolService({ enabled: () => true, clients: { github: { execute: vi.fn() }, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "squash" });
+    const merge = { number: 9, expectedHeadSha: "a".repeat(40) };
+    // The project's pick beats the Settings default, so the approval names
+    // the merge that runs: the agent tool used to read the default alone.
+    await expect(service.prepare("merge_pull_request", merge, scope([remotes.github]), undefined, { rememberedMergeMethod: "rebase" }))
+      .resolves.toEqual({ repository: repo, args: { ...merge, method: "rebase" }, mergeMethods: { offered: ["squash", "rebase", "merge"] } });
+    await expect(service.prepare("merge_pull_request", merge, scope([remotes.github])))
+      .resolves.toMatchObject({ args: { method: "squash" } });
+    await expect(service.prepare("merge_pull_request", { ...merge, method: "merge" }, scope([remotes.github]), undefined, { rememberedMergeMethod: "rebase" }))
+      .resolves.toMatchObject({ args: { method: "merge" } });
+    // GitLab takes merge and squash. A rebase request is refused before the
+    // operator is asked; a remembered rebase falls through to the default.
+    await expect(service.prepare("merge_pull_request", merge, scope([remotes.gitlab]), undefined, { rememberedMergeMethod: "rebase" }))
+      .resolves.toMatchObject({ args: { method: "squash" }, mergeMethods: { offered: ["squash", "merge"] } });
+    await expect(service.prepare("merge_pull_request", { ...merge, method: "rebase" }, scope([remotes.gitlab])))
+      .rejects.toMatchObject({ code: "unsupported_operation" });
+  });
 });
