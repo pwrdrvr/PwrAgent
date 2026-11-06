@@ -3814,6 +3814,9 @@ export function useThreadNavigation(
   // Each resource's read when a command or event last patched a directory
   // row. A page from a read that began no later predates that patch.
   const directoryPatchReadsRef = useRef(new Map<string, ReadonlyMap<string, { request: unknown; sequence: number }>>());
+  // A read started after an optimistic patch can still precede the owner's
+  // write. Keep that field until every in-flight pin command has answered.
+  const pendingDirectoryPinsRef = useRef(new Map<string, number>());
   const navigationResourcesRef = useRef(boundedNavigation.resources);
   navigationResourcesRef.current = boundedNavigation.resources;
   const deferNestedArchiveRemoval = useCallback((thread: NavigationThreadSummary): boolean => {
@@ -3882,6 +3885,7 @@ export function useThreadNavigation(
           })
           .map((directory) => directory.key);
       }));
+      const pendingDirectoryPins = new Set(pendingDirectoryPinsRef.current.keys());
       const retainedKeys = new Set([...pages.values()].flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
       // Acceptance must publish even when reconciliation retains every row
       // and the loading flags are unchanged after a batched refresh.
@@ -3966,10 +3970,13 @@ export function useThreadNavigation(
         if (previousOwner === currentOwner) {
           for (const [key, directory] of nextDirectoryRows) {
             const previous = current.rows?.directoryRows.get(key);
-            if (!previous || changedDirectoryKeys.has(key)) continue;
-            nextDirectoryRows.set(key, { ...directory, pinnedRank: previous.pinnedRank,
-              directoryThreadsCollapsed: previous.directoryThreadsCollapsed,
-              forgeAutomation: previous.forgeAutomation });
+            if (!previous) continue;
+            const retainFields = !changedDirectoryKeys.has(key);
+            if (!retainFields && !pendingDirectoryPins.has(key)) continue;
+            nextDirectoryRows.set(key, { ...directory,
+              pinnedRank: previous.pinnedRank,
+              ...(retainFields ? { directoryThreadsCollapsed: previous.directoryThreadsCollapsed,
+                forgeAutomation: previous.forgeAutomation } : {}) });
           }
         }
         const next: NavigationLoadedRows = { threadRows, directoryRows: nextDirectoryRows,
@@ -9579,6 +9586,7 @@ export function useThreadNavigation(
 
       const pinnedRank = pinned ? directory.pinnedRank : undefined;
 
+      pendingDirectoryPinsRef.current.set(directory.key, (pendingDirectoryPinsRef.current.get(directory.key) ?? 0) + 1);
       noteDirectoryPatch([directory.key]);
       setState((current) => ({
         ...current,
@@ -9603,8 +9611,15 @@ export function useThreadNavigation(
         }));
       } catch (error) {
         publishThreadActionError("update-pin", error);
+        const pending = pendingDirectoryPinsRef.current.get(directory.key) ?? 1;
+        if (pending === 1) pendingDirectoryPinsRef.current.delete(directory.key);
+        else pendingDirectoryPinsRef.current.set(directory.key, pending - 1);
         await refresh();
+        return;
       }
+      const pending = pendingDirectoryPinsRef.current.get(directory.key) ?? 1;
+      if (pending === 1) pendingDirectoryPinsRef.current.delete(directory.key);
+      else pendingDirectoryPinsRef.current.set(directory.key, pending - 1);
     },
     [refresh, publishThreadActionError, setDirectoryPinRequest, noteDirectoryPatch],
   );
