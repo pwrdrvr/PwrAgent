@@ -302,7 +302,11 @@ the owner's memory, so a viewer never infers them.
   behind a running turn, and **Auto-fix left N open** when the turn ends
   with findings still open. A cancelled fix turn shows nothing. When the
   send fails or the queue refuses the turn, the line says **Auto-fix could
-  not start** with the reason.
+  not start** with the reason. The failure goes away once an agent or the
+  operator settles a finding or resolves the review, because someone has
+  taken the findings on. A reviewer's own reported outcomes do not count. A
+  fix sent from the card's own buttons hides the failure on that card at
+  once, before any finding changes. A later failure shows again.
 
 The run follows the owner's own `thread/turnQueue/updated` events for the
 turn, matched by the review id in its `reviewAutoFix` message origin

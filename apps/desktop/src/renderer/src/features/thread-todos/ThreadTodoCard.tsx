@@ -225,6 +225,11 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   const { todo } = props;
   const tracking = useTrackedReview(todo, { id: todo.reviewId });
   const autoFix = useReviewAutoFix(todo);
+  const autoFixRun = todo.reviewId ? autoFix.status?.runs[todo.reviewId] : undefined;
+  // A fix sent from this card answers the failure it was showing. The owner
+  // drops the failure once a finding is settled; until then it stays hidden
+  // here. Matched by the failure's own time, so no clocks are compared.
+  const [answeredFailureAt, setAnsweredFailureAt] = useState<number>();
   const [expanded, setExpanded] = useState(false);
   // One hand-off per click: a second click before the send settles would
   // queue the same reply again.
@@ -271,11 +276,13 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
             const prompt = mode === "auto-fix"
               ? autoFixReviewFindingsPrompt(todo.title, findings)
               : fixReviewFindingsPrompt(todo.title, findings);
+            const failureAt = autoFixRun?.phase === "failed" ? autoFixRun.at : undefined;
             const sent = await onDoHere(todo, { prompt });
             if (sent === false) {
               setSendError("The thread did not accept the repair request. Try again.");
               return;
             }
+            if (failureAt !== undefined) setAnsweredFailureAt(failureAt);
             // Only what was sent leaves the selection; Fix now on one row
             // keeps the others the operator picked.
             setSelected((current) => {
@@ -386,7 +393,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       <div className="thread-todo-card__body">
         {review ? (
           <ReviewAutoFixLine
-            run={autoFix.status?.runs[review.id]}
+            run={autoFixRun?.phase === "failed" && autoFixRun.at === answeredFailureAt ? undefined : autoFixRun}
             openCount={review.status === "open" ? openItems.length : 0}
           />
         ) : null}

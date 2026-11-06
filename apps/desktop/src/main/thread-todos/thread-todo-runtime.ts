@@ -275,6 +275,9 @@ export function installThreadTodoRuntime(params: {
   // Viewers read the armed reviews and each run from the owner; a change
   // reaches them on the to-do change event they already reload on.
   setReviewAutoFixListener((thread) => params.broadcast({ ...thread, at: Date.now() }));
+  // Someone settling a finding has taken the review on, so a failed send no
+  // longer needs saying.
+  reviews.setOnUpdated((review) => reviewAutoFixRuns.record(review, review.id, { kind: "reviewUpdated", at: Date.now() }));
   const sendReviewAutoFix = (review: ThreadReview): void => {
     const message = reviewAutoFixMessage(review);
     if (!message) return;

@@ -138,19 +138,25 @@ export type ReviewAutoFixRunEvent =
   /** The send was refused before it reached the thread's queue. */
   | { kind: "sendFailed"; reason: string; at: number }
   /** The Auto-fix turn's queue entry moved, as `thread/turnQueue/updated` says. */
-  | { kind: "queue"; status: string; errorMessage?: string; at: number };
+  | { kind: "queue"; status: string; errorMessage?: string; at: number }
+  /** An agent or the operator settled a finding or resolved the review. */
+  | { kind: "reviewUpdated"; at: number };
 
 /**
  * A run's next state. The queue entry carries the review's id in its message
  * origin, so every step of the turn is the owner's own observation: queued or
  * held behind a running turn, started, refused or blocked at the head,
- * cancelled by the operator (no run left), and ended.
+ * cancelled by the operator (no run left), and ended. Once someone settles a
+ * finding or resolves the review, a failed send is old news: someone took
+ * the findings on, so the failure is dropped. A run that is still going
+ * settles findings itself, so it stays.
  */
 export function nextReviewAutoFixRun(
   current: ReviewAutoFixRun | undefined,
   event: ReviewAutoFixRunEvent,
 ): ReviewAutoFixRun | undefined {
   if (event.kind === "sendFailed") return { phase: "failed", at: event.at, reason: event.reason };
+  if (event.kind === "reviewUpdated") return current?.phase === "failed" ? undefined : current;
   switch (event.status) {
     case "queued":
     case "held":

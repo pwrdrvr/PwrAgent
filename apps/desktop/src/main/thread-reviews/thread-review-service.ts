@@ -60,6 +60,7 @@ export class ThreadReviewError extends Error {
 /** One commit per new review or status mutation; replay and no-ops write nothing. */
 export class ThreadReviewService {
   private readonly trackingStartedAt: number;
+  private onUpdated: (review: ThreadReview) => void = () => {};
 
   constructor(
     private readonly db: StateDb,
@@ -319,7 +320,10 @@ export class ThreadReviewService {
       changed = true;
       return review;
     }).immediate();
-    if (changed) this.emit(review);
+    if (changed) {
+      this.emit(review);
+      this.onUpdated(review);
+    }
     return review;
   }
 
@@ -368,6 +372,14 @@ export class ThreadReviewService {
     }).immediate();
     if (changed && review) this.emit(review);
     return review;
+  }
+
+  /**
+   * Called after an agent or the operator changes a review or one of its
+   * findings. A reviewer's own reported outcomes do not count.
+   */
+  setOnUpdated(listener: (review: ThreadReview) => void): void {
+    this.onUpdated = listener;
   }
 
   private emit(review: ThreadReview): void {

@@ -300,6 +300,21 @@ describe("review tracking runtime eligibility", () => {
       await vi.waitFor(() => expect(readReviewAutoFixStatus(THREAD).runs[review!.id])
         .toEqual({ phase: "failed", at: expect.any(Number), reason: "Thread is locked." }));
     });
+
+    it("drops a failed send once someone settles a finding", async () => {
+      install();
+      submitTurn.mockRejectedValueOnce(new Error("Thread is locked."));
+      getReviewAutoFixArming().starting(THREAD, "auto-fix").accepted("review-turn");
+      onEvent(findingsOutput("review-turn", "refused-review"));
+      const [review] = getThreadReviewService().list();
+      await vi.waitFor(() => expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("failed"));
+      broadcast.mockClear();
+      // The operator fixed it by hand, and the agent recorded the fix.
+      getThreadReviewService().update(
+        { id: review!.id, itemId: review!.items[0]!.id, status: "addressed", note: "Fixed by hand." }, "agent");
+      expect(readReviewAutoFixStatus(THREAD).runs[review!.id]).toBeUndefined();
+      expect(broadcast).toHaveBeenCalledWith(expect.objectContaining({ backend: THREAD.backend, threadId: THREAD.threadId }));
+    });
   });
 });
 
