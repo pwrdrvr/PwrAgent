@@ -35,7 +35,7 @@ describe("native review steer admission", () => {
           },
         }));
 
-        const response = await admitSteerTurn({ steerTurn }, { create }, request);
+        const response = await admitSteerTurn({ steerTurn }, { create, get: () => undefined }, request);
 
         expect(response).toMatchObject({
           disposition: "scheduled", fallbackReason: "native-review",

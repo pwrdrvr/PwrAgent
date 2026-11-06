@@ -40306,7 +40306,7 @@ command = "pnpm dev"
         });
       }
       expect(result).toMatchObject({
-        disposition: "scheduled", fallbackReason: "native-review",
+        disposition: completesDuringAdmission ? "started" : "scheduled", fallbackReason: "native-review",
         scheduledAction: { status: completesDuringAdmission ? "started" : "queued", turn: { input } },
       });
       expect(result.scheduledAction?.manualReleaseRequired).not.toBe(true);
@@ -40335,6 +40335,13 @@ command = "pnpm dev"
       await codexClient.emit(terminal);
       expect(start).toHaveBeenCalledOnce();
       expect(codexClient.lastStartTurnParams).toMatchObject({ threadId: "thread-parent", input });
+      expect(steer).not.toHaveBeenCalled();
+      await expect.poll(() => scheduler.get(result.scheduledAction!.id)?.status).toBe("started");
+      const { result: lateReplay, writes: lateRetryWrites } = await measureSqliteWrites(() =>
+        admitSteerTurn(registry, scheduler, request));
+      expect(lateReplay).toMatchObject({ disposition: "started", scheduledAction: { status: "started" } });
+      expect(lateRetryWrites.commits).toBe(0);
+      expect(start).toHaveBeenCalledOnce();
       expect(steer).not.toHaveBeenCalled();
     },
   );

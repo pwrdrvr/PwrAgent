@@ -24,7 +24,7 @@ describe("admitSteerTurn", () => {
     }));
     const create = vi.fn();
 
-    await expect(admitSteerTurn({ steerTurn }, { create }, request))
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, request))
       .resolves.toEqual({
         backend: "codex",
         threadId: "thread-1",
@@ -54,7 +54,7 @@ describe("admitSteerTurn", () => {
     };
     const create = vi.fn(async () => ({ action }));
 
-    await expect(admitSteerTurn({ steerTurn }, { create }, request))
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, request))
       .resolves.toMatchObject({
         disposition: "held",
         scheduledAction: action,
@@ -78,7 +78,7 @@ describe("admitSteerTurn", () => {
     });
     const create = vi.fn();
 
-    await expect(admitSteerTurn({ steerTurn }, { create }, request))
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, request))
       .rejects.toThrow("backend disconnected");
     expect(create).not.toHaveBeenCalled();
   });
@@ -91,7 +91,7 @@ describe("admitSteerTurn", () => {
     const steerTurn = vi.fn(async () => response);
     const create = vi.fn();
 
-    await expect(admitSteerTurn({ steerTurn }, { create }, { ...request, backend: "claude" }))
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, { ...request, backend: "claude" }))
       .resolves.toEqual(response);
     expect(create).not.toHaveBeenCalled();
   });
@@ -102,7 +102,7 @@ describe("admitSteerTurn", () => {
     });
     const create = vi.fn();
 
-    await expect(admitSteerTurn({ steerTurn }, { create }, { ...request, fallback: undefined }))
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, { ...request, fallback: undefined }))
       .rejects.toThrow("Native review steering is unsupported");
     expect(create).not.toHaveBeenCalled();
   });

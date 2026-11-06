@@ -695,7 +695,7 @@ export type SteerTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId: string;
-  disposition?: "held" | "queued" | "steered" | "scheduled";
+  disposition?: "held" | "queued" | "steered" | "scheduled" | "started";
   queueEntryId?: string;
   queueEntryCreatedAt?: number;
   holdReason?: string;

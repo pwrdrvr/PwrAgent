@@ -141,6 +141,11 @@ export class ScheduledThreadActionService {
     };
   }
 
+  /** Read an admitted action without changing its dispatch or hold policy. */
+  get(id: string): ScheduledThreadAction | undefined {
+    return this.options.store.get(id);
+  }
+
   async create(
     request: CreateScheduledThreadActionRequest,
     options?: { id?: string },

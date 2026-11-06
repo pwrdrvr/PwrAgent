@@ -120,6 +120,7 @@ import type {
   PrSummary,
   RenderComposerPdfPreviewResponse,
   ReviewRunMode,
+  ScheduledThreadAction,
   SteerTurnDelivery,
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
@@ -175,6 +176,7 @@ import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-cli
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { isScheduledThreadAction } from "../../lib/useScheduledThreadActionProjection";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import {
   agentEventMatchesThread,
@@ -8574,6 +8576,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     props.onPendingStatusChange?.(
       pending.delivery === "now" ? "Interrupting" : "Steering",
     );
+    // The owner can start a fallback before its admission response arrives.
+    // Keep observations only for this in-flight request, so a stale receipt
+    // cannot restore a queue chip already removed by the owner's projection.
+    const observedFallbackActions = new Map<string, ScheduledThreadAction>();
+    const stopObserving = props.desktopApi.onAgentEvent?.((event) => {
+      if (event.notification.method !== "thread/scheduledAction/updated") return;
+      const action = event.notification.params.action;
+      if (!isScheduledThreadAction(action)) return;
+      if (!agentEventMatchesThread(event, props.thread!, action.threadId)) return;
+      const previous = observedFallbackActions.get(action.id);
+      if (previous?.status === "started" || (previous && previous.updatedAt > action.updatedAt)) return;
+      observedFallbackActions.set(action.id, action);
+    });
     try {
       const responsePromise = props.desktopApi.steerTurn({
         backend: props.thread.source,
@@ -8637,30 +8652,47 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         setSendError(undefined);
         props.onPendingStatusChange?.("Queued");
       }
-      if (response.disposition === "scheduled" && response.scheduledAction) {
-        const action = response.scheduledAction;
+      if (
+        (response.disposition === "scheduled" || response.disposition === "started")
+        && response.scheduledAction
+      ) {
+        const receipt = response.scheduledAction;
+        const observed = observedFallbackActions.get(receipt.id);
+        const action = receipt.status === "started"
+          ? receipt
+          : observed && (observed.status === "started" || observed.updatedAt >= receipt.updatedAt)
+            ? observed
+            : receipt;
         const failureMessage = scheduledActionFailureMessage(action);
         if (failureMessage) throw new Error(failureMessage);
-        upsertScheduledProjectionInScope(expectedScopeKey, {
-          id: `scheduled-projection:${action.id}`,
-          scheduledActionId: action.id,
-          input: payload.input,
-          text: pending.text,
-          imageAttachments: pending.imageAttachments,
-          fileAttachments: pending.fileAttachments,
-          ...(action.status === "scheduled"
-            ? { scheduledSendAt: action.scheduledFor }
-            : {}),
-          ...(action.status === "dispatching"
-            ? { backendQueuePending: true }
-            : {}),
-          ...(action.status === "queued" && action.queueEntryId
-            ? { queueEntryId: action.queueEntryId }
-            : {}),
-        });
+        if (action.status === "started") {
+          const projected = draftStore.getQueuedTurns(expectedScopeKey).find((queued) =>
+            queued.scheduledActionId === action.id
+            || (action.queueEntryId && queued.queueEntryId === action.queueEntryId));
+          if (projected) removeQueuedTurnInScope(expectedScopeKey, projected);
+        } else {
+          upsertScheduledProjectionInScope(expectedScopeKey, {
+            id: `scheduled-projection:${action.id}`,
+            scheduledActionId: action.id,
+            input: payload.input,
+            text: pending.text,
+            imageAttachments: pending.imageAttachments,
+            fileAttachments: pending.fileAttachments,
+            ...(action.status === "scheduled"
+              ? { scheduledSendAt: action.scheduledFor }
+              : {}),
+            ...(action.status === "dispatching"
+              ? { backendQueuePending: true }
+              : {}),
+            ...(action.status === "queued" && action.queueEntryId
+              ? { queueEntryId: action.queueEntryId }
+              : {}),
+          });
+        }
+        if (steeringRequestIdRef.current === pending.id) steeringRequestIdRef.current = undefined;
         setPendingSteer(undefined);
         setSendError(undefined);
-        if (response.fallbackReason === "native-review") {
+        if (action.status !== "started" && response.fallbackReason === "native-review") {
           showComposerNotice({
             title: "Message queued",
             message: "Steering is unavailable during this type of Codex review. Your message was queued instead.",
@@ -8782,6 +8814,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       }
       props.onPendingStatusChange?.("Thinking");
     } finally {
+      stopObserving?.();
       setSteering(false);
     }
   };
