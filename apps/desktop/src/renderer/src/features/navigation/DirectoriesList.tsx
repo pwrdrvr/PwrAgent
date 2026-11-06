@@ -296,6 +296,7 @@ const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   selectedUnpinnedThreads: [],
   childThreadsByParentKey: new Map(),
   ownerChildOrder: new Map(),
+  ordinaryChildCounts: new Map(),
   directoryPinnedThreads: [],
   directoryThreadsCollapsed: false,
   directoryUnpinnedThreadCount: 0,
@@ -1168,7 +1169,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       .join(", ");
     const expandedThreadModel =
       expanded ? buildPagedDirectoryPresentation({ directory, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey, children: pagedChildren }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
-    const { childThreadsByParentKey, ownerChildOrder } = expandedThreadModel;
+    const { childThreadsByParentKey, ownerChildOrder, ordinaryChildCounts } = expandedThreadModel;
     // One tray per top-level row, holding its whole descendant subtree in
     // depth-first order. The owner keys each child under its *true* parent, so
     // a grandchild is filed under a row that is itself a child; rendering only
@@ -1217,7 +1218,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // it lands, so the row is already where it will be.
       const startsSubthread = trayEntries.length > children.length;
       if (
-        (((parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
+        (((ordinaryChildCounts.get(parentKey) ?? parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
           || subthreadsCollapsed)
         && !startsSubthread
       ) {
@@ -1422,6 +1423,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       const subthreadCount = getSubthreadDisclosureCount(
         thread,
         ordinarySubthreadCount,
+        ordinaryChildCounts.get(threadKey),
       ) + (holdsDraft ? 1 : 0);
       const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
       return (
@@ -1743,6 +1745,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           const subthreadCount = getSubthreadDisclosureCount(
                             thread,
                             ordinarySubthreadCount,
+                            ordinaryChildCounts.get(threadKey),
                           ) + (holdsDraft ? 1 : 0);
                           const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
 	                      return (

@@ -2307,12 +2307,19 @@ export type NavigationQuery =
       /** Parent rows whose children are explicitly disclosed by the viewer. */
       disclosedParentThreadKeys?: string[];
     }
-  | { kind: "children"; parent: NavigationIdentity }
+  | {
+      kind: "children";
+      parent: NavigationIdentity;
+      /** Directories only: both parent and children must belong to this serving inventory's project. */
+      directoryKey?: string;
+    }
   | { kind: "group-members"; roots: NavigationIdentity[] }
   | {
       kind: "exact";
       identities: NavigationIdentity[];
       includeAncestry?: boolean;
+      /** Single-thread selection in Directories stops ancestry at that thread's home project. */
+      ancestryScope?: "directory";
       /**
        * Viewer inventory only, and never sent to a peer: include each peer
        * identity's row as held by this machine's peer summary cache, which

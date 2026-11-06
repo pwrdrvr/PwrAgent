@@ -52,12 +52,11 @@ function fixture() {
   };
   for (const [index, directory] of directories.entries()) {
     add(`directory-pins:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "pinned" },
-      [{ row: index === 0 ? child : parent, placement: { kind: "root" }, orderKey: "0" }]);
+      [{ row: index === 0 ? child : { ...parent, ordinaryChildCount: 0 }, placement: { kind: "root" }, orderKey: "0" }]);
     add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned" }, []);
   }
-  add("children:codex:parent", { kind: "children", parent: parent.ref },
-    [{ row: child, placement: { kind: "child", parent: parent.ref }, orderKey: "0" }]);
-  add("selected-context", { kind: "exact", identities: [child.ref], includeAncestry: true },
+  add("children:codex:parent", { kind: "children", parent: parent.ref, directoryKey: directories[1]!.key }, []);
+  add("selected-context", { kind: "exact", identities: [child.ref], includeAncestry: true, ancestryScope: "directory" },
     [{ row: child, placement: { kind: "root" }, orderKey: "0" }]);
   const navigation = {
     resources, presentationReady: true, directories, selectedDirectoryKeys: [directories[0]!.key], connected: true,
@@ -76,22 +75,19 @@ function fixture() {
   return { Harness, child };
 }
 
-it.each([0, 1])("keeps the clicked thread occurrence in place (occurrence %s)", (index) => {
+it("shows one selectable occurrence in the child's own project", () => {
   const scroll = vi.fn();
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scroll });
   const { Harness } = fixture();
   render(<Harness />);
   fireEvent.click(screen.getByRole("button", { name: "Workspaces" }));
   const rows = screen.getAllByRole("button", { name: /research/ });
-  expect(rows).toHaveLength(2);
-  expect(new Set(rows.map((button) => button.closest("[data-thread-row-key]")?.getAttribute("data-thread-row-key"))).size).toBe(2);
+  expect(rows).toHaveLength(1);
   expect(rows[0]!.closest(".subthread-list")).toBeNull();
-  expect(rows[1]!.closest(".subthread-list")).not.toBeNull();
   scroll.mockClear();
-  fireEvent.click(rows[index]!);
+  fireEvent.click(rows[0]!);
   expect(scroll).not.toHaveBeenCalled();
-  // Clicking the already open thread is also a selection of this occurrence.
-  fireEvent.click(rows[1 - index]!);
+  fireEvent.click(rows[0]!);
   expect(scroll).not.toHaveBeenCalled();
 });
 
@@ -103,7 +99,7 @@ it("reveals one occurrence for a thread-only jump after a row click", () => {
   const { Harness } = fixture();
   const view = render(<Harness />);
   fireEvent.click(screen.getByRole("button", { name: "Workspaces" }));
-  fireEvent.click(screen.getAllByRole("button", { name: /research/ })[1]!);
+  fireEvent.click(screen.getByRole("button", { name: /research/ }));
   scrolled.length = 0;
   view.rerender(<Harness reveal={1} />);
   const revealedRows = scrolled.filter((element) => element.closest("[data-thread-key]")?.getAttribute("data-thread-key") === "codex:research");
@@ -144,13 +140,13 @@ it.each([0, 1, 2])("can reveal a specific project / parent occurrence: %s", (ind
   expect(scrolled[0]!.closest("[data-thread-row-key]")).toHaveAttribute("data-thread-row-key", target);
 });
 
-it("keeps another project collapsed when selecting a child in its parent's tray", () => {
+it("does not expose a cross-project child through its parent while its own project is collapsed", () => {
   const { Harness } = fixture();
   render(<Harness />);
   fireEvent.click(screen.getByRole("button", { name: "Workspaces" }));
   fireEvent.click(screen.getByRole("button", { name: "PwrSnap" }));
   expect(screen.getByRole("button", { name: "PwrSnap" })).toHaveAttribute("aria-expanded", "false");
-  fireEvent.click(screen.getByRole("button", { name: /research/ }));
+  expect(screen.queryByRole("button", { name: /research/ })).toBeNull();
   expect(screen.getByRole("button", { name: "PwrSnap" })).toHaveAttribute("aria-expanded", "false");
 });
 

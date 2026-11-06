@@ -67,7 +67,8 @@ function mount(browseMode: "directories" | "recents", peerParent: "root" | "loca
   const childrenOf = { root: peerParent === "root" ? [localChild, peerChild] : [localChild],
     "local-child": peerParent === "root" ? [] : [peerChild] };
   for (const owner of [root, localChild]) {
-    add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref },
+    add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref,
+      ...(browseMode === "directories" ? { directoryKey: directory.key } : {}) },
       childrenOf[owner.id as keyof typeof childrenOf].map((child, index) => ({ row: child, orderKey: String(index),
         placement: { kind: "child", parent: { backend: "codex", threadId: owner.id } } })));
   }

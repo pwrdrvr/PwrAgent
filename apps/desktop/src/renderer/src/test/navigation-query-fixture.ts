@@ -114,14 +114,21 @@ export function navigationQueryFixture(
       .sort((left, right) => left.pinnedRank && right.pinnedRank ? Number(left.pinnedRank) - Number(right.pinnedRank)
         : Number(Boolean(right.pinnedRank)) - Number(Boolean(left.pinnedRank)) || (right.createdAt ?? 0) - (left.createdAt ?? 0));
   }
-  if (query.kind === "children") threads = all.filter((thread) => resolveParentKey(thread) === navigationThreadSelectionKey(query.parent));
+  const scopedDirectory = query.kind === "directory" || query.kind === "children"
+    ? population.directories?.find((directory) => directory.key === query.directoryKey)
+    : query.kind === "exact" && query.ancestryScope === "directory" && query.identities[0]
+      ? population.directories?.find((directory) => inDirectory(directory).some((thread) => key(thread) === navigationThreadSelectionKey(query.identities[0]!)))
+      : undefined;
+  const scopedMembers = scopedDirectory ? new Set(inDirectory(scopedDirectory).map(key)) : undefined;
+  if (query.kind === "children") threads = all.filter((thread) => resolveParentKey(thread) === navigationThreadSelectionKey(query.parent)
+    && (!scopedMembers || (scopedMembers.has(key(thread)) && scopedMembers.has(navigationThreadSelectionKey(query.parent)))));
   if (query.kind === "exact") {
     const selected = new Map<string, NavigationThreadSummary>();
     const add = (thread: NavigationThreadSummary): void => {
       if (selected.has(key(thread))) return;
       selected.set(key(thread), thread);
       const parent = byKey.get(resolveParentKey(thread) ?? "");
-      if (query.includeAncestry && parent) add(parent);
+      if (query.includeAncestry && parent && (!scopedMembers || scopedMembers.has(key(parent)))) add(parent);
     };
     for (const ref of query.identities) {
       const thread = byKey.get(navigationThreadSelectionKey(ref));
@@ -129,7 +136,8 @@ export function navigationQueryFixture(
     }
     threads = [...selected.values()];
   }
-  const descriptors = (query.kind === "directory-index" || query.kind === "star-map-geometry" ? population.directories ?? [] : [])
+  const descriptors = (query.kind === "directory-index" || query.kind === "star-map-geometry"
+    ? population.directories ?? [] : scopedDirectory ? [scopedDirectory] : [])
     .filter((directory) => query.kind !== "directory-index" || ((!query.keys || query.keys.includes(directory.key))
       && (!query.filter || `${directory.label}\n${directory.path ?? ""}`.toLowerCase().includes(query.filter.toLowerCase()))))
     .map((directory) => {
@@ -163,6 +171,7 @@ export function navigationQueryFixture(
     protocol: 2, queryKey: JSON.stringify(query), generation: "fixture", ownerEpoch: "fixture", countsRevision: "fixture",
     coverage: { state: "complete" }, counts: counts(query.kind === "directory-index" ? all : threads), complete: !next, nextCursor: next,
     ...(lensRootCount !== undefined ? { collectionSize: lensRootCount } : {}),
+    ...(scopedDirectory ? { selectionDirectory: descriptors.find((directory) => directory.key === scopedDirectory.key) } : {}),
     directories: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? descriptors.slice(offset, offset + size) : [],
     entries: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? [] : threads.slice(offset, offset + size).map((thread, index) => {
       const owner = thread.federation?.ref.target;
@@ -178,12 +187,15 @@ export function navigationQueryFixture(
         executionMode: thread.executionMode, serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort,
         primaryGitRepository: thread.primaryGitRepository, prAutoDispatchEnabled: thread.prAutoDispatchEnabled,
         scheduledStart: thread.scheduledStart,
-        fastMode: thread.fastMode, ordinaryChildCount: childCounts.get(key(thread)) ?? 0,
+        fastMode: thread.fastMode, ordinaryChildCount: scopedMembers
+          ? all.filter((child) => scopedMembers.has(key(child)) && resolveParentKey(child) === key(thread)).length
+          : childCounts.get(key(thread)) ?? 0,
         nativeSubAgentGroupPresent: Boolean(thread.codexNativeSubAgents?.length), nativeSubAgentCount: thread.codexNativeSubAgents?.length,
         queueCount: 0, queueState: "unknown",
       };
       const resolvedParent = byKey.get(resolveParentKey(thread) ?? "");
-      const parentInCollection = !attentionMemberKeys || attentionMemberKeys.has(resolveParentKey(thread) ?? "");
+      const parentInCollection = (!attentionMemberKeys || attentionMemberKeys.has(resolveParentKey(thread) ?? ""))
+        && (!scopedMembers || scopedMembers.has(resolveParentKey(thread) ?? ""));
       return { row, orderKey: String(offset + index), placement: thread.parentThreadId && parentInCollection
         ? { kind: "child", parent: { backend: thread.parentThreadBackend ?? resolvedParent?.source ?? thread.source, threadId: thread.parentThreadId,
             ownerInstanceId: thread.parentThreadInstanceId ?? row.ref.ownerInstanceId } }

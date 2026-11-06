@@ -201,6 +201,26 @@ function directoryMemberThreads(
     .filter((thread): thread is NavigationThreadSummary => Boolean(thread)) ?? [];
 }
 
+function queryDirectory(params: {
+  query: NavigationQueryRequest["query"];
+  index: NavigationQueryIndex;
+  threadsByLegacyKey: ReadonlyMap<string, NavigationThreadSummary>;
+}): NavigationDirectorySummary | undefined {
+  const { query } = params;
+  if (query.kind === "directory" || query.kind === "children") {
+    return params.index.directories.find((directory) => directory.key === query.directoryKey);
+  }
+  if (query.kind === "exact" && query.ancestryScope === "directory") {
+    if (query.identities.length !== 1) throw new Error("Directory-scoped ancestry requires exactly one thread identity.");
+    const key = identityKey(query.identities[0]!);
+    return params.index.directories.find((directory) => directory.threadKeys.some((member) => {
+      const thread = params.threadsByLegacyKey.get(member);
+      return thread && threadKey(thread) === key;
+    }));
+  }
+  return undefined;
+}
+
 function isActive(thread: NavigationThreadSummary): boolean {
   return thread.threadStatus === "active"
     || thread.hasActiveSubAgent === true
@@ -808,7 +828,12 @@ function selectQueryThreads(params: {
   }
   if (query.kind === "children") {
     const parentThread = params.threadsByIdentity.get(identityKey(query.parent));
+    const members = query.directoryKey === undefined ? undefined : new Set(directoryMemberThreads(
+      params.index.directories.find((directory) => directory.key === query.directoryKey), params.threadsByLegacyKey,
+    ));
+    if (members && (!parentThread || !members.has(parentThread))) return [];
     const children = ordinaryThreads.filter((thread) => {
+      if (members && !members.has(thread)) return false;
       const parent = parentIdentity(thread, params.parentCandidates);
       return parent && identityKey(parent) === identityKey(query.parent);
     });
@@ -823,11 +848,14 @@ function selectQueryThreads(params: {
 
   const selected = new Map<string, NavigationThreadSummary>();
   const visiting = new Set<string>();
+  const directory = queryDirectory(params);
+  const parentOf = query.ancestryScope === "directory"
+    ? directoryParentResolver(directoryMemberThreads(directory, params.threadsByLegacyKey), params.parentCandidates) : undefined;
   const addWithAncestry = (thread: NavigationThreadSummary): void => {
     const key = threadKey(thread);
     if (selected.has(key) || visiting.has(key)) return;
     visiting.add(key);
-    const parent = parentIdentity(thread, params.parentCandidates);
+    const parent = parentOf ? parentOf(thread) : parentIdentity(thread, params.parentCandidates);
     if (query.includeAncestry && parent) {
       const parentThread = params.threadsByIdentity.get(identityKey(parent));
       if (parentThread) addWithAncestry(parentThread);
@@ -980,9 +1008,15 @@ export function projectNavigationQuery(params: {
   const repositories = repositoryIdentitiesByPath(params.index);
   const childCountByParent = new Map<string, number>();
   const viewerChildCountByParent = new Map<string, number>();
+  const scopedDirectory = queryDirectory({ query, index: params.index, threadsByLegacyKey });
+  const scopedMembers = scopedDirectory ? new Set(directoryMemberThreads(scopedDirectory, threadsByLegacyKey)) : undefined;
   for (const thread of params.index.threads) {
     const parent = parentIdentity(thread, parentCandidates);
     if (!parent || !isOrdinaryThread(thread)) continue;
+    if (scopedMembers) {
+      const parentThread = threadsByIdentity.get(identityKey(parent));
+      if (!scopedMembers.has(thread) || !parentThread || !scopedMembers.has(parentThread)) continue;
+    }
     const key = identityKey(parent);
     childCountByParent.set(key, (childCountByParent.get(key) ?? 0) + 1);
     if (parent.ownerInstanceId && navigationIdentity(thread).ownerInstanceId !== parent.ownerInstanceId) {
@@ -1041,8 +1075,8 @@ export function projectNavigationQuery(params: {
   // can regroup them. Preserve the actual relationship in row metadata for actions.
   const attentionMemberKeys = query.kind === "lens" && query.lens === "attention"
     ? new Set(selectedThreads.map(threadKey)) : undefined;
-  const directoryMembers = query.kind === "directory"
-    ? directoryMemberThreads(params.index.directories.find((directory) => directory.key === query.directoryKey), threadsByLegacyKey)
+  const directoryMembers = query.kind === "directory" || (query.kind === "exact" && query.ancestryScope === "directory")
+    ? directoryMemberThreads(scopedDirectory, threadsByLegacyKey)
     : undefined;
   const directoryParentOf = directoryMembers ? directoryParentResolver(directoryMembers, parentCandidates) : undefined;
   const homeProjects = query.kind === "group-members"
@@ -1098,7 +1132,7 @@ export function projectNavigationQuery(params: {
       backends: query.kind === "directory-index"
         || (query.kind === "star-map" && query.projectKey === undefined),
     }),
-    ...(query.kind === "directory" ? {
+    ...(query.kind === "directory" || (query.kind === "children" && query.directoryKey !== undefined) ? {
       selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index,
         directories: params.index.directories.filter((directory) => directory.key === query.directoryKey),
       }, threadsByLegacyKey, parentCandidates })[0],

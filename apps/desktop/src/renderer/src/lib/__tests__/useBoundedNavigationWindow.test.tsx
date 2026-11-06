@@ -548,8 +548,11 @@ it("pins a mounted thread beside an unavailable federation parent and its viewer
   const childrenId = `children:${navigationIdentityKey(parent.ref)}`;
   try {
     await waitFor(() => expect(navigation.resources.get(rootsId)?.state.page?.rangeStart).toBe(12));
-    await waitFor(() => expect(navigation.resources.get(childrenId)?.state.error).toContain("not connected"));
-    await waitFor(() => expect(navigation.resources.get(`${childrenId}:viewer`)?.state.page?.entries[0]?.row.id).toBe(child.id));
+    await waitFor(() => expect(navigation.resources.get(childrenId)?.state.page?.entries[0]?.row.id).toBe(child.id));
+    expect(navigation.resources.get(childrenId)?.state.request).toMatchObject({ inventory: "viewer",
+      query: { kind: "children", parent: parent.ref, directoryKey: home.key } });
+    expect(navigation.resources.get(childrenId)?.state.error).toBeUndefined();
+    expect(navigation.resources.has(`${childrenId}:viewer`)).toBe(false);
     expect(view.getByRole("button", { name: /Viewer child/ })).toBeTruthy();
     selected = { ...selected, pinnedRank: "2048" };
     fixture.emit({ backend: "codex", notification: { method: "navigation/remoteThreadPins/changed",

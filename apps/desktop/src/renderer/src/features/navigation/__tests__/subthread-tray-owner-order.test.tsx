@@ -62,7 +62,8 @@ function mount(browseMode: "directories" | "recents") {
     add("lens-pins", { kind: "lens", lens: "recents", roots: "pinned" }, [rootEntry]);
   }
   for (const [owner, descendants] of [[root, children], [children[0]!, grandchildren]] as const) {
-    add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref },
+    add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref,
+      ...(browseMode === "directories" ? { directoryKey: directory.key } : {}) },
       descendants.map((child, index) => ({ row: child, orderKey: String(index),
         placement: { kind: "child", parent: { backend: owner.source, threadId: owner.id, ownerInstanceId: OWNER } } })));
   }

@@ -17,8 +17,8 @@ afterEach(() => {
 function mount(collapsed = false, promotedGrandchild = false) {
   const directory: NavigationDirectoryRow = {
     key: "directory:/repo", label: "Repo", path: "/repo", kind: "directory",
-    counts: { total: promotedGrandchild ? 10 : 9, active: 0, unread: 0, review: 0 },
-    pinnedRootCount: 1, unpinnedRootCount: promotedGrandchild ? 2 : 1, launchpadPresent: false,
+    counts: { total: 9, active: 0, unread: 0, review: 0 },
+    pinnedRootCount: 1, unpinnedRootCount: promotedGrandchild ? 3 : 1, launchpadPresent: false,
   };
   const row = (id: string, patch: Partial<NavigationRow> & { subthreadOrder?: string[] } = {}): NavigationRow => ({
     id, source: "codex", title: id, titleSource: "explicit",
@@ -57,11 +57,14 @@ function mount(collapsed = false, promotedGrandchild = false) {
   add(`directory-pins:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "pinned" },
     [{ row: parent, placement: { kind: "root" }, orderKey: "0" }]);
   add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned" },
-    [...(promotedGrandchild ? [grandchildren[0]!] : []), tail]
+    [...(promotedGrandchild ? grandchildren : []), tail]
       .map((root, index) => ({ row: root, placement: { kind: "root" }, orderKey: String(index) })));
   for (const [owner, descendants] of [[parent, children], [children[2]!, grandchildren], [grandchildren[0]!, greatGrandchildren]] as const) {
-    add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref },
-      descendants.map((child, index) => ({ row: child, placement: { kind: "child", parent: owner.ref }, orderKey: String(index) })));
+    // The owner excludes the intermediate row in Other and its children
+    // from Repo's trays; the promoted grandchild owns its own Repo tray.
+    const sameProject = (candidate: NavigationRow) => candidate.linkedDirectories[0]?.path === "/repo";
+    add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref, directoryKey: directory.key },
+      (sameProject(owner) ? descendants.filter(sameProject) : []).map((child, index) => ({ row: child, placement: { kind: "child", parent: owner.ref }, orderKey: String(index) })));
   }
   const navigation = {
     resources, presentationReady: true, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
@@ -82,8 +85,8 @@ it.each([false, true])("gives a promoted grandchild its own row and descendants 
   const buttons = mount(collapsed, true);
   const labels = buttons.map((button) => button.getAttribute("aria-label"));
   expect(labels).toEqual(collapsed
-    ? ["parent, pinned", "grandchild-1", "great-grandchild", "tail"]
-    : ["parent, pinned", "above", "gap", "first", "middle", "grandchild-2", "last", "grandchild-1", "great-grandchild", "tail"]);
+    ? ["parent, pinned", "grandchild-1", "great-grandchild", "grandchild-2", "tail"]
+    : ["parent, pinned", "above", "gap", "first", "last", "grandchild-1", "great-grandchild", "grandchild-2", "tail"]);
   const promoted = screen.getByRole("button", { name: "grandchild-1" });
   expect(promoted.closest(".subthread-list")).toBeNull();
   expect(screen.getByRole("button", { name: "great-grandchild" }).closest(".subthread-list"))

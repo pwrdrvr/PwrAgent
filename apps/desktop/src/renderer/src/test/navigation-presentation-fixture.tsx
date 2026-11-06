@@ -57,7 +57,8 @@ function usePresentationOwner(props: FixtureProps) {
     return page;
   };
   const index = add("directory-index", { kind: "directory-index" });
-  if (selectedThread) add("selected-context", { kind: "exact", includeAncestry: true, identities: [{
+  if (selectedThread) add("selected-context", { kind: "exact", includeAncestry: true,
+    ...((props.browseMode ?? "directories") === "directories" ? { ancestryScope: "directory" as const } : {}), identities: [{
     backend: selectedThread.source, threadId: selectedThread.id,
     ownerInstanceId: selectedThread.federation?.ref.target.scope === "remote" ? selectedThread.federation.ref.target.instanceId : undefined,
   }] });
@@ -81,7 +82,13 @@ function usePresentationOwner(props: FixtureProps) {
     if (thread.subthreadsCollapsed || !parents.has(threadSummaryIdentityKey(thread))) continue;
     const parent = { backend: thread.source, threadId: thread.id,
       ownerInstanceId: thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : undefined };
-    add(`children:${navigationIdentityKey(parent)}`, { kind: "children", parent });
+    const directory = mode === "directories" ? props.directories.find((directory) => {
+      const membership = (directory as NavigationDirectorySummary).threadKeys;
+      return membership ? membership.includes(threadSummaryIdentityKey(thread))
+        : thread.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key);
+    }) : undefined;
+    add(`children:${navigationIdentityKey(parent)}`, { kind: "children", parent,
+      ...(directory ? { directoryKey: directory.key } : {}) });
   }
   const directories = (index.directories ?? []).map((descriptor) => ({ ...descriptor,
     launchpad: props.directories.find((directory) => directory.key === descriptor.key)?.launchpad }));

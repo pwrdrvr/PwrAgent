@@ -12,11 +12,14 @@ export type PagedDirectoryPresentation = {
   childThreadsByParentKey: Map<string, NavigationThreadSummary[]>;
   /** Each parent's child keys in its owner's saved order. */
   ownerChildOrder: Map<string, string[]>;
+  /** Directory-scoped counts remain separate from globally refreshed row metadata. */
+  ordinaryChildCounts: Map<string, number>;
   directoryThreadsCollapsed: boolean;
   directoryUnpinnedThreadCount: number;
 };
 
-export type PagedDirectoryChildren = Pick<PagedDirectoryPresentation, "childThreadsByParentKey" | "ownerChildOrder">;
+type DirectoryChildren = Pick<PagedDirectoryPresentation, "childThreadsByParentKey" | "ownerChildOrder" | "ordinaryChildCounts">;
+export type PagedDirectoryChildren = Map<string, DirectoryChildren>;
 
 /** Child pages belong to the window, not to each expanded directory. */
 export function buildPagedDirectoryChildren(params: {
@@ -25,24 +28,35 @@ export function buildPagedDirectoryChildren(params: {
   threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
 }): PagedDirectoryChildren {
   const presentation = params.presentationOrder ?? readNavigationPresentationOrder(params.resources);
-  const childThreadsByParentKey = new Map<string, NavigationThreadSummary[]>();
-  const seenByParent = new Map<string, Set<string>>();
+  const directories: PagedDirectoryChildren = new Map();
+  const seenByScopeAndParent = new Map<string, Set<string>>();
+  const ownerChildOrder = readOwnerChildOrder(params.resources, presentation);
   for (const resource of params.resources.values()) {
-    if (resource.state.request.query.kind !== "children") continue;
+    const query = resource.state.request.query;
+    if (query.kind !== "children" || query.directoryKey === undefined) continue;
+    let directory = directories.get(query.directoryKey);
+    if (!directory) {
+      directory = { childThreadsByParentKey: new Map(), ownerChildOrder, ordinaryChildCounts: new Map() };
+      directories.set(query.directoryKey, directory);
+    }
+    for (const { row } of resource.state.page?.entries ?? []) {
+      directory.ordinaryChildCounts.set(navigationThreadSelectionKey(row.ref), row.ordinaryChildCount);
+    }
     for (const entry of presentation.get(resource.id) ?? []) {
       if (entry.placement.kind !== "child") continue;
       const parentKey = navigationThreadSelectionKey(entry.placement.parent);
-      const seen = seenByParent.get(parentKey) ?? new Set<string>();
+      const bucketKey = JSON.stringify([query.directoryKey, parentKey]);
+      const seen = seenByScopeAndParent.get(bucketKey) ?? new Set<string>();
       const row = params.threadsByKey.get(entry.key);
+      const children = directory.childThreadsByParentKey.get(parentKey) ?? [];
       if (!row || seen.has(entry.key)) continue;
       seen.add(entry.key);
-      seenByParent.set(parentKey, seen);
-      const children = childThreadsByParentKey.get(parentKey) ?? [];
+      seenByScopeAndParent.set(bucketKey, seen);
       children.push(row);
-      childThreadsByParentKey.set(parentKey, children);
+      directory.childThreadsByParentKey.set(parentKey, children);
     }
   }
-  return { childThreadsByParentKey, ownerChildOrder: readOwnerChildOrder(params.resources, presentation) };
+  return directories;
 }
 
 /** Presentation of admitted entries only. Placement and counts remain owner authority. */
@@ -63,8 +77,15 @@ export function buildPagedDirectoryPresentation(params: {
     return true;
   })
     .map((entry) => params.threadsByKey.get(entry.key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-  const children = params.children ?? buildPagedDirectoryChildren({ ...params, presentationOrder: presentation });
+  const children: DirectoryChildren = (params.children ?? buildPagedDirectoryChildren({ ...params, presentationOrder: presentation })).get(params.directory.key)
+    ?? { childThreadsByParentKey: new Map(), ownerChildOrder: new Map(), ordinaryChildCounts: new Map() };
   let childThreadsByParentKey = children.childThreadsByParentKey;
+  const ordinaryChildCounts = new Map(children.ordinaryChildCounts);
+  for (const id of [`directory-pins:${params.directory.key}`, `directory:${params.directory.key}`]) {
+    for (const { row } of params.resources.get(id)?.state.page?.entries ?? []) {
+      ordinaryChildCounts.set(navigationThreadSelectionKey(row.ref), row.ordinaryChildCount);
+    }
+  }
   const directoryPinnedThreads = roots.filter(isPinnedThread);
   // Selection is an independent exact read, not a replacement pin range.
   // Admit only its root in this directory; keep page membership and cursors
@@ -113,7 +134,7 @@ export function buildPagedDirectoryPresentation(params: {
   }
   return {
     directoryPinnedThreads, unpinnedThreads, selectedUnpinnedThreads, childThreadsByParentKey,
-    ownerChildOrder: children.ownerChildOrder, directoryThreadsCollapsed,
+    ownerChildOrder: children.ownerChildOrder, ordinaryChildCounts, directoryThreadsCollapsed,
     directoryUnpinnedThreadCount: params.directory.unpinnedRootCount ?? 0,
   };
 }
