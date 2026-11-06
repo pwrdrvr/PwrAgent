@@ -46659,13 +46659,14 @@ button.composer__subthread-source-parent:hover {
   font-weight: 700;
 }
 
-/* The arguments a provider command takes, after its name. Muted and regular
-   weight, the same text the draft draws after the command once it is picked. */
+/* The arguments a provider command takes, after its name. Regular-weight
+   mono sets it apart from the name; the ink is `--text-secondary`, because
+   `--text-muted` falls under the text floor on the active row's tint. */
 .composer__autocomplete-argument-hint {
   min-width: 0;
   flex: 0 1 auto;
   overflow: hidden;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 0.9em;
   font-weight: 400;
