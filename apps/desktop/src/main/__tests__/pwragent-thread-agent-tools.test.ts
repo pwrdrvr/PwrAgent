@@ -77,6 +77,44 @@ describe("PwrAgent thread agent tools", () => {
       context: { backend: "codex", threadId: "manager" }, args: { projectKey: "directory:/repo" } });
   });
 
+  it("advertises thread maintenance through dynamic tools and MCP only in the unified namespace", async () => {
+    const handler = vi.fn(async () => ({ ok: true as const, data: { maintenanceDialog: { opened: true } } }));
+    const router = buildPwrAgentThreadToolRouter(handler);
+    const namespace = router.buildDynamicToolSpecs()[0];
+    if (!namespace || namespace.type !== "namespace") throw new Error("Expected a namespace");
+    for (const name of ["scan_thread_maintenance", "apply_thread_maintenance", "open_thread_maintenance"]) {
+      const dynamic = namespace.tools.find((tool) => tool.name === name);
+      const mcp = router.buildMcpTools().find((tool) => tool.name === name);
+      expect(dynamic, name).toBeDefined();
+      expect(mcp?.inputSchema).toEqual(dynamic?.inputSchema);
+      expect(mcp?.inputSchema).toMatchObject({ additionalProperties: false });
+      expect(buildPwrAgentThreadToolRouter(handler, { namespace: "pwragent_threads" })
+        .buildMcpTools().some((tool) => tool.name === name)).toBe(false);
+    }
+    const mcpTools = router.buildMcpTools();
+    expect(mcpTools.find((tool) => tool.name === "apply_thread_maintenance")?.inputSchema)
+      .toMatchObject({ required: ["scanId"] });
+    expect(mcpTools.find((tool) => tool.name === "scan_thread_maintenance")?.annotations)
+      .toMatchObject({ readOnlyHint: true });
+    expect(mcpTools.find((tool) => tool.name === "apply_thread_maintenance")?.annotations)
+      .toMatchObject({ readOnlyHint: false });
+  });
+
+  it("forwards the trusted turn and call to apply_thread_maintenance for its confirmation card", async () => {
+    const handler = vi.fn(async () => ({ ok: true as const, data: { maintenanceDialog: { opened: false } } }));
+    const router = buildPwrAgentThreadToolRouter(handler);
+    await router.handleMcpToolCall({ backend: "claude", threadId: "cleaner", tool: "apply_thread_maintenance",
+      args: { scanId: "scan-1", dryRun: true }, turnId: "turn-1", callId: "call-1" });
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ operation: "apply_thread_maintenance",
+      context: { backend: "claude", threadId: "cleaner", turnId: "turn-1", callId: "call-1" },
+      args: { scanId: "scan-1", dryRun: true } });
+    handler.mockClear();
+    await router.handleMcpToolCall({ backend: "claude", threadId: "cleaner", tool: "scan_thread_maintenance",
+      args: {}, turnId: "turn-1", callId: "call-2" });
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ operation: "scan_thread_maintenance",
+      context: { backend: "claude", threadId: "cleaner" }, args: {} });
+  });
+
   it("projects thread tools and dispatches with Agent thread context", async () => {
     const handler = vi.fn(async () => ({
       ok: true as const,

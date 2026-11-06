@@ -338,6 +338,15 @@ describe("action → permission lookup tables", () => {
     expect(permissionForDynamicTool("thread_inspection", "mark_project_read")).toBe(
       "thread.control.organize",
     );
+    expect(permissionForDynamicTool("thread_inspection", "apply_thread_maintenance")).toBe(
+      "thread.control.archive",
+    );
+    expect(permissionForDynamicTool("thread_inspection", "scan_thread_maintenance")).toBe(
+      "tools.thread_inspection",
+    );
+    expect(permissionForDynamicTool("thread_inspection", "open_thread_maintenance")).toBe(
+      "tools.thread_inspection",
+    );
     expect(toolArgsTargetRemoteInstance({ projectKey: "directory:/repo", instanceId: "peer" })).toBe(true);
     expect(toolArgsTargetRemoteInstance({ projectKey: "directory:/repo" })).toBe(false);
     // Writes shipped in that catalog are re-homed.

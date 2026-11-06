@@ -37,7 +37,7 @@ export function createCloseHarness(sessions: SessionDouble[], options: {
     for (const stage of ["before-quit", "will-quit"]) {
       options.quitModel.on(stage, (event) => { app.emit(stage, event); });
     }
-    options.quitModel.on("quit", completeNativeQuit);
+    options.quitModel.on("quit", () => { app.emit("quit"); completeNativeQuit(); });
   }
   let inspectorDetached = false;
   const quit = vi.fn(() => {
@@ -51,10 +51,25 @@ export function createCloseHarness(sessions: SessionDouble[], options: {
     const will = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
     app.emit("will-quit", will);
     if (!will.defaultPrevented) {
+      app.emit("quit");
       completeNativeQuit();
     }
   });
   app.quit = quit;
+  let renderersClosed = false;
+  // The product holds its first quit pass while closing renderer producers,
+  // then requests another pass after disposal. Model that independently from
+  // the fixture's storage barrier.
+  app.prependOnceListener("before-quit", (event: { preventDefault(): void }) => {
+    if (!options.quitModel) { renderersClosed = true; return; }
+    const windows = options.quitModel.browserWindows();
+    if (!windows.length) return;
+    event.preventDefault();
+    void Promise.all(windows.map((window) => new Promise<void>((resolve) => {
+      window.once("closed", resolve);
+      window.close();
+    }))).then(() => setImmediate(() => { app.quit(); }));
+  });
   const emit = vi.fn(() => { options.onSignal?.(); });
   const evaluate = vi.fn(async (callback: unknown, arg: unknown) => {
     if (inspectorDetached) throw new Error("Inspector detached");
@@ -62,7 +77,12 @@ export function createCloseHarness(sessions: SessionDouble[], options: {
       app,
       arg,
       session: { defaultSession: sessions[0] },
-      webContents: { getAllWebContents: () => sessions.map((session) => ({ session })) },
+      webContents: { getAllWebContents: () => sessions.map((session) => ({
+        session,
+        isDestroyed: () => options.quitModel
+          ? options.quitModel.browserWindows().length === 0
+          : renderersClosed,
+      })) },
       process: {
         pid: 120,
         uptime: () => 10,

@@ -36,7 +36,13 @@ import type {
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
-import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
+import type {
+  CancelThreadHandoffRequest,
+  HandoffInstanceThreadRequest,
+  HandoffInstanceThreadResult,
+  RetryThreadHandoffNowRequest,
+  ThreadHandoffProgress,
+} from "@pwragent/shared";
 import type {
   CancelComposerFilePushRequest,
   ComposerFilePushProgress,
@@ -168,6 +174,10 @@ import type {
   CodexAppServerRestartResult,
   CodexAppServerRestartStatus,
   DesktopThreadArchiveSweepStatus,
+  ThreadMaintenanceApplyRequest,
+  ThreadMaintenanceRules,
+  ThreadMaintenanceRun,
+  ThreadMaintenanceScan,
   DraftAutomationPromptRequest,
   DraftAutomationPromptResponse,
   ConfigureFederationTailscaleRequest,
@@ -585,6 +595,8 @@ import type {
   InspectCodeSignaturesResponse,
   PickGhCommandResponse,
   PickGitCommandResponse,
+  ManagedGitActionRequest,
+  ManagedGitActionResponse,
   RefreshDesktopCodexDiscoveryRequest,
   SetCodexModelProviderApiKeyRequest,
   SetCodexModelProviderApiKeyResponse,
@@ -896,6 +908,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   handoffThreadToInstance?: (
     request: HandoffInstanceThreadRequest,
   ) => Promise<HandoffInstanceThreadResult>;
+  /** Cancels a handoff this window started, while it can still be taken back. */
+  cancelThreadHandoff?: (request: CancelThreadHandoffRequest) => Promise<void>;
+  /** Asks a handoff held by a dropped connection to reconnect now. */
+  retryThreadHandoffNow?: (request: RetryThreadHandoffNowRequest) => Promise<void>;
+  /** Progress of handoffs this window started. Returns an unsubscribe. */
+  onThreadHandoffProgress?: (
+    callback: (progress: ThreadHandoffProgress) => void,
+  ) => () => void;
   /**
    * Copy a file from this machine to the owner of a remote thread, for a
    * composer attachment. Resolves with the owner's path to the copy.
@@ -1014,12 +1034,24 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   getThreadArchiveSweepStatus?: () => Promise<DesktopThreadArchiveSweepStatus>;
   /** Resolves with the status of the finished sweep, joining a running one. */
   runThreadArchiveSweep?: () => Promise<DesktopThreadArchiveSweepStatus>;
+  /** Read-only scan for the Thread maintenance dialog. Changes nothing. */
+  scanThreadMaintenance?: (request?: {
+    rules?: Partial<ThreadMaintenanceRules>;
+    projectKey?: string;
+  }) => Promise<ThreadMaintenanceScan>;
+  /** Starts a run of selections from one scan. Resolves once it starts;
+   * progress and the result arrive through onThreadMaintenanceRunChanged. */
+  applyThreadMaintenance?: (request: ThreadMaintenanceApplyRequest) => Promise<ThreadMaintenanceRun>;
+  getThreadMaintenanceRun?: () => Promise<ThreadMaintenanceRun | null>;
+  /** Stops after the item in progress. Nothing already done is undone. */
+  stopThreadMaintenance?: () => Promise<void>;
   analyzeFocusedDiff?: (
     request: FocusedDiffAnalysisRequest
   ) => Promise<FocusedDiffAnalysisResponse>;
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  manageThreadMergeHolds?: (request: import("@pwragent/shared").ManageThreadMergeHoldsRequest) => Promise<import("@pwragent/shared").ManageThreadMergeHoldsResponse>;
   manageThreadDependencies?: (
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
@@ -1382,6 +1414,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * selected path, has to call to see anything new.
    */
   refreshGitDiscovery?: () => Promise<ReadDesktopSettingsResponse>;
+  /**
+   * Settings → Git → Updates: check for, download, cancel, choose (Use and
+   * Roll back) or remove a PwrDrvr Git release. Returns the refreshed
+   * snapshot, with `error` when the action did not complete.
+   */
+  managedGitAction?: (request: ManagedGitActionRequest) => Promise<ManagedGitActionResponse>;
   /**
    * Reads what the platform's code-signing system says about executables
    * PwrAgent runs but does not ship. Deliberately separate from discovery
@@ -1786,6 +1824,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => () => void;
   onThreadArchiveSweepStatusChanged?: (
     callback: (status: DesktopThreadArchiveSweepStatus) => void,
+  ) => () => void;
+  onThreadMaintenanceRunChanged?: (
+    callback: (run: ThreadMaintenanceRun) => void,
+  ) => () => void;
+  /** File → Thread Maintenance…, an agent, or a project's context menu. */
+  onOpenThreadMaintenanceRequested?: (
+    callback: (request: { projectKey?: string }) => void,
   ) => () => void;
   onGithubPrSamlEnforcement?: (
     callback: (event: GithubPrSamlEnforcementEvent) => void,

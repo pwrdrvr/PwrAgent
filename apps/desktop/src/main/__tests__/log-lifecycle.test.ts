@@ -32,6 +32,9 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  // Closed-output fixtures disable this shared transport for the rest of the
+  // process. Each test starts with a live sink, independent of execution order.
+  electronLog.transports.console.level = "info";
   setMainLogDebugCollectionEnabled(false);
   _resetAppLogsForTests();
   fileSink.mockClear();

@@ -113,10 +113,10 @@ CPU/profile diagnostic captures. Recording introduces no timer, logging, IPC,
 or SQLite persistence. Additional SQLite write volume is 0 MB/day. No new
 periodic, per-turn, or per-event database write was added.
 
-Run the fixtures on an immutable commit with the Sandboxer verification skill:
+Run the fixtures on the commit under test using the local or CI test route:
 
 ```sh
-PWRAGENT_PROFILE_CRITICAL_PATHS=1 scripts/sandboxer/verify.sh unit \
+PWRAGENT_PROFILE_CRITICAL_PATHS=1 pnpm test \
   apps/desktop/src/main/__tests__/async-critical-path-profile.test.ts \
   apps/desktop/src/renderer/src/lib/__tests__/async-selection-profile.test.tsx
 ```

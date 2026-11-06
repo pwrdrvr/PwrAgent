@@ -1,8 +1,8 @@
 {
   "ipc-active-burst": {"requests":97,"elections":1,"scheduledSummaries":1},
   "local-detail-burst": {"requests":96,"builds":0,"sourceCalls":0},
-  "mixed-local-peer-active-burst": {"requests":1280,"builds":4,"sourceCalls":36,"sqliteSelects":36,"sqliteRows":28,"overlayPayloadBytes":2992,"payloadFileReads":1,"payloadFileBytes":81},
-  "mixed-local-peer-invalidated-burst": {"requests":2560,"builds":9,"sourceCalls":81,"sqliteSelects":81,"sqliteRows":63,"overlayPayloadBytes":6732,"payloadFileReads":1,"payloadFileBytes":81},
+  "mixed-local-peer-active-burst": {"requests":128,"builds":4,"sourceCalls":36,"sqliteSelects":36,"sqliteRows":28,"overlayPayloadBytes":2992,"payloadFileReads":1,"payloadFileBytes":81},
+  "mixed-local-peer-invalidated-burst": {"requests":256,"builds":9,"sourceCalls":81,"sqliteSelects":81,"sqliteRows":63,"overlayPayloadBytes":6732,"payloadFileReads":1,"payloadFileBytes":81},
   "peer-detail-burst": {"requests":96,"builds":1,"sourceCalls":8},
-  "uncached-mixed-local-peer-active-burst": {"requests":1280,"builds":1280,"sourceCalls":10880,"sqliteSelects":10880,"sqliteRows":8320,"overlayPayloadBytes":805120,"payloadFileReads":1,"payloadFileBytes":81}
+  "uncached-mixed-local-peer-active-burst": {"requests":128,"builds":128,"sourceCalls":1088,"sqliteSelects":1088,"sqliteRows":832,"overlayPayloadBytes":80512,"payloadFileReads":1,"payloadFileBytes":81}
 }

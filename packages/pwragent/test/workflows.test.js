@@ -8,7 +8,7 @@ import { connectFederationClient, decodeFederationInvite, FederationRpcEndpoint,
   generateNoiseStaticKeyPair, FederationFilePushReceiver, FederationFilePushReceipts } from "../dist/federation-core.js";
 import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
 import { OutpostGit } from "../src/projects.js";
-import { setup, eventually } from "./helpers.js";
+import { setup, eventually, restartAfterCompletedTurn } from "./helpers.js";
 
 async function peer(h, prior, onRequest, capabilities = HEADLESS_CAPABILITIES) {
   const invite = prior?.invite || decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
@@ -69,15 +69,18 @@ test("project creation, clone, project-specific turns and restart use owner cwd"
   assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "send_private_response")));
   assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "send_messaging_file")));
   assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "render_messaging_pdf_pages")));
-  await v.call("backend.startTurn", { threadId: created.threadId, input: [{ type: "text", text: "project marker" }] });
+  const turn = await v.call("backend.startTurn", { threadId: created.threadId, input: [{ type: "text", text: "project marker" }] });
   await eventually(() => existsSync(path.join(project.path, "fixture-result.txt")));
+  // The output file precedes saved history and turn/completed in the fixture.
+  // Restart only after the daemon has observed completion, so shutdown cannot
+  // interrupt that history write and leave the resumed fixture without a thread.
+  await eventually(async () => (await h.rpc("list")).some((job) => job.threadId === created.threadId && job.status === "completed"));
   assert.equal(existsSync(path.join(h.workspace, "fixture-result.txt")), false);
   const page = await v.call("backend.getNavigationQueryPage", { protocol: 2, query: { kind: "directory", directoryKey: project.path } });
   assert.equal(page.entries[0].row.projectKey, project.path);
   await assert.rejects(v.call("backend.startTurn", { threadId: created.threadId, cwd: h.workspace, input: [{ type: "text", text: "wrong cwd" }] }), /cwd|workspace|project/i);
   v.connection.close();
-  await h.stop(h.daemon);
-  await h.start();
+  await restartAfterCompletedTurn(h, turn);
   const reconnected = await peer(h, v);
   t.after(() => reconnected.connection.close());
   await reconnected.call("backend.startTurn", { threadId: created.threadId, input: [{ type: "text", text: "after restart" }] });
@@ -171,8 +174,11 @@ test("repository intake preflights before file transfer or source archive, then 
   const viewer = await peer(source);
   t.after(() => viewer.connection.close());
   const thread = await viewer.call("backend.startThread", { cwd: sourceProject.path });
-  await viewer.call("backend.startTurn", { threadId: thread.threadId, input: [{ type: "text", text: "intake history" }] });
-  await eventually(() => existsSync(path.join(sourceProject.path, "fixture-result.txt")));
+  const turn = await viewer.call("backend.startTurn", { threadId: thread.threadId, input: [{ type: "text", text: "intake history" }] });
+  // A result file precedes persisted history and turn/completed in the fixture.
+  // The owning runtime must observe this exact turn's completion before handoff.
+  await eventually(async () => (await source.rpc("list")).some((job) =>
+    job.threadId === thread.threadId && job.turnId === turn.turnId && job.status === "completed"));
   git(sourceProject.path, "add", ".");
   git(sourceProject.path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture result");
   git(sourceProject.path, "push", "origin", "main");

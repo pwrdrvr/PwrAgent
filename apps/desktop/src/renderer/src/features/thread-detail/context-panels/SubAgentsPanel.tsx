@@ -5,9 +5,10 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
-import type {
-  NavigationThreadSummary,
-  ThreadSubAgentSummary,
+import {
+  hasStoppableSubAgentRun,
+  type NavigationThreadSummary,
+  type ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
@@ -267,8 +268,7 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
               (subAgent.status === "pending"
                 || subAgent.status === "running"
                 || subAgent.status === "blocked")
-              && Boolean(subAgent.monitorThreadId)
-              && Boolean(subAgent.monitorTurnId)
+              && hasStoppableSubAgentRun(subAgent)
               && Boolean(props.desktopApi?.stopSubAgent);
             return (
               <li key={subAgent.monitorId} className="rail-card">

@@ -179,6 +179,13 @@ uses complete owner membership, covers all backends, and writes the watermarks
 in one transaction. It shares `thread.control.organize` with the single-thread
 read mutation. It does not archive threads or stop turns.
 
+To clean up many old threads at once, use `scan_thread_maintenance`, then
+`apply_thread_maintenance` with the scan's `scanId` and the items the operator
+chose. The scan applies the Settings archive rules and changes nothing. Apply
+re-checks each item, shows the operator one confirmation card, and is gated on
+`thread.control.archive`. `open_thread_maintenance` opens the same review in
+the desktop dialog instead. These tools work on this machine's threads only.
+
 - **`projectPath`** is the status card's *Move to Project*: a `to-project`
   workspace handoff that relinks the thread to another checkout without
   copying files. It is gated on `thread.control.handoff`, as that button is.

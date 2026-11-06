@@ -41,6 +41,7 @@ export const FEDERATION_CAPABILITIES = [
   "file_pull",
   "event_subscriptions",
   "turn_input_blobs",
+  "resumable_blobs",
   "transport_brotli",
   "shutdown_notice",
   /**
@@ -930,6 +931,8 @@ export type FederationNotificationEnvelope<
  */
 export type FederationBlobChunkEnvelope = FederationEnvelopeBase & {
   kind: "blob_chunk";
+  /** Durable file push; absent for the original turn-input blob protocol. */
+  purpose?: "file_push";
   transferId: string;
   chunkIndex: number;
   chunkCount: number;

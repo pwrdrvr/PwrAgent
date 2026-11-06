@@ -1,5 +1,9 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AppServerBackgroundTask } from "@pwragent/shared";
+import {
+  CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+  type AppServerBackgroundTask,
+  type ThreadSubAgentStatus,
+} from "@pwragent/shared";
 
 export type ClaudeTaskStatus = "running" | "completed" | "failed" | "stopped";
 
@@ -14,9 +18,29 @@ export type ClaudeTask = {
   backgrounded: boolean;
   status: ClaudeTaskStatus;
   progress?: string;
+  /** The report Claude settled the task with. */
+  summary?: string;
   /** When this process first saw the task; held in memory only. */
   startedAt?: number;
+  /** The live background set has named this task. */
+  namedLive?: boolean;
 };
+
+/** The Sub-agents card for one Claude sub-agent (an Agent tool task). */
+export type ClaudeSubAgentCard = {
+  monitorId: string;
+  taskId: string;
+  task: string;
+  status: ThreadSubAgentStatus;
+  agentName?: string;
+  lastMessage?: string;
+  startedAt?: number;
+};
+
+/** A sub-agent Claude runs for the Agent tool, not a command. */
+export function isClaudeSubAgentTask(task: ClaudeTask): boolean {
+  return task.taskType === "local_agent";
+}
 
 /** A settled task, for the tool call that started it. */
 export type ClaudeTaskSettlement = {
@@ -83,6 +107,7 @@ export class ClaudeTaskTracker {
       task.toolUseId ??= message.tool_use_id;
       task.ambient ||= message.ambient === true || message.skip_transcript === true;
       task.status = message.status;
+      if (message.summary) task.summary = message.summary;
       this.tasks.set(task.taskId, task);
       settled = { task, summary: message.summary };
     } else if (message.subtype === "background_tasks_changed") {
@@ -93,6 +118,9 @@ export class ClaudeTaskTracker {
           // A finishing task leaves the set after its notification; the set
           // never revives a task that already settled.
           task.backgrounded = true;
+          task.namedLive = true;
+          task.taskType ??= entry.task_type;
+          task.subagentType ??= entry.subagent_type;
           task.ambient ||= entry.ambient === true;
         } else {
           // Started before this process was observed, or a CLI that sends
@@ -100,7 +128,7 @@ export class ClaudeTaskTracker {
           this.tasks.set(entry.task_id, {
             taskId: entry.task_id, taskType: entry.task_type, subagentType: entry.subagent_type,
             description: entry.description, ambient: entry.ambient === true,
-            backgrounded: true, status: "running", startedAt: this.now(),
+            backgrounded: true, status: "running", startedAt: this.now(), namedLive: true,
           });
         }
       }
@@ -112,6 +140,42 @@ export class ClaudeTaskTracker {
   active(): ClaudeTask[] {
     return [...this.tasks.values()].filter((task) => task.status === "running" && !task.ambient
       && (!task.backgrounded || !this.liveBackground || this.liveBackground.has(task.taskId)));
+  }
+
+  /** Running tasks the Actions panel lists: commands, never sub-agents. */
+  actionTasks(): ClaudeTask[] {
+    return this.active().filter((task) => !isClaudeSubAgentTask(task));
+  }
+
+  /**
+   * One card per sub-agent, in start order. A card runs until Claude settles
+   * the task, or until the live set that named it drops it, which ends it the
+   * way a foreground task ends with its call.
+   */
+  subAgentCards(): ClaudeSubAgentCard[] {
+    return [...this.tasks.values()].flatMap((task) => {
+      if (!isClaudeSubAgentTask(task) || task.ambient) return [];
+      const dropped = task.status === "running" && task.backgrounded && task.namedLive === true
+        && this.liveBackground?.has(task.taskId) === false;
+      const status = dropped ? "success" : CLAUDE_SUB_AGENT_STATUS[task.status];
+      const lastMessage = task.summary;
+      return [{
+        monitorId: `${CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${task.taskId}`,
+        taskId: task.taskId,
+        task: task.description || task.subagentType || "Claude sub-agent",
+        status,
+        ...(task.subagentType ? { agentName: task.subagentType } : {}),
+        ...(lastMessage && status !== "running" ? { lastMessage } : {}),
+        ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
+      }];
+    });
+  }
+
+  /** Ends every running sub-agent when Claude's process goes away. */
+  endRunningSubAgents(status: "stopped" | "failed"): void {
+    for (const task of this.tasks.values()) {
+      if (isClaudeSubAgentTask(task) && task.status === "running") task.status = status;
+    }
   }
 
   /**
@@ -136,6 +200,13 @@ export class ClaudeTaskTracker {
       task.status === "running" && task.toolUseId ? [task.toolUseId] : []));
   }
 }
+
+const CLAUDE_SUB_AGENT_STATUS: Record<ClaudeTaskStatus, ThreadSubAgentStatus> = {
+  running: "running",
+  completed: "success",
+  failed: "failure",
+  stopped: "cancelled",
+};
 
 /** The row the Executions panel and quit prompt show for a running task. */
 export function claudeTaskRow(task: ClaudeTask, params: { cwd: string; command?: string }): AppServerBackgroundTask {

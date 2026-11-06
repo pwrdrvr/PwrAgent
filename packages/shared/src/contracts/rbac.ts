@@ -754,6 +754,10 @@ export type MessagingDynamicToolCategory =
  *         status-card buttons (including the Full Access danger gate).
  *       · `attach_thread_pull_request` is a write → `tools.thread_orchestration`.
  *       · `mark_project_read` changes seen state → `thread.control.organize`.
+ *       · `apply_thread_maintenance` archives threads and removes checkouts →
+ *         `thread.control.archive`. `scan_thread_maintenance` reads only, and
+ *         `open_thread_maintenance` only shows a dialog on this machine, so
+ *         both stay on `tools.thread_inspection`.
  *   - forge: reads → `tools.thread_inspection`; writes (pull requests,
  *     comments, reviews, issues, merge) → `tools.forge_write`.
  *   - thread_orchestration → `tools.thread_orchestration` (inject messages, handoff, attach dirs)
@@ -777,6 +781,9 @@ export function permissionForDynamicTool(
       }
       if (tool === "mark_project_read") {
         return "thread.control.organize";
+      }
+      if (tool === "apply_thread_maintenance") {
+        return "thread.control.archive";
       }
       if (tool === "mutate_thread") {
         // Handled per-field by permissionsForThreadMutation (args-aware).

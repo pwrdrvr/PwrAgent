@@ -15,8 +15,8 @@ Codex App Server Rust dependency disclosures are maintained by the Codex distrib
 
 Bundled Git runtime (approved separate-executable license exception)
 ------------------------------------------------------------------
-macOS/Linux: Custom Git 2.56.0-dev-pwrgit.3; exact source https://github.com/huntharo/git/tree/ada47e445ed68570a72e2b2641c48e36a0f8df63.
-Matching source archives, dependency sources, symbols, build recipes and checksums: https://github.com/huntharo/git/releases/tag/v2.56.0-dev-pwrgit.3.
+macOS/Linux: Custom Git 2.56.0-dev-pwrgit.4; exact source https://github.com/huntharo/git/tree/97dd200ae74c18d4afe94deb03bc79f29b9d774d.
+Matching source archives, dependency sources, symbols, build recipes and checksums: https://github.com/huntharo/git/releases/tag/v2.56.0-dev-pwrgit.4.
 The custom Git payload includes exact SOURCES, build provenance, Git/LFS licenses and Linux dependency notices. Git/LFS remain separate command-line programs; PwrAgent remains MIT licensed.
 
 Linux: the custom Git payload installs the Mozilla CA certificate bundle (118 certificates, dated 2026-10-20) at ssl/cacert.pem, under MPL-2.0. Source: https://curl.se/ca/cacert-2026-10-20.pem.

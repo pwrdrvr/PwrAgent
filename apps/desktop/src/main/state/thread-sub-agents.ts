@@ -137,8 +137,14 @@ END;
 export const THREAD_SUB_AGENT_LENS_SQL = `(CASE
   WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
   WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
+  WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
   ELSE 'pwragent' END)`;
-const LENS_INDEX = `CREATE INDEX IF NOT EXISTS thread_sub_agents_by_lens
+/**
+ * `_v2` added Claude's own sub-agents to the harness lens. The first index
+ * stays: older builds sharing the profile name it with INDEXED BY, which fails
+ * outright when the index is missing.
+ */
+const LENS_INDEX = `CREATE INDEX IF NOT EXISTS thread_sub_agents_by_lens_v2
   ON thread_sub_agents(thread_id, ${THREAD_SUB_AGENT_LENS_SQL}, created_at DESC, monitor_id)`;
 
 /**
@@ -335,7 +341,7 @@ function columnNames(db: BetterSqlite3.Database, table: string): Set<string> {
 export function ensureThreadSubAgentPanelSchema(db: BetterSqlite3.Database): void {
   if (!tableExists(db, "thread_sub_agents") || !tableExists(db, "thread_sub_agent_revisions")) return;
   const isCurrent = () =>
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'thread_sub_agents_by_lens'").get() !== undefined
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'thread_sub_agents_by_lens_v2'").get() !== undefined
     && columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready");
   if (isCurrent()) return;
   db.transaction(() => {
@@ -503,20 +509,22 @@ export class ThreadSubAgentTable {
     const excluded = JSON.stringify([...new Set(excludeMonitorIds)]);
     // Each query repeats the index's lens expression exactly, which is what
     // lets SQLite read the lens from the index; the plan test pins it.
-    const count = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
+    const count = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v2
       WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
+          WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
           ELSE 'pwragent' END) = ?
         AND monitor_id NOT IN (SELECT value FROM json_each(?))`);
     // `isThreadSubAgentVisibleInPanel` (subagent-visibility.ts) in SQL: a
     // finished native worker leaves the panel a day after it last moved. A
     // card that is not JSON is skipped, as `parseCards` skips it, rather than
     // failing the read.
-    const harness = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
+    const harness = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v2
       WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
+          WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
           ELSE 'pwragent' END) = 'harness'
         AND monitor_id NOT IN (SELECT value FROM json_each(?))
         AND json_valid(card) AND NOT (
@@ -543,10 +551,11 @@ export class ThreadSubAgentTable {
   }): ThreadSubAgentSummary[] {
     const excluded = JSON.stringify([...new Set(params.excludeMonitorIds ?? [])]);
     const rows = params.lens === "harness"
-      ? this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
+      ? this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v2
           WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
+          WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
           ELSE 'pwragent' END) = 'harness'
             AND monitor_id NOT IN (SELECT value FROM json_each(?))
             AND json_valid(card) AND NOT (
@@ -557,10 +566,11 @@ export class ThreadSubAgentTable {
           AND coalesce(completed_at, updated_at) < ?)
           ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)
         .all(params.storageKey, excluded, params.visibleSince, params.limit, params.offset)
-      : this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
+      : this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v2
           WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
+          WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
           ELSE 'pwragent' END) = ?
             AND monitor_id NOT IN (SELECT value FROM json_each(?))
           ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)

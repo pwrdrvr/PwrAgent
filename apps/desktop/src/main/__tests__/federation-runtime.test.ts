@@ -1,3 +1,5 @@
+import fc from "fast-check";
+import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -4970,4 +4972,80 @@ describe("federation short names", () => {
     expect(result).toEqual({ status: "handled" });
     expect(replies).toEqual([]);
   });
+});
+
+// The authenticated peer-directory event owns route liveness, including a
+// sibling disappearing while our connection to its gateway remains healthy.
+it("rejects no-deadline requests when their relayed owner disconnects", async () => {
+  await fc.assert(fc.asyncProperty(fc.uuid(), async (peerId) => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      rpcByPeer: Map<string, FederationRpcEndpoint>;
+    };
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: peerId, sendEnvelope: () => undefined });
+    runtime.rpcByPeer.set(peerId, rpc);
+    let rejected = false;
+    const pending = rpc.request({ method: "file.push.checkpoint", params: {}, timeoutMs: null })
+      .catch(() => { rejected = true; });
+    try {
+      runtime.publishPeerStatus(peerId, "disconnected");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(rejected).toBe(true);
+      expect(runtime.rpcByPeer.has(peerId)).toBe(false);
+    } finally {
+      rpc.rejectAll(new Error("fixture cleanup"));
+      await pending;
+    }
+  }), { numRuns: 10 });
+});
+
+it("an upstream disconnect preserves requests on an independent live direct connection", async () => {
+  await fc.assert(fc.asyncProperty(fc.uuid(), async (peerId) => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      rpcByPeer: Map<string, FederationRpcEndpoint>;
+      disconnectAdvertisedPeers: (reason: string) => void;
+    };
+    runtime.router = new FederationRouter({ localInstanceId: "viewer" });
+    runtime.router.registerConnection({ peerId, capabilities: [], sendEnvelope: () => undefined });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: peerId, sendEnvelope: () => undefined });
+    runtime.rpcByPeer.set(peerId, rpc);
+    let rejected = false;
+    const pending = rpc.request({ method: "file.push.checkpoint", params: {}, timeoutMs: null })
+      .catch(() => { rejected = true; });
+    try {
+      runtime.disconnectAdvertisedPeers("The upstream gateway dropped.");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(rejected).toBe(false);
+      expect(runtime.rpcByPeer.get(peerId)).toBe(rpc);
+    } finally {
+      rpc.rejectAll(new Error("fixture cleanup"));
+      await pending;
+    }
+  }), { numRuns: 10 });
+});
+
+it("Retry Now wakes a target's upstream route without waking an unrelated link", () => {
+  fc.assert(fc.property(fc.boolean(), (usesUpstream) => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      stopping: boolean;
+      reconnectTimer?: ReturnType<typeof setTimeout>;
+      remotePeerDirectory: Map<string, unknown>;
+      connectToGateway: () => Promise<void>;
+      retryHandoffNow: (targetInstanceId: string) => void;
+    };
+    runtime.stopping = false;
+    runtime.gatewayInstanceId = "upstream-gateway";
+    runtime.remotePeerDirectory.set("upstream-owner", { id: "upstream-owner" });
+    const connect = vi.fn(async () => undefined);
+    runtime.connectToGateway = connect;
+    const timer = setTimeout(() => undefined, 0);
+    runtime.reconnectTimer = timer;
+    try {
+      runtime.retryHandoffNow(usesUpstream ? "upstream-owner" : "independent-peer");
+      expect(connect).toHaveBeenCalledTimes(usesUpstream ? 1 : 0);
+    } finally {
+      clearTimeout(timer);
+    }
+  }));
 });

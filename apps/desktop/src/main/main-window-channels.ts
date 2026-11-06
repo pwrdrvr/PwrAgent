@@ -5,6 +5,8 @@ import {
   CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
   RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL,
   THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
+  THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL,
+  WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL,
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   THREAD_TODOS_DELTA_EVENT_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
@@ -59,6 +61,8 @@ export function mainWindowEventChannels(
     // This machine's quiet-restart gate; a peer's window cannot open it.
     ...(viewer ? [] : [RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL]),
     ...(viewer ? [] : [THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL]),
+    // Thread maintenance archives and removes this machine's checkouts only.
+    ...(viewer ? [] : [THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL, WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL]),
     // To-dos and operator requests live on the owner, but a viewer lists the
     // owner's queue and must hear when it changes, or a question answered
     // from the viewer keeps its chip. Each broadcaster delivers a viewer

@@ -3,10 +3,24 @@ import { describe, expect, it } from "vitest";
 import { FederationAccountingStream } from "../federation/federation-event-stream";
 import {
   eventMatchesThreadSelection,
+  navigationInvalidationForLocalEvent,
   unsequencedFederationEventPayload,
 } from "../federation/federation-runtime";
 
 describe("federation error notice selection", () => {
+  it("preserves owner-local directory scope through tiny invalidations and both event transports", () => {
+    const event = { backend: "codex", navigationDirectoryScope: { version: 1, directoryKeys: ["directory:/off-page"] },
+      notification: { method: "thread/backgroundTasks/updated", params: { threadId: "hidden-descendant", tasks: [] } },
+    } as AgentEvent;
+    const invalidation = navigationInvalidationForLocalEvent(event)!;
+    expect(invalidation.navigationDirectoryScope).toEqual(event.navigationDirectoryScope);
+    expect(invalidation.notification.params).not.toHaveProperty("tasks");
+    const encoded = new FederationAccountingStream().encode(invalidation, { epoch: "scope", sequence: 1 });
+    expect(new FederationAccountingStream().decode(JSON.parse(JSON.stringify(encoded)))?.navigationDirectoryScope)
+      .toEqual(event.navigationDirectoryScope);
+    expect(unsequencedFederationEventPayload(invalidation).navigationDirectoryScope).toEqual(event.navigationDirectoryScope);
+  });
+
   it("delivers a headless failure to subscribers of its visible owner thread", () => {
     const event: AgentEvent = {
       backend: "codex",

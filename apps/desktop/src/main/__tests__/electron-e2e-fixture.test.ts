@@ -136,7 +136,7 @@ describe("Electron E2E fixture teardown", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("holds before-quit when cookie flushing fails after Playwright closes its inspector", async () => {
+  it("rejects failed cookie flushing before native quit", async () => {
     const harness = createCloseHarness([{
       closeAllConnections: async () => undefined,
       cookies: { flushStore: async () => { throw new Error("cookie store failed to flush"); } },

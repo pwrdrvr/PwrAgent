@@ -142,7 +142,10 @@ above it, plus every identity whose workspace or external marker cannot be
 resolved, and only the paths of each that relate. Within a batch, preliminary
 discovery for one checkout is shared until a row it covers changes or a row is
 written near it. Otherwise scoped Git observations stay job-local. Broad repair
-still discovers candidates across all archived workspaces.
+discovers candidates across all archived workspaces with one complete,
+uncached read, then processes that candidate list through queued removals.
+Adapters without paged archive discovery keep their aggregate read contract.
+The fleet index is the only inventory shared within a batch.
 
 Removal admission never uses preliminary evidence. Before each removal it
 reads the Codex rows changed since the index's watermark, newest `updated_at`
@@ -180,6 +183,15 @@ What the reservation serializes, and what it cannot:
   thread. The archive service still rechecks Git's lock immediately before
   removal. An unreported provider removal keeps the checkout protected until
   the next batch reads the fleet.
+
+Archive snapshot preparation and the final lock recheck resolve only the
+target's Git admin directory. The checkout's `.git` file, the admin entry's
+`gitdir` backlink and `commondir` must agree with the supplied repository;
+the common directory itself is refused as a primary checkout. Neither check
+lists sibling worktrees. The final check stays inside terminal teardown and
+before Windows link cleanup. `worktree-archive-git.property.test.ts` measures
+the real Git boundary while archiving 201 checkouts and uses Git as the
+registration, branch and snapshot oracle across layouts and late mutations.
 
 Only one physical cleanup runs at a time. A bulk archive beyond the queue's 256
 slots waits as an intent and is admitted as slots free; quit checkpoints it.

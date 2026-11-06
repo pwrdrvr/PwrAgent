@@ -226,6 +226,7 @@ import { registerManagedRuntimeProgressBroadcast } from "./managed-runtime-progr
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenMainView } from "./window-open-main-view";
 import { requestOpenNewThread } from "./window-open-new-thread";
+import { requestOpenThreadMaintenance } from "./window-open-thread-maintenance";
 import { requestOpenSettings } from "./window-open-settings";
 import { PROFILES_SETTINGS_CREATE_SUBSECTION } from "../shared/settings-routes";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
@@ -1337,6 +1338,9 @@ function installApplicationMenu(): void {
       },
       openSource: async () => {
         await shell.openExternal(PWRAGENT_SOURCE_URL);
+      },
+      openThreadMaintenance: () => {
+        requestOpenThreadMaintenance();
       },
       openThreadSearch: () => {
         requestOpenMainView("search");

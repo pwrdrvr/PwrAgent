@@ -1,3 +1,5 @@
+import { ThreadMergeHoldsContext } from "./features/thread-merge-holds/useThreadMergeHolds";
+import { ThreadMergeHoldsDialog } from "./features/thread-merge-holds/ThreadMergeHoldsDialog";
 import { TodoDispatchProvider } from "./features/thread-todos/TodoDispatchProvider";
 import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared";
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
@@ -16,6 +18,7 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -75,7 +78,19 @@ import {
   type SendThreadToMachineRequest,
   type SendThreadToMachineSource,
 } from "./features/federation/SendThreadToMachineDialog";
+import {
+  ThreadHandoffBandContext,
+  LiveThreadHandoff,
+  LiveThreadHandoffToastCard,
+  type ThreadHandoffBandValue,
+} from "./features/federation/ThreadHandoffProgress";
+import type { ThreadHandoffChoice } from "./features/federation/thread-handoff-transfer";
+import type { ThreadHandoffSummary } from "./features/federation/thread-handoff-store";
+import { useThreadHandoffTransfers } from "./features/federation/useThreadHandoffTransfers";
+import { flyBetween } from "./lib/fly-between";
 import { ContinueAfterDialog } from "./features/thread-dependencies/ContinueAfterDialog";
+import { ThreadMaintenanceDialog } from "./features/maintenance/ThreadMaintenanceDialog";
+import { ThreadMaintenanceLauncherContext } from "./features/maintenance/thread-maintenance-launcher";
 import {
   ThreadDependencyIndicatorsContext,
   useThreadDependencyIndicators,
@@ -3337,12 +3352,34 @@ function DesktopAppShell(props: {
   // whether a turn is running.
   const [sendToMachineThread, setSendToMachineThread] =
     useState<NavigationThreadSummary>();
+  // How the dialog opens: flying in from a toast, or with a failed send's
+  // choices to retry.
+  const [sendToMachineEntry, setSendToMachineEntry] = useState<{
+    flyFrom?: DOMRect;
+    initialChoice?: ThreadHandoffChoice;
+  }>({});
   // Continue After, from the thread menu or a row's dependency chip.
   // Dependencies run on the owning machine, so a federation window has none.
+  const [mergeHoldsThread, setMergeHoldsThread] = useState<NavigationThreadSummary>();
+  const mergeHoldsContext = useMemo(() => ({ open: (thread: NavigationThreadSummary) => setMergeHoldsThread(thread) }), []);
   const [continueAfter, setContinueAfter] = useState<{
     thread: NavigationThreadSummary;
     returnFocus?: RefObject<HTMLElement | null>;
   }>();
+  // Thread maintenance: File → Thread Maintenance…, Settings → Review…, or
+  // an agent. It works on this machine's threads, so a remote window has none.
+  const [threadMaintenance, setThreadMaintenance] = useState<{ projectKey?: string }>();
+  const canMaintainThreads = Boolean(desktopApi?.scanThreadMaintenance) && !readRendererFederationTarget();
+  const openThreadMaintenance = useCallback((request: { projectKey?: string } = {}) => {
+    if (canMaintainThreads) setThreadMaintenance(request);
+  }, [canMaintainThreads]);
+  useEffect(() => {
+    if (!canMaintainThreads || !desktopApi?.onOpenThreadMaintenanceRequested) return;
+    return desktopApi.onOpenThreadMaintenanceRequested((request) => {
+      closeThreadJump();
+      setThreadMaintenance(request);
+    });
+  }, [canMaintainThreads, closeThreadJump, desktopApi]);
   const threadDependencyIndicators = useThreadDependencyIndicators(desktopApi);
   const canContinueAfter = Boolean(desktopApi?.manageThreadDependencies)
     && !readRendererFederationTarget();
@@ -3543,44 +3580,216 @@ function DesktopAppShell(props: {
       busy: live.threadStatus === "active",
     };
   })();
-  const sendThreadToMachine = async (
+  const threadHandoffs = useThreadHandoffTransfers(desktopApi);
+  const handoffTransfers = threadHandoffs.transfers;
+  const removeThreadHandoff = threadHandoffs.remove;
+  // The source row of each handoff, so a toast can reopen its dialog after
+  // the row has changed or (for a Move) left the list.
+  const handoffThreadsRef = useRef(new Map<string, NavigationThreadSummary>());
+  const sendToMachineKey = sendToMachineThread
+    ? threadSummaryIdentityKey(sendToMachineThread)
+    : undefined;
+  // A handoff is drawn in the dialog only while the dialog is open for its
+  // thread and the operator has not minimised it. Every other running one
+  // is a card in the toast stack.
+  const isHandoffInDialog = (transfer: ThreadHandoffSummary): boolean =>
+    transfer.view === "dialog" && transfer.threadKey === sendToMachineKey;
+  // The thread's running send, wherever it is drawn, or else the outcome the
+  // dialog is still showing. Opening the dialog from the thread menu while
+  // the send is minimised brings the send back rather than a fresh form,
+  // which the reserved thread would refuse.
+  const dialogHandoff = sendToMachineKey
+    ? Object.values(handoffTransfers)
+      .filter((transfer) =>
+        transfer.threadKey === sendToMachineKey
+        && (transfer.status === "running" || transfer.view === "dialog"))
+      .sort((a, b) => b.startedAt - a.startedAt)[0]
+    : undefined;
+  const showThreadHandoff = threadHandoffs.show;
+  const dialogHandoffId = dialogHandoff?.status === "running" && dialogHandoff.view === "toast"
+    ? dialogHandoff.handoffId
+    : undefined;
+  useEffect(() => {
+    if (dialogHandoffId) showThreadHandoff(dialogHandoffId, "dialog");
+  }, [dialogHandoffId, showThreadHandoff]);
+  const sendThreadToMachine = (
     thread: NavigationThreadSummary,
     request: SendThreadToMachineRequest,
-  ): Promise<void> => {
-    const result = await desktopApi!.handoffThreadToInstance!({
-      sourceThreadId: thread.id,
-      targetInstanceId: request.targetInstanceId,
-      operation: request.operation,
-      ...(request.targetRepositoryPath
-        ? { targetRepositoryPath: request.targetRepositoryPath }
-        : {}),
-    });
-    setSendToMachineThread(undefined);
+  ): void => {
+    const threadKey = threadSummaryIdentityKey(thread);
+    // A new send replaces the outcome the dialog was showing.
+    for (const transfer of Object.values(handoffTransfers)) {
+      if (transfer.threadKey === threadKey && transfer.status !== "running") {
+        removeThreadHandoff(transfer.handoffId);
+      }
+    }
+    handoffThreadsRef.current.set(threadKey, thread);
     const targetLabel = threadHandoffTargets.find((target) =>
-      target.instanceId === result.instanceId)?.label ?? result.instanceId;
-    // A Move whose archive could not be confirmed is a completed Copy, and
-    // says so: the backend returns the ready destination with a warning.
-    const moved = request.operation === "move" && result.sourceArchived;
-    showAppNotice({
-      id: `thread-handoff:${result.handoffId}`,
-      title: `${moved ? "Moved" : "Copied"} to ${targetLabel}`,
-      message: moved
-        ? `The original thread is archived.${
-          request.targetRepositoryPath ? " Its worktree stays on disk." : ""
-        }`
-        : "The original thread is still here.",
-      ...(result.warnings.length > 0 ? { detail: result.warnings.join("\n") } : {}),
-      autoDismiss: result.warnings.length === 0,
-    });
-    // The destination is a peer's thread: open it the way a thread link does,
-    // which pins the remote row into this window first.
-    showThreadFromLink({
-      backend: result.backend,
-      threadId: result.threadId,
-      instanceId: result.instanceId,
-      instanceLabel: targetLabel,
+      target.instanceId === request.targetInstanceId)?.label ?? request.targetInstanceId;
+    void threadHandoffs.start({
+      sourceThreadId: thread.id,
+      threadKey,
+      title: thread.title,
+      targetLabel,
+      choice: request,
     });
   };
+  const openSendToMachine = useCallback((
+    threadKey: string,
+    entry: { flyFrom?: DOMRect; initialChoice?: ThreadHandoffChoice },
+  ): void => {
+    const thread = navigation.threads.find((candidate) =>
+      threadSummaryIdentityKey(candidate) === threadKey)
+      ?? handoffThreadsRef.current.get(threadKey);
+    if (!thread) return;
+    setSendToMachineEntry(entry);
+    setSendToMachineThread(thread);
+  }, [navigation.threads]);
+  const closeSendToMachine = (): void => {
+    if (sendToMachineKey) {
+      for (const transfer of Object.values(handoffTransfers)) {
+        if (transfer.threadKey === sendToMachineKey && transfer.status !== "running") {
+          removeThreadHandoff(transfer.handoffId);
+        }
+      }
+    }
+    setSendToMachineEntry({});
+    setSendToMachineThread(undefined);
+  };
+  // Minimise flies the dialog into the card that replaces it.
+  const [handoffFlight, setHandoffFlight] = useState<{ handoffId: string; from: DOMRect }>();
+  useLayoutEffect(() => {
+    if (!handoffFlight) return;
+    const card = document.querySelector<HTMLElement>(
+      `[data-thread-handoff-card="${handoffFlight.handoffId}"]`,
+    );
+    if (card) flyBetween(handoffFlight.from, card);
+    setHandoffFlight(undefined);
+  }, [handoffFlight]);
+  const minimiseHandoff = (transfer: ThreadHandoffSummary, from: DOMRect | undefined): void => {
+    threadHandoffs.show(transfer.handoffId, "toast");
+    if (from) setHandoffFlight({ handoffId: transfer.handoffId, from });
+    setSendToMachineEntry({});
+    setSendToMachineThread(undefined);
+  };
+  const expandHandoff = (transfer: ThreadHandoffSummary): void => {
+    const card = document.querySelector<HTMLElement>(
+      `[data-thread-handoff-card="${transfer.handoffId}"]`,
+    );
+    threadHandoffs.show(transfer.handoffId, "dialog");
+    openSendToMachine(transfer.threadKey, card ? { flyFrom: card.getBoundingClientRect() } : {});
+  };
+  // The composer band of a thread being sent. Its Show Progress expands the
+  // send the way the toast's own button does.
+  const expandHandoffRef = useRef(expandHandoff);
+  expandHandoffRef.current = expandHandoff;
+  // The value holds the store, not its contents: the band subscribes to it,
+  // and this context never changes while bytes move.
+  const threadHandoffStore = threadHandoffs.store;
+  const threadHandoffBand = useMemo((): ThreadHandoffBandValue => ({
+    store: threadHandoffStore,
+    showProgress: (handoffId) => {
+      const transfer = threadHandoffStore.getSummaries()[handoffId];
+      if (transfer) expandHandoffRef.current(transfer);
+    },
+  }), [threadHandoffStore]);
+  // Each outcome is shown once. One the dialog is showing stays there; any
+  // other becomes a notice, because the operator has moved on.
+  const settledHandoffsRef = useRef(new Set<string>());
+  useEffect(() => {
+    // Forget what no handoff needs any more: a removed handoff's id, and the
+    // source row of a thread with no handoff left. A failed send's Retry finds
+    // its thread in the list, where a source that was not moved still is.
+    for (const handoffId of settledHandoffsRef.current) {
+      if (!handoffTransfers[handoffId]) settledHandoffsRef.current.delete(handoffId);
+    }
+    const liveThreadKeys = new Set(Object.values(handoffTransfers).map((transfer) => transfer.threadKey));
+    for (const threadKey of handoffThreadsRef.current.keys()) {
+      if (!liveThreadKeys.has(threadKey)) handoffThreadsRef.current.delete(threadKey);
+    }
+    for (const transfer of Object.values(handoffTransfers)) {
+      if (transfer.status === "running" || settledHandoffsRef.current.has(transfer.handoffId)) continue;
+      settledHandoffsRef.current.add(transfer.handoffId);
+      const inDialog = transfer.view === "dialog" && transfer.threadKey === sendToMachineKey;
+      const noun = transfer.choice.operation === "move" ? "Move" : "Copy";
+      if (transfer.status === "succeeded" && transfer.result) {
+        const result = transfer.result;
+        // A Move whose archive could not be confirmed is a completed Copy, and
+        // says so: the backend returns the ready destination with a warning.
+        const moved = transfer.choice.operation === "move" && result.sourceArchived;
+        const link = {
+          backend: result.backend,
+          threadId: result.threadId,
+          instanceId: result.instanceId,
+          instanceLabel: transfer.targetLabel,
+        };
+        showAppNotice({
+          id: `thread-handoff:${result.handoffId}`,
+          title: `${moved ? "Moved" : "Copied"} to ${transfer.targetLabel}`,
+          message: moved
+            ? `The original thread is archived.${
+              transfer.choice.targetRepositoryPath ? " Its worktree stays on disk." : ""
+            }`
+            : "The original thread is still here.",
+          ...(result.warnings.length > 0 ? { detail: result.warnings.join("\n") } : {}),
+          tone: result.warnings.length > 0 ? "warning" : "success",
+          autoDismiss: result.warnings.length === 0,
+          // A minimised send does not take the window to the new thread: the
+          // operator went back to work. It offers the way there instead.
+          ...(inDialog
+            ? {}
+            : { actions: [{ label: "Open Thread", tone: "primary" as const, onClick: () => showThreadFromLink(link) }] }),
+        });
+        removeThreadHandoff(transfer.handoffId);
+        if (inDialog) {
+          setSendToMachineEntry({});
+          setSendToMachineThread(undefined);
+          // The destination is a peer's thread: open it the way a thread link
+          // does, which pins the remote row into this window first.
+          showThreadFromLink(link);
+        }
+        continue;
+      }
+      if (inDialog) continue;
+      if (transfer.status === "failed") {
+        const error = transfer.error ?? "The transfer failed.";
+        const noticeId = `thread-handoff:${transfer.handoffId}`;
+        showAppNotice({
+          id: noticeId,
+          title: `${noun} to ${transfer.targetLabel} failed`,
+          message: `\u201c${transfer.title}\u201d is still here.`,
+          detail: error,
+          copyText: error,
+          tone: "error",
+          autoDismiss: false,
+          actions: [{
+            label: "Retry",
+            onClick: () => {
+              dismissAppNotice(noticeId);
+              openSendToMachine(transfer.threadKey, { initialChoice: transfer.choice });
+            },
+          }],
+        });
+      } else {
+        showAppNotice({
+          id: `thread-handoff:${transfer.handoffId}`,
+          title: `${noun} cancelled`,
+          message: `Nothing was created on ${transfer.targetLabel}.`,
+          tone: "neutral",
+          autoDismiss: true,
+        });
+      }
+      removeThreadHandoff(transfer.handoffId);
+    }
+  }, [
+    dismissAppNotice,
+    handoffTransfers,
+    openSendToMachine,
+    removeThreadHandoff,
+    sendToMachineKey,
+    showAppNotice,
+    showThreadFromLink,
+  ]);
   const federatedTargetHasProject = navigation.federatedTargetHasProject;
   const checkFederationTargetProject = useCallback(
     (instanceId: string, directory: FederationProjectDirectory) =>
@@ -4404,9 +4613,12 @@ function DesktopAppShell(props: {
       localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
     >
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
+    <ThreadMergeHoldsContext.Provider value={mergeHoldsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
     <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
+    <ThreadHandoffBandContext.Provider value={threadHandoffBand}>
+    <ThreadMaintenanceLauncherContext.Provider value={canMaintainThreads ? openThreadMaintenance : undefined}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -4415,14 +4627,34 @@ function DesktopAppShell(props: {
       threads={navigation.threads}
     >
       {sendToMachineThread && sendToMachineSource ? (
-        <SendThreadToMachineDialog
-          source={sendToMachineSource}
-          targets={threadHandoffTargets}
-          findRepository={findThreadHandoffRepository}
-          onClose={() => setSendToMachineThread(undefined)}
-          onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
-        />
+        <LiveThreadHandoff store={threadHandoffStore} handoffId={dialogHandoff?.handoffId}>
+          {(liveHandoff) => (
+            <SendThreadToMachineDialog
+              key={sendToMachineKey}
+              source={sendToMachineSource}
+              targets={threadHandoffTargets}
+              findRepository={findThreadHandoffRepository}
+              {...(liveHandoff ? { transfer: liveHandoff } : {})}
+              {...(sendToMachineEntry.flyFrom ? { flyFrom: sendToMachineEntry.flyFrom } : {})}
+              {...(sendToMachineEntry.initialChoice
+                ? { initialChoice: sendToMachineEntry.initialChoice }
+                : {})}
+              onClose={closeSendToMachine}
+              onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
+              onMinimise={(from) => {
+                if (dialogHandoff) minimiseHandoff(dialogHandoff, from);
+              }}
+              onCancelTransfer={() => {
+                if (dialogHandoff) threadHandoffs.cancel(dialogHandoff.handoffId);
+              }}
+              onRetryNow={() => {
+                if (dialogHandoff) threadHandoffs.retryNow(dialogHandoff.handoffId);
+              }}
+            />
+          )}
+        </LiveThreadHandoff>
       ) : null}
+      {mergeHoldsThread ? <ThreadMergeHoldsDialog key={`${mergeHoldsThread.federation?.ref.target.scope === "remote" ? mergeHoldsThread.federation.ref.target.instanceId : "local"}:${mergeHoldsThread.source}:${mergeHoldsThread.id}`} thread={mergeHoldsThread} api={desktopApi} onClose={() => setMergeHoldsThread(undefined)} /> : null}
       {continueAfter ? (
         <ContinueAfterDialog
           key={`${continueAfter.thread.source}:${continueAfter.thread.id}`}
@@ -4430,6 +4662,14 @@ function DesktopAppShell(props: {
           thread={continueAfter.thread}
           {...(continueAfter.returnFocus ? { returnFocus: continueAfter.returnFocus } : {})}
           onClose={() => setContinueAfter(undefined)}
+        />
+      ) : null}
+      {threadMaintenance ? (
+        <ThreadMaintenanceDialog
+          desktopApi={desktopApi}
+          policy={settings.snapshot?.worktrees?.archive}
+          {...(threadMaintenance.projectKey ? { projectKey: threadMaintenance.projectKey } : {})}
+          onClose={() => setThreadMaintenance(undefined)}
         />
       ) : null}
       {codexLoginProfile ? (
@@ -5045,6 +5285,19 @@ function DesktopAppShell(props: {
             showNotice={showAppNotice}
             dismissNotice={dismissAppNotice}
           />
+          {Object.values(handoffTransfers)
+            .filter((transfer) => transfer.status === "running" && !isHandoffInDialog(transfer))
+            .sort((a, b) => a.startedAt - b.startedAt)
+            .map((transfer) => (
+              <LiveThreadHandoffToastCard
+                key={transfer.handoffId}
+                store={threadHandoffStore}
+                handoffId={transfer.handoffId}
+                onExpand={() => expandHandoff(transfer)}
+                onCancel={() => threadHandoffs.cancel(transfer.handoffId)}
+                onRetryNow={() => threadHandoffs.retryNow(transfer.handoffId)}
+              />
+            ))}
         </AppNoticeStack>
         {directorVoiceApi ? (
           <DirectorVoicePanel
@@ -5059,9 +5312,12 @@ function DesktopAppShell(props: {
 
       {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
+    </ThreadMaintenanceLauncherContext.Provider>
+    </ThreadHandoffBandContext.Provider>
     </ThreadProvidersContext.Provider>
     </ThreadPrWatchIndicatorsContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
+    </ThreadMergeHoldsContext.Provider>
     </OperatorWaitsContext.Provider>
     </TodoDispatchProvider>
     </ThreadTodoRevealContext.Provider>

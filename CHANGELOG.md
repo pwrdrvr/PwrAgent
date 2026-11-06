@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.3.13 - 2026-11-05
+
+- Wait Until Done - Hold a thread's merge while replies, rebases, and CI repairs continue. Record prerequisite work and follow-up steps, including work on another machine, then receive a reminder when it is marked done without automatically starting a new turn.
+- Thread Maintenance - Review idle threads and archived checkouts together, choose what to archive or keep, and save changes before removing checkouts. Continue archive sweeps past individual failures rather than stopping the whole sweep.
+- Handoff Progress - See the steps, transferred bytes, rate, and time remaining when sending a thread to another machine. Minimize the dialog to a progress toast, or cancel before the receiver starts creating the thread.
+- Remote Transfers - Transfer files and images using resumable binary transport, preserving progress across connection drops and keeping cancellation scoped to the intended transfer.
+- Claude Sub-agents - Show Claude's sub-agents in the Sub-agents panel and beneath their parent in the thread list, with their current activity and status.
+- Local MCP Connections - Connect to HTTP MCP servers over Unix sockets on macOS/Linux and local named pipes on Windows. Verify the connected OS user before sending requests, with support for server-issued session bearer tokens.
+- Archive Performance - Reduce repeated Git checks during bulk archive and cleanup, and keep navigation refreshes scoped to affected resources and directory membership.
+- Settings - Preserve full custom Codex home paths instead of displaying a misleading abbreviation, and prevent automation action menus from being clipped.
+- Git Updates - Download and verify newer PwrDrvr Git runtimes from Settings, then explicitly choose which version to use or roll back to the previous selection. Show download and verification progress, with cancellation. The bundled macOS and Linux runtime is updated to 2.56.0-dev-pwrgit.4.
+
 ## v1.3.12 - 2026-11-04
 
 - Quiet Restart - Add "Quiet & Continue After Restart" when quitting with running threads. Stop their turns and continue them a few at a time after the next launch, holding other queued messages and automatic work until those continuations start. A restart notice shows progress and offers "Start everything now."

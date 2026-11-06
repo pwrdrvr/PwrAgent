@@ -54,6 +54,8 @@ export type ThreadTodoActionRunners = {
     todo: ThreadTodoDispatchCard;
   }) => Promise<{ summary: string }>;
   mergePullRequest: (params: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
     cwd?: string;
     pullRequest: string;
     method: ThreadTodoMergeMethod;
@@ -349,7 +351,9 @@ export class ThreadTodoService {
     key: string;
     title: string;
     detail?: string;
-    action?: StartThreadAction;
+    /** A dependency offers Start thread; a finished wait offers to send its steps. */
+    action?: StartThreadAction | Extract<ThreadTodoAction, { type: "send_message" }>;
+    items?: ThreadTodoItem[];
     cwd?: string;
     sourceProject?: ThreadTodoProject;
   }): { todo: ThreadTodo; created: boolean } {
@@ -366,6 +370,7 @@ export class ThreadTodoService {
       title: params.title,
       detail: params.detail,
       action: params.action,
+      ...(params.items?.length ? { items: params.items } : {}),
       cwd: params.cwd,
       sourceProject: params.sourceProject,
       dependencyId: params.dependencyId,
@@ -728,6 +733,7 @@ export class ThreadTodoService {
           });
         }
         const merged = await runners.mergePullRequest({
+          sourceBackend: todo.backend, sourceThreadId: todo.threadId,
           cwd,
           pullRequest: action.pullRequest,
           method,

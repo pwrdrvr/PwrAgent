@@ -1,3 +1,4 @@
+import { parsePullRequestReferenceUrl } from "./forge-reference";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type {
@@ -218,8 +219,20 @@ export class GithubPrFetcher {
     cwd?: string;
     pullRequest: string;
     method: ThreadTodoMergeMethod;
+    assertCanMerge?: (url: string) => void;
   }): Promise<{ summary: string }> {
     const command = await this.resolveGhCommand();
+    if (params.assertCanMerge) {
+      let url = params.pullRequest;
+      if (!parsePullRequestReferenceUrl(url)) {
+        const result = await execFileAsync(command, ["pr", "view", params.pullRequest, "--json", "url", "--jq", ".url"], {
+          ...(params.cwd ? { cwd: params.cwd } : {}), env: buildPwrAgentChildProcessEnv(process.env), timeout: 30_000, encoding: "utf8",
+        });
+        url = result.stdout.trim();
+        if (!parsePullRequestReferenceUrl(url)) throw new Error("Could not identify the pull request before checking merge holds.");
+      }
+      params.assertCanMerge(url);
+    }
     try {
       await execFileAsync(
         command,

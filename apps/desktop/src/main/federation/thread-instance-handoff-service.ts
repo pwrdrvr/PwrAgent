@@ -2,8 +2,8 @@ import { ThreadInstanceHandoffService as SharedHandoffService } from "@pwragent/
 import { createGitHandoffService } from "@pwragent/federation/git-instance-handoff";
 import { runGitCommand } from "../app-server/git-executable";
 import { computeWorktreePath, releaseWorktreePathReservation } from "../app-server/git-directory-service";
-export { THREAD_HANDOFF_METHODS } from "@pwragent/federation/thread-instance-handoff-service";
-export type { ImportInstanceThreadRequest } from "@pwragent/federation/thread-instance-handoff-service";
+export { THREAD_HANDOFF_METHODS, THREAD_HANDOFF_RETRY_NOW_EVENT } from "@pwragent/federation/thread-instance-handoff-service";
+export type { ImportInstanceThreadRequest, ThreadHandoffSendOptions } from "@pwragent/federation/thread-instance-handoff-service";
 
 type Options = ConstructorParameters<typeof SharedHandoffService>[0];
 export class ThreadInstanceHandoffService extends SharedHandoffService {

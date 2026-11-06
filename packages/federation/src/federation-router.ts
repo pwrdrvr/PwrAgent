@@ -66,6 +66,7 @@ export class FederationRouter {
   private readonly notificationHandlers = new Map<string, FederationNotificationHandler>();
   private blobChunkHandler?: FederationBlobChunkHandler;
   private serviceDataHandler?: FederationServiceDataHandler;
+  private readonly relayBlobTails = new Map<string, Promise<void>>();
 
   constructor(
     private readonly options: {
@@ -338,10 +339,10 @@ export class FederationRouter {
     );
   }
 
-  private relayEnvelope(params: {
+  private async relayEnvelope(params: {
     envelope: FederationProtocolEnvelope;
     sourcePeerId?: FederationInstanceId;
-  }): FederationRouteResult {
+  }): Promise<FederationRouteResult> {
     const targetInstanceId = params.envelope.targetInstanceId;
     if (!targetInstanceId) {
       return {
@@ -394,10 +395,26 @@ export class FederationRouter {
       };
     }
 
-    target.sendEnvelope({
-      ...params.envelope,
-      hopCount: hopCount + 1,
-    });
+    const relayed = { ...params.envelope, hopCount: hopCount + 1 };
+    // Only bulk data waits; control messages and replies bypass this queue.
+    if (params.envelope.kind === "blob_chunk" && target.sendEnvelopeWithBackpressure) {
+      const key = JSON.stringify([params.envelope.sourceInstanceId, targetInstanceId, params.envelope.transferId]);
+      const prior = this.relayBlobTails.get(key) ?? Promise.resolve();
+      const work = prior.then(() => target.sendEnvelopeWithBackpressure!(relayed));
+      this.relayBlobTails.set(key, work);
+      try { await work; } finally {
+        if (this.relayBlobTails.get(key) === work) this.relayBlobTails.delete(key);
+      }
+    } else {
+      if (params.envelope.kind === "request" && params.envelope.method === "file.push.checkpoint") {
+        const transferId = (params.envelope.params as { transferId?: string })?.transferId;
+        const key = JSON.stringify([params.envelope.sourceInstanceId, targetInstanceId, transferId]);
+        // This barrier follows its transfer's data through every relay. Other
+        // requests, replies and heartbeats never join the bulk queue.
+        await this.relayBlobTails.get(key);
+      }
+      target.sendEnvelope(relayed);
+    }
     return { status: "relayed", targetInstanceId };
   }
 
@@ -422,13 +439,14 @@ export class FederationRouter {
   ): FederationErrorEnvelope | undefined {
     if (!sourcePeerId) return undefined;
     const required: FederationCapability =
-      envelope.kind === "blob_chunk" ? "turn_input_blobs" : "service_forward_v2";
+      envelope.kind === "blob_chunk" ? (envelope.purpose === "file_push" ? "resumable_blobs" : "turn_input_blobs") : "service_forward_v2";
     const source = this.connections.get(sourcePeerId);
-    if (source?.capabilities.includes(required)) return undefined;
+    if (source?.capabilities.includes(required)
+      && (envelope.kind !== "blob_chunk" || envelope.purpose !== "file_push" || source.capabilities.includes("file_push"))) return undefined;
     return this.errorEnvelope(envelope, {
       code: "capability_denied",
       message: envelope.kind === "blob_chunk"
-        ? "Federation blob transfer requires turn_input_blobs."
+        ? `Federation blob transfer requires ${required}.`
         : "Federation service streams require service_forward_v2.",
     });
   }

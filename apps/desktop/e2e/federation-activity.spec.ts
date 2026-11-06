@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import type { ReadFederationActivityResponse } from "@pwragent/shared";
 import { FederationActivityLedger } from "../src/main/federation/federation-activity-ledger";
 import { launchElectronApp } from "./fixtures/electron-app";

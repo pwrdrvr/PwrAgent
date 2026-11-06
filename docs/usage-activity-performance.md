@@ -82,7 +82,7 @@ The isolated evaluation started clean at verified head `860a894c9fe8d8ff01c35762
 
 Harness commits `5c926b8b4` and `5c358c40d` only add tests; they can be cherry-picked onto the baseline or verified PR without adopting candidate production code. All primary variants ran the complete 180-sample main harness and 40-sample turn harness. Lookup and proposed-query runs selectively repeated the relevant main cases; the recorded result file preserves which cases were actually timed. Every reported case has five samples. Setup ran separately per worktree; dependencies were not shared between worktrees.
 
-Run through the Sandboxer verification skill, not on the local machine when Sandboxer is connected:
+Run locally or through repository CI:
 
 ```sh
 PWRAGENT_USAGE_PERF_DIR="$PWD/.local/usage-perf" \
@@ -143,4 +143,4 @@ pnpm test apps/desktop/src/main/__tests__/usage-activity-cadence.test.ts
 python3 scripts/summarize-usage-activity-cadence.py .local/usage-cadence
 ```
 
-Run verification through Sandboxer when connected. The harness can be cherry-picked onto the baseline and PR for comparison, with the shared metrics correction on baseline. Raw successful cadence JSONL is retained under `.local/usage-tradeoff/cadence-results/`. No live profile or operator records were used.
+Run verification locally or through repository CI. The harness can be cherry-picked onto the baseline and PR for comparison, with the shared metrics correction on baseline. Raw successful cadence JSONL is retained under `.local/usage-tradeoff/cadence-results/`. No live profile or operator records were used.

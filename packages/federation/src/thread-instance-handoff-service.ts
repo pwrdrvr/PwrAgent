@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult, ThreadHandoffExport, ThreadHandoffPrepareRequest, ThreadHandoffPrepareResult } from "@pwragent/shared";
+import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult, ThreadHandoffExport, ThreadHandoffProgress, ThreadHandoffPrepareRequest, ThreadHandoffPrepareResult } from "@pwragent/shared";
 import type { createGitHandoffService, HandoffGitRunner } from "./git-instance-handoff";
-import type { FilePushResult } from "./federation-file-push";
+import type { FilePushResult, PushFederationFileOptions } from "./federation-file-push";
 import { decodeHandoffBytes, decodeThreadHandoff, encodeThreadHandoff, threadHistoryDigest, THREAD_HANDOFF_MAX_BYTES } from "./thread-handoff-package";
 import { exportWorkspaceArchive, importWorkspaceArchive } from "./thread-workspace-archive";
 
@@ -12,6 +12,13 @@ export const THREAD_HANDOFF_METHODS = {
   import: "thread.handoff.import",
   prepare: "thread.handoff.prepare",
 } as const;
+
+export const THREAD_HANDOFF_RETRY_NOW_EVENT = "retry-now";
+export type ThreadHandoffSendOptions = {
+  onProgress?: (progress: ThreadHandoffProgress) => void;
+  signal?: AbortSignal;
+  retryNow?: EventTarget;
+};
 
 export type ImportInstanceThreadRequest = {
   handoffId: string;
@@ -47,7 +54,9 @@ export class ThreadInstanceHandoffService {
     releaseWorktree: (workspace: string) => Promise<void>;
     directory: string;
     localInstanceId: () => string;
-    push: (instanceId: string, source: string) => Promise<FilePushResult>;
+    push: (instanceId: string, source: string, options?: PushFederationFileOptions) => Promise<FilePushResult>;
+    supportsResumable?: (instanceId: string) => boolean;
+    retryNow?: (instanceId: string) => void;
     remoteImport: (instanceId: string, request: ImportInstanceThreadRequest) => Promise<HandoffInstanceThreadResult>;
     assertTarget: (instanceId: string) => void;
     prepareTarget: (instanceId: string, request: ThreadHandoffPrepareRequest) => Promise<ThreadHandoffPrepareResult>;
@@ -57,20 +66,36 @@ export class ThreadInstanceHandoffService {
     receipt: (sourceInstanceId: string, file: FilePushResult) => boolean;
   }) {}
 
-  async send(request: HandoffInstanceThreadRequest): Promise<HandoffInstanceThreadResult> {
-    if (!request || !request.sourceThreadId || typeof request.sourceThreadId !== "string"
+  retryNow(instanceId: string): void { this.options.retryNow?.(instanceId); }
+
+  async send(request: HandoffInstanceThreadRequest, sendOptions: ThreadHandoffSendOptions = {}): Promise<HandoffInstanceThreadResult> {
+    const { signal } = sendOptions;
+    signal?.throwIfAborted();
+    if (!request || (request.handoffId !== undefined && (typeof request.handoffId !== "string" || !/^[0-9a-f-]{36}$/.test(request.handoffId)))
+      || !request.sourceThreadId || typeof request.sourceThreadId !== "string"
       || typeof request.targetInstanceId !== "string" || !request.targetInstanceId
       || !["copy", "move"].includes(request.operation)
       || (request.targetRepositoryPath !== undefined && typeof request.targetRepositoryPath !== "string")) {
       throw new Error("Invalid thread handoff request.");
     }
     this.options.assertTarget(request.targetInstanceId);
+    const handoffId = request.handoffId ?? randomUUID();
+    const resumable = this.options.supportsResumable?.(request.targetInstanceId) ?? false;
+    const progress = (phase: ThreadHandoffProgress["phase"], extra: Partial<ThreadHandoffProgress> = {}): void => {
+      sendOptions.onProgress?.({ handoffId, sourceThreadId: request.sourceThreadId, phase,
+        link: "connected", cancelable: phase === "package" || phase === "send",
+        transport: resumable ? "resumable" : "single_shot", ...extra });
+    };
+    progress("package");
+    const retryNow = (): void => this.options.retryNow?.(request.targetInstanceId);
+    sendOptions.retryNow?.addEventListener(THREAD_HANDOFF_RETRY_NOW_EVENT, retryNow);
     return await this.options.backend.withThreadHandoff(request.sourceThreadId, async () => {
       if (request.operation === "move") await this.options.assertMovable?.(request.sourceThreadId);
       await mkdir(this.options.directory, { recursive: true });
       const staging = await mkdtemp(path.join(this.options.directory, "outgoing-"));
       try {
         const source = await this.options.backend.exportThreadForHandoff(request.sourceThreadId);
+        signal?.throwIfAborted();
         const historyDigest = threadHistoryDigest(source.replay);
         let repository: string | undefined;
         if (source.cwd) {
@@ -86,7 +111,6 @@ export class ThreadInstanceHandoffService {
         if (repository && !request.targetRepositoryPath?.trim()) {
           throw new Error("Choose the existing repository path on the receiving machine before transferring a Git thread.");
         }
-        const handoffId = randomUUID();
         const filePath = path.join(staging, `${handoffId}.pwragent-handoff.gz`);
         const git = repository ? await this.options.git.exportGitHandoff(repository) : undefined;
         if (git && repository && source.cwd) {
@@ -96,6 +120,7 @@ export class ThreadInstanceHandoffService {
         const prepared = await this.options.prepareTarget(request.targetInstanceId, {
           ...(git ? { git, repository: request.targetRepositoryPath } : {}),
         });
+        signal?.throwIfAborted();
         if (prepared?.version !== 2 || typeof prepared.platform !== "string"
           || (git && prepared.git?.head !== git.head)) {
           throw new Error("Upgrade the receiving PwrAgent and retry. Receiver preflight was not confirmed.");
@@ -106,9 +131,19 @@ export class ThreadInstanceHandoffService {
           rolloutBase64: source.rolloutBase64, historyDigest,
           ...(source.title ? { title: source.title } : {}), ...(git ? { git } : {}),
           ...(workspace ? { workspace } : {}),
-        }), { mode: 0o600, flag: "wx" });
+        }, resumable), { mode: 0o600, flag: "wx" });
         if (git && repository) await this.options.git.assertGitHandoffUnchanged(repository, git);
-        const file = await this.options.push(request.targetInstanceId, filePath);
+        signal?.throwIfAborted();
+        progress("send");
+        const file = await this.options.push(request.targetInstanceId, filePath, {
+          signal,
+          onProgress: (bytesCommitted, bytesTotal) => {
+            if (!resumable) progress("send", { bytesCommitted, bytesSent: bytesCommitted, bytesTotal });
+          },
+          onTransferProgress: (update) => progress("send", update),
+        });
+        signal?.throwIfAborted();
+        progress("import");
         const destination = await this.options.remoteImport(request.targetInstanceId, {
           handoffId, file, ...(request.targetRepositoryPath ? { targetRepositoryPath: request.targetRepositoryPath } : {}),
         });
@@ -117,12 +152,14 @@ export class ThreadInstanceHandoffService {
           throw new Error("The receiver returned an invalid handoff acknowledgement. The source was retained.");
         }
         if (request.operation === "move") {
+          progress("verify");
           try {
             await this.options.assertMovable?.(request.sourceThreadId);
             const current = await this.options.backend.exportThreadForHandoff(request.sourceThreadId);
             if (threadHistoryDigest(current.replay) !== historyDigest) throw new Error("Source history changed during transfer.");
             if (current.cwd !== source.cwd) throw new Error("Source workspace changed during transfer.");
             if (git && repository) await this.options.git.assertGitHandoffUnchanged(repository, git);
+            progress("archive");
             await this.options.backend.archiveThread({ backend: "codex", threadId: request.sourceThreadId, preserveWorktrees: true });
             destination.sourceArchived = true;
           } catch (error) {
@@ -133,6 +170,8 @@ export class ThreadInstanceHandoffService {
       } finally {
         await rm(staging, { recursive: true, force: true });
       }
+    }).finally(() => {
+      sendOptions.retryNow?.removeEventListener(THREAD_HANDOFF_RETRY_NOW_EVENT, retryNow);
     });
   }
 

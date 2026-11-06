@@ -108,6 +108,7 @@ export type CompactComposerDraftRestore = {
 };
 
 export type CompactComposerProps = {
+  preserveImageBytes?: boolean;
   busy?: boolean;
   /**
    * Whether a steer can reach the running turn at all. False turns the steer
@@ -308,6 +309,7 @@ export function CompactComposer(props: CompactComposerProps) {
     onSend,
     onSteer,
     pastedImageMaxPatches,
+    preserveImageBytes,
   } = props;
   const steerAvailable = Boolean(props.busy && onSteer);
   const canSteerNow = steerAvailable && props.canSteer !== false;
@@ -525,6 +527,7 @@ export function CompactComposer(props: CompactComposerProps) {
           }
 
           const normalized = await normalizeImageFile(file, {
+            preserveOriginalIfLarger: preserveImageBytes,
             fallback: normalizeImageForUpload,
             maxPatchCount: pastedImageMaxPatches,
             sourceMimeType: type,
@@ -571,6 +574,7 @@ export function CompactComposer(props: CompactComposerProps) {
       normalizeImageForUpload,
       onAttachmentError,
       pastedImageMaxPatches,
+      preserveImageBytes,
     ],
   );
 
