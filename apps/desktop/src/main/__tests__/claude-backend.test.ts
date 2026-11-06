@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { HookEvent, HookInput, Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import {
-  CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
+  CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE,
+  CLAUDE_SESSION_STILL_PRESENT_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
   type ClaudeBackendOptions,
 } from "../claude/claude-backend";
 import { ClaudeSessionReaderError } from "../claude/claude-session-reader";
@@ -1986,6 +1987,67 @@ describe("Claude SDK backend", () => {
       expect((await f.store.read(threadId)).sdkSessionId).toBe(SDK_SESSION);
       expect((await f.backend.readThread(threadId)).messages.map((message) => message.text))
         .toEqual(["Hello", "Hello world", "Hello again", "Still there?"]);
+    });
+
+    it("continues in a new session primed with the thread's own messages, only once Claude lacks the old one", async () => {
+      const prompts: SDKUserMessage["message"]["content"][] = [];
+      const f = await fixture(async function* (options, prompt) {
+        const first = await prompt[Symbol.asyncIterator]().next();
+        prompts.push((first.value as SDKUserMessage).message.content);
+        if (options.resume === SDK_SESSION) {
+          yield missing(SDK_SESSION);
+          return;
+        }
+        const id = options.resume ?? (prompts.length === 1 ? SDK_SESSION : options.sessionId!);
+        yield { type: "system", subtype: "init", session_id: id } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: `answer-${prompts.length}`, content: [{ type: "text", text: "Hello world" }],
+        } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "Hello world" } as SDKMessage;
+      });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
+      await f.waitForTurn();
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello again" }] });
+      await f.waitForTurn();
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: { turn: { error: {
+        message: CLAUDE_SESSION_GONE_MESSAGE, recovery: "claudeSessionGone",
+      } } } });
+
+      // While Claude still has the session, nothing is dropped.
+      vi.mocked(f.backendOptions.getSessionInfo!).mockResolvedValueOnce({ sessionId: SDK_SESSION } as never);
+      await expect(f.backend.continueInNewSession(threadId)).rejects.toThrow(CLAUDE_SESSION_STILL_PRESENT_MESSAGE);
+      expect((await f.store.read(threadId)).sdkSessionId).toBe(SDK_SESSION);
+
+      await f.backend.continueInNewSession(threadId);
+      const restarted = await f.store.read(threadId);
+      expect(restarted).toMatchObject({ primerPending: true, sessionRestarts: [{ previousSdkSessionId: SDK_SESSION }] });
+      expect(restarted.sdkSessionId).toBeUndefined();
+
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Back again" }] });
+      await f.waitForTurn();
+      const fresh = f.queries.at(-1)!;
+      expect(fresh.resume).toBeUndefined();
+      expect(fresh.sessionId).not.toBe(SDK_SESSION);
+      expect(fresh.sessionId).not.toBe(threadId);
+      const primed = prompts.at(-1) as Array<{ type: string; text?: string }>;
+      expect(primed[0]!.text).toContain("Operator: Hello");
+      expect(primed[0]!.text).toContain("Claude: Hello world");
+      expect(primed[0]!.text).not.toContain("Back again");
+      expect(primed.at(-1)).toEqual({ type: "text", text: "Back again" });
+      expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+      const continued = await f.store.read(threadId);
+      expect(continued.primerPending).toBeUndefined();
+      expect(continued.sdkSessionId).toBe(fresh.sessionId);
+
+      // Later turns resume the new session, with no primer.
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "And again" }] });
+      await f.waitForTurn();
+      expect(f.queries.at(-1)!.resume).toBe(fresh.sessionId);
+      expect(prompts.at(-1)).toEqual([{ type: "text", text: "And again" }]);
+      // The thread's own copy keeps every message.
+      expect((await f.backend.readThread(threadId)).messages.filter((message) => message.role === "user").map((message) => message.text))
+        .toEqual(["Hello", "Hello again", "Back again", "And again"]);
     });
 
     it("says a fork's source conversation is gone", async () => {

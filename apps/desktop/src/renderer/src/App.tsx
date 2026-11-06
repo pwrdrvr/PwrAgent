@@ -1120,6 +1120,29 @@ function DesktopAppShell(props: {
   const openCodexSettings = useCallback(() => {
     openSettingsSection("models", "codex");
   }, [openSettingsSection]);
+  const continueClaudeThreadInNewSession = useCallback((threadId: string, failureNoticeId: string) => {
+    const noticeId = `claude-new-session:${threadId}`;
+    void (async () => {
+      try {
+        if (!desktopApi?.continueClaudeThreadInNewSession) throw new Error("This window cannot continue the thread.");
+        await desktopApi.continueClaudeThreadInNewSession({ threadId });
+        dispatchAppNotice({ type: "dismiss", id: failureNoticeId });
+        showAppNotice({
+          id: noticeId,
+          title: "Ready for a new Claude session",
+          message: "Send your message again. Claude starts a new session with this thread's earlier messages; earlier tool output is not included.",
+          autoDismiss: true,
+        });
+      } catch (error) {
+        showAppNotice({
+          id: noticeId,
+          title: "Could not continue in a new session",
+          message: error instanceof Error ? error.message : String(error),
+          autoDismiss: false,
+        });
+      }
+    })();
+  }, [desktopApi, showAppNotice]);
   const syncCodexLaunchNotice = useCallback((
     notice: AppNoticeToastNotice | undefined,
   ): void => {
@@ -1630,8 +1653,9 @@ function DesktopAppShell(props: {
         const params = event.notification.params as {
           threadId?: string;
           turnId?: string;
-          turn?: { error?: { message?: unknown } };
+          turn?: { error?: { message?: unknown; recovery?: unknown } };
         };
+        const recovery = params.turn?.error?.recovery === "claudeSessionGone" ? "claudeSessionGone" as const : undefined;
         const rawMessage = params.turn?.error?.message;
         const errorMessage =
           typeof rawMessage === "string" && rawMessage.trim()
@@ -1659,6 +1683,10 @@ function DesktopAppShell(props: {
             originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
             onCodexLogin: openCodexLogin,
             onOpenCodexSettings: openCodexSettings,
+            ...(recovery && params.threadId ? {
+              recovery,
+              onContinueClaudeSession: () => continueClaudeThreadInNewSession(params.threadId!, noticeId),
+            } : {}),
             backend: event.backend,
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",
@@ -1742,6 +1770,7 @@ function DesktopAppShell(props: {
   }, [
     acknowledgeThreadSpendAlert,
     desktopApi,
+    continueClaudeThreadInNewSession,
     openCodexLogin,
     openCodexSettings,
     props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,

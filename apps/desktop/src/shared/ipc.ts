@@ -255,6 +255,8 @@ export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
 export const AGENT_REWIND_THREAD_CHANNEL = "agent:rewind-thread";
 export const AGENT_PREVIEW_THREAD_REWIND_CHANNEL = "agent:preview-thread-rewind";
 export const AGENT_UNDO_THREAD_REWIND_CHANNEL = "agent:undo-thread-rewind";
+export const AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL =
+  "agent:continue-claude-thread-in-new-session";
 export const AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL =
   "agent:configure-grok-workflow-budget";
 export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";
