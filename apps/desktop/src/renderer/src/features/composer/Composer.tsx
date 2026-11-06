@@ -290,9 +290,7 @@ import {
 } from "./composer-fork-command";
 import {
   backendDrawsCommandChips,
-  buildLeadingCommandChip,
-  findLeadingCommand,
-  leadingCommandArgumentHint,
+  describeLeadingCommand,
 } from "./composer-command-chip";
 import type { ThreadWorkspaceMode } from "../../lib/subthread-launchpads";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
@@ -11447,22 +11445,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     : undefined;
   // Claude and ACP agents read a command from the start of the prompt, so a
   // draft that starts with one of their commands draws it as a chip and, until
-  // an argument is typed, the arguments it takes. A chip at offset 0 means the
-  // draft text does not start the prompt.
-  const leadingProviderCommand =
-    skillTokens.some((token) => token.index === 0)
-      ? undefined
-      : findLeadingCommand(
-          draft,
-          props.providerCommands?.filter((command) =>
-            backendDrawsCommandChips(command.backend ?? props.thread?.source)
-          ) ?? [],
-        );
-  const commandChip = buildLeadingCommandChip(leadingProviderCommand);
-  const commandInlineHint =
-    autocompleteKind !== "slash" && !forkInlineHint
-      ? leadingCommandArgumentHint(leadingProviderCommand)
-      : undefined;
+  // an argument is typed, the arguments it takes.
+  const commandBackend = props.launchpad?.backend ?? props.thread?.source;
+  const { chip: commandChip, hint: commandInlineHint } = describeLeadingCommand({
+    commands: props.providerCommands?.filter((command) =>
+      backendDrawsCommandChips(command.backend ?? commandBackend)
+    ) ?? [],
+    draft,
+    showHint:
+      autocompleteKind !== "slash"
+      && !forkInlineHint
+      && !forking
+      && !preparingSend,
+    skillTokens,
+  });
   // Queue is the primary mid-turn; the steer chord is its keyboard-only
   // sibling, so the button is where it gets named.
   const submitButtonSteerHint =

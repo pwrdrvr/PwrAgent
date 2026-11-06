@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   backendDrawsCommandChips,
   buildCommandChipTooltip,
+  describeLeadingCommand,
   findLeadingCommand,
   leadingCommandArgumentHint,
   type ComposerChipCommand,
@@ -76,5 +77,32 @@ describe("backendDrawsCommandChips", () => {
     expect(backendDrawsCommandChips("acp:qwen")).toBe(true);
     expect(backendDrawsCommandChips("codex")).toBe(false);
     expect(backendDrawsCommandChips(undefined)).toBe(false);
+  });
+});
+
+describe("describeLeadingCommand", () => {
+  const base = { commands: COMMANDS, showHint: true, skillTokens: [] };
+
+  it("draws the chip and hint for a leading command", () => {
+    expect(describeLeadingCommand({ ...base, draft: "/code-review " })).toEqual({
+      chip: {
+        text: "/code-review",
+        tooltip: "/code-review [low|medium|high] [--fix]\nReview the current diff",
+      },
+      hint: "[low|medium|high] [--fix]",
+    });
+  });
+
+  it("keeps the chip but not the hint when something else owns that space", () => {
+    expect(describeLeadingCommand({ ...base, draft: "/code-review ", showHint: false }))
+      .toEqual({ chip: expect.objectContaining({ text: "/code-review" }) });
+  });
+
+  it("draws nothing when a mention chip starts the prompt", () => {
+    expect(describeLeadingCommand({
+      ...base,
+      draft: "/code-review ",
+      skillTokens: [{ index: 0 }],
+    })).toEqual({});
   });
 });

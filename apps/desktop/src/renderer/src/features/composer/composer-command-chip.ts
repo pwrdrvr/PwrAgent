@@ -91,3 +91,30 @@ export function buildLeadingCommandChip(
     ? { text: leading.text, tooltip: buildCommandChipTooltip(leading.command) }
     : undefined;
 }
+
+/**
+ * The chip and argument hint for a draft, as both composers draw them. A
+ * mention chip at offset 0 means the draft text does not start the prompt,
+ * so nothing is drawn. `showHint` is false while something else owns the
+ * space after the draft: the open command menu, another hint, or an editor
+ * that cannot take input.
+ */
+export function describeLeadingCommand(params: {
+  commands: readonly ComposerChipCommand[];
+  draft: string;
+  showHint: boolean;
+  skillTokens: readonly { index: number }[];
+}): { chip?: ComposerCommandChip; hint?: string } {
+  if (params.skillTokens.some((token) => token.index === 0)) {
+    return {};
+  }
+  const leading = findLeadingCommand(params.draft, params.commands);
+  if (!leading) {
+    return {};
+  }
+  const hint = params.showHint ? leadingCommandArgumentHint(leading) : undefined;
+  return {
+    chip: buildLeadingCommandChip(leading),
+    ...(hint ? { hint } : {}),
+  };
+}

@@ -41439,6 +41439,7 @@ button.pricing-token-miser__folded:focus-visible {
    at its edges. Vertical padding paints without growing the line. */
 .composer-tiptap-input__editor .composer-tiptap-input__command {
   display: inline;
+  vertical-align: baseline;
   height: auto;
   padding: 0.1em 0.45em;
   font-size: inherit;

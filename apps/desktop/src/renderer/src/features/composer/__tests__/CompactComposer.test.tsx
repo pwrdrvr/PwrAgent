@@ -155,6 +155,46 @@ describe("CompactComposer", () => {
     });
   });
 
+  it("draws a chipped command and its arguments once the menu closes, and nothing for an unchipped one", async () => {
+    const { container } = renderComposer({
+      mentionSources: {
+        commands: [
+          {
+            argumentHint: "[low|high] [--fix]",
+            chip: true,
+            name: "code-review",
+            description: "Review the diff",
+            sourceLabel: "Claude",
+          },
+          { name: "compact", description: "Compact", sourceLabel: "Codex" },
+        ],
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    const field = screen.getByTestId("composer-tiptap-input");
+    fireEvent.change(input, { target: { value: "/code" } });
+    // The menu owns the space after the draft while it is open.
+    expect(screen.getByRole("option", { name: /\/code-review/i }).textContent).toContain("[low|high] [--fix]");
+    expect(field.getAttribute("data-inline-hint")).toBeNull();
+    fireEvent.change(input, { target: { value: "/code-review " } });
+
+    await waitFor(() => {
+      expect(field.getAttribute("data-inline-hint")).toBe("[low|high] [--fix]");
+    });
+    expect(container.querySelector("[data-command-chip]")?.textContent).toBe("/code-review");
+    expect((input as HTMLTextAreaElement).value).toBe("/code-review ");
+
+    fireEvent.change(input, { target: { value: "/code-review high" } });
+    await waitFor(() => {
+      expect(field.getAttribute("data-inline-hint")).toBeNull();
+    });
+
+    fireEvent.change(input, { target: { value: "/compact " } });
+    await waitFor(() => {
+      expect(container.querySelector("[data-command-chip]")).toBeNull();
+    });
+  });
+
   it("sends the highlighted slash command on the first Enter", async () => {
     const { onSend } = renderComposer({
       mentionSources: {

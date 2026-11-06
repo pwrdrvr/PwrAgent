@@ -451,7 +451,7 @@ const IgnoreUnderlineShortcut = Extension.create({
   },
 });
 
-const commandChipPluginKey = new PluginKey("composerCommandChip");
+const commandChipPluginKey = new PluginKey<DecorationSet>("composerCommandChip");
 
 /**
  * A decoration, not a mention node: the command stays draft text, so the
@@ -2794,16 +2794,26 @@ export const ComposerTiptapInput = forwardRef<
       Extension.create({
         name: "composerCommandChip",
         addProseMirrorPlugins() {
+          const readCommandChipDecorations = (doc: ProseMirrorNode): DecorationSet =>
+            buildCommandChipDecorations(
+              doc,
+              propsRef.current.commandChip,
+              propsRef.current.markdownConversion ? "markdown" : "text",
+            );
           return [
-            new Plugin({
+            // Rebuilt only when the document or the chip changes; a caret
+            // move maps nothing and must not re-walk the document.
+            new Plugin<DecorationSet>({
               key: commandChipPluginKey,
+              state: {
+                init: (_config, state) => readCommandChipDecorations(state.doc),
+                apply: (tr, previous, _oldState, newState) =>
+                  tr.docChanged || tr.getMeta(commandChipPluginKey)
+                    ? readCommandChipDecorations(newState.doc)
+                    : previous,
+              },
               props: {
-                decorations: (state) =>
-                  buildCommandChipDecorations(
-                    state.doc,
-                    propsRef.current.commandChip,
-                    propsRef.current.markdownConversion ? "markdown" : "text",
-                  ),
+                decorations: (state) => commandChipPluginKey.getState(state),
               },
             }),
           ];

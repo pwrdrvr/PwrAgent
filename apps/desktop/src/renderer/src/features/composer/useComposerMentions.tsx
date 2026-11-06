@@ -60,11 +60,7 @@ import {
   slashCommandMatchesText,
   type ComposerSlashCommand,
 } from "./composer-slash-commands";
-import {
-  buildLeadingCommandChip,
-  findLeadingCommand,
-  leadingCommandArgumentHint,
-} from "./composer-command-chip";
+import { describeLeadingCommand } from "./composer-command-chip";
 import type { ComposerCommandChip } from "./ComposerInputTypes";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
@@ -885,19 +881,20 @@ export function useComposerMentions(params: {
     open && kind === "commands"
       ? commandOptions[activeOption] ?? commandOptions[0]
       : undefined;
-  const leadingCommand = skillTokens.some((token) => token.index === 0)
-    ? undefined
-    : findLeadingCommand(draft, commands.filter((command) => command.chip));
+  const leadingCommand = describeLeadingCommand({
+    commands: commands.filter((command) => command.chip),
+    draft,
+    showHint: !(open && kind === "commands"),
+    skillTokens,
+  });
 
   return {
     activeCommandText: activeCommand
       ? `/${normalizeSlashCommandName(activeCommand.name)}`
       : undefined,
     activeOptionId: open ? optionId(activeOption) : undefined,
-    commandChip: buildLeadingCommandChip(leadingCommand),
-    commandInlineHint: open && kind === "commands"
-      ? undefined
-      : leadingCommandArgumentHint(leadingCommand),
+    commandChip: leadingCommand.chip,
+    commandInlineHint: leadingCommand.hint,
     clear: () => {
       pendingProgrammaticChangeRef.current = undefined;
       setContent({ draft: "", skillTokens: [] });
