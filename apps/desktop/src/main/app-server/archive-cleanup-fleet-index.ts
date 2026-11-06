@@ -217,6 +217,10 @@ export class ArchiveFleetIndex {
     return result;
   }
 
+  rowsForBackend(backend: AppServerBackendKind): FleetRow[] {
+    return [...this.entries.values()].filter((row) => row.backend === backend);
+  }
+
   /** Active rows grouped under this parent by the overlay. */
   childrenOf(parentThreadId: string): FleetRow[] {
     return this.rows(this.byParent.get(parentThreadId) ?? []).filter((row) => !row.archived);

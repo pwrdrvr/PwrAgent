@@ -40274,6 +40274,48 @@ export class DesktopBackendRegistry {
     try { return await this.claudeBackend.archiveCleanupChangeToken?.(); } catch { return undefined; }
   }
 
+  /** A foreign Claude write changes only Claude's ownership evidence. Read
+   * its complete membership and overlays without walking the Codex fleet. */
+  private async refreshArchiveFleetClaudeRows(index: ArchiveFleetIndex, token: string, context?: ArchiveCleanupContext): Promise<void> {
+    const epoch = index.beginRead();
+    const observed = new Map<string, { key: string; backend: "claude"; threadId: string; archived: boolean; base: AppServerThreadSummary }>();
+    for (const archived of [false, true]) {
+      await context?.checkpoint();
+      for (const base of await this.claudeBackend.listThreads({ archived })) {
+        const key = buildThreadIdentityKey("claude", base.id);
+        // An active listing wins if a concurrent restore puts the identity
+        // in both pages, just as it does in a complete fleet read.
+        if (!observed.has(key)) observed.set(key, { key, backend: "claude", threadId: base.id, archived, base });
+      }
+    }
+    const rows = [...observed.values()];
+    const overlays = await this.readArchiveFleetOverlays(rows, context);
+    context?.assertCurrent();
+    for (const row of index.rowsForBackend("claude")) {
+      if (!observed.has(row.key)) {
+        index.delete(row.key);
+        index.settle(row.key, epoch);
+      }
+    }
+    for (const row of rows) {
+      const overlay = overlays.get(row.key);
+      if (overlay?.archiveTombstonedAt !== undefined) index.delete(row.key);
+      else {
+        const next = this.archiveFleetRow("claude", row.base, overlay, row.archived);
+        const prior = index.get(row.key);
+        // Transcript, title and usage writes move the token too. Preserve
+        // preliminary checkout observations when ownership did not change.
+        if (!prior || prior.archived !== next.archived
+          || JSON.stringify(prior.thread) !== JSON.stringify(next.thread)
+          || JSON.stringify(prior.overlay) !== JSON.stringify(next.overlay)) await index.upsert(next);
+      }
+      index.settle(row.key, epoch);
+    }
+    // Capture the token from before the read. A write during it remains
+    // visible to the next admission, and newer dirty marks remain unsettled.
+    index.claudeToken = token;
+  }
+
   /** One complete identity and overlay read: every provider, every page. */
   private async rebuildArchiveFleet(index: ArchiveFleetIndex, context?: ArchiveCleanupContext): Promise<void> {
     const reason = index.rebuildReason ?? "new batch";
@@ -40489,17 +40531,21 @@ export class DesktopBackendRegistry {
    * Fresh evidence for one removal, bounded by what changed: identities that
    * PwrAgent's writers and notifications marked, provider rows changed since
    * the watermark, and the overlays of every related identity. Without a
-   * provider recency read, or after another process wrote the overlay store or
-   * Claude sessions, admission reads the complete fleet again instead.
+   * provider recency read or after another process wrote the overlay store,
+   * admission reads the complete fleet again. Foreign Claude writes refresh
+   * that provider's membership without discarding the other providers.
    */
   private async verifyArchiveFleetForAdmission(index: ArchiveFleetIndex, scopePath: string, params: ArchiveCleanupDiscoveryRequest): Promise<void> {
     const overlayToken = this.overlayStore.readArchiveCleanupChangeToken?.();
     if (overlayToken === undefined || overlayToken !== index.overlayToken) index.requestRebuild("overlay store changed or has no change token");
     const claudeToken = await this.readClaudeArchiveCleanupChangeToken();
-    if (claudeToken === undefined || claudeToken !== index.claudeToken) index.requestRebuild("Claude sessions changed or have no change token");
+    if (claudeToken === undefined) index.requestRebuild("Claude sessions have no change token");
     if (await index.pathWriteRelates(scopePath)) index.requestRebuild("workspace write near this checkout");
     if (this.codexClient.archiveCleanupRecencyReads !== true || index.codexWatermark === undefined || this.isCodexBootstrapDeferredFn()) {
       index.requestRebuild("provider recency reads unavailable");
+    }
+    if (!index.needsRebuild && claudeToken !== undefined && claudeToken !== index.claudeToken) {
+      await this.refreshArchiveFleetClaudeRows(index, claudeToken, params.context);
     }
     if (await this.refreshArchiveFleet(index, params.context) === "rebuilt") return;
     await this.readArchiveFleetCodexDelta(index, params.context, params.removalAdmission?.directoryFilter);

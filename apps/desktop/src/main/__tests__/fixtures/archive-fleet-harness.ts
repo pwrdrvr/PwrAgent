@@ -253,6 +253,6 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
     claudeBackendOptions: { store: claudeStore }, archiveCleanupCheckpointStore: checkpoint,
     runtimeInstanceId: options.instanceId ?? "scaling-fixture", resolveLiveProfileRuntimeInstanceIds: () => [options.instanceId ?? "scaling-fixture"],
     worktreeArchiveService: { archive } as never, threadTitleGenerationService: null });
-  return { registry, counts, client, archive };
+  return { registry, counts, client, archive, claudeStore };
 }
 

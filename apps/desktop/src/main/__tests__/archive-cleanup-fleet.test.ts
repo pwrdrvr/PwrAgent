@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { AgentEvent, ThreadOverlayState } from "@pwragent/shared";
+import type { ClaudeSession } from "../claude/claude-session-store";
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -117,6 +119,49 @@ async function archive(registry: ReturnType<ReturnType<typeof world>["start"]>["
 }
 
 describe("archive cleanup fleet index", () => {
+  it("refreshes a foreign Claude change without rereading unchanged providers, and obeys its current ownership", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 30, max: 150 }),
+      fc.constantFrom("active-here", "new-active-here", "active-via-alias", "active-child-here", "archived-here", "active-elsewhere", "deleted"),
+      async (unrelated, change) => {
+        const setup = world([["owner", C0], ...Array.from({ length: unrelated }, (_, index) =>
+          [`unrelated-${index}`, `/contrived/projects/unrelated-${index}`] as [string, string])]);
+        let token = "before";
+        let sessions: ClaudeSession[] = change === "new-active-here" ? []
+          : [{ cwd: C1, thread: { ...raw("claude-owner", C1), source: "claude" } }];
+        let rowsBeforeAdmission = 0;
+        const fixture = setup.start({
+          beforeAdmission: async () => {
+            rowsBeforeAdmission = fixture.counts.providerRows;
+            sessions = change === "deleted" ? [] : [{
+              cwd: change === "active-elsewhere" ? C1 : change === "active-via-alias" ? ALIAS
+                : change === "active-child-here" ? `${C0}/src` : C0,
+              thread: { ...raw("claude-owner", C0), source: "claude", ...(change === "archived-here" ? { archivedAt: 1 } : {}) },
+            }];
+            token = "after";
+          },
+        });
+        vi.spyOn(fixture.claudeStore, "changeToken").mockImplementation(async () => token);
+        vi.mocked(fixture.claudeStore.list).mockImplementation(async () => sessions);
+        try {
+          const [result] = await archive(fixture.registry, "owner");
+          // Oracle: only a currently active Claude session at the checkout
+          // protects it. Membership, a moved cwd and deletion all come from
+          // Claude's fresh session listing, without notifications.
+          const hasActiveUser = !["archived-here", "active-elsewhere", "deleted"].includes(change);
+          expect(result!.cleanup[0]!.removedWorktree).toBe(!hasActiveUser);
+          expect(fixture.counts.removals).toBe(hasActiveUser ? 0 : 1);
+          if (change === "archived-here") expect(setup.snapshots.some((snapshot) => snapshot.threadId === "claude-owner")).toBe(true);
+          // The unchanged Codex fleet contributes only its bounded recency
+          // page, regardless of how many unrelated identities it contains.
+          expect(fixture.counts.providerRows - rowsBeforeAdmission).toBeLessThanOrEqual(5);
+        } finally {
+          await fixture.registry.close();
+        }
+      },
+    ), { numRuns: 16 });
+  });
+
   it("sees an unreported new checkout user through the provider's recency read", async () => {
     const setup = world([["owner", C0], ["unrelated", "/contrived/projects/unrelated"]]);
     const fixture = setup.start({
