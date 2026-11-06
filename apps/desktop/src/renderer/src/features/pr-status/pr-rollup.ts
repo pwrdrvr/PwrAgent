@@ -23,11 +23,19 @@ import {
  *
  * Unknown ranks last so one unpolled attachment does not hide a known
  * failure, and a known pass beats it as the summary.
+ *
+ * This rank picks the chip's PR only. The popover lists PRs by age, so a row
+ * does not jump when its checks change (see `ordered`).
  */
 export type PrRollup = {
   /** The PR whose state the chip wears. */
   representative: PrSummary;
-  /** Every PR, least ready first; finished PRs at the end. */
+  /**
+   * Every PR in list order: two stacks, open above finished. Each stack puts
+   * its newest entry on top: open PRs by when they were opened, finished PRs
+   * by when they merged or closed. A PR that merges moves to the top of the
+   * finished stack and keeps that place as later PRs finish above it.
+   */
   ordered: PrSummary[];
   openCount: number;
   /**
@@ -71,28 +79,60 @@ function finishedSortKey(pr: PrSummary): number {
   return resolveLifecycleState(pr) === "merged" ? 0 : 1;
 }
 
+type Stacked = { pr: PrSummary; index: number; at: number | undefined };
+
+/**
+ * Newest first. An entry without a time goes to the top when `missing` is
+ * "top" and to the bottom when it is "bottom". Ties and entries without a
+ * time fall back to attachment order, later attachments first.
+ */
+function newestFirst(
+  entries: Stacked[],
+  missing: "top" | "bottom",
+): PrSummary[] {
+  const unknown = missing === "top" ? Infinity : -Infinity;
+  return [...entries]
+    .sort((a, b) => (b.at ?? unknown) - (a.at ?? unknown) || b.index - a.index)
+    .map((entry) => entry.pr);
+}
+
 export function resolvePrRollup(prs: readonly PrSummary[]): PrRollup | undefined {
   if (prs.length === 0) {
     return undefined;
   }
-  const open: PrSummary[] = [];
-  const finished: PrSummary[] = [];
-  for (const pr of prs) {
-    (resolveLifecycleState(pr) === "open" ? open : finished).push(pr);
-  }
-  // Array sort is stable, so equal PRs keep their attachment order.
-  open.sort((a, b) => openSortKey(a) - openSortKey(b));
-  finished.sort((a, b) => finishedSortKey(a) - finishedSortKey(b));
-  const ordered = [...open, ...finished];
-  const mergedCount = finished.filter((pr) => finishedSortKey(pr) === 0).length;
-  const representative = ordered[0]!;
+  const open: Stacked[] = [];
+  const finished: Stacked[] = [];
+  prs.forEach((pr, index) => {
+    if (resolveLifecycleState(pr) === "open") {
+      open.push({ pr, index, at: pr.createdAt });
+    } else {
+      finished.push({ pr, index, at: pr.mergedAt ?? pr.closedAt });
+    }
+  });
+  // An open PR without `createdAt` has not been polled yet, so it is a fresh
+  // attachment: the newest. A finished PR without a time finished before the
+  // timestamps existed and is never polled again: the oldest.
+  const ordered = [
+    ...newestFirst(open, "top"),
+    ...newestFirst(finished, "bottom"),
+  ];
+  // The chip wears the least ready open PR, else merged before closed.
+  const representative = open.length > 0
+    ? lowestKey(open, openSortKey)
+    : lowestKey(finished, finishedSortKey);
+  const mergedCount = finished.filter((entry) => finishedSortKey(entry.pr) === 0).length;
   return {
     representative,
     ordered,
     openCount: open.length,
-    lead: open.length === 1 ? open[0] : undefined,
+    lead: open.length === 1 ? open[0]!.pr : undefined,
     summary: rollupSummary(representative, open.length, prs.length, mergedCount),
   };
+}
+
+/** The entry with the lowest key; the earliest attached wins a tie. */
+function lowestKey(entries: Stacked[], key: (pr: PrSummary) => number): PrSummary {
+  return entries.reduce((best, entry) => (key(entry.pr) < key(best.pr) ? entry : best)).pr;
 }
 
 function rollupSummary(
