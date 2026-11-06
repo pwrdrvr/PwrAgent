@@ -727,9 +727,10 @@ Render a brand through `BrandLockup`
     so the renderer also filters each page by each root's own pin.
   - Draw no group when no pin exists or none matches the lens filter.
   - The list below the group keeps no pin-order controls.
-  - While the group is drawn, the list sits in a **Recents** section with the
-    same header (caret, lens icon, count, collapsed readouts), so the operator
-    can fold it and keep only the pins on screen. Its collapse is
+  - While the group is drawn, the list sits in a section with the same header
+    (caret, icon, count, collapsed readouts), so the operator can fold it and
+    keep only the pins on screen. The header is the lens tab's own name and
+    icon (**Updated** or **Created**), never "Recents"; the icon stays neutral. Its collapse is
     window-local view state, not persisted, and independent of the group's.
     A newly selected thread or a starting thread inside it reopens it.
 - Offer visible pin ordering in Directories and in the Pinned group.

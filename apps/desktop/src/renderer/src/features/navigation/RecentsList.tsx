@@ -19,7 +19,7 @@ import {
   isPinnedThread,
   resolveThreadParentKey,
 } from "@pwragent/shared";
-import { CalendarPlusIcon, HistoryIcon, PinIcon } from "../../icons";
+import { PinIcon } from "../../icons";
 import { useDropIndicatorController } from "./drag-drop";
 import type { NestThreadHandler } from "./thread-nest-drop";
 import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
@@ -65,6 +65,11 @@ type RecentsListProps = {
   pinnedResourceId?: string;
   pinnedGroupCollapsed?: boolean;
   onSetPinnedGroupCollapsed?: (collapsed: boolean) => void;
+  /**
+   * The lens tab's own name and icon, which head the list while the Pinned
+   * group is drawn above it. A list under no group has no header.
+   */
+  listSection?: { title: string; icon: ReactNode };
   onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   loadedThreads?: NavigationThreadSummary[];
   approvalRequestThreadKeys?: Record<string, boolean>;
@@ -308,9 +313,10 @@ export function RecentsList(props: RecentsListProps) {
   const startingSubthreads = startingThreads.filter((creation) =>
     creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
   const startingRootThreads = startingThreads.filter((creation) => !startingSubthreads.includes(creation));
-  // The Recents section exists only under a drawn Pinned group: with no pin
+  // The list's section exists only under a drawn Pinned group: with no pin
   // the list is all there is, and folding it would leave the lens blank.
-  const recentsSectionShown = pinnedRoots.length > 0
+  const listSection = props.listSection;
+  const recentsSectionShown = listSection !== undefined && pinnedRoots.length > 0
     && (topLevelThreads.length > 0 || startingRootThreads.length > 0 || Boolean(props.pager));
   const recentsCollapsed = recentsSectionShown && recentsCollapsedState;
   // A new selection inside the folded section (⌘K, a notification) or a
@@ -683,8 +689,6 @@ export function RecentsList(props: RecentsListProps) {
   const listPage = listResourceIds.length === 1
     ? props.pagedNavigation?.resources.get(listResourceIds[0]!)?.state.page
     : undefined;
-  const listQuery = pinnedResource?.state.request.query;
-  const listIsCreatedLens = listQuery?.kind === "lens" && listQuery.lens === "recents";
 
   if (topLevelThreads.length === 0 && startingRootThreads.length === 0 && !pinnedGroup && props.emptyMessage) {
     return (
@@ -700,10 +704,10 @@ export function RecentsList(props: RecentsListProps) {
   return (
     <div className={`sidebar-list sidebar-list--dense${pinnedRoots.length > 0 ? " sidebar-list--pinned-group" : ""}`}>
       {pinnedGroup}
-      {recentsSectionShown ? (
+      {recentsSectionShown && listSection ? (
         <ThreadSection
-          title="Recents"
-          icon={listIsCreatedLens ? <CalendarPlusIcon size={12} /> : <HistoryIcon size={12} />}
+          title={listSection.title}
+          icon={listSection.icon}
           className="recents-group"
           collapsed={recentsCollapsed}
           counts={readPinnedGroupCounts({

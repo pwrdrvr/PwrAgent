@@ -569,8 +569,8 @@ describe("Pinned group before its pages are read again", () => {
   });
 });
 
-describe("Recents section", () => {
-  const recentsHeader = () => screen.getByRole("button", { name: /^Recents,/ });
+describe("The list's section under the Pinned group", () => {
+  const recentsHeader = () => screen.getByRole("button", { name: /^Created,/ });
   const rerenderRecents = (view: ReturnType<typeof renderRecents>, props: Partial<ComponentProps<typeof Sidebar>>) =>
     view.rerender(
       <Sidebar
@@ -587,10 +587,23 @@ describe("Recents section", () => {
       />,
     );
 
+  it("is headed by its lens tab's name in Updated too", () => {
+    renderRecents({ browseMode: "inbox" });
+
+    expect(screen.getByRole("button", { name: /^Updated,/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("button", { name: /^Created,/ })).toBeNull();
+  });
+
+  it("draws no list header while pins are not on top", () => {
+    renderRecents({ pinnedThreadsOnTop: false });
+
+    expect(screen.queryByRole("button", { name: /^Created,/ })).toBeNull();
+  });
+
   it("heads the list under the Pinned group with its own collapsible header", () => {
     renderRecents();
 
-    expect(recentsHeader()).toHaveAccessibleName("Recents, 3 threads");
+    expect(recentsHeader()).toHaveAccessibleName("Created, 3 threads");
     expect(recentsHeader()).toHaveAttribute("aria-expanded", "true");
     expect(listTitles()).toEqual([
       "Dark-mode chart tokens",
@@ -604,7 +617,7 @@ describe("Recents section", () => {
     fireEvent.click(recentsHeader());
 
     expect(recentsHeader()).toHaveAttribute("aria-expanded", "false");
-    expect(recentsHeader()).toHaveAccessibleName("Recents, 3 threads, 0 active threads, 0 unread");
+    expect(recentsHeader()).toHaveAccessibleName("Created, 3 threads, 0 active threads, 0 unread");
     expect(listTitles()).toEqual([]);
     expect(titlesIn(pinnedGroup()!)).toEqual([
       "Release manager",
@@ -625,10 +638,10 @@ describe("Recents section", () => {
     expect(groupHeader()).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("draws no Recents header without a pin, so the lens never folds blank", () => {
+  it("draws no list header without a pin, so the lens never folds blank", () => {
     renderRecents({ threads: [chartTokens, glossary, flakyFixture] });
 
-    expect(screen.queryByRole("button", { name: /^Recents,/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Created,/ })).toBeNull();
     expect(listTitles()).toHaveLength(3);
   });
 

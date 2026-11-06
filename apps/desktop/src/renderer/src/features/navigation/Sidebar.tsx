@@ -687,6 +687,13 @@ export function Sidebar(props: SidebarProps) {
   useNativeDragInteractionGuard();
   const pinnedThreadsOnTop = props.pinnedThreadsOnTop ?? true;
   const pinnedGroupShown = lensHasPinnedGroup(props.browseMode, pinnedThreadsOnTop);
+  // Under the Pinned group the list is headed by its own tab's name and icon,
+  // so the header reads as the lens the operator picked.
+  const ListSectionIcon = pinnedGroupShown && props.browseMode !== "attention"
+    ? browseModeIcons[props.browseMode] : undefined;
+  const listSection = ListSectionIcon
+    ? { title: browseModeLabels[props.browseMode], icon: <ListSectionIcon size={12} /> }
+    : undefined;
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
   const dependencyIndicators = useThreadDependencyIndicatorsContext();
@@ -3591,6 +3598,7 @@ export function Sidebar(props: SidebarProps) {
                 pinnedResourceId={pinnedGroupShown ? PINNED_GROUP_RESOURCE_ID : undefined}
                 pinnedGroupCollapsed={props.pinnedGroupCollapsed}
                 onSetPinnedGroupCollapsed={props.onSetPinnedGroupCollapsed}
+                listSection={listSection}
                 onReorderThreadPins={pinnedGroupShown
                   ? hoverReleasedListHandlers.reorderThreadPins : undefined}
                 emptyMessage={lensEmptyMessage}
