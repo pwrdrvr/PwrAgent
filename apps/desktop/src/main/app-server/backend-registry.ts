@@ -39710,8 +39710,8 @@ export class DesktopBackendRegistry {
   }
 
   /** Snapshot and remove reviewed checkouts no thread refers to. Each one is
-   * checked again against a fresh read of every thread, inside the archive
-   * cleanup queue, so no archive or repair runs beside it. */
+   * checked against a fresh read of every thread while holding the same
+   * checkout/container scopes as archive and repair jobs. */
   async removeUnreferencedCheckouts(worktreePaths: string[]): Promise<{
     removed: { worktreePath: string }[];
     kept: { worktreePath: string; reason: string }[];
@@ -39724,36 +39724,57 @@ export class DesktopBackendRegistry {
     };
     if (!worktreePaths.length) return result;
     await this.archiveCleanupQueue.enqueue(`unreferenced-remove:${++this.archiveWorkspaceWriteSequence}`, async (context) => {
-      const inventory = await this.readPacedArchiveCleanupInventory({ backend: "codex", threadId: "", context });
-      const references = await this.worktreeReferences(inventory);
-      const canonical = canonicalWorktreePaths();
-      const managed = new Set<string>();
-      for (const value of (await listManagedWorktrees(await this.managedWorktreeRoots())).paths) {
-        try { managed.add(await canonical(value)); } catch { /* gone */ }
-      }
+      const recordError = (worktreePath: string, error: unknown) => {
+        if (error instanceof ArchiveCleanupCancelledError || this.closed || this.stoppingRunningTurnsForShutdown) throw error;
+        if (error instanceof MissingArchiveWorktreeError) result.kept.push({ worktreePath, reason: "No longer on disk" });
+        else if (error instanceof MissingArchiveRepositoryError) result.kept.push({ worktreePath, reason: "Repository no longer exists" });
+        else result.failed.push({ worktreePath, message: error instanceof Error ? error.message : String(error) });
+      };
+      const candidates: string[] = [];
+      const scopeKeys = new Set<string>();
+      const canonicalScope = canonicalWorktreePaths();
       for (const worktreePath of worktreePaths) {
-        await context.checkpoint();
         try {
-          const key = await canonical(worktreePath);
-          const reason = !references ? "Thread folders could not be checked"
-            : !managed.has(key) ? "Not a PwrAgent checkout"
-              : unreferencedWorktrees([key], references).length === 0 ? "A thread uses it now"
-                : !await isSettledWorktree(worktreePath) ? "Created recently"
-                  : undefined;
-          if (reason) {
-            result.kept.push({ worktreePath, reason });
-            continue;
-          }
-          await this.worktreeArchiveService.archiveUnreferenced({ worktreePath });
-          result.removed.push({ worktreePath });
-        } catch (error) {
-          if (error instanceof ArchiveCleanupCancelledError || this.closed || this.stoppingRunningTurnsForShutdown) throw error;
-          if (error instanceof MissingArchiveWorktreeError) result.kept.push({ worktreePath, reason: "No longer on disk" });
-          else if (error instanceof MissingArchiveRepositoryError) result.kept.push({ worktreePath, reason: "Repository no longer exists" });
-          else result.failed.push({ worktreePath, message: error instanceof Error ? error.message : String(error) });
-        }
+          const container = await this.worktreeContainerService.containerPath(worktreePath);
+          scopeKeys.add(await canonicalScope(container ?? worktreePath));
+          candidates.push(worktreePath);
+        } catch (error) { recordError(worktreePath, error); }
       }
-      return { backend: "codex", threadId: "", archivedAt: Date.now(), cleanup: [] };
+      const remove = async (): Promise<ArchiveThreadResponse> => {
+        const read = async () => await this.worktreeReferences(await this.readPacedArchiveCleanupInventory({ backend: "codex", threadId: "", context }));
+        const references = context.withInventory ? await context.withInventory(read) : await read();
+        const canonical = canonicalWorktreePaths();
+        const managed = new Set<string>();
+        for (const value of (await listManagedWorktrees(await this.managedWorktreeRoots())).paths) {
+          try { managed.add(await canonical(value)); } catch { /* gone */ }
+        }
+        for (const worktreePath of candidates) {
+          await context.checkpoint();
+          context.setWorktreePath?.(worktreePath);
+          try {
+            const key = await canonical(worktreePath);
+            const reason = !references ? "Thread folders could not be checked"
+              : !managed.has(key) ? "Not a PwrAgent checkout"
+                : unreferencedWorktrees([key], references).length === 0 ? "A thread uses it now"
+                  : !await isSettledWorktree(worktreePath) ? "Created recently"
+                    : undefined;
+            if (reason) {
+              result.kept.push({ worktreePath, reason });
+              continue;
+            }
+            await this.worktreeArchiveService.archiveUnreferenced({ worktreePath });
+            result.removed.push({ worktreePath });
+          } catch (error) { recordError(worktreePath, error); }
+        }
+        return { backend: "codex", threadId: "", archivedAt: Date.now(), cleanup: [] };
+      };
+      // Lock all selections in a stable order before the single inventory
+      // read. Overlapping requests then recheck after the prior removal,
+      // without rescanning every provider for each selected checkout.
+      const scopes = [...scopeKeys].sort();
+      const locked = async (index: number): Promise<ArchiveThreadResponse> => index === scopes.length || !context.withWorktree
+        ? await remove() : await context.withWorktree(scopes[index]!, async () => await locked(index + 1));
+      return await locked(0);
     });
     return result;
   }

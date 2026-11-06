@@ -409,6 +409,42 @@ describe("ACP snapshot archive and restoration", () => {
 });
 
 describe("checkouts no thread refers to", () => {
+  it.each([
+    { selections: [[0], [0]] },
+    { selections: [[0], [0], [0]] },
+    { selections: [[0, 1], [1, 0]] },
+  ])("removes each checkout once across overlapping requests: $selections", async ({ selections }) => {
+    const fixture = await createFixture("claude");
+    const checkouts = Array.from({ length: Math.max(...selections.flat()) + 1 }, (_, index) =>
+      path.join(fixture.root, ".pwragent", "worktrees", `spare-${index}`, "repo"));
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    for (const [index, checkout] of checkouts.entries()) {
+      await fixture.git(fixture.repo, ["worktree", "add", "-b", `spare-${index}`, checkout]);
+      await writeFile(path.join(checkout, "notes.txt"), `checkout ${index}\n`);
+      await utimes(path.join(checkout, ".git"), twoHoursAgo, twoHoursAgo);
+    }
+    const { registry } = fixture.reopen();
+    const result = await Promise.all(selections.map(async (selection) =>
+      await registry.removeUnreferencedCheckouts(selection.map((index) => checkouts[index]!))));
+    expect(result.flatMap((row) => row.failed)).toEqual([]);
+    expect(result.flatMap((row) => row.removed).map((row) => row.worktreePath).sort()).toEqual([...checkouts].sort());
+    expect(result.flatMap((row) => row.kept)).toHaveLength(selections.flat().length - checkouts.length);
+    // One active and one archived provider page per request, independent of
+    // its selection size. Scope locking must not add a fleet scan per item.
+    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list")).toHaveLength(2 * selections.length);
+    // Git is the oracle: each registration is gone, with exactly one
+    // recoverable snapshot containing that checkout's distinct dirty data.
+    const registrations = await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"]);
+    const refs = (await fixture.git(fixture.repo, ["for-each-ref", "--format=%(refname)", "refs/pwragent/snapshots/"])).trim().split("\n");
+    expect(refs).toHaveLength(checkouts.length);
+    const contents = await Promise.all(refs.map(async (ref) => await fixture.git(fixture.repo, ["show", `${ref}:notes.txt`])));
+    expect(contents.sort()).toEqual(checkouts.map((_, index) => `checkout ${index}\n`).sort());
+    for (const checkout of checkouts) {
+      expect(registrations).not.toContain(checkout.replaceAll("\\", "/"));
+      await expect(stat(checkout)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
   it("lists only the PwrAgent worktree no thread uses, then snapshots and removes it", async () => {
     const fixture = await createFixture("claude");
     const spare = path.join(fixture.root, ".pwragent", "worktrees", "spare", "repo");
