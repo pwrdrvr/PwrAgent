@@ -887,8 +887,17 @@ jobs:
         # `parallel` mode) and the same weights. A Windows-only failure is
         # then attributable to Windows and not to a different lane split.
         # See the desktop-e2e strategy comment.
+        #
+        # TEMP and TMP move every fixture root, Electron profile, state
+        # database and app-spawned temp file off the OS volume (C:) onto the
+        # runner temp volume, beside the checkout. C: stalls disk I/O for
+        # minutes at a time; Electron's main process then outlives its quit
+        # in CreateFile/FlushFileBuffers and keeps the launcher pipe open.
+        # scripts/windows-e2e-temp-volume-workflow.test.mjs holds the evidence.
         env:
           PWTEST_SHARD_WEIGHTS: "83:82:67:88"
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: >-
           pnpm ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && 'test:desktop-e2e:windows-diagnostics' || 'test:desktop-e2e' }}
           --shard=${{ matrix.lane }}/4

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PWRAGENT_HOME_ENV,
@@ -277,6 +278,58 @@ describe("PwrAgent profiles", () => {
     expect(readProfilesRegistry({ env }).profiles).not.toContainEqual(
       expect.objectContaining({ name: "scratch" }),
     );
+  });
+
+  it("never rewrites the runtime marker after refreshing stops, and keeps it until stop", () => {
+    // Shutdown stops refreshing once the runtime is marked exited. Each
+    // refresh is a synchronous main-thread write, and a Windows close was
+    // captured blocked in exactly that write while Electron's quit waited.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 0, max: 4 }),
+          fc.integer({ min: 1, max: 6 }),
+          (ticksBeforeStop, ticksAfterStop) => {
+            const { env } = createRoot();
+            ensureNamedProfileExists("scratch", { env });
+            let clock = 1_000;
+            const heartbeat = startProfileRuntimeHeartbeat("scratch", {
+              env,
+              instanceId: "refresh-owner",
+              intervalMs: 10_000,
+              now: () => clock,
+              processId: process.pid,
+            });
+            const heartbeatAt = () =>
+              (JSON.parse(fs.readFileSync(heartbeat.markerPath, "utf8")) as {
+                heartbeatAt: number;
+              }).heartbeatAt;
+            try {
+              for (let tick = 0; tick < ticksBeforeStop; tick += 1) {
+                clock += 10_000;
+                vi.advanceTimersByTime(10_000);
+                expect(heartbeatAt()).toBe(clock);
+              }
+              heartbeat.stopRefreshing();
+              const lastWrite = heartbeatAt();
+              for (let tick = 0; tick < ticksAfterStop; tick += 1) {
+                clock += 10_000;
+                vi.advanceTimersByTime(10_000);
+              }
+              expect(vi.getTimerCount()).toBe(0);
+              expect(heartbeatAt()).toBe(lastWrite);
+            } finally {
+              heartbeat.stop();
+            }
+            expect(fs.existsSync(heartbeat.markerPath)).toBe(false);
+          },
+        ),
+        { numRuns: 25 },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("matches identity-aware runtime markers by PID, instance, and start time", () => {

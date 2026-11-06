@@ -109,6 +109,7 @@ const mainLogErrorMock = vi.fn();
 const initializeAppStateMock = vi.fn();
 const runStartupStorageMaintenanceMock = vi.fn<typeof import("../storage-maintenance").runStartupStorageMaintenance>();
 const disposeAppStateMock = vi.fn();
+const stopProfileRuntimeHeartbeatRefreshMock = vi.fn();
 const isAppStateInitializedMock = vi.fn();
 const prewarmWindowsJobWrapperMock = vi.fn<() => Promise<void>>();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
@@ -633,6 +634,7 @@ vi.mock("../state/app-state", () => ({
   hadExistingAppStateDatabase: vi.fn(() => true),
   getAppStateDb: vi.fn(() => ({ raw: {} })),
   disposeAppState: disposeAppStateMock,
+  stopProfileRuntimeHeartbeatRefresh: stopProfileRuntimeHeartbeatRefreshMock,
   isAppStateInitialized: isAppStateInitializedMock,
   getAppOverlayStore: vi.fn(() => ({
     rememberRemoteThreadTarget: vi.fn(),
@@ -874,6 +876,7 @@ describe("bootstrapApp", () => {
     mainLogErrorMock.mockReset();
     initializeAppStateMock.mockReset();
     disposeAppStateMock.mockReset();
+    stopProfileRuntimeHeartbeatRefreshMock.mockReset();
     isAppStateInitializedMock.mockReset();
     isAppStateInitializedMock.mockReturnValue(true);
     prewarmWindowsJobWrapperMock.mockReset();
@@ -2400,6 +2403,34 @@ describe("bootstrapApp", () => {
     expect(handoff).toHaveBeenCalledOnce();
     expect(quitMock).not.toHaveBeenCalled();
     expect(stopWindowDiagnosticsMock).toHaveBeenCalledOnce();
+  });
+
+  it("stops the profile heartbeat refresh between the resource barrier and quit", async () => {
+    // The heartbeat is a synchronous main-thread write every 10s. Left armed,
+    // it ran inside Electron's native quit on Windows and blocked the close.
+    let refreshArmed = true;
+    stopProfileRuntimeHeartbeatRefreshMock.mockImplementation(() => {
+      refreshArmed = false;
+    });
+    let refreshArmedAtQuit: boolean | undefined;
+    quitMock.mockImplementation(() => {
+      refreshArmedAtQuit ??= refreshArmed;
+    });
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+
+    expect(refreshArmedAtQuit).toBe(false);
+    expect(stopProfileRuntimeHeartbeatRefreshMock).toHaveBeenCalledTimes(1);
+    // Not before the runtime is released: the marker is its liveness proof.
+    expect(disposeAppServerIpcHandlersMock.mock.invocationCallOrder[0]).toBeLessThan(
+      stopProfileRuntimeHeartbeatRefreshMock.mock.invocationCallOrder[0],
+    );
+    expect(disposeAppStateMock).not.toHaveBeenCalled();
   });
 
   it("awaits async resource disposal before completing quit", async () => {

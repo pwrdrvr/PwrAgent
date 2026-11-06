@@ -213,6 +213,7 @@ import {
   initializeAppState,
   isAppStateInitialized,
   recordBootDecision,
+  stopProfileRuntimeHeartbeatRefresh,
 } from "./state/app-state";
 import type { AutoVacuumConversion } from "./state/state-db";
 import {
@@ -975,6 +976,10 @@ async function disposeMainProcessResources(source: string): Promise<void> {
       // released, leaving the next process free to dispatch the same action.
       disposeScheduledThreadActionService();
       getExistingRuntimeLeaseManager()?.markExited();
+      // The runtime no longer claims the profile, so stop advertising it.
+      // A refresh is a synchronous main-thread write, and Electron's native
+      // quit still has to run on this thread after the barrier.
+      stopProfileRuntimeHeartbeatRefresh();
       // The barrier bounds waiting; it does not cancel timed-out work. Keep
       // SQLite alive for late socket callbacks and the final lease release.
       // Only the process exit hook closes it, after synchronous cleanup.
