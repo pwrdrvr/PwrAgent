@@ -135,7 +135,7 @@ async function recordDirectoryPinFrames(page: Page, label: string): Promise<void
       if (!sampler.running) return;
       const row = [...document.querySelectorAll(".directory-row")].find((candidate) =>
         candidate.querySelector(".directory-row__title")?.textContent?.trim() === target);
-      const state = row?.getAttribute("data-directory-pinned") === "true" ? "pinned" : "unpinned";
+      const state = !row ? "missing" : row.getAttribute("data-directory-pinned") === "true" ? "pinned" : "unpinned";
       if (frames[frames.length - 1] !== state) frames.push(state);
       window.requestAnimationFrame(sample);
     };

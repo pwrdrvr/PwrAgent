@@ -1,5 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "../../test/phase-probes";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import fc from "fast-check";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION, type AgentEvent, type NavigationDirectoryRow, type NavigationQueryPage, type NavigationRow, type NavigationSelectedDetailResponse, type PrSummary, type ProjectForgeAutomation } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
@@ -314,7 +315,7 @@ function pinnedDirectoryOwner() {
     owner.hold = new Promise<void>((resolve) => { release = resolve; });
     return release;
   };
-  return { f, key, setDirectoryPin, holdIndexReads };
+  return { f, key, owner, setDirectoryPin, holdIndexReads };
 }
 
 it("keeps an unpinned directory unpinned while another page lands before the index re-read", async () => {
@@ -380,6 +381,85 @@ it("keeps an unpinned directory unpinned when an index read from before the unpi
     finish?.();
     unmount();
   }
+});
+
+it("keeps the optimistic unpin while an owner read completes before the command", async () => {
+  const { f, key } = pinnedDirectoryOwner();
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  const setDirectoryPin = vi.fn<NonNullable<DesktopApi["setDirectoryPin"]>>(async () => {
+    await pending;
+    return { directoryKey: key, pinnedRank: undefined };
+  });
+  const api = { ...f.api, setDirectoryPin };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
+  try {
+    await waitFor(() => expect(rank()).toBe("1024"));
+    act(() => result.current.setBrowseMode("directories"));
+    let command!: Promise<void>;
+    act(() => { command = result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false); });
+    expect(rank()).toBeUndefined();
+    await act(() => result.current.pagedNavigation.refresh());
+    expect(rank()).toBeUndefined();
+    await act(async () => { finish(); await command; });
+    expect(rank()).toBeUndefined();
+  } finally {
+    finish();
+    unmount();
+  }
+});
+
+it("restores the owner pin when an unpin fails after an intervening read", async () => {
+  const { f, key } = pinnedDirectoryOwner();
+  let reject!: (error: Error) => void;
+  const pending = new Promise<never>((_, fail) => { reject = fail; });
+  const api = { ...f.api, setDirectoryPin: vi.fn<NonNullable<DesktopApi["setDirectoryPin"]>>(() => pending) };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
+  try {
+    await waitFor(() => expect(rank()).toBe("1024"));
+    let command!: Promise<void>;
+    act(() => { command = result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false); });
+    await act(() => result.current.pagedNavigation.refresh());
+    expect(rank()).toBeUndefined();
+    await act(async () => { reject(new Error("write failed")); await command; });
+    expect(rank()).toBe("1024");
+  } finally {
+    unmount();
+  }
+});
+
+it("preserves an optimistic unpin across any sequence of reads before owner acknowledgement", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }), async (reads) => {
+    const { f, key, owner } = pinnedDirectoryOwner();
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const setDirectoryPin = vi.fn<NonNullable<DesktopApi["setDirectoryPin"]>>(async () => {
+      await pending;
+      owner.rank = undefined;
+      return { directoryKey: key, pinnedRank: owner.rank };
+    });
+    const api = { ...f.api, setDirectoryPin };
+    const { result, unmount } = renderHook(() => useThreadNavigation(api));
+    const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
+    try {
+      await waitFor(() => expect(rank()).toBe("1024"));
+      act(() => result.current.setBrowseMode("directories"));
+      let command!: Promise<void>;
+      act(() => { command = result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false); });
+      for (const refresh of reads) {
+        if (refresh) await act(() => result.current.pagedNavigation.refresh());
+        expect(rank()).toBeUndefined();
+      }
+      await act(async () => { finish(); await command; });
+      await act(() => result.current.pagedNavigation.refresh());
+      expect(rank()).toBe(owner.rank);
+    } finally {
+      finish();
+      unmount();
+    }
+  }), { numRuns: 15 });
 });
 
 it("loads one owner lens page and exact selection, preserving complete counts independently", async () => {
