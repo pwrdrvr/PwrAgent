@@ -25,7 +25,7 @@ function Host() {
       </button>
       {open ? (
         <DetachPullRequestWarning
-          pr={pr}
+          prs={[pr]}
           onCancel={() => setOpen(false)}
           onConfirm={() => setOpen(false)}
         />

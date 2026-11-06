@@ -241,7 +241,7 @@ describe("PR chip draft bar contract", () => {
       {
         name: "PR rollup list row",
         height: px(
-          declaration(ruleBody(".pr-rollup-popover__row .pr-chip"), "height"),
+          declaration(ruleBody(".pr-rollup-popover__list .pr-chip"), "height"),
           "rollup list pill"
         ),
       },
@@ -300,7 +300,7 @@ describe("PR chip draft bar contract", () => {
     expect([...sized.pill].sort()).toEqual([
       ".jump-palette__row-prs .pr-chip",
       ".pr-chip",
-      ".pr-rollup-popover__row .pr-chip",
+      ".pr-rollup-popover__list .pr-chip",
       ".thread-row__chips .pr-chip",
       ".thread-row__pr-rollup .pr-chip",
     ]);

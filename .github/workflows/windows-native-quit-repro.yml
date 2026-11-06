@@ -48,8 +48,13 @@ jobs:
           Invoke-WebRequest "https://download.sysinternals.com/files/Handle.zip" -OutFile $archive
           Expand-Archive -LiteralPath $archive -DestinationPath $tools -Force
           $handle = Join-Path $tools "handle64.exe"
-          $cdb = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Debuggers\x64\cdb.exe"
-          foreach ($tool in @($handle, $cdb)) {
+          # Run the debugger from the runner temp volume. CDB's startup loads its
+          # engine and extension packages from disk inside a 5 s readiness
+          # check, and the OS volume (C:) stalls for minutes at a time.
+          $debugger = Join-Path $tools "cdb"
+          Copy-Item -LiteralPath (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Debuggers\x64") -Destination $debugger -Recurse -Force
+          $cdb = Join-Path $debugger "cdb.exe"
+          foreach ($tool in @($handle, $cdb, (Join-Path $debugger "dbgeng.dll"))) {
             $signature = Get-AuthenticodeSignature -LiteralPath $tool
             if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "(^|, )O=Microsoft Corporation(,|$)") {
               throw "Diagnostic tool did not have a valid Microsoft signature."

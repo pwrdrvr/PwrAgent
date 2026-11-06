@@ -709,6 +709,7 @@ import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-ag
 import {
   type PwrAgentThreadTodoHandler,
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
+import { ThreadTodoError } from "../thread-todos/thread-todo-service";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
@@ -6920,6 +6921,7 @@ type McpGatewayConversationConsent = {
 };
 
 type ThreadListCacheState = {
+  archived: boolean;
   expiresAt?: number;
   promise?: Promise<AppServerThreadSummary[]>;
   threads?: AppServerThreadSummary[];
@@ -8899,6 +8901,10 @@ function threadOrchestrationFailure(
       ...(data === undefined ? {} : { data }),
     },
   };
+}
+
+function archivedThreadMessageRefusal(thread: Pick<AppServerThreadSummary, "id" | "title">): string {
+  return `Thread "${thread.title}" (${thread.id}) is archived; cannot send a message. Restore it with mutate_thread (archive=false) before sending.`;
 }
 
 /** See `DesktopBackendRegistry.readThreadHandoffSettings`. */
@@ -13975,7 +13981,7 @@ export class DesktopBackendRegistry {
     }
     // An event during the read must prevent publishing the old projection.
     // Do not share an in-flight request whose deadline belongs to another caller.
-    const pending: ThreadListCacheState = {};
+    const pending: ThreadListCacheState = { archived: params.archived === true };
     this.threadListCache.set(cacheKey, pending);
     const threads: AppServerThreadSummary[] = [];
     let providerFailed = false;
@@ -14052,6 +14058,7 @@ export class DesktopBackendRegistry {
         this.threadListCache.delete(cacheKey);
       } else {
         this.threadListCache.set(cacheKey, {
+          archived: params.archived === true,
           threads: result,
           expiresAt: Date.now() + THREAD_SEARCH_REUSE_WINDOW_MS,
         });
@@ -14173,7 +14180,7 @@ export class DesktopBackendRegistry {
     });
     // An event can invalidate or replace this entry while the read awaits
     // enrichment. Only the promise that still owns the key may publish it.
-    const pendingState: ThreadListCacheState = {};
+    const pendingState: ThreadListCacheState = { archived: normalizedParams.archived === true };
     const displayMetadataObservationSequence =
       this.reserveThreadInfoObservation();
     const execution = listingDiagnostics.trace("registry", {
@@ -14186,6 +14193,7 @@ export class DesktopBackendRegistry {
         if (this.threadListCache.get(cacheKey) === pendingState) {
           listingDiagnostics.remember(threads, execution);
           this.threadListCache.set(cacheKey, {
+            archived: normalizedParams.archived === true,
             expiresAt: Date.now() + (this.incompleteThreadLists.has(threads)
               ? INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS
               : THREAD_LIST_REUSE_WINDOW_MS),
@@ -14253,7 +14261,7 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId,
       },
-      { requireFresh: true },
+      { requireFresh: true, archived: false },
     );
     if (cached) {
       return cached;
@@ -14315,10 +14323,13 @@ export class DesktopBackendRegistry {
       backend?: AppServerBackendKind;
       threadId: string;
     },
-    options?: { requireFresh?: boolean },
+    options?: { requireFresh?: boolean; archived?: boolean },
   ): AppServerThreadSummary | undefined {
     const now = options?.requireFresh === true ? Date.now() : undefined;
     for (const state of this.threadListCache.values()) {
+      if (options?.archived !== undefined && state.archived !== options.archived) {
+        continue;
+      }
       if (now !== undefined && (state.expiresAt ?? 0) <= now) {
         continue;
       }
@@ -15009,6 +15020,7 @@ export class DesktopBackendRegistry {
       enrichDirectories: false,
     });
     this.threadListCache.set(cacheKey, {
+      archived: false,
       expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
       threads,
     });
@@ -19221,10 +19233,20 @@ export class DesktopBackendRegistry {
     acceptedPushedCommitShas: string[];
     worktreePath: string;
   } | undefined> {
-    const thread = await this.resolveThread({
+    const threadId = params.threadId.trim();
+    if (!threadId) return undefined;
+    let thread = await this.resolveThread({
       backend: params.backend,
-      threadId: params.threadId,
+      threadId,
     });
+    // Read-only Git access includes retained archived checkouts. Resolve the
+    // archive explicitly, independent of which thread list warmed the cache.
+    if (!thread) {
+      thread = (await this.listThreads({
+        backend: params.backend, archived: true, enrichDirectories: false,
+        forceRefresh: true, callerReason: "thread-id-lookup",
+      })).find((candidate) => candidate.id === threadId);
+    }
     if (!thread) {
       return undefined;
     }
@@ -46467,11 +46489,16 @@ export class DesktopBackendRegistry {
     source: { backend: AppServerBackendKind; threadId: string },
     target: ThreadTodoMessageTarget,
   ): Promise<ThreadTodoMessageTarget> {
-    if (target.instanceId && target.instanceLabel && target.title) return target;
+    if (target.instanceId) {
+      await this.validateRemoteMessageTarget(target);
+      if (target.instanceLabel && target.title) return target;
+    }
     if (!target.instanceId) {
       const local = await this.resolveThread({ backend: target.backend, threadId: target.threadId })
         .catch(() => undefined);
       if (local) return target.title ? target : { ...target, title: local.title };
+      const archived = await this.readArchivedMessageTarget(target).catch(() => undefined);
+      if (archived) throw new ThreadTodoError("invalid_arguments", archivedThreadMessageRefusal(archived));
     }
     if (!this.federationHandler) return target;
     const response = await Promise.resolve(this.federationHandler({
@@ -46489,12 +46516,34 @@ export class DesktopBackendRegistry {
     const found = response.data.results.find((result) =>
       !result.isLocal && result.backend === target.backend && result.threadId === target.threadId);
     if (!found) return target;
-    return {
+    const resolved = {
       ...target,
       instanceId: found.instanceId,
       instanceLabel: found.instanceLabel,
       title: target.title ?? found.title,
     };
+    return target.instanceId ? resolved : await this.validateRemoteMessageTarget(resolved);
+  }
+
+  private async validateRemoteMessageTarget(target: ThreadTodoMessageTarget): Promise<ThreadTodoMessageTarget> {
+    if (!target.instanceId || !this.federatedThreadInspectionHandler) return target;
+    const remote = await this.federatedThreadInspectionHandler({
+      backend: target.backend, threadId: target.threadId, instanceId: target.instanceId, limit: 0, includeTurns: false,
+    }).catch(() => undefined);
+    if (remote?.archived === true || remote?.thread.archivedAt !== undefined) {
+      throw new ThreadTodoError("invalid_arguments", archivedThreadMessageRefusal(remote.thread));
+    }
+    return target;
+  }
+
+  private async readArchivedMessageTarget(target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadSummary | undefined> {
+    return (await this.listThreads({
+      backend: target.backend, archived: true, enrichDirectories: false, forceRefresh: true,
+      callerReason: "thread-id-lookup",
+    })).find((thread) => thread.id === target.threadId);
   }
 
   private async sendMessageToThread(
@@ -46659,6 +46708,19 @@ export class DesktopBackendRegistry {
       if (!instanceId) {
         try {
           localThread = await this.resolveThread({ backend, threadId });
+          if (!localThread) {
+            // Archive membership belongs to the provider's listing, even when
+            // its rows omit archivedAt. Never wake a reclaimed workspace merely
+            // because a prior status/search read warmed the archived cache.
+            const archivedThread = await this.readArchivedMessageTarget({ backend, threadId });
+            if (archivedThread) {
+              return threadOrchestrationFailure(
+                "forbidden",
+                archivedThreadMessageRefusal(archivedThread),
+                { backend, threadId, archived: true },
+              );
+            }
+          }
         } catch (error) {
           localResolutionError = error;
         }
@@ -47040,6 +47102,12 @@ export class DesktopBackendRegistry {
       const localThread = !instanceId
         ? await this.resolveThread({ backend, threadId }).catch(() => undefined)
         : undefined;
+      if (!localThread && !instanceId && request.operation === "steer_thread") {
+        const archived = await this.readArchivedMessageTarget({ backend, threadId }).catch(() => undefined);
+        if (archived) {
+          return threadOrchestrationFailure("forbidden", archivedThreadMessageRefusal(archived), { backend, threadId, archived: true });
+        }
+      }
       const rememberedRemote =
         !localThread && includeRemote && this.federatedThreadControlHandler
           ? await this.federatedThreadControlHandler({
@@ -50920,7 +50988,9 @@ export class DesktopBackendRegistry {
         let candidateThreads = activeThreads.filter(
           (thread) => thread.id === threadId,
         );
+        let archived = false;
         if (candidateThreads.length === 0) {
+          archived = true;
           candidateThreads = (
             await this.listThreads({
               backend: args.backend,
@@ -50972,6 +51042,7 @@ export class DesktopBackendRegistry {
             data: {
               thread: {
                 ...summary,
+                archived,
                 status,
                 queuedExecutionMode: queued?.mode,
                 queuedExecutionModeAt: queued?.queuedAt,
@@ -51012,6 +51083,7 @@ export class DesktopBackendRegistry {
                 ...summary,
                 instanceId: remote.instanceId,
                 instanceLabel: remote.instanceLabel,
+                ...(remote.archived !== undefined ? { archived: remote.archived } : {}),
                 threadLink: buildThreadMarkdownLink({
                   backend: args.backend,
                   threadId,
@@ -51197,7 +51269,9 @@ export class DesktopBackendRegistry {
     let candidateThreads = activeThreads.filter(
       (thread) => thread.id === params.threadId,
     );
+    let archived = false;
     if (candidateThreads.length === 0) {
+      archived = true;
       candidateThreads = (
         await this.listThreads({
           backend: params.backend,
@@ -51207,7 +51281,7 @@ export class DesktopBackendRegistry {
       ).filter((thread) => thread.id === params.threadId);
     }
     const [summary] = await this.enrichThreadInspectionSummaries(candidateThreads);
-    return summary;
+    return summary ? { ...summary, archived } : undefined;
   }
 
   /**
@@ -51858,14 +51932,14 @@ export class DesktopBackendRegistry {
     if (mutateLocally) {
       // Known only when the backend listed the thread; an overlay-only hit
       // leaves the question to the archive call itself.
-      const archivedAt = localSummary?.archivedAt;
-      if (archive === true && archivedAt !== undefined) {
+      const archived = localSummary?.archived;
+      if (archive === true && archived === true) {
         return threadInspectionFailure(
           "invalid_arguments",
           `${threadLabel} is already archived.`,
         );
       }
-      if (archive === false && localSummary && archivedAt === undefined) {
+      if (archive === false && archived === false) {
         return threadInspectionFailure(
           "invalid_arguments",
           `${threadLabel} is not archived.`,

@@ -38,28 +38,12 @@ A Claude thread has two copies of its conversation:
   fork's `forkFromSdkSessionId`). Claude Code deletes a session that has been
   idle longer than its `cleanupPeriodDays` setting, 30 days by default.
 
-After Claude Code deletes the session, the thread still reads correctly, but
-Claude cannot continue it or rewind it:
+### Why PwrAgent keeps its own copy
 
-- A resume fails before the session starts. Claude Code answers with an
-  `error_during_execution` result whose error is
-  `No conversation found with session ID: <id>`, and sends no `init`.
-  The backend matches that error only when it names the session the launch
-  resumed. The turn then fails with a message that says Claude no longer has
-  the conversation. Any other resume failure keeps Claude's own message.
-- A rewind reads the session as empty. When `getSessionInfo` also finds the
-  session in no project folder, the preview and the rewind both say Claude
-  no longer has the conversation.
-
-The thread keeps its `sdkSessionId`. PwrAgent never changes the operator's
-`cleanupPeriodDays`: Claude Code applies it to every session on the machine,
-not only PwrAgent's.
-
-Claude Code also saves every session that PwrAgent runs with
-`persistSession: true`, so a Claude thread is stored twice. PwrAgent keeps its
-own copy anyway, because the Agent SDK's reader (`getSessionMessages`) cannot
-replace it. This was decided on 2026-11-02, from measurements of 337 threads
-made through the SDK API with `@anthropic-ai/claude-agent-sdk` 0.3.310:
+PwrAgent keeps its own copy, because the Agent SDK's reader
+(`getSessionMessages`) cannot replace it. This was decided on 2026-11-02,
+from measurements of 337 threads made through the SDK API with
+`@anthropic-ai/claude-agent-sdk` 0.3.310:
 
 - **Compaction hides earlier turns.** The reader returns only the
   conversation after the last compaction: a system boundary, the summary, and
@@ -70,8 +54,8 @@ made through the SDK API with `@anthropic-ai/claude-agent-sdk` 0.3.310:
   can be the source of truth.
 - **Claude Code deletes old sessions.** It removes transcripts older than
   `cleanupPeriodDays`, which defaults to 30 days. A PwrAgent thread has no
-  such limit. Resuming a deleted session fails with "No conversation found
-  with session ID".
+  such limit. See
+  [After Claude Code deletes the session](#after-claude-code-deletes-the-session).
 - **The reader leaves out fields PwrAgent shows.** It has no
   `tool_use_result`, which file diffs (`structuredPatch`), artifact links and
   background-task launches come from. It also has no turn status and no turn
@@ -103,6 +87,25 @@ Revisit this decision only if Claude's reader returns turns from before a
 compaction and PwrAgent can keep sessions past `cleanupPeriodDays` without
 changing the operator's setting. The SDK's `sessionStore` option does not
 help here. It mirrors the transcript to a third copy, and it is alpha.
+
+### After Claude Code deletes the session
+
+After Claude Code deletes the session, the thread still reads correctly, but
+Claude cannot continue it or rewind it:
+
+- A resume fails before the session starts. Claude Code answers with an
+  `error_during_execution` result whose error is
+  `No conversation found with session ID: <id>`, and sends no `init`.
+  The backend matches that error only when it names the session the launch
+  resumed. The turn then fails with a message that says Claude no longer has
+  the conversation. Any other resume failure keeps Claude's own message.
+- A rewind reads the session as empty. When `getSessionInfo` also finds the
+  session in no project folder, the preview and the rewind both say Claude
+  no longer has the conversation.
+
+The thread keeps its `sdkSessionId`. PwrAgent never changes the operator's
+`cleanupPeriodDays`: Claude Code applies it to every session on the machine,
+not only PwrAgent's.
 
 ### Copy size
 

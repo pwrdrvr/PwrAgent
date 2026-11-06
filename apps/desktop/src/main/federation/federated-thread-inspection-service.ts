@@ -81,6 +81,7 @@ export function createFederatedThreadInspectionHandler(
       instanceId: match.peer.target.instanceId,
       instanceLabel: match.peer.label,
       thread: match.thread,
+      archived: match.archived,
       ...(summary ? { summary } : {}),
       read,
     };

@@ -134,9 +134,10 @@ type ThreadRowProps = {
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   /** Fired with the same hover intent signal to refresh local Git state. */
   onPrefetchGitWorkingState?: (thread: NavigationThreadSummary) => void;
-  onDetachPullRequest?: (
+  /** One PR from its chip, or every PR from Detach all. */
+  onDetachPullRequests?: (
     thread: NavigationThreadSummary,
-    pr: PrSummary,
+    prs: readonly PrSummary[],
   ) => void;
   /**
    * Called when the user picks "Unbind" from a per-thread messaging
@@ -335,7 +336,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
     [branchDriftPrUrl, driftBaseBranch, driftBehind, driftAhead],
   );
   const detachPr = useEventCallback((targetPr: PrSummary) =>
-    props.onDetachPullRequest?.(props.thread, targetPr));
+    props.onDetachPullRequests?.(props.thread, [targetPr]));
+  const detachPrs = useEventCallback((targetPrs: readonly PrSummary[]) =>
+    props.onDetachPullRequests?.(props.thread, targetPrs));
   const toggleReactionPicker = useCallback(
     () => setPickerOpen((open) => !open),
     [],
@@ -730,6 +733,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                     ? openPrContextMenu
                     : undefined
                 }
+                onDetach={props.onDetachPullRequests ? detachPr : undefined}
+                onDetachAll={props.onDetachPullRequests ? detachPrs : undefined}
               />
             ) : null}
 
@@ -816,7 +821,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                     ? openPrContextMenu
                     : undefined
                 }
-                onDetach={props.onDetachPullRequest ? detachPr : undefined}
+                onDetach={props.onDetachPullRequests ? detachPr : undefined}
               />
             ))}
             thread={props.thread}

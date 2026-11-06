@@ -387,10 +387,14 @@ export function installThreadTodoRuntime(params: {
   ): Promise<AddThreadTodoInput> => {
     const action = input.action;
     if (action?.type === "send_message") {
-      // Raising the card must not fail on a lookup; the send discovers it too.
+      // Discovery failures stay best effort, but a known archived destination
+      // must not become a card the operator cannot send.
       const target = await Promise.resolve()
         .then(() => registry.locateThreadTodoMessageTarget(thread, action.target))
-        .catch(() => action.target);
+        .catch((error: unknown) => {
+          if (error instanceof ThreadTodoError) throw error;
+          return action.target;
+        });
       return target === action.target ? input : { ...input, action: { ...action, target } };
     }
     if (action?.type !== "start_thread") return input;

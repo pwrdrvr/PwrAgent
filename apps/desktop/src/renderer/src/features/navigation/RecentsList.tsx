@@ -2,8 +2,9 @@ import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPr
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
-import { Fragment, useId, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Children, Fragment, useEffect, useId, useRef, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useEventCallback } from "../../lib/useEventCallback";
+import { useRecoverableState } from "../../lib/RendererRecoveryState";
 import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
@@ -64,6 +65,11 @@ type RecentsListProps = {
   pinnedResourceId?: string;
   pinnedGroupCollapsed?: boolean;
   onSetPinnedGroupCollapsed?: (collapsed: boolean) => void;
+  /**
+   * The lens tab's own name and icon, which head the list while the Pinned
+   * group is drawn above it. A list under no group has no header.
+   */
+  listSection?: { title: string; icon: ReactNode };
   onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   loadedThreads?: NavigationThreadSummary[];
   approvalRequestThreadKeys?: Record<string, boolean>;
@@ -130,9 +136,10 @@ type RecentsListProps = {
   ) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onPrefetchGitWorkingState?: (thread: NavigationThreadSummary) => void;
-  onDetachPullRequest?: (
+  /** One PR from its chip, or every PR from Detach all. */
+  onDetachPullRequests?: (
     thread: NavigationThreadSummary,
-    pr: PrSummary,
+    prs: readonly PrSummary[],
   ) => void;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
@@ -189,6 +196,11 @@ export function RecentsList(props: RecentsListProps) {
     onSetThreadPin: props.onSetThreadPin,
     onNestThread: props.onNestThread,
   });
+  // The list's section below the Pinned group folds like the group does, so
+  // only the pins stay on screen. Window-local view state: it costs no
+  // persisted write, survives a renderer recovery, and a restart opens it.
+  const [recentsCollapsedState, setRecentsCollapsed] = useRecoverableState<boolean>(
+    "navigation.recentsSectionCollapsed", false);
   const threadByKey = new Map(
     (props.loadedThreads ?? props.threads).map((thread) => [
       threadSummaryIdentityKey(thread),
@@ -302,6 +314,48 @@ export function RecentsList(props: RecentsListProps) {
   const startingSubthreads = startingThreads.filter((creation) =>
     creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
   const startingRootThreads = startingThreads.filter((creation) => !startingSubthreads.includes(creation));
+  // The list's section exists only under a drawn Pinned group: with no pin
+  // the list is all there is, and folding it would leave the lens blank.
+  const listSection = props.listSection;
+  // The pager is an array with a null per resource that has nothing to load,
+  // so count its rendered controls rather than test the array.
+  const recentsSectionShown = listSection !== undefined && pinnedRoots.length > 0
+    && (topLevelThreads.length > 0 || startingRootThreads.length > 0 || Children.toArray(props.pager).length > 0);
+  const recentsCollapsed = recentsSectionShown && recentsCollapsedState;
+  // The header goes when the last pin does, and a fold it leaves behind would
+  // hide the list again under the next pin. Drop the fold only once the pins
+  // are settled at none: a lens switch or a reload starts the group's page
+  // empty while it loads, and that must keep the fold.
+  const pinsSettledEmpty = listSection !== undefined && groupActive && pinnedRoots.length === 0
+    && (!props.pagedNavigation
+      || (pinnedResource?.state.page !== undefined && !pinnedResource.loading && !pinnedResource.state.error));
+  useEffect(() => {
+    if (pinsSettledEmpty && recentsCollapsedState) setRecentsCollapsed(false);
+  }, [pinsSettledEmpty, recentsCollapsedState, setRecentsCollapsed]);
+  // A new selection inside the folded section (⌘K, a notification) or a
+  // thread starting at its top would land out of sight, so either reopens
+  // it, as a revealed pin reopens the Pinned group. Folding with a thread
+  // already open there must not, so each effect acts only on a change it
+  // records itself.
+  const selectionFolded = recentsCollapsed && props.selectedThreadKey !== undefined
+    && topLevelThreads.some((thread) => {
+      const key = threadSummaryIdentityKey(thread);
+      return key === props.selectedThreadKey
+        || trays.subtree(key).some((child) => threadSummaryIdentityKey(child) === props.selectedThreadKey);
+    });
+  const lastSelectionRef = useRef({ key: props.selectedThreadKey, reveal: props.revealSelectedThreadRequest });
+  useEffect(() => {
+    const last = lastSelectionRef.current;
+    const changed = last.key !== props.selectedThreadKey || last.reveal !== props.revealSelectedThreadRequest;
+    lastSelectionRef.current = { key: props.selectedThreadKey, reveal: props.revealSelectedThreadRequest };
+    if (changed && selectionFolded) setRecentsCollapsed(false);
+  }, [props.selectedThreadKey, props.revealSelectedThreadRequest, selectionFolded, setRecentsCollapsed]);
+  const startingRootCount = startingRootThreads.length;
+  const startingRootCountRef = useRef(startingRootCount);
+  useEffect(() => {
+    if (startingRootCount > startingRootCountRef.current) setRecentsCollapsed(false);
+    startingRootCountRef.current = startingRootCount;
+  }, [startingRootCount, setRecentsCollapsed]);
   const renderSubthreads = (parent: NavigationPresentedThread) => {
     const parentKey = threadSummaryIdentityKey(parent);
     // Already depth-first ordered by the tray. Re-sorting here by this
@@ -393,7 +447,7 @@ export function RecentsList(props: RecentsListProps) {
               onPointerDownThread={draggable ? pointerDownSubthread : undefined}
               onOpenContextMenu={props.onOpenThreadContextMenu}
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-              onDetachPullRequest={props.onDetachPullRequest}
+              onDetachPullRequests={props.onDetachPullRequests}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
               onRevealSelectedThreadComplete={
@@ -432,7 +486,7 @@ export function RecentsList(props: RecentsListProps) {
   // deliberately absent, just like Finder ranges do not reach into a closed
   // disclosure.
   const pinnedGroupCollapsed = Boolean(props.pinnedGroupCollapsed);
-  const selectionOrder = [...(pinnedGroupCollapsed ? [] : pinnedRoots), ...topLevelThreads].flatMap((thread) => {
+  const selectionOrder = [...(pinnedGroupCollapsed ? [] : pinnedRoots), ...(recentsCollapsed ? [] : topLevelThreads)].flatMap((thread) => {
     const threadKey = threadSummaryIdentityKey(thread);
     return [
       threadKey,
@@ -500,7 +554,7 @@ export function RecentsList(props: RecentsListProps) {
       thread,
       onOpenContextMenu: props.onOpenThreadContextMenu,
       onOpenPullRequestContextMenu: props.onOpenPullRequestContextMenu,
-      onDetachPullRequest: props.onDetachPullRequest,
+      onDetachPullRequests: props.onDetachPullRequests,
       onPrefetchPullRequests: props.onPrefetchPullRequests,
       onPrefetchGitWorkingState: props.onPrefetchGitWorkingState,
       onRevealSelectedThreadComplete: props.onRevealSelectedThreadComplete,
@@ -569,7 +623,10 @@ export function RecentsList(props: RecentsListProps) {
     </div>
   ) : null;
   const pinnedGroup = pinnedRoots.length > 0 ? (
-    <PinnedGroup
+    <ThreadSection
+      title="Pinned"
+      icon={<PinIcon size={12} />}
+      pinScope="recents"
       collapsed={pinnedGroupCollapsed}
       counts={readPinnedGroupCounts({
         page: pinnedResource?.state.page,
@@ -600,7 +657,7 @@ export function RecentsList(props: RecentsListProps) {
         );
       })}
       {pinnedFooter}
-    </PinnedGroup>
+    </ThreadSection>
   ) : pinnedFooter && groupActive ? (
     <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Pinned threads">
       {pinnedFooter}
@@ -623,6 +680,31 @@ export function RecentsList(props: RecentsListProps) {
     </div>
   ) : null;
 
+  const listRows = (
+    <>
+      {startingRootThreads.map((creation) => (
+        <div key={creation.selectionKey} className="thread-group">
+          <PendingThreadRow
+            entry={creation}
+            locationMode="label"
+            selected={props.selectedThreadKey === creation.selectionKey}
+            showParent
+            onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
+            onSelect={props.onSelectStartingThread}
+          />
+        </div>
+      ))}
+      {topLevelThreads.map((thread) => renderThreadGroup(thread))}
+    </>
+  );
+  // The list's own page counts its whole bucket once the owner splits the
+  // lens (`collectionSize`), so the header counts rows past the loaded page.
+  // A list spread over several pages falls back to the loaded rows.
+  const listResourceIds = props.resourceIds ?? ["lens"];
+  const listPage = listResourceIds.length === 1
+    ? props.pagedNavigation?.resources.get(listResourceIds[0]!)?.state.page
+    : undefined;
+
   if (topLevelThreads.length === 0 && startingRootThreads.length === 0 && !pinnedGroup && props.emptyMessage) {
     return (
       <div className="sidebar-list sidebar-list--dense">
@@ -637,22 +719,31 @@ export function RecentsList(props: RecentsListProps) {
   return (
     <div className={`sidebar-list sidebar-list--dense${pinnedRoots.length > 0 ? " sidebar-list--pinned-group" : ""}`}>
       {pinnedGroup}
-      <div className="sidebar-list sidebar-list--compact" role="list">
-        {startingRootThreads.map((creation) => (
-          <div key={creation.selectionKey} className="thread-group">
-            <PendingThreadRow
-              entry={creation}
-              locationMode="label"
-              selected={props.selectedThreadKey === creation.selectionKey}
-              showParent
-              onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
-              onSelect={props.onSelectStartingThread}
-            />
+      {recentsSectionShown && listSection ? (
+        <ThreadSection
+          title={listSection.title}
+          icon={listSection.icon}
+          className="recents-group"
+          collapsed={recentsCollapsed}
+          counts={readPinnedGroupCounts({
+            page: listPage,
+            roots: topLevelThreads,
+            subtree: (thread) => trays.subtree(threadSummaryIdentityKey(thread)),
+            thinkingThreadKeys: props.thinkingThreadKeys,
+          })}
+          footer={props.pager}
+          onToggle={() => setRecentsCollapsed(!recentsCollapsed)}
+        >
+          {listRows}
+        </ThreadSection>
+      ) : (
+        <>
+          <div className="sidebar-list sidebar-list--compact" role="list">
+            {listRows}
           </div>
-        ))}
-        {topLevelThreads.map((thread) => renderThreadGroup(thread))}
-      </div>
-      {props.pager}
+          {props.pager}
+        </>
+      )}
       {visitingSlot}
       {props.footer}
     </div>
@@ -716,38 +807,45 @@ function formatUnreadThreadCount(count: number): string {
 }
 
 /**
- * The Pinned group of Updated and Created: a project header's primitives (the
- * disclosure caret, the label, the right-aligned meta), so the group reads
- * as the same kind of thing a Directories project is.
+ * A section of Updated and Created: the Pinned group, or the time-sorted
+ * list under it, headed by its lens tab's name. Both use a project header's
+ * primitives (the disclosure caret, the label, the right-aligned meta), so
+ * each reads as the same kind of thing a Directories project is.
  *
  * Collapsed, the header carries the Attention tab's two readouts scoped to
- * the group, both on screen and grey at zero: closing the group must never
+ * the section, both on screen and grey at zero: closing a section must never
  * hide a running turn or an unread thread. Open, the rows show their own
  * state and the header shows only the count.
  */
-function PinnedGroup(props: {
+function ThreadSection(props: {
+  title: string;
+  icon: ReactNode;
+  /** The Pinned group is a pin-drag scope; the Recents list is not. */
+  pinScope?: string;
+  className?: string;
   collapsed: boolean;
   counts: PinnedGroupCounts;
+  footer?: ReactNode;
   onToggle?: () => void;
   children: ReactNode;
 }) {
   const { counts } = props;
   const label = [
-    "Pinned",
+    props.title,
     formatPinnedThreadCount(counts.total),
     ...(props.collapsed ? [describeAttentionCounts(counts, formatUnreadThreadCount)] : []),
   ].join(", ");
   return (
     <section
-      className="pinned-group"
-      data-thread-pin-scope="recents"
+      className={`pinned-group${props.className ? ` ${props.className}` : ""}`}
+      data-thread-pin-scope={props.pinScope}
     >
       <div className="directory-row__header">
         <button
           aria-expanded={!props.collapsed}
           aria-label={label}
           className="thread-row thread-row--compact directory-row__summary pinned-group__summary"
-          data-hover-stable-release="pinned-group"
+          data-hover-stable-release={props.className ?? "pinned-group"}
           type="button"
           onClick={props.onToggle}
         >
@@ -757,10 +855,10 @@ function PinnedGroup(props: {
               className={`directory-row__chevron${props.collapsed ? "" : " is-open"}`}
             />
             <span aria-hidden="true" className="directory-row__icon pinned-group__icon">
-              <PinIcon size={12} />
+              {props.icon}
             </span>
             <span className="directory-row__title-wrap">
-              <span className="thread-row__title directory-row__title">Pinned</span>
+              <span className="thread-row__title directory-row__title">{props.title}</span>
             </span>
           </span>
           <span className="directory-row__summary-meta">
@@ -781,9 +879,10 @@ function PinnedGroup(props: {
       </div>
       {props.collapsed ? null : (
         <div className="directory-row__details pinned-group__details">
-          <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Pinned threads">
+          <div className="sidebar-list sidebar-list--compact" role="list" aria-label={`${props.title} threads`}>
             {props.children}
           </div>
+          {props.footer}
         </div>
       )}
     </section>

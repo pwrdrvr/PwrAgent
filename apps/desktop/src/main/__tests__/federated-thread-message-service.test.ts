@@ -34,6 +34,7 @@ function buildRuntime(params: {
     label: string;
     capabilities?: Array<"thread_navigation" | "turn_control">;
     ownsThread?: boolean;
+    archived?: boolean;
     resolveUnsupported?: boolean;
     activeTurnId?: string | null;
     interruptTurn?: boolean;
@@ -195,6 +196,7 @@ function buildRuntime(params: {
         readThread,
         resolveActiveTurn,
         resolveThread,
+        lookupArchivedThreads: vi.fn(async () => ({ threads: peer.archived ? [ownedThread] : [] })),
         startTurn,
         replaceQueuedMessage: vi.fn(async (): Promise<StartTurnResponse> => ({
           backend: "codex", threadId: request.threadId, turnId: "queued-1", queueStatus: "queued", queueEntryId: "queued-1",
@@ -217,6 +219,14 @@ function buildRuntime(params: {
 }
 
 describe("federated thread message service", () => {
+  it.each([undefined, "owner"])("reports an archived peer target without an archive timestamp (owner: %s)", async (instanceId) => {
+    const { backends, runtime } = buildRuntime({ peers: [{ instanceId: "owner", label: "Owner", archived: true }] });
+    const handler = createFederatedThreadMessageHandler({ runtime: () => runtime });
+    await expect(handler({ ...request, ...(instanceId ? { instanceId } : {}) }))
+      .rejects.toThrow(/archived.*cannot send/i);
+    expect(backends.get("owner")!.startTurn).not.toHaveBeenCalled();
+  });
+
   it("replaces on the owning peer without falling back to a new turn", async () => {
     const { backends, runtime } = buildRuntime({ peers: [{ instanceId: "owner", label: "Owner", ownsThread: true }] });
     const handler = createFederatedThreadMessageHandler({ runtime: () => runtime });
