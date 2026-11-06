@@ -25,6 +25,9 @@ export const FEDERATION_THREAD_TODO_METHODS = {
   snapshotFeed: "threadTodos.snapshot",
   // Needs `thread_todo_plan` on the owner; a start there sends the prompt alone.
   raisePlan: "threadTodos.raisePlan",
+  // Older owners do not answer them; the review then shows no Auto-fix state.
+  readReviewAutoFix: "threadReviews.readAutoFix",
+  disarmReviewAutoFix: "threadReviews.disarmAutoFix",
 } as const;
 
 export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapability> = {
@@ -39,6 +42,8 @@ export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapab
   [FEDERATION_THREAD_TODO_METHODS.setProject]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.runAction]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.raisePlan]: "turn_control",
+  [FEDERATION_THREAD_TODO_METHODS.readReviewAutoFix]: "thread_detail",
+  [FEDERATION_THREAD_TODO_METHODS.disarmReviewAutoFix]: "turn_control",
 };
 
 export function registerFederationThreadTodoHandlers(router: FederationRouter, operations: Operations): void {

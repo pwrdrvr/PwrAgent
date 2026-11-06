@@ -24,6 +24,8 @@ import {
   THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   THREAD_REVIEWS_LIST_CHANNEL,
   THREAD_REVIEWS_UPDATE_CHANNEL,
+  THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL,
+  THREAD_REVIEWS_DISARM_AUTO_FIX_CHANNEL,
 } from "../../shared/ipc";
 import { expectedNavigationReadFailure } from "../../shared/navigation-ipc-result";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
@@ -166,6 +168,8 @@ export function registerThreadTodoIpcHandlers(options: {
     hub.snapshot(federationTargetForChannelSubscriber(event.sender)));
   const channels = {
     listReviews: THREAD_REVIEWS_LIST_CHANNEL, updateReview: THREAD_REVIEWS_UPDATE_CHANNEL,
+    readReviewAutoFix: THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL,
+    disarmReviewAutoFix: THREAD_REVIEWS_DISARM_AUTO_FIX_CHANNEL,
     listTodos: THREAD_TODOS_LIST_CHANNEL, resolveTodo: THREAD_TODOS_RESOLVE_CHANNEL,
     runAction: THREAD_TODOS_RUN_ACTION_CHANNEL, listProjects: THREAD_TODOS_LIST_PROJECTS_CHANNEL,
     setItemChecked: THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL, setProject: THREAD_TODOS_SET_PROJECT_CHANNEL,

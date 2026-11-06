@@ -68,8 +68,10 @@ import type {
   ThreadTodoRunOptions,
 } from "./thread-todos-view";
 import {
+  ReviewAutoFixLine,
   SettledFindingLabel,
   orderReviewItems,
+  useReviewAutoFix,
   useTrackedReview,
 } from "./review-tracking";
 import {
@@ -222,6 +224,7 @@ function ReviewTodoFindingLabel(props: { item: ThreadReviewItem; ranked: boolean
 function TrackedReviewCard(props: ThreadTodoCardProps) {
   const { todo } = props;
   const tracking = useTrackedReview(todo, { id: todo.reviewId });
+  const autoFix = useReviewAutoFix(todo);
   const [expanded, setExpanded] = useState(false);
   // One hand-off per click: a second click before the send settles would
   // queue the same reply again.
@@ -381,6 +384,12 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       />
       <ThreadTodoCardMeta todo={todo} now={props.now} progress={progress} />
       <div className="thread-todo-card__body">
+        {review ? (
+          <ReviewAutoFixLine
+            run={autoFix.status?.runs[review.id]}
+            openCount={review.status === "open" ? openItems.length : 0}
+          />
+        ) : null}
         {review && items.length === 0 ? (
           <p className="review-todo__summary">
             <span className="review-todo__count">No findings to settle</span>

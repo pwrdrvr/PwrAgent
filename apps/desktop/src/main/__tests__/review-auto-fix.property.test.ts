@@ -25,7 +25,14 @@ import {
 type Phase = "pending" | "running" | "over";
 type Review = { id: number; thread: string; turnId: string; autoFix: boolean; phase: Phase };
 type Model = { reviews: Review[]; nextId: number };
-type Real = { arming: ReviewAutoFixArming; handles: Map<number, ReviewAutoFixStart> };
+type Real = {
+  arming: ReviewAutoFixArming;
+  handles: Map<number, ReviewAutoFixStart>;
+  /** Threads the arming reported a change for since the last check. */
+  notified: Set<string>;
+  /** Each thread's armed turns at the last check. */
+  seen: Map<string, string>;
+};
 
 const thread = (id: string) => ({ backend: "codex" as const, threadId: id });
 const onThread = (model: Model, id: string, phase: Phase) =>
@@ -113,6 +120,39 @@ class ForeignLand implements fc.Command<Model, Real> {
 }
 
 // Mostly one thread, so sequences on it run long; the other checks isolation.
+/** Don't auto-fix on the running review: true exactly when it was still armed. */
+class Disarm implements fc.Command<Model, Real> {
+  constructor(readonly thread: string) {}
+  check(model: Readonly<Model>): boolean { return onThread(model as Model, this.thread, "running").length > 0; }
+  run(model: Model, real: Real): void {
+    const review = onThread(model, this.thread, "running")[0]!;
+    expect(real.arming.disarm(thread(this.thread), review.turnId)).toBe(review.autoFix);
+    review.autoFix = false;
+  }
+  toString(): string { return `disarm(${this.thread})`; }
+}
+
+/**
+ * Viewers see a thread's armed reviews: the running ones still set to
+ * auto-fix. A change to that list is announced.
+ */
+class CheckArmed implements fc.Command<Model, Real> {
+  check(): boolean { return true; }
+  run(model: Model, real: Real): void {
+    for (const id of ["a", "b"]) {
+      const expected = onThread(model, id, "running").filter((review) => review.autoFix)
+        .map((review) => review.turnId).sort();
+      const armed = real.arming.armedTurnIds(thread(id)).sort();
+      expect(armed).toEqual(expected);
+      const key = armed.join(",");
+      if ((real.seen.get(id) ?? "") !== key) expect(real.notified.has(id)).toBe(true);
+      real.seen.set(id, key);
+    }
+    real.notified.clear();
+  }
+  toString(): string { return "checkArmed"; }
+}
+
 const threadArb = fc.constantFrom("a", "a", "a", "b");
 const commands = fc.commands([
   fc.tuple(threadArb, fc.boolean()).map(([id, autoFix]) => new Begin(id, autoFix)),
@@ -121,18 +161,27 @@ const commands = fc.commands([
   threadArb.map((id) => new Land(id)),
   threadArb.map((id) => new EndTurn(id)),
   threadArb.map((id) => new ForeignLand(id)),
+  threadArb.map((id) => new Disarm(id)),
+  fc.constant(new CheckArmed()),
 ], { maxCommands: 40 });
+
+function setup(): { model: Model; real: Real } {
+  const notified = new Set<string>();
+  return {
+    model: { reviews: [], nextId: 0 },
+    real: {
+      arming: new ReviewAutoFixArming((changed) => notified.add(changed.threadId)),
+      handles: new Map(),
+      notified,
+      seen: new Map(),
+    },
+  };
+}
 
 describe("review auto-fix arming", () => {
   it("fixes a landed review exactly when it was started with auto-fix, once", () => {
     fc.assert(fc.property(commands, (cmds) => {
-      fc.modelRun(
-        () => ({
-          model: { reviews: [], nextId: 0 },
-          real: { arming: new ReviewAutoFixArming(), handles: new Map() },
-        }),
-        cmds,
-      );
+      fc.modelRun(setup, cmds);
     }), { numRuns: 2000 });
   });
 

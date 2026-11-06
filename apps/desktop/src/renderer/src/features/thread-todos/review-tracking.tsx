@@ -1,32 +1,119 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  ReviewAutoFixRun,
+  ReviewAutoFixStatus,
   ThreadReview,
   ThreadReviewIdentity,
   ThreadReviewItem,
   ThreadReviewResolution,
   UpdateThreadReviewRequest,
 } from "@pwragent/shared";
-import { BanIcon, CheckIcon, TodoIcon } from "../../icons";
+import { BanIcon, CheckIcon, ClockIcon, TodoIcon } from "../../icons";
+import { PendingSpinner } from "../../components/PendingSpinner";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 
-const pendingReads = new WeakMap<DesktopApi, Map<string, Promise<ThreadReview[]>>>();
+const pendingReads = new WeakMap<DesktopApi, Map<string, Promise<unknown>>>();
 
-/** The transcript and its To-do card share one read when the same event arrives. */
-function readReviews(api: DesktopApi, identity: ThreadReviewIdentity): Promise<ThreadReview[]> {
+/**
+ * One read per thread at a time, shared by every surface that asks, such as
+ * the transcript and its To-do card. `round` names what prompted the read: a
+ * change event's time keeps a read that started before the change from
+ * answering for it.
+ */
+function sharedRead<T>(
+  api: DesktopApi,
+  kind: string,
+  identity: ThreadReviewIdentity,
+  read: () => Promise<T>,
+  round?: number,
+): Promise<T> {
   let pending = pendingReads.get(api);
   if (!pending) {
     pending = new Map();
     pendingReads.set(api, pending);
   }
-  const key = JSON.stringify([identity.federationTarget?.instanceId, identity.backend, identity.threadId]);
+  const key = JSON.stringify([kind, identity.federationTarget?.instanceId, identity.backend, identity.threadId, round]);
   const current = pending.get(key);
-  if (current) return current;
-  const request = api.listThreadReviews!({ ...identity, status: "all" })
-    .then((response) => response.reviews)
-    .finally(() => pending.delete(key));
+  if (current) return current as Promise<T>;
+  const request = read().finally(() => pending.delete(key));
   pending.set(key, request);
   return request;
+}
+
+/** The transcript and its To-do card share one read when the same event arrives. */
+function readReviews(api: DesktopApi, identity: ThreadReviewIdentity): Promise<ThreadReview[]> {
+  return sharedRead(api, "reviews", identity, () => api.listThreadReviews!({ ...identity, status: "all" })
+    .then((response) => response.reviews));
+}
+
+/**
+ * The thread's Auto-fix state from its owner. An owner that predates it does
+ * not answer, which reads as no state at all.
+ */
+function readAutoFix(
+  api: DesktopApi,
+  identity: ThreadReviewIdentity,
+  round: number | undefined,
+): Promise<ReviewAutoFixStatus | undefined> {
+  return sharedRead(api, "auto-fix", identity, () => api.readReviewAutoFix!(identity)
+    .then((response) => response.status)
+    .catch(() => undefined), round);
+}
+
+/**
+ * A thread's Auto-fix state, read from the thread's owner and re-read on its
+ * to-do change event: which running reviews are armed, and what each landed
+ * review's Auto-fix turn is doing. `disarm` is Don't auto-fix.
+ */
+export function useReviewAutoFix(identity: ThreadReviewIdentity | undefined) {
+  const api = useDesktopApi();
+  const instanceId = identity?.federationTarget?.instanceId ?? readRendererFederationTarget()?.instanceId;
+  const backend = identity?.backend;
+  const threadId = identity?.threadId;
+  const [status, setStatus] = useState<ReviewAutoFixStatus>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    setStatus(undefined);
+    setError(undefined);
+    if (!backend || !threadId || !api?.readReviewAutoFix) return;
+    let cancelled = false;
+    const target = instanceId ? { federationTarget: { scope: "remote" as const, instanceId } } : {};
+    let latest = 0;
+    const reload = (round?: number) => {
+      const read = ++latest;
+      void readAutoFix(api, { backend, threadId, ...target }, round).then((next) => {
+        // An earlier read can answer after a later one; keep the later one.
+        if (!cancelled && read === latest) setStatus(next);
+      });
+    };
+    reload();
+    const unsubscribe = api.onThreadTodosChanged?.((event) => {
+      if (event.federationTarget?.instanceId !== instanceId && event.backend !== undefined) return;
+      if (event.backend === undefined || (event.backend === backend && event.threadId === threadId)) reload(event.at);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [api, backend, threadId, instanceId]);
+  const disarm = useCallback(async (turnId: string) => {
+    if (!backend || !threadId || !api?.disarmReviewAutoFix) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await api.disarmReviewAutoFix({ backend, threadId, turnId,
+        ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
+      });
+      setStatus(response.status);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [api, backend, threadId, instanceId]);
+  return { status, disarm, busy, error };
 }
 
 export type ReviewUpdate = (request: Omit<UpdateThreadReviewRequest, "id">) => Promise<void>;
@@ -283,6 +370,78 @@ export function ReviewStatusRow(props: { review: ThreadReview; busy: boolean; up
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A running review that will auto-fix when it lands. Don't auto-fix turns
+ * that off for this review only.
+ */
+export function ReviewAutoFixArmedRow(props: { busy: boolean; error?: string; onDisarm: () => void }) {
+  return (
+    <>
+      <div className="review-status" data-status="armed">
+        <span className="review-status__state" data-status="armed">
+          <PendingSpinner pairing="paired" size="sm" />
+          Auto-fix armed
+        </span>
+        <span className="review-status__note">
+          This thread&apos;s agent settles the findings when the review ends.
+        </span>
+        <div className="review-status__actions">
+          <button
+            type="button"
+            className="button review-status__button review-status__button--quiet"
+            disabled={props.busy}
+            onClick={props.onDisarm}
+          >
+            Don&apos;t auto-fix
+          </button>
+        </div>
+      </div>
+      {props.error ? <p className="review-status__error" role="alert">{props.error}</p> : null}
+    </>
+  );
+}
+
+/**
+ * The review card's line for its Auto-fix turn: queued behind a running
+ * turn, running, finished with findings still open, or refused before it
+ * started. Nothing once a finished run left nothing open.
+ */
+export function ReviewAutoFixLine(props: { run: ReviewAutoFixRun | undefined; openCount: number }) {
+  const { run } = props;
+  if (!run) return null;
+  if (run.phase === "running") {
+    return (
+      <p className="review-todo__auto" data-phase="running">
+        <PendingSpinner pairing="paired" size="sm" />
+        <span><strong>Auto-fixing</strong> · started when the review finished</span>
+      </p>
+    );
+  }
+  if (run.phase === "queued") {
+    return (
+      <p className="review-todo__auto" data-phase="queued">
+        <ClockIcon size={12} />
+        <span><strong>Auto-fix queued</strong> · sends when the current turn ends</span>
+      </p>
+    );
+  }
+  if (run.phase === "failed") {
+    return (
+      <p className="review-todo__auto" data-phase="failed">
+        <BanIcon size={12} />
+        <span><strong>Auto-fix could not start:</strong> {run.reason}</span>
+      </p>
+    );
+  }
+  if (props.openCount === 0) return null;
+  return (
+    <p className="review-todo__auto" data-phase="finished">
+      <TodoIcon size={12} />
+      <span><strong>Auto-fix left {props.openCount} open</strong></span>
+    </p>
   );
 }
 

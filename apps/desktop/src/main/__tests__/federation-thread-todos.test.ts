@@ -15,6 +15,8 @@ function operations() {
     listTodos: vi.fn(async (_request?: unknown) => ({ todos: [card], mergeMethods: { defaultMethod: "rebase" as const, byProject: {} } })),
     listReviews: vi.fn((_request?: unknown) => ({ reviews: [review] })),
     updateReview: vi.fn((_request?: unknown) => ({ review })),
+    readReviewAutoFix: vi.fn((_request?: unknown) => ({ status: { armedTurnIds: ["review-turn"], runs: {} } })),
+    disarmReviewAutoFix: vi.fn((_request?: unknown) => ({ disarmed: true, status: { armedTurnIds: [], runs: {} } })),
     resolveTodo: vi.fn((_request?: unknown) => ({ todo: card })),
     runAction: vi.fn(async (_request?: unknown) => ({ todo: card })),
     listProjects: vi.fn(async (_request?: unknown) => ({ projects: [] })),

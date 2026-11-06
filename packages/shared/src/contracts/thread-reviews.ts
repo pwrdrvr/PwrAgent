@@ -98,6 +98,29 @@ export type ListThreadReviewsRequest = Partial<ThreadReviewIdentity> & {
   status?: ThreadReviewStatus | "all";
 };
 
+/**
+ * What a landed review's Auto-fix turn is doing, as its owner sees it.
+ * `failed` carries the reason the send could not start.
+ */
+export type ReviewAutoFixRun =
+  | { phase: "queued"; at: number }
+  | { phase: "running"; at: number }
+  | { phase: "finished"; at: number }
+  | { phase: "failed"; at: number; reason: string };
+
+/** A thread's Auto-fix state, held in its owner's memory. */
+export type ReviewAutoFixStatus = {
+  /** Running reviews' turn ids that will auto-fix when they land. */
+  armedTurnIds: string[];
+  /** Each landed review's Auto-fix run, by review id. */
+  runs: Record<string, ReviewAutoFixRun>;
+};
+
+export type ReadReviewAutoFixRequest = ThreadReviewIdentity;
+
+/** Turns Auto-fix off for one running review. */
+export type DisarmReviewAutoFixRequest = ThreadReviewIdentity & { turnId: string };
+
 /** A finding status by its current name, or undefined when it names none. */
 export function normalizeThreadReviewItemStatus(value: unknown): ThreadReviewItemStatus | undefined {
   if (typeof value !== "string") return undefined;

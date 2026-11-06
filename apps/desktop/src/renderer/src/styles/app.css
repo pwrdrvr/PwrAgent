@@ -52722,6 +52722,28 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-weight: 600;
 }
 
+/* What the review's Auto-fix turn is doing, under the card head. The words
+   carry the state; the glyph only marks the line. */
+.review-todo__auto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.review-todo__auto svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.review-todo__auto strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .review-todo__findings {
   display: flex;
   flex-direction: column;

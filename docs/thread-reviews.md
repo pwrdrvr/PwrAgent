@@ -287,3 +287,37 @@ to "Auto-fix started for <review>" with its finding count, from the
 `reviewAutoFix` message origin.
 
 Arming writes nothing to SQLite. The fix turn is an ordinary queued turn.
+
+### Auto-fix status
+
+The owner tells its viewers what Auto-fix is doing. Both answers come from
+the owner's memory, so a viewer never infers them.
+
+- **Armed.** While an armed review runs, the transcript's review status row
+  says **Auto-fix armed**: the thread's agent settles the findings when the
+  review ends. **Don't auto-fix** turns it off for that one review. The
+  setting and later reviews keep their own choice.
+- **Run.** The review card shows a line under its head for the fix turn:
+  **Auto-fixing** while the turn runs, **Auto-fix queued** while it waits
+  behind a running turn, and **Auto-fix left N open** when the turn ends
+  with findings still open. A cancelled fix turn shows nothing. When the
+  send fails or the queue refuses the turn, the line says **Auto-fix could
+  not start** with the reason.
+
+The run follows the owner's own `thread/turnQueue/updated` events for the
+turn, matched by the review id in its `reviewAutoFix` message origin
+(`nextReviewAutoFixRun`). The owner keeps the last 20 runs per thread.
+`review-auto-fix-runs.property.test.ts` holds the phase table and that a
+viewer is told exactly when a run's phase changes, so a queue position
+update sends nothing.
+
+Viewers read the state with the `readReviewAutoFix` thread operation and
+disarm with `disarmReviewAutoFix`, through the same routes as the other
+thread to-do operations. A peer reaches them as `threadReviews.readAutoFix`
+(`thread_detail`) and `threadReviews.disarmAutoFix` (`turn_control`). A
+change publishes the thread's to-do change event, and viewers read again. An
+owner that predates these methods does not answer, and its reviews show no
+Auto-fix state.
+
+None of this writes to SQLite. An app restart ends the review's turn and its
+fix turn, so the state has nothing to outlive.
