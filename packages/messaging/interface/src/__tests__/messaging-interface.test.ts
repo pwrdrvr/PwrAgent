@@ -29,6 +29,7 @@ describe("messaging interface package", () => {
       "agent",
       "new",
       "status",
+      "continue",
       "detach",
       "monitor",
       "schedule",

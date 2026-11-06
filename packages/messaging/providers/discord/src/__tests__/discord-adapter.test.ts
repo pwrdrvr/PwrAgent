@@ -171,6 +171,7 @@ describe("discord adapter", () => {
       "agent",
       "new",
       "status",
+      "continue",
       "detach",
       "monitor",
       "schedule",

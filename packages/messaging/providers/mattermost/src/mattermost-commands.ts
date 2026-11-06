@@ -114,6 +114,12 @@ const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
     autoCompleteDesc: "Show the current PwrAgent thread binding and controls.",
   },
   {
+    base: "continue",
+    displayNameSuffix: "Continue",
+    description: "Continue a Claude thread after its session was deleted.",
+    autoCompleteDesc: "Continue a Claude thread after its session was deleted.",
+  },
+  {
     base: "detach",
     displayNameSuffix: "Detach",
     description: "Detach this conversation from its current PwrAgent thread.",

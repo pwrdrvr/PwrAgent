@@ -89,6 +89,18 @@ vi.mock("../app-server/codex-environment-config", () => ({
 }));
 
 describe("DesktopMessagingBackendBridge", () => {
+  it("continues a local Claude thread through the registry and rejects remote recovery", async () => {
+    const recover = vi.fn(async (request: { threadId: string }) => request);
+    const bridge = new DesktopMessagingBackendBridge({ continueClaudeThreadInNewSession: recover } as unknown as DesktopBackendRegistry);
+    await expect(bridge.continueClaudeThreadInNewSession({ threadId: "claude-thread" })).resolves.toEqual({ threadId: "claude-thread" });
+    expect(recover).toHaveBeenCalledWith({ threadId: "claude-thread" });
+    recover.mockClear();
+    await expect(bridge.continueClaudeThreadInNewSession({
+      threadId: "claude-thread", federationTarget: { scope: "remote", instanceId: "peer" },
+    })).rejects.toThrow("owning instance");
+    expect(recover).not.toHaveBeenCalled();
+  });
+
   it("publishes local and fast-peer navigation before a slow peer and shares one deadline", async () => {
     const registry = {
       listThreads: vi.fn(async () => []),

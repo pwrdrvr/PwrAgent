@@ -33,6 +33,11 @@ export const MESSAGING_COMMAND_CATALOG = [
     helpAction: true,
   },
   {
+    verb: "continue",
+    description: "continue a Claude thread after its session was deleted",
+    helpAction: false,
+  },
+  {
     verb: "detach",
     description: "detach this conversation from its thread",
     helpAction: true,
