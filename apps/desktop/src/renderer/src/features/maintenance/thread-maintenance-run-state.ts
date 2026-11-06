@@ -17,7 +17,7 @@ export function newerRun(
 }
 
 /** Dialog steps before a run, and "run" once a run is shown. */
-export type ThreadMaintenanceStoredPhase = "plan" | "scanning" | "threads" | "checkouts" | "run";
+export type ThreadMaintenanceStoredPhase = "plan" | "scanning" | "threads" | "hibernate" | "checkouts" | "run";
 
 export type ThreadMaintenancePhase = Exclude<ThreadMaintenanceStoredPhase, "run"> | "running" | "finished";
 

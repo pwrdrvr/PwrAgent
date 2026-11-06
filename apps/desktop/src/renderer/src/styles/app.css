@@ -53548,6 +53548,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .thread-maintenance__tab:focus-visible,
 .thread-maintenance__choice:focus-visible,
 .thread-maintenance__more:focus-visible,
+.thread-maintenance__kept-toggle:focus-visible,
 .thread-maintenance__problem-rows:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -54023,6 +54024,18 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .thread-maintenance__kept {
   padding: 8px 12px 10px;
   border-top: 1px solid var(--border-subtle);
+}
+
+/* "Show" beside an eyebrow: same accent as Show all, in the eyebrow's type. */
+.thread-maintenance__kept-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
 }
 
 .thread-maintenance__group-head + .thread-maintenance__kept {

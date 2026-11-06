@@ -208,6 +208,8 @@ export type ApplyThreadMaintenanceToolArgs = {
   removeCheckouts?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["removeCheckouts"];
   trashCheckouts?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["trashCheckouts"];
   removeEmptyFolders?: boolean;
+  /** Idle checkouts to hibernate, from the scan's hibernate list. */
+  hibernate?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["hibernate"];
   /** Return what would run without asking the operator or changing anything. */
   dryRun?: boolean;
 };
@@ -257,6 +259,24 @@ export type ThreadMaintenanceScanToolResult = {
     skipped?: string;
     truncated: boolean;
   };
+  /** Idle checkouts that can hibernate. Absent from owners without the step. */
+  hibernate?: {
+    idleDays: number;
+    maxSnapshotMb: number;
+    checked: number;
+    items: Array<{
+      backend: string;
+      threadId: ThreadIdentifier;
+      title: string;
+      worktreePath: string;
+      lastActivityAt: number;
+      changedFiles: number;
+      changedBytes: number;
+    }>;
+    kept: Record<string, number>;
+    skipped?: string;
+    truncated: boolean;
+  };
   expired: { enabled: boolean; retentionDays: number };
   failureCount: number;
   failures: import("../thread-maintenance").ThreadMaintenanceFailure[];
@@ -282,6 +302,7 @@ export type ThreadMaintenancePlanToolResult = {
   removeCheckouts: number;
   trashCheckouts: number;
   removeEmptyFolders: boolean;
+  hibernate: number;
   snapshotApprovals: Array<{ threadId: ThreadIdentifier; title: string; bytes: number }>;
 };
 

@@ -72739,6 +72739,10 @@ describe("thread maintenance agent tools", () => {
       { backend: "codex", threadId: "archived", worktreePath: "/wt/a/repo", kind: "removable" as const },
       { backend: "codex", threadId: "orphan", worktreePath: "/wt/b/kit", kind: "repositoryGone" as const, missingRepositoryPath: "/tmp/kit" },
     ] },
+    hibernate: { idleDays: 7, maxSnapshotMb: 25, removeRebuildableOutput: true, checked: 2, kept: { "Kept awake": 1 }, items: [
+      { backend: "codex", threadId: "idle-checkout", title: "Cart drawer", worktreePath: "/wt/c/repo", lastActivityAt: 1,
+        files: 3, bytes: 41_000, removedOutput: ["node_modules"] },
+    ] },
     expired: { enabled: false, retentionDays: 0 },
     failures: [],
   };
@@ -72792,6 +72796,9 @@ describe("thread maintenance agent tools", () => {
       scanId: "scan-1",
       threads: { checked: 3, idleCount: 2, truncated: false, projects: [{ key: "/repo", idleCount: 2 }] },
       checkouts: { removable: [{ worktreePath: "/wt/a/repo" }], repositoryGone: [{ worktreePath: "/wt/b/kit" }], emptyFolders: 2 },
+      hibernate: { idleDays: 7, checked: 1 + 1, kept: { "Kept awake": 1 }, truncated: false, items: [{
+        backend: "codex", threadId: "idle-checkout", worktreePath: "/wt/c/repo", changedFiles: 3, changedBytes: 41_000,
+      }] },
     });
     expect(handler.start).not.toHaveBeenCalled();
   });
@@ -72832,6 +72839,18 @@ describe("thread maintenance agent tools", () => {
     expect(payload(response).maintenanceRun).toMatchObject({ runId: "run-1", running: false });
   });
 
+  it("hibernates reviewed idle checkouts after the operator approves the card", async () => {
+    const { handler, call, answer } = await setup();
+    const pending = call("apply_thread_maintenance", { scanId: "scan-1",
+      hibernate: [{ backend: "codex", threadId: "idle-checkout" }] });
+    const card = await answer("Run maintenance");
+    expect((card.questions as Array<{ question: string }>)[0]!.question).toContain("hibernate 1 idle checkout");
+    expect((card.questions as Array<{ question: string }>)[0]!.question).toContain("comes back when its thread gets a message");
+    expect((await pending).success).toBe(true);
+    expect(handler.start).toHaveBeenCalledExactlyOnceWith({ scanId: "scan-1", archive: [], removeCheckouts: [],
+      trashCheckouts: [], removeEmptyFolders: false, hibernate: [{ backend: "codex", threadId: "idle-checkout" }] });
+  });
+
   it("changes nothing when the operator declines the card", async () => {
     const { handler, call, payload, answer } = await setup();
     const pending = call("apply_thread_maintenance", { scanId: "scan-1", archive: [{ backend: "codex", threadId: "idle-clean" }] });
@@ -72849,6 +72868,9 @@ describe("thread maintenance agent tools", () => {
     [{ scanId: "scan-1", archive: [{ backend: "codex", threadId: "idle-clean", overLimit: "snapshotAll" }] }, "under the snapshot limit"],
     [{ scanId: "scan-1", archive: [{ backend: "codex", threadId: "elsewhere" }] }, "not an idle thread"],
     [{ scanId: "scan-1", trashCheckouts: [{ worktreePath: "/wt/a/repo" }] }, "repository is gone"],
+    [{ scanId: "scan-1", hibernate: [{ backend: "codex", threadId: "idle-clean" }] }, "no idle checkout to hibernate"],
+    [{ scanId: "scan-1", hibernate: [{ backend: "codex", threadId: "agent-thread" }] }, "running this tool"],
+    [{ scanId: "scan-1", hibernate: { backend: "codex", threadId: "idle-checkout" } }, "hibernate must be an array"],
     [{ scanId: "scan-1" }, "at least one"],
     [{ scanId: "scan-1", archive: [], extra: true }, "Pass only"],
   ])("refuses %j before any card", async (args, message) => {

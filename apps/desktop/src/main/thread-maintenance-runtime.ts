@@ -2,7 +2,7 @@ import path from "node:path";
 import { shell } from "electron";
 import { isToolManagedWorktreePath, type ThreadMaintenanceRun } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
-import { ThreadMaintenanceService } from "./app-server/thread-maintenance-service";
+import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "./app-server/thread-maintenance-service";
 import { MAX_WORKTREE_SNAPSHOT_BYTES } from "./app-server/worktree-archive-service";
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getMainLogger } from "./log";
@@ -43,6 +43,7 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
     },
     removeArchivedCheckouts: async (selection) => await getDesktopBackendRegistry().removeArchivedCheckouts(selection),
     removeUnreferencedCheckouts: async (worktreePaths) => await getDesktopBackendRegistry().removeUnreferencedCheckouts(worktreePaths),
+    hibernation: checkoutHibernationReviewDeps(getDesktopBackendRegistry),
     isManagedCheckoutPath: isManagedCheckoutRoot,
     trashItem: async (absolutePath) => await shell.trashItem(absolutePath),
     onRun: (run) => {

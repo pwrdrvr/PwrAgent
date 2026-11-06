@@ -78,6 +78,20 @@ export function summarizeThreadMaintenanceScan(
       ...(scan.checkouts.skipped ? { skipped: scan.checkouts.skipped } : {}),
       truncated: [removable, gone, unreferenced].some((items) => items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT),
     },
+    ...(scan.hibernate ? {
+      hibernate: {
+        idleDays: scan.hibernate.idleDays,
+        maxSnapshotMb: scan.hibernate.maxSnapshotMb,
+        checked: scan.hibernate.checked,
+        items: scan.hibernate.items.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
+          backend: item.backend, threadId: item.threadId, title: item.title, worktreePath: item.worktreePath,
+          lastActivityAt: item.lastActivityAt, changedFiles: item.files, changedBytes: item.bytes,
+        })),
+        kept: scan.hibernate.kept,
+        ...(scan.hibernate.skipped ? { skipped: scan.hibernate.skipped } : {}),
+        truncated: scan.hibernate.items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT,
+      },
+    } : {}),
     expired: scan.expired,
     failureCount: scan.failures.length,
     failures: scan.failures.slice(0, FAILURE_LIMIT),
@@ -115,7 +129,8 @@ export function planThreadMaintenanceApply(
   const removeCheckouts = args.removeCheckouts ?? [];
   const trashCheckouts = args.trashCheckouts ?? [];
   const removeEmptyFolders = args.removeEmptyFolders === true;
-  if (!archive.length && !removeCheckouts.length && !trashCheckouts.length && !removeEmptyFolders) {
+  const hibernate = args.hibernate ?? [];
+  if (!archive.length && !removeCheckouts.length && !trashCheckouts.length && !removeEmptyFolders && !hibernate.length) {
     return { error: "Select at least one thread or checkout from the scan." };
   }
   const idle = new Map(scan.threads.projects.flatMap((project) => project.idle)
@@ -144,6 +159,17 @@ export function planThreadMaintenanceApply(
       snapshotApprovals.push({ threadId: row.threadId, title: row.title, bytes: row.workspace.bytes });
     }
   }
+  const hibernatable = new Set((scan.hibernate?.items ?? []).map((item) => `${item.backend}:${item.threadId}`));
+  for (const item of hibernate) {
+    if (!item || typeof item.backend !== "string" || typeof item.threadId !== "string") {
+      return { error: "Each hibernate item needs backend and threadId from the scan." };
+    }
+    if (item.backend === caller.backend && item.threadId === caller.threadId) {
+      return { error: "Do not hibernate the thread running this tool." };
+    }
+    const key = `${item.backend}:${item.threadId}`;
+    if (!hibernatable.has(key)) return { error: `Thread ${item.threadId} has no idle checkout to hibernate in scan ${scan.scanId}. Scan again.` };
+  }
   for (const item of removeCheckouts) {
     if (!item || typeof item.worktreePath !== "string" || checkouts.get(item.worktreePath)?.kind !== "removable") {
       return { error: `Checkout ${item?.worktreePath ?? "?"} is not a removable archived checkout in this scan.` };
@@ -165,6 +191,7 @@ export function planThreadMaintenanceApply(
       }),
       trashCheckouts: trashCheckouts.map((item) => ({ worktreePath: item.worktreePath })),
       removeEmptyFolders,
+      ...(hibernate.length ? { hibernate: hibernate.map((item) => ({ backend: item.backend, threadId: item.threadId })) } : {}),
     },
     summary: {
       scanId: scan.scanId,
@@ -172,6 +199,7 @@ export function planThreadMaintenanceApply(
       removeCheckouts: removeCheckouts.length,
       trashCheckouts: trashCheckouts.length,
       removeEmptyFolders,
+      hibernate: hibernate.length,
       snapshotApprovals,
     },
   };
@@ -181,6 +209,7 @@ export function planThreadMaintenanceApply(
 export function threadMaintenanceConfirmationQuestion(plan: ThreadMaintenancePlanToolResult): string {
   const parts = [
     plan.archive ? `archive ${plan.archive} ${plan.archive === 1 ? "thread" : "threads"}` : "",
+    plan.hibernate ? `hibernate ${plan.hibernate} idle ${plan.hibernate === 1 ? "checkout" : "checkouts"}` : "",
     plan.removeCheckouts ? `remove ${plan.removeCheckouts} archived ${plan.removeCheckouts === 1 ? "checkout" : "checkouts"}` : "",
     plan.trashCheckouts ? `move ${plan.trashCheckouts} orphaned ${plan.trashCheckouts === 1 ? "checkout" : "checkouts"} to the Trash` : "",
     plan.removeEmptyFolders ? "remove empty worktree folders" : "",
@@ -189,6 +218,7 @@ export function threadMaintenanceConfirmationQuestion(plan: ThreadMaintenancePla
   const snapshots = plan.snapshotApprovals.slice(0, 5).map((item) => `${item.title} (${formatBytes(item.bytes)})`);
   const more = plan.snapshotApprovals.length > snapshots.length ? ` and ${plan.snapshotApprovals.length - snapshots.length} more` : "";
   return `An agent asks to ${list}. Uncommitted changes are saved to recovery snapshots first.`
+    + (plan.hibernate ? " A hibernated checkout comes back when its thread gets a message." : "")
     + (snapshots.length ? ` It also asks to snapshot changes over the 100 MB limit for ${snapshots.join(", ")}${more}.` : "")
     + " Allow it?";
 }

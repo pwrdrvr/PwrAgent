@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { DesktopCheckoutHibernationPolicy, WorktreeSnapshotSummary } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "../app-server/thread-maintenance-service";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -597,5 +598,57 @@ describe("Restore now and Keep it awake", () => {
     releaseSetup();
     await restore;
     expect(registry.readCheckoutHibernation(identity)).toEqual({ restoring: false });
+  });
+});
+
+describe("Thread maintenance's hibernate step", () => {
+  function maintenance(registry: DesktopBackendRegistry) {
+    return new ThreadMaintenanceService({
+      getPolicy: () => registry.getThreadArchivePolicy(),
+      snapshotLimitBytes: 100 * MB,
+      listCandidates: async () => await registry.listAutoArchiveCandidates(),
+      resolveProject: async (candidate) => await registry.resolveAutoArchiveProject(candidate),
+      refreshCandidate: async (candidate) => await registry.refreshArchiveCandidate(candidate),
+      isBusy: (candidate) => registry.isArchiveCandidateBusy(candidate),
+      auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0 }),
+      archiveFamily: vi.fn(async () => true),
+      removeArchivedCheckouts: vi.fn(async () => ({ removed: [], kept: [], failed: [], emptyFoldersRemoved: 0, emptyFoldersFailed: [] })),
+      isManagedCheckoutPath: () => true,
+      trashItem: vi.fn(async () => {}),
+      hibernation: checkoutHibernationReviewDeps(() => registry),
+    });
+  }
+
+  it("hibernates a reviewed checkout in one commit while the hourly sweep is off", async () => {
+    const fixture = await createFixture();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    const service = maintenance(registry);
+    const scan = await service.scan();
+    expect(scan.hibernate).toMatchObject({ idleDays: 7, maxSnapshotMb: 5, checked: 1, kept: {} });
+    expect(scan.hibernate?.items).toEqual([expect.objectContaining({ threadId: THREAD_ID, worktreePath: fixture.worktree, files: 1 })]);
+
+    const { writes } = await measureSqliteWrites(async () => {
+      const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+        removeEmptyFolders: false, hibernate: [identity] });
+      expect(run.steps.find((step) => step.step === "hibernate")).toEqual({ step: "hibernate", ran: true, done: 1, kept: 0, failed: 0 });
+    });
+    expectSqliteWriteBudget({ scenario: "thread-maintenance-hibernate-one", note: "Thread maintenance hibernates one reviewed checkout", writes });
+    expect(await exists(fixture.worktree)).toBe(false);
+    expect(await snapshotOf(store)).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
+    // The sweep itself stays off.
+    expect(await sweep(registry)).toMatchObject({ skipped: "Hibernation is off" });
+  });
+
+  it("keeps a reviewed checkout that changed since the scan", async () => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const service = maintenance(registry);
+    const scan = await service.scan();
+    await writeFile(path.join(fixture.worktree, ".env.local"), "SECRET=1\n");
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.problems).toEqual([expect.objectContaining({ step: "hibernate", kind: "kept", reason: "Other ignored files" })]);
+    expect(await exists(fixture.worktree)).toBe(true);
   });
 });

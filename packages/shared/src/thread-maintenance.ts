@@ -106,7 +106,25 @@ export type ThreadMaintenanceFailure = {
   threadId?: string;
 };
 
-export type ThreadMaintenanceStep = "threads" | "checkouts" | "expired";
+/** Runs in this order: archive, then hibernate, then archived checkouts. */
+export type ThreadMaintenanceStep = "threads" | "hibernate" | "checkouts" | "expired";
+
+/** An idle thread whose checkout can hibernate: removed after its changes
+ * are saved to a recovery snapshot, and restored on the thread's next send.
+ * The thread stays in the lists. */
+export type ThreadMaintenanceHibernateCheckout = {
+  backend: string;
+  threadId: string;
+  title: string;
+  branch?: string;
+  worktreePath: string;
+  lastActivityAt: number;
+  /** Uncommitted files the snapshot would store, and their size. */
+  files: number;
+  bytes: number;
+  /** Ignored output folders, such as node_modules, removed with the checkout. */
+  removedOutput?: string[];
+};
 
 export type ThreadMaintenanceScan = {
   scanId: string;
@@ -130,6 +148,18 @@ export type ThreadMaintenanceScan = {
     emptyFolders: number;
     skipped?: string;
   };
+  /** Idle checkouts that can hibernate, from threads this scan does not
+   * offer to archive. Absent from owners that predate the step. */
+  hibernate?: {
+    /** Hibernation's own settings, as the review ran them. */
+    idleDays: number;
+    maxSnapshotMb: number;
+    removeRebuildableOutput: boolean;
+    checked: number;
+    items: ThreadMaintenanceHibernateCheckout[];
+    kept: Record<string, number>;
+    skipped?: string;
+  };
   expired: {
     enabled: boolean;
     retentionDays: number;
@@ -151,6 +181,8 @@ export type ThreadMaintenanceApplyRequest = {
   removeUnreferenced?: { worktreePath: string }[];
   /** Remove empty worktree folders left by earlier cleanups. */
   removeEmptyFolders: boolean;
+  /** Idle checkouts to hibernate. Older callers omit it. */
+  hibernate?: { backend: string; threadId: string }[];
 };
 
 export type ThreadMaintenanceProblem = {

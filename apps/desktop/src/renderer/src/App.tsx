@@ -4707,6 +4707,7 @@ function DesktopAppShell(props: {
         <ThreadMaintenanceDialog
           desktopApi={desktopApi}
           policy={settings.snapshot?.worktrees?.archive}
+          hibernationPolicy={settings.snapshot?.worktrees?.hibernate}
           {...(threadMaintenance.projectKey ? { projectKey: threadMaintenance.projectKey } : {})}
           onOpenThread={(thread) => {
             setThreadMaintenance(undefined);

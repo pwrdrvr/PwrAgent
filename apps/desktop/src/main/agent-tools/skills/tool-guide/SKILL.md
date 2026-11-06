@@ -12,6 +12,7 @@ Use read_thread for transcript detail.
 To clean up old threads, worktrees, or disk space, call scan_thread_maintenance first.
 Show the operator its summary. Use open_thread_maintenance when they want to review and choose.
 Pass the chosen items and scanId to apply_thread_maintenance. Never loop mutate_thread archive for bulk cleanup.
+Its hibernate list frees idle checkouts without archiving: each thread stays, and its checkout comes back on its next message.
 Use list_federation_instances to find a machine.
 Keep the returned instanceId for remote calls.
 Use handoff_task for local child work.

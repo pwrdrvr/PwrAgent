@@ -17265,6 +17265,7 @@ export class DesktopBackendRegistry {
   private async hibernateIdleCheckout(
     candidate: ThreadArchiveCandidate,
     policy: DesktopCheckoutHibernationPolicy,
+    options: { reviewed?: boolean } = {},
   ): Promise<boolean | string> {
     const target = hibernationTarget(candidate);
     if ("keep" in target) return target.keep;
@@ -17295,7 +17296,10 @@ export class DesktopBackendRegistry {
               const current = await this.refreshAutoArchiveCandidate(candidate);
               const all = await this.listAutoArchiveCandidates();
               const assertCurrent = () => {
-                if (reservation.cancelled || this.closed || JSON.stringify(this.readCheckoutHibernationPolicy()) !== policyKey) {
+                // A reviewed run uses the policy it was reviewed under, so a
+                // change to Settings does not cancel it; the sweep's does.
+                if (reservation.cancelled || this.closed
+                  || (!options.reviewed && JSON.stringify(this.readCheckoutHibernationPolicy()) !== policyKey)) {
                   throw new AutomaticArchiveCancelledError();
                 }
                 const reason = hibernationKeepReason(current, Date.now(), policy, this.checkoutHibernationContext(current, all));
@@ -40379,6 +40383,28 @@ export class DesktopBackendRegistry {
     return this.autoArchiveCandidateIsBusy(candidate);
   }
 
+  getCheckoutHibernationPolicy(): DesktopCheckoutHibernationPolicy {
+    return this.readCheckoutHibernationPolicy();
+  }
+
+  /** The sweep's thread-level rules for one candidate, as the review shows them. */
+  checkoutHibernationKeepReason(
+    candidate: ThreadArchiveCandidate,
+    candidates: readonly ThreadArchiveCandidate[],
+    policy: DesktopCheckoutHibernationPolicy,
+    now: number,
+  ): { target?: string; keep?: string } {
+    const target = hibernationTarget(candidate);
+    if ("keep" in target) return {};
+    return { target: target.worktreePath,
+      keep: hibernationKeepReason(candidate, now, policy, this.checkoutHibernationContext(candidate, candidates)) };
+  }
+
+  /** Hibernate one reviewed checkout, with every check run again first. */
+  async hibernateReviewedCheckout(candidate: ThreadArchiveCandidate, policy: DesktopCheckoutHibernationPolicy): Promise<boolean | string> {
+    return await this.hibernateIdleCheckout(candidate, policy, { reviewed: true });
+  }
+
   private async runArchivedThreadWorktreeRepair(options: {
     dryRun?: boolean;
     includeUnreferenced?: boolean;
@@ -51185,14 +51211,14 @@ export class DesktopBackendRegistry {
         });
         return { ok: true, data: { maintenanceScan: summarizeThreadMaintenanceScan(scan, handler.getRun()) } };
       }
-      if (!allowed(["scanId", "archive", "removeCheckouts", "trashCheckouts", "removeEmptyFolders", "dryRun"])) {
-        return threadInspectionFailure("invalid_arguments", "Pass only scanId, archive, removeCheckouts, trashCheckouts, removeEmptyFolders and dryRun.");
+      if (!allowed(["scanId", "archive", "removeCheckouts", "trashCheckouts", "removeEmptyFolders", "hibernate", "dryRun"])) {
+        return threadInspectionFailure("invalid_arguments", "Pass only scanId, archive, removeCheckouts, trashCheckouts, removeEmptyFolders, hibernate and dryRun.");
       }
       const applyArgs = request.args as import("@pwragent/shared").ApplyThreadMaintenanceToolArgs;
       if (typeof applyArgs.scanId !== "string" || !applyArgs.scanId.trim()) {
         return threadInspectionFailure("invalid_arguments", "Pass the scanId from scan_thread_maintenance.");
       }
-      for (const key of ["archive", "removeCheckouts", "trashCheckouts"] as const) {
+      for (const key of ["archive", "removeCheckouts", "trashCheckouts", "hibernate"] as const) {
         if (applyArgs[key] !== undefined && !Array.isArray(applyArgs[key])) {
           return threadInspectionFailure("invalid_arguments", `${key} must be an array.`);
         }
