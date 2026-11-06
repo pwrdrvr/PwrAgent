@@ -6,6 +6,7 @@ import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
 import { ArchiveWorktreeReferences } from "../app-server/archive-worktree-references";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import * as gitHeadBranch from "../app-server/git-head-branch";
 import { deleteThreadAssets } from "../app-server/thread-assets";
 import { CountingBackendClient, codexThread, publishNotification } from "./fixtures/thread-read-harness";
 import budgets from "./fixtures/archive-cleanup-budgets.json";
@@ -1477,9 +1478,19 @@ describe("archive cleanup pipeline", () => {
       expect(fixture.counts.providerPages).toBe(4);
       expect(fixture.counts.archiveMutations).toBe(1);
     } finally {
-      for (const thread of others) {
-        await publishNotification(fixture.registry, { method: "turn/completed", params: { threadId: thread.id, turnId: `turn-${thread.id}`, turn: { id: `turn-${thread.id}`, status: "completed", output: [] } } }, backend);
-        await publishNotification(fixture.registry, { method: "thread/status/changed", params: { threadId: thread.id, status: { type: "idle" } } }, backend);
+      // These workspaces are contrived. Terminal branch adoption must use
+      // fixture evidence too: a missing host directory makes the real probe
+      // fall back to owned Git (one PowerShell launch per Claude turn on
+      // Windows), unrelated to the archive admission this test drives.
+      const branchProbe = vi.spyOn(gitHeadBranch, "probeCurrentGitBranch")
+        .mockResolvedValue(gitHeadBranch.NOT_A_GIT_REPOSITORY);
+      try {
+        for (const thread of others) {
+          await publishNotification(fixture.registry, { method: "turn/completed", params: { threadId: thread.id, turnId: `turn-${thread.id}`, turn: { id: `turn-${thread.id}`, status: "completed", output: [] } } }, backend);
+          await publishNotification(fixture.registry, { method: "thread/status/changed", params: { threadId: thread.id, status: { type: "idle" } } }, backend);
+        }
+      } finally {
+        branchProbe.mockRestore();
       }
     }
   });
