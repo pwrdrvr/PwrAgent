@@ -218,8 +218,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         : next);
   }, [open, rollup.ordered.length]);
 
-  // An outside press or a scroll elsewhere closes it: the popover is fixed
-  // to where the chip was, and a scrolled sidebar would leave it stranded.
+  // An outside press or a scroll of the chip's ancestors closes it: the
+  // popover is fixed to where the chip was. Sibling panes (including the
+  // auto-scrolling transcript) cannot move that anchor.
   useEffect(() => {
     if (!open) return;
     const inside = (target: EventTarget | null): boolean =>
@@ -229,7 +230,14 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       if (!inside(event.target)) close();
     };
     const onScroll = (event: Event): void => {
-      if (!inside(event.target)) close();
+      const target = event.target;
+      if (
+        target === window
+        || target === document
+        || (target instanceof Node && target.contains(triggerRef.current))
+      ) {
+        close();
+      }
     };
     document.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("scroll", onScroll, true);
