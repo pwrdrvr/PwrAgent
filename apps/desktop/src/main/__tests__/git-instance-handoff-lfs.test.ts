@@ -12,7 +12,7 @@ let running: Promise<void> | undefined;
 beforeAll(() => {
   preparation = prepareFixture();
   return preparation;
-});
+}, 20_000);
 
 afterAll(async () => {
   // Vitest deadlines stop awaiting callbacks; they do not cancel them. Keep

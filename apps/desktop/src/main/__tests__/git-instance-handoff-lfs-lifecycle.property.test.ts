@@ -3,6 +3,7 @@ import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.doUnmock("vitest");
   vi.doUnmock("node:fs/promises");
   vi.doUnmock("../app-server/git-executable");
@@ -13,8 +14,8 @@ afterEach(() => {
 // Run the actual test declaration with a runner model. A deadline releases
 // Vitest's wait for a callback; it does not cancel that callback's promises.
 // Gate one Git completion so the model can begin afterAll while work remains.
-async function checkLifecycle(blockAt: number, fail: boolean): Promise<void> {
-  const setupHooks: (() => Promise<unknown>)[] = [];
+async function checkLifecycle(blockAt: number, fail: boolean, setupCompletionMs?: number): Promise<void> {
+  const setupHooks: { callback: () => Promise<unknown>; timeout?: number }[] = [];
   const cleanupHooks: (() => Promise<unknown>)[] = [];
   let body!: () => Promise<unknown>;
   let bodyStarted = false;
@@ -40,7 +41,7 @@ async function checkLifecycle(blockAt: number, fail: boolean): Promise<void> {
   };
   vi.doMock("vitest", async (importOriginal) => ({
     ...await importOriginal<typeof import("vitest")>(),
-    beforeAll: (callback: () => Promise<unknown>) => setupHooks.push(callback),
+    beforeAll: (callback: () => Promise<unknown>, timeout?: number) => setupHooks.push({ callback, timeout }),
     afterAll: (callback: () => Promise<unknown>) => cleanupHooks.push(callback),
     it: (_name: string, callback: () => Promise<unknown>, timeout: number) => {
       expect(timeout).toBe(20_000);
@@ -82,8 +83,24 @@ async function checkLifecycle(blockAt: number, fail: boolean): Promise<void> {
       events.push("callback-settled");
     }
   };
+  const invokeSetup = async (hook: typeof setupHooks[number]) => {
+    if (setupCompletionMs === undefined) return await invoke(hook.callback);
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        invoke(hook.callback),
+        new Promise<never>((_resolve, reject) => {
+          // Match the POSIX runner's default when the declaration omits a
+          // budget. Fake time exercises the deadline without an 11s sleep.
+          timer = setTimeout(() => reject(new Error("fixture setup deadline exceeded")), hook.timeout ?? 10_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   const run = (async () => {
-    for (const hook of setupHooks) await invoke(hook);
+    for (const hook of setupHooks) await invokeSetup(hook);
     if (!deadline) {
       bodyStarted = true;
       await invoke(body);
@@ -93,23 +110,60 @@ async function checkLifecycle(blockAt: number, fail: boolean): Promise<void> {
     (error: unknown) => error,
   );
   await reached.promise;
-  deadline = true;
   events.length = 0;
-  // Simulate either a setup deadline or a test deadline. The worker must
-  // retain the pending callback and its root until the Git completion drains.
-  const shutdown = (async () => {
+  const shutdown = async () => {
     for (const hook of cleanupHooks) await hook();
     events.push("worker-released");
-  })();
+  };
+  if (setupCompletionMs !== undefined) {
+    await vi.advanceTimersByTimeAsync(setupCompletionMs);
+    completion.resolve();
+    const error = await run;
+    await shutdown();
+    const withinBudget = setupCompletionMs < 20_000;
+    if (withinBudget) expect(error).toBeUndefined();
+    else expect(error).toMatchObject({ message: "fixture setup deadline exceeded" });
+    expect(bodyStarted).toBe(withinBudget);
+    expect({ preparedInBody, events }).toEqual({
+      preparedInBody: false,
+      events: [
+        "callback-settled",
+        ...(withinBudget ? ["callback-settled"] : []),
+        "root-removed",
+        "worker-released",
+      ],
+    });
+    return;
+  }
+  deadline = true;
+  // Simulate either a setup deadline or a test deadline. The worker must
+  // retain the pending callback and its root until the Git completion drains.
+  const closing = shutdown();
   completion.resolve();
   const error = await run;
-  await shutdown;
+  await closing;
   expect(error).toBe(fail ? failure : undefined);
   expect({ preparedInBody, events }).toEqual({
     preparedInBody: false,
     events: ["callback-settled", "root-removed", "worker-released"],
   });
 }
+
+it("runs the handoff after an 11-second fixture preparation", async () => {
+  vi.useFakeTimers();
+  await checkLifecycle(13, false, 11_000);
+});
+
+it("preserves the original setup deadline for generated completions within and beyond 20 seconds", async () => {
+  vi.useFakeTimers();
+  await fc.assert(fc.asyncProperty(
+    fc.oneof(
+      fc.integer({ min: 10_001, max: 19_999 }),
+      fc.integer({ min: 20_001, max: 29_999 }),
+    ),
+    async (elapsedMs) => { await checkLifecycle(13, false, elapsedMs); },
+  ));
+});
 
 it.each([13, 15])("keeps a timed-out callback owned through Git completion %i", async (blockAt) => {
   await checkLifecycle(blockAt, false);
