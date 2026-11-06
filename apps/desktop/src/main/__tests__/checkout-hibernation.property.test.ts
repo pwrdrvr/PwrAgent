@@ -115,7 +115,6 @@ function eligible(input: Scenario): boolean {
     && !input.agent && !input.mergeHeld && !input.pendingWork && !input.prWatch && !input.scheduled && !input.remote
     && !input.activeSubAgent
     && (input.threadStatus === "idle" || input.threadStatus === "notLoaded")
-    && !input.source.startsWith("acp:")
     // Only PwrAgent's own, unborrowed worktrees.
     && pwragentRoot && !input.external
     && input.snapshot !== "hibernated" && input.snapshot !== "archivedPending"

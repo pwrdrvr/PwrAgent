@@ -1,7 +1,6 @@
 import path from "node:path";
 import {
   CHECKOUT_HIBERNATION_CLAUDE_MAX_IDLE_DAYS,
-  isAcpBackendId,
   type DesktopCheckoutHibernationPolicy,
   type LinkedDirectorySummary,
   type WorktreeSnapshotSummary,
@@ -21,7 +20,6 @@ const DAY_MS = 86_400_000;
 export const HIBERNATION_KEEP_REASONS = {
   off: "Hibernation is off",
   archived: "Already archived",
-  acp: "ACP session owns the checkout",
   noWorktree: "No worktree checkout",
   borrowed: "Checkout not created by PwrAgent",
   outsideRoot: "Checkout outside PwrAgent's worktrees",
@@ -103,9 +101,6 @@ export function hibernationKeepReason(
     || overlay?.archiveRetentionStartedAt !== undefined) return HIBERNATION_KEEP_REASONS.archived;
   const protection = archiveCandidateProtectionReason(candidate, { allowPinned: true });
   if (protection) return protection;
-  // An ACP agent process keeps its session's folder as its working
-  // directory, and reloading the session needs archive's release path.
-  if (isAcpBackendId(thread.source)) return HIBERNATION_KEEP_REASONS.acp;
   const target = hibernationTarget(candidate);
   if ("keep" in target) return target.keep;
   const snapshot = snapshotForPath(overlay?.worktreeSnapshots, target.worktreePath);
