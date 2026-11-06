@@ -2362,6 +2362,11 @@ describe("AcpAgentClient", () => {
         {
           name: "help",
         },
+        // Shapes captured from Kimi Code 0.31, Qwen, and ACP v2.
+        { name: "compact", input: { hint: "<optional custom summarization instructions>" } },
+        { name: "skills", input: { hint: "" } },
+        { name: "review", input: { type: "text", hint: " [--pr <number>] " } },
+        { name: "context", input: null },
       ],
     });
 
@@ -2380,6 +2385,22 @@ describe("AcpAgentClient", () => {
         scope: "session",
         source: "provider",
       },
+      {
+        name: "compact",
+        argumentHint: "<optional custom summarization instructions>",
+        backend: "acp:kimi",
+        scope: "session",
+        source: "provider",
+      },
+      { name: "skills", backend: "acp:kimi", scope: "session", source: "provider" },
+      {
+        name: "review",
+        argumentHint: "[--pr <number>]",
+        backend: "acp:kimi",
+        scope: "session",
+        source: "provider",
+      },
+      { name: "context", backend: "acp:kimi", scope: "session", source: "provider" },
     ]);
     expect(readRawAcpSessionPayload("acp:kimi", "session-1")?.availableCommands).toEqual(
       store.getSession("acp:kimi", "session-1")?.availableCommands,

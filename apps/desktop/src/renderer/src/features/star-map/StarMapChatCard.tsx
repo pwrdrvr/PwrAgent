@@ -60,6 +60,7 @@ import {
   withOwnerPause,
 } from "../composer/queued-turn-pause";
 import { useQueuedRowReorder } from "../composer/useQueuedRowReorder";
+import { backendDrawsCommandChips } from "../composer/composer-command-chip";
 import { restoreQueuedMessage } from "../composer/queued-message-content";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
@@ -752,7 +753,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           return {
             aliases: command.aliases,
             argumentHint: command.argumentHint,
-            chip: commandBackend === "claude",
+            chip: backendDrawsCommandChips(commandBackend),
             description: command.description,
             name: command.name,
             // Codex compaction is a client action. ACP commands remain

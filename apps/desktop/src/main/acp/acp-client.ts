@@ -2420,6 +2420,9 @@ function normalizeAvailableCommandsUpdate(
     }
     const description = readNonEmptyString(command, "description");
     const aliases = readStringArray(command?.aliases);
+    // ACP's command `input` is `{ hint }` (v2 adds `type: "text"`). Qwen
+    // sends an empty hint for commands that take nothing.
+    const argumentHint = readNonEmptyString(asRecord(command?.input), "hint");
     commands.set(name, {
       name,
       backend,
@@ -2427,6 +2430,7 @@ function normalizeAvailableCommandsUpdate(
       source: "provider",
       ...(description ? { description } : {}),
       ...(aliases.length > 0 ? { aliases } : {}),
+      ...(argumentHint ? { argumentHint } : {}),
     });
   }
 

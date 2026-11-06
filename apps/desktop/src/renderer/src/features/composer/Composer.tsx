@@ -289,6 +289,7 @@ import {
   type ComposerForkCommand,
 } from "./composer-fork-command";
 import {
+  backendDrawsCommandChips,
   buildLeadingCommandChip,
   findLeadingCommand,
   leadingCommandArgumentHint,
@@ -11444,16 +11445,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const forkInlineCompletion = forkInlineHint
     ? forkCommandCompletion(draft)
     : undefined;
-  // Claude reads a command from the start of the prompt, so a draft that
-  // starts with one of its commands draws it as a chip and, until an argument
-  // is typed, the arguments it takes. A chip at offset 0 means the draft text
-  // does not start the prompt.
+  // Claude and ACP agents read a command from the start of the prompt, so a
+  // draft that starts with one of their commands draws it as a chip and, until
+  // an argument is typed, the arguments it takes. A chip at offset 0 means the
+  // draft text does not start the prompt.
   const leadingProviderCommand =
     skillTokens.some((token) => token.index === 0)
       ? undefined
       : findLeadingCommand(
           draft,
-          props.providerCommands?.filter((command) => command.backend === "claude") ?? [],
+          props.providerCommands?.filter((command) =>
+            backendDrawsCommandChips(command.backend ?? props.thread?.source)
+          ) ?? [],
         );
   const commandChip = buildLeadingCommandChip(leadingProviderCommand);
   const commandInlineHint =

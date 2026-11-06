@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  backendDrawsCommandChips,
   buildCommandChipTooltip,
   findLeadingCommand,
   leadingCommandArgumentHint,
@@ -65,5 +66,15 @@ describe("buildCommandChipTooltip", () => {
       "/code-review [low|medium|high] [--fix]\nReview the current diff",
     );
     expect(buildCommandChipTooltip(COMPACT)).toBe("/compact");
+  });
+});
+
+describe("backendDrawsCommandChips", () => {
+  it("chips commands for Claude and ACP agents, not Codex", () => {
+    expect(backendDrawsCommandChips("claude")).toBe(true);
+    expect(backendDrawsCommandChips("acp:grok")).toBe(true);
+    expect(backendDrawsCommandChips("acp:qwen")).toBe(true);
+    expect(backendDrawsCommandChips("codex")).toBe(false);
+    expect(backendDrawsCommandChips(undefined)).toBe(false);
   });
 });

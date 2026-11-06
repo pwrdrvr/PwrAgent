@@ -16,14 +16,24 @@ export type ComposerLeadingCommand = {
   text: string;
 };
 
+/**
+ * Backends that read a command from the start of the prompt text: Claude
+ * Code, and ACP agents, whose commands arrive as ordinary prompt text. Codex
+ * commands are client actions or protocol calls, so they get no chip.
+ */
+export function backendDrawsCommandChips(backend: string | undefined): boolean {
+  return backend === "claude" || backend?.startsWith("acp:") === true;
+}
+
 function bareName(name: string): string {
   return (name.startsWith("/") ? name.slice(1) : name).toLowerCase();
 }
 
 /**
  * The command a draft starts with: `/name` or one of its aliases at offset 0,
- * followed by whitespace or the end of the draft. Claude reads a command only
- * from the start of the prompt, so a `/name` anywhere else is plain text.
+ * followed by whitespace or the end of the draft. Claude and ACP agents read
+ * a command only from the start of the prompt, so a `/name` anywhere else is
+ * plain text.
  */
 export function findLeadingCommand(
   draft: string,
