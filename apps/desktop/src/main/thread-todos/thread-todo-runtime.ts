@@ -8,6 +8,7 @@ import type {
   ListInstanceProjectsResult,
   PwrAgentFederationContext,
   RaiseThreadTodoPlanRequest,
+  ThreadReview,
   ThreadReviewIdentity,
   ThreadTodo,
   ThreadTodoMergeMethod,
@@ -54,6 +55,7 @@ import {
 } from "../thread-reviews/thread-review-runtime";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 import { ThreadReviewError } from "../thread-reviews/thread-review-service";
+import { getReviewAutoFixArming, reviewAutoFixMessage } from "../thread-reviews/review-auto-fix";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
 
@@ -223,14 +225,35 @@ export function installThreadTodoRuntime(params: {
     identity: ThreadReviewIdentity,
     entry: AppServerThreadReviewEntry,
     source: "live" | "replay" = "replay",
-  ): void => {
+  ): ThreadReview | undefined => {
     try {
-      reviews.importEntry(identity, entry, source);
+      return reviews.importEntry(identity, entry, source);
     } catch (error) {
       threadTodoLog.warn("could not track a completed review", {
         error: error instanceof Error ? error.message : String(error),
       });
+      return undefined;
     }
+  };
+  // A review started with auto-fix hands its open findings to the thread's
+  // own agent as soon as it lands. Behind a running turn it queues, never
+  // steers, so it cannot interrupt work the operator started.
+  const reviewAutoFix = getReviewAutoFixArming();
+  const sendReviewAutoFix = (review: ThreadReview): void => {
+    const message = reviewAutoFixMessage(review);
+    if (!message) return;
+    void registry.submitTurn({
+      backend: review.backend,
+      threadId: review.threadId,
+      input: [{ type: "text", text: message.text }],
+      origin: "automation",
+      messageOrigin: message.messageOrigin,
+    }).catch((error: unknown) => {
+      threadTodoLog.warn("could not send a review's auto-fix", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: review.threadId,
+      });
+    });
   };
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(changed);
@@ -268,7 +291,14 @@ export function installThreadTodoRuntime(params: {
       return;
     }
     const completed = completedThreadReview(event);
-    if (completed) importReview(completed.identity, completed.entry, "live");
+    if (completed) {
+      const review = importReview(completed.identity, completed.entry, "live");
+      if (reviewAutoFix.takeOnCompletion(completed.identity, completed.turnId) && review) sendReviewAutoFix(review);
+    }
+    if (event.notification.method === "turn/completed") {
+      const { threadId, turnId } = event.notification.params;
+      if (typeof turnId === "string") reviewAutoFix.turnEnded({ backend: event.backend, threadId }, turnId);
+    }
     const reported = reportedThreadReviewOutcomes(event);
     if (reported) {
       try {

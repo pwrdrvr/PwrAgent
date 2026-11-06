@@ -33,6 +33,7 @@
     "backend.listBackends [list providers] response $.backends[].capabilities.forkThread: desktop boolean, outpost missing",
     "backend.listBackends [list providers] response $.backends[].capabilities.restoreThread: desktop boolean, outpost missing",
     "backend.listBackends [list providers] response $.backends[].capabilities.restoreWorktree: desktop boolean, outpost missing",
+    "backend.listBackends [list providers] response $.backends[].capabilities.reviewAutoFix: desktop boolean, outpost missing",
     "backend.listBackends [list providers] response $.backends[].capabilities.reviewCodexSubAgent: desktop boolean, outpost missing",
     "backend.listBackends [list providers] response $.backends[].capabilities.reviewRunMode: desktop boolean, outpost missing",
     "backend.listBackends [list providers] response $.backends[].capabilities.reviewRunner: desktop boolean, outpost missing",

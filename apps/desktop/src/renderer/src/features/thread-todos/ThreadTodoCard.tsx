@@ -68,10 +68,13 @@ import type {
 } from "./thread-todos-view";
 import {
   SettledFindingLabel,
-  fixReviewFindingsPrompt,
   orderReviewItems,
   useTrackedReview,
 } from "./review-tracking";
+import {
+  autoFixReviewFindingsPrompt,
+  fixReviewFindingsPrompt,
+} from "../../../../shared/review-fix-prompts";
 import {
   copyTodoMarkdown,
   threadTodoMarkdown,
@@ -220,8 +223,9 @@ function ReviewTodoFindingLabel(props: { item: ThreadReviewItem; ranked: boolean
 /**
  * A completed review still waiting on its findings, one row per finding.
  * A row carries no mark at rest, so nothing on it reads as a step's
- * checkbox; its chips appear on hover or focus. Fix sends every open
- * finding, or only the selected ones, to the agent in this thread.
+ * checkbox; its chips appear on hover or focus. Auto-fix sends every open
+ * finding to the agent in this thread, which decides what to fix; the menu's
+ * Fix all asks for every one. A selection sends only the selected findings.
  */
 function TrackedReviewCard(props: ThreadTodoCardProps) {
   const { todo } = props;
@@ -246,7 +250,6 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   const openItems = items.filter((item) => item.status === "open");
   // A selection that has since settled no longer counts.
   const selectedItems = openItems.filter((item) => selected.has(item.id));
-  const toSend = selectedItems.length > 0 ? selectedItems : openItems;
   const toggleSelected = (id: string) => setSelected((current) => {
     const next = new Set(current);
     if (!next.delete(id)) next.add(id);
@@ -260,15 +263,20 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   const busy = tracking.busy || sending;
   const working = props.running || props.threadRunning === true;
   const fixDisabled = busy || working;
+  // Auto-fix lets this thread's agent decide each finding; Fix asks for all
+  // of them to be fixed.
   const fix = onDoHere
-    ? (findings: ThreadReviewItem[]) => {
+    ? (findings: ThreadReviewItem[], mode: "auto-fix" | "fix" = "fix") => {
         if (sendingRef.current || fixDisabled) return;
         sendingRef.current = true;
         setSending(true);
         setSendError(undefined);
         void (async () => {
           try {
-            const sent = await onDoHere(todo, { prompt: fixReviewFindingsPrompt(todo.title, findings) });
+            const prompt = mode === "auto-fix"
+              ? autoFixReviewFindingsPrompt(todo.title, findings)
+              : fixReviewFindingsPrompt(todo.title, findings);
+            const sent = await onDoHere(todo, { prompt });
             if (sent === false) {
               setSendError("The thread did not accept the repair request. Try again.");
               return;
@@ -316,21 +324,50 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         </button>
       );
     }
-    return fix ? (
-      <button
-        type="button"
-        className="button button--primary thread-todo-card__button"
+    if (!fix) return null;
+    if (sending || working) {
+      return (
+        <button
+          type="button"
+          className="button button--primary thread-todo-card__button"
+          disabled
+          aria-busy
+        >
+          <PendingSpinner pairing="paired" size="sm" />
+          {sending ? "Sending…" : "Working…"}
+        </button>
+      );
+    }
+    // The label runs Auto-fix, unless the operator picked findings: a pick is
+    // an explicit choice to fix those. The menu holds the other sends.
+    const picked = selectedItems.length;
+    const fixAll: TodoSplitMenuEntry = {
+      kind: "item", id: "fix-all", label: `Fix all ${openItems.length}`,
+      disabled: fixDisabled, onSelect: () => fix(openItems),
+    };
+    const entries: TodoSplitMenuEntry[] = picked > 0
+      ? [
+          { kind: "item", id: "fix-selected", label: `Fix ${picked} selected`, checked: true,
+            disabled: fixDisabled, onSelect: () => fix(selectedItems) },
+          { kind: "item", id: "auto-fix-selected", label: `Auto-fix ${picked} selected`,
+            disabled: fixDisabled, onSelect: () => fix(selectedItems, "auto-fix") },
+          fixAll,
+        ]
+      : [
+          { kind: "item", id: "auto-fix", label: "Auto-fix", checked: true,
+            disabled: fixDisabled, onSelect: () => fix(openItems, "auto-fix") },
+          fixAll,
+        ];
+    return (
+      <TodoSplitButton
+        label={picked > 0 ? `Fix ${picked} selected` : "Auto-fix"}
+        Icon={ArrowUpIcon}
         disabled={fixDisabled}
-        aria-busy={sending || working}
-        onClick={() => fix(toSend)}
-      >
-        {sending || working
-          ? <PendingSpinner pairing="paired" size="sm" />
-          : <ArrowUpIcon size={12} />}
-        {sending ? "Sending…" : working ? "Working…"
-          : selectedItems.length > 0 ? `Fix ${selectedItems.length} selected` : "Fix all"}
-      </button>
-    ) : null;
+        menuLabel="Review fix options"
+        entries={entries}
+        onClick={() => (picked > 0 ? fix(selectedItems) : fix(openItems, "auto-fix"))}
+      />
+    );
   };
 
   return (

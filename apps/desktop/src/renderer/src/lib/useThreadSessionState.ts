@@ -4428,6 +4428,10 @@ function threadMessageOriginFromUnknown(
     record.kind === "pwragent"
       ? threadMessagePrAutomationOriginFromUnknown(record.prAutomation)
       : undefined;
+  const reviewAutoFix =
+    record.kind === "pwragent"
+      ? threadMessageReviewAutoFixOriginFromUnknown(record.reviewAutoFix)
+      : undefined;
   const source = record.sourceThread;
   if (!source || typeof source !== "object" || Array.isArray(source)) {
     return {
@@ -4437,6 +4441,7 @@ function threadMessageOriginFromUnknown(
       ...(messaging ? { messaging } : {}),
       ...(subAgent ? { subAgent } : {}),
       ...(prAutomation ? { prAutomation } : {}),
+      ...(reviewAutoFix ? { reviewAutoFix } : {}),
     };
   }
   const sourceRecord = source as Record<string, unknown>;
@@ -4450,6 +4455,7 @@ function threadMessageOriginFromUnknown(
       ...(systemReason ? { systemReason } : {}),
       ...(messaging ? { messaging } : {}),
       ...(prAutomation ? { prAutomation } : {}),
+      ...(reviewAutoFix ? { reviewAutoFix } : {}),
     };
   }
   // A to-do marker names the thread that raised the card, so it needs one.
@@ -4484,6 +4490,28 @@ function threadMessageOriginFromUnknown(
     ...(messaging ? { messaging } : {}),
     ...(subAgent ? { subAgent } : {}),
     ...(prAutomation ? { prAutomation } : {}),
+    ...(reviewAutoFix ? { reviewAutoFix } : {}),
+  };
+}
+
+function threadMessageReviewAutoFixOriginFromUnknown(
+  value: unknown,
+): AppServerThreadMessageOrigin["reviewAutoFix"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.reviewId !== "string"
+    || typeof record.findingCount !== "number"
+    || !Number.isFinite(record.findingCount)
+  ) {
+    return undefined;
+  }
+  return {
+    reviewId: record.reviewId,
+    findingCount: record.findingCount,
+    ...(typeof record.title === "string" ? { title: record.title } : {}),
   };
 }
 

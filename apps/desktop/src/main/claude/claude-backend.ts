@@ -654,6 +654,7 @@ export class ClaudeBackend {
         // Claude runs no reviews itself, but this owner accepts a run mode
         // for a Claude thread whose review runs on another provider.
         reviewRunMode: true,
+        reviewAutoFix: true,
         // File checkpoints restore what Edit, Write, and NotebookEdit changed.
         threadRewind: { files: true, undo: true },
       },

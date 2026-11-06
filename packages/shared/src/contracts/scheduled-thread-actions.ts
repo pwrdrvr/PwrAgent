@@ -9,6 +9,7 @@ import type {
 } from "./normalized-app-server";
 import type {
   AppServerCollaborationModeRequest,
+  ReviewAfterAction,
   ReviewRunMode,
 } from "./agent";
 import type { FederationTarget } from "./federation";
@@ -48,6 +49,8 @@ export type ScheduledThreadReviewPayload = {
   draftText?: string;
   delivery?: AppServerReviewDelivery;
   runMode?: ReviewRunMode;
+  /** What follows the review once it runs; see `StartReviewRequest.afterReview`. */
+  afterReview?: ReviewAfterAction;
   cwd?: string;
   /**
    * Reviewer override captured when the review was queued, so releasing it

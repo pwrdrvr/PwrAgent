@@ -439,7 +439,20 @@ export type ReleaseQueuedTurnResponse = {
 /** Product execution modes; independent of native protocol delivery. */
 export type ReviewRunMode = "codex-sub-agent" | "pwragent-sub-agent";
 
+/**
+ * What the thread does once the review lands. `auto-fix` sends the review's
+ * findings to the thread's own agent, which fixes, defers or declines each.
+ * `wait` leaves them on the To-do card for the operator.
+ */
+export type ReviewAfterAction = "auto-fix" | "wait";
+
 export type StartReviewRequest = {
+  /**
+   * Omitted means `wait`, so an owner never starts fixing for a viewer that
+   * did not ask. Viewers send it only to an owner whose backend advertises
+   * the `reviewAutoFix` capability.
+   */
+  afterReview?: ReviewAfterAction;
   /** Omitted legacy requests use native review unless provider/workspace constraints require managed review. */
   runMode?: ReviewRunMode;
   backend: AppServerBackendKind;

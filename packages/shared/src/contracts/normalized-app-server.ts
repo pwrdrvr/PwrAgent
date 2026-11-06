@@ -792,6 +792,11 @@ export type AppServerThreadMessageOrigin = {
     outcome: "success" | "failure" | "cancelled";
     summary: string;
   };
+  /**
+   * PwrAgent sent this message when a review started with auto-fix finished.
+   * Display text only: the review's id and title as the owner recorded them.
+   */
+  reviewAutoFix?: { reviewId: string; title?: string; findingCount: number };
   prAutomation?: {
     kind: "auto-fix" | "watch";
     prKey: string;

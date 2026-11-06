@@ -169,6 +169,12 @@ export type BackendCapabilities = {
    * continue to use their configured review behavior.
    */
   reviewRunMode?: boolean;
+  /**
+   * This thread owner honors `afterReview: "auto-fix"` on a review-start
+   * request. An owner that predates it omits the capability, so viewers hide
+   * the choice rather than promise a fix the owner would never send.
+   */
+  reviewAutoFix?: boolean;
   /** Native review/start with inline delivery (Codex's internal reviewer). */
   reviewCodexSubAgent?: boolean;
   interruptTurn: boolean;

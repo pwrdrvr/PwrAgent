@@ -6,10 +6,12 @@ import { normalizeReviewOutputRecord } from "../../shared/review-command";
 /** Only final review artifacts are persisted; deltas and started items are ignored. */
 export function completedThreadReview(event: AgentEvent): {
   identity: ThreadReviewIdentity;
+  /** The review's turn on that thread, when the event names one. */
+  turnId?: string;
   entry: AppServerThreadReviewEntry;
 } | undefined {
   if (event.federationTarget?.scope === "remote" || event.notification.method !== "item/completed") return undefined;
-  const { threadId, item: value } = event.notification.params;
+  const { threadId, turnId, item: value } = event.notification.params;
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const item = value as Record<string, unknown>;
   if (item.type !== "exitedReviewMode" || typeof item.id !== "string") return undefined;
@@ -20,6 +22,7 @@ export function completedThreadReview(event: AgentEvent): {
     : undefined;
   return {
     identity: { backend: event.backend, threadId },
+    ...(typeof turnId === "string" && turnId ? { turnId } : {}),
     entry: {
       type: "review",
       id: item.id,
