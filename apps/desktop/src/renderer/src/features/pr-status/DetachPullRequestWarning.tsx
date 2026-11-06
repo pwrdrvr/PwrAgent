@@ -21,7 +21,8 @@ function rememberDetachPullRequestWarningDismissed(): void {
 }
 
 type DetachPullRequestWarningProps = {
-  pr: PrSummary;
+  /** One PR, or every PR a "Detach all" removes. */
+  prs: readonly PrSummary[];
   onCancel: () => void;
   onConfirm: () => void;
   /**
@@ -34,7 +35,8 @@ type DetachPullRequestWarningProps = {
 
 export function DetachPullRequestWarning(props: DetachPullRequestWarningProps) {
   const [dontShowAgain, setDontShowAgain] = useState(false);
-  const prLabel = `${props.pr.org}/${props.pr.repo}#${props.pr.number}`;
+  const prLabels = props.prs.map((pr) => `${pr.org}/${pr.repo}#${pr.number}`);
+  const several = prLabels.length > 1;
   // Cancel, not the first control: this confirms a destructive action, so
   // focus starts on the choice that changes nothing.
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -61,12 +63,29 @@ export function DetachPullRequestWarning(props: DetachPullRequestWarningProps) {
         className="pr-detach-warning-dialog"
         role="dialog"
       >
-        <h2 id="pr-detach-warning-title">Detach pull request?</h2>
-        <p>
-          This removes {prLabel} from this thread's PR list. It does not close,
-          archive, or modify the pull request on its provider.
-        </p>
-        <p>Detaching also stops watching this pull request.</p>
+        <h2 id="pr-detach-warning-title">
+          {several ? `Detach ${prLabels.length} pull requests?` : "Detach pull request?"}
+        </h2>
+        {several ? (
+          <>
+            <p>This removes these pull requests from this thread's PR list:</p>
+            <ul className="pr-detach-warning-dialog__list">
+              {prLabels.map((label) => <li key={label}>{label}</li>)}
+            </ul>
+            <p>
+              It does not close, archive, or modify them on their provider.
+              Detaching also stops watching them.
+            </p>
+          </>
+        ) : (
+          <>
+            <p>
+              This removes {prLabels[0]} from this thread's PR list. It does not
+              close, archive, or modify the pull request on its provider.
+            </p>
+            <p>Detaching also stops watching this pull request.</p>
+          </>
+        )}
         <label className="composer__checkbox pr-detach-warning-dialog__checkbox">
           <input
             checked={dontShowAgain}
@@ -89,7 +108,7 @@ export function DetachPullRequestWarning(props: DetachPullRequestWarningProps) {
               props.onConfirm();
             }}
           >
-            Detach PR
+            {several ? `Detach ${prLabels.length} PRs` : "Detach PR"}
           </button>
         </div>
       </div>

@@ -827,7 +827,7 @@ export function Sidebar(props: SidebarProps) {
   const [pendingDetachPullRequest, setPendingDetachPullRequest] = useState<
     | {
         thread: NavigationThreadSummary;
-        pr: PrSummary;
+        prs: readonly PrSummary[];
       }
     | undefined
   >();
@@ -1172,7 +1172,7 @@ export function Sidebar(props: SidebarProps) {
       : undefined,
   );
   // The row callbacks this component only forwards. (`onDetachPullRequest`
-  // is absent: the rows get this component's own `detachPullRequest`, which
+  // is absent: the rows get this component's own `detachPullRequests`, which
   // owns the confirmation dialog and is already stable.) They are stable in the
   // app today because `App` happens to supply stable references, and that is
   // not a contract a memoized row should rest on — the row's bail-out must
@@ -2390,20 +2390,30 @@ export function Sidebar(props: SidebarProps) {
     void copyText(value);
   };
 
-  const detachPullRequest = useEventCallback((
+  // One confirmation covers every PR, then they detach one at a time: each
+  // detach rewrites the thread's PR list on its owner.
+  const detachPullRequests = useEventCallback((
     thread: NavigationThreadSummary,
-    pr: PrSummary,
+    prs: readonly PrSummary[],
   ): void => {
-    if (!props.onDetachPullRequest) {
+    if (!props.onDetachPullRequest || prs.length === 0) {
       return;
     }
     setContextMenu(undefined);
     if (shouldShowDetachPullRequestWarning()) {
-      setPendingDetachPullRequest({ thread, pr });
+      setPendingDetachPullRequest({ thread, prs });
       return;
     }
-    void props.onDetachPullRequest(thread, pr);
+    void detachEach(thread, prs);
   });
+  const detachEach = async (
+    thread: NavigationThreadSummary,
+    prs: readonly PrSummary[],
+  ): Promise<void> => {
+    for (const pr of prs) {
+      await props.onDetachPullRequest?.(thread, pr);
+    }
+  };
 
   // Per-thread versions of the context menu's gates, for the keyboard
   // shortcuts, which act without a menu open.
@@ -2778,6 +2788,12 @@ export function Sidebar(props: SidebarProps) {
     contextMenuHasLocalWorkspace || contextMenuHasWorktreeWorkspace;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
   const contextMenuPullRequest = contextMenu?.pullRequest;
+  // Opened from the row, not a chip: one item detaches the thread's PRs.
+  // Minimal's single chip draws no ✕, so this is its visible way.
+  const contextMenuRowPullRequests =
+    contextMenu && !contextMenuIsBulk && !contextMenuPullRequest
+      ? contextMenu.thread.prs ?? []
+      : [];
   const contextMenuIsSubthread = Boolean(
     !contextMenuIsBulk && contextMenu?.thread.parentThreadId,
   );
@@ -3554,7 +3570,7 @@ export function Sidebar(props: SidebarProps) {
               onRevealSelectedThreadComplete={
                 forwardedRevealSelectedThreadComplete
               }
-              onDetachPullRequest={detachPullRequest}
+              onDetachPullRequests={detachPullRequests}
               onReorderThreadPins={
                 hoverReleasedListHandlers.reorderThreadPins
               }
@@ -3634,7 +3650,7 @@ export function Sidebar(props: SidebarProps) {
                 onRevealSelectedThreadComplete={
                   forwardedRevealSelectedThreadComplete
                 }
-                onDetachPullRequest={detachPullRequest}
+                onDetachPullRequests={detachPullRequests}
                 onUpdateSubthreadOrder={
                   hoverReleasedListHandlers.updateSubthreadOrder
                 }
@@ -4184,13 +4200,26 @@ export function Sidebar(props: SidebarProps) {
                         role="menuitem"
                         type="button"
                         onClick={() =>
-                          detachPullRequest(contextMenu.thread, contextMenuPullRequest)
+                          detachPullRequests(contextMenu.thread, [contextMenuPullRequest])
                         }
                       >
                         Detach Pull Request
                       </button>
                     ) : null}
                   </>
+                ) : null}
+                {contextMenuRowPullRequests.length > 0 && props.onDetachPullRequest ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      detachPullRequests(contextMenu.thread, contextMenuRowPullRequests)
+                    }
+                  >
+                    {contextMenuRowPullRequests.length === 1
+                      ? `Detach Pull Request #${contextMenuRowPullRequests[0]!.number}`
+                      : "Detach All Pull Requests"}
+                  </button>
                 ) : null}
                 <button
                   role="menuitem"
@@ -4263,13 +4292,13 @@ export function Sidebar(props: SidebarProps) {
 
       {pendingDetachPullRequest ? (
         <DetachPullRequestWarning
-          pr={pendingDetachPullRequest.pr}
+          prs={pendingDetachPullRequest.prs}
           returnFocus={contextMenuOpenerRef}
           onCancel={() => setPendingDetachPullRequest(undefined)}
           onConfirm={() => {
             const pending = pendingDetachPullRequest;
             setPendingDetachPullRequest(undefined);
-            void props.onDetachPullRequest?.(pending.thread, pending.pr);
+            void detachEach(pending.thread, pending.prs);
           }}
         />
       ) : null}

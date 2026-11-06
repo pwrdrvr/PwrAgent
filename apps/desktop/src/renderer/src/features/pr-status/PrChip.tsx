@@ -52,6 +52,11 @@ type PrChipProps = {
     position: { x: number; y: number; anchorTop?: number },
   ) => void;
   onDetach?: (pr: PrSummary) => void;
+  /**
+   * Keeps Delete and the menu's Detach but draws no ✕. Minimal's title line
+   * has no room for it.
+   */
+  hideDetachButton?: boolean;
   onVisibilityChange?: (visible: boolean) => void;
 };
 
@@ -262,7 +267,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
             <EyeIcon size={12} />
           </span>
         ) : null}
-        {props.onDetach ? (
+        {props.onDetach && !props.hideDetachButton ? (
           // A pointer shortcut, not a second control: a button inside the
           // chip's button is nested-interactive, and at 16px it is under the
           // 24px target floor. Keyboards detach with Delete on the chip or

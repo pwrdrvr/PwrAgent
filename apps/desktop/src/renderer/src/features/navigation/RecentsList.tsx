@@ -130,9 +130,10 @@ type RecentsListProps = {
   ) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onPrefetchGitWorkingState?: (thread: NavigationThreadSummary) => void;
-  onDetachPullRequest?: (
+  /** One PR from its chip, or every PR from Detach all. */
+  onDetachPullRequests?: (
     thread: NavigationThreadSummary,
-    pr: PrSummary,
+    prs: readonly PrSummary[],
   ) => void;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
@@ -393,7 +394,7 @@ export function RecentsList(props: RecentsListProps) {
               onPointerDownThread={draggable ? pointerDownSubthread : undefined}
               onOpenContextMenu={props.onOpenThreadContextMenu}
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-              onDetachPullRequest={props.onDetachPullRequest}
+              onDetachPullRequests={props.onDetachPullRequests}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
               onRevealSelectedThreadComplete={
@@ -500,7 +501,7 @@ export function RecentsList(props: RecentsListProps) {
       thread,
       onOpenContextMenu: props.onOpenThreadContextMenu,
       onOpenPullRequestContextMenu: props.onOpenPullRequestContextMenu,
-      onDetachPullRequest: props.onDetachPullRequest,
+      onDetachPullRequests: props.onDetachPullRequests,
       onPrefetchPullRequests: props.onPrefetchPullRequests,
       onPrefetchGitWorkingState: props.onPrefetchGitWorkingState,
       onRevealSelectedThreadComplete: props.onRevealSelectedThreadComplete,

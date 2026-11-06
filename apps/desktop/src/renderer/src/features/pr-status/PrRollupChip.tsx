@@ -11,7 +11,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { PrSummary } from "@pwragent/shared";
-import { EyeIcon } from "../../icons";
+import { CloseIcon, EyeIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -42,6 +42,13 @@ type PrRollupChipProps = {
     pr: PrSummary,
     position: { x: number; y: number; anchorTop?: number },
   ) => void;
+  /**
+   * Detaches one PR: Delete on the chip or a popover row, or a row's ✕. The
+   * title line draws no ✕ on the chip itself; Minimal has no room for it.
+   */
+  onDetach?: (pr: PrSummary) => void;
+  /** The popover's Detach all, with every PR the chip rolls up. */
+  onDetachAll?: (prs: readonly PrSummary[]) => void;
   /** The thread branch's base drift, for the PR on that branch. */
   branchDrift?: PrBranchDrift;
   /** The thread's active PR watches; a CI watch draws the eye. */
@@ -89,6 +96,8 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
           watch={resolvePrChipWatch(props.prWatches, pr, props.autoFixRepository)}
           onOpen={props.onOpen}
           onOpenContextMenu={props.onOpenContextMenu}
+          onDetach={props.onDetach}
+          hideDetachButton
         />
       </span>
     );
@@ -272,20 +281,63 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     openPinned(event.type === "keydown");
   };
 
-  const handleRowKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number): void => {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+  // Detaching keeps the list open. Focus moves to the row that slides into
+  // the detached one's place, or to the new last row.
+  const detachRow = (pr: PrSummary, index: number, refocus: boolean): void => {
+    if (!props.onDetach) return;
+    hideRowCard();
+    props.onDetach(pr);
+    if (refocus) {
+      window.requestAnimationFrame(() => {
+        const rows = popoverRef.current?.querySelectorAll<HTMLButtonElement>(
+          ".pr-rollup-popover__row",
+        );
+        if (rows && rows.length > 0) rows[Math.min(index, rows.length - 1)]!.focus();
+      });
+    }
+  };
+
+  const handleRowKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    pr: PrSummary,
+    index: number,
+  ): void => {
+    if (
+      props.onDetach
+      && (event.key === "Delete" || event.key === "Backspace")
+      && !event.metaKey
+      && !event.ctrlKey
+      && !event.altKey
+      && !event.shiftKey
+    ) {
+      event.preventDefault();
+      detachRow(pr, index, true);
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       focusRow(index + (event.key === "ArrowDown" ? 1 : -1));
     } else if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       focusRow(event.key === "Home" ? 0 : rollup.ordered.length - 1);
     } else if (event.key === "Tab") {
-      // Hand focus to the chip before the rows unmount. Tab then moves on
-      // from the chip; Shift+Tab stops on it.
-      triggerRef.current?.focus();
-      if (event.shiftKey) event.preventDefault();
-      dismissImmediately();
+      // Tab steps from the rows to Detach all, when there is one.
+      const detachAll = popoverRef.current?.querySelector<HTMLButtonElement>(
+        ".pr-rollup-popover__detach-all",
+      );
+      if (!event.shiftKey && detachAll) {
+        event.preventDefault();
+        detachAll.focus();
+        return;
+      }
+      leavePopover(event.shiftKey, event);
     }
+  };
+
+  // Hand focus to the chip before the rows unmount. Tab then moves on from
+  // the chip; Shift+Tab stops on it.
+  const leavePopover = (backwards: boolean, event: KeyboardEvent<HTMLElement>): void => {
+    triggerRef.current?.focus();
+    if (backwards) event.preventDefault();
+    dismissImmediately();
   };
 
   const className = [
@@ -431,7 +483,8 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                           anchorTop: rect.top,
                         });
                       }}
-                      onKeyDown={(event) => handleRowKeyDown(event, index)}
+                      aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}
+                      onKeyDown={(event) => handleRowKeyDown(event, pr, index)}
                     >
                       <span
                         aria-hidden="true"
@@ -458,10 +511,54 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                         <span className="pr-rollup-popover__status">{status}</span>
                       </span>
                     </button>
+                    {props.onDetach ? (
+                      // Outside the row's button, so it is its own target.
+                      // Out of the Tab order like the chip's ✕: arrows walk
+                      // the rows, and Delete on a row detaches it.
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        className="pr-rollup-popover__detach"
+                        aria-label={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
+                        title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
+                        onMouseEnter={hideRowCard}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          detachRow(pr, index, false);
+                        }}
+                      >
+                        <CloseIcon size={11} aria-hidden="true" />
+                      </button>
+                    ) : null}
                   </li>
                 );
               })}
             </ul>
+            {props.onDetachAll ? (
+              <div className="pr-rollup-popover__foot">
+                <button
+                  type="button"
+                  className="pr-rollup-popover__detach-all"
+                  onMouseEnter={hideRowCard}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Tab") return;
+                    if (event.shiftKey) {
+                      event.preventDefault();
+                      focusRow(rollup.ordered.length - 1);
+                      return;
+                    }
+                    leavePopover(false, event);
+                  }}
+                  onClick={() => {
+                    const prs = rollup.ordered;
+                    dismissImmediately();
+                    props.onDetachAll?.(prs);
+                  }}
+                >
+                  Detach all
+                </button>
+              </div>
+            ) : null}
           </div>,
           document.body,
         )

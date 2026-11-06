@@ -82,7 +82,7 @@ function row(entry: NavigationThreadSummary) {
       onSelectThread={() => undefined}
       onOpenContextMenu={() => undefined}
       onOpenPullRequestContextMenu={() => undefined}
-      onDetachPullRequest={async () => undefined}
+      onDetachPullRequests={async () => undefined}
       onOpenPullRequest={() => undefined}
     />
   );
@@ -167,7 +167,7 @@ describe("thread row render cost", () => {
         thread={entry}
         onSelectThread={() => undefined}
         onOpenContextMenu={() => undefined}
-        onDetachPullRequest={first}
+        onDetachPullRequests={first}
       />,
     );
     const captured = lastDetach;
@@ -176,7 +176,7 @@ describe("thread row render cost", () => {
         thread={entry}
         onSelectThread={() => undefined}
         onOpenContextMenu={() => undefined}
-        onDetachPullRequest={second}
+        onDetachPullRequests={second}
       />,
     );
 
