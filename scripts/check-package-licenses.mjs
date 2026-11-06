@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// pnpm reports physical paths. Resolve aliases here too, including Windows
+// short directory names, before deduplicating roots or formatting diagnostics.
+const repoRoot = realpathSync.native(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
 
 function firstPartyPackagePaths() {
   // pnpm owns membership through pnpm-workspace.yaml. Depth -1 lists only

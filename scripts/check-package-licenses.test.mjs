@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,7 +44,7 @@ function createWorkspace() {
   return { root, manifests };
 }
 
-function runCheck(root, guard = false) {
+function runCheck(root, guard = false, entryRoot = root) {
   const env = { ...process.env };
   if (guard) {
     const guardPath = join(root, "guard.cjs");
@@ -86,7 +86,10 @@ syncBuiltinESMExports();
     // Inherited by pnpm too: discovery must obey the same read boundary.
     env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(guardPath)}`;
   }
-  const result = spawnSync(process.execPath, [join(root, "scripts/check-package-licenses.mjs")], {
+  const result = spawnSync(process.execPath, [
+    ...(entryRoot === root ? [] : ["--preserve-symlinks-main"]),
+    join(entryRoot, "scripts/check-package-licenses.mjs"),
+  ], {
     cwd: root,
     env,
     encoding: "utf8",
@@ -138,6 +141,26 @@ recursiveIncludeWorkspaceRoot: false
       '- package.json declares license undefined; expected "MIT"',
       `- ${join("tools", "example", "package.json")} declares license undefined; expected "MIT"`,
     ]);
+  });
+
+  it("uses physical workspace identity when the entrypoint has a path alias", () => {
+    const { root, manifests } = createWorkspace();
+    const aliases = mkdtempSync(join(tmpdir(), "pwragent-license-alias-"));
+    temporaryDirectories.push(aliases);
+    const entryRoot = join(aliases, "workspace");
+    symlinkSync(root, entryRoot, process.platform === "win32" ? "junction" : "dir");
+    for (const path of manifests) {
+      writeFile(root, path, JSON.stringify({ name: "invented-unlicensed-package" }));
+    }
+    const result = runCheck(root, true, entryRoot);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    // Filesystem identity is the oracle: an alias must not change diagnostics
+    // or cause the explicitly included root to be checked a second time.
+    const actual = result.stderr.split("\n").filter((line) => line.startsWith("- "));
+    expect(actual.sort()).toEqual(manifests.map((path) =>
+      `- ${join(...path.split("/"))} declares license undefined; expected "MIT"`,
+    ).sort());
   });
 
   it.each([undefined, "BSD-2-Clause"])("rejects license %s on every first-party manifest", (license) => {
