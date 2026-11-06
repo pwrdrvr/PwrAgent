@@ -82,13 +82,13 @@ beforeAll(async () => {
     storageCases.push({ from, to: target });
   }
 
-  for (const area of ["ipc", "ipc/nested", "app-server", "app-server/nested", "federation", "federation/nested", "settings"]) {
+  for (const area of ["ipc", "ipc/nested", "app-server", "app-server/nested", "federation", "federation/nested", "composer-drafts", "composer-drafts/nested", "settings"]) {
     for (const target of ["overlay", "app-state", "nested/store"]) {
       const to = `apps/desktop/src/main/state/${target}.js`;
       const from = `apps/desktop/src/main/${area}/state-${target.replaceAll("/", "-")}.js`;
       source(to, "export const value = 1;\n");
       source(from, `import ${JSON.stringify(relative(dirname(from), to).replaceAll("\\", "/"))};\n`);
-      ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation"].includes(area.split("/")[0]) });
+      ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation", "composer-drafts"].includes(area.split("/")[0]) });
     }
   }
 
@@ -147,7 +147,7 @@ describe("workspace dependency layers", () => {
     }
   });
 
-  it("keeps state private from IPC, federation and app-server at every nesting depth", () => {
+  it("keeps state private from IPC, federation, app-server and composer drafts at every nesting depth", () => {
     for (const { from, to, forbidden } of ipcStateCases) {
       const dependency = result.modules.find((module) => module.source === from)
         ?.dependencies.find((dependency) => dependency.resolved === to);
