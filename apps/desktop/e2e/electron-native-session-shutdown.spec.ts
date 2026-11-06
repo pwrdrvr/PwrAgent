@@ -3,12 +3,61 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
-import { launchElectronApp } from "./fixtures/electron-app";
+import { closeElectronWithSessionDrain, launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("Windows retains session callbacks and the inspector until preparation completes", async () => {
-  test.skip(process.platform !== "win32", "Windows native storage shutdown");
+test("flushes the final cookie written by renderer unload before native quit", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+  });
+  const server = createServer((_request, reply) => {
+    reply.setHeader("Content-Type", "text/html");
+    reply.setHeader("Permissions-Policy", "unload=(self)");
+    reply.end('<script>addEventListener("unload", () => { document.cookie = "renderer_final_write=present; path=/"; });</script>');
+  });
+  const prefix = `[e2e-final-cookie:${randomUUID()}]`;
+  const launcher = app.electronApp.process();
+  let output = "";
+  const onStderr = (chunk: Buffer | string) => { output = (output + chunk.toString()).slice(-16_384); };
+  launcher.stderr?.on("data", onStderr);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected the loopback server address");
+    await app.electronApp.evaluate(async ({ BrowserWindow, session }, { prefix, url }) => {
+      const window = new BrowserWindow({ show: false });
+      await window.loadURL(url);
+      const ownedSession = session.defaultSession;
+      if ((await ownedSession.cookies.get({ name: "renderer_final_write" })).length) {
+        throw new Error("The fixture cookie must not exist before renderer unload");
+      }
+      const flushStore = ownedSession.cookies.flushStore.bind(ownedSession.cookies);
+      ownedSession.cookies.flushStore = async () => {
+        await flushStore();
+        const cookies = await ownedSession.cookies.get({ name: "renderer_final_write" });
+        process.stderr.write(`${prefix}${JSON.stringify(cookies.map((cookie) => cookie.value))}\n`);
+      };
+    }, { prefix, url: `http://127.0.0.1:${address.port}/final-write` });
+    await (process.platform === "win32"
+      ? app.closeApplication()
+      : closeElectronWithSessionDrain(app.electronApp));
+    expect(output).toContain(`${prefix}["present"]`);
+  } finally {
+    try {
+      await app.close();
+    } finally {
+      launcher.stderr?.removeListener("data", onStderr);
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => { server.close(() => resolve()); });
+    }
+  }
+});
+
+test("retains native session callbacks after renderers and inspector close", async () => {
   const app = await launchElectronApp({
     fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
   });
@@ -46,30 +95,33 @@ test("Windows retains session callbacks and the inspector until preparation comp
     });
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected the loopback server address");
-    await app.electronApp.evaluate(({ app, net, session }, { prefix, url }) => {
+    await app.electronApp.evaluate(({ app, BrowserWindow, net, session }, { prefix, url }) => {
       app.on("before-quit", () => process.stderr.write(`${prefix}before-quit\n`));
-      app.once("will-quit", () => process.stderr.write(`${prefix}will-quit\n`));
+      app.on("will-quit", () => process.stderr.write(`${prefix}will-quit\n`));
       const ownedSession = session.defaultSession;
       const clearData = ownedSession.clearData.bind(ownedSession);
       ownedSession.clearData = async (options) => {
+        process.stderr.write(`${prefix}remaining-renderers:${BrowserWindow.getAllWindows().length}\n`);
         await (await net.fetch(url)).arrayBuffer();
         await clearData(options);
         process.stderr.write(`${prefix}callback-complete\n`);
       };
     }, { prefix, url: `http://127.0.0.1:${address.port}/session-drain` });
-    const closing = app.closeApplication();
+    const closing = process.platform === "win32"
+      ? app.closeApplication()
+      : closeElectronWithSessionDrain(app.electronApp);
     await Promise.race([
       requestReceived,
       closing.then(() => { throw new Error("Closed before the controlled session callback was released"); }),
     ]);
-    // The inspector and renderer are owned until the controlled callback
-    // completes. Waiting for quit here would make the test hold readiness
-    // until shutdown, while shutdown correctly waits for readiness.
-    expect(await app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBeGreaterThan(0);
-    expect(stages).toEqual([]);
+    // Session ownership outlives both renderers and Playwright's inspector.
+    // Native shutdown must remain held while this callback awaits real I/O.
+    expect(stages).toContain("remaining-renderers:0");
+    expect(stages).not.toContain("will-quit");
+    expect(child.exitCode).toBeNull();
     response!.end("released");
     await closing;
-    expect(stages[0]).toBe("callback-complete");
+    expect(stages.indexOf("callback-complete")).toBeLessThan(stages.indexOf("will-quit"));
     expect(stages).toContain("before-quit");
     expect(stages.at(-1)).toBe("will-quit");
   } finally {

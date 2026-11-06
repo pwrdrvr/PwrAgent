@@ -27,7 +27,7 @@
  * Adapted from pwrdrvr/PwrSnap#677 (MIT, same owner).
  */
 
-type QuitEvent = { preventDefault(): void };
+type QuitEvent = { readonly defaultPrevented: boolean; preventDefault(): void };
 type Listener = (event: QuitEvent) => void;
 
 /** The subset of `BrowserWindow` that the quit path touches. */
@@ -204,6 +204,7 @@ export class ElectronQuitModel {
     this.emitted.push(name);
     let prevented = false;
     const event = {
+      get defaultPrevented() { return prevented; },
       preventDefault: () => {
         prevented = true;
       },

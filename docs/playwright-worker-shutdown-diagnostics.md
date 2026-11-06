@@ -83,11 +83,16 @@ On Windows, fixture close also drains each live Electron session during
 graceful close: it closes connections, awaits the cookie store flush, and
 disposes the fixture session cache with `clearData({ dataTypes: ["cache"] })`.
 This preparation shares the existing six-second graceful-close deadline.
-An app-owned `before-quit` barrier retains Chromium's contexts until every
-session callback finishes, including after Playwright detaches its inspector.
-Application resource disposal and session preparation run concurrently inside
-that deadline. Holding `will-quit` instead allowed session cleanup to race
-Chromium's native context shutdown. In CI run
+An app-owned `before-quit` barrier retains Chromium's native session contexts until
+every callback finishes, including after Playwright detaches its inspector.
+Session preparation starts on the product's final allowed quit pass, after the
+application closes its renderer windows and finishes resource disposal. A pass
+already prevented by the product cannot start the drain. Flushing before renderer closure misses final
+storage writes from unload. The callback runs inside the app, without retaining
+an inspector RPC or requiring a live renderer. After completion, a macrotask
+reenters quit once native dispatch has reset its quit state. Holding `will-quit`
+is too late for reliable cache callbacks on Windows: CI run 42046887012 recorded
+nine pending cache completions at that boundary. In CI run
 41482286163, the stalled-close snapshot verified that Electron main PID 7876
 still held all four launcher pipe names while cache cleanup was pending; its
 two observed Chromium children held none of them. An unfinished drain still
