@@ -31,6 +31,11 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
+      # Temporary diagnostic branch for PR #3420; do not merge this workflow.
+      - uses: actions/checkout@v7
+        with:
+          path: diagnostics
+
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha || inputs.baseline }}
@@ -55,8 +60,20 @@ jobs:
           node-version: "24.22.1"
           working-directory: candidate
           cache-electron: "true"
-      - name: Measure identical check slices on this runner
-        run: node candidate/scripts/ci/benchmark-dev-checks.mjs baseline candidate .local/check-performance
+      - name: Turn off Spotlight indexing
+        continue-on-error: true
+        timeout-minutes: 2
+        run: sudo mdutil -a -i off
+
+      - name: Select an Xcode with actool 26
+        id: xcode
+        uses: ./diagnostics/.github/actions/select-xcode-for-actool
+
+      - name: Measure messaging cold start on both revisions
+        env:
+          DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
+          PWRAGENT_REQUIRE_ACTOOL: "1"
+        run: node diagnostics/scripts/ci/messaging-cold-start.mjs baseline candidate .local/check-performance
       - name: Upload timings, load samples and logs
         if: always()
         uses: actions/upload-artifact@v7

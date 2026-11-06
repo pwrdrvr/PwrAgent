@@ -1,0 +1,107 @@
+diff --git a/apps/desktop/src/main/__tests__/messaging-runtime.test.ts b/apps/desktop/src/main/__tests__/messaging-runtime.test.ts
+index 9461dbc42..4898efe41 100644
+--- a/apps/desktop/src/main/__tests__/messaging-runtime.test.ts
++++ b/apps/desktop/src/main/__tests__/messaging-runtime.test.ts
+@@ -127,11 +127,15 @@ afterEach(async () => {
+ 
+ describe("DesktopMessagingRuntime", () => {
+   it("starts configured adapters and routes inbound events through channel controllers", async () => {
+-    const { runtime, adapter, bridge } = await createRuntimeHarness();
++    const phase = createStartupPhaseTrace();
++    const { runtime, adapter, bridge } = await createRuntimeHarness({ phase });
+ 
++    phase("adapter-start");
+     await runtime.start();
++    phase("inbound-routing");
+     await adapter.listener?.(buildCommandEvent("/resume"));
+ 
++    phase("assertions");
+     expect(adapter.start).toHaveBeenCalledTimes(1);
+     expect(bridge.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+       protocol: 2, consumer: "messaging-browse", pageSize: 8,
+@@ -153,6 +157,7 @@ describe("DesktopMessagingRuntime", () => {
+           }),
+         }),
+       ]);
++    phase("complete");
+     // This integration-style startup test imports the runtime module graph and
+     // exercises the full adapter-start + inbound-routing path. On the slow
+     // shared Windows CI runner that cold path can exceed 15s — not a hang, just
+@@ -4271,6 +4276,7 @@ async function createFullAccessRuntimeHarness(
+ 
+ async function createRuntimeHarness(options: {
+   adapter?: ReturnType<typeof createAdapter>;
++  phase?: (name: string) => void;
+ } = {}): Promise<{
+   DesktopMessagingRuntime: typeof DesktopMessagingRuntime;
+   adapter: ReturnType<typeof createAdapter>;
+@@ -4278,13 +4284,16 @@ async function createRuntimeHarness(options: {
+   emitBackendEvent: (event: AgentEvent) => Promise<void>;
+   runtime: DesktopMessagingRuntime;
+ }> {
+-  await prepareRuntimeStore();
++  await prepareRuntimeStore(options.phase);
+ 
++  options.phase?.("adapter-and-bridge-fixtures");
+   const adapter = options.adapter ?? createAdapter("telegram");
+   const bridge = createBackendBridge();
++  options.phase?.("runtime-import");
+   const { DesktopMessagingRuntime: Runtime } = await import(
+     "../messaging/messaging-runtime"
+   );
++  options.phase?.("runtime-construction");
+   const runtime = trackRuntime(
+     new Runtime({
+       adapterFactory: () => [adapter],
+@@ -4309,21 +4318,50 @@ async function createRuntimeHarness(options: {
+   };
+ }
+ 
+-async function prepareRuntimeStore(): Promise<void> {
++async function prepareRuntimeStore(phase?: (name: string) => void): Promise<void> {
++  phase?.("temporary-directory");
+   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-runtime-"));
+   tempDirs.push(tempDir);
+   vi.stubEnv("PWRAGENT_HOME", tempDir);
++  phase?.("app-state-import");
+   const { initializeAppState, resetAppStateForTests } = await import(
+     "../state/app-state"
+   );
++  phase?.("profile-and-database-initialization");
+   resetAppStateForTests();
+   initializeAppState();
++  phase?.("messaging-store-import");
+   const { resetDesktopMessagingStoreForTests } = await import(
+     "../messaging/desktop-messaging-store"
+   );
++  phase?.("messaging-store-reset");
+   resetDesktopMessagingStoreForTests();
+ }
+ 
++// Investigation-only tracing. Each transition records the completed phase and
++// names the next one before awaiting it, so a timeout retains the pending phase.
++function createStartupPhaseTrace(): (name: string) => void {
++  const started = performance.now();
++  let previous = started;
++  let cpu = process.cpuUsage();
++  let pending: string | undefined;
++  return (next) => {
++    const now = performance.now();
++    const currentCpu = process.cpuUsage();
++    process.stderr.write(`[messaging-startup] ${JSON.stringify({
++      pid: process.pid,
++      completed: pending ?? null,
++      next,
++      elapsedMs: now - started,
++      phaseMs: now - previous,
++      cpuMs: (currentCpu.user - cpu.user + currentCpu.system - cpu.system) / 1_000,
++    })}\n`);
++    previous = now;
++    cpu = currentCpu;
++    pending = next;
++  };
++}
++
+ async function flushMicrotasks(): Promise<void> {
+   for (let index = 0; index < 10; index += 1) {
+     await Promise.resolve();
