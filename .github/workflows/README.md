@@ -14,3 +14,24 @@ namespaced with `ci:` when they start, skip, or narrow CI work.
 
 If you add another label-influenced workflow path, document it here in the same
 change as the workflow update.
+
+## Consolidated test retry report
+
+Each code-impacting CI run uploads `ci-flake-report-<attempt>`, containing one
+`flake-report.json` for all unit and desktop E2E lanes on Linux, macOS, and
+Windows. Download that single artifact from the workflow run to inspect test
+IDs and names, platform, lane, diagnostic sample, initial completion, and each
+failed test's observed retry outcome. `recovered` means the individual test
+reported its expected outcome on retry; `failed` means it failed again, and
+`unknown` includes missing, skipped, interrupted, or ambiguous retry results.
+The slice's job and step outcomes give the surrounding result; a recovered test
+alone does not mean the entire job passed.
+
+The report lists absent slices separately and marks an absent or incomplete
+first report; neither is a clean test run. Counts reflect only received
+reports, so missing or incomplete slices may contain unreported failures. A
+workflow cancelled before consolidation may not produce the artifact. Every
+run attempt has its own artifact: a partial job rerun may leave other slices
+missing in that attempt. Compact per-slice artifacts are retained for seven
+days, and the consolidated artifact for 30 days. Existing detailed retry and
+Playwright artifacts remain available for diagnosis.
