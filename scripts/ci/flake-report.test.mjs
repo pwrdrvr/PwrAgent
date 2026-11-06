@@ -117,10 +117,11 @@ test("the job summary counts every unavailable or incomplete first report even w
         writeFileSync(join(artifact, "flake-slice.json"), JSON.stringify(slice));
       }
       writeFileSync(summary, "");
-      const result = spawnSync(process.execPath, [script, "aggregate"], { cwd, encoding: "utf8", env: { ...process.env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1", GITHUB_STEP_SUMMARY: summary } });
+      const result = spawnSync(process.execPath, [script, "aggregate"], { cwd, encoding: "utf8", env: { ...process.env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: String(incomplete + 1), GITHUB_STEP_SUMMARY: summary } });
       assert.equal(result.status, 0, result.stderr);
       const content = readFileSync(summary, "utf8");
       assert.match(content, /Slices received: 22\/22; missing: 0/);
+      assert.ok(content.includes(`Download the \`ci-flake-report-${incomplete + 1}\` artifact`));
       assert.match(content, new RegExp(`First reports unavailable or incomplete: ${incomplete}\\.`));
       if (incomplete > 0) assert.match(content, /failure counts may be incomplete/i);
     }

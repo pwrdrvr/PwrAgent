@@ -44,7 +44,7 @@ if (process.argv[2] === "slice") {
     `Slices received: ${report.slices.length}/${report.expectedSlices}; missing: ${report.missingSlices.length}.`,
     `First reports unavailable or incomplete: ${incomplete}.`,
     ...((incomplete || report.missingSlices.length) ? ["Failure counts may be incomplete."] : []),
-    "Download the `ci-flake-report-${report.attempt}` artifact for per-test and per-slice details."];
+    `Download the \`ci-flake-report-${report.attempt}\` artifact for per-test and per-slice details.`];
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
   console.log(lines.join("\n"));
 } else throw new Error("Expected slice or aggregate");
