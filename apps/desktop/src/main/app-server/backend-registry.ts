@@ -11,6 +11,7 @@ import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from 
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import { openClaudeSessionReader } from "../claude/claude-session-reader";
+import { claudePlanTurnRefusal } from "../claude/claude-permissions";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { buildForgeToolDefinitions, type ForgePrToolHandler, type ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
@@ -44859,6 +44860,13 @@ export class DesktopBackendRegistry {
     const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
     const monitor = this.taskMonitorForThread(context);
     if (monitor && (annotations?.readOnlyHint !== true || annotations.destructiveHint === true)) return false;
+    const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
+    // A Claude plan turn is read-only. Its permission handler passes gateway
+    // calls here unasked, because only the gateway knows the upstream tool.
+    // Any other tool is refused at every access level, with no card.
+    if (!readOnlyCall && context.backend === "claude" && this.claudeBackend.livePlanTurn(context.threadId)) {
+      throw new Error(claudePlanTurnRefusal(`"${invocation.toolName}" on ${invocation.serverName}`));
+    }
     const selectionOwner = monitor?.mcpAccess?.selectionOwner ?? context;
     const approvalContext = monitor
       ? { backend: monitor.parentBackend, threadId: monitor.parentThreadId, turnId: monitor.parentTurnId }
@@ -44967,7 +44975,6 @@ export class DesktopBackendRegistry {
       });
       return true;
     }
-    const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
     if ((consent.approved && (!consent.readOnlyOnly || readOnlyCall))
       || (connectionConsent?.approved && (!connectionConsent.readOnlyOnly || readOnlyCall))) return true;
     const key = buildPendingRequestKey({ ...approvalContext, requestId });

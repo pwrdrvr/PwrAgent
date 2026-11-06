@@ -1456,9 +1456,11 @@ select_for_new_threads = true
   describe("in a Claude thread", () => {
     type ClaudeModes = {
       liveExecutionMode(threadId: string): ThreadExecutionMode | undefined;
+      livePlanTurn(threadId: string): boolean;
       executionMode(threadId: string): Promise<ThreadExecutionMode>;
     };
     let live: ThreadExecutionMode | undefined;
+    let plan: boolean;
     let saved: ThreadExecutionMode;
     let events: AgentEvent[];
     let reply: { action: "accept" | "decline"; content: Record<string, never> | null; _meta: { persist: "session" } | null };
@@ -1471,10 +1473,12 @@ select_for_new_threads = true
 
     beforeEach(() => {
       live = undefined;
+      plan = false;
       saved = "default";
       reply = { action: "decline", content: null, _meta: null };
       const claude = (registry as unknown as { claudeBackend: ClaudeModes }).claudeBackend;
       vi.spyOn(claude, "liveExecutionMode").mockImplementation(() => live);
+      vi.spyOn(claude, "livePlanTurn").mockImplementation(() => plan);
       vi.spyOn(claude, "executionMode").mockImplementation(async () => saved);
       events = [];
       registry.onEvent(async (event) => {
@@ -1526,6 +1530,54 @@ select_for_new_threads = true
       vi.mocked(claude.executionMode).mockRejectedValue(new Error("missing thread"));
       expect(await invoke()).toBe(false);
       expect(events).toHaveLength(1);
+    });
+
+    // Claude's permission handler passes a plan turn's gateway calls here
+    // unasked, so this is the only place that can tell a read from a write.
+    describe("in a plan turn", () => {
+      const refusal = "This is a plan turn, which is read-only, so PwrAgent did not run \"lookup\" on Fixture. "
+        + "Put this step in your plan. The operator will reply when the plan should be implemented.";
+      const approve = (annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }) => internals.approveGatewayInvocation(
+        { ...args, serverName: "Fixture" },
+        { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" },
+        new AbortController().signal, annotations,
+      );
+
+      beforeEach(() => {
+        plan = true;
+        live = "default";
+      });
+
+      it.each([
+        { label: "with no hints", annotations: undefined },
+        { label: "that is not read-only", annotations: { readOnlyHint: false } },
+        { label: "that is read-only but destructive", annotations: { readOnlyHint: true, destructiveHint: true } },
+      ])("refuses a tool $label without a card", async ({ annotations }) => {
+        await expect(approve(annotations)).rejects.toThrow(refusal);
+        expect(events).toEqual([]);
+        expect(internals.pendingServerRequests.size).toBe(0);
+      });
+
+      it("refuses it under bypass permissions, a conversation approval and an automation", async () => {
+        reply = { action: "accept", content: {}, _meta: { persist: "session" } };
+        plan = false;
+        expect(await invoke()).toBe(true);
+        plan = true;
+        await expect(approve()).rejects.toThrow(refusal);
+        live = "full-access";
+        await expect(approve()).rejects.toThrow(refusal);
+        (internals.headlessAutomationTurns as Map<string, unknown>).set("claude:thread-1:turn-1", {
+          agentThreadId: "automation-1", backend: "claude", automationRunId: "run-1",
+          executionMode: "full-access", executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
+        });
+        await expect(approve()).rejects.toThrow(refusal);
+        expect(events).toHaveLength(1);
+      });
+
+      it("runs a read-only tool as the connection's Tool approval setting says", async () => {
+        expect(await approve({ readOnlyHint: true })).toBe(true);
+        expect(events).toEqual([]);
+      });
     });
 
     it.each(["full-access", "default", "auto"] as const)("honors %s for a headless Claude automation", async (mode) => {

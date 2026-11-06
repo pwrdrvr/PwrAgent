@@ -129,7 +129,8 @@ conversation approvals and automation allowlists. The forge card follows
 `[git.agent_tools]`, its project rules and the turn's mode, and keeps
 `approve_merge` asking in every mode but Full Access. Claude still applies
 the operator's own `ask` and `deny` rules for these tools, and its `plan` mode
-still asks for a forge write; a plan turn refuses that write (below). The rules are fixed when the process starts and do not
+still asks for a forge write and for any gateway call; a plan turn decides
+both without Claude's card (below). The rules are fixed when the process starts and do not
 depend on the forge levels, so a Settings change never relaunches Claude.
 A live session that lacks them relaunches for them, or keeps asking until
 its next launch while a task runs. Other PwrAgent tools still ask through
@@ -151,6 +152,19 @@ Claude to put the step in its plan. The forge reads are read-only tools, so
 plan mode runs them without asking, and the forge policy decides them as in
 any other turn. The handler knows only the operator's Plan toggle: if Claude
 enters plan mode on its own, a forge write there keeps Claude's card.
+
+A plan turn does not change anything through an MCP connection either. Plan
+mode asks for every `call_mcp_tool` call, because the tool is not read-only,
+and accepting Claude's card could lead to the gateway card for the same call.
+One tool name covers upstream tools that read and tools that write, and only
+the gateway knows which upstream tool a call names. In a plan turn the
+permission handler therefore passes the call on without a card, and the
+gateway decides it. An upstream tool marked read-only and not destructive
+follows the connection's Tool approval setting, as in any other turn. Any
+other tool is refused at every access level, with no card, and Claude is told
+to put the step in its plan. The gateway reads the same Plan toggle
+(`ClaudeBackend.livePlanTurn`), so a plan mode Claude entered on its own
+keeps Claude's card here too. See [MCP gateway tools](mcp-gateway-tools.md).
 
 A thread's linked directories other than its working directory, including
 directories attached later with `attach_thread_directory`, are passed as

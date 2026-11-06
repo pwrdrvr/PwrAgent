@@ -771,6 +771,15 @@ export class ClaudeBackend {
     return live ? threadExecutionModeForClaudePermission(live.config.permissionMode) : undefined;
   }
 
+  /**
+   * Whether the thread's open Claude process runs a plan turn: the operator
+   * asked for this turn to plan. A plan mode Claude entered on its own does
+   * not count, as in the permission handler's `planTurn`.
+   */
+  livePlanTurn(threadId: string): boolean {
+    return this.sessions.get(threadId)?.config.permissionMode === "plan";
+  }
+
   /** See `ClaudeSessionStore.changeToken`. */
   async archiveCleanupChangeToken(): Promise<string> {
     return await this.store.changeToken();

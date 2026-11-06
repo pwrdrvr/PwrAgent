@@ -35,8 +35,18 @@ In Default and Auto the gateway card is the only prompt for a gateway call,
 whichever backend runs the thread. Codex does not review PwrAgent's dynamic
 tools. A Claude query pre-allows `mcp__pwragent__call_mcp_tool` through
 `allowedTools`, so Claude does not ask through `canUseTool` before the gateway
-does. Claude's `plan` mode and the operator's own Claude `ask` and `deny`
-rules for the tool still apply. See [Claude provider](claude-provider.md).
+does. The operator's own Claude `ask` and `deny` rules for the tool still
+apply. See [Claude provider](claude-provider.md).
+
+A Claude plan turn, the composer's Plan toggle, is read-only. Claude's `plan`
+mode asks for every `call_mcp_tool` call, so in a plan turn PwrAgent's
+permission handler passes the call to the gateway without a card. The gateway
+then runs an upstream tool marked read-only (`readOnlyHint` true and
+`destructiveHint` not true) under the connection's tool-approval policy, as in
+any other turn. It refuses any other tool before Full Access, automation
+grants or conversation approvals are consulted, shows no card, and tells
+Claude to put the step in its plan. A plan mode Claude entered on its own
+keeps Claude's own card.
 Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 

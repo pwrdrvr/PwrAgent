@@ -1528,10 +1528,13 @@ describe("Claude SDK backend", () => {
     }, { setPermissionMode: vi.fn().mockResolvedValue(undefined) });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access" });
     expect(f.backend.liveExecutionMode(threadId)).toBeUndefined();
+    expect(f.backend.livePlanTurn(threadId)).toBe(false);
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Plan the fix" }], collaborationMode: { mode: "plan" } });
     expect(f.backend.liveExecutionMode(threadId)).toBe("default");
+    expect(f.backend.livePlanTurn(threadId)).toBe(true);
     await f.backend.setExecutionMode(threadId, "auto");
     expect(f.backend.liveExecutionMode(threadId)).toBe("auto");
+    expect(f.backend.livePlanTurn(threadId)).toBe(false);
     finish();
     await f.waitForTurn();
   });
@@ -3736,6 +3739,23 @@ describe("Claude permission bridge", () => {
       if (result?.behavior === "deny") refused.push(tool.slice("mcp__pwragent__".length));
     }
     expect(refused.sort()).toEqual([...FORGE_PR_WRITE_OPERATIONS].sort());
+  });
+
+  // Plan mode asks for call_mcp_tool, which is not read-only, and accepting
+  // Claude's card led to the gateway's card for the same call. Only the
+  // gateway knows whether the upstream tool is read-only, so it decides.
+  it("passes a plan turn's gateway call to the gateway without a card", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const input = { connectionId: "one", toolName: "lookup", schemaRevision: "r1", arguments: { id: "fixture" } };
+    const context = () => ({ signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
+    const planHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
+    await expect(planHandler(CLAUDE_MCP_GATEWAY_TOOL, input, context())).resolves.toEqual({ behavior: "allow", updatedInput: input });
+    expect(request).not.toHaveBeenCalled();
+    // Pre-allowed, the call reaches the handler outside a plan turn only if
+    // the operator's own Claude rules ask for it, and then the card stays.
+    const defaultHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => false, request, cancelRequest: async () => {} });
+    await expect(defaultHandler(CLAUDE_MCP_GATEWAY_TOOL, input, context())).resolves.toMatchObject({ behavior: "deny" });
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("asks the operator before Claude leaves a plan mode it entered on its own", async () => {

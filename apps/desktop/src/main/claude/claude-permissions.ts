@@ -42,8 +42,10 @@ function claudePwragentToolName(operation: string): string {
  *
  * The rules name exact tools on PwrAgent's own server, so they are set only
  * when that server is attached. Claude still applies the operator's own
- * `ask` and `deny` rules for these tools, and its plan mode still asks for a
- * write, which a plan turn refuses without a card.
+ * `ask` and `deny` rules for these tools. Its plan mode still asks for a
+ * forge write and for any gateway call. A plan turn refuses the forge write
+ * without a card and passes the gateway call to the gateway, which refuses
+ * an upstream tool that is not read-only.
  */
 export function claudeAllowedTools(mcpServers: Options["mcpServers"]): string[] {
   return mcpServers && Object.hasOwn(mcpServers, PWRAGENT_TOOL_NAMESPACE)
@@ -84,13 +86,15 @@ const CLAUDE_PLAN_HANDOFF = "The operator has your plan and will reply when it s
   + "Stay in plan mode and end your turn now.";
 
 /**
- * A plan turn is read-only, so a forge write is refused here, without a
- * card. Claude's plan mode still asks for a write it allows, and accepting
- * that card led to the forge policy's card for the same call. The forge
+ * A plan turn is read-only, so a call that would change something is refused
+ * without a card. Claude's plan mode still asks for an allowed tool that is
+ * not read-only, and accepting that card led to PwrAgent's own card for the
+ * same call. A forge write is refused here. A gateway call is refused by the
+ * gateway, which knows whether the upstream tool is read-only. The forge
  * reads are read-only tools, which plan mode runs without asking.
  */
-function claudePlanForgeWriteRefusal(operation: string): string {
-  return `This is a plan turn, which is read-only, so PwrAgent did not run ${operation}. `
+export function claudePlanTurnRefusal(action: string): string {
+  return `This is a plan turn, which is read-only, so PwrAgent did not run ${action}. `
     + "Put this step in your plan. The operator will reply when the plan should be implemented.";
 }
 
@@ -136,8 +140,9 @@ export function createClaudePermissionHandler(options: {
   /**
    * Whether the operator asked for this turn to plan. Claude can also enter
    * plan mode on its own, and then leaving it needs the operator's approval.
-   * Only a plan turn refuses forge writes: the handler cannot see a plan
-   * mode Claude entered itself, so those writes keep Claude's card.
+   * Only a plan turn refuses forge writes and hands gateway calls to the
+   * gateway: the handler cannot see a plan mode Claude entered itself, so
+   * those calls keep Claude's card.
    */
   planTurn?: () => boolean;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
@@ -147,7 +152,11 @@ export function createClaudePermissionHandler(options: {
     if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
     if (toolName === CLAUDE_EXIT_PLAN_TOOL && options.planTurn?.()) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
     const forgeWrite = CLAUDE_FORGE_WRITE_OPERATIONS.get(toolName);
-    if (forgeWrite && options.planTurn?.()) return { behavior: "deny", message: claudePlanForgeWriteRefusal(forgeWrite) };
+    if (forgeWrite && options.planTurn?.()) return { behavior: "deny", message: claudePlanTurnRefusal(forgeWrite) };
+    // The gateway knows the upstream tool, so it decides a plan turn's call:
+    // a read-only tool follows the connection's Tool approval setting, and
+    // any other is refused there without a card.
+    if (toolName === CLAUDE_MCP_GATEWAY_TOOL && options.planTurn?.()) return { behavior: "allow", updatedInput: input };
     const requestId = randomUUID();
     const turnId = options.turnId();
     const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"
