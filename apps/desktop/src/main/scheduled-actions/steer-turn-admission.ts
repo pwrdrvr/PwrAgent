@@ -20,15 +20,20 @@ export async function admitSteerTurn(
       ? response
       : { ...response, disposition: "steered" };
   } catch (error) {
-    if (!request.fallback || !isStaleSteerError(error)) throw error;
-    const held = await scheduler.create(
+    // This owner-side refusal happens before provider delivery. A native
+    // review cannot take the steer, but its parent can queue a normal turn.
+    const nativeReview = request.backend === "codex"
+      && error instanceof Error
+      && error.message === "Native review steering is unsupported; queue a follow-up instead.";
+    if (!request.fallback || (!nativeReview && !isStaleSteerError(error))) throw error;
+    const fallback = await scheduler.create(
       {
         backend: request.backend,
         threadId: request.threadId,
         kind: "turn",
         origin: "desktop",
         scheduledFor: Date.now(),
-        manualReleaseRequired: true,
+        ...(!nativeReview ? { manualReleaseRequired: true } : {}),
         ...request.fallback,
       },
       { id: fallbackActionId(request) },
@@ -37,9 +42,10 @@ export async function admitSteerTurn(
       backend: request.backend,
       threadId: request.threadId,
       turnId: request.expectedTurnId,
-      disposition: "held",
-      holdReason: STALE_STEER_HOLD_REASON,
-      scheduledAction: held.action,
+      ...(nativeReview
+        ? { disposition: "scheduled" as const, fallbackReason: "native-review" as const }
+        : { disposition: "held" as const, holdReason: STALE_STEER_HOLD_REASON }),
+      scheduledAction: fallback.action,
     };
   }
 }

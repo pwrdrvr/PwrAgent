@@ -8660,6 +8660,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         });
         setPendingSteer(undefined);
         setSendError(undefined);
+        if (response.fallbackReason === "native-review") {
+          showComposerNotice({
+            title: "Message queued",
+            message: "Steering is unavailable during this type of Codex review. Your message was queued instead.",
+            tone: "neutral",
+          });
+        }
       }
       if (response.disposition === "held") {
         const projection = {
