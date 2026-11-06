@@ -124,6 +124,9 @@ export type ThreadMaintenanceHibernateCheckout = {
   bytes: number;
   /** Ignored output folders, such as node_modules, removed with the checkout. */
   removedOutput?: string[];
+  /** The idle-thread key (`backend:threadId`) of the archive row that also
+   * takes this thread. Archiving it in the same run keeps this row. */
+  archiveKey?: string;
 };
 
 export type ThreadMaintenanceScan = {

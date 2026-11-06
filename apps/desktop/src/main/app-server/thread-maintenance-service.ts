@@ -139,7 +139,12 @@ type RetainedScan = {
   scan: ThreadMaintenanceScan;
   /** Every thread the scan read, for the hibernation step. */
   candidates?: ThreadArchiveCandidate[];
+  /** Each root's project, as the archive step resolved it. */
+  projects: Map<string, string | undefined>;
   hibernate: Map<string, { candidate: ThreadArchiveCandidate; row: ThreadMaintenanceHibernateCheckout }>;
+  /** Hibernation's settings as the review ran them. The run uses these, not
+   * whatever Settings says by then. */
+  hibernatePolicy?: DesktopCheckoutHibernationPolicy;
   /** Direct, non-archived sub-threads per parent key, at scan time. */
   subthreads: Map<string, string[]>;
   families: Map<string, { family: ThreadArchiveCandidate[]; row: ThreadMaintenanceIdleThread }>;
@@ -191,10 +196,11 @@ export class ThreadMaintenanceService {
       families: new Map(),
       checkouts: new Map(),
       subthreads: new Map(),
+      projects: new Map(),
       hibernate: new Map(),
     };
     const threads = await this.scanThreads(rules, policy, now, request.projectKey, retained, fail);
-    // After archive: a thread offered for archive is never also offered here.
+    // After archive, so each row can say which archive row also takes it.
     const hibernate = await this.scanHibernation(now, request.projectKey, retained, fail);
     const checkouts = await this.scanCheckouts(rules, request.projectKey, retained, fail);
     const scan: ThreadMaintenanceScan = {
@@ -279,6 +285,7 @@ export class ThreadMaintenanceService {
       let project: string | undefined;
       try {
         project = await this.deps.resolveProject(root) ?? undefined;
+        retained.projects.set(buildThreadIdentityKey(root.thread.source, root.thread.id), project);
       } catch (error) {
         fail("threads", error, { threadId: root.thread.id });
         return undefined;
@@ -369,6 +376,7 @@ export class ThreadMaintenanceService {
       return undefined;
     }
     const policy = { ...settings, enabled: true };
+    retained.hibernatePolicy = policy;
     const result: NonNullable<ThreadMaintenanceScan["hibernate"]> = {
       idleDays: policy.idleDays, maxSnapshotMb: policy.maxSnapshotMb, removeRebuildableOutput: policy.removeRebuildableOutput,
       checked: 0, items: [], kept: {},
@@ -376,13 +384,20 @@ export class ThreadMaintenanceService {
     const candidates = retained.candidates;
     if (!candidates) return { ...result, skipped: "Threads could not be listed" };
     const keep = (reason: string) => { result.kept[reason] = (result.kept[reason] ?? 0) + 1; };
-    const roots = candidates.filter((candidate) => !candidate.thread.codexNativeSubAgent
-      && !retained.families.has(buildThreadIdentityKey(candidate.thread.source, candidate.thread.id)));
+    // Threads the archive step offers are listed too, marked with the archive
+    // row that takes them: the operator may not archive them, or may run
+    // this step alone. The dialog hides a row once its archive is chosen.
+    const archivedWith = new Map<string, string>();
+    for (const [rootKey, { family }] of retained.families) {
+      for (const member of family) archivedWith.set(buildThreadIdentityKey(member.thread.source, member.thread.id), rootKey);
+    }
+    const roots = candidates.filter((candidate) => !candidate.thread.codexNativeSubAgent);
     const evaluated = await mapLimit(roots, INSPECT_CONCURRENCY, async (candidate) => {
       if (this.abort.signal.aborted) return undefined;
       try {
         if (projectFilter) {
-          const project = await this.deps.resolveProject(candidate);
+          const key = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
+          const project = retained.projects.has(key) ? retained.projects.get(key) : await this.deps.resolveProject(candidate);
           if (!project || path.resolve(project) !== path.resolve(projectFilter)) return undefined;
         }
         const listed = deps.keepReason(candidate, candidates, policy, now);
@@ -402,6 +417,8 @@ export class ThreadMaintenanceService {
           bytes: inspection.bytes,
           ...(inspection.removedOutput?.length ? { removedOutput: inspection.removedOutput } : {}),
         };
+        const archiveKey = archivedWith.get(buildThreadIdentityKey(candidate.thread.source, candidate.thread.id));
+        if (archiveKey) row.archiveKey = archiveKey;
         return { row, candidate };
       } catch (error) {
         fail("hibernate", error, { threadId: candidate.thread.id });
@@ -596,7 +613,7 @@ export class ThreadMaintenanceService {
         addProblem({ step: "hibernate", kind: "failed", object, reason: "Not in this scan", ...ids });
         continue;
       }
-      if (archivedKeys.has(keyOf(item))) {
+      if (archivedKeys.has(keyOf(item)) || (entry.row.archiveKey && archivedKeys.has(entry.row.archiveKey))) {
         keepIt("Archived in this run");
         continue;
       }
@@ -610,7 +627,8 @@ export class ThreadMaintenanceService {
           keepIt("New activity during the run");
           continue;
         }
-        const outcome = await this.deps.hibernation.hibernate(refreshed, { ...this.deps.hibernation.getPolicy(), enabled: true });
+        const outcome = await this.deps.hibernation.hibernate(refreshed,
+          retained.hibernatePolicy ?? { ...this.deps.hibernation.getPolicy(), enabled: true });
         if (outcome === true) hibernateStep.done += 1;
         else keepIt(outcome === false ? "Hibernation cancelled" : outcome);
       } catch (error) {

@@ -483,7 +483,7 @@ describe("hibernate idle checkouts", () => {
     };
   }
 
-  it("offers only threads the archive step does not, under hibernation's own rules even while it is off", async () => {
+  it("marks threads the archive step offers, and uses hibernation's own rules even while it is off", async () => {
     const items = [
       candidate("newest", { daysIdle: 30, cwd: "/w/newest" }),
       candidate("idle", { daysIdle: 31, cwd: "/w/idle" }),
@@ -496,13 +496,15 @@ describe("hibernate idle checkouts", () => {
 
     expect(scan.threads.projects.flatMap((project) => project.idle).map((row) => row.threadId)).toEqual(["idle"]);
     expect(scan.hibernate).toEqual({
-      idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, checked: 2,
-      items: [expect.objectContaining({ threadId: "newest", worktreePath: "/w/newest", files: 2, bytes: 900, removedOutput: ["node_modules"] })],
+      idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, checked: 3,
+      items: [
+        // The archive row offers it too; the dialog hides it once that row is chosen.
+        expect.objectContaining({ threadId: "idle", archiveKey: "codex:idle" }),
+        expect.objectContaining({ threadId: "newest", worktreePath: "/w/newest", files: 2, bytes: 900, removedOutput: ["node_modules"] }),
+      ],
       kept: { "Rebase in progress": 1 },
     });
-    // The idle thread is offered for archive, so hibernation never looks at it.
-    const looked = vi.mocked(deps.keepReason).mock.calls.map(([item]) => item.thread.id);
-    expect(looked).not.toContain("idle");
+    expect(scan.hibernate?.items[1]).not.toHaveProperty("archiveKey");
     // The review runs the rules as if the setting were on.
     expect(vi.mocked(deps.keepReason).mock.calls.every(([, , policy]) => policy.enabled)).toBe(true);
   });
@@ -542,7 +544,8 @@ describe("hibernate idle checkouts", () => {
     });
     const scan = await service.scan();
     // Longest idle first.
-    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual(["broken", "touched", "busy", "newest"]);
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual(["broken", "touched", "busy", "idle", "newest"]);
+    expect(scan.hibernate?.items.find((item) => item.threadId === "idle")?.archiveKey).toBe("codex:idle");
     vi.mocked(serviceDeps.refreshCandidate).mockImplementation(async (item) => item.thread.id === "touched"
       ? { ...item, thread: { ...item.thread, updatedAt: NOW } }
       : item);
@@ -550,18 +553,35 @@ describe("hibernate idle checkouts", () => {
       scanId: scan.scanId,
       archive: [{ backend: "codex", threadId: "idle" }],
       removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
-      hibernate: ["newest", "busy", "touched", "broken", "unknown"].map((threadId) => ({ backend: "codex", threadId })),
+      hibernate: ["newest", "busy", "touched", "broken", "unknown", "idle"].map((threadId) => ({ backend: "codex", threadId })),
     });
     expect(order).toEqual(["archive:idle", "hibernate:newest", "hibernate:busy", "hibernate:broken"]);
     expect(vi.mocked(deps.hibernate).mock.calls.every(([, policy]) => policy.enabled && policy.idleDays === 5)).toBe(true);
     expect(run.steps.map((step) => step.step)).toEqual(["threads", "hibernate", "checkouts", "expired"]);
-    expect(run.steps.find((step) => step.step === "hibernate")).toEqual({ step: "hibernate", ran: true, done: 1, kept: 2, failed: 2 });
+    expect(run.steps.find((step) => step.step === "hibernate")).toEqual({ step: "hibernate", ran: true, done: 1, kept: 3, failed: 2 });
     expect(run.problems.filter((problem) => problem.step === "hibernate")).toEqual([
       expect.objectContaining({ kind: "kept", threadId: "busy", reason: "Busy", path: "/w/busy" }),
       expect.objectContaining({ kind: "kept", threadId: "touched", reason: "New activity during the run" }),
       expect.objectContaining({ kind: "failed", threadId: "broken", reason: "Hibernation failed", detail: "worktree is locked" }),
       expect.objectContaining({ kind: "failed", threadId: "unknown", reason: "Not in this scan" }),
+      // Archived just before, so it is not hibernated as well.
+      expect.objectContaining({ kind: "kept", threadId: "idle", reason: "Archived in this run" }),
     ]);
+  });
+
+  it("runs under the settings it was reviewed with, and reuses the scan's projects", async () => {
+    let settings = off;
+    const deps = hibernation({ getPolicy: () => settings });
+    const items = [candidate("newest", { daysIdle: 30, cwd: "/w/newest" })];
+    const { service, deps: serviceDeps } = harness(items, { hibernation: deps });
+    const scan = await service.scan({ projectKey: "/projects/app" });
+    expect(scan.hibernate?.items).toHaveLength(1);
+    // The archive step resolved the project; hibernation reuses it.
+    expect(serviceDeps.resolveProject).toHaveBeenCalledTimes(1);
+    settings = { ...off, maxSnapshotMb: 5, idleDays: 30 };
+    await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+      hibernate: [{ backend: "codex", threadId: "newest" }] });
+    expect(vi.mocked(deps.hibernate).mock.calls[0]![1]).toEqual({ ...off, enabled: true });
   });
 });
 

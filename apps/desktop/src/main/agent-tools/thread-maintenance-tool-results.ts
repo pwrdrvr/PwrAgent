@@ -86,6 +86,7 @@ export function summarizeThreadMaintenanceScan(
         items: scan.hibernate.items.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
           backend: item.backend, threadId: item.threadId, title: item.title, worktreePath: item.worktreePath,
           lastActivityAt: item.lastActivityAt, changedFiles: item.files, changedBytes: item.bytes,
+          ...(item.archiveKey ? { offeredForArchive: true } : {}),
         })),
         kept: scan.hibernate.kept,
         ...(scan.hibernate.skipped ? { skipped: scan.hibernate.skipped } : {}),
@@ -159,7 +160,8 @@ export function planThreadMaintenanceApply(
       snapshotApprovals.push({ threadId: row.threadId, title: row.title, bytes: row.workspace.bytes });
     }
   }
-  const hibernatable = new Set((scan.hibernate?.items ?? []).map((item) => `${item.backend}:${item.threadId}`));
+  const hibernatable = new Map((scan.hibernate?.items ?? []).map((item) => [`${item.backend}:${item.threadId}`, item]));
+  const archiving = new Set(archive.map((item) => `${item?.backend}:${item?.threadId}`));
   for (const item of hibernate) {
     if (!item || typeof item.backend !== "string" || typeof item.threadId !== "string") {
       return { error: "Each hibernate item needs backend and threadId from the scan." };
@@ -168,7 +170,11 @@ export function planThreadMaintenanceApply(
       return { error: "Do not hibernate the thread running this tool." };
     }
     const key = `${item.backend}:${item.threadId}`;
-    if (!hibernatable.has(key)) return { error: `Thread ${item.threadId} has no idle checkout to hibernate in scan ${scan.scanId}. Scan again.` };
+    const row = hibernatable.get(key);
+    if (!row) return { error: `Thread ${item.threadId} has no idle checkout to hibernate in scan ${scan.scanId}. Scan again.` };
+    if (row.archiveKey && archiving.has(row.archiveKey)) {
+      return { error: `Thread ${item.threadId} is archived by this request. Archive it or hibernate it, not both.` };
+    }
   }
   for (const item of removeCheckouts) {
     if (!item || typeof item.worktreePath !== "string" || checkouts.get(item.worktreePath)?.kind !== "removable") {

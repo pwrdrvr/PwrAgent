@@ -479,6 +479,23 @@ describe("thread maintenance selection", () => {
     expect(request.hibernate).toEqual([]);
   });
 
+  it("offers an archive candidate's checkout only while its archive is not chosen", () => {
+    const scan = fixtureScan();
+    scan.hibernate!.items.push({ backend: "codex", threadId: "t-clean", title: "Rebuild checkout flow",
+      worktreePath: "/home/.pwragent/worktrees/k3m9/harbor-web", lastActivityAt: NOW - 26 * DAY, files: 0, bytes: 0,
+      archiveKey: "codex:t-clean" });
+    const selection = defaultSelection(scan);
+    const hibernated = (mode: "combined" | "hibernate") =>
+      buildApplyRequest(scan, selection, mode).hibernate?.map((item) => item.threadId);
+    // Combined archives it, so it is not hibernated too.
+    expect(hibernated("combined")).toEqual(["h-changes", "h-clean"]);
+    // The tab that only hibernates offers it.
+    expect(hibernated("hibernate")).toEqual(["h-changes", "h-clean", "t-clean"]);
+    // Unticked in step 1, Combined offers it again.
+    selection.threads.delete("codex:t-clean");
+    expect(hibernated("combined")).toEqual(["h-changes", "h-clean", "t-clean"]);
+  });
+
   it("selects every idle checkout the scan offers", () => {
     const scan = fixtureScan();
     expect(buildApplyRequest(scan, defaultSelection(scan), "combined").hibernate?.map((item) => item.threadId))
