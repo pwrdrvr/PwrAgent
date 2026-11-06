@@ -98,6 +98,12 @@ export type DockProfileSnapshot = {
 
 export type ProfileRuntimeHeartbeat = {
   markerPath: string;
+  /**
+   * Stop rewriting the marker but leave it on disk. Each refresh is a
+   * synchronous main-thread write; once shutdown has released the runtime,
+   * a slow disk turns one into a stalled quit.
+   */
+  stopRefreshing: () => void;
   stop: () => void;
 };
 
@@ -819,6 +825,7 @@ export function startProfileRuntimeHeartbeat(
 
   return {
     markerPath,
+    stopRefreshing: () => clearInterval(interval),
     stop: () => {
       if (interval) clearInterval(interval);
       try {
