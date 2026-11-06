@@ -13,6 +13,7 @@ import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   ModelSettingsRecent,
+  ReviewAfterAction,
   ReviewRunMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
@@ -78,6 +79,7 @@ export type ComposerQueuedTurnSnapshot = {
     cwd?: string;
     displayText: string;
     runMode?: ReviewRunMode;
+    afterReview?: ReviewAfterAction;
     target: AppServerReviewTarget;
     /**
      * Reviewer picked when the review was queued. Carried here because a

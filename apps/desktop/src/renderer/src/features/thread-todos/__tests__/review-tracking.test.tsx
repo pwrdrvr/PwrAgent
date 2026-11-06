@@ -162,7 +162,7 @@ function renderCard(current: ThreadReview, onDoHere = vi.fn()) {
 const prompt = (lines: string[]) => [...lines, "", "Use PwrAgent's `list_reviews` tool for their details and how to record each fix."].join("\n");
 
 describe("review To-do card", () => {
-  it("lists findings by priority with no mark at rest, and fixes every open one by default", async () => {
+  it("lists findings by priority with no mark at rest, and auto-fixes every open one by default", async () => {
     const current: ThreadReview = {
       ...review,
       items: [
@@ -188,14 +188,23 @@ describe("review To-do card", () => {
     expect(within(rows[3]!).getByText("Declined")).toBeInTheDocument();
     expect(within(rows[3]!).getByRole("button", { name: "Reopen finding: Name the retry budget" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Fix all" }));
-    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: prompt([
+    // The thread's agent decides each open finding.
+    fireEvent.click(screen.getByRole("button", { name: "Auto-fix" }));
+    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: expect.stringMatching(
+      /^Auto-fix the 2 findings from Code review\. Decide which ones to fix\.\n\n1\. \[P1\] Abort pending exports\n2\. \[P2\] Keep the selected output format\n/,
+    ) });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Auto-fix" })).toBeEnabled());
+
+    // Fix all, from the menu, asks for every one.
+    fireEvent.click(screen.getByRole("button", { name: "Review fix options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Fix all 2" }));
+    expect(handlers.onDoHere).toHaveBeenLastCalledWith(todo, { prompt: prompt([
       "Fix these 2 findings from Code review:",
       "",
       "1. [P1] Abort pending exports",
       "2. [P2] Keep the selected output format",
     ]) });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Fix all" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Auto-fix" })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss review" }));
     expect(handlers.onResolve).toHaveBeenCalledWith(todo, "dismissed");
@@ -218,7 +227,7 @@ describe("review To-do card", () => {
       "",
       "1. [P2] Keep the selected output format",
     ]) });
-    await screen.findByRole("button", { name: "Fix all" });
+    await screen.findByRole("button", { name: "Auto-fix" });
     expect(select).toHaveAttribute("aria-pressed", "false");
   });
 
@@ -256,28 +265,28 @@ describe("review To-do card", () => {
       "",
       "1. [P2] Keep the selected output format",
     ]) });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Fix all" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Auto-fix" })).toBeEnabled());
   });
 
   it("sends the hand-off once while the first send is still settling", async () => {
     let settle: (sent: boolean) => void = () => {};
     const onDoHere = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
     renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1)] }, onDoHere);
-    const button = await screen.findByRole("button", { name: "Fix all" });
+    const button = await screen.findByRole("button", { name: "Auto-fix" });
     fireEvent.click(button);
     fireEvent.click(button);
     expect(onDoHere).toHaveBeenCalledTimes(1);
-    expect(button).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Fix now: Abort pending exports" })).toBeDisabled();
     settle(true);
-    await waitFor(() => expect(button).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Auto-fix" })).toBeEnabled());
   });
 
   it("shows Sending then Working and blocks duplicate fixes until the owning turn finishes", async () => {
     let settle: (sent: boolean) => void = () => {};
     const onDoHere = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
     const { rerenderCard } = renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1)] }, onDoHere);
-    fireEvent.click(await screen.findByRole("button", { name: "Fix all" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Auto-fix" }));
     const sending = screen.getByRole("button", { name: "Sending…" });
     expect(sending).toBeDisabled();
     expect(sending).toHaveAttribute("aria-busy", "true");
@@ -296,7 +305,7 @@ describe("review To-do card", () => {
     expect(onDoHere).toHaveBeenCalledTimes(1);
 
     rerenderCard(false);
-    expect(screen.getByRole("button", { name: "Fix all" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Auto-fix" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Fix now: Abort pending exports" })).toBeEnabled();
   });
 
@@ -309,7 +318,7 @@ describe("review To-do card", () => {
     let settle: (sent: boolean) => void = () => {};
     const onDoHere = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
     const { rerenderCard } = renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1)] }, onDoHere);
-    fireEvent.click(await screen.findByRole("button", { name: "Fix all" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Auto-fix" }));
     const sendingRing = screen.getByRole("button", { name: "Sending…" }).querySelector(".pending-spinner");
     expect(sendingRing?.matches(pairedRing)).toBe(true);
 
@@ -343,7 +352,7 @@ describe("review To-do card", () => {
     fireEvent.click(retry);
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(onDoHere).toHaveBeenCalledTimes(2);
-    expect(await screen.findByRole("button", { name: "Fix all" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Auto-fix" })).toBeEnabled();
   });
 
   it("declines a finding from its row", async () => {

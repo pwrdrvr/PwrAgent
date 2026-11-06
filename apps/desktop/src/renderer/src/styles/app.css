@@ -47115,6 +47115,64 @@ button.composer__subthread-source-parent:hover {
   gap: 8px;
 }
 
+/* What follows the review, at the start of the actions row so the panel
+   grows no taller. A 26px pill like the reviewer chips, with the send
+   menu's schedule check box. */
+.composer__review-after {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 7px;
+  margin-right: auto;
+  padding: 0 11px 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.composer__review-after[aria-checked="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.composer__review-after:hover {
+  color: var(--text-primary);
+}
+
+.composer__review-after[aria-checked="true"]:hover {
+  color: var(--accent-bright);
+}
+
+.composer__review-after:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.composer__review-after-box {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--text-muted);
+  border-radius: 4px;
+  color: var(--button-text);
+}
+
+.composer__review-after[aria-checked="true"] .composer__review-after-box {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+}
+
 /* Same chip language as the footer's Stop/Send/Queue pills
    (.composer__actions .button) so queued-row and review actions read as
    one family instead of taller squared-off strays. */

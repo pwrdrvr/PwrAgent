@@ -119,6 +119,7 @@ import type {
   NavigationThreadSummary,
   PrSummary,
   RenderComposerPdfPreviewResponse,
+  ReviewAfterAction,
   ReviewRunMode,
   SteerTurnDelivery,
   ThreadWorkspaceHandoffStrategy,
@@ -830,6 +831,7 @@ type QueuedTurnDraft = {
     cwd?: string;
     displayText: string;
     runMode?: ReviewRunMode;
+    afterReview?: ReviewAfterAction;
     target: AppServerReviewTarget;
   };
   text: string;
@@ -926,6 +928,11 @@ type ReviewConfigState = {
   reviewer?: ModelSettingsRecent;
   runMode: ReviewRunMode;
   runModeChosen?: boolean;
+  /**
+   * Off only when the operator unticks Auto-fix findings. Like a reviewer
+   * override, the choice lasts for this one review.
+   */
+  waitAfterReview?: boolean;
   target?: ReviewTargetChoice;
   workspaceCwd?: string;
 };
@@ -6815,6 +6822,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     cwd?: string;
     displayText: string;
     runMode?: ReviewRunMode;
+    afterReview?: ReviewAfterAction;
     target: AppServerReviewTarget;
     reviewer?: ModelSettingsRecent;
   }, options?: {
@@ -6962,6 +6970,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         target: reviewCommand.target,
         delivery: "inline",
         ...(reviewCommand.runMode ? { runMode: reviewCommand.runMode } : {}),
+        ...(reviewCommand.afterReview ? { afterReview: reviewCommand.afterReview } : {}),
         ...(reviewCommand.cwd ? { cwd: reviewCommand.cwd } : {}),
         ...(submittedReviewer
           ? {
@@ -7362,6 +7371,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ...configuredReviewCommand,
       runMode: runModeDecision.explicitRunModeSupported
         ? runModeDecision.runMode : undefined,
+      // An owner that predates auto-fix gets no field, so it is never told a
+      // choice it would ignore.
+      ...(reviewAutoFixSupported
+        ? { afterReview: config?.waitAfterReview ? "wait" as const : "auto-fix" as const }
+        : {}),
     };
     if (futureScheduledDraftSendAt) {
       if (props.launchpad && !props.launchpadMaterializing && !sendingRef.current) {
@@ -8235,6 +8249,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       cwd?: string;
       displayText: string;
       runMode?: ReviewRunMode;
+      afterReview?: ReviewAfterAction;
       target: AppServerReviewTarget;
       reviewer?: ModelSettingsRecent;
     },
@@ -8291,6 +8306,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           draftText: text,
           delivery: "inline",
           ...(reviewCommand.runMode ? { runMode: reviewCommand.runMode } : {}),
+          ...(reviewCommand.afterReview ? { afterReview: reviewCommand.afterReview } : {}),
           cwd: reviewCommand.cwd,
           // Carry the picked reviewer through the queue so releasing it later
           // does not silently fall back to the thread's own provider.
@@ -11131,6 +11147,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const reviewOwnerSummary = props.backends?.find(
     (candidate) => candidate.kind === props.thread?.source,
   );
+  const reviewAutoFixSupported =
+    reviewOwnerSummary?.capabilities.reviewAutoFix === true;
   const reviewRunModeDecision = props.thread
     ? resolveReviewRunMode({
         ownerSummary: reviewOwnerSummary,
@@ -13887,6 +13905,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             ) : null}
 
             <div className="composer__review-actions">
+              {reviewAutoFixSupported ? (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!reviewConfig?.waitAfterReview}
+                  className="composer__review-after tooltip-target"
+                  data-tooltip="When the review finishes, this thread's agent decides which findings to fix, defer to a to-do, or decline"
+                  onClick={() => {
+                    setReviewConfig((current) => {
+                      const base = current ?? createReviewConfig({
+                        directory: props.directory,
+                        thread: props.thread,
+                      });
+                      return { ...base, waitAfterReview: !base.waitAfterReview };
+                    });
+                  }}
+                >
+                  <span aria-hidden="true" className="composer__review-after-box">
+                    {reviewConfig?.waitAfterReview ? null : <CheckIcon size={11} />}
+                  </span>
+                  Auto-fix findings
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="composer__secondary-action"
@@ -13914,6 +13955,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   : "Start review"}
               </button>
             </div>
+            {reviewAutoFixSupported
+              && !reviewConfig?.waitAfterReview
+              && reviewerSelection.backend
+              && reviewerSelection.backend !== props.thread?.source ? (
+                <p className="composer__review-note">
+                  The fix runs on this thread&apos;s agent, not the reviewer.
+                </p>
+              ) : null}
           </fieldset>
         ) : (
           <ComposerTiptapInput

@@ -358,6 +358,7 @@ export function useQueuedTurnRelease(params: {
             target: reviewCommand.target,
             delivery: "inline",
             ...(reviewCommand.runMode ? { runMode: reviewCommand.runMode } : {}),
+            ...(reviewCommand.afterReview ? { afterReview: reviewCommand.afterReview } : {}),
             ...(reviewCommand.cwd ? { cwd: reviewCommand.cwd } : {}),
             // A reviewer picked when the review was queued replaces the
             // thread's settings wholesale — its model names an entry in

@@ -9,7 +9,6 @@ import type {
 import { BanIcon, CheckIcon, TodoIcon } from "../../icons";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { reviewFindingTag } from "../../../../shared/review-output";
 
 const pendingReads = new WeakMap<DesktopApi, Map<string, Promise<ThreadReview[]>>>();
 
@@ -155,27 +154,6 @@ export function orderReviewItems(items: readonly ThreadReviewItem[]): ThreadRevi
 
 export function openReviewItems(review: ThreadReview): ThreadReviewItem[] {
   return review.items.filter((item) => item.status === "open");
-}
-
-/**
- * The reply the review card's Fix button sends to the review's own thread:
- * the findings the operator picked, by title. `list_reviews` returns their
- * details and ids, and with them how to settle each one.
- */
-export function fixReviewFindingsPrompt(reviewTitle: string, items: readonly ThreadReviewItem[]): string {
-  const findings = items.map((item, index) => {
-    const tag = reviewFindingTag(item);
-    return `${index + 1}. ${tag ? `[${tag}] ` : ""}${item.title}`;
-  });
-  return [
-    items.length === 1
-      ? `Fix this finding from ${reviewTitle}:`
-      : `Fix these ${items.length} findings from ${reviewTitle}:`,
-    "",
-    ...findings,
-    "",
-    "Use PwrAgent's `list_reviews` tool for their details and how to record each fix.",
-  ].join("\n");
 }
 
 const timeFormat = new Intl.DateTimeFormat(undefined, {

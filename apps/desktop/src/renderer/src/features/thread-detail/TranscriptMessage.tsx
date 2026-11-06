@@ -204,6 +204,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
   const [monitorDetailsOpen, setMonitorDetailsOpen] = useState(false);
   const monitorOrigin = props.message.origin?.subAgent;
   const prAutomationOrigin = props.message.origin?.prAutomation;
+  const reviewAutoFixOrigin = props.message.origin?.reviewAutoFix;
   const [loadedMonitor, setLoadedMonitor] = useState<ThreadSubAgentSummary>();
   const [monitorError, setMonitorError] = useState<string>();
   const monitorRequestVersion = useRef(0);
@@ -382,6 +383,68 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
       summaryIsQuote: true,
       threadTitle: destination?.title,
     });
+  }
+
+  // Auto-fix's prompt is long and PwrAgent wrote it, so it folds like Auto-fix
+  // PR's: the line names the review, and the toggle shows the prompt.
+  if (
+    props.message.origin?.kind === "pwragent"
+    && reviewAutoFixOrigin
+  ) {
+    const count = reviewAutoFixOrigin.findingCount;
+    return (
+      <article
+        className="transcript-message transcript-message--injected transcript-message--monitor-result transcript-message--review-auto-fix"
+      >
+        {renderMessageHeader({
+          continuation: false,
+          desktopApi: props.desktopApi,
+          message: props.message,
+          sourceThreadLink,
+          threadLinks,
+          text: messageCopyText,
+        })}
+        <div className="transcript-monitor-result__summary">
+          <button
+            type="button"
+            className="transcript-monitor-result__toggle"
+            aria-expanded={monitorExpanded}
+            onClick={() => setMonitorExpanded((current) => !current)}
+          >
+            <span
+              aria-hidden="true"
+              className="transcript-monitor-result__chevron"
+            />
+            <span>
+              {reviewAutoFixOrigin.title
+                ? `Auto-fix started for ${reviewAutoFixOrigin.title}`
+                : "Review auto-fix started"}
+            </span>
+          </button>
+          <RailStatusChip tone="neutral">
+            {`${count} ${count === 1 ? "finding" : "findings"}`}
+          </RailStatusChip>
+        </div>
+        {monitorExpanded ? (
+          <div className="transcript-monitor-result__content">
+            <div className="transcript-message__text">
+              {messageSegments.map((segment, index) =>
+                renderMessageSegment({
+                  segment,
+                  index,
+                  applications: props.applications,
+                  desktopApi: props.desktopApi,
+                  fileViewerContext: props.fileViewerContext,
+                  onOpenImage: props.onOpenImage,
+                  skills: props.skills,
+                  threadLinkSource: props.threadLinkSource,
+                }),
+              )}
+            </div>
+          </div>
+        ) : null}
+      </article>
+    );
   }
 
   if (

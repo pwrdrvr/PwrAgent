@@ -10,6 +10,7 @@ import {
   resetThreadTodoServiceForTests,
 } from "../thread-todos/thread-todo-runtime";
 import { claudeReviewOutput } from "../claude/claude-review-findings";
+import { getReviewAutoFixArming, resetReviewAutoFixArmingForTests } from "../thread-reviews/review-auto-fix";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 let db: StateDb;
@@ -31,14 +32,18 @@ describe("review tracking runtime eligibility", () => {
   });
   afterEach(() => {
     resetThreadTodoServiceForTests();
+    resetReviewAutoFixArmingForTests();
     db.close();
     removeTempStateDbDir(temp.tempDir);
   });
 
+  const submitTurn = vi.fn(async () => ({ status: "queued" }));
   function install() {
+    submitTurn.mockClear();
     const registry = {
       onEvent: (listener: typeof onEvent) => { onEvent = listener; return () => {}; },
       setPwrAgentThreadTodoHandler: (value: PwrAgentThreadTodoHandler) => { handler = value; },
+      submitTurn,
     } as unknown as DesktopBackendRegistry;
     installThreadTodoRuntime({ registry, broadcast, listProjects: async () => [], readDefaultMergeMethod: () => "squash",
       feed: { loadOwners: async () => [], managedThreadKeys: () => new Set(), onDelta: () => {} } });
@@ -177,5 +182,65 @@ describe("review tracking runtime eligibility", () => {
     // This global inventory event can restore ACP owners as well as Codex.
     expect(broadcast).toHaveBeenCalledExactlyOnceWith({ at: expect.any(Number) });
     expect(getThreadReviewService().list({ status: "all" })).toEqual([]);
+  });
+  /**
+   * Rule: a review started with auto-fix hands its open findings to the
+   * thread's own agent the moment it lands, as a turn that queues behind any
+   * running one. A review started to wait, or one that lands in another
+   * turn, sends nothing.
+   */
+  describe("auto-fix", () => {
+    const findingsOutput = (turnId: string, id: string) => ({ backend: THREAD.backend, notification: {
+      method: "item/completed" as const, params: { threadId: THREAD.threadId, turnId, item: {
+        id, type: "exitedReviewMode", review: "",
+        data: { reviewOutput: claudeReviewOutput({ findings: [
+          { file: "src/a.ts", line: 3, summary: "Minor naming.", failureScenario: "Confuses readers." },
+          { file: "src/b.ts", line: 9, summary: "Drops a write.", failureScenario: "Loses data." },
+        ] }, "/repo") },
+      } },
+    } }) as AgentEvent;
+
+    it("sends the thread's agent the open findings when an armed review lands", async () => {
+      install();
+      getReviewAutoFixArming().starting(THREAD, "auto-fix").accepted("review-turn");
+      onEvent(findingsOutput("review-turn", "armed-review"));
+      await vi.waitFor(() => expect(submitTurn).toHaveBeenCalledTimes(1));
+      const [review] = getThreadReviewService().list();
+      const call = (submitTurn.mock.calls as unknown as [Record<string, unknown>][])[0]![0];
+      expect(call).toMatchObject({
+        ...THREAD,
+        origin: "automation",
+        messageOrigin: { kind: "pwragent", reviewAutoFix: { reviewId: review!.id, findingCount: 2 } },
+      });
+      const text = (call.input as { text: string }[])[0]!.text;
+      expect(text).toContain("Decide which ones to fix.");
+      expect(text).toContain("`update_review_item`");
+      // Once only: the same artifact again sends nothing more.
+      onEvent(findingsOutput("review-turn", "armed-review"));
+      await Promise.resolve();
+      expect(submitTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends nothing for a review started to wait, or one PwrAgent did not start", async () => {
+      install();
+      getReviewAutoFixArming().starting(THREAD, "wait").accepted("wait-turn");
+      onEvent(findingsOutput("wait-turn", "waiting-review"));
+      onEvent(findingsOutput("typed-turn", "typed-review"));
+      await Promise.resolve();
+      expect(getThreadReviewService().list()).toHaveLength(2);
+      expect(submitTurn).not.toHaveBeenCalled();
+    });
+
+    it("sends nothing once an armed review's turn ended without a result", async () => {
+      install();
+      getReviewAutoFixArming().starting(THREAD, "auto-fix").accepted("review-turn");
+      onEvent({ backend: THREAD.backend, notification: {
+        method: "turn/completed", params: { threadId: THREAD.threadId, turnId: "review-turn",
+          turn: { id: "review-turn", status: "interrupted" } },
+      } } as AgentEvent);
+      onEvent(findingsOutput("later-turn", "later-review"));
+      await Promise.resolve();
+      expect(submitTurn).not.toHaveBeenCalled();
+    });
   });
 });

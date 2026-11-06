@@ -951,6 +951,7 @@ import {
   preparePdfTurnInput,
   type PdfTurnInputHandling,
 } from "../pdf/pdf-turn-input-preparation";
+import { getReviewAutoFixArming } from "../thread-reviews/review-auto-fix";
 
 type InitializeResult = {
   serverInfo?: {
@@ -2935,6 +2936,7 @@ function buildCapabilities(
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     startReview: reviewCodexSubAgent || reviewRunner,
     reviewRunMode: true,
+    reviewAutoFix: true,
     reviewCodexSubAgent,
     reviewRunner,
     interruptTurn: supported.has("turn/interrupt"),
@@ -24772,8 +24774,18 @@ export class DesktopBackendRegistry {
     // Retain terminal evidence only for the lifetime of this start request.
     const terminals = new Map<string, ReviewTerminal>();
     this.pendingReviewTerminals.add(terminals);
+    // Armed before the start, so a review that lands at once still fixes.
+    const autoFix = getReviewAutoFixArming().starting(
+      { backend: params.backend, threadId: params.threadId },
+      params.afterReview,
+    );
     try {
-      return await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution);
+      const response = await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution);
+      autoFix.accepted(response.turnId);
+      return response;
+    } catch (error) {
+      autoFix.refused();
+      throw error;
     } finally {
       this.pendingReviewTerminals.delete(terminals);
     }
