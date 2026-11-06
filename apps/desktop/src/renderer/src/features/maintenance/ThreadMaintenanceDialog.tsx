@@ -581,8 +581,10 @@ function CheckoutsReview(props: {
   onSelection: (selection: ThreadMaintenanceSelection) => void;
 }) {
   const { scan, selection } = props;
-  const removable = scan.checkouts.items.filter((item) => item.kind === "removable");
-  const gone = scan.checkouts.items.filter((item) => item.kind === "repositoryGone");
+  const owned = scan.checkouts.items.filter((item) => item.kind !== "unreferenced");
+  const removable = owned.filter((item) => item.kind === "removable");
+  const gone = owned.filter((item) => item.kind === "repositoryGone");
+  const unreferenced = scan.checkouts.items.filter((item) => item.kind === "unreferenced");
   const toggle = (item: ThreadMaintenanceArchivedCheckout) => {
     const checkouts = new Set(selection.checkouts);
     if (checkouts.has(item.worktreePath)) checkouts.delete(item.worktreePath);
@@ -594,7 +596,9 @@ function CheckoutsReview(props: {
       <div className="thread-maintenance__summary">
         <div>
           <p className="thread-maintenance__summary-title">
-            {removable.length ? `${removable.length} archived ${removable.length === 1 ? "checkout is" : "checkouts are"} still on disk` : "No archived checkouts to remove"}
+            {removable.length ? `${removable.length} archived ${removable.length === 1 ? "checkout is" : "checkouts are"} still on disk`
+              : unreferenced.length ? `${unreferenced.length} ${unreferenced.length === 1 ? "checkout has" : "checkouts have"} no thread`
+                : "No archived checkouts to remove"}
           </p>
           <p className="thread-maintenance__summary-sub">
             {`${keptTotal(scan.checkouts.kept)} kept · ${scan.checkouts.emptyFolders} empty ${scan.checkouts.emptyFolders === 1 ? "folder" : "folders"}`}
@@ -643,6 +647,30 @@ function CheckoutsReview(props: {
                 </div>
               </li>
             ))}
+          </ul>
+        </section>
+      ) : null}
+      {unreferenced.length ? (
+        <section className="thread-maintenance__group" aria-label="No thread">
+          <div className="thread-maintenance__group-head">
+            <span className="thread-maintenance__eyebrow">No thread · {unreferenced.length}</span>
+          </div>
+          <ul className="thread-maintenance__rows">
+            {unreferenced.map((item) => {
+              const lead = workspaceLead(item.workspace);
+              return (
+                <li key={item.worktreePath} className="thread-maintenance__row">
+                  <Checkbox checked={selection.checkouts.has(item.worktreePath)} label={`Remove ${item.worktreePath}`} onChange={() => toggle(item)} />
+                  <div className="thread-maintenance__row-body">
+                    <p className="thread-maintenance__row-title is-path">{item.worktreePath}</p>
+                    <p className="thread-maintenance__row-meta">
+                      <span className={`thread-maintenance__lead-text is-${lead.tone}`}>{lead.text}</span>
+                      {" · No thread refers to this checkout. Git saves its changes to a recovery snapshot before it is removed."}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         </section>
       ) : null}
@@ -853,7 +881,7 @@ function Footer(props: {
   }
   if (props.phase === "checkouts" && scan && selection) {
     const request = buildApplyRequest(scan, selection, props.mode);
-    const checkouts = request.removeCheckouts.length + request.trashCheckouts.length;
+    const checkouts = request.removeCheckouts.length + request.trashCheckouts.length + (request.removeUnreferenced?.length ?? 0);
     const nothing = request.archive.length + checkouts === 0 && !request.removeEmptyFolders;
     return (
       <>

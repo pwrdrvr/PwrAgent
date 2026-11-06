@@ -3630,7 +3630,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("reviews PwrAgent's Claude threads in Thread maintenance but leaves them out of the hourly sweep", async () => {
+  it("lists PwrAgent's Claude threads for the hourly sweep and Thread maintenance", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
@@ -3645,10 +3645,8 @@ describe("DesktopBackendRegistry", () => {
     });
     try {
       const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
-      const reviewed = await registry.listThreadMaintenanceCandidates();
-      const claude = reviewed.find(({ thread }) => thread.source === "claude");
+      const claude = (await registry.listAutoArchiveCandidates()).find(({ thread }) => thread.source === "claude");
       expect(claude?.thread.id).toBe(threadId);
-      expect((await registry.listAutoArchiveCandidates()).some(({ thread }) => thread.source === "claude")).toBe(false);
       // The run's recheck reads the same store, not the Codex client.
       const refreshed = await registry.refreshArchiveCandidate(claude!);
       expect(refreshed.thread).toMatchObject({ id: threadId, source: "claude", projectKey: root });

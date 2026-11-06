@@ -18,7 +18,7 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
   return service ??= new ThreadMaintenanceService({
     getPolicy: () => getDesktopBackendRegistry().getThreadArchivePolicy(),
     snapshotLimitBytes: MAX_WORKTREE_SNAPSHOT_BYTES,
-    listCandidates: async () => await getDesktopBackendRegistry().listThreadMaintenanceCandidates(),
+    listCandidates: async () => await getDesktopBackendRegistry().listAutoArchiveCandidates(),
     resolveProject: async (candidate) => await getDesktopBackendRegistry().resolveAutoArchiveProject(candidate),
     refreshCandidate: async (candidate) => await getDesktopBackendRegistry().refreshArchiveCandidate(candidate),
     isBusy: (candidate) => getDesktopBackendRegistry().isArchiveCandidateBusy(candidate),
@@ -42,6 +42,7 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
       return true;
     },
     removeArchivedCheckouts: async (selection) => await getDesktopBackendRegistry().removeArchivedCheckouts(selection),
+    removeUnreferencedCheckouts: async (worktreePaths) => await getDesktopBackendRegistry().removeUnreferencedCheckouts(worktreePaths),
     isManagedCheckoutPath: isManagedCheckoutRoot,
     trashItem: async (absolutePath) => await shell.trashItem(absolutePath),
     onRun: (run) => {

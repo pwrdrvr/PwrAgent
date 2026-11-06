@@ -19,6 +19,7 @@ import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
+import { isSettledWorktree, listManagedWorktrees, nodeWorktreeRootReader, unreferencedWorktrees } from "./unreferenced-worktrees";
 import { ArchiveFleetIndex, type FleetChange, type FleetRow } from "./archive-cleanup-fleet-index";
 import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
@@ -860,6 +861,7 @@ import {
   getDesktopSettingsService,
 } from "../settings/desktop-settings-singleton";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import {
   assertProviderDiscoveryPermit,
   type ProviderDiscoveryPermit,
@@ -2537,6 +2539,11 @@ export type ArchivedWorktreeRepairReport = {
   cleanup: ArchiveThreadCleanupResult[];
   emptyContainerCandidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string; containerIdentity: NonNullable<WorktreeContainerCleanup["identity"]> }>;
   containerCleanup: WorktreeContainerCleanup[];
+  /** Read-only audits only: PwrAgent worktrees no thread refers to. */
+  unreferencedWorktrees?: string[];
+  unreferencedTruncated?: boolean;
+  /** Why unreferenced checkouts could not be listed this time. */
+  unreferencedUnavailable?: string;
 };
 
 /** Checkouts left in place by a repair pass, counted by a short reason. A
@@ -9608,6 +9615,7 @@ export class DesktopBackendRegistry {
   private readonly worktreeContainerService: WorktreeContainerService;
   private readonly acpBackend: AcpBackendAdapter;
   private readonly claudeBackend: ClaudeBackend;
+  private readonly managedWorktreeRootsOverride?: () => Promise<string[]>;
   private readonly claudeAgentToolMcpServer?: AgentToolMcpServerLike;
   private closed = false;
   private shutdownRequested = false;
@@ -11155,6 +11163,8 @@ export class DesktopBackendRegistry {
     useMachineAcpDiscovery?: boolean;
     useMachineClaudeDiscovery?: boolean;
     claudeBackendOptions?: Partial<ClaudeBackendOptions>;
+    /** Tests: PwrAgent's worktree roots, which default to ~/.pwragent's. */
+    managedWorktreeRoots?: () => Promise<string[]>;
     isAcpAgentEnabled?: (registryId: string) => boolean;
     createAcpClient?: AcpClientFactory;
     /** The transport of an ACP helper's own agent process. */
@@ -11973,6 +11983,7 @@ export class DesktopBackendRegistry {
               })
             : undefined);
     this.claudeAgentToolMcpServer = agentToolMcpServer;
+    this.managedWorktreeRootsOverride = options?.managedWorktreeRoots;
     this.claudeBackend = new ClaudeBackend({
       inspectInstallation: options?.useMachineClaudeDiscovery
         ? async () => inspectClaudeInstallation({ env: await settingsService?.resolveTerminalSpawnEnvAsync() })
@@ -16724,14 +16735,10 @@ export class DesktopBackendRegistry {
   /** Every non-archived thread as a housekeeping candidate. Complete
    * provider reads without navigation projection or display persistence, so
    * an idle sweep makes no SQLite commits. */
-  /** Thread maintenance reviews every provider PwrAgent runs, including
-   * Claude threads from PwrAgent's own session store. The hourly sweep keeps
-   * its narrower list until Claude auto-archive is a deliberate setting. */
-  async listThreadMaintenanceCandidates(): Promise<ThreadArchiveCandidate[]> {
-    return await this.listAutoArchiveCandidates({ includeClaude: true });
-  }
-
-  async listAutoArchiveCandidates(options: { includeClaude?: boolean } = {}): Promise<ThreadArchiveCandidate[]> {
+  /** Every provider PwrAgent runs, for the hourly sweep and Thread
+   * maintenance alike. Claude threads come from PwrAgent's own session store,
+   * and one outside a PwrAgent worktree is kept by the shared keep rules. */
+  async listAutoArchiveCandidates(): Promise<ThreadArchiveCandidate[]> {
     await this.subAgentStartupReconciliation;
     if (this.closed || this.isBootstrapModeFn()) return [];
     // Use complete provider reads without navigation projection or display
@@ -16743,15 +16750,13 @@ export class DesktopBackendRegistry {
       this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
     ])).flat();
     const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
-    if (options.includeClaude) {
-      // Only sessions PwrAgent started: its store, never ~/.claude.
-      try {
-        threads.push(...await this.claudeBackend.listThreads({ archived: false }));
-      } catch (error) {
-        backendRegistryLog.warn("auto-archive Claude thread read failed; Claude threads are kept", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    // Only sessions PwrAgent started: its store, never ~/.claude.
+    try {
+      threads.push(...await this.claudeBackend.listThreads({ archived: false }));
+    } catch (error) {
+      backendRegistryLog.warn("auto-archive Claude thread read failed; Claude threads are kept", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     // One read for every thread a PR watch will wake.
     const watchedThreadKeys = new Set(
@@ -39555,6 +39560,8 @@ export class DesktopBackendRegistry {
    * admission and the ordinary snapshot/restore persistence boundary. */
   repairArchivedThreadWorktrees(options: {
     dryRun?: boolean;
+    /** With dryRun: also list PwrAgent worktrees no thread refers to. */
+    includeUnreferenced?: boolean;
     /** Limit removal to these reviewed checkouts. Empty folders only when asked. */
     select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
@@ -39581,13 +39588,118 @@ export class DesktopBackendRegistry {
     candidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string }>;
     kept: Record<string, number>;
     emptyFolders: number;
+    unreferenced: string[];
+    unreferencedUnavailable?: string;
+    unreferencedTruncated?: boolean;
   }> {
-    const report = await this.repairArchivedThreadWorktrees({ dryRun: true });
+    const report = await this.repairArchivedThreadWorktrees({ dryRun: true, includeUnreferenced: true });
     return {
       candidates: report.candidates,
       kept: archivedWorktreeKeptReasons(report),
       emptyFolders: report.emptyContainerCandidates.length,
+      unreferenced: report.unreferencedWorktrees ?? [],
+      ...(report.unreferencedUnavailable ? { unreferencedUnavailable: report.unreferencedUnavailable } : {}),
+      ...(report.unreferencedTruncated ? { unreferencedTruncated: true } : {}),
     };
+  }
+
+  /** PwrAgent's worktree roots: `~/.pwragent/worktrees` and each profile's. */
+  private async managedWorktreeRoots(): Promise<string[]> {
+    if (this.managedWorktreeRootsOverride) return this.managedWorktreeRootsOverride();
+    const root = userHomeWorktreesRoot();
+    const profiles = path.join(path.dirname(root), "profiles");
+    return [root, ...(await nodeWorktreeRootReader.listDirectories(profiles)).map((name) => path.join(profiles, name, "worktrees"))];
+  }
+
+  /** Canonical paths every active and archived thread refers to, or
+   * undefined when one cannot be resolved. A thread with no folder refers
+   * to nothing; a folder that cannot be resolved fails the whole check. */
+  private async worktreeReferences(
+    inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
+  ): Promise<Set<string> | undefined> {
+    const canonical = canonicalWorktreePaths();
+    const keys = new Set<string>();
+    for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) {
+      const values = new Set([...archiveWorkspacePaths(thread), ...inventory.ownershipPaths?.get(thread) ?? []]);
+      for (const value of values) {
+        if (!path.isAbsolute(value)) continue;
+        try { keys.add(await canonical(value)); } catch { return undefined; }
+      }
+    }
+    return keys;
+  }
+
+  private async listUnreferencedWorktrees(
+    inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
+    report: ArchivedWorktreeRepairReport,
+  ): Promise<void> {
+    const references = await this.worktreeReferences(inventory);
+    if (!references) {
+      report.unreferencedUnavailable = "A thread's folder could not be resolved";
+      return;
+    }
+    const found = await listManagedWorktrees(await this.managedWorktreeRoots());
+    const canonical = canonicalWorktreePaths();
+    const byKey = new Map<string, string>();
+    for (const value of found.paths) {
+      // A checkout removed since the listing is simply not reported.
+      try { byKey.set(await canonical(value), value); } catch { /* gone */ }
+    }
+    const settled: string[] = [];
+    for (const key of unreferencedWorktrees([...byKey.keys()], references)) {
+      if (await isSettledWorktree(byKey.get(key)!)) settled.push(byKey.get(key)!);
+    }
+    report.unreferencedWorktrees = settled;
+    if (found.truncated) report.unreferencedTruncated = true;
+  }
+
+  /** Snapshot and remove reviewed checkouts no thread refers to. Each one is
+   * checked again against a fresh read of every thread, inside the archive
+   * cleanup queue, so no archive or repair runs beside it. */
+  async removeUnreferencedCheckouts(worktreePaths: string[]): Promise<{
+    removed: { worktreePath: string }[];
+    kept: { worktreePath: string; reason: string }[];
+    failed: { worktreePath: string; message: string }[];
+  }> {
+    const result = {
+      removed: [] as { worktreePath: string }[],
+      kept: [] as { worktreePath: string; reason: string }[],
+      failed: [] as { worktreePath: string; message: string }[],
+    };
+    if (!worktreePaths.length) return result;
+    await this.archiveCleanupQueue.enqueue(`unreferenced-remove:${++this.archiveWorkspaceWriteSequence}`, async (context) => {
+      const inventory = await this.readPacedArchiveCleanupInventory({ backend: "codex", threadId: "", context });
+      const references = await this.worktreeReferences(inventory);
+      const canonical = canonicalWorktreePaths();
+      const managed = new Set<string>();
+      for (const value of (await listManagedWorktrees(await this.managedWorktreeRoots())).paths) {
+        try { managed.add(await canonical(value)); } catch { /* gone */ }
+      }
+      for (const worktreePath of worktreePaths) {
+        await context.checkpoint();
+        try {
+          const key = await canonical(worktreePath);
+          const reason = !references ? "Thread folders could not be checked"
+            : !managed.has(key) ? "Not a PwrAgent checkout"
+              : unreferencedWorktrees([key], references).length === 0 ? "A thread uses it now"
+                : !await isSettledWorktree(worktreePath) ? "Created recently"
+                  : undefined;
+          if (reason) {
+            result.kept.push({ worktreePath, reason });
+            continue;
+          }
+          await this.worktreeArchiveService.archiveUnreferenced({ worktreePath });
+          result.removed.push({ worktreePath });
+        } catch (error) {
+          if (error instanceof ArchiveCleanupCancelledError || this.closed || this.stoppingRunningTurnsForShutdown) throw error;
+          if (error instanceof MissingArchiveWorktreeError) result.kept.push({ worktreePath, reason: "No longer on disk" });
+          else if (error instanceof MissingArchiveRepositoryError) result.kept.push({ worktreePath, reason: "Repository no longer exists" });
+          else result.failed.push({ worktreePath, message: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return { backend: "codex", threadId: "", archivedAt: Date.now(), cleanup: [] };
+    });
+    return result;
   }
 
   /** Remove only reviewed archived checkouts. Each removal still takes fresh
@@ -39677,6 +39789,7 @@ export class DesktopBackendRegistry {
 
   private async runArchivedThreadWorktreeRepair(options: {
     dryRun?: boolean;
+    includeUnreferenced?: boolean;
     select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
   } = {}): Promise<ArchivedWorktreeRepairReport> {
@@ -39786,6 +39899,10 @@ export class DesktopBackendRegistry {
           report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
             error: error instanceof Error ? error.message : String(error) });
         }
+      }
+      if (options.dryRun && options.includeUnreferenced) {
+        await checkpoint();
+        await this.listUnreferencedWorktrees(inventory, report);
       }
       backendRegistryLog.info("archived worktree repair discovered", {
         archivedThreads: report.archivedThreads, discoveredWorktrees: report.discoveredWorktrees,

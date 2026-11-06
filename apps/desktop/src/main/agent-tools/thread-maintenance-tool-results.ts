@@ -1,6 +1,7 @@
 import type {
   ApplyThreadMaintenanceToolArgs,
   ThreadMaintenanceApplyRequest,
+  ThreadMaintenanceOwnedCheckout,
   ThreadMaintenancePlanToolResult,
   ThreadMaintenanceRun,
   ThreadMaintenanceRunToolResult,
@@ -42,8 +43,10 @@ export function summarizeThreadMaintenanceScan(
       })),
     };
   });
-  const removable = scan.checkouts.items.filter((item) => item.kind === "removable");
-  const gone = scan.checkouts.items.filter((item) => item.kind === "repositoryGone");
+  const owned = scan.checkouts.items.filter((item): item is ThreadMaintenanceOwnedCheckout => item.kind !== "unreferenced");
+  const removable = owned.filter((item) => item.kind === "removable");
+  const gone = owned.filter((item) => item.kind === "repositoryGone");
+  const unreferenced = scan.checkouts.items.filter((item) => item.kind === "unreferenced");
   return {
     scanId: scan.scanId,
     finishedAt: scan.finishedAt,
@@ -66,10 +69,14 @@ export function summarizeThreadMaintenanceScan(
         worktreePath: item.worktreePath,
         ...(item.missingRepositoryPath ? { missingRepositoryPath: item.missingRepositoryPath } : {}),
       })),
+      // Listed so an agent can tell the operator; only the dialog removes them.
+      unreferenced: unreferenced.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
+        worktreePath: item.worktreePath, workspace: item.workspace.kind,
+      })),
       kept: scan.checkouts.kept,
       emptyFolders: scan.checkouts.emptyFolders,
       ...(scan.checkouts.skipped ? { skipped: scan.checkouts.skipped } : {}),
-      truncated: removable.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT || gone.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT,
+      truncated: [removable, gone, unreferenced].some((items) => items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT),
     },
     expired: scan.expired,
     failureCount: scan.failures.length,
@@ -153,7 +160,7 @@ export function planThreadMaintenanceApply(
       archive: archive.map((item) => ({ backend: item.backend, threadId: item.threadId,
         ...(item.overLimit ? { overLimit: item.overLimit } : {}) })),
       removeCheckouts: removeCheckouts.map((item) => {
-        const checkout = checkouts.get(item.worktreePath)!;
+        const checkout = checkouts.get(item.worktreePath) as ThreadMaintenanceOwnedCheckout;
         return { backend: checkout.backend, threadId: checkout.threadId, worktreePath: checkout.worktreePath };
       }),
       trashCheckouts: trashCheckouts.map((item) => ({ worktreePath: item.worktreePath })),

@@ -43,7 +43,21 @@ export type ArchivedCheckoutAudit = {
   candidates: { backend: string; threadId: string; worktreePath: string }[];
   kept: Record<string, number>;
   emptyFolders: number;
+  /** PwrAgent worktrees no thread refers to. */
+  unreferenced?: string[];
+  unreferencedUnavailable?: string;
+  unreferencedTruncated?: boolean;
 };
+
+export type UnreferencedCheckoutRemoval = {
+  removed: { worktreePath: string }[];
+  kept: { worktreePath: string; reason: string }[];
+  failed: { worktreePath: string; message: string }[];
+};
+
+/** Keep reasons for a checkout no thread refers to start with this, so the
+ * review tells them from archived threads' checkouts. */
+export const UNREFERENCED_KEEP_PREFIX = "No thread · ";
 
 export type ArchivedCheckoutRemoval = {
   removed: { worktreePath: string }[];
@@ -70,6 +84,9 @@ export type ThreadMaintenanceDeps = {
   }) => Promise<boolean>;
   /** Remove only the listed archived checkouts, plus empty folders when asked. */
   removeArchivedCheckouts: (selection: { worktreePaths: string[]; emptyFolders: boolean }) => Promise<ArchivedCheckoutRemoval>;
+  /** Snapshot and remove reviewed checkouts no thread refers to. Re-checks
+   * each against every thread first. */
+  removeUnreferencedCheckouts?: (worktreePaths: string[]) => Promise<UnreferencedCheckoutRemoval>;
   /** True only inside a worktree root that PwrAgent or Codex manages. */
   isManagedCheckoutPath: (worktreePath: string) => boolean;
   trashItem: (absolutePath: string) => Promise<void>;
@@ -354,7 +371,36 @@ export class ThreadMaintenanceService {
         return undefined;
       }
     });
-    const result = items.filter((item): item is ThreadMaintenanceArchivedCheckout => item !== undefined);
+    const result: ThreadMaintenanceArchivedCheckout[] = items.filter((item) => item !== undefined);
+    const keepUnreferenced = (reason: string) => {
+      const key = UNREFERENCED_KEEP_PREFIX + reason;
+      kept[key] = (kept[key] ?? 0) + 1;
+    };
+    if (audit.unreferencedUnavailable) keepUnreferenced(`not checked: ${audit.unreferencedUnavailable}`);
+    if (audit.unreferencedTruncated) keepUnreferenced("more than could be listed");
+    const unreferenced = await mapLimit(audit.unreferenced ?? [], INSPECT_CONCURRENCY, async (worktreePath): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
+      if (this.abort.signal.aborted) return undefined;
+      if (projectFilter && await checkoutProjectPath(worktreePath) !== path.resolve(projectFilter)) return undefined;
+      try {
+        if (await missingWorktreeRepository(worktreePath)) {
+          keepUnreferenced("repository no longer exists");
+          return undefined;
+        }
+        const reason = unreferencedKeepReason(await inspect(worktreePath, {
+          signal: this.abort.signal, limitBytes: this.deps.snapshotLimitBytes,
+          rebuildableOutputIsClean: rules.rebuildableOutputIsClean,
+        }));
+        if (typeof reason === "string") {
+          keepUnreferenced(reason);
+          return undefined;
+        }
+        return { kind: "unreferenced", worktreePath, workspace: reason };
+      } catch (error) {
+        fail("checkouts", error, { path: worktreePath });
+        return undefined;
+      }
+    });
+    result.push(...unreferenced.filter((item) => item !== undefined));
     for (const item of result) retained.checkouts.set(item.worktreePath, item);
     return { items: result, kept, emptyFolders: audit.emptyFolders };
   }
@@ -415,7 +461,8 @@ export class ThreadMaintenanceService {
 
     // Step 2: archived checkouts. One failure never skips the rest.
     const checkoutStep: ThreadMaintenanceStepResult = { step: "checkouts",
-      ran: request.removeCheckouts.length > 0 || request.trashCheckouts.length > 0 || request.removeEmptyFolders,
+      ran: request.removeCheckouts.length > 0 || request.trashCheckouts.length > 0
+        || (request.removeUnreferenced?.length ?? 0) > 0 || request.removeEmptyFolders,
       done: 0, kept: 0, failed: 0 };
     steps.push(checkoutStep);
     const removable = request.removeCheckouts.filter((item) => retained.checkouts.get(item.worktreePath)?.kind === "removable");
@@ -479,6 +526,7 @@ export class ThreadMaintenanceService {
           detail: errorMessage(error), path: item.worktreePath });
       }
     }
+    await this.removeUnreferenced(request, retained, checkoutStep, { stopped, keepStopped, addProblem, update });
     // Repository-gone checkouts the operator left unselected are kept on
     // purpose. A run that skipped this step reports nothing about them.
     for (const checkout of checkoutStep.ran ? retained.checkouts.values() : []) {
@@ -494,6 +542,67 @@ export class ThreadMaintenanceService {
     const finished = { ...this.run!, running: false, finishedAt: this.now(), current: undefined,
       steps: [...steps], problems: [...problems] };
     return this.publish(finished);
+  }
+
+  /** Checkouts no thread refers to: inspected again, then handed to the
+   * registry, which re-checks every thread before it snapshots and removes. */
+  private async removeUnreferenced(
+    request: ThreadMaintenanceApplyRequest,
+    retained: RetainedScan,
+    checkoutStep: ThreadMaintenanceStepResult,
+    run: {
+      stopped: () => boolean;
+      keepStopped: (worktreePath: string) => void;
+      addProblem: (problem: ThreadMaintenanceProblem) => void;
+      update: (patch: Partial<ThreadMaintenanceRun>) => void;
+    },
+  ): Promise<void> {
+    const kept = (worktreePath: string, reason: string, detail?: string) => {
+      checkoutStep.kept += 1;
+      run.addProblem({ step: "checkouts", kind: "kept", object: worktreePath, reason, path: worktreePath, ...(detail ? { detail } : {}) });
+    };
+    const failed = (worktreePath: string, reason: string, detail?: string) => {
+      checkoutStep.failed += 1;
+      run.addProblem({ step: "checkouts", kind: "failed", object: worktreePath, reason, path: worktreePath, ...(detail ? { detail } : {}) });
+    };
+    const ready: string[] = [];
+    const inspect = this.deps.inspectWorkspace ?? inspectMaintenanceWorkspace;
+    for (const { worktreePath } of request.removeUnreferenced ?? []) {
+      if (retained.checkouts.get(worktreePath)?.kind !== "unreferenced") {
+        failed(worktreePath, "Not in this scan");
+        continue;
+      }
+      if (run.stopped()) {
+        run.keepStopped(worktreePath);
+        continue;
+      }
+      try {
+        const reason = unreferencedKeepReason(await inspect(worktreePath, {
+          signal: this.abort.signal, limitBytes: this.deps.snapshotLimitBytes,
+          rebuildableOutputIsClean: retained.scan.rules.rebuildableOutputIsClean,
+        }));
+        if (typeof reason === "string") kept(worktreePath, "Changed since the scan", reason);
+        else ready.push(worktreePath);
+      } catch (error) {
+        this.deps.onError?.(error, { step: "checkouts", path: worktreePath });
+        failed(worktreePath, "Removal failed", errorMessage(error));
+      }
+    }
+    if (!ready.length) return;
+    if (!this.deps.removeUnreferencedCheckouts) {
+      for (const worktreePath of ready) failed(worktreePath, "Removal failed", "Removing checkouts with no thread is unavailable.");
+      return;
+    }
+    run.update({ current: { step: "checkouts", processed: 0, total: ready.length, object: ready[0] } });
+    try {
+      const removal = await this.deps.removeUnreferencedCheckouts(ready);
+      checkoutStep.done += removal.removed.length;
+      for (const item of removal.kept) kept(item.worktreePath, item.reason);
+      for (const item of removal.failed) failed(item.worktreePath, "Removal failed", item.message);
+    } catch (error) {
+      this.deps.onError?.(error, { step: "checkouts" });
+      for (const worktreePath of ready) failed(worktreePath, "Removal failed", errorMessage(error));
+    }
   }
 
   /** True when archived, else the reason it was kept. Throws on failure. */
@@ -610,4 +719,23 @@ async function mapLimit<T, R>(items: T[], limit: number, work: (item: T) => Prom
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The workspace when a checkout no thread refers to can be removed, else the
+ * reason it stays. Unlike an archived thread's checkout, a main checkout or a
+ * folder that is not Git stays too: nothing here says it is safe to touch. */
+export function unreferencedKeepReason(
+  inspection: MaintenanceWorkspaceInspection,
+): string | Extract<ThreadMaintenanceWorkspace, { kind: "clean" | "changes" }> {
+  if (inspection.keep !== undefined) return inspection.keep;
+  const { workspace } = inspection;
+  switch (workspace.kind) {
+    case "clean":
+    case "changes":
+      return workspace;
+    case "overLimit": return "Changes over the snapshot limit";
+    case "inPlace": return "Main checkout";
+    case "notGit": return "Not a Git checkout";
+    case "missing": return "No longer on disk";
+  }
 }

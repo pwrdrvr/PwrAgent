@@ -64,12 +64,15 @@ export function buildApplyRequest(
     })
     : [];
   const chosen = (item: ThreadMaintenanceArchivedCheckout) => runCheckouts && selection.checkouts.has(item.worktreePath);
+  const owned = scan.checkouts.items.filter((item) => item.kind !== "unreferenced");
   return {
     scanId: scan.scanId,
     archive,
-    removeCheckouts: scan.checkouts.items.filter((item) => item.kind === "removable" && chosen(item))
+    removeCheckouts: owned.filter((item) => item.kind === "removable" && chosen(item))
       .map(({ backend, threadId, worktreePath }) => ({ backend, threadId, worktreePath })),
-    trashCheckouts: scan.checkouts.items.filter((item) => item.kind === "repositoryGone" && chosen(item))
+    trashCheckouts: owned.filter((item) => item.kind === "repositoryGone" && chosen(item))
+      .map(({ worktreePath }) => ({ worktreePath })),
+    removeUnreferenced: scan.checkouts.items.filter((item) => item.kind === "unreferenced" && chosen(item))
       .map(({ worktreePath }) => ({ worktreePath })),
     removeEmptyFolders: runCheckouts && selection.emptyFolders,
   };

@@ -97,6 +97,8 @@ function readApplyRequest(value: unknown): ThreadMaintenanceApplyRequest {
       .map((item) => ({ backend: item.backend as string, threadId: item.threadId as string, worktreePath: item.worktreePath as string })),
     trashCheckouts: list("trashCheckouts").filter((item) => typeof item.worktreePath === "string")
       .map((item) => ({ worktreePath: item.worktreePath as string })),
+    removeUnreferenced: list("removeUnreferenced").filter((item) => typeof item.worktreePath === "string")
+      .map((item) => ({ worktreePath: item.worktreePath as string })),
     removeEmptyFolders: record.removeEmptyFolders === true,
   };
 }

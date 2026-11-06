@@ -72,7 +72,10 @@ export type ThreadMaintenanceProject = {
   space?: { totalBytes: number; idleBytes: number; lowerBound?: boolean };
 };
 
-export type ThreadMaintenanceArchivedCheckout = {
+export type ThreadMaintenanceArchivedCheckout = ThreadMaintenanceOwnedCheckout | ThreadMaintenanceUnreferencedCheckout;
+
+/** An archived thread's checkout. */
+export type ThreadMaintenanceOwnedCheckout = {
   backend: string;
   threadId: string;
   title?: string;
@@ -83,6 +86,16 @@ export type ThreadMaintenanceArchivedCheckout = {
   kind: "removable" | "repositoryGone";
   workspace?: ThreadMaintenanceWorkspace;
   missingRepositoryPath?: string;
+  space?: ThreadMaintenanceSpace;
+};
+
+/** A checkout under PwrAgent's own worktree root that no thread, active or
+ * archived, refers to. Never selected by default and never removed by the
+ * hourly sweep. Removing one saves a recovery snapshot first. */
+export type ThreadMaintenanceUnreferencedCheckout = {
+  kind: "unreferenced";
+  worktreePath: string;
+  workspace: Extract<ThreadMaintenanceWorkspace, { kind: "clean" | "changes" }>;
   space?: ThreadMaintenanceSpace;
 };
 
@@ -133,6 +146,9 @@ export type ThreadMaintenanceApplyRequest = {
   removeCheckouts: { backend: string; threadId: string; worktreePath: string }[];
   /** Orphaned checkouts to move to the Trash. Never selected by default. */
   trashCheckouts: { worktreePath: string }[];
+  /** Checkouts no thread refers to, to snapshot and remove. Never selected
+   * by default. Older callers omit it. */
+  removeUnreferenced?: { worktreePath: string }[];
   /** Remove empty worktree folders left by earlier cleanups. */
   removeEmptyFolders: boolean;
 };
