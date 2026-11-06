@@ -32,6 +32,7 @@ type PrStatusWatchStore = Pick<
   | "advanceThreadPrStatusWatches"
   | "claimThreadPrTerminalWatches"
   | "finishThreadPrTerminalWatch"
+  | "isThreadPrStatusWatchClaimActive"
 >;
 
 type PrStatusWatchRegistry = {
@@ -174,6 +175,7 @@ export class PrStatusWatchCoordinator {
     // sandbox cleanup, so it all happens once the project allows it.
     const claims: PrStatusWatchClaim[] = [];
     for (const claim of claimed) {
+      if (!await this.claimIsActive(claim)) continue;
       if (this.options.allowsWatchDispatch?.(claim.watch) === false) {
         await this.options.store.releaseThreadPrStatusWatch({
           watchId: claim.watch.watchId,
@@ -258,6 +260,7 @@ export class PrStatusWatchCoordinator {
     claim: PrStatusWatchClaim,
     pr: PrSummary,
   ): Promise<string[]> {
+    if (!await this.claimIsActive(claim)) return [];
     try {
       return await this.options.prepareTerminalWake?.({
         watch: claim.watch,
@@ -275,6 +278,7 @@ export class PrStatusWatchCoordinator {
     observedAt: number,
     extraLines: string[],
   ): Promise<void> {
+    if (!await this.claimIsActive(claim)) return;
     const release = async (spendAttempt: boolean) =>
       await this.releaseClaim(claim, spendAttempt);
     const outcome = terminalOutcomeOf(pr);
@@ -333,6 +337,7 @@ export class PrStatusWatchCoordinator {
     observedAt: number,
     failureCoveredThreadKeys: ReadonlySet<string>,
   ): Promise<void> {
+    if (!await this.claimIsActive(claim)) return;
     if (
       this.options.isBackgroundPollingEnabled?.() === false
       || this.options.allowsWatchDispatch?.(claim.watch) === false
@@ -395,6 +400,10 @@ export class PrStatusWatchCoordinator {
     } finally {
       stopHeartbeat();
     }
+  }
+
+  private async claimIsActive(claim: PrStatusWatchClaim): Promise<boolean> {
+    return await this.options.store.isThreadPrStatusWatchClaimActive({ watchId: claim.watch.watchId, ownerId: this.ownerId });
   }
 
   private async releaseClaim(

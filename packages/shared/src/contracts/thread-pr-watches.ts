@@ -167,6 +167,7 @@ export type ThreadPrWatchEndedReason =
   | "cancelled_by_operator"
   | "cancelled_by_agent"
   | "detached"
+  | "archived"
   | "covered_by_auto_fix"
   | "pr_merged"
   | "pr_closed"

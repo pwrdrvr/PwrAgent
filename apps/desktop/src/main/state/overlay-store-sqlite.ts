@@ -16,6 +16,7 @@ import {
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
+import { ThreadDependencyStore } from "./thread-dependency-store";
 import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
@@ -67,6 +68,7 @@ import type {
   ThreadPrAutoDispatchPending,
   ThreadPullRequestWatchSummary,
   ThreadPrWatchHistoryEntry,
+  ThreadDependency,
   RemoteThreadPin,
   StarMapArrangementEntry,
   StarMapWorkspaceSnapshot,
@@ -279,7 +281,8 @@ export type PrAutoDispatchCandidate = {
  * locked thread out; this also covers a row written before the lock landed.
  */
 function isPrAutoDispatchCandidateEligible(thread: ThreadOverlayState | undefined): boolean {
-  return thread?.prAutoDispatchEnabled === true && !thread.lock;
+  return thread?.prAutoDispatchEnabled === true && !thread.lock
+    && thread.archiveRetentionStartedAt === undefined && thread.archiveTombstonedAt === undefined;
 }
 
 /** A thread's Auto-fix candidacy for one PR that a sync added or removed. */
@@ -302,6 +305,15 @@ export type PrStatusWatchThreadRef = {
   backend: ThreadOverlayState["backend"];
   threadId: string;
   prKey: string;
+};
+
+/** Committed retirement changes the registry publishes through the thread-state bus. */
+export type ArchivedThreadAutomationRetirement = {
+  backend: ThreadOverlayState["backend"];
+  threadId: string;
+  prWatchesChanged: boolean;
+  autoFixChanged: boolean;
+  dependencies: Array<Pick<ThreadDependency, "id" | "conditions">>;
 };
 
 export type PrStatusWatchAdvanceResult = {
@@ -6997,19 +7009,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
     enabled: boolean;
   }): Promise<ThreadOverlayState> {
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const nextState: ThreadOverlayState = {
-      ...current,
-      prAutoDispatchEnabled: params.enabled,
-    };
-    this.putThread(threadKey, nextState);
-    return nextState;
+    return this.stateDb.raw.transaction(() => {
+      if (params.enabled && this.isThreadArchivedForPrAutomation(params)) {
+        throw new Error("Cannot enable Auto-fix for an archived thread.");
+      }
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const nextState: ThreadOverlayState = {
+        ...current,
+        prAutoDispatchEnabled: params.enabled,
+      };
+      this.putThread(threadKey, nextState);
+      return nextState;
+    }).immediate();
   }
 
   async syncThreadPrAutoDispatchCandidates(params: {
@@ -7039,7 +7056,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         const rows = this.stateDb.raw.prepare(`
           SELECT json_extract(requested.value, '$.index') AS ordinal,
             (json_type(threads.payload, '$.prAutoDispatchEnabled') = 'true'
-              AND json_type(threads.payload, '$.lock') IS NULL) AS enabled,
+              AND json_type(threads.payload, '$.lock') IS NULL
+              AND json_type(threads.payload, '$.archiveRetentionStartedAt') IS NULL
+              AND json_type(threads.payload, '$.archiveTombstonedAt') IS NULL) AS enabled,
             candidates.pr_key
           FROM json_each(?) AS requested
           LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
@@ -7210,7 +7229,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const schedule = this.stateDb.raw.transaction((): PrAutoDispatchScheduleResult => {
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
       const current = this.getThread(threadKey);
-      if (current?.prAutoDispatchEnabled !== true) {
+      if (current?.prAutoDispatchEnabled !== true || this.isThreadArchivedForPrAutomation(params)) {
         return { status: "disabled" };
       }
 
@@ -7385,7 +7404,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const begin = this.stateDb.raw.transaction(() => {
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
       const thread = this.getThread(threadKey);
-      if (thread?.prAutoDispatchEnabled !== true) {
+      if (thread?.prAutoDispatchEnabled !== true || this.isThreadArchivedForPrAutomation(params)) {
         return { status: "disabled" as const };
       }
       // Checked before the claim moves, so a locked thread spends no attempt.
@@ -7723,16 +7742,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       if (record.dispatchLease?.ownerId !== params.ownerId) {
         return undefined;
       }
+      const thread = this.getThread(buildThreadIdentityKey(params.backend, params.threadId));
+      const retired = thread?.prAutoDispatchEnabled !== true || this.isThreadArchivedForPrAutomation(params);
       const pending = { ...record.pending, scheduledAt: params.scheduledAt };
       const pendingRecord = clearPrAutoDispatchLease({ ...record, pending });
       this.stateDb.raw
         .prepare(
           `UPDATE pr_auto_dispatch_claims
-           SET status = 'pending', scheduled_at = ?, updated_at = ?, payload = ?
+           SET status = ?, scheduled_at = ?, updated_at = ?, payload = ?
            WHERE backend = ? AND thread_id = ? AND fingerprint = ?
              AND status = 'dispatching'`,
         )
         .run(
+          retired ? "cancelled" : "pending",
           params.scheduledAt,
           params.now,
           JSON.stringify(pendingRecord),
@@ -7759,7 +7781,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         now: params.now,
         threadId: params.threadId,
       });
-      return pending;
+      return retired ? undefined : pending;
     });
     return restore.immediate();
   }
@@ -8127,6 +8149,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }): Promise<PrStatusWatchRegistrationResult> {
     const headSha = prStatusWatchColumnHeadSha(params.watch);
     const register = this.stateDb.raw.transaction(() => {
+      if (this.isThreadArchivedForPrAutomation(params.watch)) {
+        throw new Error("Cannot watch pull requests for an archived thread.");
+      }
       const inserted = this.stateDb.raw
         .prepare(
           `INSERT OR IGNORE INTO pr_status_watches(
@@ -8222,6 +8247,61 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       } as const;
     });
     return register();
+  }
+
+  /** A claim can be retired by archive while its owner awaits forge or MCP work. */
+  async isThreadPrStatusWatchClaimActive(params: { watchId: string; ownerId: string }): Promise<boolean> {
+    return this.stateDb.raw.prepare(`SELECT 1 FROM pr_status_watches
+      WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`).get(params.watchId, params.ownerId) !== undefined;
+  }
+
+  /** Repair subscriptions left by older versions, before startup replays cached PR events. */
+  async retireArchivedThreadPrAutomation(now: number): Promise<ArchivedThreadAutomationRetirement[]> {
+    const rows = this.stateDb.raw.prepare(`SELECT backend, thread_id
+      FROM pr_status_watches WHERE status IN ('watching', 'dispatching')
+      UNION SELECT backend, thread_id FROM pr_auto_dispatch_claims WHERE status IN ('pending', 'dispatching')
+      UNION SELECT backend, thread_id FROM pr_auto_dispatch_candidates
+      UNION SELECT json_extract(payload, '$.backend'), json_extract(payload, '$.threadId') FROM threads
+        WHERE json_type(payload, '$.prAutoDispatchEnabled') = 'true'
+          AND (json_type(payload, '$.archiveRetentionStartedAt') IS NOT NULL
+            OR json_type(payload, '$.archiveTombstonedAt') IS NOT NULL)`).all() as Array<{
+      backend: ThreadOverlayState["backend"]; thread_id: string;
+    }>;
+    const archived = rows.filter((row) => this.isThreadArchivedForPrAutomation({ backend: row.backend, threadId: row.thread_id }));
+    if (archived.length === 0) return [];
+    return this.stateDb.raw.transaction(() => {
+      const changed: ArchivedThreadAutomationRetirement[] = [];
+      for (const row of archived) {
+        const identity = { backend: row.backend, threadId: row.thread_id };
+        if (this.isThreadArchivedForPrAutomation(identity)) {
+          const retirement = this.observeArchivedThread(identity, now);
+          if (retirement) changed.push(retirement);
+        }
+      }
+      return changed;
+    })();
+  }
+
+  private isThreadArchivedForPrAutomation(identity: { backend: ThreadOverlayState["backend"]; threadId: string }): boolean {
+    const row = this.stateDb.raw.prepare(`SELECT
+      (json_type(payload, '$.archiveRetentionStartedAt') IS NOT NULL
+        OR json_type(payload, '$.archiveTombstonedAt') IS NOT NULL) AS archived
+      FROM threads WHERE thread_id = ?`).get(encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(identity.backend, identity.threadId))) as
+      { archived: number } | undefined;
+    return row?.archived === 1;
+  }
+
+  private retireThreadPrStatusWatches(identity: { backend: ThreadOverlayState["backend"]; threadId: string }, now: number): number {
+    if (!this.stateDb.raw.prepare(`SELECT 1 FROM pr_status_watches
+      WHERE backend = ? AND thread_id = ? AND status IN ('watching', 'dispatching') LIMIT 1`)
+      .get(identity.backend, identity.threadId)) return 0;
+    // Archive revokes live leases too. Their owners must recheck the claim
+    // before preparing or submitting a wake; restore never revives this row.
+    return this.stateDb.raw.prepare(`UPDATE pr_status_watches
+      SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL, updated_at = ?,
+        payload = json_set(payload, '$.endedReason', 'archived')
+      WHERE backend = ? AND thread_id = ? AND status IN ('watching', 'dispatching')`)
+      .run(now, identity.backend, identity.threadId).changes;
   }
 
   async claimThreadPrStatusWatches(params: {
@@ -10310,17 +10390,48 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>,
     now: number,
     options?: { promoteSubthreads: boolean },
-  ): Promise<void> {
-    this.stateDb.raw.transaction(() => {
-      for (const { backend, threadId } of records) {
-        if (options?.promoteSubthreads) this.promoteArchivedSubthreads({ backend, threadId });
-        const key = buildThreadIdentityKey(backend, threadId);
-        const current = this.getThread(key) ?? { backend, threadId, executionMode: "default" as const, extraLinkedDirectories: [] };
-        if (current.archiveRetentionStartedAt === undefined) {
-          this.putThread(key, { ...current, archiveRetentionStartedAt: now });
-        }
+  ): Promise<ArchivedThreadAutomationRetirement[]> {
+    return this.stateDb.raw.transaction(() => {
+      const retired: ArchivedThreadAutomationRetirement[] = [];
+      for (const identity of records) {
+        const retirement = this.observeArchivedThread(identity, now, options);
+        if (retirement) retired.push(retirement);
       }
+      return retired;
     })();
+  }
+
+  private observeArchivedThread(
+    { backend, threadId }: { backend: ThreadOverlayState["backend"]; threadId: string },
+    now: number,
+    options?: { promoteSubthreads: boolean },
+  ): ArchivedThreadAutomationRetirement | undefined {
+    const prWatchesChanged = this.retireThreadPrStatusWatches({ backend, threadId }, now) > 0;
+    const dependencies = new ThreadDependencyStore(this.stateDb.raw).retireForArchivedThread({ backend, threadId }, now)
+      .map(({ id, conditions }) => ({ id, conditions }));
+    // Pending repairs have not reserved a budget. In-flight leases retain
+    // ownership until their dispatcher refunds and retires them.
+    const pendingRepair = this.readThreadPrAutoDispatchPending({ backend, threadId }) !== undefined;
+    if (pendingRepair) {
+      this.stateDb.raw.prepare(`UPDATE pr_auto_dispatch_claims SET status = 'cancelled', updated_at = ?
+        WHERE backend = ? AND thread_id = ? AND status = 'pending'`).run(now, backend, threadId);
+    }
+    const repairCandidate = this.stateDb.raw.prepare(`SELECT 1 FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ? LIMIT 1`).get(backend, threadId) !== undefined;
+    if (repairCandidate) {
+      this.stateDb.raw.prepare(`DELETE FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ?`).run(backend, threadId);
+    }
+    if (options?.promoteSubthreads) this.promoteArchivedSubthreads({ backend, threadId });
+    const key = buildThreadIdentityKey(backend, threadId);
+    const current = this.getThread(key) ?? { backend, threadId, executionMode: "default" as const, extraLinkedDirectories: [] };
+    const autoFixChanged = pendingRepair || repairCandidate || current.prAutoDispatchEnabled === true;
+    if (current.archiveRetentionStartedAt === undefined || current.prAutoDispatchEnabled === true) {
+      this.putThread(key, { ...current, archiveRetentionStartedAt: current.archiveRetentionStartedAt ?? now,
+        ...(current.prAutoDispatchEnabled === true ? { prAutoDispatchEnabled: false } : {}),
+      });
+    }
+    if (prWatchesChanged || autoFixChanged || dependencies.length > 0) {
+      return { backend, threadId, prWatchesChanged, autoFixChanged, dependencies };
+    }
   }
 
   /** Replace an archived tray row with its children before publishing its
@@ -12411,6 +12522,8 @@ export type OverlayStoreLike = Pick<
   | "recoverOrphanedThreadPrAutoDispatches"
   | "getThreadPrAutoDispatchAttemptCount"
   | "registerThreadPrStatusWatch"
+  | "isThreadPrStatusWatchClaimActive"
+  | "retireArchivedThreadPrAutomation"
   | "claimThreadPrStatusWatches"
   | "releaseThreadPrStatusWatch"
   | "renewThreadPrStatusWatchLease"
