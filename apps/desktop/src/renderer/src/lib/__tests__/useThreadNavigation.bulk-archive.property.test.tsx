@@ -102,7 +102,8 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     expect([...hook.result.current.pagedNavigation.resources.values()].every((resource) => !resource.loading)).toBe(true);
   });
   const navigation = hook.result.current;
-  const onThreadsArchived = vi.fn();
+  const completed = deferred();
+  const onThreadsArchived = vi.fn((_archived: Array<{ threadId: string }>) => completed.resolve());
   nextPhase("mount sidebar");
   // Mount the real sidebar against the hook's admitted page. Keep that
   // presentation stable while driving IPC completions; hook state still
@@ -168,13 +169,16 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
       }
     }
     nextPhase("assert outcome");
-    await waitFor(() => expect(onThreadsArchived).toHaveBeenCalledOnce());
+    // The final refresh also updates selected detail. Own that continuation
+    // inside act instead of letting it run between waitFor polling attempts.
+    await act(async () => { await completed.promise; });
+    expect(onThreadsArchived).toHaveBeenCalledOnce();
     for (let index = 0; index < size; index++) {
       const failed = options?.failed?.includes(index) === true;
       expect(hook.result.current.threads.some((thread) => thread.id === `thread-${index}`)).toBe(failed);
       expect(removedPins.has(`thread-${index}`)).toBe(!failed && options?.remote?.includes(index) === true);
     }
-    const successes = onThreadsArchived.mock.calls[0]![0] as Array<{ threadId: string }>;
+    const successes = onThreadsArchived.mock.calls[0]![0];
     expect(successes.map((thread) => thread.threadId)).toEqual(rows.slice(0, size)
       .filter((_, index) => !options?.failed?.includes(index)).map((row) => row.id));
     const loads = read.mock.calls.length;
@@ -183,8 +187,10 @@ async function archiveFromSidebar(size: number, completionGroups: number[][], op
     return { loads, lensLoads, selectedThreadKey: hook.result.current.selectedThreadKey };
   } finally {
     nextPhase("unmount");
-    sidebar.unmount();
-    hook.unmount();
+    await act(async () => {
+      sidebar.unmount();
+      hook.unmount();
+    });
     nextPhase("done");
     if (size >= 50) console.info("bulk archive fixture work", {
       size, groups: completionGroups.length, completedGroups, phases,

@@ -40217,8 +40217,13 @@ export class DesktopBackendRegistry {
 
   /**
    * The provider's rows changed since the index's watermark, newest first.
-   * A new thread, a cwd change and a reactivated thread each advance the row's
-   * `updated_at`, so a short read finds them without rereading the fleet.
+   * A new thread, a cwd change and an unarchived thread advance `updated_at`.
+   * Protocol-only captures (2026-11-05, Codex 0.160.0 and 0.163.0) confirmed
+   * `thread/unarchive` advances it in another app-server's `thread/list`
+   * with `sortKey: "updated_at"` and `useStateDbOnly: true`, including after
+   * restarting the restoring client. Archived `thread/resume` (ID or path)
+   * and `thread/fork` reject rather than reactivate the thread. Thus a short
+   * read sees an external restore without rereading the fleet.
    */
   private async readArchiveFleetCodexDelta(
     index: ArchiveFleetIndex,

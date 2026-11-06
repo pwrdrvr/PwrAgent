@@ -753,8 +753,11 @@ jobs:
       # Indexing competes with dependency extraction and Electron startup on
       # fresh hosted VMs. Stop it before checkout can enqueue more work. The
       # same-run comparison and per-spec timings are recorded in
-      # docs/macos-desktop-e2e-timings.md.
+      # docs/macos-desktop-e2e-timings.md. This optional tuning must not gate
+      # tests when a hosted volume is still transitioning its indexing state.
       - name: Disable Spotlight indexing on the hosted VM
+        continue-on-error: true
+        timeout-minutes: 2
         run: |
           sudo mdutil -a -i off
           mdutil -a -s
