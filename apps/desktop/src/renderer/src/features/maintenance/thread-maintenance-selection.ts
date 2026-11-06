@@ -30,8 +30,16 @@ export type ThreadMaintenanceSelection = {
   hibernate: Set<string>;
 };
 
-export function hibernateItems(scan: ThreadMaintenanceScan): ThreadMaintenanceHibernateCheckout[] {
-  return scan.hibernate?.items ?? [];
+/** Idle checkouts a tab offers. A tab that archives does not offer a
+ * thread again once its archive row is chosen. */
+export function hibernateItems(
+  scan: ThreadMaintenanceScan,
+  selection?: Pick<ThreadMaintenanceSelection, "threads">,
+  mode?: ThreadMaintenanceMode,
+): ThreadMaintenanceHibernateCheckout[] {
+  const items = scan.hibernate?.items ?? [];
+  if (!selection || !mode || !modeRuns(mode, "threads")) return items;
+  return items.filter((item) => !item.archiveKey || !selection.threads.has(item.archiveKey));
 }
 
 export function idleThreadKey(row: Pick<ThreadMaintenanceIdleThread, "backend" | "threadId">): string {
@@ -91,7 +99,7 @@ export function buildApplyRequest(
       .map(({ worktreePath }) => ({ worktreePath })),
     removeEmptyFolders: runCheckouts && selection.emptyFolders,
     hibernate: runHibernate
-      ? hibernateItems(scan).filter((item) => selection.hibernate.has(idleThreadKey(item)))
+      ? hibernateItems(scan, selection, mode).filter((item) => selection.hibernate.has(idleThreadKey(item)))
         .map(({ backend, threadId }) => ({ backend, threadId }))
       : [],
   };

@@ -72742,6 +72742,8 @@ describe("thread maintenance agent tools", () => {
     hibernate: { idleDays: 7, maxSnapshotMb: 25, removeRebuildableOutput: true, checked: 2, kept: { "Kept awake": 1 }, items: [
       { backend: "codex", threadId: "idle-checkout", title: "Cart drawer", worktreePath: "/wt/c/repo", lastActivityAt: 1,
         files: 3, bytes: 41_000, removedOutput: ["node_modules"] },
+      { backend: "codex", threadId: "idle-clean", title: "Old fix", worktreePath: "/wt/d/repo", lastActivityAt: 1,
+        files: 0, bytes: 0, archiveKey: "codex:idle-clean" },
     ] },
     expired: { enabled: false, retentionDays: 0 },
     failures: [],
@@ -72796,9 +72798,9 @@ describe("thread maintenance agent tools", () => {
       scanId: "scan-1",
       threads: { checked: 3, idleCount: 2, truncated: false, projects: [{ key: "/repo", idleCount: 2 }] },
       checkouts: { removable: [{ worktreePath: "/wt/a/repo" }], repositoryGone: [{ worktreePath: "/wt/b/kit" }], emptyFolders: 2 },
-      hibernate: { idleDays: 7, checked: 1 + 1, kept: { "Kept awake": 1 }, truncated: false, items: [{
+      hibernate: { idleDays: 7, checked: 2, kept: { "Kept awake": 1 }, truncated: false, items: [{
         backend: "codex", threadId: "idle-checkout", worktreePath: "/wt/c/repo", changedFiles: 3, changedBytes: 41_000,
-      }] },
+      }, { threadId: "idle-clean", offeredForArchive: true }] },
     });
     expect(handler.start).not.toHaveBeenCalled();
   });
@@ -72868,7 +72870,9 @@ describe("thread maintenance agent tools", () => {
     [{ scanId: "scan-1", archive: [{ backend: "codex", threadId: "idle-clean", overLimit: "snapshotAll" }] }, "under the snapshot limit"],
     [{ scanId: "scan-1", archive: [{ backend: "codex", threadId: "elsewhere" }] }, "not an idle thread"],
     [{ scanId: "scan-1", trashCheckouts: [{ worktreePath: "/wt/a/repo" }] }, "repository is gone"],
-    [{ scanId: "scan-1", hibernate: [{ backend: "codex", threadId: "idle-clean" }] }, "no idle checkout to hibernate"],
+    [{ scanId: "scan-1", hibernate: [{ backend: "codex", threadId: "elsewhere" }] }, "no idle checkout to hibernate"],
+    [{ scanId: "scan-1", archive: [{ backend: "codex", threadId: "idle-clean" }], hibernate: [{ backend: "codex", threadId: "idle-clean" }] },
+      "not both"],
     [{ scanId: "scan-1", hibernate: [{ backend: "codex", threadId: "agent-thread" }] }, "running this tool"],
     [{ scanId: "scan-1", hibernate: { backend: "codex", threadId: "idle-checkout" } }, "hibernate must be an array"],
     [{ scanId: "scan-1" }, "at least one"],

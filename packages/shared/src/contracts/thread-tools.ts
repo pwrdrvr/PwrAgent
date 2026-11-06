@@ -272,6 +272,8 @@ export type ThreadMaintenanceScanToolResult = {
       lastActivityAt: number;
       changedFiles: number;
       changedBytes: number;
+      /** The archive list offers this thread too. Pick one, not both. */
+      offeredForArchive?: boolean;
     }>;
     kept: Record<string, number>;
     skipped?: string;

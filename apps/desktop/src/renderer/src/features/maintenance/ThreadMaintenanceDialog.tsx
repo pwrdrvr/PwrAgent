@@ -186,7 +186,7 @@ export function ThreadMaintenanceDialog(props: {
   const headChip = phase === "threads" && scan
     ? `${allIdleThreads(scan).length} found`
     : phase === "hibernate" && scan
-      ? `${hibernateItems(scan).length} found`
+      ? `${hibernateItems(scan, selection, mode).length} found`
     : phase === "checkouts" && scan
       ? `${scan.checkouts.items.length} found`
       : phase === "running" && run?.current
@@ -232,7 +232,7 @@ export function ThreadMaintenanceDialog(props: {
               {phase === "threads"
                 ? <IdleThreadsReview scan={scan} selection={selection} onSelection={setSelection} />
                 : phase === "hibernate"
-                  ? <HibernateReview scan={scan} selection={selection} onSelection={setSelection} />
+                  ? <HibernateReview scan={scan} selection={selection} mode={mode} onSelection={setSelection} />
                   : <CheckoutsReview scan={scan} selection={selection} onSelection={setSelection} />}
             </>
           ) : null}
@@ -763,11 +763,12 @@ function outputNames(removedOutput: readonly string[] | undefined): string | und
 function HibernateReview(props: {
   scan: ThreadMaintenanceScan;
   selection: ThreadMaintenanceSelection;
+  mode: ThreadMaintenanceMode;
   onSelection: (selection: ThreadMaintenanceSelection) => void;
 }) {
   const { scan, selection } = props;
   const section = scan.hibernate;
-  const items = hibernateItems(scan);
+  const items = hibernateItems(scan, selection, props.mode);
   const chosen = items.filter((item) => selection.hibernate.has(idleThreadKey(item))).length;
   const toggle = (item: ThreadMaintenanceHibernateCheckout) => {
     const hibernate = new Set(selection.hibernate);
@@ -777,8 +778,12 @@ function HibernateReview(props: {
     props.onSelection({ ...selection, hibernate });
   };
   const selectAll = () => {
-    const all = chosen === items.length;
-    props.onSelection({ ...selection, hibernate: all ? new Set() : new Set(items.map(idleThreadKey)) });
+    const hibernate = new Set(selection.hibernate);
+    for (const item of items) {
+      if (chosen === items.length) hibernate.delete(idleThreadKey(item));
+      else hibernate.add(idleThreadKey(item));
+    }
+    props.onSelection({ ...selection, hibernate });
   };
   if (!section) {
     return (
