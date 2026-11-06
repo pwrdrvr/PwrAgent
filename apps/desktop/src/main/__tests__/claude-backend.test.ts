@@ -9,6 +9,7 @@ import {
   CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
   type ClaudeBackendOptions,
 } from "../claude/claude-backend";
+import { ClaudeSessionReaderError } from "../claude/claude-session-reader";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { CLAUDE_SELF_STARTED_TURN_HELD_REASON } from "../claude/claude-self-started-turns";
 import {
@@ -4550,6 +4551,66 @@ describe("Claude thread rewind", () => {
     expect(rewindFiles).not.toHaveBeenCalled();
     expect(f.run).toHaveBeenCalledOnce();
     expect((await f.store.read(threadId)).rewinds).toBeUndefined();
+  });
+
+  it("reads in this process exactly when its account directory is Claude's", async () => {
+    // Every pairing of this process's CLAUDE_CONFIG_DIR with the one Claude
+    // launches with. The default is ~/.claude whether unset or spelled out.
+    const prompts: SDKUserMessage[] = [];
+    const f = await fixture(promptRecorder(prompts));
+    const recorded = sessionMessages(prompts);
+    const inProcess = vi.fn(async () => await recorded());
+    const opened: NodeJS.ProcessEnv[] = [];
+    const openSessionReader = vi.fn((env: NodeJS.ProcessEnv) => {
+      opened.push(env);
+      return { getSessionMessages: vi.fn(async () => await recorded()), getSessionInfo: vi.fn(), close: vi.fn() };
+    });
+    Object.assign(f.backendOptions, { getSessionMessages: inProcess, openSessionReader });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+    const target = { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] };
+    const defaultDir = path.join(os.homedir(), ".claude");
+    const account = path.join(f.root, "claude-account");
+    const dirs = {
+      unset: undefined,
+      default: defaultDir,
+      defaultSlash: `${defaultDir}${path.sep}`,
+      account,
+      accountSlash: `${account}${path.sep}`,
+      other: path.join(f.root, "other-account"),
+    };
+    const store = (dir: string | undefined) => (dir === undefined ? defaultDir : dir.replace(/[\\/]+$/, ""));
+    for (const own of Object.values(dirs)) {
+      for (const launch of Object.values(dirs)) {
+        vi.stubEnv("CLAUDE_CONFIG_DIR", own);
+        f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", ...(launch === undefined ? {} : { CLAUDE_CONFIG_DIR: launch }) });
+        inProcess.mockClear();
+        openSessionReader.mockClear();
+        opened.length = 0;
+        await f.backend.previewRewind(threadId, target);
+        const here = store(own) === store(launch);
+        expect({ own, launch, here: inProcess.mock.calls.length > 0, child: opened.length > 0 })
+          .toEqual({ own, launch, here, child: !here });
+        for (const env of opened) expect(env.CLAUDE_CONFIG_DIR).toBe(launch);
+      }
+    }
+  });
+
+  it("names a failed session reader rather than a missing prompt", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const f = await fixture(promptRecorder(prompts));
+    f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", CLAUDE_CONFIG_DIR: path.join(f.root, "claude-account") });
+    const failure = "Claude's conversation could not be read in time.";
+    Object.assign(f.backendOptions, {
+      openSessionReader: () => ({
+        getSessionMessages: vi.fn(async () => []),
+        getSessionInfo: vi.fn(async () => { throw new ClaudeSessionReaderError(failure); }),
+        close: vi.fn(),
+      }),
+    });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+
+    expect(await f.backend.previewRewind(threadId, { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] }))
+      .toEqual({ unavailableReason: failure });
   });
 
   it("says Claude no longer has the conversation when Claude Code deleted its session", async () => {

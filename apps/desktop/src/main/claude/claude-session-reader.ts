@@ -20,6 +20,12 @@ export type ClaudeSessionReadRequest = {
 
 export type ClaudeSessionReadReply = { id: number; result?: unknown; error?: string };
 
+/**
+ * The reader itself failed: it did not start, stopped, timed out or was
+ * closed. Unlike an SDK error for one read, it says nothing about the session.
+ */
+export class ClaudeSessionReaderError extends Error {}
+
 /** The utility process, as far as the reader uses it. */
 export type ClaudeSessionReaderChild = {
   postMessage(message: ClaudeSessionReadRequest): void;
@@ -43,7 +49,7 @@ export function openClaudeSessionReader(
   env: NodeJS.ProcessEnv,
   options: {
     /** The built `claude-session-reader-worker.js`, next to the main entry. */
-    workerPath?: string;
+    workerPath: string;
     fork?: (env: NodeJS.ProcessEnv) => Promise<ClaudeSessionReaderChild>;
     timeoutMs?: number;
   },
@@ -62,10 +68,7 @@ export function openClaudeSessionReader(
     }
     child?.kill();
   };
-  const fork = options.fork ?? (async (forkEnv: NodeJS.ProcessEnv) => {
-    if (!options.workerPath) throw new Error("PwrAgent has no session reader to start.");
-    return await forkClaudeSessionReader(options.workerPath, forkEnv);
-  });
+  const fork = options.fork ?? (async (forkEnv: NodeJS.ProcessEnv) => await forkClaudeSessionReader(options.workerPath, forkEnv));
   const started = fork(env).then((forked) => {
     child = forked;
     if (ended) {
@@ -80,10 +83,10 @@ export function openClaudeSessionReader(
       if (reply.error !== undefined) request.reject(new Error(`Claude's conversation could not be read: ${reply.error}`));
       else request.resolve(reply.result);
     });
-    forked.once("exit", () => end(new Error("Claude's conversation could not be read: the reader stopped.")));
+    forked.once("exit", () => end(new ClaudeSessionReaderError("Claude's conversation could not be read: the reader stopped.")));
     return forked;
   }, (error: unknown) => {
-    throw ended ?? new Error(`Claude's conversation could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    throw ended ?? new ClaudeSessionReaderError(`Claude's conversation could not be read: ${error instanceof Error ? error.message : String(error)}`);
   });
   // A failed start rejects each read; it must not also go unhandled here.
   started.catch(() => {});
@@ -93,7 +96,7 @@ export function openClaudeSessionReader(
     if (ended) throw ended;
     const id = nextId++;
     return await new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => end(new Error("Claude's conversation could not be read in time.")), timeoutMs);
+      const timer = setTimeout(() => end(new ClaudeSessionReaderError("Claude's conversation could not be read in time.")), timeoutMs);
       pending.set(id, { resolve, reject, timer });
       forked.postMessage({ id, method, sessionId, ...(readOptions?.dir ? { options: { dir: readOptions.dir } } : {}) });
     });
@@ -103,7 +106,7 @@ export function openClaudeSessionReader(
       await request("getSessionMessages", sessionId, readOptions) as SessionMessage[],
     getSessionInfo: async (sessionId, readOptions) =>
       await request("getSessionInfo", sessionId, readOptions) as SDKSessionInfo | undefined,
-    close: () => end(new Error("Claude's session reader was closed.")),
+    close: () => end(new ClaudeSessionReaderError("Claude's session reader was closed.")),
   };
 }
 

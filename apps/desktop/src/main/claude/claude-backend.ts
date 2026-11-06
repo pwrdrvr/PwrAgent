@@ -20,7 +20,7 @@ import type {
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
-import type { ClaudeSessionReader, ClaudeSessionReads } from "./claude-session-reader";
+import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
@@ -165,7 +165,9 @@ function claudeSessionReadsSee(env: NodeJS.ProcessEnv | undefined): boolean {
 async function claudeSessionGone(sdkSessionId: string, reader: ClaudeSessionReads): Promise<boolean> {
   try {
     return await reader.getSessionInfo(sdkSessionId) === undefined;
-  } catch {
+  } catch (error) {
+    // A failed reader knows nothing of the session; say why it failed.
+    if (error instanceof ClaudeSessionReaderError) throw error;
     return false;
   }
 }
