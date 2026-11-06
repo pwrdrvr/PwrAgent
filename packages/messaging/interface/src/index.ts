@@ -1,4 +1,4 @@
-import type { ReviewRunMode, BackendCapabilities } from "@pwragent/shared";
+import type { ReviewAfterAction, ReviewRunMode, BackendCapabilities } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   AppServerReviewTarget,
@@ -1081,6 +1081,7 @@ export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
     threadId: ThreadIdentifier;
     phase: MessagingReviewPhase;
     runMode?: ReviewRunMode;
+    afterReview?: ReviewAfterAction;
     cwd?: string;
     repositoryPath?: string;
     workspaceSelectionRequired?: boolean;

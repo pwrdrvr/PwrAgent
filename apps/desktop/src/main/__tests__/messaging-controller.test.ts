@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type {
   AgentEvent,
   AppServerBackendKind,
@@ -1073,6 +1074,165 @@ describe("MessagingController", () => {
         review: { runMode: "pwragent-sub-agent" },
         body: expect.stringContaining("Update"),
       });
+    }
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("Update") });
+  });
+
+  it.each([true, false, undefined])("offers Auto-fix only when the owner advertises it (%s)", async (supported) => {
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000,
+      backends: [
+        buildBackendSummary({ capabilities: {
+          ...buildBackendSummary().capabilities, reviewAutoFix: supported,
+        } }),
+        buildBackendSummary({ kind: "acp:grok", capabilities: {
+          ...buildBackendSummary().capabilities, reviewRunner: true, reviewAutoFix: !supported,
+        } }),
+      ],
+    }) });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    const intent = harness.delivered.at(-1);
+    expect(intent?.kind).toBe("review");
+    if (intent?.kind !== "review") throw new Error("Expected review configurator");
+    expect(intent.actions.some((action) => action.id === "review:summary:auto-fix")).toBe(supported === true);
+    expect(intent.review.afterReview).toBe(supported ? "auto-fix" : undefined);
+    if (supported) expect(intent.body).toContain("Auto-fix findings: On");
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:reviewer" }));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.not.arrayContaining([expect.objectContaining({ value: { backend: "codex" } })]),
+    });
+  });
+
+  it.each(["picker", "command", "text"])("defaults Auto-fix on for the %s review start path", async (path) => {
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
+        ...buildBackendSummary().capabilities, reviewAutoFix: true,
+      } })],
+    }) });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(path === "text"
+      ? buildTextEvent("/review main", { botMention: true })
+      : buildCommandEvent(path === "picker" ? "/review" : "/review main"));
+    if (path === "picker") {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+    }
+    expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({ afterReview: "auto-fix" }));
+  });
+
+  it("preserves the Auto-fix choice under any sequence of toggles and picker navigation", async () => {
+    // Model: new reviews fix by default; only a toggle changes that choice.
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.constantFrom("toggle", "scope", "mode", "reviewer"), { maxLength: 6 }),
+      async (steps) => {
+        const harness = await createHarness({ listBackends: async () => ({
+          fetchedAt: 1000, backends: [
+            buildBackendSummary({ capabilities: {
+              ...buildBackendSummary().capabilities, reviewRunner: true,
+              reviewRunMode: true, reviewCodexSubAgent: true, reviewAutoFix: true,
+            } }),
+            buildBackendSummary({ kind: "acp:grok", capabilities: {
+              ...buildBackendSummary().capabilities, reviewRunner: true, reviewAutoFix: false,
+            } }),
+          ],
+        }) });
+        await bindThread(harness);
+        await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+        let autoFix = true;
+        for (const step of steps) {
+          const actions = step === "toggle" ? ["review:summary:auto-fix"]
+            : step === "scope" ? ["review:summary:target", "review:target:current-changes"]
+              : step === "mode" ? ["review:summary:mode", "review:mode:pwragent-sub-agent"]
+                : ["review:summary:reviewer", "review:reviewer:provider:1", "review:reviewer:model:default"];
+          for (const actionId of actions) {
+            await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId }));
+          }
+          if (step === "toggle") autoFix = !autoFix;
+          expect(harness.delivered.at(-1)).toMatchObject({
+            review: { afterReview: autoFix ? "auto-fix" : "wait" },
+            body: expect.stringContaining(`Auto-fix findings: ${autoFix ? "On" : "Off"}`),
+          });
+        }
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+        expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({
+          afterReview: autoFix ? "auto-fix" : "wait",
+        }));
+        await settleHarnessWork();
+      },
+    ), { numRuns: 25 });
+  });
+
+  it("keeps Auto-fix off in a restored pending review and resets it for the next review", async () => {
+    const options = { listBackends: async () => ({
+      fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
+        ...buildBackendSummary().capabilities, reviewAutoFix: true,
+      } })],
+    }) };
+    const original = await createHarness(options);
+    await bindThread(original);
+    await original.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await original.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:auto-fix" }));
+    original.controller.dispose();
+    const restored = await createHarness({ ...options, store: original.store });
+    await restored.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:base-branch" }));
+    await restored.controller.handleInboundEvent(buildTextEvent("release"));
+    await restored.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+    expect(restored.submitReview).toHaveBeenCalledWith(expect.objectContaining({
+      afterReview: "wait", target: { type: "baseBranch", branch: "release" },
+    }));
+    await restored.controller.handleInboundEvent(buildCommandEvent("/review"));
+    expect(restored.delivered.at(-1)).toMatchObject({ review: { afterReview: "auto-fix" } });
+  });
+
+  it("budgets SQLite writes for an Auto-fix toggle", async () => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const { tempDir, dbPath } = createTempStateDb("pwragent-review-autofix-writes-");
+    tempDirs.push(tempDir);
+    const db = StateDb.open(dbPath);
+    try {
+      const harness = await createHarness({
+        store: new SqliteMessagingStore(db),
+        listBackends: async () => ({
+          fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
+            ...buildBackendSummary().capabilities, reviewAutoFix: true,
+          } })],
+        }),
+      });
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+      const { writes } = await measureSqliteWrites(async () => {
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:auto-fix" }));
+      });
+      expectSqliteWriteBudget({
+        scenario: "messaging-review-auto-fix-toggle",
+        note: "One Auto-fix toggle: 2 boundary commits, 28840 WAL bytes; 0.577 MB/day at 20 toggles/day; no idle/timer writes.",
+        writes,
+      });
+    } finally {
+      await settleHarnessWork();
+      db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
+  });
+
+  it.each([false, true])("retains Auto-fix after an owner downgrade and blocks Start (rebuild: %s)", async (rebuild) => {
+    let supported = true;
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
+        ...buildBackendSummary().capabilities, reviewAutoFix: supported,
+      } })],
+    }) });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    supported = false;
+    if (rebuild) {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:target" }));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:back" }));
+      expect(harness.delivered.at(-1)).toMatchObject({ review: { afterReview: "auto-fix" } });
     }
     await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
     expect(harness.submitReview).not.toHaveBeenCalled();

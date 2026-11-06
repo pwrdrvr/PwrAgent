@@ -575,6 +575,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "messaging-review-auto-fix-toggle": {"commits": 2, "note": "One Auto-fix toggle: 2 boundary commits, 28840 WAL bytes; 0.577 MB/day at 20 toggles/day; no idle/timer writes.", "observedWalBytes": 28840, "rowsChanged": 2, "statements": 2},
   "messaging-agent-conversation-rename": {
     "commits": 5,
     "note": "one agent-driven conversation rename persists the binding title and re-renders the status card inline (no bus event exists for binding-local mutations); bounded by explicit tool calls, not per turn or per item",
