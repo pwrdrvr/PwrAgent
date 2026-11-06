@@ -751,6 +751,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             : command.name;
           return {
             aliases: command.aliases,
+            argumentHint: command.argumentHint,
+            chip: commandBackend === "claude",
             description: command.description,
             name: command.name,
             // Codex compaction is a client action. ACP commands remain

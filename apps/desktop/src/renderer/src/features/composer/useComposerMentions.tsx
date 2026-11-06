@@ -60,6 +60,12 @@ import {
   slashCommandMatchesText,
   type ComposerSlashCommand,
 } from "./composer-slash-commands";
+import {
+  buildLeadingCommandChip,
+  findLeadingCommand,
+  leadingCommandArgumentHint,
+} from "./composer-command-chip";
+import type { ComposerCommandChip } from "./ComposerInputTypes";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 
@@ -125,6 +131,10 @@ export type ComposerMentions = {
   /** `aria-activedescendant` for the editor while a popover is open. */
   activeOptionId?: string;
   clear: () => void;
+  /** The provider command the draft starts with, drawn as a chip. */
+  commandChip?: ComposerCommandChip;
+  /** The arguments that command takes, drawn after it until one is typed. */
+  commandInlineHint?: string;
   /** The plain draft; mention chips are zero-width in it. */
   draft: string;
   handleChange: (value: string, skillTokens?: ComposerSkillToken[]) => void;
@@ -752,6 +762,11 @@ export function useComposerMentions(params: {
               label={`/${name}`}
               query={query ? `/${query}` : "/"}
             />
+            {command.argumentHint ? (
+              <span className="composer__autocomplete-argument-hint">
+                {command.argumentHint}
+              </span>
+            ) : null}
           </span>
           <span className="compact-composer__mention-meta">
             {[command.sourceLabel, command.description].filter(Boolean).join(" · ")}
@@ -870,12 +885,19 @@ export function useComposerMentions(params: {
     open && kind === "commands"
       ? commandOptions[activeOption] ?? commandOptions[0]
       : undefined;
+  const leadingCommand = skillTokens.some((token) => token.index === 0)
+    ? undefined
+    : findLeadingCommand(draft, commands.filter((command) => command.chip));
 
   return {
     activeCommandText: activeCommand
       ? `/${normalizeSlashCommandName(activeCommand.name)}`
       : undefined,
     activeOptionId: open ? optionId(activeOption) : undefined,
+    commandChip: buildLeadingCommandChip(leadingCommand),
+    commandInlineHint: open && kind === "commands"
+      ? undefined
+      : leadingCommandArgumentHint(leadingCommand),
     clear: () => {
       pendingProgrammaticChangeRef.current = undefined;
       setContent({ draft: "", skillTokens: [] });

@@ -288,6 +288,11 @@ import {
   parseForkCommand,
   type ComposerForkCommand,
 } from "./composer-fork-command";
+import {
+  buildLeadingCommandChip,
+  findLeadingCommand,
+  leadingCommandArgumentHint,
+} from "./composer-command-chip";
 import type { ThreadWorkspaceMode } from "../../lib/subthread-launchpads";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
@@ -890,6 +895,7 @@ type ModelOption = NonNullable<
 
 type SlashCommandSuggestion = {
   aliases?: string[];
+  argumentHint?: string;
   description: string;
   id: string;
   insertText: string;
@@ -1068,6 +1074,7 @@ function providerCommandToSlashSuggestion(
     insertText: `/${commandName}`,
     description: command.description ?? "Provider command",
     aliases: command.aliases,
+    ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
     source: "provider",
     sourceLabel,
   };
@@ -11437,6 +11444,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const forkInlineCompletion = forkInlineHint
     ? forkCommandCompletion(draft)
     : undefined;
+  // Claude reads a command from the start of the prompt, so a draft that
+  // starts with one of its commands draws it as a chip and, until an argument
+  // is typed, the arguments it takes. A chip at offset 0 means the draft text
+  // does not start the prompt.
+  const leadingProviderCommand =
+    skillTokens.some((token) => token.index === 0)
+      ? undefined
+      : findLeadingCommand(
+          draft,
+          props.providerCommands?.filter((command) => command.backend === "claude") ?? [],
+        );
+  const commandChip = buildLeadingCommandChip(leadingProviderCommand);
+  const commandInlineHint =
+    autocompleteKind !== "slash" && !forkInlineHint
+      ? leadingCommandArgumentHint(leadingProviderCommand)
+      : undefined;
   // Queue is the primary mid-turn; the steer chord is its keyboard-only
   // sibling, so the button is where it gets named.
   const submitButtonSteerHint =
@@ -14020,8 +14043,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             disabled={composerDisabled}
             readOnly={preparingSend || forking}
             label={isLaunchpad ? "New thread" : "Reply"}
-            inlineHint={forkInlineHint}
+            inlineHint={forkInlineHint ?? commandInlineHint}
             inlineCompletion={forkInlineCompletion}
+            commandChip={commandChip}
             markdownConversion
             placeholder={composerPlaceholder}
             resolveThreadLink={(ref) => {
@@ -14148,6 +14172,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     label={command.label}
                     query={slashTrigger ? `/${slashTrigger.query}` : "/"}
                   />
+                  {command.argumentHint ? (
+                    <span className="composer__autocomplete-argument-hint">
+                      {command.argumentHint}
+                    </span>
+                  ) : null}
                   <span
                     className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
                   >

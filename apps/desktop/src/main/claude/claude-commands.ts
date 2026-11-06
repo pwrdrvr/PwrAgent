@@ -31,6 +31,7 @@ export function claudeCommandSummaries(
     name: command.name,
     ...(command.description ? { description: command.description } : {}),
     ...(command.aliases?.length ? { aliases: command.aliases } : {}),
+    ...(command.argumentHint?.trim() ? { argumentHint: command.argumentHint.trim() } : {}),
     backend: "claude" as const,
     scope: "session" as const,
     source: "provider" as const,

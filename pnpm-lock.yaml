@@ -414,6 +414,12 @@ importers:
       prosemirror-history:
         specifier: ^1.5.0
         version: 1.5.1
+      prosemirror-state:
+        specifier: ^1.4.4
+        version: 1.4.4
+      prosemirror-view:
+        specifier: 1.42.3
+        version: 1.42.3
       react:
         specifier: ^19.2.0
         version: 19.3.1
@@ -661,18 +667,18 @@ importers:
 
   packages/owner-core:
     dependencies:
-      '@shutterstock/p-map-iterable':
-        specifier: ^1.2.0
-        version: 1.2.0(aggregate-error@3.1.0)
-      '@pwrdrvr/codex-app-server-protocol':
-        specifier: 0.164.0
-        version: 0.164.0
-      '@pwrdrvr/agent-transport':
-        specifier: ^0.1.7
-        version: 0.1.7
       '@pwragent/shared':
         specifier: workspace:*
         version: link:../shared
+      '@pwrdrvr/agent-transport':
+        specifier: ^0.1.7
+        version: 0.1.7
+      '@pwrdrvr/codex-app-server-protocol':
+        specifier: 0.164.0
+        version: 0.164.0
+      '@shutterstock/p-map-iterable':
+        specifier: ^1.2.0
+        version: 1.2.0(aggregate-error@3.1.0)
 
   packages/pwragent:
     dependencies:
@@ -10655,7 +10661,7 @@ snapshots:
     dependencies:
       prosemirror-model: 1.25.9
       prosemirror-state: 1.4.4
-      prosemirror-transform: 1.12.1
+      prosemirror-transform: 1.12.2
 
   protobufjs@7.6.5:
     dependencies:

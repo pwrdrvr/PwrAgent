@@ -1,5 +1,9 @@
 export type ComposerSlashCommand = {
   aliases?: readonly string[];
+  /** The arguments the command takes, drawn after it in the menu and draft. */
+  argumentHint?: string;
+  /** A provider command the draft draws as a chip when it starts with it. */
+  chip?: boolean;
   description?: string;
   name: string;
   /** Hide this client action while the compact composer holds attachments. */

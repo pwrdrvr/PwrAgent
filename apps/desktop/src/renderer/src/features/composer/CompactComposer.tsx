@@ -1110,6 +1110,8 @@ export function CompactComposer(props: CompactComposerProps) {
           ariaActiveDescendant={mentions.activeOptionId}
           ariaControls={mentions.listboxId}
           ariaExpanded={mentions.open}
+          commandChip={mentions.commandChip}
+          inlineHint={mentions.commandInlineHint}
           disabled={props.disabled}
           id={inputId}
           label={`Message ${props.threadTitle}`}
