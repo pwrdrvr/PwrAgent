@@ -3175,11 +3175,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const savedInitialPendingSteer = props.thread
     ? draftStore.getPendingSteer(composerScopeKey)
     : undefined;
+  // A starting launchpad carries the submitted message as startup context.
+  // None of it is an unsent draft. In particular, mounting Tiptap with its
+  // old document and an empty value publishes that document back as an edit
+  // before the launchpad hydration effect can clear it.
+  const initialLaunchpad = props.launchpadMaterializing ? undefined : props.launchpad;
   const hydratedInitialLaunchpad =
-    savedInitialDraft || !props.launchpad
+    savedInitialDraft || !initialLaunchpad
       ? undefined
       : hydrateComposerDraft(
-          props.launchpadMaterializing ? "" : props.launchpad.prompt ?? "",
+          initialLaunchpad.prompt ?? "",
           props.skills,
           threadLinks,
           pullRequestLinks,
@@ -3219,14 +3224,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       draft: savedInitialDraft?.draft ?? hydratedInitialLaunchpad?.draft ?? "",
       editorDocument:
         savedInitialDraft?.editorDocument ??
-        (props.launchpad?.editorDocument as JSONContent | undefined),
+        (initialLaunchpad?.editorDocument as JSONContent | undefined),
       imageAttachments:
         savedInitialDraft?.imageAttachments ??
-        props.launchpad?.imageAttachments ??
+        initialLaunchpad?.imageAttachments ??
         [],
       fileAttachments:
         savedInitialDraft?.fileAttachments ??
-        props.launchpad?.fileAttachments ??
+        initialLaunchpad?.fileAttachments ??
         [],
       skillTokens:
         savedInitialDraft?.skillTokens ?? hydratedInitialLaunchpad?.skillTokens ?? [],
