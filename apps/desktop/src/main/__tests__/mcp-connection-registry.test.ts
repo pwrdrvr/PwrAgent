@@ -22,6 +22,44 @@ afterEach(() => {
 });
 
 describe("McpConnectionRegistry", () => {
+  it("keeps project tool approvals for built-in and stored connections beside rows it cannot read", () => {
+    const target = configPath();
+    fs.writeFileSync(target, [
+      "[[mcp_connections.project_tool_approval]]",
+      'connection = "from-a-newer-build"',
+      'repository = "github.com/pwrdrvr/kept"',
+      'tool_approval = "approve"',
+      "",
+    ].join("\n"));
+    const registry = new McpConnectionRegistry({ configPath: target });
+    const linear = registry.create({ displayName: "Linear", serverUrl: "https://mcp.linear.app/mcp" });
+    registry.setProjectToolApproval(linear.id, "https://github.com/pwrdrvr/PwrApps.git", "approve");
+    registry.setProjectToolApproval("pwrgit", "github.com/pwrdrvr/PwrApps", "prompt");
+    // One entry per project: a second write changes it in place.
+    registry.setProjectToolApproval(linear.id, "GITHUB.COM/pwrdrvr/pwrapps", "auto");
+    const reread = new McpConnectionRegistry({ configPath: target });
+    expect(reread.get(linear.id)?.projectToolApprovals).toEqual([
+      { repository: "github.com/pwrdrvr/pwrapps", toolApproval: "auto" },
+    ]);
+    expect(reread.get("pwrgit")?.projectToolApprovals).toEqual([
+      { repository: "github.com/pwrdrvr/pwrapps", toolApproval: "prompt" },
+    ]);
+    // The connection's own mode is untouched.
+    expect(reread.get(linear.id)?.toolApproval).toBe("auto");
+    expect(fs.readFileSync(target, "utf8")).toContain('connection = "from-a-newer-build"');
+
+    expect(() => registry.setProjectToolApproval(linear.id, "not a repository", "approve")).toThrow(/host\/owner\/repo/);
+    expect(() => registry.setProjectToolApproval("missing", "github.com/a/b", "approve")).toThrow(/no longer exists/);
+
+    registry.setProjectToolApproval("pwrgit", "github.com/pwrdrvr/pwrapps", null);
+    expect(registry.get("pwrgit")?.projectToolApprovals).toBeUndefined();
+    // Removing a connection removes its entries and nothing else.
+    expect(registry.remove(linear.id)).toBe(true);
+    const source = fs.readFileSync(target, "utf8");
+    expect(source).not.toContain(linear.id);
+    expect(source).toContain('repository = "github.com/pwrdrvr/kept"');
+  });
+
   it("persists local HTTP URLs with native approval and preserves selection/approval across URL edits", () => {
     const target = configPath();
     const registry = new McpConnectionRegistry({ configPath: target });

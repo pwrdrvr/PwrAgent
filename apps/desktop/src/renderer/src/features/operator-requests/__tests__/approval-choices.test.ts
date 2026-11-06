@@ -4,6 +4,8 @@ import {
   FORGE_APPROVAL_MERGE_METHODS_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
+  MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
+  MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
 } from "@pwragent/shared";
 import { createMcpElicitationState } from "../../thread-detail/mcp-elicitation";
 import { approvalChoices } from "../approval-choices";
@@ -59,6 +61,22 @@ describe("approvalChoices for a forge approval", () => {
   it("adds nothing when the request offers no rule", () => {
     const choices = approvalChoices(forgeWait({}))!;
     expect(choices.alternatives.map((choice) => choice.id)).toEqual(["cancel"]);
+  });
+});
+
+describe("approvalChoices for an MCP project grant", () => {
+  it("offers the project grant as an Allow answer that carries the choice", () => {
+    const choices = approvalChoices(forgeWait({
+      persist: ["session", "server-session"],
+      [MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY]: { label: "Allow all Linear tools in PwrApps", description: "" },
+    }))!;
+    const project = choices.alternatives.find((choice) => choice.id === "project")!;
+    expect(project).toMatchObject({ label: "Allow all Linear tools in PwrApps", effect: "allow" });
+    expect(project.buildResponse()).toEqual({
+      action: "accept",
+      content: {},
+      _meta: { [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: true },
+    });
   });
 });
 

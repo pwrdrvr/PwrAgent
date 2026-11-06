@@ -1,17 +1,20 @@
 import {
   FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
+  MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
   isSecretFieldLabel,
   isSecretFieldName,
   mcpElicitationPurpose,
   readForgeApprovalMergeMethods,
   readForgeApprovalRememberOptions,
+  readMcpProjectToolApprovalOffer,
   type AppServerMcpElicitationRequestNotification,
   type AppServerMcpElicitationResponse,
   type ForgeApprovalMergeMethods,
   type ForgeApprovalRememberOption,
   type ForgeApprovalRememberOptionId,
   type McpElicitationPurpose,
+  type McpProjectToolApprovalOffer,
   type ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 
@@ -158,6 +161,16 @@ export function readMcpRememberOptions(state: PendingMcpInteractionState): Forge
 }
 
 /**
+ * The project grant a tool approval offers from Allow, such as "Allow all
+ * Linear tools in PwrApps". Main adds it to Codex's cards and its own, and
+ * honors the choice only for the request it offered it on.
+ */
+export function readMcpProjectApprovalOffer(state: PendingMcpInteractionState): McpProjectToolApprovalOffer | undefined {
+  if (!isMcpToolApproval(state) || state.mode !== "form") return undefined;
+  return readMcpProjectToolApprovalOffer(state._meta);
+}
+
+/**
  * A forge merge approval's methods: the one the merge runs with and the
  * others the forge accepts. Undefined for every other request.
  */
@@ -269,6 +282,7 @@ export function buildMcpElicitationResponse(
   persist?: McpApprovalPersistence,
   remember?: ForgeApprovalRememberOptionId,
   mergeMethod?: ThreadTodoMergeMethod,
+  projectGrant?: boolean,
 ): AppServerMcpElicitationResponse {
   if (action !== "accept") {
     return {
@@ -279,7 +293,7 @@ export function buildMcpElicitationResponse(
   }
 
   if (state.mode === "url") {
-    if (persist || remember || mergeMethod) {
+    if (persist || remember || mergeMethod || projectGrant) {
       throw new Error("This MCP request does not support approval persistence.");
     }
     return {
@@ -302,6 +316,10 @@ export function buildMcpElicitationResponse(
   if (mergeMethod && !readMcpMergeMethods(state)?.methods.includes(mergeMethod)) {
     throw new Error("This request does not offer that merge method.");
   }
+  // A project grant changes Settings, so it goes back only when offered.
+  if (projectGrant && !readMcpProjectApprovalOffer(state)) {
+    throw new Error("This request does not offer a project grant.");
+  }
 
   return {
     action,
@@ -311,11 +329,12 @@ export function buildMcpElicitationResponse(
           ? []
           : [[field.key, fieldContentValue(field)] as const]) ?? []
     ),
-    _meta: persist || remember || mergeMethod
+    _meta: persist || remember || mergeMethod || projectGrant
       ? {
           ...(persist ? { persist } : {}),
           ...(remember ? { [FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY]: remember } : {}),
           ...(mergeMethod ? { [FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY]: mergeMethod } : {}),
+          ...(projectGrant ? { [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: true } : {}),
         }
       : null,
   };

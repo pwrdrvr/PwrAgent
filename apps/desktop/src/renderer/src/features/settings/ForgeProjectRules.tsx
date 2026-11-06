@@ -202,7 +202,7 @@ function buildAgentChoices(input: {
 }
 
 /** Projects from the Directories lens, keyed by repository match key. */
-function projectLabelsFromDirectories(
+export function projectLabelsFromDirectories(
   rows: readonly NavigationDirectoryRow[],
 ): Map<string, { repository: string; label: string }> {
   const labels = new Map<string, { repository: string; label: string }>();
@@ -483,7 +483,8 @@ export function ForgeProjectRules(props: {
   );
 }
 
-function AddProjectForm(props: {
+/** Choose a project from the Directories lens, or type its repository. */
+export function AddProjectForm(props: {
   knownProjects: Array<{ repository: string; label: string }>;
   loading: boolean;
   onAdd: (repository: string) => void;

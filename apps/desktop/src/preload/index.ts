@@ -183,6 +183,7 @@ import type {
   RemoveMcpConnectionRequest,
   SetMcpConnectionEnabledRequest,
   SetMcpConnectionSelectForNewThreadsRequest,
+  SetMcpConnectionProjectToolApprovalRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
   SetLinearPasteImagesRequest,
@@ -977,6 +978,7 @@ import {
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
+  MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL,
   MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
@@ -1383,6 +1385,10 @@ const desktopApi = Object.freeze({
     request: SetMcpConnectionToolApprovalRequest,
   ): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL, request),
+  setMcpConnectionProjectToolApproval: async (
+    request: SetMcpConnectionProjectToolApprovalRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL, request),
   setSandboxerTransport: async (request: SetSandboxerTransportRequest): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL, request),
   setSandboxerCleanupOnPrClose: async (

@@ -12,6 +12,8 @@ import {
   FORGE_APPROVAL_MERGE_METHODS_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
+  MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
+  MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
   type AppServerMcpElicitationRequestNotification,
 } from "@pwragent/shared";
 
@@ -423,6 +425,51 @@ describe("PendingMcpInteraction forge remember menu", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Allow" }));
     expect(onSubmit).toHaveBeenLastCalledWith(state, "accept");
+  });
+
+  it("offers a native Codex card's project grant from the Allow menu", () => {
+    const onSubmit = vi.fn();
+    const offer = {
+      label: "Allow all Linear tools in PwrApps",
+      description: "Every thread in PwrApps can call any Linear tool without asking. Change it in Settings → Plugins.",
+    };
+    const state = createMcpElicitationState({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "native-linear",
+        serverName: "pwragent_linear_fixture", mode: "form", message: "Allow save_issue?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], [MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY]: offer },
+      },
+    })!;
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+
+    // Codex's own choices stay where they were.
+    expect(screen.getByRole("button", { name: "Always allow" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More approval choices" }));
+    const item = screen.getByRole("menuitem", { name: offer.label });
+    expect(item).toHaveAccessibleDescription(offer.description);
+    fireEvent.click(item);
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", undefined, undefined, undefined, true);
+    expect(buildMcpElicitationResponse(state, "accept", undefined, undefined, undefined, true)._meta).toEqual({
+      [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: true,
+    });
+  });
+
+  it("refuses a project grant the request never offered", () => {
+    const state = createMcpElicitationState({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "native-plain",
+        serverName: "pwragent_linear_fixture", mode: "form", message: "Allow save_issue?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"] },
+      },
+    })!;
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "More approval choices" })).not.toBeInTheDocument();
+    expect(() => buildMcpElicitationResponse(state, "accept", undefined, undefined, undefined, true))
+      .toThrow("does not offer a project grant");
   });
 
   it("splits Allow and sends the chosen rule with the accept", () => {

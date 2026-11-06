@@ -27,6 +27,7 @@ import {
   type RemoveMcpConnectionRequest,
   type SetMcpConnectionEnabledRequest,
   type SetMcpConnectionSelectForNewThreadsRequest,
+  type SetMcpConnectionProjectToolApprovalRequest,
   type SetMcpConnectionToolApprovalRequest,
   type SetSandboxerCleanupOnPrCloseRequest,
   type SetLinearPasteImagesRequest,
@@ -65,6 +66,7 @@ import {
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
+  MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
   MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL,
@@ -290,6 +292,27 @@ export function registerMcpConnectionIpcHandlers(
       const connection: McpConnectionStatus =
         await service.setConnectionToolApproval(
           request.connectionId,
+          request.toolApproval,
+        );
+      return { connectionId: request.connectionId, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL,
+    async (
+      event,
+      request: SetMcpConnectionProjectToolApprovalRequest,
+    ): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      if (typeof request?.repository !== "string" || (request.toolApproval !== null
+        && !isMcpConnectionToolApproval(request.toolApproval))) {
+        throw new Error("Choose a project and a tool approval mode for this MCP connection.");
+      }
+      const connection: McpConnectionStatus =
+        await service.setConnectionProjectToolApproval(
+          request.connectionId,
+          request.repository,
           request.toolApproval,
         );
       return { connectionId: request.connectionId, connection };
@@ -653,6 +676,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL);

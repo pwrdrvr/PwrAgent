@@ -19,6 +19,7 @@ import {
   redactDisplayValue,
   readMcpApprovalPersistence,
   readMcpMergeMethods,
+  readMcpProjectApprovalOffer,
   readMcpRememberOptions,
   updateMcpFieldValue,
   type McpApprovalPersistence,
@@ -38,6 +39,7 @@ type PendingMcpInteractionProps = {
     persist?: McpApprovalPersistence,
     remember?: ForgeApprovalRememberOptionId,
     mergeMethod?: ThreadTodoMergeMethod,
+    projectGrant?: boolean,
   ) => Promise<void> | void;
 };
 
@@ -61,6 +63,8 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   // A merge names its method, as a to-do merge card does, and its menu
   // offers the other methods the forge accepts.
   const mergeMethods = readMcpMergeMethods(props.state);
+  // Every tool on this server for the thread's project, kept in Settings.
+  const projectOffer = url ? undefined : readMcpProjectApprovalOffer(props.state);
   const primaryLabel = url
     ? "Open in browser"
     : mergeMethods
@@ -298,6 +302,23 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
                   },
                 })),
               ]}
+              onAllow={submitPrimary}
+            />
+          ) : projectOffer ? (
+            <PendingMcpAllowSplit
+              key={props.state.requestId}
+              disabled={Boolean(props.busy) || !canAccept}
+              label={primaryLabel}
+              toggleLabel="More approval choices"
+              menuLabel="Approval choices"
+              items={[{
+                id: "project",
+                label: projectOffer.label,
+                description: projectOffer.description,
+                onSelect: () => {
+                  void props.onSubmit(props.state, "accept", undefined, undefined, undefined, true);
+                },
+              }]}
               onAllow={submitPrimary}
             />
           ) : (

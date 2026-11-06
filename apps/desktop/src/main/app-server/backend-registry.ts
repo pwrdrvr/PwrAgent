@@ -52,7 +52,14 @@ import {
   type ForgeAgentToolAccess,
   type ForgeAgentToolGroup,
   type ForgeAgentToolPolicy,
-  type McpConnectionToolApproval,
+  type McpConnectionStatus,
+  type McpConnectionToolApprovalResolution,
+  type McpProjectToolApprovalOffer,
+  buildMcpProjectToolApprovalOffer,
+  MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
+  MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
+  readMcpProjectToolApprovalChoice,
+  resolveMcpConnectionToolApproval,
 } from "@pwragent/shared";
 import {
   buildForgeApprovalRememberOptions,
@@ -8600,6 +8607,22 @@ function buildCodexPdfMcpDisabledConfig(): CodexThreadStartParams["config"] {
  * and answers the agent tool's read operations. Tests supply a stub for
  * exactly this shape.
  */
+/** A project grant a tool approval card offers, and what accepting it writes. */
+type McpProjectToolApprovalCardOffer = {
+  connectionId: string;
+  repository: string;
+  offer: McpProjectToolApprovalOffer;
+};
+
+function withoutMcpProjectToolApprovalOffer(
+  request: AppServerPendingRequestNotification,
+): AppServerPendingRequestNotification {
+  const meta = request.params._meta;
+  if (!meta || typeof meta !== "object" || !(MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY in meta)) return request;
+  const { [MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY]: _offer, ...rest } = meta as Record<string, unknown>;
+  return { ...request, params: { ...request.params, _meta: rest } } as AppServerPendingRequestNotification;
+}
+
 export type BackendRegistryMcpConnectionService =
   Pick<McpConnectionGatewayService, "registerBridge">
   // Everything past bridge registration is optional so a test can stub the
@@ -8613,6 +8636,7 @@ export type BackendRegistryMcpConnectionService =
       | "threadHandoverAt"
       | "peekThreadBridge"
       | "listConnections"
+      | "setConnectionProjectToolApproval"
       | "createConnection"
       | "probeConnection"
       | "requestGatewayToolOperation"
@@ -44878,9 +44902,24 @@ export class DesktopBackendRegistry {
       return buildHeadlessAutomationRequestCancelResponse(request);
     }
 
+    // Only main offers a project grant. A copy on the way in is not ours.
+    if (request.method === "mcpServer/elicitation/request") {
+      request = withoutMcpProjectToolApprovalOffer(request);
+    }
+    let projectOffer: McpProjectToolApprovalCardOffer | undefined;
     if (backend === "codex" && isMcpToolApproval(request)) {
-      const consent = await this.selectedConnectionMcpConsent(request, signal);
-      if (consent) return consent;
+      const decision = await this.selectedConnectionMcpConsent(request, signal);
+      if (decision?.consent) return decision.consent;
+      projectOffer = decision?.projectOffer;
+      if (projectOffer) {
+        request = {
+          ...request,
+          params: {
+            ...request.params,
+            _meta: { ...readRecord(request.params._meta), [MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY]: projectOffer.offer },
+          },
+        } as AppServerPendingRequestNotification;
+      }
     }
 
     const managedReview = this.findManagedReviewForChildRequest({
@@ -44918,7 +44957,7 @@ export class DesktopBackendRegistry {
     });
 
     if (signal?.aborted) return { decision: "cancel" };
-    return await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
+    const response = await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
       this.pendingServerRequests.set(key, {
         backend: routedBackend,
         notification: routedRequest,
@@ -44942,6 +44981,105 @@ export class DesktopBackendRegistry {
         );
       });
     });
+    if (request.method !== "mcpServer/elicitation/request") return response;
+    return await this.settleMcpProjectToolApprovalChoice(response, projectOffer);
+  }
+
+  /**
+   * Save the project grant an accepted card chose, then answer Codex without
+   * PwrAgent's key: the choice is PwrAgent's, and Codex's grant scopes are
+   * still whatever `persist` says.
+   */
+  private async settleMcpProjectToolApprovalChoice(
+    response: SubmitServerRequestRequest["response"],
+    offer: McpProjectToolApprovalCardOffer | undefined,
+  ): Promise<SubmitServerRequestRequest["response"]> {
+    if (!response || !("action" in response)) return response;
+    const meta = readRecord(response._meta);
+    if (!meta || !(MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY in meta)) return response;
+    const { [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: _choice, ...rest } = meta;
+    if (response.action === "accept" && readMcpProjectToolApprovalChoice(meta)) {
+      if (offer) await this.saveMcpProjectToolApproval(offer);
+      else backendRegistryLog.warn("ignoring a project grant this card did not offer");
+    }
+    return { ...response, _meta: Object.keys(rest).length > 0 ? rest : null };
+  }
+
+  /**
+   * The operator approved the call either way, so a failed save is logged
+   * and the call still runs once.
+   */
+  private async saveMcpProjectToolApproval(offer: McpProjectToolApprovalCardOffer): Promise<void> {
+    try {
+      await this.mcpConnectionService?.setConnectionProjectToolApproval?.(
+        offer.connectionId,
+        offer.repository,
+        "approve",
+      );
+      backendRegistryLog.info("saved an MCP project tool approval from a card", {
+        connectionId: offer.connectionId,
+        repository: offer.repository,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("could not save an MCP project tool approval", {
+        connectionId: offer.connectionId,
+        repository: offer.repository,
+        error: String(error),
+      });
+    }
+  }
+
+  /** The thread's project, as a forge rule names it: its primary repository. */
+  private threadProjectRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
+    try {
+      const primary = this.threadPrimaryGitRepositoryReader?.(backend, threadId);
+      return primary ? normalizeForgeRuleRepository(primary) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * The grant a tool approval card may offer for this thread's project, or
+   * none. Never for a thread without a repository, and never when the
+   * project itself is set to ask before every tool: the operator already
+   * chose to be asked there.
+   */
+  private async mcpProjectToolApprovalOffer(input: {
+    connection: Pick<McpConnectionStatus, "id" | "displayName">;
+    resolution: McpConnectionToolApprovalResolution;
+    repository: string | undefined;
+  }): Promise<McpProjectToolApprovalCardOffer | undefined> {
+    const { connection, resolution, repository } = input;
+    if (!repository || !this.mcpConnectionService?.setConnectionProjectToolApproval) return undefined;
+    if (resolution.repository && resolution.toolApproval === "prompt") return undefined;
+    const projectLabel = await this.ruleRepositoryProjectLabel(repository);
+    return {
+      connectionId: connection.id,
+      repository,
+      offer: buildMcpProjectToolApprovalOffer({ serverLabel: connection.displayName, projectLabel }),
+    };
+  }
+
+  /** `forgeProjectLabel` for a `host/owner/repo` key. */
+  private async ruleRepositoryProjectLabel(repository: string): Promise<string> {
+    const fallback = forgeRuleRepositoryLabel(repository);
+    if (!this.forgeProjectLabelResolver) return fallback;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const label = await Promise.race([
+        this.forgeProjectLabelResolver(repository),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), FORGE_PROJECT_LABEL_TIMEOUT_MS);
+        }),
+      ]);
+      return label?.trim() || fallback;
+    } catch (error) {
+      backendRegistryLog.warn("could not read the project name for an MCP card", { error: String(error) });
+      return fallback;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private isTaskMonitorThread(context: { backend: AppServerBackendKind; threadId: string }): boolean {
@@ -45117,7 +45255,11 @@ export class DesktopBackendRegistry {
     // The connection's Tool approval setting, read now so the next call
     // follows a change. By default Codex's rule applies: listing and
     // inspecting run, and a restart still asks.
-    const toolApproval = await this.readMcpConnectionToolApproval(invocation.connectionId);
+    // A project's own mode wins for a thread in that project.
+    const repository = this.threadProjectRepository(approvalContext.backend, approvalContext.threadId);
+    const { resolution, connection: approvalConnection } =
+      await this.readMcpConnectionToolApproval(invocation.connectionId, repository);
+    const toolApproval = resolution.toolApproval;
     signal.throwIfAborted();
     if (!gatewayToolRequiresApproval(annotations, toolApproval)) {
       backendRegistryLog.info("running MCP gateway tool without approval", {
@@ -45128,12 +45270,24 @@ export class DesktopBackendRegistry {
         serverName: invocation.serverName,
         toolName: invocation.toolName,
         toolApproval,
+        ...(resolution.repository ? { repository: resolution.repository } : {}),
       });
       return true;
     }
     const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
     if ((consent.approved && (!consent.readOnlyOnly || readOnlyCall))
       || (connectionConsent?.approved && (!connectionConsent.readOnlyOnly || readOnlyCall))) return true;
+    // A Job Monitor's card approves reads only, so it offers no grant.
+    const projectOffer = !monitor && approvalConnection
+      ? await this.mcpProjectToolApprovalOffer({ connection: approvalConnection, resolution, repository })
+      : undefined;
+    signal.throwIfAborted();
+    if (projectOffer) {
+      notification.params._meta = {
+        ...readRecord(notification.params._meta),
+        [MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY]: projectOffer.offer,
+      };
+    }
     const key = buildPendingRequestKey({ ...approvalContext, requestId });
     return await new Promise<McpGatewayApproval>((resolve, reject) => {
       if (monitor) monitor.pendingMcpApprovalCount = (monitor.pendingMcpApprovalCount ?? 0) + 1;
@@ -45163,7 +45317,17 @@ export class DesktopBackendRegistry {
           if (signal.aborted) { aborted(); return; }
           const approved = Boolean(response && "action" in response && response.action === "accept");
           if (response && "action" in response && response.action === "decline" && monitor) (monitor.deniedMcpTools ??= new Set()).add(denialKey);
-          const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
+          const responseMeta = response && "_meta" in response ? readRecord(response._meta) : undefined;
+          if (approved && readMcpProjectToolApprovalChoice(responseMeta)) {
+            if (!projectOffer) {
+              backendRegistryLog.warn("ignoring a project grant this card did not offer", { threadId: context.threadId, requestId });
+              finish(true);
+              return;
+            }
+            void this.saveMcpProjectToolApproval(projectOffer).finally(() => finish(true));
+            return;
+          }
+          const persist = responseMeta?.persist;
           const rememberedConsent = persist === "session" ? consent
             : persist === "server-session" ? connectionConsent : undefined;
           const rememberedKey = persist === "server-session" ? serverKey : sourceKey;
@@ -45300,10 +45464,18 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /**
+   * Codex's own approval card for a tool on a selected connection. Answers
+   * it when the connection, or the thread's project, is set to Allow all
+   * tools; otherwise names the project grant the card may offer.
+   */
   private async selectedConnectionMcpConsent(
     request: AppServerPendingRequestNotification,
     signal?: AbortSignal,
-  ): Promise<AppServerMcpElicitationResponse | undefined> {
+  ): Promise<{
+    consent?: AppServerMcpElicitationResponse;
+    projectOffer?: McpProjectToolApprovalCardOffer;
+  } | undefined> {
     const consent = buildMcpToolApprovalConsent(request);
     const threadId = request.params.threadId;
     const turnId = request.params.turnId ?? undefined;
@@ -45320,8 +45492,16 @@ export class DesktopBackendRegistry {
       if (!connectionId) return undefined;
       const connection = (await service.listConnections({ cachedLocalStatus: true }))
         .find((entry) => entry.id === connectionId);
-      if (!connection?.enabled || !connection.configured || connection.toolApproval !== "approve"
+      if (!connection?.enabled || !connection.configured
         || connection.state === "disconnected" || connection.state === "reauthorization_required") return undefined;
+      const repository = this.threadProjectRepository("codex", threadId);
+      const resolution = resolveMcpConnectionToolApproval(connection, repository);
+      if (resolution.toolApproval !== "approve") {
+        if (this.isTaskMonitorThread({ backend: "codex", threadId })) return undefined;
+        const projectOffer = await this.mcpProjectToolApprovalOffer({ connection, resolution, repository });
+        signal?.throwIfAborted();
+        return projectOffer ? { projectOffer } : undefined;
+      }
       // A server prefix is not proof of ownership. Recheck selection, the
       // exact live bridge and turn after asynchronous policy reads.
       const current = await this.readThreadMcpConnections({ backend: "codex", threadId });
@@ -45330,9 +45510,14 @@ export class DesktopBackendRegistry {
       if (!current.connectionIds.includes(connectionId)
         || !this.isLiveDynamicToolCall("codex", { threadId, turnId })
         || !currentBridge || buildCodexConnectionMcpServerName(currentBridge) !== request.params.serverName) return undefined;
+      if (resolution.repository) {
+        backendRegistryLog.info("approving MCP tool call allowed for its project", {
+          threadId, turnId, connectionId, repository: resolution.repository,
+        });
+      }
       // One invocation only: future requests must reread the connection's
       // policy rather than inherit a Codex conversation or permanent grant.
-      return consent;
+      return { consent };
     } catch {
       signal?.throwIfAborted();
       // An unavailable policy or registration keeps the normal prompt.
@@ -45342,15 +45527,22 @@ export class DesktopBackendRegistry {
 
   // A lookup that fails reads as the default, which still asks for anything
   // the server does not mark safe; it never reads as Allow all tools.
-  private async readMcpConnectionToolApproval(connectionId: string): Promise<McpConnectionToolApproval> {
+  private async readMcpConnectionToolApproval(
+    connectionId: string,
+    repository?: string,
+  ): Promise<{ resolution: McpConnectionToolApprovalResolution; connection?: McpConnectionStatus }> {
     try {
       // The approval mode is stored config. Reading it must not wait on a
       // local CLI's status probe before every tool call.
       const connections = await this.mcpConnectionService?.listConnections?.({ cachedLocalStatus: true });
-      return connections?.find((connection) => connection.id === connectionId)?.toolApproval ?? "auto";
+      const connection = connections?.find((entry) => entry.id === connectionId);
+      return {
+        resolution: connection ? resolveMcpConnectionToolApproval(connection, repository) : { toolApproval: "auto" },
+        ...(connection ? { connection } : {}),
+      };
     } catch (error) {
       backendRegistryLog.warn("could not read MCP connection tool approval", { connectionId, error: String(error) });
-      return "auto";
+      return { resolution: { toolApproval: "auto" } };
     }
   }
 

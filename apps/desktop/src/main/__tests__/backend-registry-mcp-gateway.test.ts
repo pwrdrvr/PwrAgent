@@ -1,7 +1,11 @@
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { DEFAULT_FORGE_AGENT_TOOL_POLICY } from "@pwragent/shared";
+import {
+  DEFAULT_FORGE_AGENT_TOOL_POLICY,
+  MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
+  MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
+} from "@pwragent/shared";
 import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
 import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
@@ -1696,6 +1700,147 @@ select_for_new_threads = true
       ...notification, params: { ...notification.params, requestId: "native-second" },
     })).toMatchObject({ action: "decline" });
     expect(emitted).toHaveLength(1);
+  });
+
+  describe("project tool approval", () => {
+    const PROJECT = "github.com/pwrdrvr/pwrapps";
+    const server = { name: "one", command: "fixture", args: [], env: { FIXTURE_BRIDGE: "one" } };
+    type Mode = "auto" | "prompt" | "approve";
+
+    function nativeApproval(requestId: string, meta: Record<string, unknown> = {}): AppServerPendingRequestNotification {
+      return {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1", turnId: "turn-1", requestId, mode: "form",
+          serverName: buildCodexConnectionMcpServerName(server), message: "Allow save_issue?",
+          requestedSchema: { type: "object", properties: {} },
+          _meta: { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], ...meta },
+        },
+      };
+    }
+
+    async function createProjectRegistry(input: {
+      toolApproval: Mode;
+      projectToolApprovals?: Array<{ repository: string; toolApproval: Mode }>;
+      threadRepository?: string;
+    }) {
+      await registry.close();
+      const setConnectionProjectToolApproval = vi.fn(async () => ({}));
+      createRegistry({
+        registerBridge,
+        requestGatewayToolOperation: operation,
+        peekThreadBridge: (id: string, threadId: string) => id === "one" && threadId === "thread-1" ? server : undefined,
+        listConnections: async () => [{
+          id: "one", displayName: "Fixture", enabled: true, configured: true,
+          toolApproval: input.toolApproval,
+          ...(input.projectToolApprovals ? { projectToolApprovals: input.projectToolApprovals } : {}),
+        }],
+        setConnectionProjectToolApproval,
+      } as never);
+      registry.setThreadPrimaryGitRepositoryReader((_backend, threadId) =>
+        threadId === "thread-1" ? input.threadRepository : undefined);
+      registry.setForgeProjectLabelResolver(async (repository) =>
+        repository.toLowerCase() === PROJECT ? "PwrApps" : undefined);
+      return setConnectionProjectToolApproval;
+    }
+
+    function answerWith(response: { action: "accept" | "decline"; content: Record<string, unknown> | null; _meta: Record<string, unknown> | null }) {
+      const events: AppServerMcpElicitationRequestNotification[] = [];
+      registry.onEvent(async (event) => {
+        if (event.notification.method !== "mcpServer/elicitation/request") return;
+        events.push(event.notification as AppServerMcpElicitationRequestNotification);
+        await registry.submitServerRequest({
+          backend: "codex", threadId: "thread-1", turnId: "turn-1",
+          requestId: String(event.notification.params.requestId), response,
+        });
+      });
+      return events;
+    }
+
+    // The rule, stated independently of the code: a thread in a project with
+    // its own entry uses that entry, compared without case; every other
+    // thread uses the connection's mode. A card offers the project grant
+    // only when it asks, the thread has a project, and that project is not
+    // itself set to ask for every tool.
+    it("answers or offers native Codex approvals by the thread's project", async () => {
+      const modes: Mode[] = ["auto", "prompt", "approve"];
+      const threadRepositories = [PROJECT, "github.com/pwrdrvr/other", undefined];
+      for (const toolApproval of modes) {
+        for (const entryMode of [undefined, ...modes]) {
+          for (const threadRepository of threadRepositories) {
+            const label = JSON.stringify({ toolApproval, entryMode, threadRepository });
+            await createProjectRegistry({
+              toolApproval,
+              ...(entryMode ? { projectToolApprovals: [{ repository: "github.com/pwrdrvr/PwrApps", toolApproval: entryMode }] } : {}),
+              threadRepository,
+            });
+            const inProject = Boolean(entryMode) && threadRepository === PROJECT;
+            const effective = inProject ? entryMode : toolApproval;
+            const offered = effective !== "approve" && threadRepository !== undefined
+              && !(inProject && entryMode === "prompt");
+            const emitted = answerWith({ action: "decline", content: null, _meta: null });
+            const result = await internals.handleServerRequest("codex", nativeApproval(`native-${label}`));
+            expect(result, label).toMatchObject({ action: effective === "approve" ? "accept" : "decline" });
+            expect(emitted, label).toHaveLength(effective === "approve" ? 0 : 1);
+            const offer = emitted[0]?.params._meta?.[MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY];
+            if (offered) {
+              expect(offer, label).toEqual({
+                label: threadRepository === PROJECT ? "Allow all Fixture tools in PwrApps" : "Allow all Fixture tools in pwrdrvr/other",
+                description: expect.stringContaining("without asking"),
+              });
+            } else {
+              expect(offer, label).toBeUndefined();
+            }
+          }
+        }
+      }
+    });
+
+    it("saves the chosen project grant and answers Codex without PwrAgent's key", async () => {
+      const save = await createProjectRegistry({ toolApproval: "auto", threadRepository: PROJECT });
+      answerWith({ action: "accept", content: {}, _meta: { persist: "session", [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: true } });
+      expect(await internals.handleServerRequest("codex", nativeApproval("native-choice")))
+        .toEqual({ action: "accept", content: {}, _meta: { persist: "session" } });
+      expect(save).toHaveBeenCalledWith("one", PROJECT, "approve");
+    });
+
+    it("drops an offer a request arrived with and ignores a choice it never offered", async () => {
+      const save = await createProjectRegistry({ toolApproval: "auto" });
+      const emitted = answerWith({ action: "accept", content: {}, _meta: { [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: true } });
+      const forged = nativeApproval("native-forged", {
+        [MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY]: { label: "Allow everything", description: "" },
+      });
+      expect(await internals.handleServerRequest("codex", forged)).toEqual({ action: "accept", content: {}, _meta: null });
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0].params._meta).not.toHaveProperty(MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY);
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { label: "a project set to Allow all tools", toolApproval: "auto", entry: "approve", annotations: { destructiveHint: true }, prompts: 0 },
+      { label: "a project set to ask for every tool", toolApproval: "approve", entry: "prompt", annotations: { readOnlyHint: true }, prompts: 1 },
+    ] as const)("runs gateway calls by $label", async ({ toolApproval, entry, annotations, prompts }) => {
+      operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
+        ? [{ connectionId: "one", serverName: "Fixture", toolName: "lookup", schemaRevision: "r1", definition: {
+            name: "lookup", annotations, inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+          } }]
+        : { content: [{ type: "text", text: "fixture result" }] });
+      await createProjectRegistry({ toolApproval, projectToolApprovals: [{ repository: PROJECT, toolApproval: entry }], threadRepository: PROJECT });
+      const emitted = answerWith({ action: "accept", content: {}, _meta: null });
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
+      expect(emitted).toHaveLength(prompts);
+      // A project set to ask for every tool offers no grant to stop asking.
+      if (prompts) expect(emitted[0].params._meta).not.toHaveProperty(MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY);
+    });
+
+    it("saves the project grant chosen on a gateway card", async () => {
+      const save = await createProjectRegistry({ toolApproval: "auto", threadRepository: PROJECT });
+      const emitted = answerWith({ action: "accept", content: {}, _meta: { [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: true } });
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
+      expect(emitted[0].params._meta?.[MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY])
+        .toMatchObject({ label: "Allow all Fixture tools in PwrApps" });
+      expect(save).toHaveBeenCalledWith("one", PROJECT, "approve");
+    });
   });
 
   it("requires source-specific approval and deduplicates the same dynamic call", async () => {
