@@ -1,7 +1,7 @@
 import { automatedWorkStartedLabel, correspondenceNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import { finalTurnOutputText } from "@pwragent/shared";
-import type { ReviewRunMode } from "@pwragent/shared";
+import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared";
 import { isThreadLockRefusal } from "@pwragent/shared";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
@@ -3192,6 +3192,7 @@ export class MessagingController {
     navigation: MessagingNavigationContext;
     phase: MessagingReviewIntent["review"]["phase"];
     runMode?: ReviewRunMode;
+    afterReview?: ReviewAfterAction;
     cwd?: string;
     repositoryPath?: string;
     workspacePageIndex?: number;
@@ -3239,7 +3240,7 @@ export class MessagingController {
     // No advertised review runners means this instance predates reviewer
     // overrides; the Reviewer button stays off rather than offering a choice
     // that cannot land.
-    const reviewerOverridesSupported = reviewerBackends.some((entry) => entry.capabilities?.reviewRunner !== false);
+    const reviewerOverridesSupported = reviewerBackends.some((entry) => entry.capabilities?.reviewRunner === true);
     const reviewerBackendKind = params.reviewer?.backend ?? params.binding.backend;
     const reviewerEntry = reviewerBackends.find(
       (entry) => entry.backend === reviewerBackendKind,
@@ -3270,6 +3271,11 @@ export class MessagingController {
 
     const owner = reviewerBackends.find((entry) => entry.backend === params.binding.backend);
     const modeSupported = owner?.capabilities?.reviewRunMode === true;
+    const autoFixSupported = owner?.capabilities?.reviewAutoFix === true;
+    const afterReview = params.afterReview ?? (autoFixSupported ? "auto-fix" : undefined);
+    const autoFixUnavailable = !autoFixSupported && afterReview === "auto-fix"
+      ? "This owner no longer supports review Auto-fix. Update that PwrAgent instance before starting this review."
+      : undefined;
     const primaryCwd = thread ? findPrimaryReviewWorkspaceCwd(thread) : undefined;
     const managedReason = reviewerBackendKind !== params.binding.backend
       ? "PwrAgent Sub Agent is required for a different review provider."
@@ -3337,6 +3343,8 @@ export class MessagingController {
       if (runMode) summaryLines.push(`Mode: ${modeLabel}`);
       if (modeUnavailable) summaryLines.push(modeUnavailable);
       if (modeSupported && managedReason) summaryLines.push(managedReason);
+      if (autoFixSupported) summaryLines.push(`Auto-fix findings: ${afterReview === "auto-fix" ? "On" : "Off"}`);
+      if (autoFixUnavailable) summaryLines.push(autoFixUnavailable);
       body = summaryLines.join("\n");
       actions = [
         ...(linkedWorkspaces.length > 1
@@ -3385,6 +3393,12 @@ export class MessagingController {
           : []),
         ...(modeSupported ? [{
           id: "review:summary:mode", label: "Review Mode", fallbackText: "review mode", priority: 3,
+        }] : []),
+        ...(autoFixSupported ? [{
+          id: "review:summary:auto-fix",
+          label: `Auto-fix findings: ${afterReview === "auto-fix" ? "On" : "Off"}`,
+          fallbackText: "auto-fix findings",
+          priority: 4,
         }] : []),
         {
           id: "review:summary:start",
@@ -3541,7 +3555,7 @@ export class MessagingController {
         "It applies to this review only — the thread keeps its own settings.",
       ].join("\n");
       actions = [
-        ...reviewerBackends.flatMap((entry, index) => entry.capabilities?.reviewRunner === false ? [] : [{
+        ...reviewerBackends.flatMap((entry, index) => entry.capabilities?.reviewRunner !== true ? [] : [{
           id: `review:reviewer:provider:${index}`,
           label: entry.label,
           fallbackText: entry.backend,
@@ -3629,6 +3643,7 @@ export class MessagingController {
         threadId: params.binding.threadId,
         phase: params.phase,
         ...(runMode ? { runMode } : {}),
+        ...(afterReview ? { afterReview } : {}),
         ...(params.reviewer ? { reviewer: params.reviewer } : {}),
         ...(reviewerBackends.length > 0 ? { reviewerBackends } : {}),
         ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -6074,6 +6089,11 @@ export class MessagingController {
         });
       } else if (action.id === "review:summary:mode") {
         await this.updateReviewPendingIntent(pendingIntent, event, { phase: "run_mode" });
+      } else if (action.id === "review:summary:auto-fix") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "summary",
+          afterReview: pendingIntent.intent.review.afterReview === "auto-fix" ? "wait" : "auto-fix",
+        });
       } else if (action.id === "review:summary:reviewer") {
         await this.updateReviewPendingIntent(pendingIntent, event, {
           phase: "reviewer_provider",
@@ -6279,7 +6299,8 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
     review: {
       phase: MessagingReviewIntent["review"]["phase"];
-    runMode?: ReviewRunMode;
+      runMode?: ReviewRunMode;
+      afterReview?: ReviewAfterAction;
       cwd?: string;
       repositoryPath?: string;
       workspacePageIndex?: number;
@@ -6346,6 +6367,7 @@ export class MessagingController {
       navigation,
       phase: review.phase,
       runMode: review.runMode ?? pendingIntent.intent.review.runMode,
+      afterReview: review.afterReview ?? pendingIntent.intent.review.afterReview,
       cwd,
       repositoryPath,
       workspacePageIndex: review.workspacePageIndex,
@@ -6421,6 +6443,7 @@ export class MessagingController {
       target,
       cwd: pendingIntent.intent.review.cwd,
       runMode: pendingIntent.intent.review.runMode,
+      afterReview: pendingIntent.intent.review.afterReview,
       reviewerLabel: reviewerBackends?.find(
         (candidate) => candidate.backend === reviewerBackend,
       )?.label,
@@ -6444,6 +6467,7 @@ export class MessagingController {
     target: AppServerReviewTarget;
     cwd?: string;
     runMode?: ReviewRunMode;
+    afterReview?: ReviewAfterAction;
     /** Reviewer override typed on the command; absent means inherit. */
     reviewBackend?: AppServerBackendKind;
     /** Human-facing reviewer label resolved by the picker, when known. */
@@ -6462,11 +6486,15 @@ export class MessagingController {
     }
 
     try {
+      const owner = await this.getBackendSummary(params.binding.backend);
       if (params.runMode !== undefined) {
-        const owner = await this.getBackendSummary(params.binding.backend);
         if (owner?.capabilities.reviewRunMode !== true) {
           throw new Error("This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review.");
         }
+      }
+      const afterReview = params.afterReview ?? (owner?.capabilities.reviewAutoFix === true ? "auto-fix" : undefined);
+      if (afterReview === "auto-fix" && owner?.capabilities.reviewAutoFix !== true) {
+        throw new Error("This owner no longer supports review Auto-fix. Update that PwrAgent instance before starting this review.");
       }
       const navigation = await this.readBoundThreadConfiguration(params.binding);
       const settings = turnSettingsForBinding(params.binding, navigation);
@@ -6495,6 +6523,7 @@ export class MessagingController {
         target: params.target,
         delivery: "inline",
         ...(params.runMode ? { runMode: params.runMode } : {}),
+        ...(afterReview ? { afterReview } : {}),
         ...(params.cwd ? { cwd: params.cwd } : {}),
         // An explicit reviewer replaces the binding's inherited settings
         // wholesale — its model belongs to a different catalog.
@@ -15327,7 +15356,11 @@ export class MessagingController {
         includeUnavailable: false,
       });
       return (response?.backends ?? [])
-        .filter((candidate) => candidate.capabilities.reviewRunner === true || candidate.capabilities.reviewRunMode === true)
+        .filter((candidate) =>
+          candidate.capabilities.reviewRunner === true
+          || candidate.capabilities.reviewRunMode === true
+          || candidate.capabilities.reviewAutoFix === true,
+        )
         .map((candidate) => ({
           backend: candidate.kind,
           label: candidate.label,

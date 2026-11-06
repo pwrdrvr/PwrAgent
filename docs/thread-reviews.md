@@ -258,6 +258,11 @@ panel shows the switch only when the thread owner's backend advertises the
 `reviewAutoFix` capability. A queued or scheduled review keeps the choice in
 its payload.
 
+Messaging `/review` offers the same **Auto-fix findings** toggle, on by
+default when the owner advertises support. The configurator keeps the choice
+through picker changes and pending-intent restoration. Review commands with
+arguments also request Auto-fix by default when supported.
+
 The owner arms the review in memory when the start is requested
 (`review-auto-fix.ts`), and matches the landed review to its start by turn
 id: a review runs as a turn of its own thread, and its artifact lands in that
