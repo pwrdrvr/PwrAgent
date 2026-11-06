@@ -41448,6 +41448,20 @@ button.pricing-token-miser__folded:focus-visible {
   height: 1.35em;
 }
 
+/* A leading provider command, such as Claude's `/code-review`. It is draft
+   text wrapped in a decoration that the caret walks through, so it stays a
+   plain inline box: an inline-flex box inside contenteditable traps the caret
+   at its edges. Vertical padding paints without growing the line. */
+.composer-tiptap-input__editor .composer-tiptap-input__command {
+  display: inline;
+  vertical-align: baseline;
+  height: auto;
+  padding: 0.1em 0.45em;
+  font-size: inherit;
+  line-height: inherit;
+  box-decoration-break: clone;
+}
+
 /* Zero-width baseline strut — load-bearing, not decoration. An inline-flex box
    takes its baseline from its FIRST flex item, and the kinds disagree on what
    that is: label text for `$`/`@`, a 1em SVG icon for `#thread`, an 8px dot for
@@ -46659,6 +46673,21 @@ button.composer__subthread-source-parent:hover {
 .composer__autocomplete-match {
   color: var(--accent-bright);
   font-weight: 700;
+}
+
+/* The arguments a provider command takes, after its name. Regular-weight
+   mono sets it apart from the name; the ink is `--text-secondary`, because
+   `--text-muted` falls under the text floor on the active row's tint. */
+.composer__autocomplete-argument-hint {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer__autocomplete-source {

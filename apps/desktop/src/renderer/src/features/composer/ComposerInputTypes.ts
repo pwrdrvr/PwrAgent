@@ -44,6 +44,18 @@ export type ComposerSkillToken = AppServerSkillSummary & {
   showOrigin?: boolean;
 };
 
+/**
+ * The provider command a draft starts with, such as Claude's `/code-review`.
+ * The editor draws `text` as a chip, but it stays ordinary draft text: Claude
+ * reads a command from the start of the prompt, and every slash-command check
+ * in the composer reads the draft.
+ */
+export type ComposerCommandChip = {
+  /** The leading `/name` exactly as the draft spells it. */
+  text: string;
+  tooltip?: string;
+};
+
 export type ComposerInputChangeMetadata = {
   editorDocument?: JSONContent;
 };

@@ -2416,3 +2416,45 @@ describe("ComposerTiptapInput", () => {
     });
   });
 });
+
+describe("leading command chip", () => {
+  const chipProps = {
+    id: "reply",
+    label: "Reply",
+    markdownConversion: true,
+    onChange: () => {},
+    placeholder: "Ask anything",
+    skillTokens: [] as ComposerSkillToken[],
+  };
+
+  it("draws the leading command as a chip without changing the draft", () => {
+    const { container, rerender } = render(
+      <ComposerTiptapInput {...chipProps} value="/code-review high" />,
+    );
+    expect(container.querySelector("[data-command-chip]")).toBeNull();
+
+    rerender(
+      <ComposerTiptapInput
+        {...chipProps}
+        commandChip={{ text: "/code-review", tooltip: "/code-review [level]" }}
+        value="/code-review high"
+      />,
+    );
+    const chip = container.querySelector<HTMLElement>("[data-command-chip]");
+    expect(chip).toHaveTextContent(/^\/code-review$/);
+    expect(chip).toHaveClass("tooltip-target");
+    expect(chip).toHaveAttribute("data-tooltip", "/code-review [level]");
+    expect(screen.getByRole("textbox", { name: "Reply" })).toHaveValue("/code-review high");
+  });
+
+  it("draws nothing when the draft no longer starts with the command", () => {
+    const { container } = render(
+      <ComposerTiptapInput
+        {...chipProps}
+        commandChip={{ text: "/code-review" }}
+        value="please /code-review"
+      />,
+    );
+    expect(container.querySelector("[data-command-chip]")).toBeNull();
+  });
+});

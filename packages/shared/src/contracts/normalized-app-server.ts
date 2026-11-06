@@ -142,6 +142,8 @@ export type AppServerAvailableCommandSummary = {
   name: string;
   description?: string;
   aliases?: string[];
+  /** The arguments the command takes, such as `[low|medium|high] [--fix]`. */
+  argumentHint?: string;
   backend?: AppServerBackendKind;
   scope?: "backend" | "session";
   source?: "provider";

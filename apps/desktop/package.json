@@ -109,6 +109,8 @@
     "pixelmatch": "^8.0.0",
     "proper-lockfile": "^4.1.2",
     "prosemirror-history": "^1.5.0",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.42.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",

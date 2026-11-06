@@ -17,6 +17,8 @@ import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-up
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
+import { Plugin, PluginKey } from "prosemirror-state";
+import { Decoration, DecorationSet } from "prosemirror-view";
 import { EditorContent, Extension, useEditor, type JSONContent } from "@tiptap/react";
 import {
   parseThreadUrl,
@@ -51,6 +53,7 @@ import {
 } from "../chrome/ThreadChipContextMenu";
 import { readPrChipModifierClasses } from "../pr-status/pr-chip-state";
 import type {
+  ComposerCommandChip,
   ComposerInputChangeMetadata,
   ComposerInputHandle,
   ComposerSkillToken,
@@ -74,6 +77,8 @@ type ComposerTiptapInputProps = {
    * or Space when the caret sits at the end of the draft.
    */
   inlineCompletion?: string;
+  /** Draw the draft's leading provider command as a chip. */
+  commandChip?: ComposerCommandChip;
   label: string;
   markdownConversion?: boolean;
   onChange: (
@@ -445,6 +450,35 @@ const IgnoreUnderlineShortcut = Extension.create({
     };
   },
 });
+
+const commandChipPluginKey = new PluginKey<DecorationSet>("composerCommandChip");
+
+/**
+ * A decoration, not a mention node: the command stays draft text, so the
+ * operator edits it like text and nothing about sending changes. The span is
+ * drawn only while the document still starts with exactly that text.
+ */
+export function buildCommandChipDecorations(
+  doc: ProseMirrorNode,
+  chip: ComposerCommandChip | undefined,
+  mode: TiptapReadMode,
+): DecorationSet {
+  if (!chip?.text) {
+    return DecorationSet.empty;
+  }
+  const from = getPositionAtDocumentDraftIndex(doc, 0, mode);
+  const to = getPositionAtDocumentDraftIndex(doc, chip.text.length, mode);
+  if (to <= from || doc.textBetween(from, to) !== chip.text) {
+    return DecorationSet.empty;
+  }
+  return DecorationSet.create(doc, [
+    Decoration.inline(from, to, {
+      class: "chip skill-chip composer-tiptap-input__command tooltip-target",
+      "data-command-chip": chip.text,
+      ...(chip.tooltip ? { "data-tooltip": chip.tooltip } : {}),
+    }),
+  ]);
+}
 
 // Drafts saved before underline was removed can carry the mark. Tiptap
 // replaces a document with an unknown mark by an empty one, so drop it first.
@@ -2757,6 +2791,34 @@ export const ComposerTiptapInput = forwardRef<
       props.markdownConversion ? MarkdownStarterKit : PlainTextStarterKit,
       IgnoreUnderlineShortcut,
       SkillMention,
+      Extension.create({
+        name: "composerCommandChip",
+        addProseMirrorPlugins() {
+          const readCommandChipDecorations = (doc: ProseMirrorNode): DecorationSet =>
+            buildCommandChipDecorations(
+              doc,
+              propsRef.current.commandChip,
+              propsRef.current.markdownConversion ? "markdown" : "text",
+            );
+          return [
+            // Rebuilt only when the document or the chip changes; a caret
+            // move maps nothing and must not re-walk the document.
+            new Plugin<DecorationSet>({
+              key: commandChipPluginKey,
+              state: {
+                init: (_config, state) => readCommandChipDecorations(state.doc),
+                apply: (tr, previous, _oldState, newState) =>
+                  tr.docChanged || tr.getMeta(commandChipPluginKey)
+                    ? readCommandChipDecorations(newState.doc)
+                    : previous,
+              },
+              props: {
+                decorations: (state) => commandChipPluginKey.getState(state),
+              },
+            }),
+          ];
+        },
+      }),
     ],
     [props.markdownConversion],
   );
@@ -3566,6 +3628,17 @@ export const ComposerTiptapInput = forwardRef<
         }
       });
   }, [editor, props.skillTokens]);
+
+  // The plugin reads the chip from props, so a new chip with no edit of its
+  // own needs a transaction before ProseMirror redraws the decorations.
+  const commandChipText = props.commandChip?.text;
+  const commandChipTooltip = props.commandChip?.tooltip;
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) {
+      return;
+    }
+    editor.view.dispatch(editor.state.tr.setMeta(commandChipPluginKey, true));
+  }, [commandChipText, commandChipTooltip, editor]);
 
   useImperativeHandle(ref, () => ({
     deleteSelection: () => {

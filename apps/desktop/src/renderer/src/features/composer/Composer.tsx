@@ -288,6 +288,10 @@ import {
   parseForkCommand,
   type ComposerForkCommand,
 } from "./composer-fork-command";
+import {
+  backendDrawsCommandChips,
+  describeLeadingCommand,
+} from "./composer-command-chip";
 import type { ThreadWorkspaceMode } from "../../lib/subthread-launchpads";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
@@ -890,6 +894,7 @@ type ModelOption = NonNullable<
 
 type SlashCommandSuggestion = {
   aliases?: string[];
+  argumentHint?: string;
   description: string;
   id: string;
   insertText: string;
@@ -1068,6 +1073,7 @@ function providerCommandToSlashSuggestion(
     insertText: `/${commandName}`,
     description: command.description ?? "Provider command",
     aliases: command.aliases,
+    ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
     source: "provider",
     sourceLabel,
   };
@@ -11437,6 +11443,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const forkInlineCompletion = forkInlineHint
     ? forkCommandCompletion(draft)
     : undefined;
+  // Claude and ACP agents read a command from the start of the prompt, so a
+  // draft that starts with one of their commands draws it as a chip and, until
+  // an argument is typed, the arguments it takes.
+  const commandBackend = props.launchpad?.backend ?? props.thread?.source;
+  const { chip: commandChip, hint: commandInlineHint } = describeLeadingCommand({
+    commands: props.providerCommands?.filter((command) =>
+      backendDrawsCommandChips(command.backend ?? commandBackend)
+    ) ?? [],
+    draft,
+    showHint:
+      autocompleteKind !== "slash"
+      && !forkInlineHint
+      && !forking
+      && !preparingSend,
+    skillTokens,
+  });
   // Queue is the primary mid-turn; the steer chord is its keyboard-only
   // sibling, so the button is where it gets named.
   const submitButtonSteerHint =
@@ -14020,8 +14042,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             disabled={composerDisabled}
             readOnly={preparingSend || forking}
             label={isLaunchpad ? "New thread" : "Reply"}
-            inlineHint={forkInlineHint}
+            inlineHint={forkInlineHint ?? commandInlineHint}
             inlineCompletion={forkInlineCompletion}
+            commandChip={commandChip}
             markdownConversion
             placeholder={composerPlaceholder}
             resolveThreadLink={(ref) => {
@@ -14148,6 +14171,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     label={command.label}
                     query={slashTrigger ? `/${slashTrigger.query}` : "/"}
                   />
+                  {command.argumentHint ? (
+                    <span className="composer__autocomplete-argument-hint">
+                      {command.argumentHint}
+                    </span>
+                  ) : null}
                   <span
                     className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
                   >

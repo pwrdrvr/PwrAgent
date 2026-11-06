@@ -95,6 +95,15 @@ describe("claudeCommandSummaries", () => {
     ]);
     expect(summaries[0]).toMatchObject({ description: "Make a new Design artifact from a brief", backend: "claude" });
   });
+
+  it("carries the argument hint Claude reports, so the composer can teach a command's arguments", () => {
+    const summaries = claudeCommandSummaries([
+      command("code-review", { builtin: true, argumentHint: " [low|medium|high] [--fix] " }),
+      command("compact", { builtin: true, argumentHint: "  " }),
+    ], new Set());
+    expect(summaries[0]?.argumentHint).toBe("[low|medium|high] [--fix]");
+    expect(summaries[1]).not.toHaveProperty("argumentHint");
+  });
 });
 
 describe("Claude slash commands", () => {

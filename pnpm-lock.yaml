@@ -414,6 +414,12 @@ importers:
       prosemirror-history:
         specifier: ^1.5.0
         version: 1.5.1
+      prosemirror-state:
+        specifier: ^1.4.4
+        version: 1.4.4
+      prosemirror-view:
+        specifier: 1.42.3
+        version: 1.42.3
       react:
         specifier: ^19.2.0
         version: 19.3.1
@@ -10655,7 +10661,7 @@ snapshots:
     dependencies:
       prosemirror-model: 1.25.9
       prosemirror-state: 1.4.4
-      prosemirror-transform: 1.12.1
+      prosemirror-transform: 1.12.2
 
   protobufjs@7.6.5:
     dependencies:
