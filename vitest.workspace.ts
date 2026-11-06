@@ -224,6 +224,9 @@ export default defineConfig({
           // Machine-level cold starts, paid once per run so neither is billed
           // to whichever test file happens to reach it first.
           globalSetup: [
+            // Outpost consumers import its published JavaScript, whose bundle
+            // must exist before workers start, regardless of test selection.
+            "apps/desktop/src/test-setup/outpost-build.ts",
             // Windows only in effect: warms the Job-object wrapper that owns
             // `git worktree remove` so its one-time PowerShell + helper-compile
             // cold start is not billed to whichever test reaches it first.
