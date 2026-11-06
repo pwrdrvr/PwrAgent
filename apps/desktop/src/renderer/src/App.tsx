@@ -1130,7 +1130,7 @@ function DesktopAppShell(props: {
         showAppNotice({
           id: noticeId,
           title: "Ready for a new Claude session",
-          message: "Send your message again. Claude starts a new session with this thread's earlier messages; earlier tool output is not included.",
+          message: "The next message starts a new Claude session with this thread's earlier messages. Earlier tool output is not included.",
           autoDismiss: true,
         });
       } catch (error) {

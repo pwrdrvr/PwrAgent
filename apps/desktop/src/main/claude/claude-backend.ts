@@ -142,7 +142,8 @@ function claudeResultFailure(message: SDKResultMessage): string | undefined {
 const CLAUDE_SESSION_CLEANUP_NOTE = "Claude Code deletes sessions that have been idle longer than its "
   + "cleanupPeriodDays setting (30 days by default). This thread's transcript is still here.";
 
-const CLAUDE_CONTINUE_NOTE = "Continue in a new session to carry on with this thread's own record of the conversation.";
+const CLAUDE_CONTINUE_NOTE = "Choose Continue in a new session in the PwrAgent desktop app to carry on "
+  + "with this thread's own record of the conversation.";
 
 export const CLAUDE_SESSION_GONE_MESSAGE = "Claude no longer has this conversation, so it cannot continue it. "
   + `${CLAUDE_SESSION_CLEANUP_NOTE} ${CLAUDE_CONTINUE_NOTE}`;

@@ -26896,10 +26896,6 @@ export class DesktopBackendRegistry {
     };
   }
 
-  /**
-   * Puts back what a rewind removed. Only Claude keeps the removed turns, and
-   * only until the thread's next turn starts.
-   */
   /** A Claude thread whose session Claude Code deleted continues in a new
    * one, primed with the thread's own record of the conversation. */
   async continueClaudeThreadInNewSession(request: { threadId: string }): Promise<{ threadId: string }> {
@@ -26912,6 +26908,10 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Puts back what a rewind removed. Only Claude keeps the removed turns, and
+   * only until the thread's next turn starts.
+   */
   async undoThreadRewind(
     request: UndoThreadRewindRequest,
   ): Promise<UndoThreadRewindResponse> {
