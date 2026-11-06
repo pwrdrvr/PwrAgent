@@ -32,7 +32,7 @@ import {
   summarizeProjectHeldWakeup,
   type ProjectForgeAutomationResolution,
 } from "../app-server/project-forge-automation-index";
-import { getThreadTodoService, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
+import { getThreadTodoService, readProjectMergeMethodPreference, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { threadArtifactDirectory } from "../app-server/thread-assets";
 import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
@@ -4441,21 +4441,12 @@ class DesktopAppServerService {
     }
     // A merge reads and keeps the project's merge-method pick, the one a
     // to-do merge card for this project would use.
-    const placement = await readThreadTodoPlacement(getDesktopBackendRegistry(), context)
-      .catch(() => undefined);
-    const projectKey = placement?.sourceProject?.key;
-    const todos = getThreadTodoService();
+    const preference = await readProjectMergeMethodPreference(getDesktopBackendRegistry(), context);
     const prepared = await this.forgePrToolService().prepare(operation, args, scope, context.signal, {
-      rememberedMergeMethod: projectKey ? todos.projectMergeMethod(projectKey) : undefined,
+      rememberedMergeMethod: preference.remembered,
     });
-    if (!prepared.mergeMethods || !projectKey) return prepared;
-    return {
-      ...prepared,
-      mergeMethods: {
-        ...prepared.mergeMethods,
-        remember: (method) => todos.rememberProjectMergeMethod(projectKey, method),
-      },
-    };
+    if (!prepared.mergeMethods || !preference.remember) return prepared;
+    return { ...prepared, mergeMethods: { ...prepared.mergeMethods, remember: preference.remember } };
   }
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */

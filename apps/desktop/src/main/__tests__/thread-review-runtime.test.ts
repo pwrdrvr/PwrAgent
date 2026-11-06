@@ -7,6 +7,7 @@ import { getThreadReviewService } from "../thread-reviews/thread-review-runtime"
 import {
   getThreadTodoService,
   installThreadTodoRuntime,
+  readProjectMergeMethodPreference,
   resetThreadTodoServiceForTests,
 } from "../thread-todos/thread-todo-runtime";
 import { claudeReviewOutput } from "../claude/claude-review-findings";
@@ -242,5 +243,49 @@ describe("review tracking runtime eligibility", () => {
       await Promise.resolve();
       expect(submitTurn).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("project merge-method preference", () => {
+  let temp: ReturnType<typeof createTempStateDb>;
+  beforeEach(() => {
+    temp = createTempStateDb("pwragent-merge-pref-");
+    db = StateDb.open(temp.dbPath);
+  });
+  afterEach(() => {
+    resetThreadTodoServiceForTests();
+    db.close();
+    removeTempStateDbDir(temp.tempDir);
+  });
+
+  it("shares the to-do cards' per-project pick and publishes a new one to open to-do views", async () => {
+    const onDelta = vi.fn();
+    const registry = {
+      onEvent: () => () => {},
+      setPwrAgentThreadTodoHandler: () => {},
+      resolveThreadPrimaryDirectory: async () => ({ id: "atlas", label: "atlas", path: "/work/atlas" }),
+    } as unknown as DesktopBackendRegistry;
+    installThreadTodoRuntime({ registry, broadcast: vi.fn(), listProjects: async () => [], readDefaultMergeMethod: () => "squash",
+      feed: { loadOwners: async () => [], managedThreadKeys: () => new Set(), onDelta } });
+
+    const first = await readProjectMergeMethodPreference(registry, THREAD);
+    expect(first.remembered).toBeUndefined();
+    first.remember!("rebase");
+    // A pick that changed no card still reaches open merge cards' labels.
+    const byProject = getThreadTodoService().mergeMethodPreferences().byProject;
+    expect(Object.values(byProject)).toEqual(["rebase"]);
+    expect(onDelta).toHaveBeenCalledTimes(1);
+    expect(onDelta.mock.calls[0]![0]).toMatchObject({ mergeMethods: { defaultMethod: "squash", byProject } });
+
+    const second = await readProjectMergeMethodPreference(registry, THREAD);
+    expect(second.remembered).toBe("rebase");
+    onDelta.mockClear();
+    second.remember!("rebase");
+    expect(onDelta).not.toHaveBeenCalled();
+  });
+
+  it("has no pick to read or keep for a thread without a project", async () => {
+    const registry = { resolveThreadPrimaryDirectory: async () => undefined } as unknown as DesktopBackendRegistry;
+    await expect(readProjectMergeMethodPreference(registry, THREAD)).resolves.toEqual({});
   });
 });

@@ -10,7 +10,8 @@ import {
   type ForgePrToolArgs,
   type ForgePrToolOperation,
 } from "../pr-status/forge-pr-tool-contract";
-import { FORGE_READ_OPERATIONS, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import { FORGE_READ_OPERATIONS } from "../pr-status/forge-tool-contract";
+import type { ForgePrToolPreparedCall } from "../pr-status/forge-pr-tool-service";
 import { agentToolFailure, agentToolSuccess, type AgentToolCallContext, type AgentToolDefinition } from "./agent-tool-definition";
 import { buildForgeReadToolDefinitions, type ForgeReadHandler } from "./pwragent-forge-agent-tools";
 
@@ -25,15 +26,12 @@ export type ForgePrToolPreflight = (
   context: AgentToolCallContext,
 ) => Promise<ForgePrToolPreflightResult>;
 
-export type ForgePrToolPreflightResult = {
-  repository: ForgeRepository;
-  args: ForgePrToolArgs;
-  /**
-   * A merge's choices. `args.method` is the one it runs with; the approval
-   * offers the rest, and `remember` keeps a pick for the thread's project.
-   */
-  mergeMethods?: {
-    offered: ThreadTodoMergeMethod[];
+/**
+ * The prepared call, plus a merge's `remember`, which keeps the operator's
+ * pick from the approval's menu for the thread's project.
+ */
+export type ForgePrToolPreflightResult = Omit<ForgePrToolPreparedCall, "mergeMethods"> & {
+  mergeMethods?: NonNullable<ForgePrToolPreparedCall["mergeMethods"]> & {
     remember?: (method: ThreadTodoMergeMethod) => void;
   };
 };

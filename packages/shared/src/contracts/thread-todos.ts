@@ -552,11 +552,13 @@ export function resolveThreadTodoMergeMethod(
   todo: Pick<ThreadTodo, "sourceProject" | "targetProject" | "mergeMethod">,
   preferences: ThreadTodoMergeMethodPreferences | undefined,
 ): ThreadTodoMergeMethod {
-  if (isThreadTodoMergeMethod(todo.mergeMethod)) return todo.mergeMethod;
   const projectKey = threadTodoActionProject(todo)?.key;
-  return (projectKey ? preferences?.byProject[projectKey] : undefined)
-    ?? preferences?.defaultMethod
-    ?? DEFAULT_THREAD_TODO_MERGE_METHOD;
+  return settleMergeMethod({
+    offered: THREAD_TODO_MERGE_METHODS,
+    requested: isThreadTodoMergeMethod(todo.mergeMethod) ? todo.mergeMethod : undefined,
+    remembered: projectKey ? preferences?.byProject[projectKey] : undefined,
+    fallback: preferences?.defaultMethod,
+  });
 }
 
 export type ResolveThreadTodoRequest = {
