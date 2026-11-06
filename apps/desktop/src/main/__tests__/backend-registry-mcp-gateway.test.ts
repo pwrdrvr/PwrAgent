@@ -13,7 +13,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerMcpElicitationRequestNotification, AppServerPendingRequestNotification, AgentEvent, ThreadExecutionMode } from "@pwragent/shared";
-import type { CodexAppServerClient } from "../codex-app-server/client";
+import type { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DesktopBackendRegistry, buildCodexConnectionMcpServerName } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
