@@ -1718,12 +1718,37 @@
   list-style: none;
 }
 
-.pr-rollup-popover__row {
+/* A row is the open-in-browser button plus, when the thread can detach,
+   its ✕. The highlight covers both, so the ✕ reads as part of the row. */
+.pr-rollup-popover__list > li {
   display: flex;
-  width: 100%;
   align-items: flex-start;
   gap: 8px;
-  padding: 6px 8px;
+  padding-right: 8px;
+  border-radius: 4px;
+}
+
+/* The rows' chips sit on the side nearest the chip that opened the list,
+   so the ✕ is a short move from where the pointer came in. */
+.pr-rollup-popover--chips-left .pr-rollup-popover__list > li {
+  flex-direction: row-reverse;
+  padding-right: 0;
+  padding-left: 8px;
+}
+
+.pr-rollup-popover__list > li:hover,
+.pr-rollup-popover__list > li:has(.pr-rollup-popover__row:focus-visible) {
+  background: var(--accent-soft);
+}
+
+/* The title and status take the row's full width; the chip sits beside. */
+.pr-rollup-popover__row {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 0 6px 8px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -1733,9 +1758,8 @@
   cursor: pointer;
 }
 
-.pr-rollup-popover__row:hover,
-.pr-rollup-popover__row:focus-visible {
-  background: var(--accent-soft);
+.pr-rollup-popover--chips-left .pr-rollup-popover__row {
+  padding: 6px 8px 6px 0;
 }
 
 .pr-rollup-popover__row:focus-visible {
@@ -1743,21 +1767,16 @@
   outline-offset: -2px;
 }
 
-.pr-rollup-popover__row .pr-chip {
+/* The rows' chips, centered on the title line. */
+.pr-rollup-popover__list .pr-chip {
   height: 20px;
   flex: none;
-  pointer-events: none;
-}
-
-.pr-rollup-popover__text {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 1px;
+  margin-top: 5px;
 }
 
 .pr-rollup-popover__title {
   overflow: hidden;
+  max-width: 100%;
   font-size: 12px;
   font-weight: 500;
   line-height: 18px;
@@ -1766,9 +1785,46 @@
 }
 
 .pr-rollup-popover__status {
+  overflow: hidden;
+  max-width: 100%;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Detach all sits apart from the rows, so a stray click on the list
+   never reaches it. */
+.pr-rollup-popover__foot {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  padding: 4px 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pr-rollup-popover__detach-all {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pr-rollup-popover__detach-all:hover,
+.pr-rollup-popover__detach-all:focus-visible {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.pr-rollup-popover__detach-all:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 /* (No compact-specific list gap anymore: the base `.sidebar-list` /
@@ -8726,6 +8782,18 @@ a.button {
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.45;
+}
+
+/* Detach all: one PR per line, scrolling past about eight. */
+.pr-detach-warning-dialog__list {
+  max-height: 160px;
+  margin: 6px 0 8px;
+  padding-left: 18px;
+  overflow-y: auto;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .pr-detach-warning-dialog__checkbox {

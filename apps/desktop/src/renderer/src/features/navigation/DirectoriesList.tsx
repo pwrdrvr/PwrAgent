@@ -213,9 +213,10 @@ type DirectoriesListProps = {
   ) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onPrefetchGitWorkingState?: (thread: NavigationThreadSummary) => void;
-  onDetachPullRequest?: (
+  /** One PR from its chip, or every PR from Detach all. */
+  onDetachPullRequests?: (
     thread: NavigationThreadSummary,
-    pr: PrSummary,
+    prs: readonly PrSummary[],
   ) => void;
   onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   onUpdateSubthreadOrder?: (
@@ -1300,7 +1301,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 }
                 onOpenContextMenu={props.onOpenThreadContextMenu}
                 onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-                onDetachPullRequest={props.onDetachPullRequest}
+                onDetachPullRequests={props.onDetachPullRequests}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
                 onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
                 onRevealSelectedThreadComplete={
@@ -1464,7 +1465,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             onPointerDownThread={pointerDownThread}
             onOpenContextMenu={props.onOpenThreadContextMenu}
             onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-            onDetachPullRequest={props.onDetachPullRequest}
+            onDetachPullRequests={props.onDetachPullRequests}
             onPrefetchPullRequests={props.onPrefetchPullRequests}
             onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
             onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
@@ -1799,7 +1800,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onMovePinnedThread={movePinnedThread}
                           onOpenContextMenu={props.onOpenThreadContextMenu}
                           onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-                          onDetachPullRequest={props.onDetachPullRequest}
+                          onDetachPullRequests={props.onDetachPullRequests}
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
                           onRevealSelectedThreadComplete={

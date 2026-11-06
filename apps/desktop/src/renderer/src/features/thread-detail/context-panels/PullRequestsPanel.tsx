@@ -271,7 +271,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
       )}
       {pendingDetachPr ? (
         <DetachPullRequestWarning
-          pr={pendingDetachPr}
+          prs={[pendingDetachPr]}
           onCancel={() => setPendingDetachPr(undefined)}
           onConfirm={() => {
             const pr = pendingDetachPr;

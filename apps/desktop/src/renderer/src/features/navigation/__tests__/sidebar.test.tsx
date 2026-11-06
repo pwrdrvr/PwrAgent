@@ -23,6 +23,7 @@ import {
   type NavigationThreadSummary,
   type ProjectForgeAutomation,
   type ProjectHeldWakeup,
+  type PrSummary,
   type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
@@ -11244,6 +11245,77 @@ describe("Sidebar menus from the keyboard", () => {
     pressEscape();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(chip).toHaveFocus();
+  });
+
+  function renderRowMenu(
+    thread: NavigationThreadSummary,
+    onDetachPullRequest: (thread: NavigationThreadSummary, pr: PrSummary) => Promise<void>,
+  ) {
+    try {
+      window.localStorage.removeItem("pwragent.detachPrWarning.dismissed");
+    } catch {
+      // The warning shows when storage is unavailable too.
+    }
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[thread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[thread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onDetachPullRequest={onDetachPullRequest}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+  }
+
+  it("offers the row menu's Detach Pull Request for a thread with one PR", () => {
+    const detach = vi.fn(async () => undefined);
+    renderRowMenu(pullRequestThread, detach);
+    act(() => screen.getByRole("menuitem", { name: "Detach Pull Request #202" }).click());
+    expect(screen.getByRole("dialog", { name: "Detach pull request?" })).toBeInTheDocument();
+    act(() => screen.getByRole("button", { name: "Detach PR" }).click());
+    expect(detach).toHaveBeenCalledWith(pullRequestThread, pullRequestThread.prs![0]);
+  });
+
+  it("detaches every PR from the row menu after one confirmation, one at a time", async () => {
+    const prs = [202, 203, 204].map((number) => ({
+      ...pullRequestThread.prs![0]!,
+      number,
+      url: `https://github.com/ExampleOrg/ExampleApp/pull/${number}`,
+    }));
+    const thread = { ...pullRequestThread, prs };
+    // Each detach rewrites the thread's PR list on its owner, so the next
+    // must not start until the last has finished.
+    const pending: Array<() => void> = [];
+    const detach = vi.fn(() => new Promise<void>((resolve) => pending.push(resolve)));
+    renderRowMenu(thread, detach);
+    expect(screen.queryByRole("menuitem", { name: /^Detach Pull Request #/ })).toBeNull();
+    act(() => screen.getByRole("menuitem", { name: "Detach All Pull Requests" }).click());
+
+    const dialog = screen.getByRole("dialog", { name: "Detach 3 pull requests?" });
+    expect(within(dialog).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "ExampleOrg/ExampleApp#202",
+      "ExampleOrg/ExampleApp#203",
+      "ExampleOrg/ExampleApp#204",
+    ]);
+    act(() => within(dialog).getByRole("button", { name: "Detach 3 PRs" }).click());
+
+    for (const [index, pr] of prs.entries()) {
+      expect(detach).toHaveBeenCalledTimes(index + 1);
+      expect(detach).toHaveBeenLastCalledWith(thread, pr);
+      await act(async () => {
+        pending.shift()!();
+      });
+    }
+    expect(detach).toHaveBeenCalledTimes(3);
   });
 });
 

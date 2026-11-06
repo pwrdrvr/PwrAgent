@@ -109,10 +109,10 @@ describe("PrRollupChip", () => {
 
     const list = screen.getByRole("group", { name: "Pull requests for Orbit refactor" });
     const rows = within(list).getAllByRole("button");
-    expect(rows.map((row) => row.textContent)).toEqual([
-      "#11Change 11ready for review · checks failing",
-      "#10Change 10ready for review · checks passing",
-      "#12Change 12merged",
+    expect(rows.map((row) => row.closest("li")!.textContent)).toEqual([
+      "Change 11ready for review · checks failing#11",
+      "Change 10ready for review · checks passing#10",
+      "Change 12merged#12",
     ]);
 
     fireEvent.click(rows[1]!);
@@ -153,8 +153,8 @@ describe("PrRollupChip", () => {
     const rows = within(screen.getByRole("group", { name: "Pull requests for Orbit refactor" }))
       .getAllByRole("button");
     expect(rows[0]).toHaveAccessibleName(/^Open acme\/orbit#11, Change 11 .* in browser, waiting for CI$/);
-    expect(rows[0]!.querySelector(".pr-chip__watch")).not.toBeNull();
-    expect(rows[1]!.querySelector(".pr-chip__watch")).toBeNull();
+    expect(rows[0]!.closest("li")!.querySelector(".pr-chip__watch")).not.toBeNull();
+    expect(rows[1]!.closest("li")!.querySelector(".pr-chip__watch")).toBeNull();
     cleanup();
 
     // A lone PR is the ordinary chip, which draws the same eye.
@@ -193,9 +193,9 @@ describe("PrRollupChip", () => {
 
     fireEvent.click(chip);
     const rows = within(screen.getByRole("group")).getAllByRole("button");
-    expect(rows.map((row) => row.textContent)).toEqual([
-      "#11Change 11ready for review · checks failing · 4 behind main",
-      "#10Change 10ready for review · checks passing",
+    expect(rows.map((row) => row.closest("li")!.textContent)).toEqual([
+      "Change 11ready for review · checks failing · 4 behind main#11",
+      "Change 10ready for review · checks passing#10",
     ]);
     expect(rows[0]).toHaveAccessibleName(
       "Open acme/orbit#11, Change 11 (ready for review · checks failing · 4 behind main) in browser",
