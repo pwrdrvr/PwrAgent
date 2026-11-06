@@ -3684,9 +3684,10 @@ export class DesktopFederationRuntime {
    * from saved pins. Reads local state only, so an offline peer's children
    * still count. */
   async peerSubthreadsOfLocalThreads(): Promise<Map<string, string[]>> {
-    const localInstanceId = (await this.health()).instanceId;
-    if (!localInstanceId) return new Map();
-    return peerSubthreadChildren(await getDesktopOverlayStore().listRemoteThreadPins(), localInstanceId);
+    const pins = await getDesktopOverlayStore().listRemoteThreadPins();
+    // No pins, no peer sub-threads. Only the identity is needed, not the
+    // peer and config reads health() does, which could fail the sweep.
+    return pins.length ? peerSubthreadChildren(pins, this.ensureLocalInstanceId()) : new Map();
   }
 
   /** Promote cross-instance children before the archive removes their row. */
