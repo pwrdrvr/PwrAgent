@@ -26,8 +26,11 @@ export function atomicJson(file, value) {
       closeSync(fd);
     }
     renameSync(temporary, file);
-    const directory = openSync(path.dirname(file), "r");
-    try { fsyncSync(directory); } finally { closeSync(directory); }
+    // Windows rejects directory fsync. The file is synced before rename on every host.
+    if (process.platform !== "win32") {
+      const directory = openSync(path.dirname(file), "r");
+      try { fsyncSync(directory); } finally { closeSync(directory); }
+    }
   } catch (error) {
     // Preserve the original storage failure even if cleanup also fails.
     try { unlinkSync(temporary); } catch { /* A renamed file is already gone. */ }

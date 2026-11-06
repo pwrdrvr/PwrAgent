@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { buildThreadIdentityKey, NavigationQueryStore, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
 import { ACTIVE, atomicJson, digest } from "./store.js";
+import { OutpostThreadRegistry } from "./owner-thread-registry.js";
 
 // The owner methods this outpost serves. Each one's capability comes from the
 // shared owner contract, so a grant means the same here as on desktop.
@@ -73,6 +74,7 @@ export class HeadlessBackend {
     runtime.listOwnedThreads = () => [...this.threads.values()].filter((thread) => !thread.archived);
     this.latestJobs = new Map();
     this.syncJobs();
+    this.threadRegistry = new OutpostThreadRegistry(this);
   }
 
   persist() {

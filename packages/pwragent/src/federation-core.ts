@@ -28,3 +28,4 @@ export { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-stor
 export { buildThreadIdentityKey, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 
 export { CodexAppServerClient } from "@pwragent/owner-core/codex-app-server/client";
+export { patchOwnerThreadMetadata } from "@pwragent/owner-core/thread-storage";

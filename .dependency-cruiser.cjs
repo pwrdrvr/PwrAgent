@@ -102,6 +102,15 @@ module.exports = {
       },
     },
     {
+      name: "owner-core-has-no-storage-format-dependencies",
+      severity: "error",
+      comment: "Owner storage ports cannot reach host stores, SQLite or file-format modules.",
+      from: { path: "^packages/owner-core/" },
+      to: {
+        path: "^apps/desktop/src/main/state/|(?:^|/)(?:better-sqlite3|sqlite3|sql\\.js|yaml|js-yaml|toml|smol-toml|json5|jsonfile|write-file-atomic)(?:/|$)|\\.(?:json|jsonl|yaml|yml|toml)$",
+      },
+    },
+    {
       name: "outpost-only-imports-reusable-libraries",
       severity: "error",
       comment:
