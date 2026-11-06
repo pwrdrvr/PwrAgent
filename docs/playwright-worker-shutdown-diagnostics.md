@@ -134,6 +134,14 @@ plus explicit missing-symbol/capture status. Raw debugger output, arguments,
 memory and environment are never uploaded. At most four roots are
 sampled per lane; the owning close's deadline remains unchanged.
 
+When that controlled probe fails, `native-stack-setup.json` also reports whether
+CDB emitted its banner, started and completed Extension Gallery initialization,
+reached a command prompt, and emitted the readiness marker. `outputBytes` counts
+the retained debugger text inspected for those flags; it is not a total stream
+byte count. These observations help locate startup progress within the existing
+deadline. They do not establish which operation caused a timeout, and a flag
+alone does not satisfy the positive control.
+
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
 fire-and-forget prewarm. Vitest's separate prewarm setup still awaits its
