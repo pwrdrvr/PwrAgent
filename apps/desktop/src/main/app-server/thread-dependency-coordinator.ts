@@ -217,7 +217,7 @@ export class ThreadDependencyCoordinator {
 
   private async evaluate(item: ThreadDependency, signal?: { target: { backend: string; threadId: string }; turn: AppServerThreadTurnMetadata }): Promise<void> {
     if (this.options.store.isConsumerArchived(item)) {
-      this.options.store.retireForArchivedThread(item, this.now());
+      for (const retired of this.options.store.retireForArchivedThread(item, this.now())) await this.options.changed(retired);
       return;
     }
     if (item.status === "dispatching") return;

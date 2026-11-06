@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import { buildPullRequestStatusKey, type PrSummary, type ThreadDependency, type ThreadPullRequestWatchSummary } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, buildPullRequestStatusKey, type AgentEvent, type PrSummary, type ThreadDependency, type ThreadPullRequestWatchSummary } from "@pwragent/shared";
+import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { PrStatusWatchCoordinator } from "../pr-status/pr-status-watch";
 import { PrAutoDispatchCoordinator } from "../pr-status/pr-auto-dispatch";
 import { ThreadDependencyCoordinator } from "../app-server/thread-dependency-coordinator";
@@ -10,6 +11,7 @@ import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { CountingBackendClient } from "./fixtures/thread-read-harness";
 
 const identity = { backend: "codex" as const, threadId: "watcher" };
 const pr: PrSummary = {
@@ -69,6 +71,87 @@ async function lifecycle(terminal: boolean, commands: Array<"register" | "archiv
 }
 
 describe("PR watches end at archive", () => {
+  it("retires setting-only legacy Auto-fix overlays without changing live settings", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("codex" as const, "claude" as const, "acp:grok" as const),
+      fc.constantFrom("archiveRetentionStartedAt", "archiveTombstonedAt"),
+      async (backend, archiveField) => {
+        const db = openInMemoryStateDb();
+        const store = new SqliteOverlayStore(db);
+        const target = { backend, threadId: "legacy-setting-only" };
+        const live = { backend, threadId: "live-setting-only" };
+        try {
+          for (const identity of [target, live]) await store.setThreadPrAutoDispatchEnabled({ ...identity, enabled: true });
+          // Older releases retained the preference after their PR rows disappeared.
+          db.raw.prepare("UPDATE threads SET payload = json_set(payload, ?, 1) WHERE thread_id = ?")
+            .run(`$.${archiveField}`, buildLegacyEncodedThreadIdentityKey(backend, target.threadId));
+          await store.retireArchivedThreadPrAutomation(2);
+          await store.setThreadArchiveTombstone({ ...target, restoredAt: 3 });
+          expect((await store.getThreadOverlayState(target))?.prAutoDispatchEnabled).toBe(false);
+          expect((await store.getThreadOverlayState(live))?.prAutoDispatchEnabled).toBe(true);
+        } finally { db.close(); }
+      },
+    ), { numRuns: 25 });
+  });
+
+  it("publishes retirement updates after the archive transaction for owners and prerequisites", async () => {
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const client = new CountingBackendClient([]);
+    const registry = new DesktopBackendRegistry({ codexClient: client as never, overlayStore: store, threadTitleGenerationService: null });
+    const events: AgentEvent[] = [];
+    let watchCount = 1;
+    const dependencies = new Set(["codex:watcher", "codex:foundation", "claude:foundation"]);
+    registry.onEvent(async (event) => {
+      events.push(event);
+      if (event.notification.method === "thread/prWatches/updated") {
+        expect(db.raw.inTransaction).toBe(false);
+        watchCount = (await store.listActiveThreadPrStatusWatches(identity)).length;
+      }
+      if (event.notification.method === "thread/dependencies/updated") {
+        expect(db.raw.inTransaction).toBe(false);
+        expect(new ThreadDependencyStore(db.raw).active()).toEqual([]);
+        dependencies.delete(`${event.backend}:${event.notification.params.threadId}`);
+      }
+    });
+    try {
+      await store.retireArchivedThreadPrAutomation(0);
+      await store.registerThreadPrStatusWatch({ watch: watch(true, "retiring-watch"), now: 1 });
+      new ThreadDependencyStore(db.raw).register({ ...dependency("retiring-dependency"), conditions: [
+        ...dependency("unused").conditions,
+        { backend: "claude", threadId: "foundation", when: "pr_merged", prUrl: pr.url },
+      ] });
+      await client.emitNotification({ method: "thread/archived", params: { threadId: identity.threadId } });
+      expect(watchCount).toBe(0);
+      expect(dependencies).toEqual(new Set());
+      const changed = events.filter((event) => event.notification.method === "thread/prWatches/updated"
+        || event.notification.method === "thread/dependencies/updated");
+      expect(changed).toHaveLength(4);
+      await store.setThreadArchiveTombstone({ ...identity, restoredAt: 3 });
+      expect(watchCount).toBe(0);
+      events.length = 0;
+      await client.emitNotification({ method: "thread/archived", params: { threadId: identity.threadId } });
+      expect(events.filter((event) => event.notification.method === "thread/prWatches/updated"
+        || event.notification.method === "thread/dependencies/updated")).toEqual([]);
+    } finally { await registry.close(); db.close(); }
+  });
+
+  it("publishes no retirement updates when archive rolls back", async () => {
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const registry = new DesktopBackendRegistry({ codexClient: new CountingBackendClient([]) as never, overlayStore: store, threadTitleGenerationService: null });
+    const changed = vi.fn();
+    registry.onEvent(changed);
+    try {
+      await store.registerThreadPrStatusWatch({ watch: watch(true, "kept-watch"), now: 1 });
+      db.raw.exec(`CREATE TRIGGER fail_archive_retention BEFORE INSERT ON threads
+        WHEN NEW.thread_id = 'codex:watcher' BEGIN SELECT RAISE(ABORT, 'fixture archive failure'); END;`);
+      await expect(registry.observeArchivedThreads([identity], 2)).rejects.toThrow("fixture archive failure");
+      expect(await store.listActiveThreadPrStatusWatches(identity)).toHaveLength(1);
+      expect(changed).not.toHaveBeenCalled();
+    } finally { await registry.close(); db.close(); }
+  });
+
   it.each([false, true])("does not replay a pre-archive watch after restore (terminal=%s)", async (terminal) => {
     await lifecycle(terminal, ["register", "archive", "restore", "event"]);
   });
@@ -89,7 +172,7 @@ describe("PR watches end at archive", () => {
       // Older versions recorded the archive without retiring subscriptions.
       await store.setThreadArchiveTombstone({ ...identity, archivedAt: 2 });
       expect(await store.retireArchivedThreadPrAutomation(3))
-        .toEqual([{ ...identity, prKey: buildPullRequestStatusKey(pr) }]);
+        .toEqual([{ ...identity, prWatchesChanged: true, autoFixChanged: false, dependencies: [] }]);
       expect(await store.listPendingPrTerminalWatchPrKeys(identity)).toEqual([]);
       expect(await store.listThreadPrStatusWatchHistory({ ...identity, limit: 10 }))
         .toEqual([expect.objectContaining({ watchId: "old-watch", status: "cancelled", endedReason: "archived" })]);
@@ -106,6 +189,12 @@ describe("PR watches end at archive", () => {
       store, registry: { submitTurnIfIdle: async () => ({ status: "busy" }) }, now: () => 1,
     });
     try {
+      const legacy = { ...identity, threadId: "setting-only-budget" };
+      await store.setThreadPrAutoDispatchEnabled({ ...legacy, enabled: true });
+      await store.setThreadArchiveTombstone({ ...legacy, archivedAt: 1 });
+      const startup = await measureSqliteWrites(() => store.retireArchivedThreadPrAutomation(2));
+      expectSqliteWriteBudget({ scenario: "pr-setting-only-startup-retirement", writes: startup.writes,
+        note: "Retire one legacy archived Auto-fix preference without live PR rows in one startup commit (~0.012 MB); one startup/day costs ~0.012 MB/day. Repeat scans write nothing." });
       await store.setThreadPrAutoDispatchEnabled({ ...identity, enabled: true });
       await store.syncThreadPrAutoDispatchCandidates({ ...identity, prKeys: [buildPullRequestStatusKey(pr)], now: 1 });
       await repairs.handleStatusSnapshot({

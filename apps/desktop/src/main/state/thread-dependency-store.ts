@@ -122,14 +122,16 @@ export class ThreadDependencyStore {
   }
 
   /** Archive revokes the consumer's subscriptions, including an unsubmitted claim. */
-  retireForArchivedThread(target: Pick<ThreadDependency, "backend" | "threadId">, now: number): void {
-    if (!this.db.prepare(`SELECT 1 FROM thread_dependencies
-      WHERE backend = ? AND thread_id = ? AND status IN ('waiting', 'ready', 'dispatching') LIMIT 1`)
-      .get(target.backend, target.threadId)) return;
+  retireForArchivedThread(target: Pick<ThreadDependency, "backend" | "threadId">, now: number): ThreadDependency[] {
+    const retired = this.decode(this.db.prepare(`SELECT payload FROM thread_dependencies
+      WHERE backend = ? AND thread_id = ? AND status IN ('waiting', 'ready', 'dispatching')`)
+      .all(target.backend, target.threadId));
+    if (retired.length === 0) return [];
     this.db.prepare(`UPDATE thread_dependencies SET status = 'cancelled',
       payload = json_set(payload, '$.status', 'cancelled', '$.updatedAt', ?)
       WHERE backend = ? AND thread_id = ? AND status IN ('waiting', 'ready', 'dispatching')`)
       .run(now, target.backend, target.threadId);
+    return retired.map((item) => ({ ...item, status: "cancelled", updatedAt: now }));
   }
 
   /** One immediate transaction: an operator card commits with its claim. */

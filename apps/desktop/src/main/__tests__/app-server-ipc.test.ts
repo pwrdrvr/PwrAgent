@@ -1226,6 +1226,8 @@ vi.mock("../app-server/backend-registry", () => {
     listThreads,
     getCachedThreadSummary,
     getThreadInfo: () => undefined,
+    observeArchivedThreads: async () => {},
+    publishArchivedThreadAutomationRetirements: async () => {},
     readThread,
     getThreadTranscriptImageRoots,
     readDirectoryStatuses,

@@ -1962,7 +1962,7 @@ class DesktopAppServerService {
       filter: request.filter,
     });
     if (request.archived) {
-      await this.getOverlayStore().observeArchivedThreads?.(
+      await getDesktopBackendRegistry().observeArchivedThreads(
         threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), Date.now(),
       );
     }
@@ -10269,7 +10269,7 @@ class DesktopAppServerService {
         prepareClaims: async () => {
           if (!archivedSubscriptionsRetired) {
             const retired = await this.getOverlayStore().retireArchivedThreadPrAutomation(Date.now());
-            await this.publishPrWatchesUpdated(retired);
+            await getDesktopBackendRegistry().publishArchivedThreadAutomationRetirements(retired);
             archivedSubscriptionsRetired = true;
           }
           await this.syncPrStatusWatchKeys();

@@ -68,6 +68,7 @@ import type {
   ThreadPrAutoDispatchPending,
   ThreadPullRequestWatchSummary,
   ThreadPrWatchHistoryEntry,
+  ThreadDependency,
   RemoteThreadPin,
   StarMapArrangementEntry,
   StarMapWorkspaceSnapshot,
@@ -304,6 +305,15 @@ export type PrStatusWatchThreadRef = {
   backend: ThreadOverlayState["backend"];
   threadId: string;
   prKey: string;
+};
+
+/** Committed retirement changes the registry publishes through the thread-state bus. */
+export type ArchivedThreadAutomationRetirement = {
+  backend: ThreadOverlayState["backend"];
+  threadId: string;
+  prWatchesChanged: boolean;
+  autoFixChanged: boolean;
+  dependencies: Array<Pick<ThreadDependency, "id" | "conditions">>;
 };
 
 export type PrStatusWatchAdvanceResult = {
@@ -8246,29 +8256,29 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   /** Repair subscriptions left by older versions, before startup replays cached PR events. */
-  async retireArchivedThreadPrAutomation(now: number): Promise<PrStatusWatchThreadRef[]> {
-    const rows = this.stateDb.raw.prepare(`SELECT backend, thread_id, pr_key
+  async retireArchivedThreadPrAutomation(now: number): Promise<ArchivedThreadAutomationRetirement[]> {
+    const rows = this.stateDb.raw.prepare(`SELECT backend, thread_id
       FROM pr_status_watches WHERE status IN ('watching', 'dispatching')
-      UNION SELECT backend, thread_id, pr_key FROM pr_auto_dispatch_claims WHERE status IN ('pending', 'dispatching')
-      UNION SELECT backend, thread_id, pr_key FROM pr_auto_dispatch_candidates`).all() as Array<{
-      backend: ThreadOverlayState["backend"]; thread_id: string; pr_key: string;
+      UNION SELECT backend, thread_id FROM pr_auto_dispatch_claims WHERE status IN ('pending', 'dispatching')
+      UNION SELECT backend, thread_id FROM pr_auto_dispatch_candidates
+      UNION SELECT json_extract(payload, '$.backend'), json_extract(payload, '$.threadId') FROM threads
+        WHERE json_type(payload, '$.prAutoDispatchEnabled') = 'true'
+          AND (json_type(payload, '$.archiveRetentionStartedAt') IS NOT NULL
+            OR json_type(payload, '$.archiveTombstonedAt') IS NOT NULL)`).all() as Array<{
+      backend: ThreadOverlayState["backend"]; thread_id: string;
     }>;
     const archived = rows.filter((row) => this.isThreadArchivedForPrAutomation({ backend: row.backend, threadId: row.thread_id }));
     if (archived.length === 0) return [];
     return this.stateDb.raw.transaction(() => {
-      const changed: typeof rows = [];
-      const retired = new Set<string>();
+      const changed: ArchivedThreadAutomationRetirement[] = [];
       for (const row of archived) {
         const identity = { backend: row.backend, threadId: row.thread_id };
-        const key = buildThreadIdentityKey(identity.backend, identity.threadId);
-        if (retired.has(key)) changed.push(row);
-        else if (this.isThreadArchivedForPrAutomation(identity)) {
-          this.observeArchivedThread(identity, now);
-          retired.add(key);
-          changed.push(row);
+        if (this.isThreadArchivedForPrAutomation(identity)) {
+          const retirement = this.observeArchivedThread(identity, now);
+          if (retirement) changed.push(retirement);
         }
       }
-      return uniquePrStatusWatchThreads(changed);
+      return changed;
     })();
   }
 
@@ -10380,9 +10390,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>,
     now: number,
     options?: { promoteSubthreads: boolean },
-  ): Promise<void> {
-    this.stateDb.raw.transaction(() => {
-      for (const identity of records) this.observeArchivedThread(identity, now, options);
+  ): Promise<ArchivedThreadAutomationRetirement[]> {
+    return this.stateDb.raw.transaction(() => {
+      const retired: ArchivedThreadAutomationRetirement[] = [];
+      for (const identity of records) {
+        const retirement = this.observeArchivedThread(identity, now, options);
+        if (retirement) retired.push(retirement);
+      }
+      return retired;
     })();
   }
 
@@ -10390,25 +10405,32 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     { backend, threadId }: { backend: ThreadOverlayState["backend"]; threadId: string },
     now: number,
     options?: { promoteSubthreads: boolean },
-  ): void {
-    this.retireThreadPrStatusWatches({ backend, threadId }, now);
-    new ThreadDependencyStore(this.stateDb.raw).retireForArchivedThread({ backend, threadId }, now);
+  ): ArchivedThreadAutomationRetirement | undefined {
+    const prWatchesChanged = this.retireThreadPrStatusWatches({ backend, threadId }, now) > 0;
+    const dependencies = new ThreadDependencyStore(this.stateDb.raw).retireForArchivedThread({ backend, threadId }, now)
+      .map(({ id, conditions }) => ({ id, conditions }));
     // Pending repairs have not reserved a budget. In-flight leases retain
     // ownership until their dispatcher refunds and retires them.
-    if (this.readThreadPrAutoDispatchPending({ backend, threadId })) {
+    const pendingRepair = this.readThreadPrAutoDispatchPending({ backend, threadId }) !== undefined;
+    if (pendingRepair) {
       this.stateDb.raw.prepare(`UPDATE pr_auto_dispatch_claims SET status = 'cancelled', updated_at = ?
         WHERE backend = ? AND thread_id = ? AND status = 'pending'`).run(now, backend, threadId);
     }
-    if (this.stateDb.raw.prepare(`SELECT 1 FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ? LIMIT 1`).get(backend, threadId)) {
+    const repairCandidate = this.stateDb.raw.prepare(`SELECT 1 FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ? LIMIT 1`).get(backend, threadId) !== undefined;
+    if (repairCandidate) {
       this.stateDb.raw.prepare(`DELETE FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ?`).run(backend, threadId);
     }
     if (options?.promoteSubthreads) this.promoteArchivedSubthreads({ backend, threadId });
     const key = buildThreadIdentityKey(backend, threadId);
     const current = this.getThread(key) ?? { backend, threadId, executionMode: "default" as const, extraLinkedDirectories: [] };
+    const autoFixChanged = pendingRepair || repairCandidate || current.prAutoDispatchEnabled === true;
     if (current.archiveRetentionStartedAt === undefined || current.prAutoDispatchEnabled === true) {
       this.putThread(key, { ...current, archiveRetentionStartedAt: current.archiveRetentionStartedAt ?? now,
         ...(current.prAutoDispatchEnabled === true ? { prAutoDispatchEnabled: false } : {}),
       });
+    }
+    if (prWatchesChanged || autoFixChanged || dependencies.length > 0) {
+      return { backend, threadId, prWatchesChanged, autoFixChanged, dependencies };
     }
   }
 
