@@ -9,6 +9,7 @@ import type {
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
 import { withWorktreeTerminalsClosed } from "../terminal/worktree-terminals";
+import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 
 type GitResult = {
   stdout: string;
@@ -267,6 +268,7 @@ async function unlinkWindowsWorktreeLinks(worktreePath: string, assertRemoval?: 
 }
 
 export class WorktreeArchiveService {
+  private readonly repositoryRemovals = new PerKeyAsyncLock();
   private readonly gitEnv?: NodeJS.ProcessEnv;
   private readonly maxSnapshotBytes: number;
 
@@ -350,10 +352,13 @@ export class WorktreeArchiveService {
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
     const assertRemoval = await params.beforeRemove?.();
     assertRemoval?.();
-    await withWorktreeTerminalsClosed(worktreePath, async () => {
+    await this.repositoryRemovals.run(commonDirectory, async () => await withWorktreeTerminalsClosed(worktreePath, async () => {
       // Removal admission and terminal teardown can await other work. Recheck
       // Git's lock protection before modifying even ignored link entries.
       await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory, removing: true });
+      if (trimGitOutput((await this.runGit(worktreePath, ["rev-parse", "--verify", "HEAD"])).stdout) !== head) {
+        throw new Error("Worktree HEAD changed during snapshot preparation; the worktree was kept.");
+      }
       assertRemoval?.();
       if (process.platform === "win32") {
         await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);
@@ -367,7 +372,7 @@ export class WorktreeArchiveService {
         // archive complete until the Job's active-process count reaches zero.
         { ownProcessTree: true, beforeSpawn: assertRemoval },
       );
-    }, assertRemoval);
+    }, assertRemoval));
 
     const archivedAt = params.now ?? Date.now();
     return {
@@ -611,13 +616,17 @@ export class WorktreeArchiveService {
 
     try {
       const env = { GIT_INDEX_FILE: indexPath };
-      await this.runGit(params.worktreePath, ["read-tree", "HEAD"], { env });
+      const source = params.worktree.head ?? "HEAD";
+      await this.runGit(params.worktreePath, ["read-tree", source], { env });
       // Measure exactly what this fresh index will stage, before git add writes
       // blobs. The live index can hide edits with assume-unchanged or skip-worktree
       // flags that are absent here. Committed and ignored content is excluded.
-      const changed = await this.runGit(params.worktreePath, ["diff", "--name-only", "-z", "HEAD", "--", "."], { env });
+      const changed = await this.runGit(params.worktreePath, ["diff", "--name-only", "-z", source, "--", "."], { env });
       const untracked = await this.runGit(params.worktreePath, ["ls-files", "--others", "--exclude-standard", "-z"], { env });
       const files = new Set(`${changed.stdout}${untracked.stdout}`.split("\0").filter(Boolean));
+      // A clean checkout needs only a recovery pin to its existing HEAD. Do
+      // not manufacture an empty-change commit (or a branch) for the archive.
+      if (files.size === 0 && params.worktree.head) return params.worktree.head;
       if (files.size > MAX_WORKTREE_SNAPSHOT_FILES) {
         throw new Error(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
       }
@@ -639,6 +648,9 @@ export class WorktreeArchiveService {
       const tree = trimGitOutput(
         (await this.runGit(params.worktreePath, ["write-tree"], { env })).stdout,
       );
+      if (params.worktree.head && tree === trimGitOutput((await this.runGit(params.worktreePath, ["rev-parse", `${params.worktree.head}^{tree}`])).stdout)) {
+        return params.worktree.head;
+      }
       const message = [
         `Snapshot worktree for ${params.backend}:${params.threadId}`,
         "",

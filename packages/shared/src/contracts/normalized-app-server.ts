@@ -1116,6 +1116,14 @@ export type ArchiveThreadCleanupResult = {
   error?: string;
 };
 
+export type ArchiveCleanupProgress = {
+  batchId: string;
+  active: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath?: string }>;
+  queued: number;
+  completed: number;
+  total: number;
+};
+
 export type ArchiveThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -2267,6 +2275,10 @@ export type AppServerNotification =
       params: {
         threadId: string;
       };
+    }
+  | {
+      method: "archiveCleanup/progress";
+      params: ArchiveCleanupProgress;
     }
   | {
       method: "thread/archiveCleanup/completed";

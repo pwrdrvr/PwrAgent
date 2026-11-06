@@ -1,4 +1,17 @@
-import type { ArchiveThreadCleanupResult } from "@pwragent/shared";
+import type { ArchiveCleanupProgress, ArchiveThreadCleanupResult } from "@pwragent/shared";
+import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
+
+export function formatArchiveCleanupProgress(progress: ArchiveCleanupProgress): AppNoticeToastNotice | undefined {
+  if (progress.active.length === 0 && progress.queued === 0) return undefined;
+  return {
+    id: `archive-cleanup:${progress.batchId}`,
+    title: "Cleaning up archived worktrees",
+    message: `${progress.completed} of ${progress.total} completed · ${progress.active.length} active · ${progress.queued} waiting`,
+    autoDismiss: false,
+    status: { label: "In progress", state: "progress" },
+    facts: progress.active.flatMap((job) => job.worktreePath ? [{ label: "Worktree", value: job.worktreePath }] : []),
+  };
+}
 
 export type ArchiveThreadNotice = {
   id: string;

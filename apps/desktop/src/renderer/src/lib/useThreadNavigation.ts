@@ -1,4 +1,5 @@
-import { formatArchiveCleanupNotice, type ArchiveThreadNotice } from "./archive-cleanup-notice";
+import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
+import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import type { LaunchpadCreationStatus } from "@pwragent/shared";
@@ -32,6 +33,7 @@ import type {
   AppServerThreadStatus,
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
+  ArchiveCleanupProgress,
   CodexThreadEnvironmentRuntime,
   DesktopProviderModelDefaults,
   FederationInstanceId,
@@ -3030,6 +3032,8 @@ export function useThreadNavigation(
   archivedThreadKeys: ReadonlySet<string>;
   archiveThreadNotice?: ArchiveThreadNotice;
   dismissArchiveThreadNotice: () => void;
+  archiveCleanupProgressNotice?: AppNoticeToastNotice;
+  dismissArchiveCleanupProgressNotice: () => void;
   worktreeArchiveError?: string;
   loading: boolean;
   loaded: boolean;
@@ -3490,6 +3494,8 @@ export function useThreadNavigation(
   }), [desktopApi]);
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
   const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
+  const [archiveCleanupProgressNotice, setArchiveCleanupProgressNotice] = useState<AppNoticeToastNotice>();
+  const dismissedArchiveCleanupBatch = useRef<string | undefined>(undefined);
   const [worktreeArchiveError, setWorktreeArchiveError] = useState<string>();
   const [renameThreadError, setRenameThreadError] = useState<string>();
   // Held in a ref so a caller that rebuilds the callback every render cannot
@@ -4663,6 +4669,12 @@ export function useThreadNavigation(
             : current
         );
         scheduleEventRefresh();
+        return;
+      }
+
+      if (method === "archiveCleanup/progress") {
+        const progress = event.notification.params as ArchiveCleanupProgress;
+        if (dismissedArchiveCleanupBatch.current !== progress.batchId) setArchiveCleanupProgressNotice(formatArchiveCleanupProgress(progress));
         return;
       }
 
@@ -10070,6 +10082,11 @@ export function useThreadNavigation(
     setArchiveThreadNotice(undefined);
   }, []);
 
+  const dismissArchiveCleanupProgressNotice = useCallback((): void => {
+    if (archiveCleanupProgressNotice) dismissedArchiveCleanupBatch.current = archiveCleanupProgressNotice.id.slice("archive-cleanup:".length);
+    setArchiveCleanupProgressNotice(undefined);
+  }, [archiveCleanupProgressNotice]);
+
   return {
     browseMode: shownBrowseMode,
     pinnedThreadsOnTop,
@@ -10098,6 +10115,8 @@ export function useThreadNavigation(
     archivedThreadKeys,
     archiveThreadNotice,
     dismissArchiveThreadNotice,
+    archiveCleanupProgressNotice,
+    dismissArchiveCleanupProgressNotice,
     worktreeArchiveError,
     loading: state.loading,
     loaded: Boolean(state.rows),

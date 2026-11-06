@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import type { ArchiveThreadCleanupResult } from "@pwragent/shared";
-import { formatArchiveCleanupNotice } from "../archive-cleanup-notice";
+import { formatArchiveCleanupNotice, formatArchiveCleanupProgress } from "../archive-cleanup-notice";
 
 describe("archive cleanup notices", () => {
+  it("shows live work until the queue drains, including work that has not completed yet", () => {
+    fc.assert(fc.property(fc.integer({ min: 0, max: 4 }), fc.nat({ max: 256 }), fc.nat({ max: 1000 }), (active, queued, completed) => {
+      const jobs = Array.from({ length: active }, (_, i) => ({ backend: "codex" as const, threadId: `thread-${i}`, worktreePath: `/contrived/worktree-${i}` }));
+      const notice = formatArchiveCleanupProgress({ batchId: "fixture", active: jobs, queued, completed, total: active + queued + completed });
+      expect(Boolean(notice)).toBe(active + queued > 0);
+      if (notice) {
+        expect(notice.autoDismiss).toBe(false);
+        expect(notice.message).toContain(`${active} active`);
+        expect(notice.message).toContain(`${queued} waiting`);
+        expect(notice.facts?.map((fact) => fact.value)).toEqual(jobs.map((job) => job.worktreePath));
+      }
+    }));
+  });
+
   it("raises a notice exactly when an outcome still needs attention, in outcome order", () => {
     const outcome = fc.record({
       kind: fc.constantFrom("removed", "absent", "shared", "repository-missing", "failed"),
