@@ -584,6 +584,7 @@ describe("sub-thread parents", () => {
       "/src/repo/.claude/worktrees/fix-login",
       "/Users/me/.claude/worktrees/fix-login",
       "/Users/me/.codex/worktrees/a1b2/repo",
+      "/Users/me/.codex/worktrees/.pwragent/worktrees/repo",
     ]) {
       expect(archiveCandidateProtectionReason(claude(independent))).toBe(CLAUDE_CHECKOUT_KEEP_REASON);
     }
@@ -604,9 +605,9 @@ describe("sub-thread parents", () => {
         const reason = archiveCandidateProtectionReason({
           thread: { ...candidate("c").thread, source: "claude", projectKey, linkedDirectories: [] },
         });
-        if (reason === undefined) {
-          expect(projectKey).toMatch(/\/\.pwrag(?:ent|nt)\/(?:profiles\/[^/]+\/)?worktrees\/[^/]+\/[^/]+/);
-        }
+        // The leftmost tool worktree root in the path must be PwrAgent's.
+        const root = /\/\.(codex|pwrag(?:ent|nt))(?:\/profiles\/[^/]+)?\/worktrees\/[^/]+\/[^/]+/.exec(projectKey);
+        if (reason === undefined) expect(root?.[1]).toMatch(/^pwrag/);
       },
     ));
   });

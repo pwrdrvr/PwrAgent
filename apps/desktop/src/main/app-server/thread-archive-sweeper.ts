@@ -128,9 +128,14 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
 
 export const CLAUDE_CHECKOUT_KEEP_REASON = "Checkout not created by PwrAgent";
 
-/** A worktree under PwrAgent's own root (`~/.pwragent/…/worktrees/<id>/<name>`). */
+const TOOL_WORKTREE_ROOT = /[\\/]\.(codex|pwrag(?:ent|nt))(?:[\\/]profiles[\\/][^\\/]+)?[\\/]worktrees[\\/][^\\/]+[\\/][^\\/]+/;
+
+/** A worktree under PwrAgent's own root (`~/.pwragent/…/worktrees/<id>/<name>`).
+ * The first tool root in the path decides, so a Codex worktree with a folder
+ * named `.pwragent` inside it is still Codex's. */
 export function isPwrAgentWorktreePath(value: string | undefined): boolean {
-  return isToolManagedWorktreePath(value) && /[\\/]\.pwrag(?:ent|nt)[\\/]/.test(value ?? "");
+  if (!value || !isToolManagedWorktreePath(value)) return false;
+  return TOOL_WORKTREE_ROOT.exec(value)?.[1]?.startsWith("pwrag") === true;
 }
 
 /** The Claude thread works in a PwrAgent worktree, and no directory it uses
