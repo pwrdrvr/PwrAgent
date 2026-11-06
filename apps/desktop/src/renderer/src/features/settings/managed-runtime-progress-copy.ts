@@ -50,7 +50,13 @@ const STEP_LABELS: Record<ManagedRuntimeInstallPhase, string> = {
 const RUNTIME_NAMES: Record<ManagedRuntimeId, string> = {
   codex: "pwrdrvr/codex",
   grok: "pwrdrvr/grok-build",
+  git: "PwrDrvr Git",
 };
+
+/** Git's last step puts the release in place; switching to it is Use. */
+function stepLabel(runtime: ManagedRuntimeId, phase: ManagedRuntimeInstallPhase): string {
+  return runtime === "git" && phase === "activating" ? "Install" : STEP_LABELS[phase];
+}
 
 /** A finished or failed strip is stale once this much time has passed. */
 export function isManagedRuntimeProgressVisible(
@@ -85,7 +91,7 @@ export function managedRuntimeSteps(
         : MANAGED_RUNTIME_INSTALL_PHASES.indexOf(progress.phase);
   return MANAGED_RUNTIME_INSTALL_PHASES.map((phase, index) => ({
     phase,
-    label: STEP_LABELS[phase],
+    label: stepLabel(progress.runtime, phase),
     state:
       index < at
         ? "done"
@@ -161,23 +167,35 @@ export function managedRuntimeProgressCopy(
         ...base,
         tone: "busy",
         eyebrow: "Verifying",
-        message: "Checking the SHA-256 and the signature…",
+        message: progress.runtime === "git"
+          ? "Checking the archive against its published SHA-256…"
+          : "Checking the SHA-256 and the signature…",
       };
     case "unpacking":
       return {
         ...base,
         tone: "busy",
         eyebrow: "Unpacking",
-        message: "Extracting the archive and checking the bundle…",
+        message: progress.runtime === "git"
+          ? "Extracting, then checking every file and signature against the release…"
+          : "Extracting the archive and checking the bundle…",
       };
     case "activating":
       return {
         ...base,
         tone: "busy",
-        eyebrow: "Activating",
+        eyebrow: progress.runtime === "git" ? "Installing" : "Activating",
         message: "Moving the verified build into place…",
       };
     case "ready":
+      if (progress.runtime === "git") {
+        return {
+          ...base,
+          tone: "ok",
+          eyebrow: "Downloaded",
+          message: "Verified. Not in use until you choose it.",
+        };
+      }
       return waitingForIdle
         ? {
             ...base,

@@ -5,11 +5,12 @@ import { promisify } from "node:util";
 import {
   bundledGitDirectory,
   bundledGitEnvironment,
-  isInsideDirectory,
+  isPwrAgentGitPath,
   operatorSystemConfig,
   validateBundledGit,
 } from "./bundled-git";
-import { getConfiguredGitCommand } from "./git-command";
+import { getConfiguredGitCommand, getSelectedManagedGit } from "./git-command";
+import { resolveManagedGitRuntime } from "./managed-git-runtime";
 
 export const GIT_COMMAND_ENV = "PWRAGENT_GIT_PATH";
 
@@ -21,7 +22,7 @@ export function gitCommandPreference(env: NodeJS.ProcessEnv): string | undefined
 export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {
   const env = { ...source };
   const root = path.resolve(bundledGitDirectory());
-  const inBundle = (value: string) => isInsideDirectory(root, value);
+  const inBundle = (value: string) => isPwrAgentGitPath(value);
   let inheritedPath = "";
   for (const key of Object.keys(env)) {
     const upper = key.toUpperCase();
@@ -47,13 +48,34 @@ export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string)
   return env;
 }
 
+/**
+ * Explicit commands win (PWRAGENT_GIT_PATH, then a manual path), then the
+ * downloaded PwrDrvr release chosen with Use, then the bundle. A downloaded
+ * release runs exactly as the bundle does: its own helpers, templates, Git
+ * LFS, system config and, on Linux, CA bundle.
+ */
 export function gitRuntimeEnvironment(source: NodeJS.ProcessEnv, preference = gitCommandPreference(source)): NodeJS.ProcessEnv {
-  return preference ? customGitEnvironment(source, preference) : bundledGitEnvironment(source);
+  if (preference) return customGitEnvironment(source, preference);
+  const managed = getSelectedManagedGit();
+  if (!managed) return bundledGitEnvironment(source);
+  try {
+    return bundledGitEnvironment(source, { root: resolveManagedGitRuntime(managed).root });
+  } catch {
+    // The release failed its checks. PwrAgent's own commands fail through
+    // resolveRuntimeGitExecutable; a shell gets no PwrAgent Git on PATH
+    // rather than the rejected one.
+    return customGitEnvironment(source, "git");
+  }
 }
 
 export async function resolveRuntimeGitExecutable(source: NodeJS.ProcessEnv): Promise<string> {
   const preference = gitCommandPreference(source);
-  if (!preference) return await validateBundledGit();
+  if (!preference) {
+    const managed = getSelectedManagedGit();
+    // Throws for a release that failed verification: never silently another Git.
+    if (managed) return resolveManagedGitRuntime(managed).executable;
+    return await validateBundledGit();
+  }
   if (path.isAbsolute(preference) || preference.includes(path.sep)) return path.resolve(preference);
   const env = customGitEnvironment(source, preference);
   if (process.platform === "win32") {

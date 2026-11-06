@@ -595,6 +595,8 @@ import type {
   InspectCodeSignaturesResponse,
   PickGhCommandResponse,
   PickGitCommandResponse,
+  ManagedGitActionRequest,
+  ManagedGitActionResponse,
   RefreshDesktopCodexDiscoveryRequest,
   SetCodexModelProviderApiKeyRequest,
   SetCodexModelProviderApiKeyResponse,
@@ -1412,6 +1414,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * selected path, has to call to see anything new.
    */
   refreshGitDiscovery?: () => Promise<ReadDesktopSettingsResponse>;
+  /**
+   * Settings → Git → Updates: check for, download, cancel, choose (Use and
+   * Roll back) or remove a PwrDrvr Git release. Returns the refreshed
+   * snapshot, with `error` when the action did not complete.
+   */
+  managedGitAction?: (request: ManagedGitActionRequest) => Promise<ManagedGitActionResponse>;
   /**
    * Reads what the platform's code-signing system says about executables
    * PwrAgent runs but does not ship. Deliberately separate from discovery

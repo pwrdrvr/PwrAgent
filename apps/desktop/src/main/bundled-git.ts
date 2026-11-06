@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { access } from "node:fs/promises";
+import { managedGitRoot } from "./managed-git-paths";
 import { resolvePwragentRoot } from "./profile";
 
 let packagedResourcesPath: string | undefined;
@@ -54,11 +55,15 @@ export async function validateBundledGit(): Promise<string> {
  * another Pwr app or a shell with Git-specific environment overrides. */
 export function bundledGitEnvironment(
   source: NodeJS.ProcessEnv,
-  options: { platform?: NodeJS.Platform } = {},
+  options: {
+    platform?: NodeJS.Platform;
+    /** A downloaded PwrDrvr Git release's payload, in place of the bundle. */
+    root?: string;
+  } = {},
 ): NodeJS.ProcessEnv {
   const platform = options.platform ?? process.platform;
   const clean = { ...source };
-  const root = bundledGitDirectory();
+  const root = options.root ?? bundledGitDirectory();
   let inheritedPath = "";
   for (const key of Object.keys(clean)) {
     const upper = key.toUpperCase();
@@ -66,6 +71,10 @@ export function bundledGitEnvironment(
       inheritedPath = clean[key] ?? "";
       delete clean[key];
     } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "PWRAGENT_GIT_PATH"].includes(upper)) {
+      delete clean[key];
+    } else if (["PREFIX", "GIT_SSL_CAINFO"].includes(upper) && clean[key] && isPwrAgentGitPath(clean[key]!)) {
+      // Inherited from a shell that ran another PwrAgent Git: set again below
+      // for this runtime, never left pointing at a release that can go away.
       delete clean[key];
     } else if (upper === "GIT_CONFIG_SYSTEM") {
       const operatorConfig = operatorSystemConfig(root, clean[key]);
@@ -88,7 +97,7 @@ export function bundledGitEnvironment(
   if (platform === "linux" && !env.GIT_SSL_CAINFO && existsSync(caBundle)) {
     env.GIT_SSL_CAINFO = caBundle;
   }
-  const executableDirectory = path.dirname(bundledGitExecutable());
+  const executableDirectory = path.dirname(dugite.resolveGitBinary(root));
   // Git puts its exec path first for subcommands; shells and hooks also need
   // the bundled git/git-lfs before any installed versions in PATH.
   const pathEntries = [executableDirectory, helperDirectory, ...(env.PATH ?? "").split(path.delimiter)];
@@ -129,6 +138,12 @@ function mingitSystemConfig(root: string, helperDirectory: string): string | und
     path.join(root, "etc", "gitconfig"),
     path.join(path.dirname(path.dirname(helperDirectory)), "etc", "gitconfig"),
   ].find((candidate) => existsSync(candidate));
+}
+
+/** Inside the bundle or a downloaded PwrDrvr Git release. */
+export function isPwrAgentGitPath(value: string): boolean {
+  return isInsideDirectory(path.resolve(bundledGitDirectory()), path.resolve(value))
+    || isInsideDirectory(path.resolve(managedGitRoot()), path.resolve(value));
 }
 
 /** Whether `value` is `directory` itself or something beneath it. */
@@ -205,19 +220,19 @@ const installedLfsBySearch = new Map<string, string | undefined>();
  * The operator's own git-lfs, found by following their PATH exactly as the
  * `command -v git-lfs` test at the top of every Git LFS hook does.
  *
- * PwrAgent's own bundle is skipped: it joins PATH only inside the processes
- * PwrAgent launches, so finding git-lfs there says nothing about whether the
+ * PwrAgent's own bundle and downloaded releases are skipped: they join PATH
+ * only inside the processes PwrAgent launches, so finding git-lfs there says
+ * nothing about whether the
  * operator's own shell can push a repository the bundle set Git LFS up in.
  */
 export function installedGitLfs(env: NodeJS.ProcessEnv): string | undefined {
   const searchPath = operatorSearchPath(searchPathOf(env), { home: env.HOME });
   const cached = installedLfsBySearch.get(searchPath);
   if (cached ? existsSync(cached) : installedLfsBySearch.has(searchPath)) return cached;
-  const bundle = path.resolve(bundledGitDirectory());
   const executable = process.platform === "win32" ? "git-lfs.exe" : "git-lfs";
   let found: string | undefined;
   for (const entry of searchPath.split(path.delimiter)) {
-    if (!path.isAbsolute(entry) || isInsideDirectory(bundle, entry)) continue;
+    if (!path.isAbsolute(entry) || isPwrAgentGitPath(entry)) continue;
     const candidate = path.join(entry, executable);
     if (existsSync(candidate)) {
       found = candidate;
@@ -339,6 +354,8 @@ export function operatorSystemConfig(bundleRoot: string, value: string | undefin
 /** Our bundle's files, or another Dugite layout's `git/etc/gitconfig`. */
 function isBundledGitSystemConfig(bundleRoot: string, file: string): boolean {
   if (isInsideDirectory(path.resolve(bundleRoot), file)) return true;
+  // A downloaded release's own config, from an environment built for it.
+  if (isInsideDirectory(path.resolve(managedGitRoot()), file)) return true;
   const gitDirectory = path.dirname(path.dirname(file));
   return path.basename(file) === "gitconfig"
     && path.basename(path.dirname(file)) === "etc"

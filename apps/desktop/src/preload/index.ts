@@ -392,6 +392,8 @@ import type {
   InspectCodeSignaturesResponse,
   PickGhCommandResponse,
   PickGitCommandResponse,
+  ManagedGitActionRequest,
+  ManagedGitActionResponse,
   PickReferenceFromDiskResponse,
   ConnectPwrGitResponse,
   ConnectPwrSnapResponse,
@@ -1122,6 +1124,7 @@ import {
   SETTINGS_PICK_GLAB_COMMAND_CHANNEL,
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
+  SETTINGS_MANAGED_GIT_ACTION_CHANNEL,
   SETTINGS_READ_CHANNEL,
   TOKEN_MISER_READ_USAGE_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
@@ -2019,6 +2022,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(SETTINGS_PICK_GIT_COMMAND_CHANNEL),
   refreshGitDiscovery: async (): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL),
+  managedGitAction: async (
+    request: ManagedGitActionRequest,
+  ): Promise<ManagedGitActionResponse> =>
+    await ipcRenderer.invoke(SETTINGS_MANAGED_GIT_ACTION_CHANNEL, request),
   inspectCodeSignatures: async (
     request: InspectCodeSignaturesRequest,
   ): Promise<InspectCodeSignaturesResponse> =>
