@@ -16,6 +16,9 @@ test("real CLI submits once, disconnects, reads results and explicitly continues
   const job = await h.finished("first");
   assert.equal(job.status, "completed");
   assert.equal(readFileSync(path.join(h.workspace, "fixture-result.txt"), "utf8"), "hello");
+  const workspacePolicy = { type: "workspaceWrite", writableRoots: [h.workspace], networkAccess: false,
+    excludeTmpdirEnvVar: true, excludeSlashTmp: true };
+  assert.deepEqual(h.calls().find((message) => message.method === "turn/start").params.sandboxPolicy, workspacePolicy);
   await h.submit("first", "hello", { sandbox: "workspace-write" });
   assert.equal(h.calls().filter((m) => m.method === "turn/start").length, 1);
   await assert.rejects(h.submit("first", "different"), /different input/);
@@ -26,9 +29,10 @@ test("real CLI submits once, disconnects, reads results and explicitly continues
   assert.equal((await h.stop(h.daemon)).code, 0);
   await h.start();
   assert.equal((await h.rpc("show", { id: "first" })).status, "completed");
-  await h.submit("second", "continue", { threadId: job.threadId });
+  await h.submit("second", "continue", { threadId: job.threadId, sandbox: "workspace-write" });
   assert.equal((await h.finished("second")).status, "completed");
   assert.equal(h.calls().filter((m) => m.method === "thread/resume").length, 1);
+  assert.deepEqual(h.calls().filter((message) => message.method === "turn/start").at(-1).params.sandboxPolicy, workspacePolicy);
   assert.equal((await h.rpc("read", { id: "second" })).thread.turns.length, 2);
   const waiter = h.launch(["wait", "--id", "second"]);
   assert.equal((await waiter.done).code, 0);
@@ -64,18 +68,25 @@ test("concurrent submit has one owner; busy rejects without a queued record; dup
 
 test("early terminal events, failed turns and interactive requests have honest outcomes", { timeout }, async (t) => {
   const h = await setup(t);
-  for (const [prompt, status] of [["early", "completed"], ["fail", "failed"], ["approval", "blocked"], ["question", "blocked"]]) {
+  for (const [prompt, status] of [["early", "completed"], ["returned", "completed"], ["fail", "failed"], ["approval", "blocked"], ["question", "blocked"]]) {
     await h.submit(prompt, prompt);
     assert.equal((await h.finished(prompt)).status, status);
   }
   const responses = h.calls().filter((m) => m.id === "server-request");
   assert.deepEqual(responses[0].result, { decision: "decline" });
-  assert.equal(responses[1].error.code, -32601);
+  assert.equal(responses[1].error.code, -32603);
+  assert.match(responses[1].error.message, /Interactive requests are not supported/);
 });
 
 test("provider death marks uncertain work and restart does not replay", { timeout }, async (t) => {
   const h = await setup(t);
   await h.submit("crashed", "crash");
+  await eventually(async () => {
+    const job = await h.rpc("show", { id: "crashed" });
+    return job.status === "running" && existsSync(path.join(h.data, "crash.ready"));
+  });
+  const owner = JSON.parse(readFileSync(path.join(h.directory, "owner.lock"), "utf8"));
+  process.kill(owner.codexPid, "SIGUSR1");
   assert.equal((await h.daemon.done).code, 1);
   await h.start();
   assert.equal((await h.rpc("show", { id: "crashed" })).status, "unknown");

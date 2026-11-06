@@ -26,7 +26,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeNotification } from "@pwrdrvr/agent-client";
 import type { NormalizedThreadEvent } from "@pwrdrvr/agent-core";
 import type { AppServerThreadReplay } from "@pwragent/shared";
-import { extractThreadReplayFromReadResult } from "../codex-app-server/client";
+import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 import { reduceNormalizedThread } from "../acp/normalized-thread-reducer";
 import { normalizedThreadToReplay } from "../acp/normalized-thread-to-replay";
 

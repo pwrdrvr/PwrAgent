@@ -89,7 +89,7 @@ import type {
 } from "./core/messaging-adapter";
 import { MessagingFederatedThreadTargetError } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { buildMessageContent } from "../codex-app-server/client";
+import { buildMessageContent } from "../codex-app-server/desktop-client";
 import { getMainLogger } from "../log";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";

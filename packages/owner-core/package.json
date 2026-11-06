@@ -8,7 +8,10 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@pwragent/shared": "workspace:*"
+    "@pwragent/shared": "workspace:*",
+    "@pwrdrvr/agent-transport": "^0.1.7",
+    "@pwrdrvr/codex-app-server-protocol": "0.164.0",
+    "@shutterstock/p-map-iterable": "^1.2.0"
   },
   "scripts": {
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"

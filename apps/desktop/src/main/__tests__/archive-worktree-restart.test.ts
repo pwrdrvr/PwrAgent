@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { WorktreeContainerService } from "../app-server/worktree-container-service";
-import { CodexAppServerClient } from "../codex-app-server/client";
+import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";

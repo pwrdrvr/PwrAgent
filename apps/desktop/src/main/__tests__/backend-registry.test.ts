@@ -148,8 +148,8 @@ import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
 import type {
   CodexPwrdrvrTokenMiserActivation,
   CodexServerCapabilities,
-} from "../codex-app-server/client";
-import { CodexAppServerClient } from "../codex-app-server/client";
+} from "../codex-app-server/desktop-client";
+import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import { isBindingForThread } from "../messaging/core/messaging-binding-thread-match";
 import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";

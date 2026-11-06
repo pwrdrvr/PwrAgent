@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { extractThreadReplayFromReadResult } from "../codex-app-server/client";
+import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 
 // Synthetic protocol snapshots only. Count operations, never elapsed time.
 function measureSnapshot(size: number, tools: boolean) {
@@ -84,7 +84,7 @@ vi.mock("@pwrdrvr/agent-transport", async (importOriginal) => ({
 }));
 
 it("normalizes live chunks and late tool progress without revisiting earlier notification payloads", async () => {
-  const { CodexAppServerClient } = await import("../codex-app-server/client");
+  const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
   for (const historySize of [128, 256]) {
     const client = new CodexAppServerClient({ directoryResolver: async () => [] });
     const delivered: Array<{ method: string; params: unknown }> = [];

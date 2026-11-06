@@ -1,6 +1,6 @@
 import { codexAuthState } from "../codex-auth-state";
 import { registerReceivingFolderIpc } from "./receiving-folder";
-import { CodexAppServerClient } from "../codex-app-server/client";
+import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { validateGlabCommand } from "../settings/glab-discovery";
 import { validateCodexModelProviders } from "@pwragent/shared";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";

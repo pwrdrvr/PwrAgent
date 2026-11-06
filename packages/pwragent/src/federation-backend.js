@@ -140,6 +140,13 @@ export class HeadlessBackend {
     }
     const id = message.params?.threadId || message.params?.thread?.id;
     if (!this.threads.has(id)) return;
+    if (message.method === "thread/name/updated") {
+      const thread = this.threads.get(id);
+      const source = message.params.titleSource || "explicit";
+      if (thread.titleSource === "explicit" && source !== "explicit") return;
+      this.setTitle(thread, message.params.threadName, source);
+      return;
+    }
     // The desktop adapter represents failed completions as turn/failed and
     // supplies turnId alongside the provider's nested turn object.
     const turnId = message.params?.turnId || message.params?.turn?.id;
@@ -188,7 +195,7 @@ export class HeadlessBackend {
           && (!params.afterKey || project.path > params.afterKey)).map((project) => ({ key: project.path, kind: "directory", path: project.path, label: project.label, threadKeys: [] })) };
       case "readTurnAssistantReply": {
         const history = await this.readThread(params.threadId);
-        const messages = history.replay.messages.filter((message) => message.role === "assistant" && message.turn?.id === params.turnId);
+        const messages = history.replay.entries.filter((entry) => entry.type === "message" && entry.role === "assistant" && entry.turn?.id === params.turnId);
         return { message: messages.find((message) => params.itemId ? message.id === params.itemId : message.text === params.text) || null };
       }
       case "readThread": {
@@ -227,7 +234,7 @@ export class HeadlessBackend {
           const original = job.messageOrigin;
           this.runtime.save({ ...job, messageOrigin: { ...incoming, ...mergeCausalMessagingContext([original, incoming]) } });
         }
-        const result = await this.runtime.codex.request("turn/steer", { threadId: params.threadId, expectedTurnId: params.expectedTurnId || job.turnId, input });
+        const result = await this.runtime.codex.steerTurn({ threadId: params.threadId, expectedTurnId: params.expectedTurnId || job.turnId, input });
         return { backend: "codex", threadId: params.threadId, turnId: result.turnId || job.turnId, disposition: "steered",
           ...(name === "controlActiveTurn" ? { ok: true, requestId: params.requestId } : {}) };
       }
@@ -281,8 +288,7 @@ export class HeadlessBackend {
     this.publish({ backend: "codex", notification: { method: "navigation/invalidated", params: { threadId, ...(sourceMethod ? { sourceMethod } : {}) } } }, "navigation");
   }
 
-  // threads.json is the only store for a title. The outpost never sets the
-  // Codex thread name.
+  // threads.json retains owner title provenance, including explicit renames.
   setTitle(thread, title, titleSource) {
     Object.assign(thread, { title, titleSource });
     this.persist();
@@ -340,10 +346,10 @@ export class HeadlessBackend {
     const cwd = this.runtime.projects.resolve(params.cwd || params.directoryPath || params.projectKey);
     this.creating = true;
     try {
-      const result = await this.runtime.codex.request("thread/start", { cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
-      if (!result?.thread?.id || typeof result.thread.id !== "string" || result.thread.id.length > 256) throw new Error("Invalid thread/start response");
-      this.runtime.loadedThreads.add(result.thread.id);
-      const thread = { id: result.thread.id, messagingFileTools: true, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
+      const result = await this.runtime.codex.startThread({ cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
+      if (!result?.threadId || typeof result.threadId !== "string" || result.threadId.length > 256) throw new Error("Invalid thread/start response");
+      this.runtime.loadedThreads.add(result.threadId);
+      const thread = { id: result.threadId, messagingFileTools: true, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
         model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
       this.threads.set(thread.id, thread);
       this.persist();
@@ -369,10 +375,12 @@ export class HeadlessBackend {
   }
 
   async listBackends() {
-    const result = await this.runtime.codex.request("model/list", {});
-    const models = (result.data || []).map((model) => ({ id: model.id, label: model.displayName || model.id,
-      current: model.isDefault, reasoningEfforts: (model.supportedReasoningEfforts || []).map((entry) => entry.reasoningEffort),
-      defaultReasoningEffort: model.defaultReasoningEffort, supportsSteering: true, supportsImage: false, supportsFast: false }));
+    const models = (await this.runtime.codex.listModels()).map((model) => ({
+      id: model.id, label: model.label, current: model.current,
+      reasoningEfforts: model.reasoningEfforts, defaultReasoningEffort: model.defaultReasoningEffort,
+      supportsReasoning: model.supportsReasoning, supportsSteering: true,
+      supportsImage: false, supportsFast: false,
+    }));
     return { fetchedAt: Date.now(), backends: [{ kind: "codex", label: "Codex (headless outpost)", available: true,
       methods: Object.keys(METHOD_CAPABILITIES), capabilities: { listThreads: true, createThread: true, resumeThread: true,
         renameThread: true, readThread: true, startTurn: true, interruptTurn: true, steerTurn: true,
@@ -384,36 +392,23 @@ export class HeadlessBackend {
 
   async readThread(id) {
     this.owned(id);
-    const result = await this.runtime.codex.request("thread/read", { threadId: id, includeTurns: true });
-    const entries = [];
-    for (const turn of result.thread?.turns || []) {
-      const status = turn.status === "inProgress" ? "in_progress" : turn.status;
-      const job = [...this.runtime.store.jobs.values()].find((job) => job.threadId === id && job.turnId === turn.id);
-      const metadata = { id: turn.id,
-        ...(["in_progress", "completed", "failed", "cancelled", "interrupted"].includes(status) ? { status } : {}) };
-      for (const [index, item] of (turn.items || []).entries()) {
-        const itemId = item.id || `${turn.id}-${index}`;
-        if (item.type === "agentMessage" || item.type === "userMessage") {
-          entries.push({ type: "message", id: itemId, role: item.type === "agentMessage" ? "assistant" : "user",
-            text: item.text || (item.content || []).filter((part) => part.type === "text").map((part) => part.text).join("\n"),
-            turn: metadata, ...(item.type === "userMessage" && job?.messageOrigin ? { origin: job.messageOrigin } : {}) });
-        } else {
-          const details = item.type === "commandExecution" ? [{ id: itemId, kind: "command", label: item.command,
-            command: { displayCommand: item.command, cwd: item.cwd, output: item.aggregatedOutput || "", exitCode: item.exitCode, durationMs: item.durationMs } }]
-            : [{ id: itemId, kind: item.type === "fileChange" ? "write" : "read", label: item.type, markdown: JSON.stringify(item, null, 2) }];
-          entries.push({ type: "activity", id: itemId, summary: item.command || item.type,
-            status: item.status === "inProgress" ? "in_progress" : item.status === "failed" ? "failed" : "completed", details, turn: metadata });
-        }
-      }
+    const replay = await this.runtime.codex.readThread({ threadId: id });
+    const entries = replay.entries.map((entry) => {
+      if (entry.type !== "message" || entry.role !== "user") return entry;
+      const job = [...this.runtime.store.jobs.values()].find((job) => job.threadId === id && job.turnId === entry.turn?.id);
+      return job?.messageOrigin ? { ...entry, origin: job.messageOrigin } : entry;
+    });
+    const origins = new Map(entries.filter((entry) => entry.type === "message" && entry.origin).map((entry) => [entry.id, entry.origin]));
+    const messages = replay.messages.map((message) => origins.has(message.id) ? { ...message, origin: origins.get(message.id) } : message);
+    const summary = await this.runtime.codex.readThreadSummary(id);
+    const thread = this.owned(id);
+    if (thread.titleSource === "fallback" && summary.titleSource !== "fallback") {
+      this.setTitle(thread, summary.title, summary.titleSource);
+    } else if (thread.titleSource === "fallback") {
+      this.deriveTitle(id, replay.messages.find((message) => message.role === "user")?.text);
     }
-    const messages = entries.filter((entry) => entry.type === "message");
-    // Names threads created before derived titles, and imported threads.
-    this.deriveTitle(id, typeof result.thread?.preview === "string" && result.thread.preview.trim()
-      ? result.thread.preview : messages.find((item) => item.role === "user")?.text);
-    return { backend: "codex", threadId: id, fetchedAt: Date.now(), threadStatus: this.summary(this.owned(id)).threadStatus,
-      replay: { entries, messages, lastUserMessage: messages.filter((item) => item.role === "user").at(-1)?.text,
-        lastAssistantMessage: messages.filter((item) => item.role === "assistant").at(-1)?.text,
-        pagination: { supportsPagination: false, hasPreviousPage: false } } };
+    return { backend: "codex", threadId: id, fetchedAt: Date.now(), threadStatus: this.summary(thread).threadStatus,
+      replay: { ...replay, entries, messages } };
   }
 
   navigationIndex() {

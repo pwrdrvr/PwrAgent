@@ -26,3 +26,5 @@ export { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "@pwragent/federation/fed
 
 export { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-store";
 export { buildThreadIdentityKey, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+
+export { CodexAppServerClient } from "@pwragent/owner-core/codex-app-server/client";

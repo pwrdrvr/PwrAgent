@@ -93,6 +93,30 @@ test("encrypted desktop protocol enrolls, browses, runs, reconnects and reads wh
   await assert.rejects(viewer(invite, v.identity, "reconnect"), /revoked_peer/);
 });
 
+test("an explicit title survives the shared client's derived first-turn name and restart", { timeout: 20000 }, async (t) => {
+  const h = await setup(t);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
+  let v = await viewer(invite);
+  t.after(() => v.connection.close());
+  v.subscribe();
+  const { threadId } = await v.call("startThread", { backend: "codex", cwd: h.workspace });
+  await v.call("renameThread", { threadId, title: "Release checklist" });
+  await v.call("startTurn", { backend: "codex", threadId, input: [{ type: "text", text: "Rewrite everything" }] });
+  await eventually(async () => (await v.call("resolveThread", { threadId })).thread.threadStatus === "idle");
+  const thread = (await v.call("resolveThread", { threadId })).thread;
+  assert.deepEqual([thread.title, thread.titleSource], ["Release checklist", "explicit"]);
+  const names = v.events.filter((event) => event.method === "backend.event")
+    .map((event) => event.params.notification).filter((event) => event.method === "thread/name/updated");
+  assert.ok(names.length > 0);
+  assert.ok(names.every((event) => event.params.threadName === "Release checklist"));
+  v.connection.close();
+  await h.stop(h.daemon);
+  await h.start();
+  v = await viewer(invite, v.identity, "reconnect");
+  const reopened = (await v.call("resolveThread", { threadId })).thread;
+  assert.deepEqual([reopened.title, reopened.titleSource], ["Release checklist", "explicit"]);
+});
+
 test("launchpad creation validates ownership and unsupported settings before creating a thread", { timeout: 20000 }, async (t) => {
   const h = await setup(t);
   const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);

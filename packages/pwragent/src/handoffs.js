@@ -72,11 +72,8 @@ export function setupHandoffs(federation, directory) {
       exportThreadForHandoff: async (id) => {
         const owned = backend.owned(id);
         if (runtime.active) throw new Error("Wait for the source turn to finish");
-        const result = await runtime.codex.request("thread/read", { threadId: id, includeTurns: false });
-        if (result.thread?.id !== id || typeof result.thread.path !== "string") throw new Error("Codex did not provide a persisted thread for protocol export");
-        const file = await runtime.codex.request("fs/readFile", { path: result.thread.path });
-        if (typeof file.dataBase64 !== "string") throw new Error("Codex protocol thread export is unavailable");
-        return { rolloutBase64: file.dataBase64, replay: (await backend.readThread(id)).replay,
+        const exported = await runtime.codex.exportThreadForHandoff(id);
+        return { ...exported, replay: (await backend.readThread(id)).replay,
           cwd: runtime.projects.resolve(owned.cwd || runtime.workspace),
           // A placeholder would become the destination's explicit name.
           ...(owned.titleSource === "fallback" ? {} : { title: owned.title }) };
@@ -87,9 +84,9 @@ export function setupHandoffs(federation, directory) {
         try {
           const cwd = runtime.projects.contained(await realpath(request.directoryPath));
           if (backend.threads.size >= 10000) throw new Error("Thread retention limit reached");
-          const result = await runtime.codex.request("thread/fork", { threadId: request.sourceThreadId, path: request.sourceThreadPath,
+          const result = await runtime.codex.forkThread({ threadId: request.sourceThreadId, path: request.sourceThreadPath,
             cwd, approvalPolicy: "never", sandbox: "read-only" });
-          const id = result.thread?.id;
+          const id = result.threadId;
           if (typeof id !== "string" || !id || backend.threads.has(id)) throw new Error("Invalid forked thread identity");
           backend.threads.set(id, { id, cwd, title: "Imported thread", titleSource: "fallback", createdAt: Date.now(), sandbox: "read-only" });
           runtime.loadedThreads.add(id);
@@ -101,7 +98,7 @@ export function setupHandoffs(federation, directory) {
       readThread: async ({ threadId }) => ({ replay: (await backend.readThread(threadId)).replay }),
       archiveThread: async ({ threadId }) => {
         backend.owned(threadId);
-        await runtime.codex.request("thread/archive", { threadId });
+        await runtime.codex.archiveThread({ threadId });
         backend.owned(threadId).archived = true;
         backend.persist();
         backend.invalidate(threadId);

@@ -4,7 +4,7 @@ import type {
   BackendAccountSummary,
   BackendRateLimitSummary,
 } from "@pwragent/shared";
-import { CodexAppServerClient } from "../src/main/codex-app-server/client";
+import { CodexAppServerClient } from "../src/main/codex-app-server/desktop-client";
 import { ProtocolCaptureStore } from "../src/main/testing/capture-store";
 import { createProtocolCaptureObserver } from "../src/main/testing/protocol-capture";
 

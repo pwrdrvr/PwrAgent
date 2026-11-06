@@ -1,3 +1,15 @@
+import type {
+  CodexClientHost,
+  CodexClientLogger,
+  CodexListingDiagnostics,
+  CodexClientTransport,
+  CodexAppServerExit,
+  CodexAppServerProcessInfo,
+  CodexInvalidResponseMessageIdRecoveryResult,
+  CodexRecoveryBlockingTurn,
+  ThreadDirectoryEnrichment,
+  DirectoryEnrichmentCaller,
+} from "./host";
 import type { NativeVoiceNotification } from "./native-voice-protocol";
 import type { ThreadRealtimeStartParams, ThreadRealtimeAppendTextParams } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
@@ -8,14 +20,12 @@ import type {
   ThreadBackgroundTerminalsListResponse,
   ThreadBackgroundTerminalsTerminateResponse,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
-import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { rememberBoundedMap } from "../bounded-map";
 import { usageAccountKey } from "../usage-account-identity";
-import { nativeReviewTarget } from "../../shared/pull-request-review";
+import { nativeReviewTarget } from "@pwragent/shared/pull-request-review";
 import { ThreadListTextCache } from "./thread-list-text-cache";
 import { codexRequestCountsAsActivity, withCodexRequestActivity } from "./request-activity";
-import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -90,12 +100,6 @@ import type {
   CodexMcpServerSummary,
   LinkedDirectorySummary,
 } from "@pwragent/shared";
-import { prependBundledToolsToPath } from "../bundled-tools";
-import {
-  buildPwrAgentChildProcessEnv,
-  ELECTRON_RENDERER_URL_ENV,
-} from "../child-process-env";
-import { getMainLogger } from "../log";
 import { isPwrSnapSignedMediaUrl } from "../pwrsnap-media-url";
 import type {
   ClientRequest as CodexClientRequest,
@@ -148,31 +152,20 @@ import {
   type JsonRpcObserverDiagnostics,
   type JsonRpcObserverEvent,
 } from "@pwrdrvr/agent-transport";
-import {
-  enrichThreadDirectory,
-  type ThreadDirectoryEnrichment,
-  type DirectoryEnrichmentCaller,
-} from "../app-server/thread-directory-enricher";
-import { withAgentSetupVariablePolicy } from "../app-server/agent-setup-variables";
+import { withAgentSetupVariablePolicy } from "../agent-setup-variables";
 import {
   isCodexReviewPromptText,
   isPwrAgentInlineReviewPrompt,
   normalizeReviewDisplayText,
   normalizeReviewOutputRecord,
-} from "../../shared/review-command";
+} from "@pwragent/shared/review-command";
 import {
   formatDynamicToolOutput,
   formatMcpToolOutput,
   formatToolActivityTitle,
   formatToolIdentifier,
   formatToolInvocation,
-} from "../../shared/tool-activity";
-import {
-  StdioJsonRpcTransport,
-  type CodexAppServerExit,
-  type CodexAppServerProcessInfo,
-  type StdioJsonRpcTransportOptions,
-} from "./stdio-transport";
+} from "@pwragent/shared/tool-activity";
 import {
   CodexAppServerRestartPolicy,
   type CodexAppServerRestartPolicyOptions,
@@ -184,21 +177,10 @@ import {
   type CodexAppServerRecycleSettings,
   type CodexAppServerRecycleStatus,
 } from "./app-server-recycle-policy";
-import {
-  collectDescendants,
-  countOpenFileDescriptors,
-  readProcessTable,
-} from "../process-descendants";
-import {
-  isCodexInvalidResponseMessageIdError,
-  repairCodexInvalidResponseMessageIds,
-  type CodexInvalidResponseMessageIdRecoveryResult,
-  type CodexRecoveryBlockingTurn,
-} from "./invalid-response-message-id-recovery";
 import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
-} from "@pwragent/owner-core/thread-title-generation-service";
+} from "../thread-title-generation-service";
 import {
   normalizeCompatibleApprovalPolicy,
   resolveCodexProtocolCompatibility,
@@ -333,7 +315,7 @@ const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
 ]);
 const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
-type CodexClientOptions = {
+export type CodexClientOptions = {
   authenticationRecovery?: boolean;
   /** The profile's helper model settings, read per helper turn. */
   readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
@@ -341,13 +323,9 @@ type CodexClientOptions = {
   resolveUsageAccountKey?: () => Promise<string | undefined>;
   /** Ids of the model providers PwrAgent configured, read per message. */
   resolveModelProviderIds?: () => ReadonlySet<string>;
-  command?: string;
-  args?: string[];
   env?: NodeJS.ProcessEnv;
-  resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
-  resolveCommand?: StdioJsonRpcTransportOptions["resolveCommand"];
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
-  bundledToolsDirectory?: StdioJsonRpcTransportOptions["bundledToolsDirectory"];
+  bundledToolsDirectory?: string;
   /**
    * Whether a thread's agent gets the shell variables its environment's
    * setup captured. Read at every thread start, fork, resume and turn. When
@@ -389,19 +367,6 @@ type CodexClientOptions = {
   /** Test seam for the idle recycle and idle-thread unsubscribe clock. */
   now?: () => number;
 };
-
-async function sampleAppServerProcessTree(
-  process: CodexAppServerProcessInfo,
-): Promise<{ childProcessCount?: number; openFdCount?: number }> {
-  const [table, openFdCount] = await Promise.all([
-    readProcessTable().catch(() => undefined),
-    countOpenFileDescriptors(process.pid),
-  ]);
-  return {
-    ...(table ? { childProcessCount: collectDescendants(table, process.pid).length } : {}),
-    ...(openFdCount !== undefined ? { openFdCount } : {}),
-  };
-}
 
 /**
  * Thrown instead of starting Codex after it exited on its own too many times
@@ -608,9 +573,7 @@ const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>
   "applyPatchApproval",
   "execCommandApproval",
 ]);
-const codexClientLog = getMainLogger("pwragent:codex-client");
-
-function logCodexClientDebug(event: string, payload: Record<string, unknown>): void {
+function logCodexClientDebug(codexClientLog: CodexClientLogger, event: string, payload: Record<string, unknown>): void {
   if (process.env.NODE_ENV === "production") {
     return;
   }
@@ -687,7 +650,7 @@ function describePayloadShape(payload: unknown): {
   return { payloadType: typeof payload };
 }
 
-function logUnhandledCodexMessage(params: {
+function logUnhandledCodexMessage(codexClientLog: CodexClientLogger, params: {
   kind: "notification" | "request";
   method: string;
   payload: unknown;
@@ -732,7 +695,7 @@ function logUnhandledCodexMessage(params: {
   codexClientLog.warn("unknown codex notification", details);
 }
 
-function logSkillsChangedNotification(params: {
+function logSkillsChangedNotification(codexClientLog: CodexClientLogger, params: {
   payload: unknown;
   listenerCount: number;
   initialized: boolean;
@@ -755,7 +718,7 @@ function logSkillsChangedNotification(params: {
  * Computer Use writes its own title ("Allow Computer Use to use "Electron"?"),
  * which names the app; any other server may put arguments in the title.
  */
-function logMcpElicitationRequest(params: unknown, requestId: string | undefined): void {
+function logMcpElicitationRequest(codexClientLog: CodexClientLogger, params: unknown, requestId: string | undefined): void {
   const record = asRecord(params);
   const meta = asRecord(record?.["_meta"]);
   const serverName = readStringFromRecord(record, "serverName");
@@ -6822,6 +6785,7 @@ function buildThreadStartPayload(params: {
   dynamicTools?: CodexDynamicToolSpec[];
   threadSource?: CodexThreadStartParams["threadSource"];
   bundledToolsDirectory?: string;
+  buildShellEnvironment?: CodexClientHost["buildShellEnvironment"];
   pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
 }, compatibility: CodexProtocolCompatibility): CodexThreadStartPayload {
   const base: CodexThreadStartPayload = {
@@ -6881,6 +6845,7 @@ function buildThreadStartPayload(params: {
     ),
     params.codexEnvironmentRuntime,
     params.bundledToolsDirectory,
+    params.buildShellEnvironment,
   );
   if (config) {
     base.config = config;
@@ -6912,15 +6877,15 @@ function mergeCodexShellEnvironmentPolicyConfig(
   config: CodexThreadStartParams["config"] | undefined,
   runtime: CodexThreadEnvironmentRuntime | undefined,
   bundledToolsDirectory?: string,
+  buildShellEnvironment?: CodexClientHost["buildShellEnvironment"],
 ): CodexThreadStartParams["config"] | undefined {
   const sanitizedConfig = sanitizeCodexShellEnvironmentPolicyConfig(config);
   if (runtime?.executionTarget !== "local" || !runtime.shellEnvironment) {
     return sanitizedConfig;
   }
-  const hydratedEnvironment = prependBundledToolsToPath(
-    buildPwrAgentChildProcessEnv(runtime.shellEnvironment),
-    bundledToolsDirectory ? { directory: bundledToolsDirectory } : {},
-  );
+  const hydratedEnvironment = buildShellEnvironment
+    ? buildShellEnvironment(runtime.shellEnvironment, bundledToolsDirectory)
+    : runtime.shellEnvironment;
   const shellEnvironment = Object.fromEntries(
     Object.entries(hydratedEnvironment).filter(
       (entry): entry is [string, string] =>
@@ -6955,7 +6920,7 @@ function sanitizeCodexShellEnvironmentPolicyConfig(
     const environmentKey = key.startsWith("shell_environment_policy.set.")
       ? key.slice("shell_environment_policy.set.".length)
       : undefined;
-    if (environmentKey?.toUpperCase() === ELECTRON_RENDERER_URL_ENV) {
+    if (environmentKey?.toUpperCase() === "ELECTRON_RENDERER_URL") {
       delete sanitized[key];
     }
   }
@@ -6997,6 +6962,7 @@ function buildThreadForkPayload(params: {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   config?: CodexThreadForkParams["config"];
   bundledToolsDirectory?: string;
+  buildShellEnvironment?: CodexClientHost["buildShellEnvironment"];
 }, compatibility: CodexProtocolCompatibility): CodexThreadForkPayload {
   const base: CodexThreadForkPayload = {
     threadId: params.threadId,
@@ -7042,6 +7008,7 @@ function buildThreadForkPayload(params: {
     params.config,
     params.codexEnvironmentRuntime,
     params.bundledToolsDirectory,
+    params.buildShellEnvironment,
   );
   if (config) {
     base.config = config;
@@ -7064,6 +7031,7 @@ function buildThreadResumePayloads(params: {
   config?: CodexThreadResumeParams["config"];
   defaultModeRequestUserInput?: boolean;
   bundledToolsDirectory?: string;
+  buildShellEnvironment?: CodexClientHost["buildShellEnvironment"];
   dynamicTools?: CodexDynamicToolSpec[];
   pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
@@ -7109,6 +7077,7 @@ function buildThreadResumePayloads(params: {
     ),
     params.codexEnvironmentRuntime,
     params.bundledToolsDirectory,
+    params.buildShellEnvironment,
   );
   if (config) {
     base.config = config;
@@ -7297,6 +7266,7 @@ function buildTurnStartPayload(params: {
   approvalPolicy?: string;
   approvalsReviewer?: ApprovalsReviewer;
   sandbox?: string;
+  sandboxPolicy?: CodexSandboxPolicy;
   outputSchema?: CodexTurnStartParams["outputSchema"];
   collaborationMode?: AppServerCollaborationModeRequest;
   collaborationFallbackModel?: string;
@@ -7334,7 +7304,7 @@ function buildTurnStartPayload(params: {
     base.approvalPolicy = approvalPolicy;
   }
   applyApprovalReviewer(base, params, compatibility);
-  const sandboxPolicy = buildCodexSandboxPolicy(params.sandbox);
+  const sandboxPolicy = params.sandboxPolicy ?? buildCodexSandboxPolicy(params.sandbox);
   if (sandboxPolicy) {
     base.sandboxPolicy = sandboxPolicy;
   }
@@ -7589,6 +7559,7 @@ async function hydrateCodexThreadHistory(params: {
 }
 
 async function requestWithFallbacks(params: {
+  listingDiagnostics?: CodexListingDiagnostics;
   client: Pick<JsonRpcConnection, "request">;
   diagnostics?: JsonRpcObserverDiagnostics;
   methods: Array<CodexClientRequestMethod | (string & {})>;
@@ -7610,8 +7581,8 @@ async function requestWithFallbacks(params: {
         attempt += 1;
         const request = () => params.client.request(method, payload, timeoutMs, params.diagnostics);
         return await (method === "thread/list"
-          ? listingDiagnostics.trace("provider-rpc", { caller: params.diagnostics?.callerReason, page: params.listingPage, attempt,
-            ...(attempt > 1 ? { reason: "provider-fallback" } : {}) }, request)
+          ? params.listingDiagnostics?.trace("provider-rpc", { caller: params.diagnostics?.callerReason, page: params.listingPage, attempt,
+            ...(attempt > 1 ? { reason: "provider-fallback" } : {}) }, request) ?? request()
           : request());
       } catch (error) {
         lastError = error;
@@ -7626,6 +7597,8 @@ async function requestWithFallbacks(params: {
 }
 
 async function requestThreadListPages(params: {
+  listingDiagnostics: CodexListingDiagnostics;
+  logger: CodexClientLogger;
   textCache: ThreadListTextCache;
   archived?: boolean;
   client: Pick<JsonRpcConnection, "request">;
@@ -7671,6 +7644,7 @@ async function requestThreadListPages(params: {
       timeoutMs: params.requestTimeoutMs,
       deadlineAt: params.deadlineAt,
       listingPage: pageCount + 1,
+      listingDiagnostics: params.listingDiagnostics,
     });
     const page = extractThreadListPage(result, params.textCache);
     pages.push(...page.threads);
@@ -7704,7 +7678,7 @@ async function requestThreadListPages(params: {
   } while (cursor);
 
   const mergedThreads = mergeThreadSummaries(pages);
-  logCodexClientDebug("threadListPages", {
+  logCodexClientDebug(params.logger, "threadListPages", {
     archived: params.archived === true,
     callerReason: params.diagnostics?.callerReason ?? "thread-list",
     durationMs: Date.now() - startedAt,
@@ -7791,7 +7765,7 @@ export class CodexAppServerClient {
   private rejectedCodexHome?: string;
   private transportClosePromise: Promise<void> | null = null;
   private readonly restartPolicy: CodexAppServerRestartPolicy;
-  private readonly transport: StdioJsonRpcTransport;
+  private readonly transport: CodexClientTransport;
   /** Last Codex event or ordinary RPC; background probes do not postpone recycling. */
   private lastAppServerActivityAt: number;
   /** Requests from Codex (approvals, user input, tool calls) not yet answered. */
@@ -7938,34 +7912,26 @@ export class CodexAppServerClient {
   private readonly reportedUnknownNotificationMethods = new Set<string>();
   private readonly liveMessagePhases = new Map<string, LiveAgentMessagePhase>();
 
-  constructor(private readonly options: CodexClientOptions = {}) {
+  constructor(private readonly options: CodexClientOptions, private readonly host: CodexClientHost) {
     this.restartPolicy = new CodexAppServerRestartPolicy(options.appServerRestartPolicy);
     this.lastAppServerActivityAt = this.now();
-    this.transport = new StdioJsonRpcTransport({
-      command: options.command?.trim() || "codex",
-      authenticationRecovery: options.authenticationRecovery,
+    this.transport = host.createTransport({
       onAuthenticationRejected: (home) => {
         this.rejectedCodexHome = home;
         const runningTurns = [...this.runningTurnIdsByThread];
         this.runningTurnIdsByThread.clear();
         void (async () => {
           await this.close();
-          await this.failRunningTurns(runningTurns, CODEX_SIGN_IN_REQUIRED);
-        })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
+          await this.failRunningTurns(runningTurns, host.signInRequiredMessage);
+        })().catch((error) => this.host.logger.warn("Codex auth shutdown failed", { error: String(error) }));
       },
       onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
-      args: options.args ?? [],
-      env: options.env,
-      resolveArgs: options.resolveArgs,
-      resolveCommand: options.resolveCommand,
-      resolveEnv: options.resolveEnv,
-      bundledToolsDirectory: options.bundledToolsDirectory,
     });
     this.rawConnection = new JsonRpcConnection(
       this.transport,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       createCodexObserverWithConfigReadRedaction(options.connectionObserver),
-      { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
+      { logContext: { backend: "codex" }, logger: host.rpcLogger },
     );
     // Every request, admitted or lifecycle, reaches Codex through this one
     // function, so qualified model ids are translated in one place.
@@ -7984,9 +7950,14 @@ export class CodexAppServerClient {
     // any operation, helper or recovery opens or closes.
     const requestBeforeSubscriptionTracking = this.rawConnection.request.bind(this.rawConnection);
     this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
-      const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
-      this.observeThreadSubscription(method, params, result);
-      return result;
+      try {
+        const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
+        this.observeThreadSubscription(method, params, result);
+        return result;
+      } catch (error) {
+        this.host.onRequestFailure?.(error);
+        throw error;
+      }
     };
     this.connection = {
       request: (...args) => this.requestWhenAvailable(...args),
@@ -7998,7 +7969,7 @@ export class CodexAppServerClient {
         ? async (projectKey?: string) => ({
             linkedDirectories: await directoryResolver(projectKey),
           })
-        : enrichThreadDirectory);
+        : host.enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, rawParams) => {
       this.lastAppServerActivityAt = this.now();
       const params = this.modelProviderTranslator
@@ -8007,7 +7978,7 @@ export class CodexAppServerClient {
       if (method === "deprecationNotice") {
         // Protocol migration guidance belongs in diagnostics, not thread UI.
         const notice = asRecord(params) ?? {};
-        codexClientLog.warn("codex deprecation notice", {
+        this.host.logger.warn("codex deprecation notice", {
           summary: notice.summary,
           details: notice.details,
         });
@@ -8023,7 +7994,7 @@ export class CodexAppServerClient {
       // carry the operator's spoken words and session SDP, which stay memory
       // only.
       if (!isKnownCodexMethod && !method.startsWith("thread/realtime/")) {
-        logUnhandledCodexMessage({
+        logUnhandledCodexMessage(this.host.logger, {
           kind: "notification",
           method,
           payload: params,
@@ -8031,7 +8002,7 @@ export class CodexAppServerClient {
         });
       }
       if (method === "skills/changed") {
-        logSkillsChangedNotification({
+        logSkillsChangedNotification(this.host.logger, {
           payload: params,
           listenerCount: this.notificationListeners.size,
           initialized: this.initialized,
@@ -8060,7 +8031,7 @@ export class CodexAppServerClient {
           });
           this.mcpStartupStatusByContext.set(contextKey, statuses);
           if (status === "failed") {
-            codexClientLog.error("MCP server startup failed", {
+            this.host.logger.error("MCP server startup failed", {
               serverName: name,
               ...(threadId ? { threadId } : {}),
               ...(error ? { error } : {}),
@@ -8193,7 +8164,7 @@ export class CodexAppServerClient {
 
       const listeners = [...this.requestListeners];
       if (listeners.length === 0) {
-        logUnhandledCodexMessage({
+        logUnhandledCodexMessage(this.host.logger, {
           kind: "request",
           method,
           payload: params,
@@ -8203,11 +8174,11 @@ export class CodexAppServerClient {
       }
 
       if (method === "mcpServer/elicitation/request") {
-        logMcpElicitationRequest(params, rpcId == null ? undefined : String(rpcId));
+        logMcpElicitationRequest(this.host.logger, params, rpcId == null ? undefined : String(rpcId));
       }
 
       if (!isHandledServerRequestMethod(method)) {
-        logUnhandledCodexMessage({
+        logUnhandledCodexMessage(this.host.logger, {
           kind: "request",
           method,
           payload: params,
@@ -8366,7 +8337,7 @@ export class CodexAppServerClient {
           this.threadUnsubscribeUnsupported = true;
           return "stop";
         }
-        codexClientLog.warn("idle Codex thread unsubscribe failed", {
+        this.host.logger.warn("idle Codex thread unsubscribe failed", {
           threadId,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -8383,7 +8354,7 @@ export class CodexAppServerClient {
       if (outcome === "released") released.push(threadId);
     }
     if (released.length > 0) {
-      codexClientLog.info("unsubscribed idle Codex threads", {
+      this.host.logger.info("unsubscribed idle Codex threads", {
         count: released.length,
         stillSubscribed: this.subscribedThreads.size,
       });
@@ -8464,7 +8435,7 @@ export class CodexAppServerClient {
     const runningTurns = [...this.runningTurnIdsByThread];
     this.resetConnectionState(new Error("codex app server exited"));
     const decision = this.restartPolicy.recordExit();
-    codexClientLog.warn("Codex app server exited unexpectedly", {
+    this.host.logger.warn("Codex app server exited unexpectedly", {
       runningTurns: runningTurns.length,
       code: exit.code,
       signal: exit.signal,
@@ -8487,13 +8458,13 @@ export class CodexAppServerClient {
       try {
         listener();
       } catch (error) {
-        codexClientLog.warn("Codex app server exit listener failed", {
+        this.host.logger.warn("Codex app server exit listener failed", {
           error: String(error),
         });
       }
     }
     void this.failRunningTurns(runningTurns, CODEX_APP_SERVER_EXITED_MID_TURN)
-      .catch((error) => codexClientLog.warn("Codex exit turn failure delivery failed", { error: String(error) }));
+      .catch((error) => this.host.logger.warn("Codex exit turn failure delivery failed", { error: String(error) }));
   }
 
   getAppServerRestartStatus(): CodexAppServerRestartStatus {
@@ -8536,7 +8507,7 @@ export class CodexAppServerClient {
     // A start already waiting out the old delay proceeds now.
     this.cancelRestartBackoff?.();
     this.setRestartStatus({ stopped: false });
-    codexClientLog.info("Codex app server restart history cleared", { reason, wasStopped });
+    this.host.logger.info("Codex app server restart history cleared", { reason, wasStopped });
   }
 
   /**
@@ -8547,7 +8518,7 @@ export class CodexAppServerClient {
     const info = this.initialized ? this.transport.getProcessInfo?.() : undefined;
     if (!info) return undefined;
     const sampledAt = this.now();
-    const counts = await (this.options.sampleAppServerProcessTree ?? sampleAppServerProcessTree)(info)
+    const counts = await (this.options.sampleAppServerProcessTree ?? this.host.sampleAppServerProcessTree)(info)
       .catch(() => ({}));
     return {
       pid: info.pid,
@@ -8582,7 +8553,7 @@ export class CodexAppServerClient {
     try {
       outcome = await this.tryRecycleIdleAppServer(params);
     } catch (error) {
-      codexClientLog.warn("Codex app server idle recycle failed", { error: String(error) });
+      this.host.logger.warn("Codex app server idle recycle failed", { error: String(error) });
       outcome = { kind: "busy", blocker: "error" };
     }
     this.recycleStatus = {
@@ -8648,7 +8619,7 @@ export class CodexAppServerClient {
         ...(sample.openFdCount !== undefined ? { openFdCount: sample.openFdCount } : {}),
         ...(stop ? { orphansReaped: stop.orphansReaped } : {}),
       };
-      codexClientLog.info("Codex app server recycled while idle", record);
+      this.host.logger.info("Codex app server recycled while idle", record);
       return { kind: "recycled", record };
     });
   }
@@ -8679,7 +8650,7 @@ export class CodexAppServerClient {
       try {
         listener(status);
       } catch (error) {
-        codexClientLog.warn("Codex restart status listener failed", { error: String(error) });
+        this.host.logger.warn("Codex restart status listener failed", { error: String(error) });
       }
     }
   }
@@ -8687,7 +8658,7 @@ export class CodexAppServerClient {
   private async waitForRestartBackoff(): Promise<void> {
     const delayMs = this.restartPolicy.remainingDelayMs();
     if (delayMs <= 0) return;
-    codexClientLog.info("waiting to restart Codex app server", { delayMs });
+    this.host.logger.info("waiting to restart Codex app server", { delayMs });
     await new Promise<void>((resolve) => {
       const finish = () => {
         clearTimeout(timer);
@@ -8898,7 +8869,7 @@ export class CodexAppServerClient {
     signal?: AbortSignal;
     threadId: string;
   }): Promise<CodexInvalidResponseMessageIdRecoveryResult> {
-    if (!isCodexInvalidResponseMessageIdError(params.failureMessage)) {
+    if (!this.host.invalidResponseMessageIdRecovery?.isFailure(params.failureMessage)) {
       throw new Error(
         "Codex persisted-message-ID recovery requires the exact invalid ID prefix failure",
       );
@@ -8934,7 +8905,7 @@ export class CodexAppServerClient {
         .join("\n");
       if (waitKey !== reportedWaitKey) {
         reportedWaitKey = waitKey;
-        codexClientLog.warn("Codex history recovery is waiting for running turns", {
+        this.host.logger.warn("Codex history recovery is waiting for running turns", {
           blockingThreadIds: attempt.blockingTurns.map((turn) => turn.threadId),
           threadId: params.threadId,
         });
@@ -8972,6 +8943,8 @@ export class CodexAppServerClient {
       // resolved without guessing at Codex-owned storage paths.
       const matchingThreads = (
         await requestThreadListPages({
+          listingDiagnostics: this.host.listingDiagnostics,
+          logger: this.host.logger,
           textCache: this.threadListTextCache,
           archived: false,
           client: this.rawConnection,
@@ -9009,7 +8982,7 @@ export class CodexAppServerClient {
       let recoveryResult: CodexInvalidResponseMessageIdRecoveryResult | undefined;
       let recoveryError: unknown;
       try {
-        recoveryResult = await repairCodexInvalidResponseMessageIds({
+        recoveryResult = await this.host.invalidResponseMessageIdRecovery!.repair({
           codexHome,
           forkLineageThreadIds: params.forkLineageThreadIds,
           rolloutPath,
@@ -9339,7 +9312,7 @@ export class CodexAppServerClient {
       });
       this.recordedThreadNames.set(entry.id, entry.threadName);
     } catch (error) {
-      codexClientLog.warn("failed to set codex thread name", {
+      this.host.logger.warn("failed to set codex thread name", {
         threadId: entry.id,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -9363,7 +9336,7 @@ export class CodexAppServerClient {
       });
       this.recordedThreadNames.set(params.threadId, threadName);
     } catch (error) {
-      codexClientLog.warn("failed to set derived codex thread name", {
+      this.host.logger.warn("failed to set derived codex thread name", {
         threadId: params.threadId,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -9639,10 +9612,10 @@ export class CodexAppServerClient {
     ]);
     const existing = this.pendingThreadListings.get(key);
     if (existing) {
-      listingDiagnostics.link("provider", "coalesced", existing, { caller: diagnostics?.callerReason });
+      this.host.listingDiagnostics.link("provider", "coalesced", existing, { caller: diagnostics?.callerReason });
       return structuredClone(await existing);
     }
-    const pending = listingDiagnostics.trace("provider", { provider: "codex", caller: diagnostics?.callerReason, archived: params?.archived === true },
+    const pending = this.host.listingDiagnostics.trace("provider", { provider: "codex", caller: diagnostics?.callerReason, archived: params?.archived === true },
       () => this.loadThreadListing(params, diagnostics));
     this.pendingThreadListings.set(key, pending);
     try {
@@ -9668,6 +9641,8 @@ export class CodexAppServerClient {
     const shared = pending !== undefined;
     if (!pending) {
       pending = requestThreadListPages({
+        listingDiagnostics: this.host.listingDiagnostics,
+        logger: this.host.logger,
         textCache: this.threadListTextCache,
         archived: params?.archived === true,
         client: this.connection,
@@ -9737,6 +9712,8 @@ export class CodexAppServerClient {
     await this.ensureInitialized();
 
     const nativeThreads = await requestThreadListPages({
+      listingDiagnostics: this.host.listingDiagnostics,
+      logger: this.host.logger,
       textCache: this.threadListTextCache,
       archived: params?.archived === true,
       client: this.connection,
@@ -9770,6 +9747,8 @@ export class CodexAppServerClient {
 
     const rawThreads = filterVisibleCodexThreads(
       await requestThreadListPages({
+        listingDiagnostics: this.host.listingDiagnostics,
+        logger: this.host.logger,
         textCache: this.threadListTextCache,
         archived: params?.archived === true,
         client: this.connection,
@@ -9818,7 +9797,7 @@ export class CodexAppServerClient {
       this.archivedThreadMetadataScheduledByFilter.delete(cacheKey);
       void withCodexRequestActivity({ countsAsActivity: false }, () =>
         this.refreshArchivedThreadMetadata(filter, diagnostics)).catch((error) => {
-        codexClientLog.warn("archived thread metadata refresh failed", {
+        this.host.logger.warn("archived thread metadata refresh failed", {
           error: error instanceof Error ? error.message : String(error),
           filter: filter?.trim() || null,
         });
@@ -9837,6 +9816,8 @@ export class CodexAppServerClient {
     }
 
     const requestPromise = requestThreadListPages({
+      listingDiagnostics: this.host.listingDiagnostics,
+      logger: this.host.logger,
       textCache: this.threadListTextCache,
       archived: true,
       client: this.connection,
@@ -9912,6 +9893,7 @@ export class CodexAppServerClient {
   }): Promise<{ threads: AppServerThreadSummary[]; nextCursor?: string }> {
     await this.ensureInitialized();
     const result = await requestWithFallbacks({
+      listingDiagnostics: this.host.listingDiagnostics,
       client: this.connection,
       diagnostics: { callerReason: "archive-cleanup" },
       methods: ["thread/list"] as CodexClientRequestMethod[],
@@ -10028,7 +10010,7 @@ export class CodexAppServerClient {
           }
         } catch (error) {
           if (background?.strict) throw error;
-          codexClientLog.warn("thread directory enrichment failed", {
+          this.host.logger.warn("thread directory enrichment failed", {
             threadId: thread.id,
             projectKey,
             error: error instanceof Error ? error.message : String(error),
@@ -10241,7 +10223,7 @@ export class CodexAppServerClient {
     if (!this.helperModelsRead) {
       this.helperModelsReading ??= this.listModels()
         .catch((error: unknown) => {
-          codexClientLog.warn("model/list for helper model failed", {
+          this.host.logger.warn("model/list for helper model failed", {
             helper: params.helper,
             error: error instanceof Error ? error.message : String(error),
           });
@@ -10266,7 +10248,7 @@ export class CodexAppServerClient {
     const warningKey = `${params.helper}:${skipped.join(",")}`;
     if (skipped.length > 0 && !this.helperModelWarnings.has(warningKey)) {
       this.helperModelWarnings.add(warningKey);
-      codexClientLog.warn("helper model not offered by Codex", {
+      this.host.logger.warn("helper model not offered by Codex", {
         helper: params.helper,
         skipped,
         model: resolution.model,
@@ -10297,11 +10279,11 @@ export class CodexAppServerClient {
       this.availableHelperModels = models;
       this.helperModelsRead = true;
       this.helperModelWarnings.clear();
-      codexClientLog.info("model/list", {
+      this.host.logger.info("model/list", {
         durationMs: Math.round(performance.now() - startedAt),
         normalizedModelIds: models.map((model) => model.id),
       });
-      codexClientLog.debug("model/list raw models", {
+      this.host.logger.debug("model/list raw models", {
         rawModels: summarizeGeneratedModelList(parsedResult),
       });
       return models;
@@ -10311,11 +10293,11 @@ export class CodexAppServerClient {
     this.availableHelperModels = models;
     this.helperModelsRead = true;
     this.helperModelWarnings.clear();
-    codexClientLog.info("model/list", {
+    this.host.logger.info("model/list", {
       durationMs: Math.round(performance.now() - startedAt),
       normalizedModelIds: models.map((model) => model.id),
     });
-    codexClientLog.debug("model/list raw models", {
+    this.host.logger.debug("model/list raw models", {
       rawModels: summarizeRawModelList(result),
     });
 
@@ -10427,7 +10409,7 @@ export class CodexAppServerClient {
             ? { estimatedCostMicros } : {}),
         };
       } catch (error) {
-        codexClientLog.debug("historical pricing snapshot unavailable", { threadId, error: String(error) });
+        this.host.logger.debug("historical pricing snapshot unavailable", { threadId, error: String(error) });
         return { model };
       }
     });
@@ -10660,6 +10642,13 @@ export class CodexAppServerClient {
     return response.terminated;
   }
 
+  /** Raw protocol response retained for hosts with an existing protocol CLI. */
+  async readThreadProtocolResult(params: CodexThreadReadParams): Promise<CodexThreadReadResponse> {
+    await this.ensureInitialized();
+    return await this.connection.request("thread/read", params,
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) as CodexThreadReadResponse;
+  }
+
   async readThread(params: {
     threadId: string;
     includeTurns?: boolean;
@@ -10775,6 +10764,12 @@ export class CodexAppServerClient {
     };
   }
 
+  private buildSandboxPolicy(sandbox?: string, cwd?: string): CodexSandboxPolicy | undefined {
+    return this.host.buildSandboxPolicy
+      ? this.host.buildSandboxPolicy(sandbox, cwd)
+      : buildCodexSandboxPolicy(sandbox);
+  }
+
   /** Drops the captured setup variables when the profile withholds them. */
   private withAgentEnvironmentPolicy<
     T extends { codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime },
@@ -10802,6 +10797,7 @@ export class CodexAppServerClient {
     const payload = buildThreadStartPayload({
       ...params, pwrdrvrTokenMiser: params.pwrdrvrTokenMiser ?? undefined,
       bundledToolsDirectory: this.options.bundledToolsDirectory,
+      buildShellEnvironment: this.host.buildShellEnvironment,
     }, this.getProtocolCompatibility());
     if (!isDeepStrictEqual(fresh.dynamicTools, payload.dynamicTools ?? [])
       || fresh.cwd !== payload.cwd
@@ -10816,7 +10812,7 @@ export class CodexAppServerClient {
       threadId: params.threadId,
       approvalPolicy: payload.approvalPolicy,
       approvalsReviewer: payload.approvalsReviewer,
-      sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+      sandboxPolicy: this.buildSandboxPolicy(params.sandbox, params.cwd),
     }, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     const current = admitted
       ? this.admittedNativeVoiceThreads.get(params.threadId)
@@ -10862,6 +10858,7 @@ export class CodexAppServerClient {
     }
     const [resumePayload] = buildThreadResumePayloads({
       ...params, bundledToolsDirectory: this.options.bundledToolsDirectory,
+      buildShellEnvironment: this.host.buildShellEnvironment,
     }, this.getProtocolCompatibility());
     await requestWithFallbacks({
       client: connection,
@@ -10878,7 +10875,7 @@ export class CodexAppServerClient {
         ...settings, threadId: params.threadId,
         approvalPolicy: resumePayload.approvalPolicy as CodexThreadSettingsUpdateParams["approvalPolicy"],
         approvalsReviewer: resumePayload.approvalsReviewer,
-        sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+        sandboxPolicy: this.buildSandboxPolicy(params.sandbox, params.cwd),
       };
       await connection.request("thread/settings/update", payload,
         this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
@@ -10926,6 +10923,7 @@ export class CodexAppServerClient {
 
     const startPayload = buildThreadStartPayload({
       ...params, bundledToolsDirectory: this.options.bundledToolsDirectory,
+      buildShellEnvironment: this.host.buildShellEnvironment,
     }, this.getProtocolCompatibility());
     const result = await requestWithFallbacks({
       client: this.connection,
@@ -10982,6 +10980,7 @@ export class CodexAppServerClient {
           {
             ...params,
             bundledToolsDirectory: this.options.bundledToolsDirectory,
+            buildShellEnvironment: this.host.buildShellEnvironment,
           },
           this.getProtocolCompatibility(),
         ),
@@ -11008,6 +11007,11 @@ export class CodexAppServerClient {
 
   async startTurn(params: {
     threadId: string;
+    /** Hosts with durable jobs can retain a terminal response before the call returns. */
+    onTerminalResult?: (result: {
+      threadId: string;
+      turn: { id: string; status: "completed" | "failed" | "interrupted"; error?: { message: string } };
+    }) => void;
     /** Delegation attribution only. */
     parentTurnId?: string;
     rootTurnId?: string;
@@ -11095,6 +11099,7 @@ export class CodexAppServerClient {
             config: params.config,
             defaultModeRequestUserInput: params.defaultModeRequestUserInput,
             bundledToolsDirectory: this.options.bundledToolsDirectory,
+            buildShellEnvironment: this.host.buildShellEnvironment,
             dynamicTools: params.dynamicTools,
             pwrdrvrTokenMiser: params.pwrdrvrTokenMiser,
           },
@@ -11116,7 +11121,7 @@ export class CodexAppServerClient {
             if (message.toLowerCase().includes("already has an active writer")) {
               throw error;
             }
-            codexClientLog.warn("thread/resume failed before turn/start", {
+            this.host.logger.warn("thread/resume failed before turn/start", {
               threadId: params.threadId,
               requestedApprovalPolicy: params.approvalPolicy ?? null,
               requestedSandbox: params.sandbox ?? null,
@@ -11148,6 +11153,7 @@ export class CodexAppServerClient {
             approvalPolicy: params.approvalPolicy,
             approvalsReviewer: params.approvalsReviewer,
             sandbox: params.sandbox,
+            sandboxPolicy: this.buildSandboxPolicy(params.sandbox, params.cwd),
             collaborationMode: params.collaborationMode,
             collaborationFallbackModel:
               params.model?.trim() || extractStringProperty(resumeResult, "model"),
@@ -11166,6 +11172,12 @@ export class CodexAppServerClient {
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
     const turn = asRecord(asRecord(result)?.turn);
+    const terminalStatus = pickString(turn ?? {}, ["status"]);
+    if (terminalStatus === "completed" || terminalStatus === "failed" || terminalStatus === "interrupted") {
+      const message = pickString(asRecord(turn?.error) ?? {}, ["message"]);
+      params.onTerminalResult?.({ threadId, turn: { id: turnId, status: terminalStatus,
+        ...(message ? { error: { message } } : {}) } });
+    }
     if (typeof turn?.rootTurnId === "string" || turn?.rootTurnId === null) {
       rememberBoundedMap(this.turnRoots, `${threadId}:${turnId}`, turn.rootTurnId, 1_000);
     }
@@ -11446,7 +11458,7 @@ export class CodexAppServerClient {
         // AGENTS.md. The helper cwd and project-doc budget still exclude
         // project instructions, while the remaining global source is bounded
         // to one fresh copy because every helper uses a new ephemeral thread.
-        codexClientLog.warn("codex helper thread retained global instruction source", {
+        this.host.logger.warn("codex helper thread retained global instruction source", {
           threadId: helperThreadId,
           instructionSourceCount: instructionSources.length,
         });
@@ -11461,7 +11473,7 @@ export class CodexAppServerClient {
         // threadId is supplied. Configured servers are still disabled in the
         // helper overlay, but that legacy inventory cannot attest the helper
         // without falsely rejecting tools active on interactive threads.
-        logCodexClientDebug("codex helper skipped unavailable thread-scoped MCP attestation", {
+        logCodexClientDebug(this.host.logger, "codex helper skipped unavailable thread-scoped MCP attestation", {
           threadId: helperThreadId,
         });
       }
@@ -11560,7 +11572,7 @@ export class CodexAppServerClient {
             payloads: [{ threadId: helperThreadId, turnId: helperTurnId }],
             timeoutMs,
           }).catch((error: unknown) => {
-            codexClientLog.warn("codex helper turn cleanup interrupt failed", {
+            this.host.logger.warn("codex helper turn cleanup interrupt failed", {
               threadId: helperThreadId,
               turnId: helperTurnId,
               error: error instanceof Error ? error.message : String(error),
@@ -11573,7 +11585,7 @@ export class CodexAppServerClient {
           payloads: [{ threadId: helperThreadId }],
           timeoutMs,
         }).catch((error: unknown) => {
-          codexClientLog.warn("codex helper thread unsubscribe failed", {
+          this.host.logger.warn("codex helper thread unsubscribe failed", {
             threadId: helperThreadId,
             error: error instanceof Error ? error.message : String(error),
           });
@@ -11653,6 +11665,7 @@ export class CodexAppServerClient {
             codexEnvironmentRuntime: params.codexEnvironmentRuntime,
             config: params.config,
             bundledToolsDirectory: this.options.bundledToolsDirectory,
+            buildShellEnvironment: this.host.buildShellEnvironment,
             dynamicTools: params.dynamicTools,
           },
           this.getProtocolCompatibility(),
@@ -11746,7 +11759,7 @@ export class CodexAppServerClient {
         threadId: params.threadId,
         approvalPolicy: permissions.approvalPolicy as CodexThreadSettingsUpdateParams["approvalPolicy"],
         approvalsReviewer: permissions.approvalsReviewer,
-        sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+        sandboxPolicy: this.buildSandboxPolicy(params.sandbox, params.cwd),
         ...(params.cwd ? { cwd: params.cwd } : {}),
         ...(params.model ? { model: params.model } : {}),
         ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
@@ -11950,7 +11963,7 @@ export class CodexAppServerClient {
         throw error;
       }
 
-      codexClientLog.warn(
+      this.host.logger.warn(
         "turn/interrupt timed out; waiting for later status updates",
         {
           threadId: params.threadId,
@@ -12183,12 +12196,12 @@ export class CodexAppServerClient {
   }
 
   isAuthenticationRequired(): boolean {
-    return Boolean(this.rejectedCodexHome && codexAuthState.isBlocked(this.rejectedCodexHome));
+    return Boolean(this.rejectedCodexHome && this.host.authState.isBlocked(this.rejectedCodexHome));
   }
 
   private async ensureInitialized(): Promise<void> {
     if (this.rejectedCodexHome && !this.options.authenticationRecovery) {
-      codexAuthState.assertAvailable(this.rejectedCodexHome);
+      this.host.authState.assertAvailable(this.rejectedCodexHome);
     }
     if (this.pendingCloses > 0) throw new Error("codex app server client closed");
     const generation = this.closeGeneration;
@@ -12247,7 +12260,7 @@ export class CodexAppServerClient {
       const startedAt = performance.now();
       await this.rawConnection.connect();
       assertNotClosed();
-      codexClientLog.info("app-server transport connected", {
+      this.host.logger.info("app-server transport connected", {
         durationMs: Math.round(performance.now() - startedAt),
       });
 
@@ -12264,8 +12277,7 @@ export class CodexAppServerClient {
           };
         } = {
           clientInfo: {
-            name: "pwragent-desktop",
-            title: "PwrAgent",
+            ...this.host.clientInfo,
             version: this.options.clientVersion ?? "0.0.0",
           },
           capabilities: {
@@ -12296,7 +12308,7 @@ export class CodexAppServerClient {
       assertNotClosed();
       this.initialized = true;
       this.restartPolicy.recordStarted();
-      codexClientLog.info("app-server initialized", {
+      this.host.logger.info("app-server initialized", {
         handshakeDurationMs: Math.round(performance.now() - handshakeStartedAt),
         durationMs: Math.round(performance.now() - startedAt),
       });
