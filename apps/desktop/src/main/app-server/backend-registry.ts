@@ -19192,10 +19192,20 @@ export class DesktopBackendRegistry {
     acceptedPushedCommitShas: string[];
     worktreePath: string;
   } | undefined> {
-    const thread = await this.resolveThread({
+    const threadId = params.threadId.trim();
+    if (!threadId) return undefined;
+    let thread = await this.resolveThread({
       backend: params.backend,
-      threadId: params.threadId,
+      threadId,
     });
+    // Read-only Git access includes retained archived checkouts. Resolve the
+    // archive explicitly, independent of which thread list warmed the cache.
+    if (!thread) {
+      thread = (await this.listThreads({
+        backend: params.backend, archived: true, enrichDirectories: false,
+        forceRefresh: true, callerReason: "thread-id-lookup",
+      })).find((candidate) => candidate.id === threadId);
+    }
     if (!thread) {
       return undefined;
     }
