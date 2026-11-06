@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import { createGitHandoffService, type HandoffGitRunner } from "@pwragent/federation/git-instance-handoff";
 import { ThreadInstanceHandoffService } from "@pwragent/federation/thread-instance-handoff-service";
-import { CodexAppServerClient } from "../src/main/codex-app-server/client";
+import { CodexAppServerClient } from "../src/main/codex-app-server/desktop-client";
 import { createProviderRuntimeClient } from "../src/main/codex-app-server/provider-runtime-client";
 
 vi.mock("../src/main/log", () => ({

@@ -1808,7 +1808,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each(["legacy", "paginated", "future-mode"])("uses Codex's portable export for a %s source", async (historyMode) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       MockTransport.readThreadResultByThreadId.set("handoff-format", {
@@ -1831,7 +1831,7 @@ describe("CodexAppServerClient", () => {
     { threadId: "handoff-format", format: "future-format", dataBase64: "cG9ydGFibGU=" },
     { threadId: "handoff-format", format: "legacy-rollout-v1", dataBase64: "" },
   ])("refuses invalid portable exports without falling back to private file bytes: %j", async (exported) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       MockTransport.readThreadResultByThreadId.set("handoff-format", {
@@ -1847,7 +1847,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([-32601, -32603])("never substitutes a paginated file when portable export fails with %s", async (code) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       MockTransport.readThreadResultByThreadId.set("handoff-format", {

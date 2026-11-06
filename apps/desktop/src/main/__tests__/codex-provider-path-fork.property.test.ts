@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type { CodexAppServerClient } from "../codex-app-server/client";
+import type { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 
 async function assertPathRouting(threadId: string, model?: string) {
