@@ -21,6 +21,7 @@ import type { RemoteThreadTargetStore } from "../state/remote-thread-target-stor
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import { isFederationPeerUnavailableError } from "./federation-peer-unavailable-error";
 import { hasFederationErrorCode } from "./federation-rpc";
+import { lookupFederationArchivedThreads } from "./federation-collection-client";
 import {
   getDesktopFederationRuntime,
   type DesktopFederationRuntime,
@@ -71,6 +72,9 @@ export function createFederatedThreadMessageHandler(
           error.code,
           `${error.message.replace(/\.$/, "")}; the message was not sent.`,
         );
+      }
+      if (error instanceof PwrAgentFederatedThreadMessageError && error.code === "forbidden") {
+        throw error;
       }
       if (error instanceof PwrAgentFederatedThreadMessageError) {
         // Preserve the legacy send_message_to_thread error classification.
@@ -228,6 +232,16 @@ async function resolveThreadOnPeer(
       throw error;
     }
     throw new Error("Upgrade this PwrAgent peer and its gateways: bounded exact thread resolution is required.");
+  }
+  if (!thread) {
+    const archived = (await lookupFederationArchivedThreads(backend, request.backend, [request.threadId]))
+      .find((candidate) => candidate.id === request.threadId);
+    if (archived) {
+      throw new PwrAgentFederatedThreadMessageError(
+        "forbidden",
+        `Thread "${archived.title}" (${request.threadId}) on ${peer.label} is archived; cannot send a message. Restore the thread before sending.`,
+      );
+    }
   }
   return thread ? { backend, peer, thread } : undefined;
 }

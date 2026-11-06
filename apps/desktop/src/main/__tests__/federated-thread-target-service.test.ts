@@ -36,7 +36,7 @@ describe("resolveFederatedThreadTarget", () => {
     await expect(resolveFederatedThreadTarget({
       runtime,
       request: { backend: "codex", instanceId: "pwr_remote", threadId: thread.id },
-    })).resolves.toMatchObject({ thread });
+    })).resolves.toMatchObject({ thread, archived: true });
     const options = (resolveThread.mock.calls[0] as unknown[])[1];
     expect(options).toEqual({ deadlineAt: expect.any(Number) });
     expect(lookupArchivedThreads).toHaveBeenCalledWith({
