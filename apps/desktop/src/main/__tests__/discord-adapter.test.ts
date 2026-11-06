@@ -76,6 +76,10 @@ describe("DiscordAdapter", () => {
           description: "Show the current PwrAgent thread binding and controls.",
           name: "status",
         }),
+        createApplicationCommand("cmd-continue", {
+          description: "Continue a Claude thread after its session was deleted.",
+          name: "continue",
+        }),
         createApplicationCommand("cmd-new", {
           description: "Start a new PwrAgent thread from a project.",
           name: "new",
@@ -184,7 +188,7 @@ describe("DiscordAdapter", () => {
         name: "resume",
       }),
     );
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(7);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(8);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
@@ -228,7 +232,7 @@ describe("DiscordAdapter", () => {
     await adapter.start(async () => {});
 
     expect(api.listApplicationCommands).toHaveBeenCalledWith(DISCORD_APP_ID);
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(9);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(10);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
