@@ -55,6 +55,8 @@ export function buildNavigationWindowDemand(params: {
   selectedRootRef?: NavigationIdentity;
   selectedContextReady?: boolean;
   disclosedParents?: readonly NavigationIdentity[];
+  /** Directory placement from collection pages, independent of a thread's global parent. */
+  disclosedParentDirectoryKeys?: ReadonlyMap<string, string>;
   /** Viewer-owned draft identities only, from any owner. Bounded per read below; no draft text. */
   draftRefs?: readonly NavigationIdentity[];
   /** `general.pinned_threads_on_top`; defaults on, as the setting does. */
@@ -69,12 +71,14 @@ export function buildNavigationWindowDemand(params: {
   // Descriptors provide authoritative counts for collapsed directories and all lenses.
   demand.set("directory-index", request({ kind: "directory-index" }, 100));
   if (params.selectedRef) {
-    demand.set("selected-context", { ...request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100),
+    demand.set("selected-context", { ...request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true,
+      ...(params.browseMode === "directories" ? { ancestryScope: "directory" as const } : {}) }, 100),
       inventory: params.selectedRef.ownerInstanceId || params.target?.scope === "remote" ? "owner" : "viewer",
       federationTarget: params.selectedRef.ownerInstanceId ? { scope: "remote", instanceId: params.selectedRef.ownerInstanceId } : params.target });
   }
   if (params.selectedRef?.ownerInstanceId && params.target?.scope !== "remote") {
-    demand.set("selected-viewer-mount", request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100));
+    demand.set("selected-viewer-mount", request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true,
+      ...(params.browseMode === "directories" ? { ancestryScope: "directory" as const } : {}) }, 100));
   }
   const loadedDirectoryKeys = params.indexedDirectoryKeys ?? new Set(params.directories.map((directory) => directory.key));
   const missingSelectedDirectories = (params.selectedDirectoryKeys ?? []).filter((key) => !loadedDirectoryKeys.has(key) && !params.removedDirectoryKeys?.includes(key));
@@ -125,6 +129,14 @@ export function buildNavigationWindowDemand(params: {
       params.browseMode === "attention" ? NAVIGATION_QUERY_MAX_PAGE_ROWS : undefined));
   }
   for (const parent of params.disclosedParents ?? []) {
+    const directoryKey = params.browseMode === "directories"
+      ? params.disclosedParentDirectoryKeys?.get(navigationIdentityKey(parent)) : undefined;
+    if (directoryKey) {
+      // The serving inventory owns this directory's mounted membership. A
+      // parent's native owner can have different paths and other projects.
+      demand.set(`children:${navigationIdentityKey(parent)}`, request({ kind: "children", parent, directoryKey }));
+      continue;
+    }
     demand.set(`children:${navigationIdentityKey(parent)}`, { ...request({ kind: "children", parent }),
       inventory: parent.ownerInstanceId || params.target?.scope === "remote" ? "owner" : "viewer",
       federationTarget: parent.ownerInstanceId ? { scope: "remote", instanceId: parent.ownerInstanceId } : params.target,
@@ -148,10 +160,13 @@ export function visibleDisclosedNavigationParents(params: {
   collectionIds: Iterable<string>;
   pages: ReadonlyMap<string, import("@pwragent/shared").NavigationQueryPage>;
   disclosedParents: readonly NavigationIdentity[];
+  directoryKeysByParent?: Map<string, string>;
 }): NavigationIdentity[] {
   const candidates = new Map(params.disclosedParents.map((ref) => [navigationIdentityKey(ref), ref]));
   const visible = new Map<string, NavigationIdentity>();
-  const pending = [...params.collectionIds].filter((id) => isLensCollectionId(id) || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("drafts:"));
+  const pending = [...params.collectionIds].filter((id) => isLensCollectionId(id) || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("drafts:"))
+    .map((id) => ({ id, directoryKey: id.startsWith("directory-pins:") ? id.slice("directory-pins:".length)
+      : id.startsWith("directory:") ? id.slice("directory:".length) : undefined }));
   // Directory presentation admits an exact selected pin outside its page,
   // and retains an unpinned selected root while Directory threads is closed.
   // Both roots need child demand even though no collection page contains them.
@@ -159,27 +174,34 @@ export function visibleDisclosedNavigationParents(params: {
   const selected = params.pages.get("selected-viewer-mount") ?? params.pages.get("selected-context");
   const selectedRoot = selected?.entries.find((entry) => entry.placement.kind === "root");
   if (selectedRoot && selected?.selectionDirectory
-    && pending.includes(`directory-pins:${selected.selectionDirectory.key}`)
+    && pending.some(({ id }) => id === `directory-pins:${selected.selectionDirectory!.key}`)
     && (selectedRoot.row.pinnedRank !== undefined
-      || !pending.includes(`directory:${selected.selectionDirectory.key}`))) {
+      || !pending.some(({ id }) => id === `directory:${selected.selectionDirectory!.key}`))) {
     const key = navigationIdentityKey(selectedRoot.row.ref);
     const parent = candidates.get(key);
     if (parent) {
       visible.set(key, parent);
-      pending.push(`children:${key}`, `children:${key}:viewer`);
+      params.directoryKeysByParent?.set(key, selected.selectionDirectory.key);
+      pending.push(...[`children:${key}`, `children:${key}:viewer`].map((id) => ({ id, directoryKey: selected.selectionDirectory!.key })));
     }
   }
   const visited = new Set<string>();
   while (pending.length) {
-    const id = pending.pop()!;
+    const { id, directoryKey } = pending.pop()!;
     if (visited.has(id)) continue;
     visited.add(id);
-    for (const entry of params.pages.get(id)?.entries ?? []) {
+    const page = params.pages.get(id);
+    // A retained global child page from another lens cannot establish
+    // directory placement while its scoped replacement is still loading.
+    if (params.directoryKeysByParent && directoryKey && id.startsWith("children:")
+      && page?.selectionDirectory?.key !== directoryKey) continue;
+    for (const entry of page?.entries ?? []) {
       const key = navigationIdentityKey(entry.row.ref);
       const parent = candidates.get(key);
       if (!parent || visible.has(key)) continue;
       visible.set(key, parent);
-      pending.push(`children:${key}`, `children:${key}:viewer`);
+      if (directoryKey) params.directoryKeysByParent?.set(key, directoryKey);
+      pending.push(...[`children:${key}`, `children:${key}:viewer`].map((childId) => ({ id: childId, directoryKey })));
     }
   }
   return [...visible.values()];

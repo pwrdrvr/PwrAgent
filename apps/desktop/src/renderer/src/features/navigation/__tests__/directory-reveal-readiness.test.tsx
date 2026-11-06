@@ -164,7 +164,7 @@ function pagedNavigation(rootLoaded: boolean) {
       "children:codex:parent",
       resource(
         "children:codex:parent",
-        { kind: "children", parent: parent.ref },
+        { kind: "children", parent: parent.ref, directoryKey: directory.key },
         {
           entries: [
             {

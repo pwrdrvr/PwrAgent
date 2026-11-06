@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type { NavigationDirectoryRow, NavigationIdentity, NavigationQueryPage } from "@pwragent/shared";
 import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, projectDisclosedNavigationParents, visibleDisclosedNavigationParents } from "../navigation-window-demand";
+import { navigationIdentityKey } from "../navigation-query-state";
 import type { NavigationPresentedThread } from "../navigation-loaded-rows";
 
 const directories: NavigationDirectoryRow[] = Array.from({ length: 100 }, (_, index) => ({
@@ -42,7 +43,7 @@ it("selection can survive an unloaded project and explicit collapse overrides au
   const selectedRef = { backend: "codex" as const, threadId: "off-page" };
   const demand = buildNavigationWindowDemand({ ...base, selectedRef, selectedDirectoryKeys: ["directory:42"], expandedByKey: { "directory:42": false } });
   expect([...demand.keys()]).toEqual(["directory-index", "selected-context"]);
-  expect(demand.get("selected-context")?.query).toEqual({ kind: "exact", identities: [selectedRef], includeAncestry: true });
+  expect(demand.get("selected-context")?.query).toEqual({ kind: "exact", identities: [selectedRef], includeAncestry: true, ancestryScope: "directory" });
 });
 
 it("unpinned disclosure and child disclosure create independent explicit demand", () => {
@@ -88,6 +89,38 @@ it("routes disclosed children to their explicit owners", () => {
   expect(demand.get('children:["peer","codex","same-id"]:viewer')?.federationTarget).toBeUndefined();
   const remoteWindow = buildNavigationWindowDemand({ ...base, target: { scope: "remote", instanceId: "peer" }, disclosedParents: [remote] });
   expect([...remoteWindow.keys()].some((key) => key.endsWith(":viewer"))).toBe(false);
+});
+
+it.each([undefined, "peer"])("scopes a directory's child reads to its serving inventory (parent owner %s)", (ownerInstanceId) => {
+  const parent: NavigationIdentity = { backend: "codex", threadId: "parent", ...(ownerInstanceId ? { ownerInstanceId } : {}) };
+  const key = navigationIdentityKey(parent);
+  const scoped = { ...base, disclosedParents: [parent],
+    disclosedParentDirectoryKeys: new Map([[key, directories[42]!.key]]) };
+  const demand = buildNavigationWindowDemand(scoped);
+  const children = [...demand.values()].filter(({ query }) => query.kind === "children");
+  expect(children).toHaveLength(1);
+  expect(children[0]).toMatchObject({ inventory: "viewer", query: { kind: "children", parent, directoryKey: directories[42]!.key } });
+  expect(children[0]?.federationTarget).toBeUndefined();
+  const remoteWindow = buildNavigationWindowDemand({ ...scoped, target: { scope: "remote", instanceId: "viewer-peer" } });
+  expect(remoteWindow.get(`children:${key}`)).toMatchObject({ inventory: "owner", federationTarget: { scope: "remote", instanceId: "viewer-peer" } });
+});
+
+it("does not infer directory placement from retained global child pages", () => {
+  const ref = (id: string): NavigationIdentity => ({ backend: "codex", threadId: id });
+  const page = (id: string): NavigationQueryPage => ({ protocol: 2, queryKey: id, generation: "g", ownerEpoch: "o", countsRevision: "r",
+    coverage: { state: "complete" }, counts: { total: 1, active: 0, unread: 0, review: 0 }, complete: true,
+    entries: [{ row: { ref: ref(id), id, source: "codex", title: id, titleSource: "explicit", rowRevision: "r",
+      linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 1, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" },
+      placement: { kind: "root" }, orderKey: "0" }] });
+  const pages = new Map([[`directory:${directories[0]!.key}`, page("parent")],
+    [`directory:${directories[1]!.key}`, page("audit")],
+    [`children:${navigationIdentityKey(ref("parent"))}`, page("audit")]]);
+  for (const collectionIds of [[...pages.keys()].slice(0, 2), [...pages.keys()].slice(0, 2).reverse()]) {
+    const directoryKeysByParent = new Map<string, string>();
+    visibleDisclosedNavigationParents({ collectionIds, pages, disclosedParents: [ref("parent"), ref("audit")], directoryKeysByParent });
+    expect(directoryKeysByParent.get(navigationIdentityKey(ref("parent")))).toBe(directories[0]!.key);
+    expect(directoryKeysByParent.get(navigationIdentityKey(ref("audit")))).toBe(directories[1]!.key);
+  }
 });
 
 it("reads every instance's drafts in one viewer request that main resolves per owner", () => {

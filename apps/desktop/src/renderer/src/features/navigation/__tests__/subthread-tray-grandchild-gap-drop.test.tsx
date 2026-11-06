@@ -73,7 +73,8 @@ function mount(browseMode: Lens, saved: boolean | Promise<boolean> = true, grand
   }
   const childrenOf = { root: [alpha, bravo], [grandparent]: [localGrand, peerGrand] };
   for (const owner of [root, grandparent === "alpha" ? alpha : bravo]) {
-    add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref },
+    add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref,
+      ...(browseMode === "directories" ? { directoryKey: directory.key } : {}) },
       childrenOf[owner.id as keyof typeof childrenOf].map((child, index) => ({ row: child, orderKey: String(index),
         placement: { kind: "child", parent: { backend: "codex", threadId: owner.id } } })));
   }

@@ -114,10 +114,12 @@ export function useBoundedNavigationWindow(params: Demand & {
       indexedDirectoryKeys: new Set((indexedDirectories ?? []).map((directory) => directory.key)),
     };
     const collections = buildNavigationWindowDemand({ ...demandParams, disclosedParents: [] });
+    const disclosedParentDirectoryKeys = new Map<string, string>();
     const disclosedParents = visibleDisclosedNavigationParents({ collectionIds: collections.keys(), pages,
       disclosedParents: params.disclosedParents ?? [],
+      directoryKeysByParent: disclosedParentDirectoryKeys,
     });
-    const requests = buildNavigationWindowDemand({ ...demandParams, disclosedParents });
+    const requests = buildNavigationWindowDemand({ ...demandParams, disclosedParents, disclosedParentDirectoryKeys });
     addVisibleMountedOwnerDemand({ demand: requests, pages, target: params.target, selectedRef: params.selectedRef });
     return prepareNavigationDemand(requests);
   }, [params.browseMode, params.target, params.attentionView, params.expandedByKey, params.unpinnedExpandedByKey,

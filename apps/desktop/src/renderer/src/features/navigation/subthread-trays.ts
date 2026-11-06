@@ -47,11 +47,10 @@ export type SubthreadTrays = {
  * root can also appear in an ancestor's child page; its own tray must keep
  * both that row and its descendants regardless of the owners' render order.
  *
- * `ownerChildOrder` is each parent's child keys in the order its owner's child
- * pages listed them. Navigation rows never carry `subthreadOrder` (it is a
- * detail collection), so those pages are the only place the saved order
- * reaches a tray. Without it a tray falls back to newest-first, and every
- * reorder snaps back on the next read.
+ * `ownerChildOrder` comes from native child pages or sibling positions in
+ * exact owner metadata reads. Navigation rows never carry `subthreadOrder`
+ * (it is a detail collection). Without the owner's order a tray falls back
+ * to newest-first, and every reorder snaps back on the next read.
  */
 export function createSubthreadTrays(
   childrenByParentKey: ReadonlyMap<string, NavigationThreadSummary[]>,

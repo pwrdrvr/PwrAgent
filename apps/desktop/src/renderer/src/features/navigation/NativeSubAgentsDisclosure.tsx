@@ -29,8 +29,9 @@ type NativeSubAgentsDisclosureProps = {
 export function getSubthreadDisclosureCount(
   thread: NavigationPresentedThread,
   ordinaryChildCount: number,
+  scopedOrdinaryChildCount?: number,
 ): number {
-  return (thread.ordinaryChildCount ?? ordinaryChildCount) + (thread.nativeSubAgentGroupPresent ?? Boolean(thread.codexNativeSubAgents?.length) ? 1 : 0);
+  return (scopedOrdinaryChildCount ?? thread.ordinaryChildCount ?? ordinaryChildCount) + (thread.nativeSubAgentGroupPresent ?? Boolean(thread.codexNativeSubAgents?.length) ? 1 : 0);
 }
 
 /** The ordinary child-section preference remains authoritative. */
