@@ -397,7 +397,6 @@ describe("Tangerine Terminal theme contract", () => {
     expect(showMore).toMatch(/min-height:\s*24px;/);
     expect(showMore).toMatch(/border-radius:\s*12px;/);
     expect(showMore).toMatch(/font-size:\s*11px;/);
-    expect(showMore).toMatch(/justify-self:\s*start;/);
     expect(showMore).toMatch(/align-self:\s*flex-start;/);
     expect(showMore).not.toMatch(/(^|[^-])width:\s*100%;/);
     expect(showMore).toMatch(/background:\s*var\(--bg-panel-elevated\);/);

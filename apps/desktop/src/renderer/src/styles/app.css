@@ -9780,11 +9780,10 @@ a.button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  /* Shrink-wrap in every container: `start` for the `.subthread-list` grid
-     (whose `role="listitem"` wrapper is a block, where inline-flex already
-     shrinks), `flex-start` for the flex columns of the scroll region and a
-     directory's details. */
-  justify-self: start;
+  /* Shrink-wrap in every container. Inline-flex does it in the block
+     `role="listitem"` wrappers of the sub-thread and pinned pagers; the
+     flex columns (scroll region, list lanes, a directory's details) would
+     stretch it to their width without `align-self`. */
   align-self: flex-start;
   max-width: 100%;
   min-width: 0;
