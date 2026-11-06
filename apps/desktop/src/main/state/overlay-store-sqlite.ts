@@ -1,4 +1,5 @@
 import type { ManageThreadMergeHoldsRequest, ThreadMergeHold } from "@pwragent/shared";
+import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { validateMergeHoldRequest, updateMergeHolds } from "../thread-merge-holds/thread-merge-holds";
 import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
@@ -25,6 +26,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
+  AppServerThreadTitleSource,
   AutomationThreadSummary,
   DirectoryLaunchpadOverlayState,
   DesktopProviderModelDefaults,
@@ -866,7 +868,7 @@ function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | 
   return keys;
 }
 
-export class SqliteOverlayStore implements RemoteThreadTargetStore {
+export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadRegistry {
   private readonly codexEnvironmentLiveOutput = new CodexEnvironmentLiveOutput();
   private managedSubAgentThreadKeysCache?: { generation: number; keys: Set<string> };
   private navigationOverlayCache?: {
@@ -1608,6 +1610,43 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       } : overlay },
       threads: [thread],
     })[0]!;
+  }
+
+  async getThreadMetadata(identity: OwnerThreadIdentity): Promise<OwnerThreadRecord | undefined> {
+    const state = this.getThread(buildThreadIdentityKey(identity.backend, identity.threadId));
+    return state ? ownerThreadRecord(state) : undefined;
+  }
+
+  async listThreadMetadata(): Promise<OwnerThreadRecord[]> {
+    const rows = this.stateDb.raw.prepare("SELECT payload FROM threads ORDER BY thread_id").all() as { payload: string }[];
+    return rows.map((row) => ownerThreadRecord(JSON.parse(row.payload)));
+  }
+
+  async updateThreadMetadata(identity: OwnerThreadIdentity, patch: OwnerThreadMetadataPatch): Promise<OwnerThreadRecord> {
+    return this.stateDb.raw.transaction(() => {
+      const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+      const current = this.getThread(key);
+      const record = current ? ownerThreadRecord(current) : undefined;
+      const next = patchOwnerThreadMetadata(record, identity, patch);
+      if (!record || !sameJson(record, next)) {
+        const state: OwnerThreadOverlay = {
+          ...current,
+          ...identity,
+          executionMode: current?.executionMode ?? "default",
+          extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
+          title: next.title?.text,
+          titleSource: next.title?.source,
+          parentThreadId: next.parent?.threadId,
+          parentThreadBackend: next.parent?.backend,
+          parentThreadInstanceId: next.parent?.instanceId,
+        };
+        for (const [field, stored] of OWNER_OVERLAY_FIELDS) {
+          Object.assign(state, { [stored]: next[field] });
+        }
+        this.putThread(key, state);
+      }
+      return next;
+    })();
   }
 
   async markThreadSeen(params: {
@@ -11148,6 +11187,41 @@ const UNCHANGED_STAMP_REFRESH_MS = 5 * 60_000;
 
 function isStampFresh(stored: number | undefined, next: number): boolean {
   return stored !== undefined && next - stored < UNCHANGED_STAMP_REFRESH_MS;
+}
+
+type OwnerThreadOverlay = ThreadOverlayState & {
+  archived?: boolean;
+  title?: string;
+  titleSource?: AppServerThreadTitleSource;
+  createdAt?: number;
+  updatedAt?: number;
+  cwd?: string;
+};
+
+const OWNER_OVERLAY_FIELDS = [
+  ["archived", "archived"],
+  ["executionMode", "executionMode"], ["model", "model"], ["reasoningEffort", "reasoningEffort"],
+  ["serviceTier", "serviceTier"], ["fastMode", "fastMode"],
+  ["executionModeUpdatedAt", "executionModeUpdatedAt"], ["reasoningEffortsByModel", "reasoningEffortsByModel"],
+  ["modelMigrationRevision", "modelMigrationRevision"], ["modelSettingsManuallyUpdatedAt", "modelSettingsManuallyUpdatedAt"],
+  ["createdAt", "createdAt"], ["updatedAt", "updatedAt"], ["cwd", "cwd"],
+  ["pinnedRank", "pinnedRank"], ["seenAt", "lastSeenAt"], ["seenUpdatedAt", "lastSeenUpdatedAt"],
+  ["archivedAt", "archiveTombstonedAt"], ["restoredAt", "archiveRestoredAt"],
+  ["archiveRetentionStartedAt", "archiveRetentionStartedAt"],
+  ["subthreadOrder", "subthreadOrder"], ["subthreadsCollapsed", "subthreadsCollapsed"],
+] as const;
+
+function ownerThreadRecord(state: OwnerThreadOverlay): OwnerThreadRecord {
+  const patch: OwnerThreadMetadataPatch = {
+    title: state.title === undefined ? undefined : { text: state.title, source: state.titleSource ?? "fallback" },
+    parent: state.parentThreadId !== undefined ? {
+      backend: state.parentThreadBackend ?? state.backend,
+      threadId: state.parentThreadId,
+      ...(state.parentThreadInstanceId !== undefined ? { instanceId: state.parentThreadInstanceId } : {}),
+    } : undefined,
+  };
+  for (const [field, stored] of OWNER_OVERLAY_FIELDS) Object.assign(patch, { [field]: state[stored] });
+  return patchOwnerThreadMetadata(undefined, { backend: state.backend, threadId: state.threadId }, patch);
 }
 
 /** Structural equality for JSON-shaped overlay values; `undefined` equals `undefined` only. */

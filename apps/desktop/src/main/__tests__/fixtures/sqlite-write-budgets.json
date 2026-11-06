@@ -889,6 +889,8 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "owner-thread-metadata-command": {"commits": 1, "note": "One owner metadata command merges all changed fields in one transaction; no lifecycle callers yet.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "owner-thread-metadata-unchanged": {"commits": 0, "note": "100 unchanged metadata commands and reads make no commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "pending-spend-alert-page": {
     "commits": 0,
     "note": "Ten local alert projections out of twelve pending entries, with no overlay summaries: zero commits; 0 MB/day added WAL",

@@ -27,6 +27,7 @@ const targets = [
   { path: "future-library", file: "packages/future-library/src/index.js", name: "@pwragent/future-library" },
 ];
 const cases = [];
+const storageCases = [];
 let root;
 let result;
 
@@ -64,6 +65,20 @@ beforeAll(async () => {
       to: target.file,
       allowed: target.path === "pwragent" || [...reusable, "owner-core"].includes(target.path),
     });
+  }
+
+  for (const target of [
+    "apps/desktop/src/main/state/overlay.js",
+    "node_modules/better-sqlite3/index.js",
+    "node_modules/yaml/index.js",
+    "node_modules/smol-toml/index.js",
+    "packages/owner-core/src/registry.json",
+    "packages/owner-core/src/registry.toml",
+  ]) {
+    source(target, target.endsWith(".json") ? "{}" : "export const value = 1;\n");
+    const from = `packages/owner-core/src/probes/storage-${storageCases.length}.js`;
+    source(from, `import ${JSON.stringify(relative(dirname(from), target).replaceAll("\\", "/"))};\n`);
+    storageCases.push({ from, to: target });
   }
 
   // dependency-cruiser normalizes entry paths against cwd, even with baseDir.
@@ -110,5 +125,14 @@ describe("workspace dependency layers", () => {
 
   it("keeps every forbidden rule fatal", () => {
     expect(config.forbidden.every((rule) => rule.severity === "error")).toBe(true);
+  });
+
+  it("blocks owner storage formats", () => {
+    for (const { from, to } of storageCases) {
+      const dependency = result.modules.find((module) => module.source === from)
+        ?.dependencies.find((dependency) => dependency.resolved === to);
+      expect(dependency?.rules?.map((rule) => rule.name), `${from} -> ${to}`)
+        .toContain("owner-core-has-no-storage-format-dependencies");
+    }
   });
 });
