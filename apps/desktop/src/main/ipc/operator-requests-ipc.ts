@@ -14,15 +14,12 @@ import {
   OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL,
   OPERATOR_REQUESTS_MARK_SEEN_CHANNEL,
 } from "../../shared/ipc";
-import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getMainLogger } from "../log";
-import { OperatorRequestService } from "../operator-requests/operator-request-service";
-import { OperatorRequestStore } from "../operator-requests/operator-request-store";
-import { installOperatorRequestService, localOperatorQuestionOperations } from "../operator-requests/operator-request-runtime";
+import type { OperatorRequestService } from "../operator-requests/operator-request-service";
+import { createDesktopOperatorRequestService, installOperatorRequestService, localOperatorQuestionOperations } from "../operator-requests/operator-request-runtime";
 import { FederatedOperatorRequestService } from "../federation/federation-operator-requests";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
-import { getAppStateDb } from "../state/app-state";
 import { federationTargetForChannelSubscriber, subscribersForChannel } from "../window-channels";
 
 const operatorRequestLog = getMainLogger("pwragent:operator-requests");
@@ -45,16 +42,12 @@ function broadcastOperatorRequestsChanged(event: OperatorRequestsChangedEvent): 
 
 export function registerOperatorRequestIpcHandlers(): void {
   service?.stop();
-  service = new OperatorRequestService({
-    registry: getDesktopBackendRegistry(),
-    store: new OperatorRequestStore(getAppStateDb()),
-    broadcast: (event) => {
-      broadcastOperatorRequestsChanged(event);
-      getDesktopFederationRuntime().publishOperatorRequestsChanged(event);
-      if (event.reason === "questions" && event.backend && event.threadId) {
-        getDesktopFederationRuntime().publishOperatorQuestionsChanged({ backend: event.backend, threadId: event.threadId });
-      }
-    },
+  service = createDesktopOperatorRequestService((event) => {
+    broadcastOperatorRequestsChanged(event);
+    getDesktopFederationRuntime().publishOperatorRequestsChanged(event);
+    if (event.reason === "questions" && event.backend && event.threadId) {
+      getDesktopFederationRuntime().publishOperatorQuestionsChanged({ backend: event.backend, threadId: event.threadId });
+    }
   });
   service.start();
   const current = service;

@@ -218,6 +218,18 @@ module.exports = {
       },
     },
     {
+      name: "desktop-ipc-state-is-service-private",
+      severity: "error",
+      comment:
+        "Desktop IPC handlers reach persistent state through owner and application services.",
+      from: {
+        path: "^apps/desktop/src/main/ipc/",
+      },
+      to: {
+        path: "^apps/desktop/src/main/state/",
+      },
+    },
+    {
       name: "desktop-raw-config-is-store-private",
       severity: "error",
       comment:

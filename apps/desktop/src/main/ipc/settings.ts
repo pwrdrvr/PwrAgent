@@ -169,7 +169,7 @@ import { isSafeExternalOpenUrl, isSlackAppDeepLink } from "../external-url-polic
 import { getMainLogger } from "../log";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp";
-import { AcpAgentStore } from "../acp/acp-agent-store";
+import { AcpAgentService } from "../acp/acp-agent-service";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
@@ -196,7 +196,6 @@ import type {
   AcpRegistryDistribution,
   AcpRegistrySnapshot,
 } from "../acp/acp-registry-types";
-import { getAppStateDb } from "../state/app-state";
 import { resolveWindowsCodexLaunchCommand } from "../codex-windows-launch";
 import { normalizeProfileName } from "../profile";
 
@@ -424,7 +423,7 @@ async function listAcpAgentSettingsImpl(
   permit?: ProviderDiscoveryPermit,
   progress?: ProviderCatalogRefreshProgress,
 ): Promise<ListAcpAgentSettingsResponse> {
-  const store = new AcpAgentStore(getAppStateDb());
+  const store = new AcpAgentService();
   const settingsService = getService(service);
   const registryService = new AcpRegistryService();
   let snapshot: AcpRegistrySnapshot | undefined;
@@ -744,7 +743,7 @@ async function probeInstalledAcpAgent(
 }
 
 async function listInstalledAndLocalAcpAgents(
-  store: AcpAgentStore,
+  store: AcpAgentService,
   options?: {
     permit?: ProviderDiscoveryPermit;
     providers?: ReturnType<DesktopSettingsService["readProvidersConfig"]>;
@@ -1681,7 +1680,7 @@ export function registerSettingsIpcHandlers(
       _event,
       request: AcknowledgeAcpAgentUpdateRequest,
     ): Promise<AcknowledgeAcpAgentUpdateResponse> => {
-      const store = new AcpAgentStore(getAppStateDb());
+      const store = new AcpAgentService();
       const record = isAcpBackendId(request.backendId)
         ? store.getInstalledAgent(request.backendId)
         : undefined;

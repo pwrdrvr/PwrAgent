@@ -19,14 +19,15 @@ import {
   COMPOSER_DRAFT_SAVE_CHANNEL,
 } from "../../shared/ipc";
 import { getMainLogger } from "../log";
-import { getAppStateDb } from "../state/app-state";
-import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
+import {
+  clearComposerDraft,
+  listComposerDraftLatest,
+  listComposerDraftRecoveryCandidates,
+  recordComposerDraftHistory,
+  saveComposerDraft,
+} from "../composer-drafts/composer-draft-service";
 
 const log = getMainLogger("pwragent:composer-drafts");
-
-function getStore(): ComposerDraftRecoveryStore {
-  return new ComposerDraftRecoveryStore(getAppStateDb());
-}
 
 export function registerComposerDraftIpcHandlers(): void {
   ipcMain.removeHandler(COMPOSER_DRAFT_SAVE_CHANNEL);
@@ -36,8 +37,7 @@ export function registerComposerDraftIpcHandlers(): void {
       _event,
       request: SaveComposerDraftRequest,
     ): Promise<SaveComposerDraftResponse> => {
-      const draft = getStore().save(request);
-      return { draft };
+      return saveComposerDraft(request);
     },
   );
 
@@ -48,8 +48,7 @@ export function registerComposerDraftIpcHandlers(): void {
       _event,
       request: RecordComposerDraftHistoryRequest,
     ): Promise<RecordComposerDraftHistoryResponse> => {
-      const candidate = getStore().recordHistory(request.draft);
-      return { candidate };
+      return recordComposerDraftHistory(request);
     },
   );
 
@@ -60,8 +59,7 @@ export function registerComposerDraftIpcHandlers(): void {
       _event,
       request: ClearComposerDraftRequest,
     ): Promise<ClearComposerDraftResponse> => {
-      getStore().clear(request.scopeKey);
-      return { scopeKey: request.scopeKey };
+      return clearComposerDraft(request);
     },
   );
 
@@ -72,7 +70,7 @@ export function registerComposerDraftIpcHandlers(): void {
       _event,
       request: ListComposerDraftRecoveryCandidatesRequest | undefined,
     ): Promise<ListComposerDraftRecoveryCandidatesResponse> => {
-      return { candidates: getStore().listCandidates(request) };
+      return listComposerDraftRecoveryCandidates(request);
     },
   );
 
@@ -80,10 +78,7 @@ export function registerComposerDraftIpcHandlers(): void {
   ipcMain.handle(
     COMPOSER_DRAFT_LIST_LATEST_CHANNEL,
     async (_event, request?: ListComposerDraftLatestRequest): Promise<ListComposerDraftLatestResponse> => {
-      const store = getStore();
-      if (request?.migrateKnownOwners === true) store.migrateKnownOwnerScopes();
-      if (request?.migrateLegacyLaunchpads === true) store.migrateLegacyLaunchpadDrafts();
-      return { drafts: store.listLatest() };
+      return listComposerDraftLatest(request);
     },
   );
 }
