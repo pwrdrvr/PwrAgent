@@ -1087,10 +1087,13 @@ async function runAppUpdateCheck(
       };
       activeDownload = download;
       lastDownloadReleaseTag = download.releaseTag;
-      if (downloadedResult) {
+      // The pending installer cache belongs to electron-updater, not to a
+      // selected track. A different track's download deletes the held file
+      // too, even though downloadedResult only matches the selected track.
+      if (heldDownloadedUpdate && heldDownloadedUpdate.version !== selectedVersion) {
         supersedingDownload = {
-          selection: updateSelection,
-          version: downloadedResult.version,
+          selection: heldDownloadedUpdate.selection,
+          version: heldDownloadedUpdate.version,
         };
         syncAutoInstallOnAppQuit(updateSelection);
       }
