@@ -10,6 +10,7 @@ import type { LaunchpadCreationRequest, LaunchpadCreationResponse, ThreadTodoMes
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
+import { openClaudeSessionReader } from "../claude/claude-session-reader";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { buildForgeToolDefinitions, type ForgePrToolHandler, type ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
@@ -11976,6 +11977,11 @@ export class DesktopBackendRegistry {
         ? async () => inspectClaudeInstallation({ env: await settingsService?.resolveTerminalSpawnEnvAsync() })
         : async () => ({ authStatus: "unknown" }),
       resolveEnv: async () => await settingsService?.resolveTerminalSpawnEnvAsync() ?? process.env,
+      // A chunk's __dirname is its own folder; this module is bundled into
+      // the main entry, beside the worker.
+      openSessionReader: (env) => openClaudeSessionReader(env, {
+        workerPath: path.join(__dirname, "claude-session-reader-worker.js"),
+      }),
       emit: async (event) => { await this.emit(event); },
       request: async (request, signal) => await this.handleServerRequest("claude", request, signal),
       cancelRequest: async (threadId, turnId, requestId) => {
