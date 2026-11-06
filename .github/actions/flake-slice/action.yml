@@ -1,0 +1,45 @@
+name: Record test retry slice
+description: Preserve a compact record for the consolidated run report.
+inputs:
+  kind:
+    required: true
+    description: unit or e2e
+  platform:
+    required: true
+    description: Platform and unit lane group
+  lane:
+    required: true
+    description: Lane number
+  sample:
+    required: false
+    default: "1"
+    description: Diagnostic sample number
+  job-status:
+    required: true
+    description: Job status at the reporting step
+  first-outcome:
+    required: false
+    description: Initial test step outcome
+  retry-outcome:
+    required: false
+    description: Retry step outcome
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FLAKE_KIND: ${{ inputs.kind }}
+        FLAKE_PLATFORM: ${{ inputs.platform }}
+        FLAKE_LANE: ${{ inputs.lane }}
+        FLAKE_SAMPLE: ${{ inputs.sample }}
+        FLAKE_JOB_STATUS: ${{ inputs.job-status }}
+        FLAKE_FIRST_OUTCOME: ${{ inputs.first-outcome }}
+        FLAKE_RETRY_OUTCOME: ${{ inputs.retry-outcome }}
+      run: node scripts/ci/write-flake-report.mjs slice
+    - uses: actions/upload-artifact@v7
+      with:
+        name: flake-slice-${{ github.run_attempt }}-${{ inputs.kind }}-${{ inputs.platform }}-lane-${{ inputs.lane }}-sample-${{ inputs.sample }}
+        path: .local/ci/flake-slice.json
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7

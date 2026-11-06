@@ -263,8 +263,22 @@ jobs:
         run: node scripts/ci/run-retry-failures.mjs unit-verify
 
       - name: Retry failed unit tests
+        id: unit-retry
         if: steps.unit-tests.outcome == 'failure'
         run: pnpm exec node scripts/ci/run-retry-failures.mjs unit
+
+      - name: Record retry slice
+        if: ${{ !cancelled() && always() }}
+        continue-on-error: true
+        uses: ./.github/actions/flake-slice
+        with:
+          kind: unit
+          platform: linux
+          lane: ${{ matrix.lane }}
+          sample: 1
+          job-status: ${{ job.status }}
+          first-outcome: ${{ steps.unit-tests.outcome }}
+          retry-outcome: ${{ steps.unit-retry.outcome }}
 
       - name: Upload unit retry reports
         if: ${{ !cancelled() && (steps.unit-tests.outcome == 'failure' || steps.unit-completion.outcome == 'failure') }}
@@ -416,6 +430,7 @@ jobs:
         run: node scripts/ci/run-retry-failures.mjs unit-verify
 
       - name: Retry failed unit tests
+        id: unit-retry
         if: steps.unit-tests.outcome == 'failure'
         shell: bash
         env:
@@ -423,6 +438,19 @@ jobs:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: pnpm exec node scripts/ci/run-retry-failures.mjs unit
+
+      - name: Record retry slice
+        if: ${{ !cancelled() && always() }}
+        continue-on-error: true
+        uses: ./.github/actions/flake-slice
+        with:
+          kind: unit
+          platform: windows-main
+          lane: ${{ matrix.lane }}
+          sample: 1
+          job-status: ${{ job.status }}
+          first-outcome: ${{ steps.unit-tests.outcome }}
+          retry-outcome: ${{ steps.unit-retry.outcome }}
 
       - name: Upload unit retry reports
         if: ${{ !cancelled() && (steps.unit-tests.outcome == 'failure' || steps.unit-completion.outcome == 'failure') }}
@@ -483,8 +511,22 @@ jobs:
         run: node scripts/ci/run-retry-failures.mjs unit-verify
 
       - name: Retry failed unit tests
+        id: unit-retry
         if: steps.unit-tests.outcome == 'failure'
         run: pnpm exec node scripts/ci/run-retry-failures.mjs unit
+
+      - name: Record retry slice
+        if: ${{ !cancelled() && always() }}
+        continue-on-error: true
+        uses: ./.github/actions/flake-slice
+        with:
+          kind: unit
+          platform: windows-renderer
+          lane: ${{ matrix.lane }}
+          sample: 1
+          job-status: ${{ job.status }}
+          first-outcome: ${{ steps.unit-tests.outcome }}
+          retry-outcome: ${{ steps.unit-retry.outcome }}
 
       - name: Upload unit retry reports
         if: ${{ !cancelled() && (steps.unit-tests.outcome == 'failure' || steps.unit-completion.outcome == 'failure') }}
@@ -661,6 +703,19 @@ jobs:
           PWRAGENT_RETRY_OUTCOME: ${{ steps.e2e-retry.outcome }}
         run: node scripts/ci/run-retry-failures.mjs e2e-verify
 
+      - name: Record retry slice
+        if: ${{ !cancelled() && always() }}
+        continue-on-error: true
+        uses: ./.github/actions/flake-slice
+        with:
+          kind: e2e
+          platform: linux
+          lane: ${{ matrix.lane }}
+          sample: 1
+          job-status: ${{ job.status }}
+          first-outcome: ${{ steps.e2e-tests.outcome }}
+          retry-outcome: ${{ steps.e2e-retry.outcome }}
+
       - name: Upload desktop Playwright artifacts
         uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
@@ -832,11 +887,25 @@ jobs:
         run: node scripts/ci/run-retry-failures.mjs unit-verify
 
       - name: Retry failed unit tests
+        id: unit-retry
         if: steps.unit-tests.outcome == 'failure'
         env:
           DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
           PWRAGENT_REQUIRE_ACTOOL: "1"
         run: pnpm exec node scripts/ci/run-retry-failures.mjs unit
+
+      - name: Record retry slice
+        if: ${{ !cancelled() && always() }}
+        continue-on-error: true
+        uses: ./.github/actions/flake-slice
+        with:
+          kind: unit
+          platform: macos
+          lane: ${{ matrix.lane }}
+          sample: 1
+          job-status: ${{ job.status }}
+          first-outcome: ${{ steps.unit-tests.outcome }}
+          retry-outcome: ${{ steps.unit-retry.outcome }}
 
       - name: Upload unit timings
         if: always()
@@ -965,6 +1034,19 @@ jobs:
         env:
           PWRAGENT_RETRY_OUTCOME: ${{ steps.e2e-retry.outcome }}
         run: node scripts/ci/run-retry-failures.mjs e2e-verify
+
+      - name: Record retry slice
+        if: ${{ !cancelled() && always() }}
+        continue-on-error: true
+        uses: ./.github/actions/flake-slice
+        with:
+          kind: e2e
+          platform: macos
+          lane: ${{ matrix.lane }}
+          sample: 1
+          job-status: ${{ job.status }}
+          first-outcome: ${{ steps.e2e-tests.outcome }}
+          retry-outcome: ${{ steps.e2e-retry.outcome }}
 
       - name: Upload macOS Playwright artifacts
         uses: actions/upload-artifact@v7
@@ -1112,6 +1194,19 @@ jobs:
           PWRAGENT_RETRY_OUTCOME: ${{ steps.e2e-retry.outcome }}
         run: node scripts/ci/run-retry-failures.mjs e2e-verify
 
+      - name: Record retry slice
+        if: ${{ !cancelled() && always() }}
+        continue-on-error: true
+        uses: ./.github/actions/flake-slice
+        with:
+          kind: e2e
+          platform: windows
+          lane: ${{ matrix.lane }}
+          sample: ${{ matrix.sample }}
+          job-status: ${{ job.status }}
+          first-outcome: ${{ steps.e2e-tests.outcome }}
+          retry-outcome: ${{ steps.e2e-retry.outcome }}
+
       - name: Upload desktop Playwright artifacts
         uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
@@ -1122,4 +1217,31 @@ jobs:
             apps/desktop/test-results/
             .local/ci/retry/
           include-hidden-files: true
+          retention-days: 30
+
+  flake-report:
+    name: Consolidate test retries
+    runs-on: ubuntu-latest
+    needs: [changes, test, test-macos, windows-desktop-main, windows-renderer-packages, desktop-e2e, desktop-e2e-macos, windows-e2e]
+    if: ${{ always() && !cancelled() && needs.changes.outputs.code_impacting == 'true' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Download compact slice reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: flake-slice-${{ github.run_attempt }}-*
+          path: .local/ci/flake-slices
+      - name: Consolidate reports
+        env:
+          FLAKE_SAMPLES: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && '3' || '1' }}
+          FLAKE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/write-flake-report.mjs aggregate
+      - name: Upload consolidated report
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-flake-report-${{ github.run_attempt }}
+          path: .local/ci/flake-report/
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 30
