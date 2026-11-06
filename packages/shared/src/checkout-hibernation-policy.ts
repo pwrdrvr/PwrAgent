@@ -1,5 +1,6 @@
 import type { DesktopThreadArchivePolicy } from "./thread-archive-policy";
 import type { LinkedDirectorySummary, WorktreeSnapshotSummary } from "./contracts/normalized-app-server";
+import { canonicalizeNavigationPath } from "./directory-navigation";
 
 /**
  * Settings → Worktrees → Hibernate idle checkouts, `[worktrees.hibernate]`.
@@ -62,10 +63,6 @@ export function normalizeCheckoutHibernationPolicy(
   };
 }
 
-function comparableWorktreePath(value: string): string {
-  return value.replace(/\\/g, "/").replace(/\/+$/, "");
-}
-
 /** Whether the thread's own worktree checkout is hibernated: its first
  * worktree directory has a hibernated snapshot, and the thread is not archived. */
 export function isThreadCheckoutHibernated(thread: {
@@ -76,7 +73,7 @@ export function isThreadCheckoutHibernated(thread: {
   if (thread.archivedAt !== undefined) return false;
   const worktreePath = thread.linkedDirectories.find((directory) => directory.kind === "worktree")?.worktreePath;
   if (!worktreePath) return false;
-  const target = comparableWorktreePath(worktreePath);
+  const target = canonicalizeNavigationPath(worktreePath);
   return (thread.worktreeSnapshots ?? []).some((snapshot) =>
-    snapshot.state === "hibernated" && comparableWorktreePath(snapshot.worktreePath) === target);
+    snapshot.state === "hibernated" && canonicalizeNavigationPath(snapshot.worktreePath) === target);
 }

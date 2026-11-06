@@ -463,7 +463,7 @@ describe("idle checkout hibernation and restore", () => {
 });
 
 describe("Restore now and Keep it awake", () => {
-  type HibernationEvent = { workspace?: { restoring?: boolean; restorePhase?: string } | null; keepAwake?: boolean };
+  type HibernationEvent = { workspace?: { restoring?: boolean; restorePhase?: string; runsSetup?: boolean } | null; keepAwake?: boolean };
   const hibernationEvents = (registry: DesktopBackendRegistry) => {
     const events: HibernationEvent[] = [];
     registry.onEvent((event) => {
@@ -533,10 +533,39 @@ describe("Restore now and Keep it awake", () => {
     const { registry, store } = fixture.open();
     await sweep(registry);
     await git(fixture.repo, ["worktree", "add", path.join(fixture.root, "elsewhere"), "owned"]);
+    const events = hibernationEvents(registry);
     const result = await registry.setThreadCheckoutHibernation({ ...identity, restore: true });
     expect(result).toMatchObject({ keepAwake: false, hibernated: true, restoreError: expect.stringContaining("owned") });
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated" });
     expect(registry.readCheckoutHibernation(identity).restoreFailure?.message).toBe(result.restoreError);
+    // The card goes back to the hibernated checkout; it never reads awake.
+    expect(events.at(-1)?.workspace).toMatchObject({ worktreePath: fixture.worktree, branch: "owned" });
+    expect(events.at(-1)?.workspace).not.toHaveProperty("restoring");
+  });
+
+  it("ends a restore that throws, so no surface keeps showing it", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open();
+    await sweep(registry);
+    recreateSpy(registry).mockRejectedValueOnce(new Error("git exploded"));
+    const events = hibernationEvents(registry);
+    const result = await registry.setThreadCheckoutHibernation({ ...identity, restore: true });
+    expect(result).toMatchObject({ hibernated: true, restoreError: "git exploded" });
+    expect(events.map((event) => event.workspace?.restoring ?? false)).toEqual([true, false]);
+    expect(events.at(-1)?.workspace).toMatchObject({ worktreePath: fixture.worktree });
+    expect(registry.readCheckoutHibernation(identity)).toEqual({ restoring: false });
+    expect(await snapshotOf(store)).toMatchObject({ state: "hibernated" });
+  });
+
+  it("says the restore runs project setup before any restore starts", async () => {
+    const fixture = await createFixture({ environment: true });
+    const { registry, store } = fixture.open();
+    await store.setThreadCodexEnvironmentRuntime({ ...identity, codexEnvironmentRuntime: {
+      environmentId: "env", environmentName: "Env", executionTarget: "local", setupStatus: "succeeded",
+    } as never });
+    const events = hibernationEvents(registry);
+    await sweep(registry);
+    expect(events).toEqual([{ threadId: THREAD_ID, workspace: expect.objectContaining({ runsSetup: true }) }]);
   });
 
   it("keeps the restoring card through project setup, then clears it", async () => {
