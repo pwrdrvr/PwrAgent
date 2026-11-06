@@ -986,10 +986,10 @@ export class AcpAgentClient {
   private async loadSessionOperation(
     metadata: AcpSessionMetadata,
   ): Promise<AppServerThreadReplay> {
-    this.rememberSessionIds(metadata);
     const storedMetadata =
       this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
       metadata;
+    this.rememberSessionIds(storedMetadata);
     // Showing an idle-closed session needs no reload; the next request
     // reloads it.
     if (
@@ -1004,8 +1004,10 @@ export class AcpAgentClient {
         return this.replayForSessionMetadata(storedMetadata);
       }
     }
-    this.options.store.upsertSession(metadata);
-    const localHistory = this.hydrateSessionFromHistory(metadata);
+    // The caller may have captured metadata before awaiting client startup.
+    // A replay read must preserve archive and other updates made meanwhile.
+    this.options.store.upsertSession(storedMetadata);
+    const localHistory = this.hydrateSessionFromHistory(storedMetadata);
     const fallbackNormalizer = this.normalizers.get(metadata.sessionId);
     const hydratedMetadata =
       this.options.store.getSession(this.options.backendId, metadata.sessionId) ??

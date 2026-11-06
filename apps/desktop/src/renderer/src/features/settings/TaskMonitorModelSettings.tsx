@@ -5,6 +5,7 @@ import {
   type DesktopTaskMonitorModelChoice,
 } from "@pwragent/shared";
 import { Select, type SelectOption } from "../../components/Select";
+import { modelSelectOptions } from "../../lib/model-select-options";
 import { helperModelRunningLabel } from "./HelperModelSettings";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 
@@ -74,10 +75,11 @@ export function TaskMonitorModelSettings(props: {
             : savedModel,
         }]
       : []),
-    ...models.map((model) => ({
-      value: `${MODEL_VALUE_PREFIX}${model.id}`,
-      label: model.label ?? model.id,
-    })),
+    ...modelSelectOptions({
+      kind: props.backendId,
+      models,
+      valueFor: (model) => `${MODEL_VALUE_PREFIX}${model.id}`,
+    }),
   ];
 
   const save = (value: string): void => {

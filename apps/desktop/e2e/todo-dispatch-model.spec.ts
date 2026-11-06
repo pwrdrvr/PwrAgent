@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
@@ -213,11 +213,19 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await stack.getByRole("button", { name: "Handoff options" }).click();
     await stack.getByRole("menuitemradio", { name: "Send to thread…" }).click();
     await expect(stack.getByRole("button", { name: "Send request", exact: true })).toBeDisabled();
-    await stack.getByRole("textbox", { name: "Find destination thread" }).fill("Per-route rate limits");
-    await stack.getByRole("button", { name: "Search", exact: true }).click();
-    await stack.getByRole("button", { name: /Per-route rate limits/ }).click();
+    // The ⌘K palette's search, as you type: no Search button, and Enter picks
+    // the active row.
+    const destinationField = stack.getByRole("combobox", { name: "Find destination thread" });
+    await destinationField.fill("Per-route rate limits");
+    await expect(stack.getByRole("option", { name: /Per-route rate limits/ })).toBeVisible();
+    await expect(stack.getByRole("button", { name: "Search", exact: true })).toHaveCount(0);
+    await destinationField.press("Enter");
     await expect(stack.getByRole("button", { name: "Send request", exact: true })).toBeEnabled();
-    await expect(stack).toContainText("atlas-rate-limits");
+    // The destination is a thread chip; its hover card names the thread id.
+    const destination = stack.getByRole("button", { name: "Open thread Per-route rate limits", exact: true });
+    await destination.focus();
+    await expect(app.window.getByRole("tooltip")).toContainText(other);
+    await destination.blur();
     expect(await app.getLastStartTurn()).toBeUndefined();
     await stack.getByRole("button", { name: "Show the whole proposed prompt" }).click();
     await app.window.screenshot({ path: testInfo.outputPath("todo-send-request.png") });

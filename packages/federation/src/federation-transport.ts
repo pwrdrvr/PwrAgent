@@ -1621,7 +1621,8 @@ function sendFrame(
   }
   const payload = encodeFederationFramePayload({
     json: socketPayload,
-    compressionEnabled: options?.compressionEnabled ?? false,
+    compressionEnabled: (options?.compressionEnabled ?? false)
+      && !(message.kind === "envelope" && message.envelope.kind === "blob_chunk"),
   });
   const maxFrameBytes = options?.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES;
   const wireByteLength = transport
@@ -1664,11 +1665,34 @@ async function sendFrameWithBackpressure(
   options?: { compressionEnabled?: boolean; maxFrameBytes?: number; maxDecodedFrameBytes?: number },
   context?: EnvelopeDiagnosticsContext,
 ): Promise<number> {
-  await waitForFederationSendCapacity(socket);
-  if (socket.readyState !== WebSocket.OPEN) {
-    throw new Error("Federation connection closed while sending an attachment.");
+  const bulk = message.kind === "envelope" && message.envelope.kind === "blob_chunk";
+  if (!bulk) {
+    await waitForFederationSendCapacity(socket);
+    if (socket.readyState !== WebSocket.OPEN) throw new Error("Federation connection closed while sending.");
+    return sendFrame(socket, message, transport, options, context);
   }
-  return sendFrame(socket, message, transport, options, context);
+  return await scheduleFederationBlob(socket, async () => {
+    // Keep at most one chunk ahead of a newly queued control frame. All blob
+    // producers share this queue, including gateway relays and composer images.
+    await waitForFederationSendCapacity(socket, 0);
+    if (socket.readyState !== WebSocket.OPEN) throw new Error("Federation connection closed while sending a blob.");
+    return sendFrame(socket, message, transport, options, context);
+  });
+}
+
+const blobSendTails = new WeakMap<object, Promise<unknown>>();
+
+/** One blob at a time per socket, yielding to control traffic between chunks. */
+export async function scheduleFederationBlob<T>(socket: object, send: () => Promise<T>): Promise<T> {
+  const previous = blobSendTails.get(socket) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return await send();
+  });
+  blobSendTails.set(socket, next);
+  try { return await next; } finally {
+    if (blobSendTails.get(socket) === next) blobSendTails.delete(socket);
+  }
 }
 
 /** The ws client's underlying TCP or TLS socket: ws keeps it on `_socket`. */
@@ -1685,10 +1709,11 @@ type FederationRawSocket = {
  */
 export async function waitForFederationSendCapacity(
   socket: Pick<WebSocket, "bufferedAmount" | "readyState"> & { _socket?: FederationRawSocket | null },
+  highWaterBytes = FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES,
 ): Promise<void> {
   while (
     socket.readyState === WebSocket.OPEN
-    && socket.bufferedAmount > FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES
+    && socket.bufferedAmount > highWaterBytes
   ) {
     const raw = socket._socket;
     if (raw) {

@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { HookEvent, HookInput, Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import {
   CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
   type ClaudeBackendOptions,
 } from "../claude/claude-backend";
+import { ClaudeSessionReaderError } from "../claude/claude-session-reader";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { CLAUDE_SELF_STARTED_TURN_HELD_REASON } from "../claude/claude-self-started-turns";
 import {
@@ -22,7 +23,13 @@ import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-r
 
 const roots: string[] = [];
 const backends: ClaudeBackend[] = [];
+// Session reads and titles compare the launch environment's Claude config
+// directory with this process's; the runner's own must not decide them.
+beforeEach(() => {
+  vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
+});
 afterEach(async () => {
+  vi.unstubAllEnvs();
   // A backend queues usage-limit writes into the temp root without the test
   // awaiting them, and a session can still be reporting its last turn.
   // close() joins both, so every backend finishes closing, even when another
@@ -57,6 +64,18 @@ async function runPromptSubmit(options: Options, input: { prompt: string; source
   return outputs;
 }
 
+/** Claude's ScheduleWakeup call, and the PostToolUse hook that records it. */
+async function* scheduleLoopWakeup(options: Options, prompt: string): AsyncGenerator<SDKMessage> {
+  const input = { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt };
+  yield { type: "assistant", parent_tool_use_id: null, message: {
+    id: "schedule", content: [{ type: "tool_use", id: "tool-wake", name: "ScheduleWakeup", input }],
+  } } as SDKMessage;
+  await runHooks(options, "PostToolUse", {
+    tool_name: "ScheduleWakeup", tool_use_id: "tool-wake", tool_input: input,
+    tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
+  });
+}
+
 async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUserMessage>) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
   generateSessionTitle?: (description: string, options?: { persist?: boolean }) => Promise<string | null>;
 } = {}) {
@@ -67,6 +86,8 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
   const turnCompletions = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
   let latestTurnId: string | undefined;
   const queries: Options[] = [];
+  /** Each batch of sub-agent cards the backend asked to save. */
+  const subAgentRecords: Array<{ threadId: string; subAgents: Array<{ monitorId: string; status: string; task: string; agentName?: string; lastMessage?: string }> }> = [];
   const close = vi.fn();
   const run = vi.fn((args: Parameters<typeof query>[0]) => {
     const options = args.options!;
@@ -111,6 +132,9 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
     request: async () => ({ decision: "accept" }),
     cancelRequest: async () => {},
     resolveEnv: async (): Promise<NodeJS.ProcessEnv> => ({ PATH: "/fixture", ANTHROPIC_API_KEY: "must-not-reach-child", CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child" }),
+    recordSubAgents: async (params: { threadId: string; subAgents: unknown[] }) => {
+      subAgentRecords.push(structuredClone(params) as (typeof subAgentRecords)[number]);
+    },
   };
   /** Every backend over this root goes through here, so cleanup can close it. */
   function openBackend(options: ClaudeBackendOptions = backendOptions) {
@@ -127,7 +151,7 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
     if (!completion) throw new Error("No Claude turn has started in this fixture.");
     await completion.promise;
   }
-  return { backend, backendOptions, openBackend, store, events, queries, run, close, waitForTurn, root };
+  return { backend, backendOptions, openBackend, store, events, queries, run, close, waitForTurn, root, subAgentRecords };
 }
 
 describe("Claude SDK backend", () => {
@@ -227,6 +251,7 @@ describe("Claude SDK backend", () => {
     // Builds before this one stored a refusal on every Claude thread.
     const stored = await f.store.read(threadId);
     await f.store.save({ ...stored, thread: { ...stored.thread, workspaceHandoff: { available: false, unavailableReason: "old" } } });
+    expect((await f.backend.listThreads())[0]).toMatchObject({ projectKey: previous });
     expect((await f.backend.listThreads())[0]?.workspaceHandoff).toBeUndefined();
 
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Remember PINEAPPLE" }] });
@@ -246,6 +271,8 @@ describe("Claude SDK backend", () => {
       { id: secondary, kind: "local", label: "other-repo", path: secondary },
     ]);
     expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    // The thread's projectKey follows its working directory.
+    expect((await f.backend.listThreads())[0]).toMatchObject({ projectKey: worktree });
 
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Where are you?" }] });
     await f.waitForTurn();
@@ -2202,15 +2229,7 @@ describe("Claude SDK backend", () => {
     const loop = { id: "a1b2c3d4", schedule: "5 14 3 11 *", recurring: false, prompt: "/loop check the deploy" };
     const f = await fixture(async function* (options) {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
-      yield { type: "assistant", parent_tool_use_id: null, message: {
-        id: "schedule", content: [{ type: "tool_use", id: "tool-wake", name: "ScheduleWakeup",
-          input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt } }],
-      } } as SDKMessage;
-      await runHooks(options, "PostToolUse", {
-        tool_name: "ScheduleWakeup", tool_use_id: "tool-wake",
-        tool_input: { delaySeconds: 600, reason: "The deploy takes ten minutes.", prompt: loop.prompt },
-        tool_response: { scheduledFor: 4_000_000_000_000, clampedDelaySeconds: 600, wasClamped: false },
-      });
+      yield* scheduleLoopWakeup(options, loop.prompt);
       yield { type: "assistant", parent_tool_use_id: null, message: {
         id: "waiting", content: [{ type: "text", text: "I'll check again in ten minutes." }],
       } } as SDKMessage;
@@ -2908,6 +2927,93 @@ describe("Claude SDK backend", () => {
     expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", additionalDirectories: [attached] });
   });
 
+  describe("a setting only a new process takes, while Claude's own wake is pending", () => {
+    const pwragent = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
+    const settings: Array<{
+      name: string;
+      base?: Partial<Parameters<ClaudeBackend["startTurn"]>[0]>;
+      change: (root: string) => Partial<Parameters<ClaudeBackend["startTurn"]>[0]>;
+      applied: (root: string) => Partial<Options>;
+    }> = [{
+      name: "instructions",
+      change: () => ({ instructions: "Be brief." }),
+      applied: () => ({ systemPrompt: { type: "preset", preset: "claude_code", append: "Be brief." } }),
+    }, {
+      name: "an attached directory",
+      change: (root) => ({ attachedDirectories: [{ id: path.join(root, "attached"), kind: "local", label: "attached", path: path.join(root, "attached") }] }),
+      applied: (root) => ({ additionalDirectories: [path.join(root, "attached")] }),
+    }, {
+      name: "an environment",
+      change: () => ({ shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" } }),
+      applied: () => ({ env: expect.objectContaining({ PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" }) }),
+    }, {
+      name: "tool rules",
+      base: { mcpServers: {} },
+      change: () => ({ mcpServers: { pwragent } }),
+      applied: () => ({ allowedTools: [CLAUDE_MCP_GATEWAY_TOOL, ...CLAUDE_FORGE_TOOLS] }),
+    }];
+
+    it.each(settings)("defers $name and keeps the process for the wake, then relaunches with it", async (setting) => {
+      const loop = { id: "a1b2c3d4", schedule: "5 14 3 11 *", recurring: false, prompt: "/loop check the deploy" };
+      const ended = Promise.withResolvers<void>();
+      let second: SDKUserMessage | undefined;
+      const f = await fixture(async function* (options, prompt) {
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+        if (options.resume) {
+          yield { type: "assistant", parent_tool_use_id: null, message: { id: "relaunched", content: [{ type: "text", text: "Done." }] } } as SDKMessage;
+          yield { type: "result", subtype: "success", is_error: false, result: "Done." } as SDKMessage;
+          return;
+        }
+        const input = prompt[Symbol.asyncIterator]();
+        await input.next();
+        yield* scheduleLoopWakeup(options, loop.prompt);
+        await runHooks(options, "Stop", { stop_hook_active: false, session_crons: [loop] });
+        yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+        const next = await input.next();
+        // A relaunch closes this process's input instead.
+        if (next.done) return;
+        second = next.value as SDKUserMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "stopping", content: [{ type: "text", text: "Stopping the loop." }] } } as SDKMessage;
+        await ended.promise;
+        // Claude ended its loop, so nothing holds the process any more.
+        await runHooks(options, "Stop", { stop_hook_active: false, session_crons: [] });
+        yield { type: "result", subtype: "success", is_error: false, result: "stopped",
+          user_message_uuids: [second.uuid] } as unknown as SDKMessage;
+        await new Promise<void>((resolve) => {
+          options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }, { setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }) });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: loop.prompt }], ...setting.base });
+      await f.waitForTurn();
+      expect(f.backend.listSessionWakes(threadId)).toHaveLength(1);
+      expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
+
+      // A relaunch now would end the wake, so the live process takes the turn.
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Stop checking" }],
+        ...setting.base, ...setting.change(f.root) });
+      expect(f.run).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(second).toBeDefined());
+      expect(f.close).not.toHaveBeenCalled();
+      expect(f.backend.liveSessionThreadIds()).toEqual([threadId]);
+      expect(f.backend.listSessionWakes(threadId)).toEqual([expect.objectContaining({ id: "a1b2c3d4", origin: "loop_wakeup" })]);
+
+      ended.resolve();
+      await f.waitForTurn();
+      await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+      expect(f.close).toHaveBeenCalled();
+      expect(f.backend.listSessionWakes(threadId)).toEqual([]);
+
+      // With nothing held, the next turn's new process takes the setting.
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Again" }], ...setting.base, ...setting.change(f.root) });
+      await f.waitForTurn();
+      expect(f.run).toHaveBeenCalledTimes(2);
+      expect(f.queries[0]).not.toMatchObject(setting.applied(f.root));
+      expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", ...setting.applied(f.root) });
+      expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+    });
+  });
+
   it("refuses to fork a thread while its turn is running", async () => {
     let finish!: () => void;
     const gate = new Promise<void>((resolve) => { finish = resolve; });
@@ -3098,6 +3204,69 @@ describe("Claude SDK backend", () => {
     });
   });
 
+  describe("stopping a turn while Claude's own wake is pending", () => {
+    const capabilities = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"];
+    async function stoppable(params: { wake?: "loop" | "cron" }) {
+      const interrupted = Promise.withResolvers<void>();
+      const interrupt = vi.fn(async () => {
+        interrupted.resolve();
+        return { still_queued: [], cancelled: [] };
+      });
+      const prompt = "/loop check the deploy";
+      const f = await fixture(async function* (options) {
+        const aborted = new Promise<void>((resolve) => {
+          options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", capabilities } as SDKMessage;
+        if (params.wake === "loop") yield* scheduleLoopWakeup(options, prompt);
+        if (params.wake === "cron") {
+          await runHooks(options, "PostToolUse", {
+            tool_name: "CronCreate", tool_use_id: "tool-cron", tool_input: { cron: "*/5 * * * *", prompt: "Check CI" },
+            tool_response: { id: "e5f6a7b8", humanSchedule: "Every 5 minutes", recurring: true, nextFireAt: 4_000_000_000_000 },
+          });
+        }
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "reading", content: [{ type: "text", text: "Reading the logs." }] } } as SDKMessage;
+        await Promise.race([interrupted.promise, aborted]);
+        if (options.abortController!.signal.aborted) return;
+        yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["Request interrupted by user"] } as unknown as SDKMessage;
+        await aborted;
+      }, { interrupt });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: prompt }] });
+      await vi.waitFor(() => expect((f.backend.readThread(threadId)).then((replay) => replay.lastAssistantMessage))
+        .resolves.toBe("Reading the logs."));
+      return { ...f, threadId, turn, interrupt };
+    }
+
+    it.each([
+      { wake: "loop" as const, held: { origin: "loop_wakeup", prompt: "/loop check the deploy", nextFireAt: 4_000_000_000_000 } },
+      { wake: "cron" as const, held: { id: "e5f6a7b8", origin: "cron", recurring: true, prompt: "Check CI" } },
+    ])("interrupts Claude and keeps the process for a $wake wake", async ({ wake, held }) => {
+      const f = await stoppable({ wake });
+      // No task holds the process; only the wake does.
+      expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
+      expect(f.backend.listSessionWakes(f.threadId)).toHaveLength(1);
+      await f.backend.interruptTurn(f.turn);
+      expect(f.interrupt).toHaveBeenCalledWith({ cancelQueued: true });
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/cancelled", params: { turnId: f.turn.turnId } });
+      // Ending the process would end the wake with it.
+      expect(f.close).not.toHaveBeenCalled();
+      expect(f.backend.liveSessionThreadIds()).toEqual([f.threadId]);
+      expect(f.backend.listSessionWakes(f.threadId)).toEqual([expect.objectContaining(held)]);
+      await f.backend.close();
+    });
+
+    it("ends the query when neither a wake nor a task would stop with it", async () => {
+      const f = await stoppable({});
+      expect(f.backend.listSessionWakes(f.threadId)).toEqual([]);
+      await f.backend.interruptTurn(f.turn);
+      expect(f.interrupt).not.toHaveBeenCalled();
+      expect(f.close).toHaveBeenCalled();
+      expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
+      expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    });
+  });
+
   it("closes a background launch row that no task event ever settled", async () => {
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
@@ -3140,7 +3309,7 @@ describe("Claude SDK backend", () => {
     ])));
   });
 
-  it("reports a background sub-agent as running work with its progress", async () => {
+  it("reports a background sub-agent as a Sub-agents card, not an Actions row", async () => {
     const agentDone = Promise.withResolvers<void>();
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
@@ -3163,21 +3332,95 @@ describe("Claude SDK backend", () => {
         status: "stopped", output_file: "", summary: "Stopped" } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "noted" } as SDKMessage;
     });
+    // A failed assertion must not leave the session parked, or cleanup hangs.
+    onTestFinished(() => agentDone.resolve());
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     const started = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
     await f.waitForTurn();
-    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
+    // The Actions panel lists commands. A sub-agent is a card in the
+    // Sub-agents panel, and it still keeps the thread working.
+    await vi.waitFor(() => expect(f.subAgentRecords.flatMap((record) => record.subAgents)).toEqual([
+      { monitorId: "claude-native:agent-1", taskId: "agent-1", task: "Audit the SDK", status: "running",
+        agentName: "Explore", startedAt: expect.any(Number) },
+    ]));
+    expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([]);
+    // Claude takes another turn when it ends, so Waiting For still lists it.
+    await vi.waitFor(() => expect(f.backend.listWaitingTasks(threadId)).toEqual([{
       itemId: "tool-agent", processId: "agent-1", command: "Audit the SDK", cwd: f.root,
       kind: "agent", agentType: "Explore", progress: "3 tool uses · last Grep",
       background: true, startedAt: expect.any(Number),
     }]));
+    expect(f.backend.backgroundTaskThreadIds()).toEqual([threadId]);
+    expect(f.backend.activeTaskCount(threadId)).toBe(1);
+    expect(f.subAgentRecords.every((record) => record.threadId === threadId)).toBe(true);
+    expect(f.events.filter((event) => event.notification.method === "thread/backgroundTasks/updated")
+      .flatMap((event) => (event.notification.params as { tasks: unknown[] }).tasks)).toEqual([]);
     expect(f.events.filter((event) => event.notification.method === "turn/started")).toHaveLength(1);
     agentDone.resolve();
     await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+    expect(f.subAgentRecords.flatMap((record) => record.subAgents).at(-1)).toMatchObject({
+      monitorId: "claude-native:agent-1", status: "cancelled", lastMessage: "Stopped",
+    });
+    expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
+    expect(f.backend.listWaitingTasks(threadId)).toEqual([]);
     expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
     expect(f.events.find((event) => event.notification.method === "item/completed"
       && (event.notification.params.item as { id?: string }).id === "tool-agent")?.notification.params)
       .toMatchObject({ turnId: started.turnId, item: { status: "cancelled" } });
+  });
+
+  it("retries a sub-agent card whose write failed", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        task_type: "local_agent", subagent_type: "Explore", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
+        status: "completed", output_file: "", summary: "Audit done" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const saved: string[] = [];
+    let attempts = 0;
+    const backend = f.openBackend({
+      ...f.backendOptions,
+      recordSubAgents: async ({ subAgents }) => {
+        attempts += 1;
+        // The first write fails, as a busy or closing database would.
+        if (attempts === 1) throw new Error("database is locked");
+        saved.push(...subAgents.map((card) => card.status));
+      },
+    });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    await vi.waitFor(() => expect(backend.liveSessionThreadIds()).toEqual([]));
+    // The running card failed once, was written on the next event, then ended.
+    expect(saved).toEqual(["running", "success"]);
+  });
+
+  it("ends a running sub-agent's card when Claude's process ends without settling it", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        task_type: "local_agent", subagent_type: "general-purpose", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+    // A card left running would say "working" forever.
+    expect(f.subAgentRecords.flatMap((record) => record.subAgents).map((card) => card.status))
+      .toEqual(["running", "failure"]);
   });
 
   it("does not wait on a foreground task that sends no notification", async () => {
@@ -4242,6 +4485,132 @@ describe("Claude thread rewind", () => {
       answered.resolve();
       await busy.waitForTurn();
     }
+  });
+
+  it("reads the conversation in a session reader started with Claude's environment", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const rewindFiles = vi.fn(async () => ({ canRewind: true, filesChanged: ["src/a.ts"], insertions: 1, deletions: 0 }));
+    const f = await fixture(promptRecorder(prompts), { rewindFiles });
+    const account = path.join(f.root, "claude-account");
+    // The operator's shell picks a second Claude account; PwrAgent's own
+    // process has none, so its own session reads see another store.
+    f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", CLAUDE_CONFIG_DIR: account, ANTHROPIC_API_KEY: "must-not-reach-child" });
+    const recorded = sessionMessages(prompts);
+    const inProcess = vi.fn(async (_sessionId: string, _options?: { dir?: string }): ReturnType<typeof recorded> => []);
+    const openReader = () => ({ getSessionMessages: vi.fn(async () => await recorded()), getSessionInfo: vi.fn(), close: vi.fn() });
+    const readers: ReturnType<typeof openReader>[] = [];
+    const openSessionReader = vi.fn((_env: NodeJS.ProcessEnv) => {
+      const reader = openReader();
+      readers.push(reader);
+      return reader;
+    });
+    Object.assign(f.backendOptions, { getSessionMessages: inProcess, openSessionReader });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
+    const target = { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] };
+
+    expect(await f.backend.previewRewind(threadId, target))
+      .toEqual({ files: { paths: ["src/a.ts"], insertions: 1, deletions: 0 } });
+    await f.backend.rewindThread({ threadId, target, mode: "conversation" });
+
+    expect((await f.store.read(threadId)).resumeSessionAt).toBe("assistant-1");
+    // The reader runs with the environment Claude launches with.
+    expect(openSessionReader).toHaveBeenCalledTimes(2);
+    for (const [env] of openSessionReader.mock.calls) {
+      expect(env).toMatchObject({ CLAUDE_CONFIG_DIR: account });
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    }
+    expect(readers[0]!.getSessionMessages).toHaveBeenCalledWith(SDK_SESSION, { dir: f.root });
+    expect(readers.map((reader) => reader.close.mock.calls.length)).toEqual([1, 1]);
+    expect(inProcess).not.toHaveBeenCalled();
+
+    // The same directory, spelled with a trailing separator, reads here.
+    vi.stubEnv("CLAUDE_CONFIG_DIR", `${account}${path.sep}`);
+    inProcess.mockImplementation(async () => await recorded());
+    expect(await f.backend.previewRewind(threadId, { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] }))
+      .toMatchObject({ files: expect.any(Object) });
+    expect(openSessionReader).toHaveBeenCalledTimes(2);
+    expect(inProcess).toHaveBeenCalledWith(SDK_SESSION, { dir: f.root });
+  });
+
+  it("leaves the thread as it was when the session reader fails", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const rewindFiles = vi.fn();
+    const f = await fixture(promptRecorder(prompts), { rewindFiles });
+    f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", CLAUDE_CONFIG_DIR: path.join(f.root, "claude-account") });
+    const failure = "Claude's conversation could not be read: the reader stopped.";
+    const close = vi.fn();
+    Object.assign(f.backendOptions, {
+      openSessionReader: () => ({ getSessionMessages: vi.fn(async () => { throw new Error(failure); }), getSessionInfo: vi.fn(), close }),
+    });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+    const target = { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] };
+
+    expect(await f.backend.previewRewind(threadId, target)).toEqual({ unavailableReason: failure });
+    await expect(f.backend.rewindThread({ threadId, target, mode: "conversation-and-files" })).rejects.toThrow(failure);
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(rewindFiles).not.toHaveBeenCalled();
+    expect(f.run).toHaveBeenCalledOnce();
+    expect((await f.store.read(threadId)).rewinds).toBeUndefined();
+  });
+
+  it("reads in this process exactly when its account directory is Claude's", async () => {
+    // Every pairing of this process's CLAUDE_CONFIG_DIR with the one Claude
+    // launches with. The default is ~/.claude whether unset or spelled out.
+    const prompts: SDKUserMessage[] = [];
+    const f = await fixture(promptRecorder(prompts));
+    const recorded = sessionMessages(prompts);
+    const inProcess = vi.fn(async () => await recorded());
+    const opened: NodeJS.ProcessEnv[] = [];
+    const openSessionReader = vi.fn((env: NodeJS.ProcessEnv) => {
+      opened.push(env);
+      return { getSessionMessages: vi.fn(async () => await recorded()), getSessionInfo: vi.fn(), close: vi.fn() };
+    });
+    Object.assign(f.backendOptions, { getSessionMessages: inProcess, openSessionReader });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+    const target = { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] };
+    const defaultDir = path.join(os.homedir(), ".claude");
+    const account = path.join(f.root, "claude-account");
+    const dirs = {
+      unset: undefined,
+      default: defaultDir,
+      defaultSlash: `${defaultDir}${path.sep}`,
+      account,
+      accountSlash: `${account}${path.sep}`,
+      other: path.join(f.root, "other-account"),
+    };
+    const store = (dir: string | undefined) => (dir === undefined ? defaultDir : dir.replace(/[\\/]+$/, ""));
+    for (const own of Object.values(dirs)) {
+      for (const launch of Object.values(dirs)) {
+        vi.stubEnv("CLAUDE_CONFIG_DIR", own);
+        f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", ...(launch === undefined ? {} : { CLAUDE_CONFIG_DIR: launch }) });
+        inProcess.mockClear();
+        openSessionReader.mockClear();
+        opened.length = 0;
+        await f.backend.previewRewind(threadId, target);
+        const here = store(own) === store(launch);
+        expect({ own, launch, here: inProcess.mock.calls.length > 0, child: opened.length > 0 })
+          .toEqual({ own, launch, here, child: !here });
+        for (const env of opened) expect(env.CLAUDE_CONFIG_DIR).toBe(launch);
+      }
+    }
+  });
+
+  it("names a failed session reader rather than a missing prompt", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const f = await fixture(promptRecorder(prompts));
+    f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", CLAUDE_CONFIG_DIR: path.join(f.root, "claude-account") });
+    const failure = "Claude's conversation could not be read in time.";
+    Object.assign(f.backendOptions, {
+      openSessionReader: () => ({
+        getSessionMessages: vi.fn(async () => []),
+        getSessionInfo: vi.fn(async () => { throw new ClaudeSessionReaderError(failure); }),
+        close: vi.fn(),
+      }),
+    });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+
+    expect(await f.backend.previewRewind(threadId, { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] }))
+      .toEqual({ unavailableReason: failure });
   });
 
   it("says Claude no longer has the conversation when Claude Code deleted its session", async () => {

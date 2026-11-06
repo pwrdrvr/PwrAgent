@@ -4,8 +4,16 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 
 const execFile = promisify(execFileCallback);
+// Runtime forge clients also call these helpers without a Settings owner.
+// Own admitted probes here so every caller participates in application quit.
+const sharedProbeLifetime = new CommandDiscoveryLifetime();
+
+export function closeSharedCommandDiscovery(): Promise<void> {
+  return sharedProbeLifetime.close();
+}
 
 export type CommandDiscoveryCandidate<Source extends string> = {
   command: string;
@@ -215,22 +223,36 @@ async function readCommandVersion(params: {
   }
 }
 
-export async function buildCommandDiscoveryCandidate<Source extends string>(
-  candidate: CommandDiscoveryInput<Source>,
-  options: {
+type CommandCandidateOptions<Source extends string> = {
+  env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  signal?: AbortSignal;
+  versionArgs?: string[];
+  parseVersion: (output: string) => string | undefined;
+  validateVersion?: (version: string) => string | undefined;
+  preflightCandidate?: (params: {
+    command: string;
+    source: Source;
     env: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
-    signal?: AbortSignal;
-    versionArgs?: string[];
-    parseVersion: (output: string) => string | undefined;
-    validateVersion?: (version: string) => string | undefined;
-    preflightCandidate?: (params: {
-      command: string;
-      source: Source;
-      env: NodeJS.ProcessEnv;
-      platform: NodeJS.Platform;
-    }) => Promise<CommandDiscoveryPreflightResult | undefined>;
-  },
+    platform: NodeJS.Platform;
+  }) => Promise<CommandDiscoveryPreflightResult | undefined>;
+};
+
+export function buildCommandDiscoveryCandidate<Source extends string>(
+  candidate: CommandDiscoveryInput<Source>,
+  options: CommandCandidateOptions<Source>,
+): Promise<CommandDiscoveryCandidate<Source> | undefined> {
+  return sharedProbeLifetime.run(() => probeCommandDiscoveryCandidate(candidate, {
+    ...options,
+    signal: options.signal
+      ? AbortSignal.any([options.signal, sharedProbeLifetime.signal])
+      : sharedProbeLifetime.signal,
+  }), undefined);
+}
+
+async function probeCommandDiscoveryCandidate<Source extends string>(
+  candidate: CommandDiscoveryInput<Source>,
+  options: CommandCandidateOptions<Source>,
 ): Promise<CommandDiscoveryCandidate<Source> | undefined> {
   const trimmedCommand = candidate.command?.trim();
   if (!trimmedCommand || options.signal?.aborted) {
@@ -288,6 +310,9 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
           versionArgs: options.versionArgs ?? ["--version"],
         })
     : { ran: false, failureReason: "not_found" };
+  // An admitted child finishes naturally, including stdio close, but its
+  // result must not authorize another command after shutdown admission closes.
+  if (options.signal?.aborted) return undefined;
   const version = versionResult.version ?? preflightResult?.version;
   const versionValidationFailure = version
     ? options.validateVersion?.(version)
@@ -341,6 +366,10 @@ export async function discoverCommands<Source extends string>(
       ),
     )
   );
+
+  if (sharedProbeLifetime.signal.aborted || options.signal?.aborted) {
+    return { candidates: [] };
+  }
 
   const executableAutoCandidates = autoCandidates.filter((candidate) => candidate.executable);
   const includeFailedAutoCandidates =

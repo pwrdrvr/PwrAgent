@@ -1,4 +1,5 @@
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
+import { currentMessagingModels, messagingModelCatalog, otherMessagingModels } from "./fixtures/messaging-model-catalog";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -196,6 +197,71 @@ function boundedPeerBrowseFixture(local: NavigationSnapshot, remote: NavigationS
 }
 
 describe("MessagingController", () => {
+  it.each(["pending", "failed"] as const)("budgets preparation typing writes (startup=%s)", async (outcome) => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const { tempDir, dbPath } = createTempStateDb("pwragent-first-typing-writes-");
+    tempDirs.push(tempDir);
+    const db = StateDb.open(dbPath);
+    const startupEntered = createDeferred<void>();
+    const startup = createDeferred<void>();
+    const activityRecorded = createDeferred<void>();
+    const errorEntered = createDeferred<void>();
+    const errorDelivery = createDeferred<void>();
+    let handling: Promise<void> | undefined;
+    try {
+      const store = new SqliteMessagingStore(db);
+      const harness = await createHarness({
+        store,
+        startTurn: async (request) => {
+          startupEntered.resolve();
+          await startup.promise;
+          if (outcome === "failed") throw new Error("Fixture startup failure");
+          return { backend: request.backend, threadId: request.threadId, turnId: "turn-1" };
+        },
+        deliver: async (intent) => {
+          if (intent.kind === "error") {
+            errorEntered.resolve();
+            await errorDelivery.promise;
+          }
+          return { channel: "telegram", deliveredAt: 1_000, outcome: "presented" };
+        },
+      });
+      await bindThread(harness);
+      const recordDelivery = store.recordDelivery.bind(store);
+      vi.spyOn(store, "recordDelivery").mockImplementation(async (record) => {
+        const recorded = await recordDelivery(record);
+        if (record.intentId?.startsWith("activity:")) activityRecorded.resolve();
+        return recorded;
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        handling = harness.controller.handleInboundEvent(buildTextEvent("Fixture request"));
+        await Promise.all([startupEntered.promise, activityRecorded.promise]);
+        if (outcome === "failed") {
+          startup.resolve();
+          // Stop before persisting the existing error surface, so this budget
+          // measures the new preparation activity and its cleanup only.
+          await errorEntered.promise;
+        }
+      });
+      expectSqliteWriteBudget({
+        scenario: outcome === "pending" ? "messaging-first-typing-before-startup" : "messaging-first-typing-failed-start",
+        note: outcome === "pending"
+          ? "One admitted reply through its first activity delivery with startup blocked: 1 commit, 12360 WAL bytes; 0.247 MB/day at 20 turns/day, 12.36 MB/day at 1000, 0 idle/timer writes."
+          : "One preparation activity and its failed-start cleanup: 2 boundary commits; about 0.494 MB/day at 20 failures/day or 24.72 MB/day at 1000; no timer persistence.",
+        writes,
+      });
+    } finally {
+      startup.resolve();
+      errorDelivery.resolve();
+      await handling;
+      await settleHarnessWork();
+      db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
+  });
+
   it("logs provider-neutral ingress stages through startTurn acceptance", async () => {
     let clock = 2_000;
     const info = vi.fn();
@@ -1011,6 +1077,35 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
     expect(harness.submitReview).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("Update") });
+  });
+
+  it("review model menus put superseded models behind Other", async () => {
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000,
+      backends: [buildBackendSummary({
+        capabilities: { ...buildBackendSummary().capabilities, reviewRunner: true },
+        launchpadOptions: { models: messagingModelCatalog },
+      })],
+    }) });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:reviewer" }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:reviewer:provider:0" }));
+    const picker = harness.delivered.at(-1)!;
+    expect(picker.kind).toBe("review");
+    if (picker.kind !== "review") throw new Error("Expected review picker");
+    expect(picker.actions.filter((action) => (action.value as { model?: string } | undefined)?.model)
+      .map((action) => (action.value as { model: string }).model)).toEqual(currentMessagingModels);
+    const other = picker.actions.find((action) => action.label === "Other")!;
+    expect(other).toBeDefined();
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: other.id, value: other.value }));
+    const otherPicker = harness.delivered.at(-1)!;
+    if (otherPicker.kind !== "review") throw new Error("Expected review picker");
+    expect(otherPicker.actions.filter((action) => (action.value as { model?: string } | undefined)?.model)
+      .map((action) => (action.value as { model: string }).model)).toEqual(otherMessagingModels);
+    const selected = otherPicker.actions.find((action) => (action.value as { model?: string } | undefined)?.model === "gpt-6-sol")!;
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: selected.id, value: selected.value }));
+    expect(harness.delivered.at(-1)).toMatchObject({ review: { reviewer: { backend: "codex", model: "gpt-6-sol" } } });
   });
 
   it("picks a reviewer through the configurator buttons", async () => {
@@ -22944,6 +23039,86 @@ describe("MessagingController", () => {
     });
   });
 
+  it.each(["telegram", "discord", "slack", "mattermost", "feishu", "line"] as const)(
+    "%s model menus put superseded models behind Other for existing and new threads", async (channel) => {
+      const harness = await createHarness({
+        channel,
+        listBackends: async () => ({
+          fetchedAt: 1000,
+          backends: [buildBackendSummary({ launchpadOptions: { models: messagingModelCatalog } })],
+        }),
+      });
+      const channelRef = { channel, conversation: { id: "chat-1", kind: "dm" as const } };
+      const callback = (actionId: string, value?: MessagingJsonValue) =>
+        harness.controller.handleInboundEvent(buildCallbackEvent({ actionId, value, channel: channelRef }));
+      const choices = () => {
+        const intent = harness.delivered.at(-1)!;
+        if (intent.kind === "single_select") return intent.choices;
+        if (intent.kind === "confirmation") return intent.actions;
+        throw new Error(`Expected a model picker, got ${intent.kind}`);
+      };
+      const modelIds = (id: string) => choices().filter((choice) => choice.id === id)
+        .map((choice) => (choice.value as { model: string }).model);
+      await callback("bind:codex:thread-1", { backend: "codex", threadId: "thread-1" });
+      await callback("status:model");
+      expect(modelIds("status:set-model")).toEqual(currentMessagingModels);
+      const other = choices().find((choice) => choice.label === "Other")!;
+      expect(other).toBeDefined();
+      await callback(other.id, other.value);
+      expect(modelIds("status:set-model")).toEqual(otherMessagingModels);
+      const back = choices().find((choice) => choice.label === "Back")!;
+      await callback(back.id, back.value);
+      expect(modelIds("status:set-model")).toEqual(currentMessagingModels);
+      await callback(other.id, other.value);
+      await callback("status:set-model", { model: otherMessagingModels[0]! });
+      expect(harness.setThreadModelSettings).toHaveBeenCalledWith(expect.objectContaining({ model: otherMessagingModels[0] }));
+
+      await harness.controller.handleInboundEvent({ ...buildCommandEvent("/new"), channel: channelRef });
+      await callback("browse:select-project", {
+        directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+      });
+      await callback("browse:new:model");
+      expect(modelIds("browse:new:set-model")).toEqual(currentMessagingModels);
+      const newOther = choices().find((choice) => choice.label === "Other")!;
+      expect(newOther).toBeDefined();
+      await callback(newOther.id, newOther.value);
+      expect(modelIds("browse:new:set-model")).toEqual(otherMessagingModels);
+      await callback("browse:new:set-model", { model: otherMessagingModels[1]! });
+      expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ patch: { model: otherMessagingModels[1] } }));
+      harness.controller.dispose();
+    },
+  );
+
+  it("groups Codex providers for a new thread and opens their model pages", async () => {
+    const providerModels = [
+      { id: "@local/gpt-6-sol", label: "Local Sol", providerId: "local", providerLabel: "Local" },
+      { id: "@local/second", label: "Second", providerId: "local", providerLabel: "Local" },
+    ];
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000,
+      backends: [buildBackendSummary({ launchpadOptions: { models: [...messagingModelCatalog, ...providerModels] } })],
+    }) });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project", value: {
+      directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+    } }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:model" }));
+    const picker = harness.delivered.at(-1)!;
+    if (picker.kind !== "confirmation") throw new Error("Expected model picker");
+    expect(picker.actions.filter((action) => action.id === "browse:new:set-model")
+      .map((action) => (action.value as { model: string }).model)).toEqual(currentMessagingModels);
+    const provider = picker.actions.find((action) => action.label === "Local")!;
+    expect(provider).toBeDefined();
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: provider.id, value: provider.value }));
+    const providerPicker = harness.delivered.at(-1)!;
+    if (providerPicker.kind !== "confirmation") throw new Error("Expected provider model picker");
+    expect(providerPicker.actions.filter((action) => action.id === "browse:new:set-model")
+      .map((action) => (action.value as { model: string }).model)).toEqual(providerModels.map((model) => model.id));
+    expect(providerPicker.actions.some((action) => action.label === "Other")).toBe(false);
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:set-model", value: { model: providerModels[0]!.id } }));
+    expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ patch: { model: providerModels[0]!.id } }));
+  });
+
   it("opens a model picker and stores the selected model", async () => {
     const harness = await createHarness({
       listBackends: async () => ({
@@ -26811,6 +26986,44 @@ function rbacProviderGranting(
 }
 
 describe("RBAC capability enforcement", () => {
+  it.each(["other", "next", "previous", "back"])(
+    "denies a previously delivered model %s callback after permission revocation", async (submenu) => {
+      const permissions: MessagingPermissionId[] = [
+        "message.reply", "thread.resume", "thread.status.view", "thread.settings.model",
+      ];
+      const listBackends = vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [buildBackendSummary({ launchpadOptions: {
+          models: submenu === "next" || submenu === "previous"
+            ? Array.from({ length: 10 }, (_, index) => ({ id: `native-${index}` }))
+            : messagingModelCatalog,
+        } })],
+      }));
+      const harness = await createHarness({ rbacPolicy: rbacProviderGranting(permissions), listBackends });
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:model" }));
+      const choices = () => {
+        const intent = harness.delivered.at(-1)!;
+        if (intent.kind !== "single_select") throw new Error(`Expected model picker, got ${intent.kind}`);
+        return intent.choices;
+      };
+      if (submenu === "previous" || submenu === "back") {
+        const navigate = choices().find((action) => action.id === `status:model:${submenu === "previous" ? "next" : "other"}`)!;
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: navigate.id, value: navigate.value }));
+      }
+      const staleAction = choices().find((action) => action.id === `status:model:${submenu}`)!;
+      expect(staleAction).toBeDefined();
+      permissions.splice(permissions.indexOf("thread.settings.model"), 1);
+      harness.delivered.length = 0;
+      listBackends.mockClear();
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: staleAction.id, value: staleAction.value }));
+      expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", title: "Not permitted" });
+      expect(harness.delivered.some((intent) => intent.kind === "single_select")).toBe(false);
+      expect(listBackends).not.toHaveBeenCalled();
+      expect(harness.setThreadModelSettings).not.toHaveBeenCalled();
+    },
+  );
+
   it("gates /status handoff and project selection on handoff permission", async () => {
     const harness = await createHarness({
       rbacPolicy: rbacProviderGranting(["message.reply", "elicitation.answer", "thread.status.view"]),

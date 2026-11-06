@@ -499,6 +499,35 @@ function main() {
   lines.push("");
   lines.push("Bundled Git runtime (approved separate-executable license exception)");
   lines.push("------------------------------------------------------------------");
+  const customGit = JSON.parse(readFileSync(join(repoRoot, "apps/desktop/custom-git-runtime.json"), "utf8"));
+  lines.push(`macOS/Linux: Custom Git ${customGit.version}; exact source https://github.com/huntharo/git/tree/${customGit.source_revision}.`);
+  lines.push(`Matching source archives, dependency sources, symbols, build recipes and checksums: https://github.com/huntharo/git/releases/tag/v${customGit.version}.`);
+  lines.push("The custom Git payload includes exact SOURCES, build provenance, Git/LFS licenses and Linux dependency notices. Git/LFS remain separate command-line programs; PwrAgent remains MIT licensed.");
+  // The Linux payloads ship curl's Mozilla CA bundle at Dugite's path. The
+  // repository keeps the payload's own notice and license; the pinned license
+  // hash keeps a repin from leaving an older text here.
+  const caBundles = [...new Set(Object.values(customGit.assets)
+    .filter((asset) => asset.ca_bundle)
+    .map((asset) => JSON.stringify(asset.ca_bundle)))].map((ca) => JSON.parse(ca));
+  if (caBundles.length > 1) throw new Error("Custom Git platforms pin different CA bundles");
+  const [caBundle] = caBundles;
+  if (caBundle) {
+    const caNotices = join(repoRoot, "apps/desktop/resources/custom-git");
+    const license = readFileSync(join(caNotices, "LICENSE.ca-bundle"));
+    if (createHash("sha256").update(license).digest("hex") !== caBundle.license_sha256) {
+      throw new Error("apps/desktop/resources/custom-git/LICENSE.ca-bundle differs from the pinned custom Git CA license");
+    }
+    lines.push(
+      "",
+      `Linux: the custom Git payload installs the Mozilla CA certificate bundle (${caBundle.certificate_count} certificates, dated ${caBundle.date}) at ${caBundle.path}, under ${caBundle.license}. Source: ${caBundle.url}.`,
+      "",
+      readFileSync(join(caNotices, "NOTICE.ca-bundle"), "utf8").trim(),
+      "",
+      license.toString("utf8").trim(),
+      "",
+    );
+  }
+  lines.push("The following existing Dugite distribution and notices apply to Windows:", "");
   const gitNotices = join(repoRoot, "apps/desktop/resources/embedded-git");
   for (const file of ["SOURCES", "COPYING", "LICENSE.git-lfs", "LICENSE.git-credential-manager", "NOTICE"]) {
     lines.push(readFileSync(join(gitNotices, file), "utf8").trim(), "");

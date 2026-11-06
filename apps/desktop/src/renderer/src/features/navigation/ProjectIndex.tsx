@@ -38,8 +38,10 @@ export type ProjectIndexEntry = {
   label: string;
   /** Holds the open thread or launchpad: drawn in the accent, like its row. */
   containsSelection: boolean;
-  /** A turn is running in one of its threads. */
+  /** A turn is running on this machine in one of its threads. */
   active: boolean;
+  /** A turn is running on a peer instance in one of its threads. */
+  activeRemote?: boolean;
   /** One of its threads finished a turn the operator has not read. */
   review: boolean;
   /** Forge Automation is paused for the project. */
@@ -518,7 +520,11 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
                   // are decoration beside the name, so the name says what
                   // they mean.
                   aria-label={`Jump to ${project.label}${
-                    project.active ? ", turn running" : project.review ? ", unread" : ""
+                    project.active && project.activeRemote
+                      ? ", turns running here and on another instance"
+                      : project.active ? ", turn running"
+                      : project.activeRemote ? ", turn running on another instance"
+                      : project.review ? ", unread" : ""
                   }${project.forgeActivityPaused ? ", forge activity paused" : ""}`}
                   onClick={() => {
                     tooltip.hide();
@@ -545,9 +551,15 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
                   onBlur={tooltip.hide}
                 >
                   <span className="project-index__label">{project.label}</span>
-                  {project.active ? (
+                  {project.active || project.activeRemote ? (
+                    // Local above remote, as the Attention tab stacks them.
                     <span className="project-index__mark" aria-hidden="true">
-                      <ThinkingScanner compact />
+                      {project.active ? <ThinkingScanner compact /> : null}
+                      {project.activeRemote ? (
+                        <span className="project-index__mark-remote">
+                          <ThinkingScanner compact />
+                        </span>
+                      ) : null}
                     </span>
                   ) : project.review ? (
                     <span className="project-index__mark" aria-hidden="true">

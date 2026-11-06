@@ -4,6 +4,7 @@ import type {
 } from "@pwragent/shared";
 import { threadTodoThreadKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadJumpSearchApi } from "../navigation/useThreadJumpSearch";
 
 /**
  * What the operator chose on one card besides the owner's model pick. Each
@@ -27,7 +28,8 @@ export type TodoDispatchChoices = {
 type DispatchContext = {
   /** False for the default context, which keeps no choices. */
   provided: boolean;
-  api?: Pick<DesktopApi, "listBackends" | "listModelSettingsRecents" | "listThreadTodoDispatchEnvironments" | "searchThreads">;
+  api?: Pick<DesktopApi, "listBackends" | "listModelSettingsRecents" | "listThreadTodoDispatchEnvironments">
+    & ThreadJumpSearchApi;
   /** Settings → Models → Allow Fast mode, on this window's own machine. */
   localCodexFastAllowed: boolean;
   choices: ReadonlyMap<string, TodoDispatchChoices>;

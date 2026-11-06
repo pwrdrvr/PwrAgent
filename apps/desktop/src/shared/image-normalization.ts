@@ -75,7 +75,7 @@ export type ImageUploadNormalizationLogRequest = {
   };
   normalized: {
     height: number;
-    mimeType: "image/jpeg" | "image/png";
+    mimeType: string;
     size: number;
     width: number;
   };

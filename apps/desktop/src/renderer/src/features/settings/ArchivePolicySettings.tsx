@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   normalizeThreadArchivePolicy,
   type DesktopSettingsConfigPatch,
@@ -6,6 +6,7 @@ import {
   type DesktopThreadArchiveSweepStatus,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ThreadMaintenanceLauncherContext } from "../maintenance/thread-maintenance-launcher";
 import { SettingsCompOption, SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
 
@@ -13,6 +14,46 @@ const sweepTimeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
 });
+
+/** "Kept 12: Uncommitted changes (8), Pinned thread (4)." The three largest
+ * reasons, then a count of the rest. */
+function describeKept(kept: Record<string, number> | undefined): string {
+  const entries = Object.entries(kept ?? {}).filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const total = entries.reduce((sum, [, count]) => sum + count, 0);
+  if (total === 0) return "";
+  const shown = entries.slice(0, 3).map(([reason, count]) => `${reason} (${count})`);
+  const rest = entries.length - shown.length;
+  return `Kept ${total}: ${shown.join(", ")}${rest > 0 ? `, and ${rest} more ${rest === 1 ? "reason" : "reasons"}` : ""}.`;
+}
+
+/** One sentence per phase of a finished sweep: threads, retention, worktrees. */
+export function archiveSweepSummaryLines(status: DesktopThreadArchiveSweepStatus): string[] {
+  const lines: string[] = [];
+  const threads = status.threads;
+  if (threads?.skipped) lines.push(`Threads: ${threads.skipped}.`);
+  else if (threads) {
+    lines.push([
+      `Checked ${threads.checked} ${threads.checked === 1 ? "thread" : "threads"}.`,
+      `Archived ${threads.archived}.`,
+      describeKept(threads.kept),
+    ].filter(Boolean).join(" "));
+  } else if (status.archived > 0) {
+    lines.push(`Archived ${status.archived} ${status.archived === 1 ? "thread" : "threads"}.`);
+  }
+  if (status.deleted > 0) lines.push(`Deleted ${status.deleted} expired ${status.deleted === 1 ? "archive" : "archives"}.`);
+  const worktrees = status.worktrees;
+  if (worktrees) {
+    lines.push([
+      `Cleaned ${worktrees.removed} of ${worktrees.candidates} archived worktrees.`,
+      worktrees.kept ? describeKept(worktrees.kept) : `Protected ${worktrees.protected}.`,
+    ].filter(Boolean).join(" "));
+    if (worktrees.emptyContainers) {
+      lines.push(`Cleaned ${worktrees.removedContainers ?? 0} of ${worktrees.emptyContainers} empty worktree folders.`);
+    }
+  }
+  return lines;
+}
 
 export function ArchivePolicySettings(props: {
   value?: DesktopThreadArchivePolicy;
@@ -105,6 +146,7 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
     );
     return () => { cancelled = true; unsubscribe?.(); };
   }, [api, receive]);
+  const openThreadMaintenance = useContext(ThreadMaintenanceLauncherContext);
   if (!api?.getThreadArchiveSweepStatus) return null;
 
   const busy = requesting || status?.running === true;
@@ -119,16 +161,21 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
   const time = (at: number) => sweepTimeFormatter.format(at);
   const changed = (status?.archived ?? 0) + (status?.deleted ?? 0)
     + (status?.worktrees?.removed ?? 0) + (status?.worktrees?.removedContainers ?? 0);
-  const summary = status ? [
-    status.archived > 0 ? `Archived ${status.archived} ${status.archived === 1 ? "thread" : "threads"}.` : "",
-    status.deleted > 0 ? `Deleted ${status.deleted} expired ${status.deleted === 1 ? "archive" : "archives"}.` : "",
-    status.worktrees ? `Cleaned ${status.worktrees.removed} of ${status.worktrees.candidates} archived worktrees. Protected ${status.worktrees.protected}.` : "",
-    status.worktrees?.emptyContainers ? `Cleaned ${status.worktrees.removedContainers ?? 0} of ${status.worktrees.emptyContainers} empty worktree folders.` : "",
-  ].filter(Boolean).join(" ") || (status.failed > 0 ? "" : "Nothing to archive.") : "";
-  const error = requestError ?? (status?.running ? undefined : status?.error);
+  const finished = status !== undefined && !status.running && status.finishedAt !== undefined;
+  const summaryLines = finished ? archiveSweepSummaryLines(status) : [];
+  if (finished && summaryLines.length === 0 && status.failed === 0) summaryLines.push("Nothing to archive.");
+  // Every recorded failure, not only the first; `failed` counts any beyond the cap.
+  const failures = finished
+    ? status.failures?.map((failure) => failure.path && !failure.message.includes(failure.path)
+      ? `${failure.message} (${failure.path})`
+      : failure.message) ?? (status.error ? [status.error] : [])
+    : [];
+  const unlisted = finished ? Math.max(0, status.failed - failures.length) : 0;
   return (
     <SettingsField label="Last sweep"
-      sub="Run now also retries archived worktree cleanup. Recovery snapshots exclude ignored files and keep oversized checkouts in place."
+      sub={openThreadMaintenance
+        ? "Sweeps run hourly. Review shows which threads are idle and why each was kept."
+        : "Run now also retries archived worktree cleanup. Recovery snapshots exclude ignored files and keep oversized checkouts in place."}
       control={
         <div className="settings-archive-sweep">
           <div className="settings-archive-sweep__line">
@@ -150,18 +197,32 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
                     </span>
                   ) : null}
                   <span className="settings-archive-sweep__time">{time(status.finishedAt)}</span>
-                  {summary ? <span className="settings-archive-sweep__text">{summary}</span> : null}
                 </>
               )}
             </span>
-            {api.runThreadArchiveSweep ? (
-              <button className="button button--ghost settings-section-controls__button settings-archive-sweep__run"
-                type="button" aria-disabled={busy || undefined} onClick={() => { void run(); }}>
-                Run now
-              </button>
-            ) : null}
+            <span className="settings-archive-sweep__buttons">
+              {openThreadMaintenance ? (
+                <button className="button button--ghost settings-section-controls__button settings-archive-sweep__run"
+                  type="button" onClick={() => openThreadMaintenance()}>
+                  Review…
+                </button>
+              ) : null}
+              {api.runThreadArchiveSweep ? (
+                <button className="button button--ghost settings-section-controls__button settings-archive-sweep__run"
+                  type="button" aria-disabled={busy || undefined} onClick={() => { void run(); }}>
+                  Run now
+                </button>
+              ) : null}
+            </span>
           </div>
-          {error ? <p className="settings-archive-sweep__error" role="alert">{error}</p> : null}
+          {summaryLines.map((line) => <p key={line} className="settings-archive-sweep__text">{line}</p>)}
+          {requestError ? <p className="settings-archive-sweep__error" role="alert">{requestError}</p> : null}
+          {failures.length ? (
+            <div role="alert">
+              {failures.map((failure, index) => <p key={index} className="settings-archive-sweep__error">{failure}</p>)}
+              {unlisted > 0 ? <p className="settings-archive-sweep__error">and {unlisted} more</p> : null}
+            </div>
+          ) : null}
           {props.active && status && !status.running && status.nextAt !== undefined ? (
             <p className="settings-archive-sweep__next">
               {status.finishedAt === undefined ? "First" : "Next"} sweep about {time(status.nextAt)}

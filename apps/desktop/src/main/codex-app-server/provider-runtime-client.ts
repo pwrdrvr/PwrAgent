@@ -1,5 +1,5 @@
 import { parseCodexProviderModelId, type CodexModelProviderSettings } from "@pwragent/shared";
-import type { CodexAppServerClient } from "./client";
+import type { CodexAppServerClient } from "./desktop-client";
 
 type Route = "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "reportedProvider";
 // Exhaustive: adding a public client operation requires choosing its runtime ownership.
@@ -36,6 +36,8 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   listThreadsForMigration: "primary",
   readArchiveCleanupThreadSummary: "threadId",
   listArchiveCleanupThreadsPage: "primary",
+  archiveCleanupRecencyReads: "primary",
+  enrichArchiveCleanupThreads: "primary",
   enrichThreadDirectories: "primary",
   listSkills: "primary",
   listMcpServers: "thread",
@@ -59,6 +61,7 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   listBackgroundTerminals: "threadId",
   terminateBackgroundTerminal: "threadId",
   readThread: "thread",
+  readThreadProtocolResult: "thread",
   readThreadModelSettings: "thread",
   exportThreadForHandoff: "threadId",
   prepareFreshNativeVoiceThread: "thread",
@@ -94,7 +97,7 @@ type Callback = (...args: unknown[]) => unknown;
 type Subscription = { method: Method; args: unknown[]; stops: Map<CodexAppServerClient, () => void> };
 const READ_ONLY = new Set<Method>([
   "readArchiveCleanupThreadSummary", "readThreadPricingSnapshot", "readThreadTurn", "readThreadActivity",
-  "readThreadName", "readThreadSummary", "readThread", "readThreadModelSettings", "exportThreadForHandoff",
+  "readThreadName", "readThreadSummary", "readThread", "readThreadProtocolResult", "readThreadModelSettings", "exportThreadForHandoff",
   "listBackgroundTerminals",
   "readThreadToolInvocation", "readTurnRoot",
 ]);

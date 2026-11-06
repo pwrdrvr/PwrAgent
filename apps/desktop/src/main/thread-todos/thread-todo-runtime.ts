@@ -1,3 +1,5 @@
+import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { assertNoMergeHolds } from "../thread-merge-holds/thread-merge-holds";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
@@ -354,6 +356,13 @@ export function installThreadTodoRuntime(params: {
     input: AddThreadTodoInput,
   ): Promise<AddThreadTodoInput> => {
     const action = input.action;
+    if (action?.type === "send_message") {
+      // Raising the card must not fail on a lookup; the send discovers it too.
+      const target = await Promise.resolve()
+        .then(() => registry.locateThreadTodoMessageTarget(thread, action.target))
+        .catch(() => action.target);
+      return target === action.target ? input : { ...input, action: { ...action, target } };
+    }
     if (action?.type !== "start_thread") return input;
     const { model, reasoningEffort } = await settleModel(thread, action);
     const { model: _model, reasoningEffort: _effort, ...rest } = action;
@@ -544,8 +553,16 @@ export function createThreadTodoRunners(params: {
       await registry.sendThreadTodoMessage(request);
       return { summary: `Sent to ${request.target.title ?? request.target.threadId}` };
     },
-    mergePullRequest: async (request) =>
-      await new GithubPrFetcher().mergePullRequest(request),
+    mergePullRequest: async (request) => {
+      assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+        backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest: request.pullRequest,
+      });
+      return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: (pullRequest) => {
+        assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+          backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest,
+        });
+      } });
+    },
     startThread: async ({
       sourceBackend, sourceThreadId, cwd, crossProject, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
     }) => {

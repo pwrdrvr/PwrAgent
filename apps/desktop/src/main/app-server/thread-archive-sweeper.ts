@@ -2,7 +2,9 @@ import { stat } from "node:fs/promises";
 import type { AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
+  THREAD_ARCHIVE_SWEEP_FAILURE_LIMIT,
   type DesktopThreadArchivePolicy,
+  type DesktopThreadArchiveSweepFailure,
   type DesktopThreadArchiveSweepStatus,
   buildThreadIdentityKey,
   isCodexChatsDirectory,
@@ -21,6 +23,8 @@ export type ThreadArchiveCandidate = {
   activeSubAgent?: boolean;
   /** A PR watch (watching or dispatching) will wake the thread. */
   activePrWatch?: boolean;
+  /** Its overlay or sub-agent state could not be read; fail closed. */
+  unreadable?: boolean;
 };
 
 /** Card statuses that keep housekeeping away from a thread. */
@@ -31,11 +35,11 @@ type SweeperDeps = {
   resolveProject?: (candidate: ThreadArchiveCandidate) => Promise<string | undefined>;
   /** Resolves to the number of expired families deleted. A cleanup that
    * logs its own per-thread failures reports each through onFailure. */
-  cleanupRetention?: (onFailure: (error: unknown) => void) => Promise<number | void>;
+  cleanupRetention?: (onFailure: (error: unknown, details?: SweepFailureDetails) => void) => Promise<number | void>;
   cleanupWorktrees?: (options: {
     manual: boolean;
     onProgress: (status: NonNullable<DesktopThreadArchiveSweepStatus["worktrees"]>) => void;
-    onFailure: (error: unknown) => void;
+    onFailure: (error: unknown, details?: SweepFailureDetails) => void;
   }) => Promise<void>;
   listCandidates: () => Promise<ThreadArchiveCandidate[]>;
   refreshCandidate: (candidate: ThreadArchiveCandidate) => Promise<ThreadArchiveCandidate>;
@@ -44,11 +48,23 @@ type SweeperDeps = {
   /** Resolves false when the archive was cancelled at the mutation boundary. */
   archive: (candidate: ThreadArchiveCandidate, family: ThreadArchiveCandidate[]) => Promise<unknown>;
   workspaceIsSafe?: (cwd: string, signal: AbortSignal) => Promise<boolean>;
+  /** Why a workspace must be kept, or undefined when it is safe. Takes
+   * precedence over workspaceIsSafe, which can only say "changes". */
+  workspaceArchiveBlocker?: (cwd: string, signal: AbortSignal) => Promise<string | undefined>;
   onError: (error: unknown, threadId?: string) => void;
   onStatus?: (status: DesktopThreadArchiveSweepStatus) => void;
 };
 
-type SweepTally = Pick<DesktopThreadArchiveSweepStatus, "archived" | "deleted" | "failed" | "error">;
+type SweepTally = Pick<DesktopThreadArchiveSweepStatus, "archived" | "deleted" | "failed" | "error" | "failures" | "threads">;
+type SweepFailureDetails = { path?: string; threadId?: string };
+type SweepPhase = DesktopThreadArchiveSweepFailure["phase"];
+
+/** Keep reasons reported for workspaces that fail the archive safety check. */
+export const WORKSPACE_KEEP_REASONS = {
+  changes: "Uncommitted changes",
+  ignored: "Ignored files only",
+  unretained: "Commits on no branch",
+} as const;
 
 /** Reads live Git state, including ignored files, untracked files and dirty submodules. A
  * detached tip is safe only when a local or remote branch retains it. No fetch
@@ -57,10 +73,20 @@ export async function workspaceIsSafeForAutoArchive(
   cwd: string,
   signal: AbortSignal,
 ): Promise<boolean> {
+  return await workspaceArchiveBlocker(cwd, signal) === undefined;
+}
+
+/** The same check as workspaceIsSafeForAutoArchive, naming what keeps the
+ * workspace. Ignored files alone (for example node_modules) are reported
+ * separately so the operator can see why a clean checkout was kept. */
+export async function workspaceArchiveBlocker(
+  cwd: string,
+  signal: AbortSignal,
+): Promise<string | undefined> {
   try {
     await stat(cwd);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
   const options = { signal, timeout: 10_000 };
@@ -73,17 +99,22 @@ export async function workspaceIsSafeForAutoArchive(
     // Archive removes only registered Git worktrees, so a directory with no
     // repository at or above it (a scratch project) is left in place. A broken
     // worktree link reports a different message and still fails closed.
-    if (isOutsideAnyGitRepository(error)) return true;
+    if (isOutsideAnyGitRepository(error)) return undefined;
     throw error;
   }
-  if (status.stdout.trim()) return false;
+  const lines = status.stdout.split("\n").filter((line) => line.trim());
+  if (lines.length) {
+    return lines.every((line) => line.startsWith("!! "))
+      ? WORKSPACE_KEEP_REASONS.ignored
+      : WORKSPACE_KEEP_REASONS.changes;
+  }
   const retained = await runGitCommand(cwd, [
     "rev-list", "--count", "HEAD", "--not", "--branches", "--remotes",
   ], options);
-  return retained.stdout.trim() === "0";
+  return retained.stdout.trim() === "0" ? undefined : WORKSPACE_KEEP_REASONS.unretained;
 }
 
-function isOutsideAnyGitRepository(error: unknown): boolean {
+export function isOutsideAnyGitRepository(error: unknown): boolean {
   const stderr = (error as { stderr?: unknown })?.stderr;
   const text = `${error instanceof Error ? error.message : String(error)}\n${typeof stderr === "string" ? stderr : ""}`;
   return text.includes("not a git repository (or any of the parent directories)");
@@ -94,9 +125,11 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
     ...(overlay?.worktreeSnapshots ?? []).map((snapshot) => snapshot.restoredAt ?? 0));
 }
 
-export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent, activePrWatch }: ThreadArchiveCandidate): string | undefined {
+export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent, activePrWatch, unreadable }: ThreadArchiveCandidate): string | undefined {
+  if (unreadable) return "Thread state unreadable";
   if (thread.isPinned || overlay?.pinnedRank !== undefined) return "Pinned thread";
   if (overlay?.agent) return "Agent thread";
+  if (overlay?.mergeHolds?.some((hold) => hold.status === "waiting")) return "Merge held";
   if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
   // The agent asked to be woken by its PR; archiving would strand the wake.
   if (activePrWatch) return "Watching a PR";
@@ -120,11 +153,48 @@ export function isStaleArchiveCandidate(
   now: number,
   policy: DesktopThreadArchivePolicy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" },
 ): boolean {
+  return archiveCandidateKeepReason(candidate, now, policy) === undefined;
+}
+
+/** Why the policy keeps a candidate, or undefined when it is stale. */
+export function archiveCandidateKeepReason(
+  candidate: ThreadArchiveCandidate,
+  now: number,
+  policy: DesktopThreadArchivePolicy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" },
+): string | undefined {
   const { thread, overlay } = candidate;
-  if (!policy.enabled || thread.archivedAt !== undefined || overlay?.archiveTombstonedAt !== undefined
-    || isProtectedArchiveCandidate(candidate)) return false;
-  if (!Number.isFinite(thread.updatedAt) || (thread.updatedAt ?? 0) <= 0) return false;
-  return policy.mode === "count" || now - archiveCandidateLastActivity(candidate) >= policy.inactivityDays * 86_400_000;
+  if (!policy.enabled) return "Automatic archiving is off";
+  if (thread.archivedAt !== undefined || overlay?.archiveTombstonedAt !== undefined) return "Already archived";
+  const protection = archiveCandidateProtectionReason(candidate);
+  if (protection) return protection;
+  if (!Number.isFinite(thread.updatedAt) || (thread.updatedAt ?? 0) <= 0) return "Activity unknown";
+  return policy.mode === "count" || now - archiveCandidateLastActivity(candidate) >= policy.inactivityDays * 86_400_000
+    ? undefined
+    : "Recently active";
+}
+
+/** Groups each root with its native sub-agent threads, which archive with it. */
+export function archiveFamilies(candidates: ThreadArchiveCandidate[]): (root: ThreadArchiveCandidate) => ThreadArchiveCandidate[] {
+  const children = new Map<string, ThreadArchiveCandidate[]>();
+  for (const candidate of candidates) {
+    const parentId = candidate.thread.codexNativeSubAgent?.parentThreadId;
+    if (!parentId) continue;
+    const key = buildThreadIdentityKey(candidate.thread.source, parentId);
+    children.set(key, [...children.get(key) ?? [], candidate]);
+  }
+  return (root) => {
+    const group: ThreadArchiveCandidate[] = [];
+    const seen = new Set<string>();
+    const visit = (candidate: ThreadArchiveCandidate) => {
+      const key = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
+      if (seen.has(key)) return;
+      seen.add(key);
+      group.push(candidate);
+      for (const child of children.get(key) ?? []) visit(child);
+    };
+    visit(root);
+    return group;
+  };
 }
 
 /** Main-process housekeeping. Only explicit start() schedules it, so registry
@@ -159,7 +229,7 @@ export class ThreadArchiveSweeper {
     this.running = withCodexRequestActivity(
       { countsAsActivity: false }, () => this.run(tally, options.manual === true),
     ).catch((error) => {
-      if (!this.abort.signal.aborted) this.fail(tally, error);
+      if (!this.abort.signal.aborted) this.fail(tally, "threads", error);
     }).finally(() => {
       this.running = undefined;
       if (this.abort.signal.aborted) return;
@@ -187,83 +257,123 @@ export class ThreadArchiveSweeper {
     this.deps.onStatus?.(status);
   }
 
-  private count(tally: SweepTally, error: unknown): void {
+  private count(tally: SweepTally, phase: SweepPhase, error: unknown, details: SweepFailureDetails = {}): void {
+    const message = error instanceof Error ? error.message : String(error);
     tally.failed += 1;
-    tally.error ??= error instanceof Error ? error.message : String(error);
+    tally.error ??= message;
+    const failures = tally.failures ??= [];
+    if (failures.length < THREAD_ARCHIVE_SWEEP_FAILURE_LIMIT) {
+      failures.push({ phase, message,
+        ...(details.path ? { path: details.path } : {}),
+        ...(details.threadId ? { threadId: details.threadId } : {}) });
+    }
   }
 
-  private fail(tally: SweepTally, error: unknown, threadId?: string): void {
-    this.count(tally, error);
+  private fail(tally: SweepTally, phase: SweepPhase, error: unknown, threadId?: string): void {
+    this.count(tally, phase, error, { threadId });
     this.deps.onError(error, threadId);
   }
 
   private async run(tally: SweepTally, manual: boolean): Promise<void> {
+    // Each phase reports its own failures; none of them stops a later phase.
     try {
       await this.deps.cleanupWorktrees?.({ manual,
         onProgress: (worktrees) => this.publish({ ...this.status, ...tally, worktrees }),
-        onFailure: (error) => this.count(tally, error),
+        onFailure: (error, details) => this.count(tally, "worktrees", error, details),
       });
-    } catch (error) { if (!this.abort.signal.aborted) this.fail(tally, error); }
-    const policy = this.deps.getPolicy?.() ?? { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" as const };
-    try { tally.deleted += await this.deps.cleanupRetention?.((error) => this.count(tally, error)) || 0; }
-    catch (error) { if (!this.abort.signal.aborted) this.fail(tally, error); }
-    if (!policy.enabled || this.abort.signal.aborted) return;
-    const candidates = await this.deps.listCandidates();
-    const children = new Map<string, ThreadArchiveCandidate[]>();
-    for (const candidate of candidates) {
-      const parentId = candidate.thread.codexNativeSubAgent?.parentThreadId;
-      if (!parentId) continue;
-      const key = buildThreadIdentityKey(candidate.thread.source, parentId);
-      children.set(key, [...children.get(key) ?? [], candidate]);
+    } catch (error) { if (!this.abort.signal.aborted) this.fail(tally, "worktrees", error); }
+    try { tally.deleted += await this.deps.cleanupRetention?.((error, details) => this.count(tally, "retention", error, details)) || 0; }
+    catch (error) { if (!this.abort.signal.aborted) this.fail(tally, "retention", error); }
+    if (this.abort.signal.aborted) return;
+    let policy: DesktopThreadArchivePolicy;
+    try { policy = this.deps.getPolicy?.() ?? { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" as const }; }
+    catch (error) {
+      this.fail(tally, "threads", error);
+      tally.threads = { checked: 0, eligible: 0, archived: 0, kept: {}, skipped: "The archive policy could not be read" };
+      return;
     }
-    const groupFor = (root: ThreadArchiveCandidate): ThreadArchiveCandidate[] => {
-      const group: ThreadArchiveCandidate[] = [];
-      const seen = new Set<string>();
-      const visit = (candidate: ThreadArchiveCandidate) => {
-        const key = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
-        if (seen.has(key)) return;
-        seen.add(key);
-        group.push(candidate);
-        for (const child of children.get(key) ?? []) visit(child);
-      };
-      visit(root);
-      return group;
+    const threads: NonNullable<SweepTally["threads"]> = { checked: 0, eligible: 0, archived: 0, kept: {} };
+    tally.threads = threads;
+    if (!policy.enabled) {
+      threads.skipped = "Automatic archiving is off";
+      return;
+    }
+    const keep = (reason: string) => { threads.kept[reason] = (threads.kept[reason] ?? 0) + 1; };
+    let candidates: ThreadArchiveCandidate[];
+    try { candidates = await this.deps.listCandidates(); }
+    catch (error) {
+      if (!this.abort.signal.aborted) this.fail(tally, "threads", error);
+      threads.skipped = "Threads could not be listed";
+      return;
+    }
+    const groupFor = archiveFamilies(candidates);
+    /** The first reason any member of the family must stay, if one does. */
+    const familyKeepReason = (group: ThreadArchiveCandidate[]): string | undefined => {
+      const now = Date.now();
+      for (const item of group) {
+        const reason = archiveCandidateKeepReason(item, now, policy);
+        if (reason) return reason;
+      }
+      return group.some((item) => this.deps.isBusy(item)) ? "Busy" : undefined;
     };
-    const eligibleRoots = candidates.filter((candidate) => !candidate.thread.codexNativeSubAgent
-      && groupFor(candidate).every((item) => isStaleArchiveCandidate(item, Date.now(), policy) && !this.deps.isBusy(item)));
+    /** Undefined when every workspace is safe to archive. */
+    const workspaceKeepReason = async (group: ThreadArchiveCandidate[]): Promise<string | undefined> => {
+      const paths = new Set(group.flatMap(({ thread, overlay }) =>
+        [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
+          .map((directory) => directory.worktreePath ?? directory.path)));
+      for (const cwd of paths) {
+        if (!cwd.trim()) return "Workspace unknown";
+        const reason = this.deps.workspaceArchiveBlocker
+          ? await this.deps.workspaceArchiveBlocker(cwd, this.abort.signal)
+          : this.deps.workspaceIsSafe
+            ? await this.deps.workspaceIsSafe(cwd, this.abort.signal) ? undefined : WORKSPACE_KEEP_REASONS.changes
+            : await workspaceArchiveBlocker(cwd, this.abort.signal);
+        if (reason) return reason;
+      }
+      return undefined;
+    };
+    const eligibleRoots: ThreadArchiveCandidate[] = [];
+    for (const candidate of candidates) {
+      if (candidate.thread.codexNativeSubAgent) continue;
+      threads.checked += 1;
+      const reason = familyKeepReason(groupFor(candidate));
+      if (reason) keep(reason);
+      else eligibleRoots.push(candidate);
+    }
+    threads.eligible = eligibleRoots.length;
     const selected = new Set<ThreadArchiveCandidate>();
     if (policy.mode === "count") {
       const projects = new Map<string, ThreadArchiveCandidate[]>();
       for (const candidate of eligibleRoots) {
         if (this.abort.signal.aborted) return;
         // Workspaces that cannot be safely archived are kept in addition to
-        // the quota, just like pins and active work.
+        // the quota, just like pins and active work. A failure is reported for
+        // that thread alone and the rest of the project is still ranked.
+        let key: string | undefined;
         try {
-          let safe = true;
-          const paths = new Set(groupFor(candidate).flatMap(({ thread, overlay }) =>
-            [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
-              .map((directory) => directory.worktreePath ?? directory.path)));
-          for (const cwd of paths) {
-            if (!cwd.trim() || !await (this.deps.workspaceIsSafe ?? workspaceIsSafeForAutoArchive)(cwd, this.abort.signal)) {
-              safe = false;
-              break;
-            }
+          const reason = await workspaceKeepReason(groupFor(candidate));
+          if (reason) {
+            keep(reason);
+            continue;
           }
-          if (!safe) continue;
+          key = this.deps.resolveProject
+            ? await this.deps.resolveProject(candidate)
+            : candidate.thread.projectKey ?? candidate.thread.linkedDirectories[0]?.path;
         } catch (error) {
-          if (!this.abort.signal.aborted) this.fail(tally, error, candidate.thread.id);
+          if (!this.abort.signal.aborted) this.fail(tally, "threads", error, candidate.thread.id);
           continue;
         }
-        const key = this.deps.resolveProject
-          ? await this.deps.resolveProject(candidate)
-          : candidate.thread.projectKey ?? candidate.thread.linkedDirectories[0]?.path;
         // Unknown project identity must not combine unrelated worktrees into one quota.
-        if (!key) continue;
+        if (!key) {
+          keep("Project unknown");
+          continue;
+        }
         projects.set(key, [...projects.get(key) ?? [], candidate]);
       }
       for (const group of projects.values()) {
         group.sort((a, b) => archiveCandidateLastActivity(b) - archiveCandidateLastActivity(a)
           || a.thread.id.localeCompare(b.thread.id));
+        for (let index = 0; index < Math.min(group.length, policy.keepPerProject); index++) keep("Within the per-project limit");
         for (const candidate of group.slice(policy.keepPerProject)) selected.add(candidate);
       }
     } else {
@@ -273,30 +383,45 @@ export class ThreadArchiveSweeper {
       if (this.abort.signal.aborted) return;
       if (!selected.has(candidate)) continue;
       const group = groupFor(candidate);
-      if (!group.every((item) => isStaleArchiveCandidate(item, Date.now(), policy) && !this.deps.isBusy(item))) continue;
+      const listed = familyKeepReason(group);
+      if (listed) {
+        keep(listed);
+        continue;
+      }
       try {
         const refreshed = await Promise.all(group.map((item) => this.deps.refreshCandidate(item)));
         if (this.abort.signal.aborted) return;
-        if (policy.mode === "count" && archiveCandidateLastActivity(refreshed[0]!) > archiveCandidateLastActivity(candidate)) continue;
-        if (!refreshed.every((item) => isStaleArchiveCandidate(item, Date.now(), policy) && !this.deps.isBusy(item))) continue;
-        const paths = new Set(refreshed.flatMap(({ thread, overlay }) =>
-          [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
-            .map((directory) => directory.worktreePath ?? directory.path),
-        ));
-        let safe = true;
-        for (const cwd of paths) {
-          if (!cwd.trim() || !await (this.deps.workspaceIsSafe ?? workspaceIsSafeForAutoArchive)(cwd, this.abort.signal)) {
-            safe = false;
-            break;
-          }
+        if (policy.mode === "count" && archiveCandidateLastActivity(refreshed[0]!) > archiveCandidateLastActivity(candidate)) {
+          keep("Recently active");
+          continue;
         }
-        if (!safe || this.abort.signal.aborted) continue;
-        if (!refreshed.every((item) => !this.deps.isBusy(item)) || !await this.deps.canArchive(refreshed)) continue;
+        const current = familyKeepReason(refreshed);
+        if (current) {
+          keep(current);
+          continue;
+        }
+        const workspace = await workspaceKeepReason(refreshed);
+        if (this.abort.signal.aborted) continue;
+        if (workspace) {
+          keep(workspace);
+          continue;
+        }
+        if (!refreshed.every((item) => !this.deps.isBusy(item))) {
+          keep("Busy");
+          continue;
+        }
+        if (!await this.deps.canArchive(refreshed)) {
+          keep("Not eligible when archiving");
+          continue;
+        }
         if (this.abort.signal.aborted) return;
         if (JSON.stringify(this.deps.getPolicy?.() ?? policy) !== JSON.stringify(policy)) return;
-        if (await this.deps.archive(refreshed[0]!, refreshed) !== false) tally.archived += 1;
+        if (await this.deps.archive(refreshed[0]!, refreshed) !== false) {
+          tally.archived += 1;
+          threads.archived += 1;
+        } else keep("Archive cancelled");
       } catch (error) {
-        if (!this.abort.signal.aborted) this.fail(tally, error, candidate.thread.id);
+        if (!this.abort.signal.aborted) this.fail(tally, "threads", error, candidate.thread.id);
       }
     }
   }

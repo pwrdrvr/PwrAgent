@@ -1,0 +1,397 @@
+import type { AppServerReviewOutput, AppServerReviewFinding } from "@pwragent/shared";
+
+/**
+ * The structured review contract a PwrAgent Sub Agent child answers in. Main
+ * parses the child's reply into the review card's output and its text form.
+ */
+export const REVIEW_OUTPUT_INSTRUCTIONS = [
+  "Return only one JSON object with this exact top-level shape:",
+  '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.85}',
+  'overall_correctness must be exactly "patch is correct" or "patch is incorrect" — no other wording.',
+  // The field had no stated meaning for most of its life, so the number the
+  // card printed was whatever each model decided it meant. The example value
+  // is part of the definition: a schema showing 0.0 is a value weaker models
+  // copy through, and a literal zero renders as "0% confidence" beside a
+  // correct verdict.
+  "overall_confidence_score is how confident you are, from 0 to 1, that overall_correctness is the right verdict. It is not a quality score for the patch and not a merge recommendation. Omit the field entirely if you cannot distinguish.",
+  "Each finding must contain title, body, confidence_score, optional priority (0-3), and code_location with absolute_file_path plus line_range.start/end.",
+  "Do not wrap the JSON in Markdown fences and do not include prose outside it.",
+].join("\n");
+
+/**
+ * Keeps a reviewer-reported confidence only when it can mean something.
+ *
+ * The score is the reviewer's own confidence that its `overall_correctness`
+ * verdict is right. Three values look like numbers and are not judgements:
+ *
+ * - Exactly `0`. The output schema in the review prompt has to show the field,
+ *   and whatever value it shows is the one a weaker model copies through. A
+ *   literal zero next to "patch is correct" is a transcription, not a reviewer
+ *   with no confidence at all.
+ * - Anything above 1. A model answering `95` may mean 95%, or may mean nothing.
+ *   Rescaling it guesses at intent; dropping it does not.
+ * - Anything below 0, or non-finite.
+ *
+ * Dropping the value is safe because the verdict stands on its own — readers
+ * render the correctness without a number. Substituting zero would not.
+ */
+export function normalizeReviewConfidenceScore(
+  value: unknown,
+): number | undefined {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && value > 0
+    && value <= 1
+    ? value
+    : undefined;
+}
+
+export function parseReviewOutputText(
+  text: string | undefined,
+): AppServerReviewOutput | undefined {
+  if (!text?.trim()) {
+    return undefined;
+  }
+  const record = readReviewArtifactObject(text.trim());
+  if (!record) {
+    return undefined;
+  }
+  if (
+    !Array.isArray(record.findings)
+    || typeof record.overall_correctness !== "string"
+    || !record.overall_correctness.trim()
+    || typeof record.overall_explanation !== "string"
+  ) {
+    return undefined;
+  }
+
+  const confidenceScore = normalizeReviewConfidenceScore(
+    record.overall_confidence_score,
+  );
+  const findings = record.findings.flatMap(
+    (value): AppServerReviewOutput["findings"] => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return [];
+      }
+      const finding = value as Record<string, unknown>;
+      const location = asRecord(finding.code_location);
+      const lineRange = asRecord(location?.line_range);
+      if (
+        typeof finding.title !== "string"
+        || typeof finding.body !== "string"
+        || typeof finding.confidence_score !== "number"
+        || typeof location?.absolute_file_path !== "string"
+        || typeof lineRange?.start !== "number"
+        || typeof lineRange?.end !== "number"
+      ) {
+        return [];
+      }
+      return [{
+        title: finding.title,
+        body: finding.body,
+        confidence_score: finding.confidence_score,
+        ...(typeof finding.priority === "number"
+          ? { priority: finding.priority }
+          : {}),
+        ...(normalizeReviewCategory(finding.category)
+          ? { category: normalizeReviewCategory(finding.category) }
+          : {}),
+        code_location: {
+          absolute_file_path: location.absolute_file_path,
+          line_range: {
+            start: lineRange.start,
+            end: lineRange.end,
+          },
+        },
+      }];
+    },
+  );
+
+  return {
+    findings,
+    overall_correctness: normalizeOverallCorrectness(
+      record.overall_correctness,
+      findings,
+    ),
+    overall_explanation: record.overall_explanation,
+    ...(confidenceScore === undefined
+      ? {}
+      : { overall_confidence_score: confidenceScore }),
+  };
+}
+
+/**
+ * The prompt asks for a bare JSON object and nothing else. Grok Build streams
+ * two or three narration sentences first ("I'll review this branch against
+ * `main`…") and only then the object, so the artifact has to be recovered from
+ * the surrounding prose. Failing that recovery is not cosmetic: the unparsed
+ * blob becomes the review text and is replayed verbatim into the parent thread
+ * as the next turn's context.
+ */
+function readReviewArtifactObject(
+  text: string,
+): Record<string, unknown> | undefined {
+  for (const candidate of [unwrapJsonFence(text), extractJsonObject(text)]) {
+    if (!candidate) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Codex review/start answers with exactly the two documented phrases. Other
+ * agents paraphrase — Grok Build reports "patch has issues" — and an artifact
+ * with real findings is worth more than the exact wording.
+ *
+ * Both directions have to be read, not just the negative one: the renderer
+ * paints anything that is not "patch is correct" as a red "Patch needs work"
+ * badge, so mapping an unrecognized-but-clean verdict to incorrect puts that
+ * badge next to a "0 findings" badge. When the wording says nothing either
+ * way, the findings list is the more trustworthy signal.
+ */
+function normalizeOverallCorrectness(
+  value: string,
+  findings: AppServerReviewOutput["findings"],
+): AppServerReviewOutput["overall_correctness"] {
+  const normalized = value.trim().toLowerCase();
+  const negation = String.raw`\b(no|not|without|zero|free of)\b[^.]{0,20}?`;
+  const fault = String.raw`\b(incorrect|issues?|problems?|bugs?|defects?)\b`;
+  const clean = String.raw`\b(correct|fine|good|ok|okay)\b`;
+  // "no issues found" names the fault word to deny it; "not correct" does the
+  // same to the clean word. Check both denials before either bare match.
+  if (new RegExp(negation + fault).test(normalized)) {
+    return "patch is correct";
+  }
+  if (new RegExp(negation + clean).test(normalized)) {
+    return "patch is incorrect";
+  }
+  if (new RegExp(fault).test(normalized)) {
+    return "patch is incorrect";
+  }
+  if (new RegExp(clean).test(normalized)) {
+    return "patch is correct";
+  }
+  return findings.length > 0 ? "patch is incorrect" : "patch is correct";
+}
+
+type ReviewFinding = AppServerReviewOutput["findings"][number];
+
+const LEADING_PRIORITY_TAG = /^\s*\[P([0-3])\]\s*/i;
+
+/**
+ * Reviewers that learned Codex's own review format lead a finding's title
+ * with its tag — "[P2] Persist review provenance" — although the
+ * contract gives priority a field of its own. Every surface that draws the
+ * priority separately (the card's badge, the copied heading, the text form)
+ * then prints it twice.
+ *
+ * The stored finding keeps the reviewer's words; those surfaces read this
+ * view of it. A tag that contradicts the field stays in the title, so the
+ * disagreement shows rather than being settled either way, and a finding
+ * with no priority takes its tag as the priority.
+ */
+export function withoutRedundantPriorityTag<T extends ReviewFinding>(
+  finding: T,
+): T {
+  const tag = LEADING_PRIORITY_TAG.exec(finding.title);
+  const title = tag ? finding.title.slice(tag[0].length) : "";
+  if (!tag || !title.trim()) {
+    return finding;
+  }
+  const tagged = Number(tag[1]);
+  if (finding.priority === undefined) {
+    return { ...finding, priority: tagged, title };
+  }
+  return finding.priority === tagged ? { ...finding, title } : finding;
+}
+
+const REVIEW_CATEGORY_MAX_LENGTH = 40;
+
+/**
+ * A category is a short label drawn in a one-line chip. Anything longer, or
+ * spanning lines, is a reviewer's prose in the wrong field and is dropped.
+ */
+export function normalizeReviewCategory(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const category = value.trim();
+  return category
+    && category.length <= REVIEW_CATEGORY_MAX_LENGTH
+    && !/[\r\n]/.test(category)
+    ? category
+    : undefined;
+}
+
+/** "test-coverage" reads as "Test coverage". */
+export function reviewCategoryLabel(category: string): string {
+  const words = category.trim().replace(/[-_]+/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * What labels a finding: its priority, else its category. Codex-style
+ * reviewers rank findings; Claude Code classifies them and never ranks.
+ * A finding with neither has no label, rather than a "P?" placeholder.
+ */
+export function reviewFindingTag(finding: {
+  priority?: number;
+  category?: string;
+}): string | undefined {
+  if (typeof finding.priority === "number") {
+    return `P${finding.priority}`;
+  }
+  const category = normalizeReviewCategory(finding.category);
+  return category ? reviewCategoryLabel(category) : undefined;
+}
+
+export function formatReviewOutputText(
+  output: AppServerReviewOutput,
+): string {
+  const lines = [
+    output.overall_explanation.trim() || output.overall_correctness,
+  ];
+  if (output.findings.length === 0) {
+    return [...lines, "", "No findings."].join("\n");
+  }
+  lines.push("");
+  for (const finding of output.findings.map(withoutRedundantPriorityTag)) {
+    const tag = reviewFindingTag(finding);
+    const range = finding.code_location.line_range;
+    lines.push(
+      `- ${tag ? `[${tag}] ` : ""}${finding.title} (${finding.code_location.absolute_file_path}:${range.start}-${range.end})`,
+      `  ${finding.body}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function unwrapJsonFence(value: string): string {
+  const match = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return match?.[1]?.trim() ?? value;
+}
+
+function extractJsonObject(value: string): string {
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+  return start === -1 || end <= start ? "" : value.slice(start, end + 1);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+export function parsePlainReview(review: string): {
+  explanation: string;
+  findings: AppServerReviewFinding[];
+} {
+  const [rawExplanation, rawComments] = review.split(
+    /\n\s*(?:Full\s+)?Review comments?:\s*\n/i
+  );
+  if (!rawComments) {
+    return {
+      explanation: review,
+      findings: [],
+    };
+  }
+
+  const findingPattern =
+    /(?:^|\n)- \[P(\d+)\] ([^\n—]+?)\s+—\s+(.+?):(\d+)(?:-(\d+))?\n([\s\S]*?)(?=\n- \[P\d+\] |\n*$)/g;
+  const findings: AppServerReviewFinding[] = [];
+
+  for (const match of rawComments.matchAll(findingPattern)) {
+    const priority = Number.parseInt(match[1] ?? "", 10);
+    const title = match[2]?.trim();
+    const absoluteFilePath = match[3]?.trim();
+    const start = Number.parseInt(match[4] ?? "", 10);
+    const end = Number.parseInt(match[5] ?? match[4] ?? "", 10);
+    const body = match[6]?.trim();
+
+    if (
+      !title ||
+      !absoluteFilePath ||
+      !body ||
+      !Number.isInteger(priority) ||
+      !Number.isInteger(start) ||
+      !Number.isInteger(end)
+    ) {
+      continue;
+    }
+
+    findings.push({
+      title,
+      body,
+      priority,
+      confidence_score: 0,
+      code_location: {
+        absolute_file_path: absoluteFilePath,
+        line_range: {
+          start,
+          end,
+        },
+      },
+    });
+  }
+
+  return {
+    explanation: rawExplanation.trim(),
+    findings,
+  };
+}
+
+// The old mapper's last paragraph: the category, then " · " and the verdict.
+const LEGACY_CLAUDE_FACTS = /\n\nCategory: ([^\n·]+?)(?: · Verdict: (\w+))?$/;
+
+/**
+ * Claude reviews recorded before findings carried a category wrote it into
+ * the body's last paragraph ("Category: correctness · Verdict: CONFIRMED").
+ * Lift it back out so those reviews get the same badge as new ones.
+ */
+function withLegacyClaudeCategory(
+  finding: AppServerReviewFinding,
+): AppServerReviewFinding {
+  if (finding.category !== undefined || finding.priority !== undefined) {
+    return finding;
+  }
+  const facts = LEGACY_CLAUDE_FACTS.exec(finding.body);
+  const category = normalizeReviewCategory(facts?.[1]);
+  if (!facts || !category) {
+    return finding;
+  }
+  const rest = finding.body.slice(0, facts.index);
+  return {
+    ...finding,
+    category,
+    body: facts[2] ? `${rest}\n\nVerdict: ${facts[2]}` : rest,
+  };
+}
+
+/**
+ * A review entry's findings in display order, without a title's redundant
+ * priority tag. The transcript renders these and review tracking records them,
+ * so a tracked finding's index names the same row in both.
+ */
+export function reviewEntryFindings(entry: {
+  output?: AppServerReviewOutput;
+  review: string;
+  reviewer?: { backend: string };
+}): AppServerReviewFinding[] {
+  const output = entry.output ?? parseReviewOutputText(entry.review);
+  const findings = output?.findings.map(withoutRedundantPriorityTag)
+    ?? parsePlainReview(entry.review).findings;
+  return entry.reviewer?.backend === "claude"
+    ? findings.map(withLegacyClaudeCategory)
+    : findings;
+}

@@ -1,12 +1,9 @@
-import { execFile as execFileCallback } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "../app-server/git-head-branch";
-
-const execFile = promisify(execFileCallback);
+import { isolateProcessGitEnvironment, runIsolatedGit } from "./helpers/isolated-git";
 
 const readObservation = vi.hoisted(() => ({
   afterRead: undefined as ((filePath: unknown) => Promise<void>) | undefined,
@@ -23,40 +20,19 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-const isolatedGitKeys = /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|INDEX_FILE|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG.*))$/i;
-let savedGitEnv: Map<string, string>;
+let restoreGitEnv: () => void;
 
 beforeEach(() => {
-  savedGitEnv = new Map();
-  for (const [key, value] of Object.entries(process.env)) {
-    if (isolatedGitKeys.test(key) && value !== undefined) {
-      savedGitEnv.set(key, value);
-      delete process.env[key];
-    }
-  }
+  restoreGitEnv = isolateProcessGitEnvironment();
 });
 
 afterEach(() => {
   readObservation.afterRead = undefined;
-  for (const [key, value] of savedGitEnv) process.env[key] = value;
+  restoreGitEnv();
 });
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (isolatedGitKeys.test(key)) delete env[key];
-  }
-  const { stdout } = await execFile("git", ["-C", cwd, ...args], {
-    env: {
-      ...env,
-      GIT_CONFIG_GLOBAL: path.join(cwd, "missing-global-config"),
-      GIT_CONFIG_SYSTEM: path.join(cwd, "missing-system-config"),
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    },
-    encoding: "utf8",
-    windowsHide: true,
-  });
+  const { stdout } = await runIsolatedGit(cwd, args);
   return stdout.trim();
 }
 

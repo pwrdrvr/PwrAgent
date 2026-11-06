@@ -331,6 +331,37 @@ describe("PrRollupChip", () => {
     expect(screen.queryByRole("group")).toBeNull();
   });
 
+  it("keeps the hovered list mounted when a transcript update scrolls another pane", () => {
+    vi.useFakeTimers();
+    const props = {
+      prs: [passing, failing],
+      repoPrefixedUrls: "",
+      threadTitle: "Orbit refactor",
+      onOpen: vi.fn(),
+    };
+    const scene = (update: number) => (
+      <div>
+        <aside><PrRollupChip {...props} prs={props.prs.map((pr) => ({ ...pr }))} /></aside>
+        <main data-testid="transcript">Streamed update {update}</main>
+      </div>
+    );
+    const { container, rerender } = render(scene(0));
+    const chip = container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+    fireEvent.mouseEnter(chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const list = screen.getByRole("group");
+
+    rerender(scene(1));
+    expect(screen.getByRole("group")).toBe(list);
+    fireEvent.scroll(screen.getByTestId("transcript"));
+    expect(screen.getByRole("group")).toBe(list);
+    expect(chip).toHaveAttribute("aria-expanded", "true");
+
+    // Scrolling the chip's own pane still invalidates its fixed placement.
+    fireEvent.scroll(container.querySelector("aside")!);
+    expect(screen.queryByRole("group")).toBeNull();
+  });
+
   it("opens from the keyboard, moves with the arrows, and closes on Escape", () => {
     vi.useFakeTimers();
     const { container } = renderRollup([passing, failing, merged]);

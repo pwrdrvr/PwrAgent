@@ -119,7 +119,7 @@ an unclosed stream gets at most one additional second for cleanup.
 ## Controlled comparison
 
 `pnpm test:desktop-e2e e2e/rendering-diagnostics.spec.ts` runs the checked-in
-comparison (use Sandboxer when connected, per repository guidance). It creates a
+comparison through the repository's local or CI test routes. It creates a
 contrived window with no React, polling or rAF. It captures the same spinner
 first paused, then running, and compares native `DrawFrame` counts for that
 renderer PID. The animation snapshot identifies the spinner in the running

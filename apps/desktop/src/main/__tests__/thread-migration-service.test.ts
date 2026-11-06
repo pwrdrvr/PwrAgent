@@ -4,7 +4,7 @@ import type {
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
 import type { ResolvedCodexCommandCandidate } from "@pwrdrvr/codex-discovery";
-import type { CodexThreadMigrationMetadata } from "../codex-app-server/client";
+import type { CodexThreadMigrationMetadata } from "../codex-app-server/desktop-client";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";
 
 function makeSettingsSnapshot(activeProfile = "work"): DesktopSettingsSnapshot {

@@ -1,4 +1,7 @@
-import type { DirectorySummaryKind } from "./contracts/navigation";
+import type { DirectorySummaryKind, NavigationDirectorySummary, NavigationThreadSummary } from "./contracts/navigation";
+import type { LinkedDirectorySummary } from "./contracts/normalized-app-server";
+import { classifyDirectory, orderByHomePreference } from "./directory-navigation";
+import { isToolManagedWorktreePath } from "./worktree-paths";
 
 /** A checkout's repository, as every machine names it. */
 export type ProjectRepositoryIdentity = {
@@ -27,7 +30,7 @@ type PeerDirectory = ProjectIdentity & {
  * uses to file a remote thread under a local project group
  * (`findRemoteHomeDirectoryIndex`).
  */
-export function directoryIdentityNames(directory: ProjectIdentity): string[] {
+export function directoryIdentityNames(directory: { label: string; path?: string; kind?: string }): string[] {
   const basename = directory.path?.split(/[\\/]/).filter(Boolean).pop();
   return [...new Set(
     [directory.label, basename ?? ""]
@@ -107,4 +110,169 @@ function repositoryIdentities(directory: ProjectIdentity): string[] {
   return [directory.repositoryKey, ...directory.repositoryKeys ?? []]
     .filter((repository): repository is string => Boolean(repository))
     .map((repository) => repository.toLowerCase());
+}
+
+/**
+ * The single local directory group a remote thread belongs to, by project
+ * identity (directory label / path basename — peer paths never match viewer
+ * paths). When the owner's projectKey identifies one of its linked
+ * directories, that primary project wins even if a secondary @-referenced
+ * directory is a local checkout. Otherwise, home preference is the owner's
+ * own rule (`orderByHomePreference`): tool-managed worktree folders last,
+ * otherwise linked order.
+ *
+ * Main files every peer row in the Directories lens with this rule, and the
+ * renderer places a peer thread's starting row with it, so the row the
+ * thread lands in is the row it started in.
+ */
+export function findRemoteHomeDirectoryIndex(
+  directories: ReadonlyArray<RemoteHomeCandidate>,
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+): number | undefined {
+  // Scratch folder names are per-thread identities, not project identities.
+  // Match the containing workspace by kind before considering any raw names.
+  const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
+  const home = linkedByHomePreference[0];
+  if (home && classifyDirectory(home).kind === "workspace") {
+    const index = directories.findIndex((directory) => directory.kind === "workspace");
+    return index === -1 ? undefined : index;
+  }
+  // Two rows can answer to one name: a checkout and a tool-managed worktree
+  // of it, or two clones. Main files a row from its own list and the
+  // renderer places a starting row from the list it rendered, and the two
+  // are not in one order, so the first match is not one answer. The winner
+  // is chosen by what the rows are instead.
+  const directoryIndexByName = new Map<string, number>();
+  directories.forEach((directory, index) => {
+    for (const name of directoryIdentityNames(directory)) {
+      const current = directoryIndexByName.get(name);
+      if (current === undefined || compareHomeCandidates(directory, directories[current]!, name) < 0) {
+        directoryIndexByName.set(name, index);
+      }
+    }
+  });
+  for (const linked of linkedByHomePreference) {
+    // A secondary Workspaces link is matched by kind only when it is home.
+    // Its folder name (`projects`, a scratch hash) names no project, and a
+    // name match would file the thread under Workspaces whenever its real
+    // project has no local checkout.
+    if (classifyDirectory(linked).kind === "workspace") {
+      continue;
+    }
+    for (const name of directoryIdentityNames(linked)) {
+      const index = directoryIndexByName.get(name);
+      if (index !== undefined) {
+        return index;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** A local directory row a remote thread can be filed under. */
+export type RemoteHomeCandidate = {
+  key: string;
+  label: string;
+  path?: string;
+  kind?: DirectorySummaryKind;
+  localAvailability?: "unconfigured";
+};
+
+/**
+ * The placeholder project main adds for a remote thread whose project has no
+ * local row, so the Directories lens still shows it until Add Directory
+ * registers a matching checkout. The renderer draws the same row under a
+ * peer's starting thread, so the thread lands where it started.
+ */
+export function remoteThreadPlaceholderDirectory(
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+): NavigationDirectorySummary | undefined {
+  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
+  if (!home) {
+    return undefined;
+  }
+  const descriptor = classifyDirectory(home);
+  if (descriptor.kind === "workspace") {
+    // Never expose a peer path as a launchable local directory. All remote
+    // scratch mounts share this group until a local Workspaces row exists.
+    return {
+      key: "unconfigured-workspace",
+      kind: "workspace",
+      label: descriptor.label,
+      localAvailability: "unconfigured",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+  }
+  const label = home.label.trim() || (home.path.split(/[\\/]/).filter(Boolean).pop() ?? "").trim();
+  if (!label) {
+    return undefined;
+  }
+
+  // The key stays name-based so existing rows keep their grouping. The
+  // owner's repository identity rides along, so the row's New chat menu
+  // matches peers by origin rather than by folder name alone.
+  return {
+    key: `unconfigured-directory:${encodeURIComponent(label.toLowerCase())}`,
+    kind: "directory",
+    label,
+    localAvailability: "unconfigured",
+    ...(home.repositoryKey ? { repositoryKey: home.repositoryKey } : {}),
+    ...(home.repositoryKeys?.length ? { repositoryKeys: [...home.repositoryKeys] } : {}),
+    threadKeys: [],
+    needsAttentionCount: 0,
+  };
+}
+
+// Below zero when `a` is the better home for a thread named `name`: a
+// configured row before a placeholder, a checkout before a tool-managed
+// worktree folder, a label match before a folder-name match, then by key.
+function compareHomeCandidates(a: RemoteHomeCandidate, b: RemoteHomeCandidate, name: string): number {
+  const rank = (directory: RemoteHomeCandidate): number[] => [
+    directory.localAvailability === "unconfigured" ? 1 : 0,
+    isToolManagedWorktreePath(directory.path) ? 1 : 0,
+    directory.label.trim().toLowerCase() === name ? 0 : 1,
+  ];
+  const rankA = rank(a);
+  const rankB = rank(b);
+  for (let index = 0; index < rankA.length; index += 1) {
+    if (rankA[index] !== rankB[index]) return rankA[index]! - rankB[index]!;
+  }
+  return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+}
+
+/** A remote thread's linked directories, home first. */
+function remoteLinkedDirectoriesByHomePreference(
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+): LinkedDirectorySummary[] {
+  const linkedDirectories = thread.linkedDirectories ?? [];
+  const projectKey = thread.projectKey;
+  const primaryProjectDirectory = projectKey
+    ? linkedDirectories.find((directory) =>
+        linkedDirectoryMatchesProjectKey(directory, projectKey)
+      )
+    : undefined;
+  if (primaryProjectDirectory) {
+    return [primaryProjectDirectory];
+  }
+
+  return orderByHomePreference(linkedDirectories, (directory) => classifyDirectory(directory).path);
+}
+
+function linkedDirectoryMatchesProjectKey(
+  directory: Pick<LinkedDirectorySummary, "path" | "worktreePath">,
+  projectKey: string,
+): boolean {
+  const normalizedProjectKey = normalizeFederatedPath(projectKey);
+  if (!normalizedProjectKey) {
+    return false;
+  }
+  return [directory.path, directory.worktreePath].some(
+    (candidate) => normalizeFederatedPath(candidate) === normalizedProjectKey,
+  );
+}
+
+function normalizeFederatedPath(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized || undefined;
 }

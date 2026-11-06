@@ -1,3 +1,4 @@
+import { useThreadMergeHoldsOpener } from "../thread-merge-holds/useThreadMergeHolds";
 import {
   getSubthreadProjectIdentity,
   getThreadNamedBranch,
@@ -57,6 +58,7 @@ import {
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
+  isFederationViewerWindow,
   readRendererFederationLabel,
   readRendererFederationTarget,
 } from "../../lib/federation-window";
@@ -133,6 +135,7 @@ import {
 } from "./DirectoriesList";
 import { applyDirectoryDrop, type DirectoryDrop } from "./directory-pin-drop";
 import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
+import { projectTurnMarks } from "./project-index";
 import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog";
 import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
 import {
@@ -432,6 +435,10 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
   ) => Promise<ArchivedThreadRef[] | void>;
+  onArchiveThreads?: (
+    threads: NavigationThreadSummary[],
+    options?: ArchiveThreadOptions,
+  ) => Promise<ArchivedThreadRef[]>;
   /**
    * Threads left the list through Archive. `reopenKey` is the thread that
    * was open, so an Undo can bring the operator back to it.
@@ -688,6 +695,7 @@ export function Sidebar(props: SidebarProps) {
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
   const dependencyIndicators = useThreadDependencyIndicatorsContext();
+  const openMergeHolds = useThreadMergeHoldsOpener();
   const contextMenuRef = useRef<HTMLDivElement>(null);
   // What had focus when the thread context menu opened: the row's ⋮ button,
   // or wherever focus was for a right-click. Escape, Tab and a finished
@@ -1045,13 +1053,14 @@ export function Sidebar(props: SidebarProps) {
     );
     const pinned = projects.filter(isPinnedDirectory).sort(comparePinnedDirectories);
     const unpinned = projects.filter((directory) => !isPinnedDirectory(directory));
+    const federationViewer = isFederationViewerWindow();
     return [...pinned, ...unpinned].map((directory) => ({
       key: directory.key,
       label: directory.label,
       containsSelection:
         indexSelectedItemKey === buildLaunchpadSelectionKey(directory.key)
         || (selectedThreadDirectoryKeys?.includes(directory.key) ?? false),
-      active: (directory.counts?.active ?? 0) > 0,
+      ...projectTurnMarks(directory.counts, federationViewer),
       review: (directory.counts?.review ?? 0) > 0,
       ...(isProjectForgeActivityPaused(directory) ? { forgeActivityPaused: true } : {}),
       ...(isPinnedDirectory(directory) ? { pinned: true } : {}),
@@ -1935,9 +1944,11 @@ export function Sidebar(props: SidebarProps) {
         );
     const archiveOptions: ArchiveThreadOptions | undefined =
       nextSelectionKey === undefined ? options : { ...options, nextSelectionKey };
-    const results = await Promise.all(threads.map((thread) =>
-      archiveOptions ? onArchiveThread(thread, archiveOptions) : onArchiveThread(thread)));
-    const archived = results.flatMap((result) => result ?? []);
+    const archived = props.onArchiveThreads
+      ? await props.onArchiveThreads(threads, archiveOptions)
+      : (await Promise.all(threads.map((thread) =>
+          archiveOptions ? onArchiveThread(thread, archiveOptions) : onArchiveThread(thread))))
+        .flatMap((result) => result ?? []);
     if (archived.length > 0) {
       props.onThreadsArchived?.(archived, {
         title: threads.length === 1 ? threads[0]!.title : undefined,
@@ -3185,6 +3196,7 @@ export function Sidebar(props: SidebarProps) {
       {props.threadJumpOpen ? (
         <SidebarSearchPopup
           threads={props.threads}
+          thinkingThreadKeys={props.thinkingThreadKeys}
           projects={props.directories}
           onJumpToProject={(directory) => {
             props.onBrowseModeChange("directories");
@@ -3994,6 +4006,12 @@ export function Sidebar(props: SidebarProps) {
                     >
                       <span>Lock Thread…</span>
                       {menuShortcut("threads.lock")}
+                    </button>
+                  ) : null}
+                  {openMergeHolds && !contextMenuIsBulk ? (
+                    <button role="menuitem" type="button" onClick={() => { const target = contextMenu.thread; setContextMenu(undefined); openMergeHolds(target); }}>
+                      <span>Wait Until Done…</span>
+                      {contextMenu.thread.mergeHolds?.length ? <span className="thread-context-menu__aside">{contextMenu.thread.mergeHolds.length} waiting</span> : null}
                     </button>
                   ) : null}
                   {contextMenuCanContinueAfter ? (

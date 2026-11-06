@@ -3,6 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
 import { ThreadTodoCard } from "../ThreadTodoCard";
 import { TodoDispatchProvider } from "../TodoDispatchProvider";
+import {
+  CURRENT_CODEX_MODEL_LABELS,
+  PROVIDER_MODEL,
+  codexCatalogModels,
+  composerDropdownOptionLabels,
+} from "../../../test/model-catalog";
 
 const thread: ThreadTodoModelSettings = { backend: "claude", model: "opus", reasoningEffort: "high" };
 const codex: ThreadTodoModelSettings = { backend: "codex", model: "sol", reasoningEffort: "high" };
@@ -36,6 +42,19 @@ async function openPicker() {
 }
 
 describe("to-do dispatch model picker", () => {
+  it("titles a Codex model provider's models by provider, as the composer's launchpad does", async () => {
+    const settings: ThreadTodoModelSettings = { backend: "codex", model: "gpt-6.1-sol" };
+    const todo = { ...base, dispatchDefaults: { thread: settings } };
+    setup(todo, [], [{ ...backends[1]!, launchpadOptions: { models: codexCatalogModels() } }]);
+    await openPicker();
+    fireEvent.click(screen.getByRole("menuitem", { name: "To-do model: GPT-6.1-Sol" }));
+    const list = screen.getByRole("listbox", { name: /^To-do model/ });
+    expect(composerDropdownOptionLabels(list)).toEqual([
+      ...CURRENT_CODEX_MODEL_LABELS, "Other", PROVIDER_MODEL.label,
+    ]);
+    expect(within(list).getByRole("group", { name: PROVIDER_MODEL.providerLabel })).toBeTruthy();
+  });
+
   it("shares the composer's current models and keeps a selected legacy model under Other", async () => {
     const labels = ["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6-Sol", "GPT-6.1-Terra", "GPT-6-Luna",
       "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna"];

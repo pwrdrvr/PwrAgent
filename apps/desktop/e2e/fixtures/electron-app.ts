@@ -57,6 +57,7 @@ import {
 } from "./electron-shutdown-policy";
 import { removeTempRoot } from "./temp-root-cleanup";
 import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
+import { registerMainProcessTiming } from "./electron-test";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -88,6 +89,7 @@ export const DESKTOP_MAIN_ENTRY = path.resolve(
  * matters is the close below, not this one.
  */
 const ELECTRON_EVALUATE_QUIT_TIMEOUT_MS = 1_000;
+const ELECTRON_DIAGNOSTICS_TIMEOUT_MS = 1_000;
 /**
  * How long the app gets to shut down on its own before the process tree is
  * force-killed.
@@ -446,12 +448,22 @@ export async function launchElectronApp(
   // the next job on a persistent runner to inherit. That now includes the
   // onboarding-wizard check inside `finishElectronLaunch`, which throws by
   // design.
+  let captureMainProcessTiming: () => Promise<unknown> = async () => undefined;
   try {
+    captureMainProcessTiming = registerMainProcessTiming(async () => {
+      if (!env.PWRAGENT_REPLAY_FIXTURE_PATH) return undefined;
+      return await withTimeout(
+        electronApp.evaluate(() => globalThis.__PWRAGENT_E2E_MAIN_PROCESS_TIMING__?.()),
+        ELECTRON_DIAGNOSTICS_TIMEOUT_MS,
+        "Main-process timing snapshot did not respond",
+      );
+    });
     // Onboarding may quit before teardown. Preserve Windows ownership while
     // the main-process RPC is alive; cmd.exe's exit alone does not close pipes
     // inherited by Electron descendants.
     await captureElectronMainProcess(electronApp);
     return await finishElectronLaunch({
+      captureMainProcessTiming,
       circuitEnabled,
       circuitStateFile,
       diagnosticsFile,
@@ -464,6 +476,7 @@ export async function launchElectronApp(
       suppressOnboarding,
     });
   } catch (error) {
+    await captureMainProcessTiming();
     await closeElectronApplication(electronApp, {
       circuitEnabled,
       circuitStateFile,
@@ -479,6 +492,7 @@ export async function launchElectronApp(
 }
 
 async function finishElectronLaunch(args: {
+  captureMainProcessTiming: () => Promise<unknown>;
   circuitEnabled: boolean;
   circuitStateFile?: string;
   diagnosticsFile?: string;
@@ -491,6 +505,7 @@ async function finishElectronLaunch(args: {
   suppressOnboarding: boolean;
 }): Promise<LaunchResult> {
   const {
+    captureMainProcessTiming,
     circuitEnabled,
     circuitStateFile,
     diagnosticsFile,
@@ -502,14 +517,17 @@ async function finishElectronLaunch(args: {
     seedConfigPath,
     suppressOnboarding,
   } = args;
-  const closeApplicationOnce = memoizeElectronClose(async () =>
-    await closeElectronApplication(electronApp, {
+  const closeApplicationOnce = memoizeElectronClose(async () => {
+    // Specs usually close in finally, before Playwright records a hard failure.
+    // Retain this bounded copy until the shared fixture knows the outcome.
+    await captureMainProcessTiming();
+    return await closeElectronApplication(electronApp, {
       circuitEnabled,
       circuitStateFile,
       diagnosticsFile,
       launchId,
-    }),
-  );
+    });
+  });
   // Bound every action on every window this app opens.
   //
   // Playwright leaves actions unbounded by default, so a click that never
@@ -1290,10 +1308,10 @@ export async function closeElectronWithSessionDrain(
 ): Promise<void> {
   const child = electronApp.process();
   const errorPrefix = `[pwragent-e2e-session-drain:${randomUUID()}]`;
-  let buffered = "";
   let rejectDrain: (error: Error) => void = () => undefined;
   const drainFailed = new Promise<never>((_resolve, reject) => { rejectDrain = reject; });
   drainFailed.catch(() => undefined);
+  let buffered = "";
   const onStderr = (chunk: Buffer | string) => {
     buffered += chunk.toString();
     for (;;) {
@@ -1303,6 +1321,9 @@ export async function closeElectronWithSessionDrain(
       try {
         const message: unknown = JSON.parse(buffered.slice(start + errorPrefix.length, end));
         if (typeof message === "object" && message !== null) {
+          if ("error" in message && typeof message.error === "string") {
+            rejectDrain(new Error(message.error));
+          }
           if (options.diagnosticsFile) {
             appendFileSync(options.diagnosticsFile, `${JSON.stringify({
               kind: "session-drain",
@@ -1310,8 +1331,6 @@ export async function closeElectronWithSessionDrain(
               ...message,
             })}\n`);
           }
-        } else if (typeof message === "string") {
-          rejectDrain(new Error(`Electron session drain failed: ${message}`));
         }
       } catch {
         // Other app stderr cannot change the owned close result.
@@ -1323,50 +1342,59 @@ export async function closeElectronWithSessionDrain(
   child.stderr?.on("data", onStderr);
   try {
     await electronApp.evaluate(({ app, session, webContents }, errorPrefix) => {
-      const record = (stage: string, index?: number) => {
+      const record = (stage: string, index?: number, error?: string) => {
         process.stderr.write(`${errorPrefix}${JSON.stringify({
-          stage, index, at: Date.now(), pid: process.pid,
+          stage, index, error, at: Date.now(), pid: process.pid,
         })}\n`);
       };
       record("installed");
+      const contents = webContents.getAllWebContents();
       const sessions = new Set([
         session.defaultSession,
-        ...webContents.getAllWebContents().map((contents) => contents.session),
+        ...contents.map((contents) => contents.session),
       ]);
-      let quitHeld = false;
+      let released = false;
+      let draining = false;
       const holdNativeQuit = (event: Electron.Event) => {
         record("before-quit");
+        // The product listener runs first and prevents quit until renderer
+        // closure and resource disposal finish. Its final allowed pass is the
+        // boundary before native quit, not the first before-quit notification.
+        if (released || event.defaultPrevented) return;
         event.preventDefault();
-        quitHeld = true;
+        if (draining) return;
+        if (contents.some((contents) => !contents.isDestroyed())) {
+          record("failed", undefined, "Native quit allowed before renderer disposal completed");
+          return;
+        }
+        draining = true;
+        // Renderer unload can produce final storage writes. Drain only once
+        // its producers have closed, before native window/context shutdown
+        // starts. Holding will-quit is too late for Windows cache callbacks.
+        // The callback belongs to the app, not the detached inspector RPC.
+        void Promise.all([...sessions].map(async (ownedSession, index) => {
+          record("close-connections-start", index);
+          await ownedSession.closeAllConnections();
+          record("close-connections-complete", index);
+          await ownedSession.cookies.flushStore();
+          record("flush-cookies-complete", index);
+          await ownedSession.clearData({ dataTypes: ["cache"] });
+          record("clear-cache-complete", index);
+        })).then(() => {
+          released = true;
+          record("released");
+          // Native event dispatch performs a microtask checkpoint before
+          // resetting is_quitting_. Reenter only after that dispatch returns.
+          setImmediate(() => { record("retry-quit"); app.quit(); });
+        }).catch((error: unknown) => {
+          record("failed", undefined, error instanceof Error ? error.message : String(error));
+        });
       };
-      // Application disposal can run while sessions drain, but Chromium
-      // must not enter its window/context shutdown until the callbacks finish.
-      // The app owns this before-quit barrier after Playwright detaches its
-      // inspector. A will-quit barrier is too late to preserve those contexts.
       app.on("before-quit", holdNativeQuit);
       app.once("will-quit", () => record("will-quit"));
-      app.once("quit", () => record("quit"));
-      void Promise.all([...sessions].map(async (ownedSession, index) => {
-        record("close-connections-start", index);
-        await ownedSession.closeAllConnections();
-        record("close-connections-complete", index);
-        await ownedSession.cookies.flushStore();
-        record("flush-cookies-complete", index);
-        await ownedSession.clearData({ dataTypes: ["cache"] });
-        record("clear-cache-complete", index);
-      })).then(() => {
-        record("released");
+      app.once("quit", () => {
         app.removeListener("before-quit", holdNativeQuit);
-        // Completion can run inside a native before-quit checkpoint. Retry
-        // from a fresh task after that dispatch has settled (quit-retry.ts).
-        if (quitHeld) setImmediate(() => { record("retry-quit"); app.quit(); });
-      }, (error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        try {
-          process.stderr.write(`${errorPrefix}${JSON.stringify(message.slice(0, 2_000))}\n`);
-        } catch {
-          // The unchanged deadline still rejects an unfinished drain.
-        }
+        record("quit");
       });
     }, errorPrefix);
     // Session preparation and application disposal share the close deadline.

@@ -5,10 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ThreadHandoffExport, ThreadHandoffPackage } from "@pwragent/shared";
+import type { ThreadHandoffExport, ThreadHandoffPackage, ThreadHandoffProgress } from "@pwragent/shared";
 import { computeWorktreePath } from "../app-server/git-directory-service";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
-import { ThreadInstanceHandoffService } from "../federation/thread-instance-handoff-service";
+import { ThreadInstanceHandoffService, THREAD_HANDOFF_RETRY_NOW_EVENT } from "../federation/thread-instance-handoff-service";
 import type { ImportInstanceThreadRequest } from "../federation/thread-instance-handoff-service";
 import { decodeThreadHandoff, encodeThreadHandoff, threadHistoryDigest } from "../federation/thread-handoff-package";
 
@@ -18,7 +18,7 @@ const replay: ThreadHandoffExport["replay"] = {
 };
 const source: ThreadHandoffExport = { rolloutBase64: Buffer.from("opaque fixture history\n").toString("base64"), replay, title: "Windows fixture" };
 
-async function setup(options: { createHistoryWorkspace?: () => Promise<string> } = {}) {
+async function setup(options: { createHistoryWorkspace?: () => Promise<string>; retryNow?: (instanceId: string) => void } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-handoff-"));
   roots.push(root);
   const archive = vi.fn(async () => {});
@@ -48,7 +48,7 @@ async function setup(options: { createHistoryWorkspace?: () => Promise<string> }
   const sender = new ThreadInstanceHandoffService({
     backend, directory: path.join(root, "sender"), localInstanceId: () => "pwr_sender",
     assertTarget: vi.fn(), receipt: vi.fn(), remoteImport,
-    prepareTarget, push,
+    prepareTarget, push, retryNow: options.retryNow,
   });
   return { root, backend, sender, receiver, receipt, remoteImport, archive, prepareTarget, push };
 }
@@ -340,4 +340,81 @@ it("rejects tampered checksums and unsafe file paths before importing", async ()
     git: { head: "a".repeat(40), ref: "refs/heads/main", origin: "example/repo", cwdRelative: ".git/config" },
   };
   await expect(decodeThreadHandoff(await encodeThreadHandoff(pkg))).rejects.toThrow("Unsafe");
+});
+
+const CALLER_HANDOFF_ID = "0f0e0d0c-0b0a-4908-8706-050403020100";
+
+it("reports each step in order under the caller's handoff id, and Cancel ends at import", async () => {
+  const { sender, push } = await setup();
+  const forward = push.getMockImplementation()!;
+  push.mockImplementation(async (instanceId: string, file: string, options?: { onProgress?: (sent: number, total: number) => void }) => {
+    options?.onProgress?.(0, 10);
+    options?.onProgress?.(10, 10);
+    return await forward(instanceId, file);
+  });
+  const reports: ThreadHandoffProgress[] = [];
+  const result = await sender.send(
+    { sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "move", handoffId: CALLER_HANDOFF_ID },
+    { onProgress: (progress) => reports.push(progress) },
+  );
+  expect(result.handoffId).toBe(CALLER_HANDOFF_ID);
+  expect(reports.every((report) => report.handoffId === CALLER_HANDOFF_ID)).toBe(true);
+  expect(reports.map((report) => report.phase).filter((phase, index, all) => phase !== all[index - 1]))
+    .toEqual(["package", "send", "import", "verify", "archive"]);
+  expect(reports.filter((report) => report.phase === "send").map((report) => report.bytesCommitted))
+    .toEqual([undefined, 0, 10]);
+  const firstImport = reports.findIndex((report) => report.phase === "import");
+  expect(reports.slice(0, firstImport).every((report) => report.cancelable)).toBe(true);
+  expect(reports.slice(firstImport).every((report) => !report.cancelable)).toBe(true);
+});
+
+it("never asks the receiver to import after a cancel during the send", async () => {
+  const { sender, push, remoteImport } = await setup();
+  const controller = new AbortController();
+  push.mockImplementation(async (_instanceId: string, _file: string, options?: { signal?: AbortSignal }) => {
+    controller.abort();
+    options?.signal?.throwIfAborted();
+    throw new Error("unreachable");
+  });
+  await expect(sender.send(
+    { sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" },
+    { signal: controller.signal },
+  )).rejects.toThrow(/aborted/i);
+  expect(remoteImport).not.toHaveBeenCalled();
+});
+
+it("runs an import that has started to its result, whatever Cancel does", async () => {
+  const { sender, remoteImport } = await setup();
+  const controller = new AbortController();
+  const forward = remoteImport.getMockImplementation()!;
+  remoteImport.mockImplementation(async (instanceId: string, request: ImportInstanceThreadRequest) => {
+    controller.abort();
+    return await forward(instanceId, request);
+  });
+  await expect(sender.send(
+    { sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" },
+    { signal: controller.signal },
+  )).resolves.toMatchObject({ threadId: "destination-thread" });
+});
+
+it("refuses a handoff id that is not a UUID", async () => {
+  const { sender, push } = await setup();
+  await expect(sender.send({
+    sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy", handoffId: "../outgoing",
+  })).rejects.toThrow("Invalid thread handoff request.");
+  expect(push).not.toHaveBeenCalled();
+});
+
+it("routes the per-send Retry Now event to its target and removes the listener", async () => {
+  const retryNow = vi.fn();
+  const events = new EventTarget();
+  const { sender, backend } = await setup({ retryNow });
+  backend.exportThreadForHandoff.mockImplementationOnce(async () => {
+    events.dispatchEvent(new Event(THREAD_HANDOFF_RETRY_NOW_EVENT));
+    return source;
+  });
+  await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" }, { retryNow: events });
+  expect(retryNow).toHaveBeenCalledExactlyOnceWith("pwr_receiver");
+  events.dispatchEvent(new Event(THREAD_HANDOFF_RETRY_NOW_EVENT));
+  expect(retryNow).toHaveBeenCalledTimes(1);
 });

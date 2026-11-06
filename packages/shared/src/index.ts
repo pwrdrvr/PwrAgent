@@ -5,6 +5,7 @@ export * from "./codex-environment-action-runs";
 export * from "./codex-turn-error";
 export * from "./codex-speed";
 export * from "./codex-version";
+export * from "./managed-git-version";
 export * from "./federation-project-match";
 export * from "./codex-git-action-directives";
 export * from "./codex-async-questions";
@@ -55,11 +56,13 @@ export * from "./contracts/operator-requests";
 export * from "./contracts/thread-dependencies";
 export * from "./contracts/thread-pr-watches";
 export * from "./contracts/thread-pending-wakes";
+export * from "./contracts/thread-merge-holds";
 export * from "./contracts/thread-system-messages";
 export * from "./contracts/thread-search";
 export * from "./messaging-contact-labels";
 export * from "./messaging-id-validation";
 export * from "./mcp-auth-status";
+export * from "./mcp-ipc-url";
 export * from "./profile-menu";
 export * from "./profile-names";
 export * from "./directory-pins";
@@ -90,6 +93,7 @@ export * from "./thread-lock";
 export * from "./project-forge-automation";
 export * from "./thread-terminal";
 export * from "./thread-titles";
+export * from "./text-graphemes";
 export * from "./tool-activity-burst";
 export * from "./turn-output";
 export * from "./token-usage-pricing";
@@ -114,6 +118,7 @@ export { isCodexAuthenticationFailure } from "./codex-authentication";
 
 export * from "./local-model-pricing";
 export * from "./codex-model-providers";
+export * from "./model-menu";
 
 export * from "./thread-search-query";
 
@@ -121,6 +126,7 @@ export * from "./contracts/usage-activity";
 
 export * from "./contracts/background-terminals";
 export * from "./thread-archive-policy";
+export * from "./thread-maintenance";
 export * from "./transcript-file-reference";
 export * from "./acp-permission-mode";
 export * from "./uuid-v7";

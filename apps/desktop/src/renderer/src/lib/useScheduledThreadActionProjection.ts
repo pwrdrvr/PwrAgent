@@ -363,7 +363,9 @@ export function applyScheduledActionProjection(
   );
   if (isProjectableAction(action)) {
     const currentIndex = current.findIndex(
-      (entry) => entry.scheduledActionId === action.id,
+      (entry) =>
+        entry.scheduledActionId === action.id
+        || entry.failedScheduledActionId === action.id,
     );
     const insertionIndex =
       action.status === "held" && !action.queueEntryId
@@ -449,9 +451,12 @@ function projectionFromAction(action: ScheduledThreadAction) {
  * `applyScheduledActionProjection` keeps the same place for the same reason.
  * Actions that are still waiting for their send time stay sorted by it.
  */
+// A failed row holds the turns behind it, so it must not move behind them
+// on a refresh.
 function keepsQueuePosition(action: ScheduledThreadAction): boolean {
   return (
     action.status === "held"
+    || action.status === "failed"
     || action.status === "dispatching"
     || action.status === "queued"
   );

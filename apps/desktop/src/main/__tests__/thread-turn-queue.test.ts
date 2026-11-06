@@ -1,9 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
 } from "../app-server/thread-turn-queue";
+import {
+  OPEN_RESTART_GATE,
+  restartGateHolds,
+  transitionRestartGate,
+  type RestartGateState,
+} from "../app-server/restart-continuation-gate";
 
 function buildEntry(
   overrides: Partial<Omit<ThreadTurnQueueEntry, "input">> = {},
@@ -928,6 +934,189 @@ describe("ThreadTurnQueue", () => {
     expect(startedEntries).toEqual(["stale-steer"]);
   });
 
+  it("keeps held entries in the order they arrived", async () => {
+    let active = true;
+    const startedEntries: string[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => active,
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        return {
+          backend: entry.backend,
+          threadId: entry.threadId,
+          turnId: `turn-${entry.id}`,
+        };
+      },
+    });
+    const thread = { backend: "codex" as const, threadId: "thread-1" };
+
+    await queue.submit(buildEntry({ id: "already-queued" }));
+    await expect(queue.submitHeld(buildEntry({ id: "first-held" }), "Locked."))
+      .resolves.toMatchObject({ position: 1 });
+    await expect(queue.submitHeld(buildEntry({ id: "second-held" }), "Locked."))
+      .resolves.toMatchObject({ entry: { id: "second-held", manualReleaseRequired: true }, position: 3 });
+    await queue.submit(buildEntry({ id: "queued-while-held" }));
+    await queue.submitHeld(buildEntry({ id: "third-held" }), "Locked.");
+
+    // The first hold goes ahead of the turn that was waiting; later ones
+    // line up behind everything the hold already covers.
+    expect(queue.getQueuedEntries(thread).map((entry) => entry.id)).toEqual([
+      "first-held",
+      "already-queued",
+      "second-held",
+      "queued-while-held",
+      "third-held",
+    ]);
+
+    active = false;
+    await queue.releaseHold(thread, () => true);
+    for (let index = 0; index < 5; index += 1) {
+      await vi.waitFor(() => expect(startedEntries).toHaveLength(index + 1));
+      const turnId = `turn-${startedEntries[index]}`;
+      await queue.releaseThread({ ...thread, turnId, status: "turn/completed" });
+    }
+    expect(startedEntries).toEqual([
+      "first-held",
+      "already-queued",
+      "second-held",
+      "queued-while-held",
+      "third-held",
+    ]);
+  });
+
+  describe("when a second kind of hold arrives", () => {
+    const thread = { backend: "codex" as const, threadId: "thread-1" };
+    const LOCKED = "This thread is locked. Unlock it before starting a turn.";
+    const FAILED = "The previous turn failed. Review the error before retrying queued messages.";
+    const STALE_STEER = "This steering message was held after its target turn ended.";
+    const isLock = (reason: string) => reason === LOCKED;
+
+    function recordingQueue(options: { busy?: boolean } = {}) {
+      let active = options.busy ?? false;
+      let refusal: string | undefined;
+      const started: string[] = [];
+      const queue = new ThreadTurnQueue({
+        isThreadActive: () => active,
+        startTurn: async (entry) => {
+          if (refusal) throw new Error(refusal);
+          started.push(entry.id);
+          active = true;
+          return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+        },
+      });
+      onTestFinished(() => queue.close());
+      const finish = async (id: string) => {
+        active = false;
+        await queue.releaseThread({ ...thread, turnId: `turn-${id}`, status: "turn/completed" });
+      };
+      const holds = () => queue.getQueuedEntries(thread)
+        .map((entry) => [entry.id, entry.manualReleaseRequired ? entry.holdReason : "not held"]);
+      const refuse = (reason: string | undefined) => {
+        refusal = reason;
+      };
+      const idle = () => {
+        active = false;
+      };
+      return { queue, started, finish, holds, refuse, idle };
+    }
+
+    it("keeps a failure's hold when a lock holds a delivery and is then lifted", async () => {
+      const { queue, started, holds } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "failed-retry" }), FAILED);
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      expect(holds()).toEqual([["failed-retry", FAILED], ["monitor-result", LOCKED]]);
+
+      await queue.releaseHold(thread, isLock);
+      // The delivery now waits behind the failure, for the same Retry.
+      expect(holds()).toEqual([["failed-retry", FAILED], ["monitor-result", FAILED]]);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(started).toEqual([]);
+      expect(queue.canStartImmediately(thread)).toBe(false);
+
+      await expect(queue.releaseEntryWithDisposition("failed-retry"))
+        .resolves.toMatchObject({ disposition: "started" });
+      expect(started).toEqual(["failed-retry"]);
+    });
+
+    it("starts what a lock held on unlock and leaves a later stale steer held", async () => {
+      const { queue, started, finish, holds } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.submitHeld(buildEntry({ id: "stale-steer" }), STALE_STEER);
+      expect(holds()).toEqual([["monitor-result", LOCKED], ["stale-steer", STALE_STEER]]);
+
+      await queue.releaseHold(thread, isLock);
+      await vi.waitFor(() => expect(started).toEqual(["monitor-result"]));
+      expect(holds()).toEqual([["stale-steer", STALE_STEER]]);
+
+      // The stale steer still waits for Retry once the thread is idle.
+      await finish("monitor-result");
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(started).toEqual(["monitor-result"]);
+      expect(holds()).toEqual([["stale-steer", STALE_STEER]]);
+    });
+
+    it("holds what a lock held for review when a turn fails", async () => {
+      const { queue, started, holds } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.releaseThread({ ...thread, status: "turn/failed", errorMessage: FAILED });
+      expect(holds()).toEqual([["monitor-result", FAILED]]);
+
+      // Unlocking does not stand in for reviewing the failure.
+      await expect(queue.releaseHold(thread, isLock)).resolves.toBe(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(started).toEqual([]);
+      expect(holds()).toEqual([["monitor-result", FAILED]]);
+    });
+
+    it("keeps a stale steer's own hold when a released entry's start is refused", async () => {
+      const { queue, started, holds, refuse } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.submitHeld(buildEntry({ id: "stale-steer" }), STALE_STEER);
+      // Locked again before the released entry could start.
+      refuse(LOCKED);
+      await queue.releaseHold(thread, isLock);
+      await vi.waitFor(() => expect(holds()).toEqual([["monitor-result", LOCKED], ["stale-steer", STALE_STEER]]));
+
+      refuse(undefined);
+      await queue.releaseHold(thread, isLock);
+      await vi.waitFor(() => expect(started).toEqual(["monitor-result"]));
+      expect(holds()).toEqual([["stale-steer", STALE_STEER]]);
+    });
+
+    it("ends the hold when the last held entry is cancelled after an unlock", async () => {
+      const { queue, holds } = recordingQueue({ busy: true });
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.submitHeld(buildEntry({ id: "stale-steer" }), STALE_STEER);
+      await queue.releaseHold(thread, isLock);
+      queue.cancelEntry("stale-steer");
+
+      await queue.submit(buildEntry({ id: "next-message" }));
+      // Nothing is left for the stale steer's reason to hold.
+      expect(holds()).toEqual([["monitor-result", "not held"], ["next-message", "not held"]]);
+    });
+
+    it("refuses Retry on an entry an unlock released, leaving later holds alone", async () => {
+      const { queue, holds, idle } = recordingQueue({ busy: true });
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.submitHeld(buildEntry({ id: "stale-steer" }), STALE_STEER);
+      await queue.releaseHold(thread, isLock);
+      idle();
+
+      await expect(queue.releaseEntryWithDisposition("monitor-result"))
+        .resolves.toEqual({ disposition: "not_held", entryId: "monitor-result" });
+      expect(holds()).toEqual([["monitor-result", "not held"], ["stale-steer", STALE_STEER]]);
+    });
+
+    it("clears the hold when unlock releases the last held entry", async () => {
+      const { queue, started, finish } = recordingQueue();
+      await queue.submitHeld(buildEntry({ id: "monitor-result" }), LOCKED);
+      await queue.releaseHold(thread, isLock);
+      await vi.waitFor(() => expect(started).toEqual(["monitor-result"]));
+      await finish("monitor-result");
+      expect(queue.canStartImmediately(thread)).toBe(true);
+    });
+  });
+
   it("cancels pending queue entries by id", async () => {
     const queue = new ThreadTurnQueue({
       isThreadActive: () => true,
@@ -1782,4 +1971,111 @@ describe("ThreadTurnQueue.submitProjectHeld", () => {
     await vi.waitFor(() => expect(started).toEqual(["wake"]));
     queue.close();
   });
+
+  describe("quiet-restart gate", () => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    const other = { backend: "codex" as const, threadId: "thread-2" };
+
+    function gatedQueue(gate: { state: RestartGateState; now: number }) {
+      const started: string[] = [];
+      const queue = new ThreadTurnQueue({
+        startTurn: async (entry) => {
+          started.push(entry.id);
+          return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+        },
+        isDispatchHeld: (entry) => restartGateHolds(gate.state, {
+          ...(entry.restartContinuation && entry.id ? { restartEntryId: entry.id } : {}),
+        }, gate.now),
+      });
+      onTestFinished(() => queue.close());
+      return { queue, started };
+    }
+
+    it("starts a restored continuation first and holds everything else until the gate opens", async () => {
+      const gate: { state: RestartGateState; now: number } = { state: OPEN_RESTART_GATE, now: 0 };
+      const { queue, started } = gatedQueue(gate);
+      gate.state = transitionRestartGate(gate.state, {
+        type: "restore",
+        schedule: [{ entryId: "restart", threadKey: "codex:thread-1", dispatchAt: 100 }],
+        releaseBy: 1_000,
+      });
+      await queue.submit(buildEntry({ id: "queued-before" }));
+      queue.restoreRestartContinuations([{ ...buildEntry({ id: "restart" }), createdAt: 1 } as ThreadTurnQueueEntry]);
+      await queue.submit(buildEntry({ id: "elsewhere", ...other }));
+
+      expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["restart", "queued-before"]);
+      expect(queue.getQueuedEntries(target)[0]).toMatchObject({ restartContinuation: true });
+      expect(queue.canStartImmediately(other)).toBe(false);
+      await expect(queue.submitIfIdle(buildEntry({ id: "idle", ...other }))).resolves.toEqual({ status: "busy" });
+
+      // Before its dispatch time, nothing starts, not even the continuation.
+      queue.drainAll();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(started).toEqual([]);
+
+      gate.now = 100;
+      queue.scheduleThreadDrain(target);
+      await vi.waitFor(() => expect(started).toEqual(["restart"]));
+      gate.state = transitionRestartGate(gate.state, { type: "settled", entryId: "restart" });
+      expect(gate.state).toEqual(OPEN_RESTART_GATE);
+
+      queue.drainAll();
+      await vi.waitFor(() => expect(started).toEqual(["restart", "elsewhere"]));
+      // queued-before waits for the continuation's turn, as any queued turn does.
+      await queue.releaseThread({ ...target, turnId: "turn-restart", status: "turn/completed" });
+      await vi.waitFor(() => expect(started).toEqual(["restart", "elsewhere", "queued-before"]));
+    });
+
+    it("starts and steers nothing while quieting", async () => {
+      const gate: { state: RestartGateState; now: number } = {
+        state: transitionRestartGate(OPEN_RESTART_GATE, { type: "quiet", at: 0 }),
+        now: 0,
+      };
+      const { queue, started } = gatedQueue(gate);
+      const submitted = await queue.submit(buildEntry({ id: "manual" }));
+      const steered = await queue.submitSteer(buildEntry({ id: "steer", ...other }));
+      expect(submitted.status).toBe("queued");
+      expect(steered.status).toBe("queued");
+      queue.drainAll();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(started).toEqual([]);
+    });
+
+    it("puts a held submission behind a restart continuation and reports the continuation held", async () => {
+      const gate: { state: RestartGateState; now: number } = { state: OPEN_RESTART_GATE, now: 0 };
+      const events: ThreadTurnQueueLifecycleEvent[] = [];
+      const queue = new ThreadTurnQueue({
+        startTurn: async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` }),
+        isDispatchHeld: (entry) => restartGateHolds(gate.state, {
+          ...(entry.restartContinuation && entry.id ? { restartEntryId: entry.id } : {}),
+        }, gate.now),
+        onLifecycle: (event) => {
+          events.push(event);
+        },
+      });
+      onTestFinished(() => queue.close());
+      queue.restoreRestartContinuations([{ ...buildEntry({ id: "restart" }), createdAt: 1 } as ThreadTurnQueueEntry]);
+      await queue.submitHeld(buildEntry({ id: "monitor" }), "Thread is locked");
+      expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["restart", "monitor"]);
+      expect(events.filter((event) => event.type === "held").map((event) => event.entry.id)).toContain("restart");
+    });
+
+    it("lets nothing move past a restart continuation", async () => {
+      const gate: { state: RestartGateState; now: number } = {
+        state: transitionRestartGate(OPEN_RESTART_GATE, {
+          type: "restore",
+          schedule: [{ entryId: "restart", threadKey: "codex:thread-1", dispatchAt: 100 }],
+          releaseBy: 1_000,
+        }),
+        now: 0,
+      };
+      const { queue } = gatedQueue(gate);
+      queue.restoreRestartContinuations([{ ...buildEntry({ id: "restart" }), createdAt: 1 } as ThreadTurnQueueEntry]);
+      await queue.submit(buildEntry({ id: "later" }));
+      await expect(queue.moveEntry("later", "restart")).resolves.toMatchObject({ disposition: "held" });
+      await expect(queue.moveEntry("restart")).resolves.toMatchObject({ disposition: "held" });
+      expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["restart", "later"]);
+    });
+  });
 });
+

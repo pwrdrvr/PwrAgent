@@ -40,6 +40,12 @@ export function nativeDebuggerStatus(output) {
   return {
     detachUnsupported: /The system does not support detach on exit/i.test(output),
     networkPathDisallowed: /Network path disallowed/i.test(output),
+    bannerObserved: /Microsoft \(R\) Windows Debugger/i.test(output),
+    extensionInitializationStarted: /Preparing the environment for Debugger Extensions Gallery/i.test(output),
+    extensionInitializationCompleted: /Waiting for Debugger Extensions Gallery to Initialize completed/i.test(output),
+    commandPromptObserved: /(?:^|\n)\s*\d+:[a-f0-9]+>/i.test(output),
+    readinessMarkerObserved: /pwragent-noninvasive-ready/.test(output),
+    outputBytes: Buffer.byteLength(output),
   };
 }
 
@@ -59,10 +65,17 @@ export function nativeProbeFailure(error) {
   // include private paths, command arguments and register contents.
   return {
     reason: probeReasons.get(error?.message) ?? "controlled-probe-failed",
+    triageGuide: "docs/playwright-worker-shutdown-diagnostics.md#controlled-native-debugger-setup-failures",
     debugger: error?.nativeDebugger && {
       exitCode: Number.isSafeInteger(error.nativeDebugger.exitCode) ? error.nativeDebugger.exitCode : undefined,
       detachUnsupported: error.nativeDebugger.detachUnsupported === true,
       networkPathDisallowed: error.nativeDebugger.networkPathDisallowed === true,
+      bannerObserved: error.nativeDebugger.bannerObserved === true,
+      extensionInitializationStarted: error.nativeDebugger.extensionInitializationStarted === true,
+      extensionInitializationCompleted: error.nativeDebugger.extensionInitializationCompleted === true,
+      commandPromptObserved: error.nativeDebugger.commandPromptObserved === true,
+      readinessMarkerObserved: error.nativeDebugger.readinessMarkerObserved === true,
+      outputBytes: Number.isSafeInteger(error.nativeDebugger.outputBytes) ? error.nativeDebugger.outputBytes : undefined,
     },
   };
 }

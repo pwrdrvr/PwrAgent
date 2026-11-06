@@ -92,6 +92,71 @@ describe("Git discovery", () => {
     }
   });
 
+  describe("downloaded PwrDrvr Git releases", () => {
+    const noEnv = { ...process.env, PWRAGENT_GIT_PATH: undefined };
+    const rejected = (generation: string) => ({
+      generation,
+      executable: `/releases/${generation}/bin/git`,
+      root: `/releases/${generation}`,
+      failure: "A file changed after the release was sealed: bin/git",
+    });
+
+    it("asks for the release list at once and lists releases just above the bundle", async () => {
+      let loaded!: (list: ReturnType<typeof rejected>[]) => void;
+      let loaderCalled = false;
+      const pending = discoverGitCommands({
+        env: noEnv,
+        managed: () => {
+          loaderCalled = true;
+          return new Promise((resolve) => { loaded = resolve; });
+        },
+      });
+      expect(loaderCalled).toBe(true);
+      loaded([rejected("2.56.0-dev-pwrgit.6-bbbbbbb"), rejected("2.56.0-dev-pwrgit.5-aaaaaaa")]);
+      const result = await pending;
+      const sources = result.candidates.map((candidate) => candidate.generation ?? candidate.source);
+      const bundledAt = sources.indexOf("bundled");
+      expect(sources.slice(bundledAt - 2, bundledAt + 1))
+        .toEqual(["2.56.0-dev-pwrgit.6-bbbbbbb", "2.56.0-dev-pwrgit.5-aaaaaaa", "bundled"]);
+      expect(result.selectedSource).toBe("bundled");
+    });
+
+    it("keeps a chosen release selected when it fails a check or is gone, never the bundle", async () => {
+      for (const managed of [[rejected("2.56.0-dev-pwrgit.5-aaaaaaa")], []]) {
+        const result = await discoverGitCommands({
+          env: noEnv,
+          managed: async () => managed,
+          selectedManaged: "2.56.0-dev-pwrgit.5-aaaaaaa",
+        });
+        expect(result.candidates.filter((candidate) => candidate.selected)).toEqual([
+          expect.objectContaining({
+            source: "managed",
+            generation: "2.56.0-dev-pwrgit.5-aaaaaaa",
+            executable: false,
+            failureReason: expect.stringMatching(/sealed|no longer installed/),
+          }),
+        ]);
+      }
+    });
+
+    it("lets a manual path win over a chosen release, and shows no row for a missing one", async () => {
+      const result = await discoverGitCommands({
+        configuredCommand: "/missing/config/git",
+        env: noEnv,
+        managed: async () => [],
+        selectedManaged: "2.56.0-dev-pwrgit.5-aaaaaaa",
+      });
+      expect(result.selectedSource).toBe("config");
+      expect(result.candidates.some((candidate) => candidate.source === "managed")).toBe(false);
+    });
+
+    it("treats a failed release list as no releases", async () => {
+      const result = await discoverGitCommands({ env: noEnv, managed: async () => { throw new Error("EACCES"); } });
+      expect(result.candidates.some((candidate) => candidate.source === "managed")).toBe(false);
+      expect(result.selectedSource).toBe("bundled");
+    });
+  });
+
   it("parses both upstream and Windows Git versions", () => {
     expect(parseGitVersionOutput("git version 2.53.0\n")).toBe("2.53.0");
     expect(parseGitVersionOutput("git version 2.53.0.windows.4\n")).toBe("2.53.0.windows.4");

@@ -24,6 +24,35 @@ export type ProjectSpy = { current: string | null; inView: string[] };
 
 export const NO_PROJECT_SPY: ProjectSpy = { current: null, inView: [] };
 
+/**
+ * A project's running turns, split into this machine's and its peers'.
+ * `counts.active` already includes the peer turns, so the local count is the
+ * difference. A federation window fronts one peer, whose turns are its own,
+ * so it has no remote split. The project's header and its name in the index
+ * both read this, so the two never disagree.
+ */
+export function splitProjectTurnCounts(
+  counts: { active: number; activeRemote?: number } | undefined,
+  federationViewer: boolean,
+): { local: number; remote: number } {
+  const total = counts?.active ?? 0;
+  const remote = federationViewer ? 0 : Math.min(total, counts?.activeRemote ?? 0);
+  return { local: total - remote, remote };
+}
+
+/**
+ * Which turn marks a project's name wears: the accent scanner for a turn on
+ * this machine, the grey scanner for a peer's, as in the project's header and
+ * the Attention tab.
+ */
+export function projectTurnMarks(
+  counts: { active: number; activeRemote?: number } | undefined,
+  federationViewer: boolean,
+): { active: boolean; activeRemote: boolean } {
+  const { local, remote } = splitProjectTurnCounts(counts, federationViewer);
+  return { active: local > 0, activeRemote: remote > 0 };
+}
+
 /** A dragged width is announced and saved, so it moves in whole pixels. */
 export const PROJECT_INDEX_KEYBOARD_STEP = 16;
 

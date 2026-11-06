@@ -372,6 +372,46 @@ describe("PrChip", () => {
     expect(card).not.toHaveTextContent("Initial pull request title");
   });
 
+  it("keeps a pending and visible hover card through transcript updates and scrolling", () => {
+    vi.useFakeTimers();
+    const onOpen = vi.fn();
+    const scene = (revision: number) => (
+      <div>
+        <aside>
+          <PrChip
+            pr={basePr({ title: `Change revision ${revision}`, additions: revision, deletions: 3 })}
+            showRepoPrefix={false}
+            onOpen={onOpen}
+          />
+        </aside>
+        <main data-testid="transcript">Streamed update {revision}</main>
+      </div>
+    );
+    const { container, rerender } = render(scene(0));
+    const chip = container.querySelector<HTMLElement>("[data-pr-chip]")!;
+    fireEvent.mouseEnter(chip);
+
+    // Streaming during the entry delay must not cancel the pending hover.
+    rerender(scene(1));
+    fireEvent.scroll(screen.getByTestId("transcript"));
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const card = screen.getByRole("tooltip");
+    expect(card).toHaveTextContent("Change revision 1");
+
+    rerender(scene(2));
+    fireEvent.scroll(screen.getByTestId("transcript"));
+    expect(container.querySelector("[data-pr-chip]")).toBe(chip);
+    expect(screen.getByRole("tooltip")).toBe(card);
+    expect(card).toHaveTextContent("Change revision 2");
+    expect(card).toHaveTextContent("+2");
+    expect(chip).toHaveAttribute("aria-describedby", card.id);
+
+    fireEvent.scroll(container.querySelector("aside")!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(chip).not.toHaveAttribute("aria-describedby");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
   it("mounts no card at all until the chip is hovered", () => {
     vi.useFakeTimers();
     // A sidebar renders hundreds of these. The card element is built on every

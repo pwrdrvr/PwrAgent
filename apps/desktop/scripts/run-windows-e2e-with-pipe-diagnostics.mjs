@@ -4,15 +4,17 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSyn
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, launcherParentMatches, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
 import { nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 import { childProcessLocations } from "./windows-child-process-locations.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
+const electronOnly = process.argv[2] === "--electron-only";
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
 const requests = path.join(root, "requests");
 const evidence = path.join(root, "evidence");
-const artifact = path.join(desktop, "test-results", "worker-shutdown", "native-controller");
+const artifact = electronOnly ? path.join(root, "native-controller")
+  : path.join(desktop, "test-results", "worker-shutdown", "native-controller");
 const stopFile = path.join(root, "stop");
 const executable = path.join(root, "windows-pipe-diagnostics.exe");
 const handleExecutable = process.env.PWRAGENT_WINDOWS_HANDLE_EXE;
@@ -111,8 +113,8 @@ async function inventory(event) {
   const result = await namedInventory(event.pid);
   const source = result.source;
   const sourceRow = source && rows.get(source.pid + ":" + source.created);
-  const correctParent = sourceRow?.ppid === event.workerPid && sourceRow.name.toLowerCase() === "electron.exe"
-    && BigInt(source.created) <= (BigInt(event.at) + 1n) * 10000n + 116444736000000000n;
+  const parentRow = sourceRow?.parentCreated && rows.get(event.workerPid + ":" + sourceRow.parentCreated);
+  const correctParent = launcherParentMatches(event, source, sourceRow, parentRow);
   const endpoints = !result.error && correctParent && !event.omittedCandidates
     ? exactLauncherPipes(event.candidates, source)
     : { error: "Main query failed, ancestry was not observed, or candidate pool was incomplete." };
@@ -251,6 +253,7 @@ async function prepareNativeStacks() {
     captureFormat: "module-offsets",
     electronSha256: createHash("sha256").update(readFileSync(electron)).digest("hex"),
     probe, probeFailed, probeFailure });
+  if (probeFailed) log("native-stack-setup-failed", { probeFailure });
 }
 
 function enqueue(task) {
@@ -350,8 +353,11 @@ async function closeObserver() {
   }
 }
 async function main() {
-  const command = packageManagerCommand(process.env.npm_execpath,
-    ["--filter", "@pwragent/desktop", "test:e2e", ...process.argv.slice(2)]);
+  const command = electronOnly
+    ? { file: process.execPath, args: [path.join(desktop, "scripts/probe-electron-native-quit.mjs"),
+      ...process.argv.slice(3), "--output-dir", path.join(root, "cases")] }
+    : packageManagerCommand(process.env.npm_execpath,
+      ["--filter", "@pwragent/desktop", "test:e2e", ...process.argv.slice(2)]);
   let enabled = false;
   try {
     if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Native diagnostics require Windows x64.");
@@ -363,12 +369,20 @@ async function main() {
     write("setup-error.json", { error: error.message });
     log("setup-error", { error: error.message });
   }
+  if (electronOnly) {
+    log("electron-only-output", { directory: root });
+    if (!enabled || !nativeStackEnabled) {
+      try { await closeObserver(); } finally { process.exitCode = 1; }
+      return;
+    }
+  }
   // Same build/test command, shards, worker count, retries and deadlines as CI.
   // The watcher starts before launcher pipes exist. Later diagnostic queries
   // are controller children, outside Electron's process ownership tree.
   const child = spawn(command.file, command.args, {
     stdio: "inherit", env: { ...process.env, ...(enabled ? {
       PWRAGENT_WINDOWS_PIPE_REQUESTS: requests,
+      ...(electronOnly ? { PWRAGENT_WINDOWS_PIPE_EVIDENCE: evidence } : {}),
       PWRAGENT_E2E_CHILD_PROCESS_DIAGNOSTICS_FILE: path.join(desktop, "test-results", "worker-shutdown", "main-children.jsonl"),
     } : {}) },
   });
@@ -378,11 +392,13 @@ async function main() {
   } finally {
     try { await closeObserver(); }
     catch (error) { log("controller-cleanup-error", { error: error.message }); }
-    try {
-      const locations = childProcessLocations(desktop, path.join(desktop, "test-results", "worker-shutdown", "main-children.jsonl"));
-      mkdirSync(artifact, { recursive: true });
-      writeFileSync(path.join(artifact, "main-child-locations.json"), json(locations) + "\n");
-    } catch { log("child-location-error", { unavailable: true }); }
+    if (!electronOnly) {
+      try {
+        const locations = childProcessLocations(desktop, path.join(desktop, "test-results", "worker-shutdown", "main-children.jsonl"));
+        mkdirSync(artifact, { recursive: true });
+        writeFileSync(path.join(artifact, "main-child-locations.json"), json(locations) + "\n");
+      } catch { log("child-location-error", { unavailable: true }); }
+    }
   }
   process.exitCode = code ?? 1;
 }

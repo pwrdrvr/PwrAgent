@@ -26,6 +26,7 @@ import type {
 } from "@pwragent/shared";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { modelSelectOptions } from "../../lib/model-select-options";
 import {
   describeExecutionModeForBackend,
   formatExecutionModeLabel,
@@ -1595,6 +1596,7 @@ function ProviderModelDefaultField(props: {
   const { pending: fastAllowPending, track: trackFastAllow } =
     useSettingsFieldPending();
   const models = props.backend.launchpadOptions?.models ?? [];
+  const modelRows = modelSelectOptions({ kind: props.backend.kind, models });
   const selectedModel = props.defaults?.model ?? "";
   const modelOption = models.find((model) => model.id === selectedModel);
   const reasoningOptions = reasoningOptionsFor(
@@ -1610,6 +1612,20 @@ function ProviderModelDefaultField(props: {
       !selectedReasoning
       || reasoningOptions.includes(selectedReasoning)
     );
+  const modelChoices: SelectOption[] = [
+    { value: "", label: "Provider advertised default" },
+    ...(selectedModel && !modelOption
+      ? [{ value: selectedModel, label: `${selectedModel} (unavailable)` }]
+      : []),
+    ...modelRows,
+  ];
+  const reasoningChoices: SelectOption[] = [
+    { value: "", label: "Provider advertised reasoning" },
+    ...(selectedReasoning && !reasoningOptions.includes(selectedReasoning)
+      ? [{ value: selectedReasoning, label: `${selectedReasoning} (unavailable)` }]
+      : []),
+    ...reasoningOptions.map((effort) => ({ value: effort, label: effort })),
+  ];
 
   return (
     <SettingsField
@@ -1622,13 +1638,13 @@ function ProviderModelDefaultField(props: {
       control={
         <div className="settings-paths">
           <div className="settings-provider-defaults__selectors">
-            <select
+            <Select
               aria-label={`${props.backend.label} default model`}
               className="settings-select settings-select--chip"
               disabled={props.disabled}
               value={selectedModel}
-              onChange={(event) => {
-                const model = event.currentTarget.value;
+              options={modelChoices}
+              onChange={(model) => {
                 if (!model) {
                   props.onChange(withoutModel(props.defaults));
                   return;
@@ -1649,28 +1665,18 @@ function ProviderModelDefaultField(props: {
                   reasoningEffortsByModel,
                 });
               }}
-            >
-              <option value="">Provider advertised default</option>
-              {selectedModel && !modelOption ? (
-                <option value={selectedModel}>{selectedModel} (unavailable)</option>
-              ) : null}
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label ?? model.id}
-                </option>
-              ))}
-            </select>
+            />
             {selectedModel && reasoningOptions.length > 0 ? (
-              <select
+              <Select
                 aria-label={`${props.backend.label} default reasoning`}
                 className="settings-select settings-select--chip"
                 disabled={props.disabled}
                 value={selectedReasoning}
-                onChange={(event) => {
+                options={reasoningChoices}
+                onChange={(effort) => {
                   const reasoningEffortsByModel = {
                     ...(props.defaults?.reasoningEffortsByModel ?? {}),
                   };
-                  const effort = event.currentTarget.value;
                   if (effort) {
                     reasoningEffortsByModel[selectedModel] = effort;
                   } else {
@@ -1682,20 +1688,7 @@ function ProviderModelDefaultField(props: {
                     reasoningEffortsByModel,
                   });
                 }}
-              >
-                <option value="">Provider advertised reasoning</option>
-                {selectedReasoning
-                && !reasoningOptions.includes(selectedReasoning) ? (
-                  <option value={selectedReasoning}>
-                    {selectedReasoning} (unavailable)
-                  </option>
-                ) : null}
-                {reasoningOptions.map((effort) => (
-                  <option key={effort} value={effort}>
-                    {effort}
-                  </option>
-                ))}
-              </select>
+              />
             ) : null}
           </div>
           {selectedModel ? (

@@ -4538,6 +4538,33 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("never reads the operator's home profile when given a child env", () => {
+    // The operator's real ~/.pwragent chose another Git; this process runs
+    // under its own PWRAGENT_HOME. An injected env names neither root.
+    const home = createTempRoot();
+    const operatorProfile = path.join(home, ".pwragent", "profiles", "default");
+    fs.mkdirSync(operatorProfile, { recursive: true });
+    fs.writeFileSync(
+      path.join(operatorProfile, "config.toml"),
+      "[applications.git]\npath = \"/operator/host-git/bin/git\"\n",
+    );
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("PWRAGENT_HOME", createTempRoot());
+    try {
+      const service = new DesktopSettingsService({
+        env: { PATH: ["/usr/bin", "/bin"].join(path.delimiter) } as NodeJS.ProcessEnv,
+        secretStore: new MemoryDesktopSecretStore(),
+        resolveCodexShellEnv: () => ({ PATH: "/usr/bin" }),
+      });
+
+      expect(service.resolveGitCommandPreference()).toBeUndefined();
+      expectBundledGitPath(service.resolveCodexSpawnEnv().PATH, ["/usr/bin"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("adds login shell PATH entries to the Codex app-server spawn env", () => {
     const service = new DesktopSettingsService({
       env: { PATH: ["/usr/bin", "/bin"].join(path.delimiter) } as NodeJS.ProcessEnv,

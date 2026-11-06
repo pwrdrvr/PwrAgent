@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { killGraduatedProfileInstances } from "./fixtures/detached-profile-instances";
 import { launchElectronApp } from "./fixtures/electron-app";
 

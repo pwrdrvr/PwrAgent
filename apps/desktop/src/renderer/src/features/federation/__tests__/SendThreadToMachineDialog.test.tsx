@@ -7,6 +7,12 @@ import {
   type SendThreadToMachineSource,
 } from "../SendThreadToMachineDialog";
 import type { ThreadHandoffTarget } from "../thread-handoff-targets";
+import type { ThreadHandoffProgress } from "@pwragent/shared";
+import {
+  reduceThreadHandoffTransfers,
+  type ThreadHandoffChoice,
+  type ThreadHandoffTransfer,
+} from "../thread-handoff-transfer";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 
 afterEach(() => {
@@ -43,8 +49,46 @@ const STUDIO_ONLY: FindThreadHandoffRepository = async (instanceId) =>
     ? { path: "/Users/operator/src/PwrAgent", matchedBy: "origin" }
     : undefined;
 
+const HANDOFF = "0f0e0d0c-0b0a-4908-8706-050403020100";
+
+function progress(overrides: Partial<ThreadHandoffProgress>): ThreadHandoffProgress {
+  return {
+    handoffId: HANDOFF,
+    sourceThreadId: "thread-1",
+    phase: "package",
+    link: "connected",
+    cancelable: true,
+    transport: "single_shot",
+    ...overrides,
+  };
+}
+
+/** A transfer as the window's reducer builds it from main's reports. */
+function transfer(
+  reports: ThreadHandoffProgress[],
+  options: { choice?: ThreadHandoffChoice; failed?: string } = {},
+): ThreadHandoffTransfer {
+  let state = reduceThreadHandoffTransfers({}, {
+    type: "started",
+    at: 0,
+    handoffId: HANDOFF,
+    sourceThreadId: "thread-1",
+    threadKey: "codex:thread-1",
+    title: "Sketch the release checklist",
+    targetLabel: "build-linux",
+    choice: options.choice ?? { targetInstanceId: "pwr_linux", operation: "copy" },
+  });
+  reports.forEach((report, index) => {
+    state = reduceThreadHandoffTransfers(state, { type: "progress", at: (index + 1) * 100, progress: report });
+  });
+  if (options.failed) {
+    state = reduceThreadHandoffTransfers(state, { type: "failed", handoffId: HANDOFF, error: options.failed });
+  }
+  return state[HANDOFF]!;
+}
+
 function renderDialog(props: Partial<Parameters<typeof SendThreadToMachineDialog>[0]> = {}) {
-  const onSend = props.onSend ?? vi.fn(async () => {});
+  const onSend = props.onSend ?? vi.fn();
   const onClose = props.onClose ?? vi.fn();
   render(
     <SendThreadToMachineDialog
@@ -185,38 +229,59 @@ describe("SendThreadToMachineDialog", () => {
     expect(onSend).toHaveBeenCalledWith({ targetInstanceId: "pwr_linux", operation: "copy" });
   });
 
-  it("locks the dialog while sending, Escape included", async () => {
-    let finish: () => void = () => {};
+  it("lists the steps while sending, and Escape minimises instead of closing", () => {
+    const onMinimise = vi.fn();
     const { onClose } = renderDialog({
       source: { title: "Sketch the release checklist" },
-      onSend: () => new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
+      transfer: transfer([progress({ phase: "send", bytesCommitted: 610, bytesTotal: 1000 })]),
+      onMinimise,
     });
-    await act(async () => {
-      screen.getByRole("button", { name: "Copy to build-linux" }).click();
-    });
-    expect(screen.getByRole("dialog")).toHaveAttribute("aria-busy", "true");
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Copying…" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Sending to build-linux. This thread cannot take new turns until the transfer finishes.",
-    );
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("heading", { name: "Copying to build-linux" })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Send to build-linux" })).toHaveAttribute("aria-valuenow", "61");
+    expect(screen.getByRole("button", { name: "Cancel Copy" })).toBeEnabled();
     pressEscape();
     expect(onClose).not.toHaveBeenCalled();
-    await act(async () => finish());
+    expect(onMinimise).toHaveBeenCalledTimes(1);
+    act(() => screen.getByRole("button", { name: "Run in Background" }).click());
+    expect(onMinimise).toHaveBeenCalledTimes(2);
   });
 
-  it("shows the backend's error and keeps the choices for a retry", async () => {
+  it("withholds Cancel once the receiver may be creating the thread", () => {
+    const onCancelTransfer = vi.fn();
     renderDialog({
       source: { title: "Sketch the release checklist" },
-      onSend: async () => {
-        throw new Error("Cancel the source thread's scheduled actions before Move, or use Copy.");
-      },
+      transfer: transfer([
+        progress({ phase: "send", bytesCommitted: 1000, bytesTotal: 1000 }),
+        progress({ phase: "import", cancelable: false }),
+      ]),
+      onCancelTransfer,
     });
-    act(() => screen.getByRole("radio", { name: /^Move/ }).click());
-    await act(async () => {
-      screen.getByRole("button", { name: "Move to build-linux" }).click();
+    const cancel = screen.getByRole("button", { name: "Cancel Copy" });
+    expect(cancel).toBeDisabled();
+    expect(cancel).toHaveAttribute("data-tooltip", expect.stringContaining("build-linux is creating the thread"));
+  });
+
+  it("offers Retry Now while a dropped link holds the send", () => {
+    const onRetryNow = vi.fn();
+    renderDialog({
+      source: { title: "Sketch the release checklist" },
+      transfer: transfer([progress({ phase: "send", bytesCommitted: 400, bytesTotal: 1000, link: "waiting", transport: "resumable" })]),
+      onRetryNow,
+    });
+    expect(screen.getByText(/The connection to build-linux dropped/)).toBeInTheDocument();
+    act(() => screen.getByRole("button", { name: "Retry Now" }).click());
+    expect(onRetryNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the backend's error and keeps the choices for a retry", () => {
+    renderDialog({
+      source: { title: "Sketch the release checklist" },
+      transfer: transfer([], {
+        choice: { targetInstanceId: "pwr_linux", operation: "move" },
+        failed: "Cancel the source thread's scheduled actions before Move, or use Copy.",
+      }),
     });
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Cancel the source thread's scheduled actions before Move, or use Copy.",

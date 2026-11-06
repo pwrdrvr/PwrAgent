@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { fixtureCodexClient } from "./helpers/codex-client.js";
 import { HeadlessBackend, PLACEHOLDER_THREAD_TITLE } from "../src/federation-backend.js";
 
 function backendFixture(t, jobs, read = async () => ({ thread: { turns: [] } })) {
@@ -10,8 +11,9 @@ function backendFixture(t, jobs, read = async () => ({ thread: { turns: [] } }))
   mkdirSync(local, { recursive: true });
   const directory = mkdtempSync(path.join(local, "titles-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const codex = fixtureCodexClient(read);
   const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(),
-    store: { directory: path.join(directory, "jobs"), jobs }, codex: { request: read }, onFailure: (error) => { throw error; } };
+    store: { directory: path.join(directory, "jobs"), jobs }, codex, onFailure: (error) => { throw error; } };
   const published = [];
   const backend = new HeadlessBackend(runtime, (event, eventClass) => published.push({ eventClass, ...event.notification }));
   return { backend, published, registry: () => JSON.parse(readFileSync(backend.file, "utf8")).threads };
@@ -73,6 +75,9 @@ test("an explicit rename is never replaced, and an empty prompt leaves the place
   assert.deepEqual(published[0], { eventClass: "transcript", method: "thread/name/updated",
     params: { threadId: "named", threadName: "Release checklist", titleSource: "explicit" } });
   backend.event({ method: "headless/turnStarted", params: { threadId: "named", jobId: "named", prompt: "Rewrite everything" } });
+  const beforeDerived = published.length;
+  backend.event({ method: "thread/name/updated", params: { threadId: "named", threadName: "Rewrite everything", titleSource: "derived" } });
+  assert.equal(published.length, beforeDerived, "a rejected derived title is not published");
   await backend.readThread("named");
   assert.equal(backend.owned("named").title, "Release checklist");
   assert.equal(backend.owned("named").titleSource, "explicit");

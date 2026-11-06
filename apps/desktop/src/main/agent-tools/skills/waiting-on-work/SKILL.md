@@ -11,6 +11,7 @@ input schema for argument details and result semantics.
 | Waiting for | PwrAgent workflow |
 | --- | --- |
 | CI or merge of this thread's attached PR | `check_thread_pull_request_status`, follow `prAutomation.guidance`, then `watch_thread_pull_request` if a notification is needed. |
+| Work that finishes only when someone says so, before merging or before the operator acts, including a remote thread | `manage_thread_merge_holds` (the **Wait Until Done** UI) with `action: "create"`. |
 | Another local thread's turn, passing CI, or PR merge | `manage_thread_dependencies` (the **Continue After** UI) with `action: "create"`. Use `mode: "all"` for several prerequisites. |
 | A long job or repeatable check that neither workflow covers | `create_monitor_delegation`. |
 
@@ -39,7 +40,30 @@ A success watch can still be needed when Auto-fix is active. Follow the status
 tool's description for `autoFixActive` monitoring ownership and repair-event
 semantics, and follow the returned `prAutomation.guidance` for this PR.
 
-## Another thread
+## Waiting until work is done
+
+Use `manage_thread_merge_holds` (**Wait Until Done…**) for "mark us waiting
+on", "do not merge until", or "when that thread is done, remind me to …". It
+fits work whose end is a judgement: an investigation, a validation pass, a
+review. Supply `reason`, what has to finish, and put the operator's next
+steps in `followUp`, one per item. Set `offerToSend` only when the operator
+wants the reminder to offer sending those steps here. Optionally identify the
+prerequisite thread by backend, thread id, and local or remote target. A
+remote prerequisite can be offline.
+
+The wait holds merging this thread's PR. Rebase, CI repair, review, and
+conversation continue. It does not raise a to-do or start a turn while it
+waits; do not add a Start thread card for it.
+
+Mark it done with `resolve`, putting what finished in `note`. The operator can
+also mark it done in the UI, or tell you to. On the prerequisite thread,
+`list` finds the waiting thread, hold id, and owner. Marking it done raises
+the operator's reminder card on the waiting thread: the follow-up as a
+checklist, with your note. It starts no turn and merges nothing. `cancel`,
+when the operator stops waiting, raises no card. A finished turn, idle state,
+archive, or disconnection never marks a wait done.
+
+## Another thread's milestone
 
 "Rebase after PR #10 merges" and "continue after PRs #9, #10, and #11 all
 merge" are dependencies, even though those PRs are not attached to this
@@ -90,7 +114,11 @@ effort. Follow the tool description for monitor-specific controls.
 
 ## After setting up the wait
 
-Confirm the wait or monitor was successfully created before relying on it.
+For a wait until done, confirm creation and say what it waits for and what
+the operator will be reminded to do. Continue other work as needed; no turn
+is resumed automatically.
+
+For a watch, dependency, or monitor, confirm creation before relying on it.
 A `project_paused` error means the operator paused forge activity or turned off
 PR watches for that project. Do not retry or work around it with another wait
 or message. Stop and tell the operator what you were waiting for. A dependency

@@ -3,7 +3,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { startInProcessFederationGateway } from "./fixtures/federation-gateway";
 

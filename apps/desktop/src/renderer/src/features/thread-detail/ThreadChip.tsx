@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { PopoutIcon, ThreadIcon } from "../../icons";
 import {
   useLiveThreadLink,
@@ -12,6 +12,7 @@ import {
   type ChipContextMenuPosition,
 } from "../chrome/ChipContextMenu";
 import { threadCopyTargets } from "../chrome/ThreadChipContextMenu";
+import { ThreadInfoCard, useThreadInfo } from "./ThreadInfoCard";
 
 export { threadCopyTargets } from "../chrome/ThreadChipContextMenu";
 
@@ -33,7 +34,8 @@ export function ThreadChip(props: ThreadChipProps) {
   const contextMenuInvokerRef = useRef<HTMLSpanElement>(null);
   const [contextMenuPosition, setContextMenuPosition] =
     useState<ChipContextMenuPosition>();
-  const tooltipController = useViewportTooltip({ className: "viewport-tooltip" });
+  // The hover card is built to the PR card's measurements and shares its rules.
+  const tooltipController = useViewportTooltip({ className: "pr-status-card thread-info-card" });
   const popoutTooltipController = useViewportTooltip({
     className: "viewport-tooltip",
   });
@@ -43,9 +45,20 @@ export function ThreadChip(props: ThreadChipProps) {
   const label = link.titleSource === "fallback" && fallbackLabel
     ? fallbackLabel
     : liveTitle || fallbackLabel || link.threadId;
-  const tooltip = link.gitBranch
-    ? `${label}\n${link.gitBranch} — open thread${link.messageId ? " at message" : ""}`
-    : `${label}\nOpen thread${link.messageId ? " at message" : ""}`;
+  const threadInfo = useThreadInfo(link);
+  const card = <ThreadInfoCard info={threadInfo.info} label={label} link={link} />;
+  const latestCardRef = useRef(card);
+  // A click focuses the chip on its way to opening the thread; only keyboard
+  // focus opens the card, so a click starts no reads.
+  const pointerFocusRef = useRef(false);
+  latestCardRef.current = card;
+  const tooltipVisible = tooltipController.visible;
+  const updateTooltip = tooltipController.update;
+  // Facts and cost land after the card opens; push them into the open card.
+  // `info` changes only when a read settles, so this cannot loop.
+  useEffect(() => {
+    if (tooltipVisible) updateTooltip(latestCardRef.current);
+  }, [threadInfo.info, label, tooltipVisible, updateTooltip]);
   const remoteInstanceLabel = link.instanceLabel ?? link.instanceId;
   const remoteViewerTooltip = remoteInstanceLabel
     ? `Open this thread in the remote viewer window for ${remoteInstanceLabel}`
@@ -90,6 +103,7 @@ export function ThreadChip(props: ThreadChipProps) {
       >
         <span
           aria-label={`Open thread ${label}`}
+          aria-describedby={tooltipVisible ? tooltipController.tooltipId : undefined}
           aria-haspopup="menu"
           className="chip thread-chip"
           data-thread-chip=""
@@ -112,14 +126,29 @@ export function ThreadChip(props: ThreadChipProps) {
             });
           }}
           onDragStart={(event) => event.preventDefault()}
-          onFocus={(event) => tooltipController.show(event.currentTarget, tooltip)}
+          onFocus={(event) => {
+            if (pointerFocusRef.current) {
+              pointerFocusRef.current = false;
+              return;
+            }
+            threadInfo.load();
+            tooltipController.show(event.currentTarget, latestCardRef.current);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               handleActivate(event);
             }
           }}
-          onMouseEnter={(event) => tooltipController.show(event.currentTarget, tooltip)}
+          onMouseEnter={(event) => {
+            // Read only once the card opens, never on a pass over the chip.
+            tooltipController.showAfterDelay(event.currentTarget, () => {
+              threadInfo.load();
+              return latestCardRef.current;
+            });
+          }}
           onMouseLeave={tooltipController.hide}
+          onPointerDown={() => { pointerFocusRef.current = true; }}
+          onPointerUp={() => { pointerFocusRef.current = false; }}
         >
           <ThreadIcon className="thread-chip__icon" size={12} />
           <span className="thread-chip__label">#{label.replace(/^#/, "")}</span>

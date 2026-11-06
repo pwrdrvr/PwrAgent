@@ -1,3 +1,4 @@
+import type { ThreadMergeHold } from "./thread-merge-holds";
 import type { ForgeCli } from "../forge-product";
 import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
@@ -272,6 +273,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   reactions?: string[];
   /** Present while the thread is locked against new turns. */
   lock?: ThreadLock;
+  mergeHolds?: ThreadMergeHold[];
   /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
   /** Codex environments discovered from the active thread workspace. */
@@ -564,6 +566,12 @@ export type PrSummary = {
    * have a failed check while other checks are still running.
    */
   checksStillRunning?: boolean;
+  /**
+   * Every check on the head was skipped or neutral, so a `passing` state
+   * means nothing was tested. Absent from older builds and federated peers;
+   * treat absence as "checks ran".
+   */
+  checksAllSkipped?: true;
   lifecycleState?: PrLifecycleState;
   reviewState?: PrReviewState;
   mergeState?: PrMergeState;
@@ -1037,6 +1045,27 @@ export function applyNavigationLaunchpadProviderSettingsPatch<
           providerSettings,
         };
   return projectNavigationLaunchpadProviderSettings(base as T);
+}
+
+/**
+ * Apply a defaults patch whose provider settings belong to `provider`. They
+ * are filed under that provider while the defaults keep their own, unless
+ * the patch names a backend. Without this, a patch with no backend lands
+ * under whichever provider the defaults hold.
+ */
+export function applyNavigationLaunchpadDefaultsPatch<
+  T extends NavigationLaunchpadDefaults,
+>(defaults: T, patch: Partial<T>, provider: AppServerBackendKind): T {
+  if (patch.backend !== undefined || provider === defaults.backend) {
+    return applyNavigationLaunchpadProviderSettingsPatch(defaults, patch);
+  }
+  const filed = applyNavigationLaunchpadProviderSettingsPatch(defaults, {
+    ...patch,
+    backend: provider,
+  });
+  return applyNavigationLaunchpadProviderSettingsPatch(filed, {
+    backend: defaults.backend,
+  } as Partial<T>);
 }
 
 export function changedProviderModelDefaultBackends(
@@ -2132,6 +2161,7 @@ export type NavigationRow = {
   reactions?: string[];
   reactionsTruncated?: boolean;
   lock?: ThreadLock;
+  mergeHolds?: ThreadMergeHold[];
   prs?: PrSummary[];
   prsTruncated?: boolean;
   messagingBindings?: MessagingThreadBindingSummary[];
@@ -3282,6 +3312,7 @@ export type ThreadOverlayState = {
   reactions?: string[];
   /** Present while the thread is locked against new turns. See {@link ThreadLock}. */
   lock?: ThreadLock;
+  mergeHolds?: ThreadMergeHold[];
   /**
    * Consolidated tool-output incident state for this thread: when it first
    * warned, what the operator dismissed, and what they muted. Persisted so an

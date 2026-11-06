@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, launcherParentMatches, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
 import { localSymbolDirectories, nativeDebuggerStatus, nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
 const roots = [];
@@ -15,6 +15,26 @@ const names = [1, 2, 3, 4].map((n) => "\\Device\\NamedPipe\\uv\\" + n + "-123");
 const inventory = () => ({ verified: true, liveAfter: true, pipes: names.map((name) => ({ name })) });
 
 describe("Windows natural pipe evidence", () => {
+  it("binds a launcher through native parent creation when the JavaScript clock lags", () => {
+    const event = { pid: 77, workerPid: 7, at: 1000 };
+    const source = { pid: 77, created: "116444736010042220", verified: true, liveAfter: true };
+    const child = { pid: 77, created: source.created, ppid: 7,
+      parentCreated: "116444736009000000", name: "electron.exe" };
+    const parent = { pid: 7, created: child.parentCreated };
+    expect(BigInt(source.created) > (BigInt(event.at) + 1n) * 10000n + 116444736000000000n).toBe(true);
+    expect(launcherParentMatches(event, source, child, parent)).toBe(true);
+    for (const changed of [{ verified: false }, { liveAfter: false }, { pid: 78 }, { created: "116444736010042221" }]) {
+      expect(launcherParentMatches(event, { ...source, ...changed }, child, parent)).toBe(false);
+    }
+    for (const changed of [{ ppid: 8 }, { parentCreated: "116444736009000001" }, { name: "node.exe" }]) {
+      expect(launcherParentMatches(event, source, { ...child, ...changed }, parent)).toBe(false);
+    }
+    expect(launcherParentMatches(event, source, child, { ...parent, created: source.created + "0" })).toBe(false);
+    expect(launcherParentMatches(event, source, { ...child, parentCreated: source.created + "0" },
+      { ...parent, created: source.created + "0" })).toBe(false);
+    expect(launcherParentMatches(event, source, child, undefined)).toBe(false);
+  });
+
   it("samples with a non-suspending attach and local symbols, then rejects changed process identities", () => {
     const cache = path.resolve("private-symbol-cache");
     expect(nativeStackArguments(77, cache)).toEqual([
@@ -56,17 +76,23 @@ describe("Windows natural pipe evidence", () => {
   });
 
   it("retains known preflight failure reasons without exception text or debugger output", () => {
+    const triageGuide = "docs/playwright-worker-shutdown-diagnostics.md#controlled-native-debugger-setup-failures";
+    const noProgress = { bannerObserved: false, extensionInitializationStarted: false,
+      extensionInitializationCompleted: false, commandPromptObserved: false, readinessMarkerObserved: false };
     const output = "cdb: The system does not support detach on exit\nWARNING: Network path disallowed\nC:\\private\\secret.pdb token";
     const error = new Error("Noninvasive debugger exited before readiness");
     error.nativeDebugger = { ...nativeDebuggerStatus(output), exitCode: 0, rawOutput: output };
     const failure = nativeProbeFailure(error);
-    expect(failure).toEqual({ reason: "debugger-exited-before-readiness",
-      debugger: { exitCode: 0, detachUnsupported: true, networkPathDisallowed: true } });
+    expect(failure).toEqual({ reason: "debugger-exited-before-readiness", triageGuide,
+      debugger: { exitCode: 0, detachUnsupported: true, networkPathDisallowed: true,
+        ...noProgress, outputBytes: Buffer.byteLength(output) } });
     expect(JSON.stringify(failure)).not.toMatch(/private|secret|token|rawOutput/);
-    expect(nativeDebuggerStatus("native frames")).toEqual({ detachUnsupported: false, networkPathDisallowed: false });
-    expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed" });
+    expect(nativeDebuggerStatus("native frames")).toEqual({ detachUnsupported: false, networkPathDisallowed: false,
+      ...noProgress, outputBytes: 13 });
+    expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed", triageGuide });
     expect(nativeProbeFailure({ nativeDebugger: { exitCode: output, detachUnsupported: output } })).toEqual({
-      reason: "controlled-probe-failed", debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false },
+      reason: "controlled-probe-failed", triageGuide, debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false,
+        ...noProgress, outputBytes: undefined },
     });
   });
 
@@ -280,8 +306,14 @@ describe("Windows natural pipe evidence", () => {
     const result = await promisify(execFile)(process.execPath, [path.join(import.meta.dirname, "windows-pipe-diagnostics-probe.mjs")], {
       windowsHide: true, timeout: 35000,
     });
-    expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({
+    const proof = JSON.parse(result.stdout);
+    expect(proof).toEqual(expect.objectContaining({
       creationIdentityVerified: true, nativeExitTimeVerified: true,
     }));
+    // The owned live process is the oracle: readiness must lead to frames,
+    // a moving heartbeat during attach, and survival of cancellation and q.
+    if (process.env.PWRAGENT_WINDOWS_CDB_EXE) {
+      expect(proof).toMatchObject({ noninvasiveDebuggerVerified: true, debuggerQuitVerified: true });
+    }
   }, 40000);
 });

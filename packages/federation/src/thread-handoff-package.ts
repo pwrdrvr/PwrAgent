@@ -54,15 +54,62 @@ export function validateGitHandoffReference(value: ThreadHandoffGitReference): v
   if (value.cwdRelative !== undefined) validateHandoffRelativePath(value.cwdRelative);
 }
 
-export async function encodeThreadHandoff(value: ThreadHandoffPackage): Promise<Buffer> {
-  const bytes = Buffer.from(JSON.stringify(value));
-  if (bytes.length > THREAD_HANDOFF_MAX_BYTES) throw new Error("The handoff package exceeds 128 MiB before compression.");
-  return await compress(bytes);
+// PWH3: magic, uint32 manifest length, UTF-8 manifest, gzip(raw rollout),
+// raw workspace archive. Archives are already compressed and pass through once.
+const HANDOFF_MAGIC = Buffer.from("PWH3");
+const MAX_MANIFEST_BYTES = 64 * 1024;
+
+export async function encodeThreadHandoff(value: ThreadHandoffPackage, binary = true): Promise<Buffer> {
+  if (!binary) {
+    const bytes = Buffer.from(JSON.stringify(value));
+    if (bytes.length > THREAD_HANDOFF_MAX_BYTES) throw new Error("The handoff package exceeds 128 MiB before compression.");
+    return await compress(bytes);
+  }
+  const { rolloutBase64, workspace, ...metadata } = value;
+  const rollout = decodeHandoffBytes(rolloutBase64);
+  const archive = workspace ? decodeHandoffBytes(workspace.dataBase64) : Buffer.alloc(0);
+  if (rollout.length + archive.length > THREAD_HANDOFF_MAX_BYTES) throw new Error("The handoff package exceeds 128 MiB before compression.");
+  const compressed = await compress(rollout);
+  const manifest = Buffer.from(JSON.stringify({ ...metadata,
+    rolloutBytes: compressed.length,
+    ...(workspace ? { workspace: { format: workspace.format, warnings: workspace.warnings, sizeBytes: archive.length } } : {}),
+  }));
+  if (manifest.length > MAX_MANIFEST_BYTES) throw new Error("The handoff manifest is too large.");
+  const prefix = Buffer.alloc(8);
+  HANDOFF_MAGIC.copy(prefix);
+  prefix.writeUInt32BE(manifest.length, 4);
+  const bytes = Buffer.concat([prefix, manifest, compressed, archive]);
+  if (bytes.length > THREAD_HANDOFF_MAX_BYTES) throw new Error("The compressed handoff exceeds 128 MiB.");
+  return bytes;
 }
 
 export async function decodeThreadHandoff(bytes: Buffer): Promise<ThreadHandoffPackage> {
   if (bytes.length > THREAD_HANDOFF_MAX_BYTES) throw new Error("The compressed handoff exceeds 128 MiB.");
-  const value = JSON.parse((await decompress(bytes, { maxOutputLength: THREAD_HANDOFF_MAX_BYTES })).toString("utf8")) as ThreadHandoffPackage;
+  let value: ThreadHandoffPackage;
+  if (bytes.subarray(0, 4).equals(HANDOFF_MAGIC)) {
+    if (bytes.length < 8) throw new Error("Truncated handoff prefix.");
+    const length = bytes.readUInt32BE(4);
+    if (length > MAX_MANIFEST_BYTES || 8 + length > bytes.length) throw new Error("Invalid handoff manifest length.");
+    const manifest = JSON.parse(bytes.subarray(8, 8 + length).toString("utf8"));
+    const start = 8 + length;
+    if (!Number.isSafeInteger(manifest.rolloutBytes) || manifest.rolloutBytes < 1
+      || start + manifest.rolloutBytes > bytes.length
+      || (manifest.workspace && (!Number.isSafeInteger(manifest.workspace.sizeBytes) || manifest.workspace.sizeBytes < 0))
+      || start + manifest.rolloutBytes + (manifest.workspace?.sizeBytes ?? 0) !== bytes.length) {
+      throw new Error("Invalid handoff section lengths.");
+    }
+    const archive = bytes.subarray(start + manifest.rolloutBytes);
+    const rollout = await decompress(bytes.subarray(start, start + manifest.rolloutBytes), {
+      maxOutputLength: THREAD_HANDOFF_MAX_BYTES - archive.length,
+    });
+    value = { ...manifest, rolloutBase64: rollout.toString("base64"),
+      ...(manifest.workspace ? { workspace: { ...manifest.workspace, dataBase64: archive.toString("base64") } } : {}),
+    };
+    delete (value as unknown as Record<string, unknown>).rolloutBytes;
+    if (value.workspace) delete (value.workspace as unknown as Record<string, unknown>).sizeBytes;
+  } else {
+    value = JSON.parse((await decompress(bytes, { maxOutputLength: THREAD_HANDOFF_MAX_BYTES })).toString("utf8")) as ThreadHandoffPackage;
+  }
   if (!value || value.version !== 2 || typeof value.handoffId !== "string" || !/^[0-9a-f-]{36}$/.test(value.handoffId)
     || typeof value.sourceThreadId !== "string" || !value.sourceThreadId
     || typeof value.historyDigest !== "string" || !/^[0-9a-f]{64}$/.test(value.historyDigest)

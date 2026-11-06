@@ -1,4 +1,6 @@
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
+import { THREAD_MERGE_HOLDS_CHANNEL, type ManageThreadMergeHoldsRequest, type ManageThreadMergeHoldsResponse } from "@pwragent/shared";
+import { appendMergeHoldDependents, assertNoMergeHolds, qualifyMergeHoldOwners, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
@@ -16,6 +18,7 @@ import { THREAD_PR_WATCHES_CHANNEL, THREAD_PR_WATCH_HISTORY_MAX_LIMIT, type Thre
 import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { THREAD_PENDING_WAKES_CHANNEL, type ThreadPendingWakesList, type ThreadPendingWakesRequest, type ThreadPendingWakesResponse } from "@pwragent/shared";
+import { findRemoteHomeDirectoryIndex } from "@pwragent/shared";
 import {
   buildThreadPendingWakes,
   stopRemoteThreadPendingWake,
@@ -471,6 +474,9 @@ import {
 } from "../../shared/ipc";
 import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
+import { registerThreadMaintenanceIpc, unregisterThreadMaintenanceIpc } from "./thread-maintenance-ipc";
+import { disposeThreadMaintenanceService, getThreadMaintenanceService } from "../thread-maintenance-runtime";
+import { requestOpenThreadMaintenance } from "../window-open-thread-maintenance";
 import {
   federationWindowTargetForWebContents,
   isFederationWindowWebContents,
@@ -492,7 +498,7 @@ import {
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
-import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
+import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { readLocalNavigationDirectoryIndex } from "../app-server/navigation-directory-index";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
@@ -1545,6 +1551,7 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
       candidate.checksStillRunning === pr.checksStillRunning &&
+      candidate.checksAllSkipped === pr.checksAllSkipped &&
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
@@ -1819,6 +1826,7 @@ class DesktopAppServerService {
   private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
+  private unsubscribeRestartGate?: () => void;
   private ownerNavigationMetadataVersion = 0;
   private ownerNavigationMetadataRead: Promise<void> | undefined;
   private ownerNavigationMetadataAbort: AbortController | undefined;
@@ -4283,6 +4291,16 @@ class DesktopAppServerService {
 
   async startOwnerNavigation(): Promise<void> {
     this.ownerNavigationActive = true;
+    // Continue After waits while a quiet restart's continuations go first.
+    this.unsubscribeRestartGate ??= getDesktopBackendRegistry().onRestartGateChanged?.((closed) => {
+      if (!closed && this.ownerNavigationActive) {
+        void this.reconcileThreadDependencies().catch((error: unknown) => {
+          appServerLog.warn("dependency reconcile after restart gate failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    });
     // Gates read Forge Automation from memory; load it before polling starts.
     await this.hydrateProjectForgeAutomation();
     this.syncPrPollingSchedulerState();
@@ -4566,13 +4584,24 @@ class DesktopAppServerService {
     };
   }
 
-  private forgePrToolService(): ForgePrToolService {
+  private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {
     this.githubPrToolClient ??= new GithubPrToolClient({ ci: this.getForgeCiClient() });
     this.gitlabPrToolClient ??= new GitlabPrToolClient({ gitlab: this.getPrFetcher().gitlab });
     return new ForgePrToolService({
       enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
       clients: { github: this.githubPrToolClient, gitlab: this.gitlabPrToolClient },
       defaultMergeMethod: () => getDesktopSettingsService().resolveDefaultMergeMethod(),
+      assertCanMerge: (repository, number) => {
+        const marker = repository.provider === "gitlab" ? "-/merge_requests" : "pull";
+        try {
+          assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+            backend: context?.backend ?? "", threadId: context?.threadId ?? "",
+            pullRequest: `https://${repository.host}/${repository.owner}/${repository.repo}/${marker}/${number}`,
+          });
+        } catch (error) {
+          throw new ForgeReadError("merge_held", error instanceof Error ? error.message : String(error));
+        }
+      },
     });
   }
 
@@ -4583,7 +4612,7 @@ class DesktopAppServerService {
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
-    const result = await this.forgePrToolService().execute(operation, args, await this.forgePrToolScope(context), context.signal);
+    const result = await this.forgePrToolService(context).execute(operation, args, await this.forgePrToolScope(context), context.signal);
     if (operation === "rerun_failed_ci_jobs") {
       // The re-run already happened; failing to remember it must not fail the call.
       await this.recordCiRerun(result, context).catch((error: unknown) => {
@@ -5332,9 +5361,7 @@ class DesktopAppServerService {
       recentSubAgents: async (thread, limit) => limit === 0 ? []
         : await this.getOverlayStore().listEndedThreadTaskMonitors({ ...thread, limit }),
       // Only Claude continues a thread when a background task ends.
-      backendTasks: async (thread) => thread.backend === "claude"
-        ? (await registry.listBackgroundTerminals(thread)).terminals
-        : [],
+      backendTasks: async (thread) => registry.listBackendTaskWakes(thread),
       backendWakes: (thread) => registry.listBackendWakes(thread),
       hold: async (thread) => await registry.readThreadWakeHold(thread),
       heldEntries: (thread) => registry.listHeldThreadQueueEntries(thread),
@@ -8578,6 +8605,21 @@ class DesktopAppServerService {
     };
   }
 
+  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, actor = "operator"): Promise<ManageThreadMergeHoldsResponse> {
+    validateMergeHoldRequest({ ...request, backend: request.backend ?? "codex", threadId: request.threadId ?? "" });
+    const runtime = getDesktopFederationRuntime();
+    if (request.federationTarget?.scope === "remote") {
+      const { federationTarget, ...ownerRequest } = request;
+      const localId = (await runtime.health()).instanceId;
+      if (federationTarget.instanceId !== localId) {
+        const response = await runtime.remoteBackend(federationTarget).manageThreadMergeHolds(ownerRequest);
+        return qualifyMergeHoldOwners(response, federationTarget, localId);
+      }
+    }
+    const response = await getDesktopBackendRegistry().manageThreadMergeHolds(request, actor);
+    return await appendMergeHoldDependents(response, request, runtime);
+  }
+
   async setThreadLock(
     request: SetThreadLockRequest,
   ): Promise<SetThreadLockResponse> {
@@ -9938,50 +9980,52 @@ class DesktopAppServerService {
         .attachDirectoryToThread(ownerRequest);
     }
     const backend = request.backend ?? "codex";
-    const registered = await this.registerDirectoryFromDisk({
-      path: request.path,
-      preferredBackend: request.preferredBackend ?? backend,
-    });
-    if (!registered.ok) {
-      return {
-        ok: false,
+    return await getDesktopBackendRegistry().withThreadWorkspaceMutation({ backend, threadId: request.threadId }, async () => {
+      const registered = await this.registerDirectoryFromDisk({
+        path: request.path,
+        preferredBackend: request.preferredBackend ?? backend,
+      });
+      if (!registered.ok) {
+        return {
+          ok: false,
+          backend,
+          threadId: request.threadId,
+          reason: registered.reason,
+          message: registered.message,
+        };
+      }
+
+      const directoryPathId = toLinkedDirectoryPathId(registered.directoryPath);
+      const directory: LinkedDirectorySummary = {
+        id: directoryPathId,
+        kind: "local",
+        label: registered.directoryLabel,
+        path: directoryPathId,
+      };
+      await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.path], async () => await this.getOverlayStore().addLinkedDirectory({
         backend,
         threadId: request.threadId,
-        reason: registered.reason,
-        message: registered.message,
-      };
-    }
+        directory,
+      }));
 
-    const directoryPathId = toLinkedDirectoryPathId(registered.directoryPath);
-    const directory: LinkedDirectorySummary = {
-      id: directoryPathId,
-      kind: "local",
-      label: registered.directoryLabel,
-      path: directoryPathId,
-    };
-    await this.getOverlayStore().addLinkedDirectory({
-      backend,
-      threadId: request.threadId,
-      directory,
-    });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
-      notification: {
-        method: "navigation/threadDirectories/updated",
-        params: {
-          reason: "selected-thread",
-          threadIds: [request.threadId],
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: {
+            reason: "selected-thread",
+            threadIds: [request.threadId],
+          },
         },
-      },
-    });
+      });
 
-    return {
-      ok: true,
-      backend,
-      threadId: request.threadId,
-      directory,
-    };
+      return {
+        ok: true,
+        backend,
+        threadId: request.threadId,
+        directory,
+      };
+    }, [request.path]);
   }
 
   async detachDirectoryFromThread(
@@ -10070,6 +10114,8 @@ class DesktopAppServerService {
   }
 
   async close(): Promise<void> {
+    this.unsubscribeRestartGate?.();
+    this.unsubscribeRestartGate = undefined;
     this.pendingWakesCache.clear();
     this.ownerNavigationActive = false;
     this.ownerNavigationMetadataVersion += 1;
@@ -10237,7 +10283,10 @@ class DesktopAppServerService {
         // PR conditions also wait while the consumer's project holds PR
         // watches. A paused project's turn-only wake is held or discarded
         // in submit, by its wake-up policy.
+        // A quiet restart's continuations go first; the gate opening
+        // reconciles again (see `startAppServerOwnerNavigation`).
         canDispatch: (dependency) => this.ownerNavigationActive
+          && !getDesktopBackendRegistry().isRestartGateClosed?.()
           && (dependency.conditions.every((condition) => condition.when === "turn_completed")
             || (this.backgroundPrPollingEnabled
               && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
@@ -10802,6 +10851,24 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
     appServerService.isPullRequestLocallyMonitored(prKey)
   );
+  getDesktopBackendRegistry().setThreadMergeHoldToolHandler(async (request, actor) => await appServerService.manageThreadMergeHolds(request, actor));
+  getDesktopBackendRegistry().setMergeHoldReminderDelivery({
+    prepare: (thread) => readThreadTodoPlacement(getDesktopBackendRegistry(), thread),
+    raise: (card, placement) => getThreadTodoService().raiseForDependency({ ...card, ...placement }).todo,
+    publish: (todo) => getThreadTodoService().publish(todo),
+  });
+  ipcMain.removeHandler(THREAD_MERGE_HOLDS_CHANNEL);
+  ipcMain.handle(THREAD_MERGE_HOLDS_CHANNEL, async (event, request: ManageThreadMergeHoldsRequest) => {
+    const federationTarget = federationWindowTargetForWebContents(event.sender);
+    return await appServerService.manageThreadMergeHolds({ ...request, ...(!request.federationTarget && federationTarget ? { federationTarget } : {}) });
+  });
+  getDesktopBackendRegistry().setThreadMaintenanceToolHandler({
+    scan: async (request) => await getThreadMaintenanceService().scan(request),
+    getScan: (scanId) => getThreadMaintenanceService().getScan(scanId),
+    getRun: () => getThreadMaintenanceService().getRun(),
+    start: (request) => getThreadMaintenanceService().start(request),
+    open: (request) => requestOpenThreadMaintenance(request),
+  });
   getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request, provenance) => {
     try {
       const threadDependencies = await appServerService.manageThreadDependencies(request, provenance);
@@ -10987,6 +11054,7 @@ export function registerAppServerIpcHandlers(): void {
         }
       }
     });
+  registerThreadMaintenanceIpc();
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
   ipcMain.handle(
     APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
@@ -12297,12 +12365,17 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeCodexRestartStatus = undefined;
   unsubscribeThreadArchiveSweepStatus?.();
   unsubscribeThreadArchiveSweepStatus = undefined;
+  unregisterThreadMaintenanceIpc();
+  disposeThreadMaintenanceService();
   ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadDependencyToolHandler(undefined);
+  registry?.setThreadMergeHoldToolHandler(undefined);
+  registry?.setMergeHoldReminderDelivery(undefined);
+  registry?.setThreadMaintenanceToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setPullRequestReferenceResolver(undefined);

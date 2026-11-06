@@ -884,6 +884,7 @@ if (!signStageOnly) {
     join(stageDir, "electron-builder.yml"),
   );
   configureStageGithubReleaseType();
+  copyFileSync(join(desktopRoot, "custom-git-runtime.json"), join(stageDir, "custom-git-runtime.json"));
   for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
     copyFileSync(join(repoRoot, file), join(stageDir, file));
   }
@@ -1077,7 +1078,7 @@ const dockTilePluginExecutable = join(
 );
 
 step("verify packaged Git and LFS");
-verifyBundledGit(join(builtApp, "Contents", "Resources"), { macSlices });
+verifyBundledGit(join(builtApp, "Contents", "Resources"));
 
 step(`verify ${macArch} binary slices`);
 verifyMacSlices(join(builtApp, "Contents", "MacOS", "PwrAgent"));

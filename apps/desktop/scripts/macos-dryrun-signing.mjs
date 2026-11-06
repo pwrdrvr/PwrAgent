@@ -13,6 +13,7 @@ export async function signMacDryrunApp(app, entitlements) {
     platform: "darwin",
     identity: "-",
     identityValidation: false,
+    ignore: (file) => /\/Contents\/Resources\/git(?:\/|$)/.test(file),
     preAutoEntitlements: false,
     preEmbedProvisioningProfile: false,
     // osx-sign discovers .app and .framework bundles, but not .plugin bundles.

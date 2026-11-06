@@ -97,7 +97,10 @@ export function parseGitLabMr(payload: GitLabMrPayload, pipelineSourceHeadSha?: 
   const status = pipeline?.sha && payload.sha && pipeline.sha !== payload.sha
     && pipelineSourceHeadSha !== payload.sha ? undefined : pipeline?.status;
   const running = ["created", "waiting_for_resource", "preparing", "pending", "running", "scheduled"].includes(status ?? "");
-  const checkState = status === "success" ? "passing"
+  // A skipped pipeline (`[skip ci]`) is final but tested nothing. It passes so
+  // a watch can end, and says so, matching a skipped-only GitHub head.
+  const skipped = status === "skipped";
+  const checkState = status === "success" || skipped ? "passing"
     : status === "failed" || status === "canceled" ? "failing"
     : running ? "pending" : "unknown";
   const lifecycleState = payload.state === "merged" ? "merged"
@@ -120,6 +123,7 @@ export function parseGitLabMr(payload: GitLabMrPayload, pipelineSourceHeadSha?: 
     state: checkState,
     checkState,
     checksStillRunning: running,
+    ...(skipped ? { checksAllSkipped: true as const } : {}),
     lifecycleState,
     reviewState: payload.draft ? "draft" : "ready_for_review",
     mergeState: payload.has_conflicts || merge === "conflict" ? "conflicting"

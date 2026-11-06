@@ -6,7 +6,7 @@ import type {
 } from "react";
 import type { WorktreeSnapshotSummary } from "@pwragent/shared";
 import { CopyIcon } from "../../../icons";
-import { copyText, formatCopyTooltip } from "../../../lib/copy-text";
+import { copyText, elideMiddle, formatCopyTooltip } from "../../../lib/copy-text";
 
 /**
  * Shared building blocks for the context-rail tab panels. These were
@@ -106,16 +106,7 @@ export function formatTooltipValue(value: string, maxLength = 72): string {
   return elideMiddle(value, maxLength);
 }
 
-export function elideMiddle(text: string, maxLength: number): string {
-  if (text.length <= maxLength) {
-    return text;
-  }
-
-  const visible = Math.max(8, maxLength - 1);
-  const left = Math.ceil(visible / 2);
-  const right = Math.floor(visible / 2);
-  return `${text.slice(0, left)}…${text.slice(-right)}`;
-}
+export { elideMiddle };
 
 export function buildRailTooltipText(
   value: string,

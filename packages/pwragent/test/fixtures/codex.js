@@ -46,22 +46,23 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     assert.equal(initialized, false);
     assert.equal(params.capabilities.experimentalApi, true);
     initialized = true;
-    reply({ userAgent: "fixture-codex/0.159.2" });
+    reply({ userAgent: "fixture-codex/0.159.2", codexHome: process.env.CODEX_HOME, platformFamily: "unix", platformOs: "linux" });
   } else if (method === "initialized") {
     assert.ok(initialized);
     acknowledged = true;
   } else {
     assert.ok(acknowledged);
     if (method === "model/list") {
-      reply({ data: [{ id: "fixture-model", displayName: "Fixture model", isDefault: true, supportedReasoningEfforts: [] }] });
+      reply({ data: [{ id: "fixture-model", displayName: "Fixture model", isDefault: true, hidden: false,
+        supportedReasoningEfforts: [], defaultReasoningEffort: "medium", inputModalities: ["text"], additionalSpeedTiers: [], serviceTiers: [] }], nextCursor: null });
     } else if (method === "thread/start" || method === "thread/resume") {
-      assert.equal(params.approvalPolicy, "never");
-      assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
-      assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
+      if (params.approvalPolicy !== undefined) assert.equal(params.approvalPolicy, "never");
+      if (params.sandbox !== undefined) assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
+      if (params.cwd !== undefined) assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const threadId = params.threadId || `thread-${Date.now()}-${++sequence}`;
       if (method === "thread/resume") {
         assert.ok(threads[threadId]);
-        if (!threads[threadId].turns.length) {
+        if (!threads[threadId].turns.length && active?.threadId !== threadId) {
           send({ id, error: { code: -32600, message: `no rollout found for thread id ${threadId}` } });
           continue;
         }
@@ -88,9 +89,22 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
           callId: `call-${active.id}`, namespace: "pwragent", tool: tool.operation, arguments: tool.args || {} } });
         continue;
       }
+      if (prompt === "returned") {
+        const turn = { id: active.id, status: "completed", items: [{ type: "agentMessage", text: "Returned result" }] };
+        threads[active.threadId].turns.push(turn);
+        persist();
+        active = null;
+        reply({ turn });
+        continue;
+      }
       if (prompt === "early") { complete("completed"); reply(initial); continue; }
       reply(initial);
-      if (prompt === "crash") { setTimeout(() => process.exit(7), 30); continue; }
+      if (prompt === "crash") {
+        process.once("SIGUSR1", () => process.exit(7));
+        send({ method: "turn/started", params: { threadId: active.threadId, turn: initial.turn } });
+        writeFileSync(path.join(directory, "crash.ready"), active.id);
+        continue;
+      }
       if (prompt === "descendant") {
         const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setInterval(()=>{},1000)", path.join(directory, "descendant.ready")], { stdio: "ignore" });
         writeFileSync(path.join(directory, "descendant.pid"), String(child.pid));
@@ -113,6 +127,13 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       reply({});
     } else if (method === "thread/read") {
       reply({ thread: { ...threads[params.threadId], path: `/fixture-provider/${params.threadId}` } });
+    } else if (method === "thread/turns/list") {
+      reply({ data: threads[params.threadId].turns.slice().reverse().map((turn) => ({ ...turn, itemsView: "full" })), nextCursor: null });
+    } else if (method === "thread/name/set") {
+      threads[params.threadId].name = params.name;
+      persist();
+      reply({});
+      send({ method: "thread/name/updated", params: { threadId: params.threadId, threadName: params.name } });
     } else if (method === "fs/readFile") {
       const thread = threads[path.basename(params.path)];
       assert.ok(thread);

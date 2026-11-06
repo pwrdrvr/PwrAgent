@@ -269,6 +269,50 @@ export function listRunningDetachedCommands(): DetachedCommandSummary[] {
 }
 
 /**
+ * Ask every detached action tree to stop with SIGTERM, for a quiet restart,
+ * and SIGKILL whatever is still running after `graceMs`. Gives dev servers
+ * and watchers the chance to clean up that the shutdown SIGKILL does not.
+ * Resolves with how many trees were asked to stop.
+ */
+export async function terminateAllCodexEnvironmentDetachedCommands(
+  graceMs: number,
+): Promise<number> {
+  const asked: Array<[string, DetachedCommandProcess]> = [];
+  for (const [runId, entry] of detachedCommandProcesses) {
+    if (entry.closed()) continue;
+    if (entry.killHandle) {
+      clearTimeout(entry.killHandle);
+      entry.killHandle = undefined;
+    }
+    try {
+      entry.killTree("SIGTERM");
+      asked.push([runId, entry]);
+    } catch (error) {
+      environmentRuntimeLog.warn("detached-quiet-terminate-failed", {
+        runId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  const deadline = Date.now() + Math.max(0, graceMs);
+  while (asked.some(([, entry]) => !entry.closed()) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  for (const [runId, entry] of asked) {
+    if (entry.closed()) continue;
+    try {
+      entry.killTree("SIGKILL");
+    } catch (error) {
+      environmentRuntimeLog.warn("detached-quiet-kill-failed", {
+        runId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return asked.length;
+}
+
+/**
  * Kill every detached action tree on shutdown.
  *
  * Without this the children were simply abandoned: they are spawned detached

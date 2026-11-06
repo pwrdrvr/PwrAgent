@@ -214,8 +214,9 @@ export type ThreadTodo = {
   /** Re-adding an open card with the same key updates it in place. */
   key?: string;
   /**
-   * Set when a thread dependency raised the card for the operator. One
-   * dependency raises at most one card, whatever its status.
+   * Set when a thread dependency, or a wait marked done (`merge-hold:<id>`),
+   * raised the card for the operator. Each raises at most one card, whatever
+   * its status.
    */
   dependencyId?: string;
   kind: ThreadTodoKind;

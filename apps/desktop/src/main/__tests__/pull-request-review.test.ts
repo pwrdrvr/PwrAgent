@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { resolvePullRequestReview } from "../app-server/pull-request-review";
 import { resolveReviewProvenance } from "../app-server/review-provenance";
 import {
@@ -12,6 +12,9 @@ import {
   describeAttachedPullRequestLocalSync,
   findCheckedOutPullRequest,
   nativeReviewTarget,
+  pullRequestRepositoryKey,
+  reviewThreadForWorkspace,
+  reviewWorkspacePullRequests,
 } from "../../shared/pull-request-review";
 
 const exec = promisify(execFile);
@@ -265,5 +268,65 @@ describe("explicit attached PR review", () => {
         return runGit(dir, args);
       },
     })).rejects.toThrow("unavailable after fetch");
+  });
+});
+
+describe("review workspace scope", () => {
+  const pr = (repo: string, number: number, extra: Partial<PrSummary> = {}): PrSummary => ({
+    provider: "github.com", org: "fixture", repo, number, state: "passing", lifecycleState: "open",
+    url: `https://github.com/fixture/${repo}/pull/${number}`, ...extra,
+  });
+  const thread = (prs: PrSummary[]): NavigationThreadSummary => ({
+    id: "thread-1", title: "Runtime", titleSource: "explicit", source: "codex",
+    executionMode: "default", inbox: { inInbox: false }, projectKey: "/worktrees/git",
+    gitBranch: "feat/runtime-reshare", observedGitBranch: "feat/runtime-reshare",
+    gitWorkingState: {
+      baseBranch: "origin/pwrgit", dirtyFiles: 0, untrackedFiles: 0,
+      unpushedCommits: 0, dirtyAdditions: 0, dirtyDeletions: 0,
+    },
+    linkedDirectories: [
+      { id: "git", kind: "worktree", label: "git", path: "/repo/git", worktreePath: "/worktrees/git" },
+      { id: "pwrgit", kind: "local", label: "PwrGit", path: "C:/Work/PwrGit", gitBranch: "feat/pin", repositoryKey: "github.com/fixture/PwrGit" },
+    ],
+    prs,
+  });
+  const gitPr = pr("git", 8, { baseRefName: "pwrgit", headRefName: "feat/runtime-reshare", linkedDirectoryPaths: ["/worktrees/git"] });
+  const pwrgitPr = pr("PwrGit", 546, { baseRefName: "main", headRefName: "feat/pin" });
+
+  it("keys a PR by its lowercased host, owner and repository", () => {
+    expect(pullRequestRepositoryKey(pwrgitPr)).toBe("github.com/fixture/pwrgit");
+    expect(pullRequestRepositoryKey({ url: "https://example.com/not-a-pr" })).toBe("");
+  });
+
+  it("describes a secondary workspace by its own branch and PRs only", () => {
+    // The drive letter differs in case from the stored linked directory.
+    const scoped = reviewThreadForWorkspace({ cwd: "c:/Work/PwrGit/", thread: thread([gitPr, pwrgitPr]) });
+    expect(scoped?.prs).toEqual([pwrgitPr]);
+    expect(scoped?.gitBranch).toBe("feat/pin");
+    expect(scoped?.observedGitBranch).toBeUndefined();
+    expect(scoped?.gitWorkingState).toBeUndefined();
+  });
+
+  it("scopes the primary workspace's PRs and keeps every PR when none match", () => {
+    const primary = reviewThreadForWorkspace({
+      cwd: "/worktrees/git",
+      directory: { gitStatus: { originRepository: "github.com/fixture/git" } },
+      thread: thread([gitPr, pwrgitPr]),
+    });
+    expect(primary?.prs).toEqual([gitPr]);
+    expect(primary?.gitWorkingState?.baseBranch).toBe("origin/pwrgit");
+
+    // An origin that still names a renamed repository matches none of its PRs.
+    const renamed = thread([{ ...gitPr, linkedDirectoryPaths: undefined }, pwrgitPr]);
+    expect(reviewWorkspacePullRequests({
+      cwd: "/worktrees/git",
+      directory: { gitStatus: { originRepository: "github.com/fixture/old-git" } },
+      thread: renamed,
+    })).toEqual([]);
+    expect(reviewThreadForWorkspace({
+      cwd: "/worktrees/git",
+      directory: { gitStatus: { originRepository: "github.com/fixture/old-git" } },
+      thread: renamed,
+    })).toBe(renamed);
   });
 });

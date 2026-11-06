@@ -1,0 +1,193 @@
+import type {
+  ApplyThreadMaintenanceToolArgs,
+  ThreadMaintenanceApplyRequest,
+  ThreadMaintenancePlanToolResult,
+  ThreadMaintenanceRun,
+  ThreadMaintenanceRunToolResult,
+  ThreadMaintenanceScan,
+  ThreadMaintenanceScanToolResult,
+} from "@pwragent/shared";
+
+/** Idle rows returned to an agent across all projects. */
+export const THREAD_MAINTENANCE_TOOL_ROW_LIMIT = 200;
+/** Archived checkouts returned to an agent, per kind. */
+export const THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT = 100;
+const FAILURE_LIMIT = 20;
+const PROBLEM_LIMIT = 50;
+
+export function summarizeThreadMaintenanceScan(
+  scan: ThreadMaintenanceScan,
+  run?: ThreadMaintenanceRun,
+): ThreadMaintenanceScanToolResult {
+  let remaining = THREAD_MAINTENANCE_TOOL_ROW_LIMIT;
+  let truncated = false;
+  const projects = scan.threads.projects.map((project) => {
+    const idle = project.idle.slice(0, Math.max(0, remaining));
+    remaining -= idle.length;
+    if (idle.length < project.idle.length) truncated = true;
+    return {
+      key: project.key,
+      label: project.label,
+      idleCount: project.idle.length,
+      kept: project.kept,
+      idle: idle.map((row) => ({
+        backend: row.backend,
+        threadId: row.threadId,
+        title: row.title,
+        lastActivityAt: row.lastActivityAt,
+        workspace: row.workspace.kind,
+        ...("files" in row.workspace ? { changedFiles: row.workspace.files, changedBytes: row.workspace.bytes } : {}),
+        ...(row.worktreePath ? { worktreePath: row.worktreePath } : {}),
+        subThreads: row.subThreads,
+      })),
+    };
+  });
+  const removable = scan.checkouts.items.filter((item) => item.kind === "removable");
+  const gone = scan.checkouts.items.filter((item) => item.kind === "repositoryGone");
+  return {
+    scanId: scan.scanId,
+    finishedAt: scan.finishedAt,
+    rules: scan.rules,
+    ...(scan.projectKey ? { projectKey: scan.projectKey } : {}),
+    threads: {
+      checked: scan.threads.checked,
+      idleCount: scan.threads.projects.reduce((total, project) => total + project.idle.length, 0),
+      kept: scan.threads.kept,
+      ...(scan.threads.skipped ? { skipped: scan.threads.skipped } : {}),
+      projects,
+      truncated,
+    },
+    checkouts: {
+      removable: removable.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
+        backend: item.backend, threadId: item.threadId, worktreePath: item.worktreePath,
+        ...(item.workspace ? { workspace: item.workspace.kind } : {}),
+      })),
+      repositoryGone: gone.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
+        worktreePath: item.worktreePath,
+        ...(item.missingRepositoryPath ? { missingRepositoryPath: item.missingRepositoryPath } : {}),
+      })),
+      kept: scan.checkouts.kept,
+      emptyFolders: scan.checkouts.emptyFolders,
+      ...(scan.checkouts.skipped ? { skipped: scan.checkouts.skipped } : {}),
+      truncated: removable.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT || gone.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT,
+    },
+    expired: scan.expired,
+    failureCount: scan.failures.length,
+    failures: scan.failures.slice(0, FAILURE_LIMIT),
+    ...(run ? { run: summarizeThreadMaintenanceRun(run) } : {}),
+    guidance: "Show the operator this summary before changing anything. Prefer open_thread_maintenance when they want to review it themselves. Pass this scanId to apply_thread_maintenance with the items they chose.",
+  };
+}
+
+export function summarizeThreadMaintenanceRun(run: ThreadMaintenanceRun): ThreadMaintenanceRunToolResult {
+  return {
+    runId: run.runId,
+    scanId: run.scanId,
+    running: run.running,
+    startedAt: run.startedAt,
+    ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
+    steps: run.steps,
+    problems: run.problems.slice(0, PROBLEM_LIMIT),
+    ...(run.running ? { guidance: "The run continues in the background. Do not start another. Call scan_thread_maintenance later to read its result." } : {}),
+  };
+}
+
+export type ThreadMaintenanceApplyPlan = {
+  request: ThreadMaintenanceApplyRequest;
+  summary: ThreadMaintenancePlanToolResult;
+};
+
+/** Checks every selection against the scan it names. Returns an error
+ * message for the agent, or the run request and a plan summary. */
+export function planThreadMaintenanceApply(
+  args: ApplyThreadMaintenanceToolArgs,
+  scan: ThreadMaintenanceScan,
+  caller: { backend: string; threadId: string },
+): { error: string } | ThreadMaintenanceApplyPlan {
+  const archive = args.archive ?? [];
+  const removeCheckouts = args.removeCheckouts ?? [];
+  const trashCheckouts = args.trashCheckouts ?? [];
+  const removeEmptyFolders = args.removeEmptyFolders === true;
+  if (!archive.length && !removeCheckouts.length && !trashCheckouts.length && !removeEmptyFolders) {
+    return { error: "Select at least one thread or checkout from the scan." };
+  }
+  const idle = new Map(scan.threads.projects.flatMap((project) => project.idle)
+    .map((row) => [`${row.backend}:${row.threadId}`, row]));
+  const checkouts = new Map(scan.checkouts.items.map((item) => [item.worktreePath, item]));
+  const snapshotApprovals: ThreadMaintenancePlanToolResult["snapshotApprovals"] = [];
+  for (const item of archive) {
+    if (!item || typeof item.backend !== "string" || typeof item.threadId !== "string") {
+      return { error: "Each archive item needs backend and threadId from the scan." };
+    }
+    if (item.backend === caller.backend && item.threadId === caller.threadId) {
+      return { error: "Do not archive the thread running this tool." };
+    }
+    const row = idle.get(`${item.backend}:${item.threadId}`);
+    if (!row) return { error: `Thread ${item.threadId} is not an idle thread in scan ${scan.scanId}. Scan again.` };
+    if (item.overLimit !== undefined && item.overLimit !== "keepCheckout" && item.overLimit !== "snapshotAll") {
+      return { error: "overLimit must be keepCheckout or snapshotAll." };
+    }
+    if (item.overLimit && row.workspace.kind !== "overLimit") {
+      return { error: `Thread ${item.threadId} is under the snapshot limit. Omit overLimit for it.` };
+    }
+    if (row.workspace.kind === "overLimit" && !item.overLimit) {
+      return { error: `Thread ${item.threadId} has changes over the snapshot limit. Ask the operator, then pass overLimit keepCheckout or snapshotAll.` };
+    }
+    if (item.overLimit === "snapshotAll" && row.workspace.kind === "overLimit") {
+      snapshotApprovals.push({ threadId: row.threadId, title: row.title, bytes: row.workspace.bytes });
+    }
+  }
+  for (const item of removeCheckouts) {
+    if (!item || typeof item.worktreePath !== "string" || checkouts.get(item.worktreePath)?.kind !== "removable") {
+      return { error: `Checkout ${item?.worktreePath ?? "?"} is not a removable archived checkout in this scan.` };
+    }
+  }
+  for (const item of trashCheckouts) {
+    if (!item || typeof item.worktreePath !== "string" || checkouts.get(item.worktreePath)?.kind !== "repositoryGone") {
+      return { error: `Checkout ${item?.worktreePath ?? "?"} is not a checkout whose repository is gone in this scan.` };
+    }
+  }
+  return {
+    request: {
+      scanId: scan.scanId,
+      archive: archive.map((item) => ({ backend: item.backend, threadId: item.threadId,
+        ...(item.overLimit ? { overLimit: item.overLimit } : {}) })),
+      removeCheckouts: removeCheckouts.map((item) => {
+        const checkout = checkouts.get(item.worktreePath)!;
+        return { backend: checkout.backend, threadId: checkout.threadId, worktreePath: checkout.worktreePath };
+      }),
+      trashCheckouts: trashCheckouts.map((item) => ({ worktreePath: item.worktreePath })),
+      removeEmptyFolders,
+    },
+    summary: {
+      scanId: scan.scanId,
+      archive: archive.length,
+      removeCheckouts: removeCheckouts.length,
+      trashCheckouts: trashCheckouts.length,
+      removeEmptyFolders,
+      snapshotApprovals,
+    },
+  };
+}
+
+/** One sentence for the operator's confirmation card, naming every change. */
+export function threadMaintenanceConfirmationQuestion(plan: ThreadMaintenancePlanToolResult): string {
+  const parts = [
+    plan.archive ? `archive ${plan.archive} ${plan.archive === 1 ? "thread" : "threads"}` : "",
+    plan.removeCheckouts ? `remove ${plan.removeCheckouts} archived ${plan.removeCheckouts === 1 ? "checkout" : "checkouts"}` : "",
+    plan.trashCheckouts ? `move ${plan.trashCheckouts} orphaned ${plan.trashCheckouts === 1 ? "checkout" : "checkouts"} to the Trash` : "",
+    plan.removeEmptyFolders ? "remove empty worktree folders" : "",
+  ].filter(Boolean);
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0] ?? "";
+  const snapshots = plan.snapshotApprovals.slice(0, 5).map((item) => `${item.title} (${formatBytes(item.bytes)})`);
+  const more = plan.snapshotApprovals.length > snapshots.length ? ` and ${plan.snapshotApprovals.length - snapshots.length} more` : "";
+  return `An agent asks to ${list}. Uncommitted changes are saved to recovery snapshots first.`
+    + (snapshots.length ? ` It also asks to snapshot changes over the 100 MB limit for ${snapshots.join(", ")}${more}.` : "")
+    + " Allow it?";
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}

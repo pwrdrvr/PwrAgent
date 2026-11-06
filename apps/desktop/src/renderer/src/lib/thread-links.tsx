@@ -60,6 +60,15 @@ export type ThreadLinkContextValue = {
    * One store instance per provider, stable across membership rebuilds.
    */
   hoverTarget: ThreadLinkHoverStore;
+  /**
+   * The loaded navigation row a link points at, read when it is called. A
+   * hover card reads it at hover time; nothing re-renders when rows change.
+   */
+  readSummary?: (
+    link: Pick<ResolvedThreadLink, "backend" | "instanceId" | "threadId">,
+  ) => NavigationThreadSummary | undefined;
+  /** Every loaded navigation row, read when it is called, as `readSummary` is. */
+  readLoadedThreads?: () => readonly NavigationThreadSummary[];
 };
 
 export type ThreadLinkHoverTarget = Pick<
@@ -671,6 +680,14 @@ export function ThreadLinkProvider(props: {
         return metadataStore.subscribe(link, listener);
       },
       hoverTarget: hoverStore,
+      readSummary(link) {
+        const instanceId = link.instanceId === localInstanceId ? undefined : link.instanceId;
+        const key = threadLinkKey({ backend: link.backend, instanceId, threadId: link.threadId });
+        return threadsRef.current.find((thread) => threadLinkKey(threadSummaryLink(thread)) === key);
+      },
+      readLoadedThreads() {
+        return threadsRef.current;
+      },
     };
     // Rebuild when membership or the viewer identity changes; refs carry
     // fresh metadata and callbacks without invalidating the whole transcript.

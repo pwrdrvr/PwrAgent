@@ -1,0 +1,9 @@
+Mozilla CA certificate bundle, converted to PEM by curl.
+Unmodified readable source input: https://curl.se/ca/cacert-2026-10-20.pem
+Bundle date: 2026-10-20
+SHA256: 796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe
+The original PEM header, certificate data and notices are retained.
+This file is governed by the Mozilla Public License 2.0; see LICENSE.ca-bundle.
+License source: https://www.mozilla.org/media/MPL/2.0/index.815ca599c9df.txt
+Upstream extraction/source information: https://curl.se/docs/caextract.html
+Dugite-compatible installed path: ssl/cacert.pem.

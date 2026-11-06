@@ -8,6 +8,7 @@ import {
   type ThreadSubAgentSummary,
   type TokenMiserSubAgentAccounting,
 } from "@pwragent/shared";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { statSync } from "node:fs";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -369,12 +370,41 @@ describe("thread sub-agent table", () => {
     it("classifies every card into the shared lens", async () => {
       const { stateDb, store } = openStore();
       const ids = ["system:token-miser:gate-1", "system:token-miserX", "codex-native:worker", "codex-native",
-        "review:turn-1", "system:title-helper:x", "task-monitor:abc", "codex-native:"];
+        "review:turn-1", "system:title-helper:x", "task-monitor:abc", "codex-native:",
+        "claude-native:task-1", "claude-native", "claude-native:"];
       await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1",
         subAgents: ids.map((monitorId, index) => card(index, { monitorId })) });
       const rows = stateDb.raw.prepare(`SELECT monitor_id, ${THREAD_SUB_AGENT_LENS_SQL} AS lens FROM thread_sub_agents`).all() as Array<{ monitor_id: string; lens: SubAgentLens }>;
       expect(rows).toHaveLength(ids.length);
       for (const row of rows) expect([row.monitor_id, row.lens]).toEqual([row.monitor_id, subAgentLens(card(0, { monitorId: row.monitor_id }))]);
+      // Claude Code's own sub-agents are harness workers, like Codex's.
+      expect(rows.filter((row) => row.lens === "harness").map((row) => row.monitor_id).sort())
+        .toEqual(["claude-native:", "claude-native:task-1", "codex-native:", "codex-native:worker"]);
+    });
+
+    it("agrees with the shared lens for any monitor id (differential)", async () => {
+      const { stateDb, store } = openStore();
+      // Ids near every prefix boundary: a whole prefix, a cut one, one with a
+      // suffix, and arbitrary text.
+      const prefixes = ["system:token-miser:", "codex-native:", "claude-native:", "review:", "task-monitor:"];
+      const monitorId = fc.oneof(
+        fc.tuple(fc.constantFrom(...prefixes), fc.string({ maxLength: 6 })).map(([prefix, rest]) => prefix + rest),
+        fc.tuple(fc.constantFrom(...prefixes), fc.nat({ max: 20 })).map(([prefix, cut]) => prefix.slice(0, cut)),
+        fc.string({ maxLength: 20 }),
+      ).filter((id) => id.length > 0);
+      let run = 0;
+      await fc.assert(fc.asyncProperty(fc.uniqueArray(monitorId, { minLength: 1, maxLength: 12 }), async (ids) => {
+        // Each run writes its own thread; the storage key contains its id.
+        const threadId = `differential-${run += 1}-end`;
+        await store.upsertThreadSubAgents({ backend: "codex", threadId,
+          subAgents: ids.map((id, index) => card(index, { monitorId: id })) });
+        const rows = stateDb.raw.prepare(`SELECT monitor_id, ${THREAD_SUB_AGENT_LENS_SQL} AS lens FROM thread_sub_agents
+          WHERE instr(thread_id, ?) > 0`)
+          .all(threadId) as Array<{ monitor_id: string; lens: SubAgentLens }>;
+        expect(rows).toHaveLength(ids.length);
+        const lenses = new Map(rows.map((row) => [row.monitor_id, row.lens]));
+        for (const id of ids) expect([id, lenses.get(id)]).toEqual([id, subAgentLens(card(0, { monitorId: id }))]);
+      }), { numRuns: 50 });
     });
 
     it("counts and pages the panel as the shared visibility rule filters it", async () => {
@@ -467,7 +497,7 @@ describe("thread sub-agent table", () => {
         DROP TRIGGER thread_sub_agent_gate_totals_update_new;
         DROP TRIGGER thread_sub_agent_gate_totals_delete;
         DROP VIEW thread_sub_agent_gate_shares;
-        DROP INDEX thread_sub_agents_by_lens;`);
+        DROP INDEX thread_sub_agents_by_lens_v2;`);
       for (const column of (stateDb.raw.prepare("SELECT name FROM pragma_table_info('thread_sub_agent_revisions')").all() as Array<{ name: string }>)
         .map((row) => row.name).filter((name) => name.startsWith("gate_"))) {
         stateDb.raw.exec(`ALTER TABLE thread_sub_agent_revisions DROP COLUMN ${column}`);
@@ -526,7 +556,7 @@ describe("thread sub-agent table", () => {
       // The two lenses that never age out are counted from the index alone.
       const counts = reads.find((sql) => sql.startsWith("SELECT count(*)") && !sql.includes("completedAt"))!;
       expect((stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${counts}`).all(null, null, null) as Array<{ detail: string }>)
-        .map((row) => row.detail).join("\n")).toMatch(/USING COVERING INDEX thread_sub_agents_by_lens/);
+        .map((row) => row.detail).join("\n")).toMatch(/USING COVERING INDEX thread_sub_agents_by_lens_v2/);
     });
 
     it("parses the same card bytes for pricing and a panel page on a thread with 25 or 2,025 gates", async () => {

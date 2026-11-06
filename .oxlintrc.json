@@ -152,6 +152,26 @@
     },
     {
       "files": [
+        "apps/desktop/e2e/**/*.spec.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@playwright/test",
+                "importNames": ["test"],
+                "allowTypeImports": true,
+                "message": "Import test from fixtures/electron-test so Electron launch diagnostics have an active fixture."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
         "apps/desktop/src/renderer/**/*.{ts,tsx}"
       ],
       "rules": {

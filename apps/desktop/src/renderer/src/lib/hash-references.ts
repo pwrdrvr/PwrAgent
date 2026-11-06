@@ -2,6 +2,7 @@ import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
+  graphemePrefix,
   threadHasExactPrNumberMatch,
   threadMatchesQuery,
   type ThreadJumpCandidate,
@@ -79,7 +80,7 @@ function truncateAtWordBoundary(value: string, limit: number): string {
   const truncated =
     wordBreak >= Math.floor(limit / 2)
       ? value.slice(0, wordBreak)
-      : value.slice(0, limit);
+      : graphemePrefix(value, limit);
   return `${truncated.replace(/[\s,;:.-]+$/, "")}…`;
 }
 
