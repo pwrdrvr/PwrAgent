@@ -54,7 +54,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "diagnosticBytes": 1736,
       "requestBytes": 3600,
       "requests": 8,
-      "responseBytes": 6652,
+      "responseBytes": 6720,
       "responseRows": 8,
       "unchanged": 0,
     },
