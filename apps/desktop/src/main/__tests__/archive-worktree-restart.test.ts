@@ -82,7 +82,8 @@ async function createFixture(managed: boolean | "claude" = false) {
       archiveCleanupCheckpointStore: checkpoint ? new ArchiveCleanupCheckpointStore(db.raw, { processAlive: () => false }) : null,
       claudeBackendOptions: { store: claudeStore },
       acpAgentStore, acpSessionStore, createAcpTransport, discoverLocalAcpAgents: async () => [],
-      acpWorktreeRepositoryResolver: async (cwd) => cwd === worktree ? directory : undefined });
+      acpWorktreeRepositoryResolver: async (cwd) => cwd === worktree ? directory : undefined,
+      managedWorktreeRoots: async () => [path.join(root, ".pwragent", "worktrees")] });
     registries.push(registry);
     return { db, store, client, registry, acpAgentStore, acpSessionStore };
   };
@@ -404,6 +405,36 @@ describe("ACP snapshot archive and restoration", () => {
       note: "Restore two ACP owners through protocol session/load, recreating a shared checkout once and preserving later edits; boundary writes only.", writes });
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("shared dirty edit\n");
     expect(await readFile(path.join(fixture.worktree, "later.txt"), "utf8")).toBe("later shared edit");
+  });
+});
+
+describe("checkouts no thread refers to", () => {
+  it("lists only the PwrAgent worktree no thread uses, then snapshots and removes it", async () => {
+    const fixture = await createFixture("claude");
+    const spare = path.join(fixture.root, ".pwragent", "worktrees", "spare", "repo");
+    await fixture.git(fixture.repo, ["worktree", "add", "-b", "spare", spare]);
+    await writeFile(path.join(spare, "notes.txt"), "left behind\n");
+    // A Claude thread still works in the first checkout.
+    await fixture.claudeStore.save({ cwd: fixture.worktree, thread: {
+      id: "11111111-1111-4111-8111-111111111111", source: "claude", title: "Uses the checkout", titleSource: "explicit",
+      linkedDirectories: [fixture.directory],
+    } });
+    const { registry } = fixture.reopen();
+    const { writes } = await measureSqliteWrites(async () => {
+      expect((await registry.auditArchivedCheckouts()).unreferenced).toEqual([spare]);
+      expect(await registry.removeUnreferencedCheckouts([fixture.worktree, spare])).toEqual({
+        removed: [{ worktreePath: spare }],
+        kept: [{ worktreePath: fixture.worktree, reason: "A thread uses it now" }],
+        failed: [],
+      });
+    });
+    // Reading every thread and removing through Git persists nothing.
+    expect(writes.commits).toBe(0);
+    await expect(stat(spare)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(fixture.worktree)).resolves.toBeDefined();
+    const refs = (await fixture.git(fixture.repo, ["for-each-ref", "--format=%(refname)", "refs/pwragent/snapshots/"])).trim().split("\n");
+    expect(refs).toHaveLength(1);
+    expect(await fixture.git(fixture.repo, ["show", `${refs[0]}:notes.txt`])).toBe("left behind\n");
   });
 });
 

@@ -23,8 +23,11 @@ type WorktreeInfo = {
   locked?: boolean;
 };
 
+/** "pwragent" snapshots a checkout no thread owns, from Thread maintenance. */
+type SnapshotOwner = AppServerBackendKind | "pwragent";
+
 type ArchiveWorktreeParams = {
-  backend: AppServerBackendKind;
+  backend: SnapshotOwner;
   threadId: string;
   worktreePath: string;
   repositoryPath?: string;
@@ -132,7 +135,7 @@ function snapshotIdForPath(worktreePath: string): string {
 }
 
 function snapshotRefForBackend(
-  backend: AppServerBackendKind,
+  backend: SnapshotOwner,
   worktreePath: string,
 ): string {
   const namespace = backend === "codex" ? "codex" : "pwragent";
@@ -272,7 +275,20 @@ export class WorktreeArchiveService {
     this.maxSnapshotBytes = options.maxSnapshotBytes ?? MAX_WORKTREE_SNAPSHOT_BYTES;
   }
 
-  async archive(params: ArchiveWorktreeParams): Promise<WorktreeSnapshotSummary> {
+  async archive(params: ArchiveWorktreeParams & { backend: AppServerBackendKind }): Promise<WorktreeSnapshotSummary> {
+    return { ...await this.snapshotAndRemove(params), backend: params.backend };
+  }
+
+  /** Snapshot and remove a checkout no thread owns. The snapshot goes under
+   * refs/pwragent/snapshots/, like every non-Codex archive. */
+  async archiveUnreferenced(params: { worktreePath: string }): Promise<{ snapshotRef: string; repositoryPath: string }> {
+    const { snapshotRef, repositoryPath } = await this.snapshotAndRemove({
+      backend: "pwragent", threadId: "unreferenced", worktreePath: params.worktreePath,
+    });
+    return { snapshotRef, repositoryPath };
+  }
+
+  private async snapshotAndRemove(params: ArchiveWorktreeParams): Promise<Omit<WorktreeSnapshotSummary, "backend">> {
     let worktreePath: string;
     try {
       worktreePath = await realpath(path.resolve(params.worktreePath));
@@ -356,7 +372,6 @@ export class WorktreeArchiveService {
     const archivedAt = params.now ?? Date.now();
     return {
       id: snapshotIdForPath(worktreePath),
-      backend: params.backend,
       threadId: params.threadId,
       worktreePath,
       repositoryPath,
@@ -586,7 +601,7 @@ export class WorktreeArchiveService {
 
   private async createSnapshotCommit(params: {
     maxSnapshotBytes?: number;
-    backend: AppServerBackendKind;
+    backend: SnapshotOwner;
     threadId: string;
     worktree: WorktreeInfo;
     worktreePath: string;

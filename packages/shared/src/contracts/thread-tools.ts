@@ -250,6 +250,8 @@ export type ThreadMaintenanceScanToolResult = {
   checkouts: {
     removable: Array<{ backend: string; threadId: ThreadIdentifier; worktreePath: string; workspace?: string }>;
     repositoryGone: Array<{ worktreePath: string; missingRepositoryPath?: string }>;
+    /** PwrAgent checkouts no thread refers to. Review them in the dialog. */
+    unreferenced: Array<{ worktreePath: string; workspace: string }>;
     kept: Record<string, number>;
     emptyFolders: number;
     skipped?: string;

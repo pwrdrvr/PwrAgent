@@ -14,6 +14,9 @@ import {
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import {
   ThreadMaintenanceService,
+  UNREFERENCED_KEEP_PREFIX,
+  unreferencedKeepReason,
+  type ArchivedCheckoutAudit,
   type ArchivedCheckoutRemoval,
   type ThreadMaintenanceDeps,
 } from "../app-server/thread-maintenance-service";
@@ -229,6 +232,80 @@ describe("sub-thread parents", () => {
     expect(run.problems).toEqual([]);
     expect(vi.mocked(deps.archiveFamily).mock.calls.map(([family]) => family[0]!.thread.id))
       .toEqual(["x", "y", "z", "mid", "top"]);
+  });
+});
+
+describe("checkouts no thread refers to", () => {
+  const unreferencedAudit = (paths: string[], extra: Partial<ArchivedCheckoutAudit> = {}) =>
+    vi.fn(async (): Promise<ArchivedCheckoutAudit> => ({ candidates: [], kept: {}, emptyFolders: 0, unreferenced: paths, ...extra }));
+
+  it("lists a clean or snapshot-sized one, and keeps every other with a No thread reason", async () => {
+    const { service, workspaces } = harness([], {
+      auditArchivedCheckouts: unreferencedAudit(["/u/clean", "/u/edits", "/u/commits", "/u/big", "/u/main", "/u/scratch"]),
+    });
+    workspaces.set("/u/edits", { kind: "changes", files: 2, bytes: 40 });
+    workspaces.set("/u/commits", { keep: "Commits on no branch" });
+    workspaces.set("/u/big", { kind: "overLimit", files: 1, bytes: 900, limitBytes: 100, largest: [] });
+    workspaces.set("/u/main", { kind: "inPlace" });
+    workspaces.set("/u/scratch", { kind: "notGit" });
+    const scan = await service.scan();
+    expect(scan.checkouts.items).toEqual([
+      { kind: "unreferenced", worktreePath: "/u/clean", workspace: { kind: "clean" } },
+      { kind: "unreferenced", worktreePath: "/u/edits", workspace: { kind: "changes", files: 2, bytes: 40 } },
+    ]);
+    expect(scan.checkouts.kept).toEqual({
+      [`${UNREFERENCED_KEEP_PREFIX}Commits on no branch`]: 1,
+      [`${UNREFERENCED_KEEP_PREFIX}Changes over the snapshot limit`]: 1,
+      [`${UNREFERENCED_KEEP_PREFIX}Main checkout`]: 1,
+      [`${UNREFERENCED_KEEP_PREFIX}Not a Git checkout`]: 1,
+    });
+  });
+
+  it("says so when they could not be checked", async () => {
+    const { service } = harness([], {
+      auditArchivedCheckouts: unreferencedAudit([], { unreferencedUnavailable: "A thread's folder could not be resolved" }),
+    });
+    const scan = await service.scan();
+    expect(scan.checkouts.kept).toEqual({ [`${UNREFERENCED_KEEP_PREFIX}not checked: A thread's folder could not be resolved`]: 1 });
+  });
+
+  it("removes only selected ones that are still safe, and reports what the registry kept", async () => {
+    const removeUnreferencedCheckouts = vi.fn(async (paths: string[]) => ({
+      removed: paths.filter((value) => value === "/u/clean").map((worktreePath) => ({ worktreePath })),
+      kept: paths.filter((value) => value === "/u/claimed").map((worktreePath) => ({ worktreePath, reason: "A thread uses it now" })),
+      failed: [],
+    }));
+    const { service, workspaces } = harness([], {
+      auditArchivedCheckouts: unreferencedAudit(["/u/clean", "/u/claimed", "/u/later", "/u/unselected"]),
+      removeUnreferencedCheckouts,
+    });
+    const scan = await service.scan();
+    // A commit lands in one checkout between review and removal.
+    workspaces.set("/u/later", { keep: "Commits on no branch" });
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeUnreferenced: ["/u/clean", "/u/claimed", "/u/later", "/u/not-scanned"].map((worktreePath) => ({ worktreePath })),
+      removeEmptyFolders: false });
+    expect(removeUnreferencedCheckouts).toHaveBeenCalledWith(["/u/clean", "/u/claimed"]);
+    expect(run.steps[1]).toEqual({ step: "checkouts", ran: true, done: 1, kept: 2, failed: 1 });
+    expect(run.problems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ object: "/u/later", kind: "kept", reason: "Changed since the scan", detail: "Commits on no branch" }),
+      expect.objectContaining({ object: "/u/claimed", kind: "kept", reason: "A thread uses it now" }),
+      expect.objectContaining({ object: "/u/not-scanned", kind: "failed", reason: "Not in this scan" }),
+    ]));
+    expect(run.problems.some((problem) => problem.object === "/u/unselected")).toBe(false);
+  });
+
+  it("is removable only for a clean or snapshot-sized checkout", () => {
+    const workspaces: ThreadMaintenanceWorkspace[] = [
+      { kind: "clean" }, { kind: "changes", files: 1, bytes: 1 },
+      { kind: "overLimit", files: 1, bytes: 2, limitBytes: 1, largest: [] },
+      { kind: "notGit" }, { kind: "inPlace" }, { kind: "missing" },
+    ];
+    for (const workspace of workspaces) {
+      const removable = typeof unreferencedKeepReason({ workspace }) !== "string";
+      expect(removable).toBe(workspace.kind === "clean" || workspace.kind === "changes");
+    }
+    expect(unreferencedKeepReason({ keep: "Other ignored files" })).toBe("Other ignored files");
   });
 });
 
