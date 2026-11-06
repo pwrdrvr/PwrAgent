@@ -26947,6 +26947,18 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /** A Claude thread whose session Claude Code deleted continues in a new
+   * one, primed with the thread's own record of the conversation. */
+  async continueClaudeThreadInNewSession(request: { threadId: string }): Promise<{ threadId: string }> {
+    await this.assertThreadNotLocked("claude", request.threadId);
+    try {
+      return await this.claudeBackend.continueInNewSession(request.threadId);
+    } finally {
+      // A message queued behind the failed turn can go now.
+      this.threadTurnQueue.scheduleThreadDrain({ backend: "claude", threadId: request.threadId });
+    }
+  }
+
   /**
    * Puts back what a rewind removed. Only Claude keeps the removed turns, and
    * only until the thread's next turn starts.

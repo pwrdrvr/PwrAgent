@@ -2136,6 +2136,12 @@ export type AppServerNotification =
           durationMs?: number | null;
           error: {
             message: string;
+            /**
+             * A way forward the client can offer. `claudeSessionGone`:
+             * Claude Code deleted the session the thread resumes, and the
+             * thread can continue in a new one.
+             */
+            recovery?: "claudeSessionGone";
           };
         };
       };

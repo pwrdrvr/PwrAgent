@@ -1242,6 +1242,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   undoThreadRewind?: (
     request: UndoThreadRewindRequest,
   ) => Promise<UndoThreadRewindResponse>;
+  /** A Claude thread whose session Claude Code deleted continues in a new one. */
+  continueClaudeThreadInNewSession?: (
+    request: { threadId: string },
+  ) => Promise<{ threadId: string }>;
   configureGrokWorkflowBudget?: (
     request: ConfigureGrokWorkflowBudgetRequest,
   ) => Promise<ConfigureGrokWorkflowBudgetResponse>;

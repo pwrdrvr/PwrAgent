@@ -21,6 +21,7 @@ import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
+import { buildClaudeSessionPrimer } from "./claude-session-primer";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
@@ -141,11 +142,16 @@ function claudeResultFailure(message: SDKResultMessage): string | undefined {
 const CLAUDE_SESSION_CLEANUP_NOTE = "Claude Code deletes sessions that have been idle longer than its "
   + "cleanupPeriodDays setting (30 days by default). This thread's transcript is still here.";
 
+const CLAUDE_CONTINUE_NOTE = "Choose Continue in a new session in the PwrAgent desktop app to carry on "
+  + "with this thread's own record of the conversation.";
+
 export const CLAUDE_SESSION_GONE_MESSAGE = "Claude no longer has this conversation, so it cannot continue it. "
-  + `${CLAUDE_SESSION_CLEANUP_NOTE} Start a new thread to keep working.`;
+  + `${CLAUDE_SESSION_CLEANUP_NOTE} ${CLAUDE_CONTINUE_NOTE}`;
 
 export const CLAUDE_FORK_SOURCE_GONE_MESSAGE = "Claude no longer has the conversation this thread was forked from, "
-  + `so it cannot continue it. ${CLAUDE_SESSION_CLEANUP_NOTE} Start a new thread to keep working.`;
+  + `so it cannot continue it. ${CLAUDE_SESSION_CLEANUP_NOTE} ${CLAUDE_CONTINUE_NOTE}`;
+
+export const CLAUDE_SESSION_STILL_PRESENT_MESSAGE = "Claude still has this conversation. Send your message again to continue it.";
 
 export const CLAUDE_SESSION_GONE_REWIND_MESSAGE = "Claude no longer has this conversation, so it cannot rewind it. "
   + CLAUDE_SESSION_CLEANUP_NOTE;
@@ -980,7 +986,14 @@ export class ClaudeBackend {
       const executable = await this.requireInstallation();
       const session = await this.store.read(threadId);
       if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
-      const content = await claudeInput(params.input);
+      const prompted = await claudeInput(params.input);
+      // After a deleted session, the new one opens with the thread's own
+      // record of the conversation. Read before this turn's message joins it.
+      const primer = session.primerPending && !session.ephemeral && !session.sdkSessionId && !session.forkFromSdkSessionId
+        ? buildClaudeSessionPrimer(await this.store.entries(threadId))
+        : undefined;
+      const content: SDKUserMessage["message"]["content"] = !primer ? prompted
+        : [{ type: "text", text: primer }, ...typeof prompted === "string" ? [{ type: "text" as const, text: prompted }] : prompted];
       controller.signal.throwIfAborted();
       const current: LiveSession = live = {
         session, controller, input: new ClaudeInputStream(), inputWrites: Promise.resolve(),
@@ -1007,7 +1020,9 @@ export class ClaudeBackend {
       // prompt leaves the thread with no session to resume, and that id is
       // taken, so the next session gets its own.
       // An ephemeral session has no file to resume, so each launch starts fresh.
-      const freshSdkSessionId = session.rewinds?.length || session.ephemeral ? randomUUID() : threadId;
+      // A deleted session's id may still be Claude's: never reuse it.
+      const freshSdkSessionId = session.rewinds?.length || session.sessionRestarts?.length || session.ephemeral
+        ? randomUUID() : threadId;
       const resumedSdkSessionId = session.ephemeral ? undefined : session.sdkSessionId ?? session.forkFromSdkSessionId;
       if (resumedSdkSessionId) current.resumed = { sdkSessionId: resumedSdkSessionId, fork: !session.sdkSessionId };
       const sdkOptions: Options = {
@@ -1425,6 +1440,9 @@ export class ClaudeBackend {
             current.sdkSessionId = message.session_id;
             delete current.resumeSessionAt;
             delete current.forkFromSdkSessionId;
+            // The new session now holds the primer; later turns resume it.
+            delete current.primerPending;
+            session.primerPending = undefined;
             if (newSession) delete current.sdkSessionDir;
             await this.store.save(current);
             // A new turn ends every rewind's undo; drop the files kept for one.
@@ -1793,8 +1811,10 @@ export class ClaudeBackend {
           id: turnId, status: "cancelled", startedAt: turn.startedAt,
         } } });
       } else if (failure) {
+        const recovery = failure === CLAUDE_SESSION_GONE_MESSAGE || failure === CLAUDE_FORK_SOURCE_GONE_MESSAGE
+          ? { recovery: "claudeSessionGone" as const } : {};
         await this.emit({ method: "turn/failed", params: { threadId, turnId, turn: {
-          id: turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure },
+          id: turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure, ...recovery },
         } } });
       } else {
         await this.emit({ method: "turn/completed", params: { threadId, turnId, turn: {
@@ -2974,9 +2994,16 @@ export class ClaudeBackend {
    */
   private async rewindPoint(session: ClaudeSession, target: ThreadRewindTarget): Promise<ClaudeRewindPoint> {
     if (!session.sdkSessionId) throw new Error("Claude has no conversation to rewind yet.");
-    // The SDK's session reads see this process's account, not the one turns
-    // launch with. Another account's store would read as a missing prompt
-    // or a deleted session, so read it where Claude's environment applies.
+    const sdkSessionId = session.sdkSessionId;
+    return await this.withSessionReader(async (reader) => await this.findRewindPoint(session, sdkSessionId, target, reader));
+  }
+
+  /**
+   * Run SDK session reads where Claude's environment applies. The SDK's reads
+   * see this process's account, not the one turns launch with, and another
+   * account's store would read as a missing prompt or a deleted session.
+   */
+  private async withSessionReader<T>(work: (reader: ClaudeSessionReads) => Promise<T>): Promise<T> {
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
     const reader: ClaudeSessionReader = claudeSessionReadsSee(env)
       ? {
@@ -2986,10 +3013,43 @@ export class ClaudeBackend {
       }
       : this.openSessionReader(env);
     try {
-      return await this.findRewindPoint(session, session.sdkSessionId, target, reader);
+      return await work(reader);
     } finally {
       reader.close();
     }
+  }
+
+  /**
+   * Continue a thread whose Claude session Claude Code deleted. The gone
+   * session is forgotten and the next one opens with the thread's own record
+   * of the conversation. Refused while Claude still has the session, so a
+   * live conversation is never dropped.
+   */
+  async continueInNewSession(threadId: string): Promise<{ threadId: string }> {
+    const busy = () => this.sessions.has(threadId) || this.starting.has(threadId)
+      || this.rewinding.has(threadId) || this.rewindQueries.has(threadId);
+    if (busy()) throw new ClaudeTurnActiveError("Wait for Claude to finish with this thread first.");
+    const session = await this.store.read(threadId);
+    if (session.ephemeral) throw new Error("This thread has no Claude session to replace.");
+    const previous = session.sdkSessionId ?? session.forkFromSdkSessionId;
+    if (!previous) throw new Error("This thread has no Claude session to replace.");
+    if (!await this.withSessionReader(async (reader) => await claudeSessionGone(previous, reader))) {
+      throw new Error(CLAUDE_SESSION_STILL_PRESENT_MESSAGE);
+    }
+    if (busy()) throw new ClaudeTurnActiveError("Wait for Claude to finish with this thread first.");
+    const current = await this.store.read(threadId);
+    if ((current.sdkSessionId ?? current.forkFromSdkSessionId) !== previous) {
+      throw new Error("This thread's Claude session changed. Send your message again.");
+    }
+    current.sessionRestarts = [...current.sessionRestarts ?? [], { at: Date.now(), previousSdkSessionId: previous }];
+    current.primerPending = true;
+    delete current.sdkSessionId;
+    delete current.forkFromSdkSessionId;
+    delete current.resumeSessionAt;
+    delete current.sdkSessionDir;
+    await this.store.save(current);
+    claudeBackendLog.info("Claude thread continues in a new session", { threadId, previousSdkSessionId: previous });
+    return { threadId };
   }
 
   private openSessionReader(env: NodeJS.ProcessEnv): ClaudeSessionReader {
@@ -3020,7 +3080,8 @@ export class ClaudeBackend {
         throw new Error(CLAUDE_SESSION_GONE_REWIND_MESSAGE);
       }
       throw new Error("Claude's conversation does not have this prompt, so it cannot rewind to before it. "
-        + "Prompts sent before rewind support, or before Claude compacted the conversation, cannot be rewound.");
+        + "Prompts sent before rewind support, or before Claude compacted the conversation, cannot be rewound."
+        + (session.sessionRestarts?.length ? " Neither can prompts from before the thread continued in a new Claude session." : ""));
     }
     return {
       promptUuid,

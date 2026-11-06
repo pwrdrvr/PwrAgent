@@ -43,6 +43,16 @@ export type ClaudeSession = {
   resumeSessionAt?: string;
   /** Each rewind, oldest first. */
   rewinds?: ClaudeRewindRecord[];
+  /**
+   * Each time the thread continued in a new Claude session because Claude
+   * Code had deleted the one it resumed, oldest first.
+   */
+  sessionRestarts?: { at: number; previousSdkSessionId: string }[];
+  /**
+   * The next query opens with PwrAgent's record of the earlier conversation.
+   * Cleared once Claude confirms the new session.
+   */
+  primerPending?: boolean;
 };
 
 export type ClaudeRewindRecord = {

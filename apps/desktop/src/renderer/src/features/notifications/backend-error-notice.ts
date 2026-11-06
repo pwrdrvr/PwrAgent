@@ -34,6 +34,9 @@ export type BackendErrorSignal = (
       onDismiss?: () => void;
       onCodexLogin?: () => void;
       onOpenCodexSettings?: () => void;
+      /** Offered when the turn's error says Claude deleted the thread's session. */
+      onContinueClaudeSession?: () => void;
+      recovery?: "claudeSessionGone";
       backend: AppServerBackendKind;
       threadId: string;
       turnId: string;
@@ -164,6 +167,11 @@ export function resolveBackendErrorNotice(
             actions: [{ label: "Open Codex settings", onClick: signal.onOpenCodexSettings }],
             body: createElement(CodexInstallGuideLink, { showRefreshHint: true }),
           }
+        : {}),
+      // A Claude thread runs on its own machine, so a peer's window cannot.
+      ...(signal.backend === "claude" && !signal.instanceId
+        && signal.recovery === "claudeSessionGone" && signal.onContinueClaudeSession
+        ? { actions: [{ label: "Continue in a new session", onClick: signal.onContinueClaudeSession }] }
         : {}),
       message: signal.errorMessage,
       detail: signal.threadLabel,

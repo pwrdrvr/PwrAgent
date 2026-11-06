@@ -150,6 +150,7 @@ import {
   AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
   AGENT_REWIND_THREAD_CHANNEL,
   AGENT_UNDO_THREAD_REWIND_CHANNEL,
+  AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -1165,6 +1166,15 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL);
+  ipcMain.handle(
+    AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL,
+    async (_event, request: { threadId: string }): Promise<{ threadId: string }> => {
+      // Claude threads run on this machine only; a peer's window offers no action.
+      return await registry.continueClaudeThreadInNewSession({ threadId: String(request?.threadId ?? "") });
+    },
+  );
+
   ipcMain.removeHandler(AGENT_UNDO_THREAD_REWIND_CHANNEL);
   ipcMain.handle(
     AGENT_UNDO_THREAD_REWIND_CHANNEL,
@@ -1605,6 +1615,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_PREVIEW_THREAD_REWIND_CHANNEL);
   ipcMain.removeHandler(AGENT_REWIND_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_UNDO_THREAD_REWIND_CHANNEL);
+  ipcMain.removeHandler(AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL);
   ipcMain.removeHandler(AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL);

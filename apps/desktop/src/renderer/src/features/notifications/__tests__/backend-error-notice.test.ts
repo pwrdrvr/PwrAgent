@@ -88,6 +88,27 @@ describe("resolveBackendErrorNotice", () => {
     expect(resolveBackendErrorNotice({ ...signal, errorMessage: "Connection timed out" }, undefined)?.actions).toBeUndefined();
   });
 
+  it("offers to continue a Claude thread in a new session only when its session is gone, and only locally", () => {
+    const onContinueClaudeSession = vi.fn();
+    const signal = {
+      kind: "turn-failed" as const,
+      backend: "claude" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      threadLabel: "Fixture thread",
+      errorMessage: "Claude no longer has this conversation, so it cannot continue it.",
+      recovery: "claudeSessionGone" as const,
+      onContinueClaudeSession,
+    };
+    const notice = resolveBackendErrorNotice(signal, undefined);
+    expect(notice?.actions?.map((action) => action.label)).toEqual(["Continue in a new session"]);
+    notice?.actions?.[0]?.onClick();
+    expect(onContinueClaudeSession).toHaveBeenCalledOnce();
+    expect(resolveBackendErrorNotice({ ...signal, instanceId: "peer-1" }, undefined)?.actions).toBeUndefined();
+    expect(resolveBackendErrorNotice({ ...signal, recovery: undefined }, undefined)?.actions).toBeUndefined();
+    expect(resolveBackendErrorNotice({ ...signal, backend: "codex" as const }, undefined)?.actions).toBeUndefined();
+  });
+
   const invalidIdFailure =
     "[ApiIdParam] [input[169].id] [invalid_id_prefix] "
     + "Invalid 'input[169].id': 'review_rollout_user'. "

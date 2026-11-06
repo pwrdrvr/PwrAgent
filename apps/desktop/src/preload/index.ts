@@ -753,6 +753,7 @@ import {
   AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
   AGENT_REWIND_THREAD_CHANNEL,
   AGENT_UNDO_THREAD_REWIND_CHANNEL,
+  AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -2596,6 +2597,10 @@ const desktopApi = Object.freeze({
     request: UndoThreadRewindRequest,
   ): Promise<UndoThreadRewindResponse> =>
     await ipcRenderer.invoke(AGENT_UNDO_THREAD_REWIND_CHANNEL, request),
+  continueClaudeThreadInNewSession: async (
+    request: { threadId: string },
+  ): Promise<{ threadId: string }> =>
+    await ipcRenderer.invoke(AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL, request),
   configureGrokWorkflowBudget: async (
     request: ConfigureGrokWorkflowBudgetRequest,
   ): Promise<ConfigureGrokWorkflowBudgetResponse> =>
