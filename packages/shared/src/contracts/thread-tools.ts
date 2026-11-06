@@ -654,6 +654,8 @@ export type ThreadInspectionSummary = {
   projectKey?: string;
   createdAt?: number;
   updatedAt?: number;
+  /** Provider archive membership, including when no archive timestamp exists. */
+  archived?: boolean;
   archivedAt?: number;
   agent?: ThreadAgentMetadata;
   handoffOrigin?: ThreadHandoffOrigin;

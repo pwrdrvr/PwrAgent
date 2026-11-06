@@ -610,7 +610,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use start_review when the work is ready for review.",
         "Use merge_pull_request when the PR is green and ready to land.",
         "Use start_thread to propose a follow-up thread with its full prompt.",
-        "Use send_message to preview a request for an existing thread. Name its target and prompt. The operator sends it.",
+        "Use send_message to preview a request for an active thread. Archived targets are refused. Name its target and prompt. The operator sends it.",
         "Prefer this over start_thread when an existing thread owns the work.",
         TODO_WRITING_GUIDANCE,
         "Omit the action for a reminder that must not be lost.",

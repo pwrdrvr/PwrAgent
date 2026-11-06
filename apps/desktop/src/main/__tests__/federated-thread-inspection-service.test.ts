@@ -248,12 +248,12 @@ describe("federated thread inspection service", () => {
     expect(runtime.remoteThreadSummaries).not.toHaveBeenCalled();
   });
 
-  it("resolves an archived thread on its explicit remote owner", async () => {
+  it.each([undefined, 3_000])("resolves an archived thread on its explicit remote owner (archive timestamp: %s)", async (archivedAt) => {
     const archivedThread = {
       source: "codex" as const,
       id: threadId,
       title: "Archived collector result",
-      archivedAt: 3_000,
+      ...(archivedAt !== undefined ? { archivedAt } : {}),
       linkedDirectories: [],
     };
     const listThreads = vi.fn();
@@ -301,7 +301,8 @@ describe("federated thread inspection service", () => {
       includeTurns: true,
     })).resolves.toMatchObject({
       instanceId: "pwr_owner",
-      thread: { id: threadId, archivedAt: 3_000 },
+      archived: true,
+      thread: { id: threadId },
     });
     expect(listThreads).not.toHaveBeenCalled();
     expect(lookupArchivedThreads).toHaveBeenCalledWith({

@@ -46,6 +46,8 @@ export type PwrAgentFederatedThreadInspectionResult = {
   instanceId: FederationInstanceId;
   instanceLabel: string;
   thread: AppServerThreadSummary;
+  /** Owner archive membership, independent of an optional archive timestamp. */
+  archived?: boolean;
   /** Enriched owner navigation row when the thread is active and available. */
   summary?: NavigationThreadSummary;
   read: AppServerReadThreadResponse;
