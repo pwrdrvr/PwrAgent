@@ -596,7 +596,9 @@ function CheckoutsReview(props: {
       <div className="thread-maintenance__summary">
         <div>
           <p className="thread-maintenance__summary-title">
-            {removable.length ? `${removable.length} archived ${removable.length === 1 ? "checkout is" : "checkouts are"} still on disk` : "No archived checkouts to remove"}
+            {removable.length ? `${removable.length} archived ${removable.length === 1 ? "checkout is" : "checkouts are"} still on disk`
+              : unreferenced.length ? `${unreferenced.length} ${unreferenced.length === 1 ? "checkout has" : "checkouts have"} no thread`
+                : "No archived checkouts to remove"}
           </p>
           <p className="thread-maintenance__summary-sub">
             {`${keptTotal(scan.checkouts.kept)} kept · ${scan.checkouts.emptyFolders} empty ${scan.checkouts.emptyFolders === 1 ? "folder" : "folders"}`}

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -414,6 +414,11 @@ describe("checkouts no thread refers to", () => {
     const spare = path.join(fixture.root, ".pwragent", "worktrees", "spare", "repo");
     await fixture.git(fixture.repo, ["worktree", "add", "-b", "spare", spare]);
     await writeFile(path.join(spare, "notes.txt"), "left behind\n");
+    // Settled: created two hours ago. A just-made one may be a thread still starting.
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(path.join(spare, ".git"), twoHoursAgo, twoHoursAgo);
+    const starting = path.join(fixture.root, ".pwragent", "worktrees", "starting", "repo");
+    await fixture.git(fixture.repo, ["worktree", "add", "-b", "starting", starting]);
     // A Claude thread still works in the first checkout.
     await fixture.claudeStore.save({ cwd: fixture.worktree, thread: {
       id: "11111111-1111-4111-8111-111111111111", source: "claude", title: "Uses the checkout", titleSource: "explicit",
@@ -422,9 +427,10 @@ describe("checkouts no thread refers to", () => {
     const { registry } = fixture.reopen();
     const { writes } = await measureSqliteWrites(async () => {
       expect((await registry.auditArchivedCheckouts()).unreferenced).toEqual([spare]);
-      expect(await registry.removeUnreferencedCheckouts([fixture.worktree, spare])).toEqual({
+      expect(await registry.removeUnreferencedCheckouts([fixture.worktree, starting, spare])).toEqual({
         removed: [{ worktreePath: spare }],
-        kept: [{ worktreePath: fixture.worktree, reason: "A thread uses it now" }],
+        kept: [{ worktreePath: fixture.worktree, reason: "A thread uses it now" },
+          { worktreePath: starting, reason: "Created recently" }],
         failed: [],
       });
     });
@@ -432,6 +438,7 @@ describe("checkouts no thread refers to", () => {
     expect(writes.commits).toBe(0);
     await expect(stat(spare)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(stat(fixture.worktree)).resolves.toBeDefined();
+    await expect(stat(starting)).resolves.toBeDefined();
     const refs = (await fixture.git(fixture.repo, ["for-each-ref", "--format=%(refname)", "refs/pwragent/snapshots/"])).trim().split("\n");
     expect(refs).toHaveLength(1);
     expect(await fixture.git(fixture.repo, ["show", `${refs[0]}:notes.txt`])).toBe("left behind\n");

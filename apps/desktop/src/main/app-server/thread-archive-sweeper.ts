@@ -8,7 +8,7 @@ import {
   type DesktopThreadArchiveSweepStatus,
   buildThreadIdentityKey,
   isCodexChatsDirectory,
-  isToolManagedWorktreePath,
+  toolWorktreeRootOwner,
 } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
@@ -128,14 +128,9 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
 
 export const CLAUDE_CHECKOUT_KEEP_REASON = "Checkout not created by PwrAgent";
 
-const TOOL_WORKTREE_ROOT = /[\\/]\.(codex|pwrag(?:ent|nt))(?:[\\/]profiles[\\/][^\\/]+)?[\\/]worktrees[\\/][^\\/]+[\\/][^\\/]+/;
-
-/** A worktree under PwrAgent's own root (`~/.pwragent/…/worktrees/<id>/<name>`).
- * The first tool root in the path decides, so a Codex worktree with a folder
- * named `.pwragent` inside it is still Codex's. */
+/** A worktree under PwrAgent's own root (`~/.pwragent/…/worktrees/<id>/<name>`). */
 export function isPwrAgentWorktreePath(value: string | undefined): boolean {
-  if (!value || !isToolManagedWorktreePath(value)) return false;
-  return TOOL_WORKTREE_ROOT.exec(value)?.[1]?.startsWith("pwrag") === true;
+  return toolWorktreeRootOwner(value) === "pwragent";
 }
 
 /** The Claude thread works in a PwrAgent worktree, and no directory it uses

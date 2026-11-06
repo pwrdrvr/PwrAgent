@@ -18,7 +18,7 @@ import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
-import { listManagedWorktrees, nodeWorktreeRootReader, unreferencedWorktrees } from "./unreferenced-worktrees";
+import { isSettledWorktree, listManagedWorktrees, nodeWorktreeRootReader, unreferencedWorktrees } from "./unreferenced-worktrees";
 import { ArchiveFleetIndex, type FleetChange, type FleetRow } from "./archive-cleanup-fleet-index";
 import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
@@ -39595,7 +39595,11 @@ export class DesktopBackendRegistry {
       // A checkout removed since the listing is simply not reported.
       try { byKey.set(await canonical(value), value); } catch { /* gone */ }
     }
-    report.unreferencedWorktrees = unreferencedWorktrees([...byKey.keys()], references).map((key) => byKey.get(key)!);
+    const settled: string[] = [];
+    for (const key of unreferencedWorktrees([...byKey.keys()], references)) {
+      if (await isSettledWorktree(byKey.get(key)!)) settled.push(byKey.get(key)!);
+    }
+    report.unreferencedWorktrees = settled;
     if (found.truncated) report.unreferencedTruncated = true;
   }
 
@@ -39628,7 +39632,8 @@ export class DesktopBackendRegistry {
           const reason = !references ? "Thread folders could not be checked"
             : !managed.has(key) ? "Not a PwrAgent checkout"
               : unreferencedWorktrees([key], references).length === 0 ? "A thread uses it now"
-                : undefined;
+                : !await isSettledWorktree(worktreePath) ? "Created recently"
+                  : undefined;
           if (reason) {
             result.kept.push({ worktreePath, reason });
             continue;

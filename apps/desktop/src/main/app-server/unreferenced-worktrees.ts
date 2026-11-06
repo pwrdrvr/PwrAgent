@@ -4,6 +4,21 @@ import path from "node:path";
 /** Discovery reads at most this many checkouts, so a huge root cannot stall a scan. */
 export const MAX_DISCOVERED_WORKTREES = 1_000;
 
+/** A checkout created this recently may belong to a thread that is still
+ * starting: the worktree exists before the thread does while its project
+ * setup runs. */
+export const UNREFERENCED_MIN_AGE_MS = 60 * 60 * 1000;
+
+/** True once the worktree's `.git` link is older than the minimum age. An
+ * unreadable link counts as recent, so it is never offered. */
+export async function isSettledWorktree(worktreePath: string, now = Date.now()): Promise<boolean> {
+  try {
+    return now - (await lstat(path.join(worktreePath, ".git"))).mtimeMs >= UNREFERENCED_MIN_AGE_MS;
+  } catch {
+    return false;
+  }
+}
+
 export type WorktreeRootReader = {
   /** Directory names in a folder; empty when it does not exist. */
   listDirectories(folder: string): Promise<string[]>;

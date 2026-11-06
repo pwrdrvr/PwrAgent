@@ -76,7 +76,7 @@ export function summarizeThreadMaintenanceScan(
       kept: scan.checkouts.kept,
       emptyFolders: scan.checkouts.emptyFolders,
       ...(scan.checkouts.skipped ? { skipped: scan.checkouts.skipped } : {}),
-      truncated: removable.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT || gone.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT,
+      truncated: [removable, gone, unreferenced].some((items) => items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT),
     },
     expired: scan.expired,
     failureCount: scan.failures.length,
