@@ -14,6 +14,27 @@ the CLI owns sign-in, and opts in to CLI behavior that PwrAgent renders:
 | `CLAUDE_CODE_ARTIFACT=1` | Turns on artifacts (see below). |
 | `CLAUDE_CODE_ARTIFACT_AUTO_OPEN=0` | A publish does not open the browser. |
 
+## Session reads
+
+The Agent SDK's `getSessionMessages` and `getSessionInfo` read sessions under
+the calling process's `CLAUDE_CONFIG_DIR` (default `~/.claude`). They ignore
+the environment that turns launch Claude with, and the SDK has no option to
+change that. When the operator's shell selects another account and PwrAgent
+does not, the two directories differ.
+
+- Compare them with `claudeSessionReadsSee` before an SDK session read.
+- When they differ, read through `openClaudeSessionReader`
+  ([claude-session-reader.ts](claude-session-reader.ts)). It runs the reads
+  in a utility process started with Claude's launch environment. Close it
+  when done.
+- Never set `process.env.CLAUDE_CONFIG_DIR` in the main process, even
+  briefly: it races other SDK calls and every child inherits it.
+- Only the SDK reads Claude's session files. PwrAgent does not parse them.
+- The registry passes the worker's path in. A shared chunk's `__dirname` is
+  its own folder, not `out/main`.
+- After an Agent SDK or Electron upgrade, build, then run
+  `pnpm --filter @pwragent/desktop probe:claude-session-reader`.
+
 ## Artifacts
 
 Claude Code's `Artifact`, `ArtifactComments` and `ArtifactData` tools publish

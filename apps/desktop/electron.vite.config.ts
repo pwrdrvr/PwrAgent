@@ -170,6 +170,7 @@ export default defineConfig(({ command }) => {
           input: {
             index: resolve(__dirname, "src/main/index.ts"),
             "storage-maintenance-worker": resolve(__dirname, "src/main/state/storage-maintenance-worker.ts"),
+            "claude-session-reader-worker": resolve(__dirname, "src/main/claude/claude-session-reader-worker.ts"),
             "mcp-connection-bridge": resolve(
               __dirname,
               "src/main/mcp-connections/mcp-connection-bridge-entry.ts"

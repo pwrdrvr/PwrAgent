@@ -20,6 +20,7 @@ import type {
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+import type { ClaudeSessionReader, ClaudeSessionReads } from "./claude-session-reader";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
@@ -60,6 +61,8 @@ export type ClaudeBackendOptions = {
   query?: typeof query;
   getSessionInfo?: typeof getSessionInfo;
   getSessionMessages?: typeof getSessionMessages;
+  /** Session reads for a Claude launched under another CLAUDE_CONFIG_DIR. */
+  openSessionReader?: (env: NodeJS.ProcessEnv) => ClaudeSessionReader;
   inspectInstallation?: typeof inspectClaudeInstallation;
   discoverModels?: typeof discoverClaudeModels;
   readCommands?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<SlashCommand[]>;
@@ -140,10 +143,6 @@ export const CLAUDE_FORK_SOURCE_GONE_MESSAGE = "Claude no longer has the convers
 export const CLAUDE_SESSION_GONE_REWIND_MESSAGE = "Claude no longer has this conversation, so it cannot rewind it. "
   + CLAUDE_SESSION_CLEANUP_NOTE;
 
-export const CLAUDE_CONFIG_DIR_REWIND_MESSAGE = "Claude runs this thread with a different CLAUDE_CONFIG_DIR from "
-  + "PwrAgent's own, so PwrAgent cannot read the conversation to rewind it. "
-  + "Give PwrAgent the same CLAUDE_CONFIG_DIR to rewind Claude threads.";
-
 /**
  * Whether the SDK's session reads (`getSessionInfo`, `getSessionMessages`)
  * see the sessions of a Claude launched with `env`. They read this process's
@@ -153,6 +152,15 @@ export const CLAUDE_CONFIG_DIR_REWIND_MESSAGE = "Claude runs this thread with a 
 function claudeSessionReadsSee(env: NodeJS.ProcessEnv | undefined): boolean {
   const configDir = (value: string | undefined) => path.resolve(value ?? path.join(homedir(), ".claude"));
   return configDir(env?.CLAUDE_CONFIG_DIR) === configDir(process.env.CLAUDE_CONFIG_DIR);
+}
+
+/** True only when Claude has no file for the session in any project folder. */
+async function claudeSessionGone(sdkSessionId: string, reader: ClaudeSessionReads): Promise<boolean> {
+  try {
+    return await reader.getSessionInfo(sdkSessionId) === undefined;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1973,7 +1981,9 @@ export class ClaudeBackend {
     try {
       let current = await this.store.read(threadId);
       if (current.thread.titleSource === "explicit" || !session.sdkSessionId || live.controller.signal.aborted) return false;
-      // Do not inspect a different account's session store.
+      // Do not inspect a different account's session store. A session
+      // reader would start a process at every turn's end for a title the
+      // query's own title control also supplies.
       // The SDK may spawn Git in this workspace (with its own timeout).
       // Unlike query telemetry, this read cannot be cancelled by closing the
       // query. Keep it owned by the turn so shutdown cannot release the
@@ -2878,16 +2888,37 @@ export class ClaudeBackend {
     if (!session.sdkSessionId) throw new Error("Claude has no conversation to rewind yet.");
     // The SDK's session reads see this process's account, not the one turns
     // launch with. Another account's store would read as a missing prompt
-    // or a deleted session.
-    if (!claudeSessionReadsSee(claudeEnvironment(await this.options.resolveEnv?.() ?? process.env))) {
-      throw new Error(CLAUDE_CONFIG_DIR_REWIND_MESSAGE);
+    // or a deleted session, so read it where Claude's environment applies.
+    const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+    const reader: ClaudeSessionReader = claudeSessionReadsSee(env)
+      ? {
+        getSessionMessages: this.options.getSessionMessages ?? getSessionMessages,
+        getSessionInfo: this.options.getSessionInfo ?? getSessionInfo,
+        close: () => {},
+      }
+      : this.openSessionReader(env);
+    try {
+      return await this.findRewindPoint(session, session.sdkSessionId, target, reader);
+    } finally {
+      reader.close();
     }
+  }
+
+  private openSessionReader(env: NodeJS.ProcessEnv): ClaudeSessionReader {
+    if (!this.options.openSessionReader) {
+      throw new Error("Claude's conversation could not be read: it is under another CLAUDE_CONFIG_DIR.");
+    }
+    return this.options.openSessionReader(env);
+  }
+
+  private async findRewindPoint(
+    session: ClaudeSession, sdkSessionId: string, target: ThreadRewindTarget, reader: ClaudeSessionReads,
+  ): Promise<ClaudeRewindPoint> {
     const promptUuid = target.messageId.startsWith("user:") ? target.messageId.slice("user:".length) : undefined;
-    const read = this.options.getSessionMessages ?? getSessionMessages;
-    const local = await read(session.sdkSessionId, { dir: session.sdkSessionDir ?? session.cwd });
+    const local = await reader.getSessionMessages(sdkSessionId, { dir: session.sdkSessionDir ?? session.cwd });
     // An undone rewind can return to a session written before an earlier
     // move, so search every project folder when the expected one lacks it.
-    const messages = (local.length > 0 ? local : await read(session.sdkSessionId))
+    const messages = (local.length > 0 ? local : await reader.getSessionMessages(sdkSessionId))
       .filter((message) => message.parent_tool_use_id === null);
     const index = promptUuid ? messages.findIndex((message) => message.uuid === promptUuid && message.type === "user") : -1;
     // A pending rewind already dropped the entries after its point.
@@ -2897,7 +2928,7 @@ export class ClaudeBackend {
     if (!promptUuid || index < 0 || (resumeIndex >= 0 && index > resumeIndex)) {
       // A deleted session reads as empty. Search every project folder before
       // saying so, since an empty read alone also fits an unreadable file.
-      if (messages.length === 0 && await this.claudeSessionGone(session.sdkSessionId)) {
+      if (messages.length === 0 && await claudeSessionGone(sdkSessionId, reader)) {
         throw new Error(CLAUDE_SESSION_GONE_REWIND_MESSAGE);
       }
       throw new Error("Claude's conversation does not have this prompt, so it cannot rewind to before it. "
@@ -2909,15 +2940,6 @@ export class ClaudeBackend {
       // A pending rewind already ends the conversation at its point.
       leafUuid: session.resumeSessionAt ?? messages.at(-1)?.uuid,
     };
-  }
-
-  /** True only when Claude has no file for the session in any project folder. */
-  private async claudeSessionGone(sdkSessionId: string): Promise<boolean> {
-    try {
-      return await (this.options.getSessionInfo ?? getSessionInfo)(sdkSessionId) === undefined;
-    } catch {
-      return false;
-    }
   }
 
   /**

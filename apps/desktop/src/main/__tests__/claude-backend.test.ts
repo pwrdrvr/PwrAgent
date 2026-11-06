@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookEvent, HookInput, Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import {
-  CLAUDE_CONFIG_DIR_REWIND_MESSAGE, CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
+  CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
   type ClaudeBackendOptions,
 } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
@@ -22,7 +22,13 @@ import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-r
 
 const roots: string[] = [];
 const backends: ClaudeBackend[] = [];
+// Session reads and titles compare the launch environment's Claude config
+// directory with this process's; the runner's own must not decide them.
+beforeEach(() => {
+  vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
+});
 afterEach(async () => {
+  vi.unstubAllEnvs();
   // A backend queues usage-limit writes into the temp root without the test
   // awaiting them, and a session can still be reporting its last turn.
   // close() joins both, so every backend finishes closing, even when another
@@ -4244,44 +4250,70 @@ describe("Claude thread rewind", () => {
     }
   });
 
-  it("refuses without reading sessions when Claude runs under another config directory", async () => {
+  it("reads the conversation in a session reader started with Claude's environment", async () => {
     const prompts: SDKUserMessage[] = [];
-    const rewindFiles = vi.fn();
+    const rewindFiles = vi.fn(async () => ({ canRewind: true, filesChanged: ["src/a.ts"], insertions: 1, deletions: 0 }));
     const f = await fixture(promptRecorder(prompts), { rewindFiles });
     const account = path.join(f.root, "claude-account");
     // The operator's shell picks a second Claude account; PwrAgent's own
-    // process has none.
-    f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", CLAUDE_CONFIG_DIR: account });
-    // Like the SDK, read the sessions of this process's config directory.
+    // process has none, so its own session reads see another store.
+    f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", CLAUDE_CONFIG_DIR: account, ANTHROPIC_API_KEY: "must-not-reach-child" });
     const recorded = sessionMessages(prompts);
-    const getSessionMessages = vi.fn(async () =>
-      path.resolve(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")) === account ? recorded() : []);
-    Object.assign(f.backendOptions, { getSessionMessages });
-    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
-    try {
-      const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
-      const target = { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] };
+    const inProcess = vi.fn(async (_sessionId: string, _options?: { dir?: string }): ReturnType<typeof recorded> => []);
+    const openReader = () => ({ getSessionMessages: vi.fn(async () => await recorded()), getSessionInfo: vi.fn(), close: vi.fn() });
+    const readers: ReturnType<typeof openReader>[] = [];
+    const openSessionReader = vi.fn((_env: NodeJS.ProcessEnv) => {
+      const reader = openReader();
+      readers.push(reader);
+      return reader;
+    });
+    Object.assign(f.backendOptions, { getSessionMessages: inProcess, openSessionReader });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
+    const target = { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] };
 
-      expect(await f.backend.previewRewind(threadId, target))
-        .toEqual({ unavailableReason: CLAUDE_CONFIG_DIR_REWIND_MESSAGE });
-      for (const mode of ["conversation", "conversation-and-files"] as const) {
-        await expect(f.backend.rewindThread({ threadId, target, mode })).rejects.toThrow(CLAUDE_CONFIG_DIR_REWIND_MESSAGE);
-      }
-      // Neither the wrong account's sessions nor a control query were touched.
-      expect(getSessionMessages).not.toHaveBeenCalled();
-      expect(f.backendOptions.getSessionInfo).not.toHaveBeenCalled();
-      expect(rewindFiles).not.toHaveBeenCalled();
-      expect(f.run).toHaveBeenCalledTimes(2);
-      expect((await f.store.read(threadId)).rewinds).toBeUndefined();
+    expect(await f.backend.previewRewind(threadId, target))
+      .toEqual({ files: { paths: ["src/a.ts"], insertions: 1, deletions: 0 } });
+    await f.backend.rewindThread({ threadId, target, mode: "conversation" });
 
-      // The same directory, spelled with a trailing separator, reads the
-      // conversation and rewinds.
-      vi.stubEnv("CLAUDE_CONFIG_DIR", `${account}${path.sep}`);
-      await f.backend.rewindThread({ threadId, target, mode: "conversation" });
-      expect((await f.store.read(threadId)).resumeSessionAt).toBe("assistant-1");
-    } finally {
-      vi.unstubAllEnvs();
+    expect((await f.store.read(threadId)).resumeSessionAt).toBe("assistant-1");
+    // The reader runs with the environment Claude launches with.
+    expect(openSessionReader).toHaveBeenCalledTimes(2);
+    for (const [env] of openSessionReader.mock.calls) {
+      expect(env).toMatchObject({ CLAUDE_CONFIG_DIR: account });
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     }
+    expect(readers[0]!.getSessionMessages).toHaveBeenCalledWith(SDK_SESSION, { dir: f.root });
+    expect(readers.map((reader) => reader.close.mock.calls.length)).toEqual([1, 1]);
+    expect(inProcess).not.toHaveBeenCalled();
+
+    // The same directory, spelled with a trailing separator, reads here.
+    vi.stubEnv("CLAUDE_CONFIG_DIR", `${account}${path.sep}`);
+    inProcess.mockImplementation(async () => await recorded());
+    expect(await f.backend.previewRewind(threadId, { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] }))
+      .toMatchObject({ files: expect.any(Object) });
+    expect(openSessionReader).toHaveBeenCalledTimes(2);
+    expect(inProcess).toHaveBeenCalledWith(SDK_SESSION, { dir: f.root });
+  });
+
+  it("leaves the thread as it was when the session reader fails", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const rewindFiles = vi.fn();
+    const f = await fixture(promptRecorder(prompts), { rewindFiles });
+    f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", CLAUDE_CONFIG_DIR: path.join(f.root, "claude-account") });
+    const failure = "Claude's conversation could not be read: the reader stopped.";
+    const close = vi.fn();
+    Object.assign(f.backendOptions, {
+      openSessionReader: () => ({ getSessionMessages: vi.fn(async () => { throw new Error(failure); }), getSessionInfo: vi.fn(), close }),
+    });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+    const target = { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] };
+
+    expect(await f.backend.previewRewind(threadId, target)).toEqual({ unavailableReason: failure });
+    await expect(f.backend.rewindThread({ threadId, target, mode: "conversation-and-files" })).rejects.toThrow(failure);
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(rewindFiles).not.toHaveBeenCalled();
+    expect(f.run).toHaveBeenCalledOnce();
+    expect((await f.store.read(threadId)).rewinds).toBeUndefined();
   });
 
   it("says Claude no longer has the conversation when Claude Code deleted its session", async () => {
