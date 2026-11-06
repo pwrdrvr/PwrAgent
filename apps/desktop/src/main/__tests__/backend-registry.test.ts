@@ -72582,7 +72582,7 @@ describe("thread maintenance agent tools", () => {
     expired: { enabled: false, retentionDays: 0 },
     failures: [],
   };
-  const finished = { runId: "run-1", scanId: "scan-1", running: false, startedAt: 3, finishedAt: 4,
+  const finished = { runId: "run-1", revision: 2, scanId: "scan-1", running: false, startedAt: 3, finishedAt: 4,
     steps: [{ step: "threads" as const, ran: true, done: 1, kept: 0, failed: 0 }], problems: [] };
 
   async function setup() {

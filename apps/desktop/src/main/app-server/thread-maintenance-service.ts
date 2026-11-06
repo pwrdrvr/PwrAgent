@@ -97,6 +97,7 @@ type RetainedScan = {
 export class ThreadMaintenanceService {
   private readonly scans = new Map<string, RetainedScan>();
   private run?: ThreadMaintenanceRun;
+  private revision = 0;
   private running?: Promise<ThreadMaintenanceRun>;
   private readonly abort = new AbortController();
 
@@ -159,11 +160,10 @@ export class ThreadMaintenanceService {
     if (this.running) throw new Error("Thread maintenance is already running.");
     const retained = this.scans.get(request.scanId);
     if (!retained) throw new Error("That scan is no longer available. Scan again.");
-    const run: ThreadMaintenanceRun = {
-      runId: this.newId(), scanId: request.scanId, running: true, startedAt: this.now(),
+    const run = this.publish({
+      runId: this.newId(), revision: 0, scanId: request.scanId, running: true, startedAt: this.now(),
       steps: [], problems: [],
-    };
-    this.publish(run);
+    });
     const done = this.execute(request, retained).finally(() => { this.running = undefined; });
     this.running = done;
     return { run, done };
@@ -493,8 +493,7 @@ export class ThreadMaintenanceService {
     steps.push({ step: "expired", ran: false, done: 0, kept: 0, failed: 0 });
     const finished = { ...this.run!, running: false, finishedAt: this.now(), current: undefined,
       steps: [...steps], problems: [...problems] };
-    this.publish(finished);
-    return finished;
+    return this.publish(finished);
   }
 
   /** True when archived, else the reason it was kept. Throws on failure. */
@@ -525,9 +524,11 @@ export class ThreadMaintenanceService {
     return archived ? true : "Archive cancelled";
   }
 
-  private publish(run: ThreadMaintenanceRun): void {
+  private publish(snapshot: ThreadMaintenanceRun): ThreadMaintenanceRun {
+    const run = { ...snapshot, revision: ++this.revision };
     this.run = run;
     this.deps.onRun?.(run);
+    return run;
   }
 
   private now(): number {

@@ -160,6 +160,9 @@ export type ThreadMaintenanceStepResult = {
 
 export type ThreadMaintenanceRun = {
   runId: string;
+  /** Grows with every snapshot main publishes, across runs. The newest
+   * snapshot wins however it arrives (apply reply, event, or fetch). */
+  revision: number;
   scanId: string;
   running: boolean;
   startedAt: number;

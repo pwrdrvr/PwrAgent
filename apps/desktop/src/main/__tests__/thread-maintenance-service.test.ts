@@ -5,7 +5,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { DEFAULT_THREAD_ARCHIVE_POLICY, REBUILDABLE_OUTPUT_NAMES, type ThreadMaintenanceWorkspace } from "@pwragent/shared";
+import {
+  DEFAULT_THREAD_ARCHIVE_POLICY,
+  REBUILDABLE_OUTPUT_NAMES,
+  type ThreadMaintenanceRun,
+  type ThreadMaintenanceWorkspace,
+} from "@pwragent/shared";
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import {
   ThreadMaintenanceService,
@@ -228,6 +233,26 @@ describe("sub-thread parents", () => {
 });
 
 describe("ThreadMaintenanceService.apply", () => {
+  it("stamps every published snapshot with a larger revision, across runs", async () => {
+    const published: ThreadMaintenanceRun[] = [];
+    const { service } = harness([candidate("a", { daysIdle: 30, cwd: "/w/a" })], {
+      getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age", inactivityDays: 7 }),
+      onRun: (run: ThreadMaintenanceRun) => { published.push(run); },
+    });
+    for (let index = 0; index < 2; index++) {
+      const scan = await service.scan();
+      const { run, done } = service.start({ scanId: scan.scanId, archive: [{ backend: "codex", threadId: "a" }],
+        removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+      const finished = await done;
+      // The reply the dialog gets is older than the result it may already have.
+      expect(run.revision).toBeLessThan(finished.revision);
+      expect(service.getRun()).toEqual(finished);
+    }
+    const revisions = published.map((run) => run.revision);
+    expect(revisions).toEqual([...revisions].sort((a, b) => a - b));
+    expect(new Set(revisions).size).toBe(revisions.length);
+  });
+
   it("archives selections, keeps one with new activity, and keeps going after a failure", async () => {
     const items = [
       candidate("a", { daysIdle: 30, cwd: "/w/a" }),

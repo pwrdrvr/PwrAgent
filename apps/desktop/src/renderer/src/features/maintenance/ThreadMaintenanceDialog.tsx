@@ -32,8 +32,14 @@ import {
   type ThreadMaintenanceMode,
   type ThreadMaintenanceSelection,
 } from "./thread-maintenance-selection";
+import {
+  newerRun,
+  threadMaintenancePhase,
+  type ThreadMaintenancePhase,
+  type ThreadMaintenanceStoredPhase,
+} from "./thread-maintenance-run-state";
 
-type Phase = "plan" | "scanning" | "threads" | "checkouts" | "running" | "finished";
+type Phase = ThreadMaintenancePhase;
 
 const MODE_TABS: { mode: ThreadMaintenanceMode; label: string }[] = [
   { mode: "combined", label: "Combined" },
@@ -73,32 +79,37 @@ export function ThreadMaintenanceDialog(props: {
   const policy = useMemo(() => normalizeThreadArchivePolicy(props.policy), [props.policy]);
   const [mode, setMode] = useState<ThreadMaintenanceMode>("combined");
   const [rules, setRules] = useState<ThreadMaintenanceRules>(() => defaultThreadMaintenanceRules(policy));
-  const [phase, setPhase] = useState<Phase>("plan");
+  const [storedPhase, setPhase] = useState<ThreadMaintenanceStoredPhase>("plan");
   const [scan, setScan] = useState<ThreadMaintenanceScan>();
   const [selection, setSelection] = useState<ThreadMaintenanceSelection>();
   const [run, setRun] = useState<ThreadMaintenanceRun>();
   const [error, setError] = useState<string>();
+  const phase = threadMaintenancePhase(storedPhase, run);
   const busy = phase === "running";
-  const dialogRef = useModalDialog<HTMLDivElement>({
-    onClose: () => { if (!busy) props.onClose(); },
-  });
+  // Closing never stops a run: it keeps going in the background, and opening
+  // the dialog again shows it.
+  const dialogRef = useModalDialog<HTMLDivElement>({ onClose: props.onClose });
+
+  // Every snapshot goes through newerRun, so a late apply reply cannot undo
+  // a result that already arrived as an event.
+  const showRun = useCallback((next: ThreadMaintenanceRun | null | undefined) => {
+    if (!next) return;
+    setRun((current) => newerRun(current, next));
+    setPhase("run");
+  }, []);
 
   // A run another surface started (an agent tool) shows here as it goes.
   useEffect(() => {
     if (!api) return;
     let cancelled = false;
     const unsubscribe = api.onThreadMaintenanceRunChanged?.((next) => {
-      if (cancelled) return;
-      setRun((current) => current && current.runId !== next.runId && current.running ? current : next);
-      setPhase((current) => next.running ? "running" : current === "running" ? "finished" : current);
+      if (!cancelled) showRun(next);
     });
     void api.getThreadMaintenanceRun?.().then((current) => {
-      if (cancelled || !current?.running) return;
-      setRun(current);
-      setPhase("running");
+      if (!cancelled && current?.running) showRun(current);
     }, () => {});
     return () => { cancelled = true; unsubscribe?.(); };
-  }, [api]);
+  }, [api, showRun]);
 
   const startScan = useCallback(async () => {
     if (!api?.scanThreadMaintenance) return;
@@ -119,13 +130,11 @@ export function ThreadMaintenanceDialog(props: {
     if (!api?.applyThreadMaintenance || !scan || !chosen) return;
     setError(undefined);
     try {
-      const started = await api.applyThreadMaintenance(buildApplyRequest(scan, chosen, runMode));
-      setRun(started);
-      setPhase(started.running ? "running" : "finished");
+      showRun(await api.applyThreadMaintenance(buildApplyRequest(scan, chosen, runMode)));
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : String(runError));
     }
-  }, [api, scan, selection]);
+  }, [api, scan, selection, showRun]);
 
   const finishThreads = () => {
     if (mode === "threads") void startRun("threads");
@@ -141,7 +150,8 @@ export function ThreadMaintenanceDialog(props: {
         : undefined;
 
   return (
-    <div className="thread-maintenance-modal">
+    <div className="thread-maintenance-modal"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
       <div ref={dialogRef} aria-labelledby="thread-maintenance-title" aria-modal="true"
         className="thread-maintenance" role="dialog" tabIndex={-1}>
         <div className="thread-maintenance__head">
@@ -154,7 +164,7 @@ export function ThreadMaintenanceDialog(props: {
           <div className="thread-maintenance__head-side">
             {headChip ? <span className="settings-pathrow__chip">{headChip}</span> : null}
             <button aria-label="Close thread maintenance" className="workspace-handoff-dialog__close"
-              disabled={busy} type="button" onClick={props.onClose}><CloseIcon size={14} /></button>
+              type="button" onClick={props.onClose}><CloseIcon size={14} /></button>
           </div>
         </div>
         <div className="thread-maintenance__body">
@@ -206,7 +216,13 @@ export function ThreadMaintenanceDialog(props: {
               else void startRun(mode, next);
             }}
             onFinishCheckouts={() => { void startRun(mode); }}
-            onStop={() => { void api?.stopThreadMaintenance?.(); }}
+            onStop={() => {
+              // Read main's run back as well, so a lost event cannot leave
+              // the dialog showing a run that has ended.
+              void Promise.resolve(api?.stopThreadMaintenance?.())
+                .then(() => api?.getThreadMaintenanceRun?.())
+                .then((current) => { if (current) setRun((shown) => newerRun(shown, current)); }, () => {});
+            }}
             onNewScan={() => { setRun(undefined); setScan(undefined); setSelection(undefined); setPhase("plan"); }}
           />
         </div>
