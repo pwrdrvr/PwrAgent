@@ -30,7 +30,8 @@ describe("unreferenced worktree discovery", () => {
       fc.array(fc.tuple(fc.array(segment, { minLength: 1, maxLength: 4 }), fc.boolean()), { maxLength: 24 }),
       fc.integer({ min: 0, max: 30 }),
       async (entries, limit) => {
-        const root = "/home/me/.pwragent/worktrees";
+        // Built with path.join so separators match the fake folders on Windows too.
+        const root = path.join(path.sep, "home", "me", ".pwragent", "worktrees");
         const folders = new Map<string, boolean>();
         for (const [segments, linked] of entries) {
           // Every ancestor exists as a folder; only the leaf can be a worktree.
