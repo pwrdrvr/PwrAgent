@@ -187,8 +187,10 @@ PwrAgent's update feature was ported from PwrGit (see
 and `auto-updater-supersede.test.ts` covers a downloaded update that a newer
 release replaces.
 
-PwrGit is adding properties for `selectChannelReleases` and an `fc.commands`
-model of its held update. When they land, port them here and keep the two
+[PwrGit#554](https://github.com/pwrdrvr/PwrGit/pull/554) added properties for
+`selectChannelReleases` and an `fc.commands` model of its held update. The
+port is in `apps/desktop/src/main/__tests__/auto-updater.property.test.ts`,
+with PwrAgent's event-driven completion and cancellation flow. Keep the two
 sets in step. The rules are the same in every Pwr app:
 
 - No channel offers less than Stable's latest release.
