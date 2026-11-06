@@ -41,6 +41,14 @@ export function archiveSweepSummaryLines(status: DesktopThreadArchiveSweepStatus
   } else if (status.archived > 0) {
     lines.push(`Archived ${status.archived} ${status.archived === 1 ? "thread" : "threads"}.`);
   }
+  // A pass that is off says nothing here; its own setting lives in Worktrees.
+  const hibernation = status.hibernation;
+  if (hibernation && !hibernation.skipped && hibernation.checked > 0) {
+    lines.push([
+      `Hibernated ${hibernation.hibernated} idle ${hibernation.hibernated === 1 ? "checkout" : "checkouts"}.`,
+      describeKept(hibernation.kept),
+    ].filter(Boolean).join(" "));
+  }
   if (status.deleted > 0) lines.push(`Deleted ${status.deleted} expired ${status.deleted === 1 ? "archive" : "archives"}.`);
   const worktrees = status.worktrees;
   if (worktrees) {

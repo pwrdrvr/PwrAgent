@@ -28,4 +28,8 @@ if [[ "$manager_ready" != true ]]; then
   exit 1
 fi
 
-pnpm --filter @pwragent/desktop test:e2e "$@"
+if [[ "${PWRAGENT_E2E_PREBUILT:-}" == "1" ]]; then
+  pnpm --filter @pwragent/desktop exec playwright test -c playwright.config.ts "$@"
+else
+  pnpm --filter @pwragent/desktop test:e2e "$@"
+fi

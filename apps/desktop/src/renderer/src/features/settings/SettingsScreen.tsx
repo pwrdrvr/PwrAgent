@@ -1593,6 +1593,7 @@ function SettingsSectionBody(props: {
             worktrees: { storage },
           });
         }}
+        onWriteConfig={props.settings.writeConfig}
       />
     );
   }

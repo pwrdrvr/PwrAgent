@@ -382,18 +382,23 @@ describe("Tangerine Terminal theme contract", () => {
       /min-height:\s*24px;/,
     );
 
-    // The rail's paging control ("Load more threads") is a row-width button
-    // on a themed panel with the strong border, 30px like the start actions
-    // beside it. It used to be a transparent, borderless, left-aligned 12px
-    // label: its text passed contrast in every theme and its box cleared
-    // 24px, and operators still could not find it at the end of a list of
-    // borderless rows. The surface and border are what make it read as a
-    // button; the themed fill is also what keeps a call site from falling
-    // back to Chromium's opaque grey slab, which seven of the twelve did when
-    // they rendered a classless <button>.
+    // The rail's paging control ("Load more threads") is a pill in the PR
+    // chip family: shrink-wrapped, 24px, on a themed panel with the strong
+    // border. It has been both extremes. A transparent, borderless 12px
+    // label passed contrast and the 24px floor, and operators still could
+    // not find it. A row-width 30px button fixed that and became the
+    // heaviest box in every sub-thread tray. The fill and the strong border
+    // are what make it findable, so they stay pinned; so does the size, so
+    // it cannot drift back to a slab. The themed fill also keeps a call site
+    // from falling back to Chromium's opaque grey slab, which seven of the
+    // twelve did when they rendered a classless <button>.
     const showMore = extractRuleBody(css, ".sidebar-show-more");
-    expect(showMore).toMatch(/min-height:\s*30px;/);
-    expect(showMore).toMatch(/width:\s*100%;/);
+    expect(showMore).toMatch(/display:\s*inline-flex;/);
+    expect(showMore).toMatch(/min-height:\s*24px;/);
+    expect(showMore).toMatch(/border-radius:\s*12px;/);
+    expect(showMore).toMatch(/font-size:\s*11px;/);
+    expect(showMore).toMatch(/align-self:\s*flex-start;/);
+    expect(showMore).not.toMatch(/(^|[^-])width:\s*100%;/);
     expect(showMore).toMatch(/background:\s*var\(--bg-panel-elevated\);/);
     expect(showMore).toMatch(/border:\s*1px solid var\(--border-strong\);/);
     // `:hover` matches a busy control, so the hover rule has to exclude one

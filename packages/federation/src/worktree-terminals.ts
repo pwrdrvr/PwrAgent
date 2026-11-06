@@ -4,6 +4,8 @@ import path from "node:path";
 
 type WorktreeTerminalOwner = {
   withWorktreeClosed<T>(worktreePath: string, work: () => Promise<T>, assertCurrent?: () => void): Promise<T>;
+  /** A live terminal, or one still being opened, runs in this folder. */
+  hasOpenIn?(worktreePath: string): boolean;
 };
 
 const owners = new Set<WorktreeTerminalOwner>();
@@ -44,6 +46,11 @@ export function isWithinWorktree(cwd: string | undefined, worktreePath: string, 
 export function registerWorktreeTerminalOwner(service: WorktreeTerminalOwner): () => void {
   owners.add(service);
   return () => { owners.delete(service); };
+}
+
+/** Hibernation refuses a checkout with an open terminal rather than close it. */
+export function hasWorktreeTerminalsOpenIn(worktreePath: string): boolean {
+  return [...owners].some((owner) => owner.hasOpenIn?.(worktreePath) ?? false);
 }
 
 export async function withWorktreeTerminalsClosed<T>(worktreePath: string, work: () => Promise<T>, assertCurrent?: () => void): Promise<T> {

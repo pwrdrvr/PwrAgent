@@ -1,7 +1,9 @@
 import type {
+  DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   DesktopWorktreeStorageLocation,
 } from "@pwragent/shared";
+import { CheckoutHibernationSettings } from "./CheckoutHibernationSettings";
 import {
   SegmentedField,
   SettingsField,
@@ -34,6 +36,7 @@ export function WorktreesSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onStorageChange: (value: DesktopWorktreeStorageLocation) => Promise<void>;
+  onWriteConfig?: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
 }) {
   const storage = props.snapshot.worktrees.storage;
   const overridden = storage.source === "env";
@@ -87,6 +90,12 @@ export function WorktreesSettings(props: {
           />
         </div>
       </SettingsSection>
+
+      <CheckoutHibernationSettings
+        value={props.snapshot.worktrees.hibernate}
+        archive={props.snapshot.worktrees.archive}
+        onWriteConfig={props.onWriteConfig}
+      />
     </SettingsSectionStack>
   );
 }

@@ -9,29 +9,34 @@ import { expect, test } from "vitest";
 // thread blocked in CreateFile, WriteFile or FlushFileBuffers on fixture
 // storage, while the same closes appended to a D: file in a median 61 ms.
 // Electron's main process then outlives its quit, holding the launcher pipe.
-test("Windows Desktop E2E keeps fixture storage on the runner temp volume", () => {
+test("every Windows Desktop E2E run keeps fixture storage on the runner temp volume", () => {
   const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const job = workflow.split(/\n  (?=[\w-]+:\n)/).find((block) => block.startsWith("windows-e2e:"));
   expect(job).toBeDefined();
   const testSteps = job.split("\n      - ").filter((step) => /\btest:desktop-e2e\b/.test(step));
-  expect(testSteps).toHaveLength(1);
+  expect(testSteps).toHaveLength(2);
   // Node reads TEMP and TMP on Windows; Electron and every child inherit them.
-  expect(testSteps[0]).toMatch(/^ {10}TEMP: \$\{\{ runner\.temp \}\}$/m);
-  expect(testSteps[0]).toMatch(/^ {10}TMP: \$\{\{ runner\.temp \}\}$/m);
+  for (const step of testSteps) {
+    expect(step).toMatch(/^ {10}TEMP: \$\{\{ runner\.temp \}\}$/m);
+    expect(step).toMatch(/^ {10}TMP: \$\{\{ runner\.temp \}\}$/m);
+  }
 });
 
 // The desktop-main suite also writes native diagnostic build products under
 // os.tmpdir(). Its C# probe hit the 20 s compiler deadline on the C: temp root
 // in CI run 42294585123. Keep the unit fixture outputs on the same volume as
 // E2E; this does not change the compiler deadline or bypass its positive control.
-test("Windows desktop-main keeps native diagnostic build products on the runner temp volume", () => {
+test("every Windows desktop-main run keeps native diagnostic build products on the runner temp volume", () => {
   const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const job = workflow.split(/\n  (?=[\w-]+:\n)/).find((block) => block.startsWith("windows-desktop-main:"));
   expect(job).toBeDefined();
-  const testSteps = job.split("\n      - ").filter((step) => /pnpm test --project desktop-main\b/.test(step));
-  expect(testSteps).toHaveLength(1);
-  expect(testSteps[0]).toMatch(/^ {10}TEMP: \$\{\{ runner\.temp \}\}$/m);
-  expect(testSteps[0]).toMatch(/^ {10}TMP: \$\{\{ runner\.temp \}\}$/m);
+  const testSteps = job.split("\n      - ").filter((step) =>
+    /pnpm test --project desktop-main\b|run-retry-failures\.mjs unit$/.test(step.trim()));
+  expect(testSteps).toHaveLength(2);
+  for (const step of testSteps) {
+    expect(step).toMatch(/^ {10}TEMP: \$\{\{ runner\.temp \}\}$/m);
+    expect(step).toMatch(/^ {10}TMP: \$\{\{ runner\.temp \}\}$/m);
+  }
 });
 
 // CDB's startup loads its engine and extension packages from its install

@@ -4230,6 +4230,12 @@ class DesktopAppServerService {
       seenUpdatedAt: request.seenUpdatedAt,
       threadId: request.threadId,
     });
+    // Opening a thread is the restore point when restore_on = "open". Fired
+    // from this once-per-open signal, never from repeated detail reads.
+    void getDesktopBackendRegistry().wakeHibernatedCheckoutOnOpen({ backend, threadId: request.threadId })
+      .catch((error: unknown) => logDebug("hibernated checkout restore on open failed", {
+        backend, threadId: request.threadId, error: error instanceof Error ? error.message : String(error),
+      }));
 
     logDebug("markThreadSeen", {
       backend,

@@ -357,7 +357,9 @@ async function main() {
     ? { file: process.execPath, args: [path.join(desktop, "scripts/probe-electron-native-quit.mjs"),
       ...process.argv.slice(3), "--output-dir", path.join(root, "cases")] }
     : packageManagerCommand(process.env.npm_execpath,
-      ["--filter", "@pwragent/desktop", "test:e2e", ...process.argv.slice(2)]);
+      process.env.PWRAGENT_E2E_PREBUILT === "1"
+        ? ["--filter", "@pwragent/desktop", "exec", "playwright", "test", "-c", "playwright.config.ts", ...process.argv.slice(2)]
+        : ["--filter", "@pwragent/desktop", "test:e2e", ...process.argv.slice(2)]);
   let enabled = false;
   try {
     if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Native diagnostics require Windows x64.");

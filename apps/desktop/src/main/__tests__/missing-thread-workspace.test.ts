@@ -1,6 +1,6 @@
 import type { AppServerThreadSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
-import { detectMissingThreadWorkspace } from "../app-server/missing-thread-workspace";
+import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace } from "../app-server/missing-thread-workspace";
 
 const WORKTREE = "/home/dev/.pwragent/worktrees/mf3k2q/atlas";
 const MAIN = "/home/dev/src/atlas";
@@ -85,5 +85,35 @@ describe("detectMissingThreadWorkspace", () => {
     });
     expect(result).toEqual({ worktreePath: WORKTREE, repositoryPath: MAIN, repositoryAvailable: false });
     expect(readBranch).not.toHaveBeenCalled();
+  });
+});
+
+describe("hibernated checkouts", () => {
+  const hibernated = () => snapshot({ state: "hibernated", archivedAt: undefined, hibernatedAt: 30, sourceBranch: "fix/retry-backoff" });
+
+  it("are not missing while the next send can restore them, so the composer stays", async () => {
+    const readBranch = vi.fn(async () => "main");
+    expect(await detectMissingThreadWorkspace(thread({ worktreeSnapshots: [hibernated()] }), {
+      pathExists: async () => false, readBranch,
+    })).toBeUndefined();
+    expect(readBranch).not.toHaveBeenCalled();
+    expect(describeHibernatedThreadWorkspace(thread({ worktreeSnapshots: [hibernated()] }), true)).toEqual({
+      worktreePath: WORKTREE, repositoryPath: MAIN, hibernatedAt: 30, branch: "fix/retry-backoff", restoring: true,
+    });
+  });
+
+  it("show the missing-worktree card with their checkpoint once a restore failed", async () => {
+    expect(await detectMissingThreadWorkspace(thread({ worktreeSnapshots: [hibernated()] }), {
+      pathExists: async (target) => target === MAIN, includeHibernated: true,
+    })).toEqual({
+      worktreePath: WORKTREE, repositoryPath: MAIN, repositoryAvailable: true, branch: "fix/retry-backoff",
+      checkpoint: { snapshotRef: "refs/codex/snapshots/abc", snapshotCommit: "a41c9e2", archivedAt: 30 },
+    });
+  });
+
+  it("are described only for the thread's own worktree and never once archived", () => {
+    expect(describeHibernatedThreadWorkspace(thread({ worktreeSnapshots: [snapshot({ state: "hibernated", worktreePath: "/elsewhere" })] })))
+      .toBeUndefined();
+    expect(describeHibernatedThreadWorkspace(thread({ archivedAt: 1, worktreeSnapshots: [hibernated()] }))).toBeUndefined();
   });
 });

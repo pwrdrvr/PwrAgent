@@ -1,4 +1,4 @@
-import type { DesktopThreadArchivePolicy, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
+import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchivePolicy, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
 import {
   FORGE_AGENT_TOOL_GROUPS,
   FORGE_AGENT_TOOL_RULE_GROUPS,
@@ -425,6 +425,7 @@ export type DesktopSettingsConfig = {
   };
   worktrees?: {
     archive?: Partial<DesktopThreadArchivePolicy>;
+    hibernate?: Partial<DesktopCheckoutHibernationPolicy>;
     storage?: DesktopWorktreeStorageLocation;
   };
 };
@@ -2172,6 +2173,16 @@ export function desktopSettingsPatchToEdits(
     }
   }
 
+  if (patch.worktrees?.hibernate) {
+    const hibernate = patch.worktrees.hibernate;
+    for (const [property, key] of [
+      ["enabled", "enabled"], ["idleDays", "idle_days"], ["maxSnapshotMb", "max_snapshot_mb"],
+      ["removeRebuildableOutput", "remove_rebuildable_output"], ["restoreOn", "restore_on"],
+    ] as const) {
+      if (hibernate[property] !== undefined) set(["worktrees", "hibernate", key], hibernate[property]);
+    }
+  }
+
   if (patch.worktrees?.storage !== undefined) {
     set(["worktrees", "storage"], patch.worktrees.storage);
   }
@@ -2230,6 +2241,7 @@ function normalizeDesktopConfig(
   const gitApplication = tables["applications.git"];
   const worktrees = tables["worktrees"];
   const archive = tables["worktrees.archive"];
+  const hibernate = tables["worktrees.hibernate"];
 
   return pruneEmptyConfig({
     general: {
@@ -2716,6 +2728,13 @@ function normalizeDesktopConfig(
         inactivityDays: readNumber(archive?.inactivity_days),
         keepPerProject: readNumber(archive?.keep_per_project),
         retentionDays: readNumber(archive?.retention_days),
+      } : undefined,
+      hibernate: hibernate ? {
+        enabled: readBoolean(hibernate.enabled),
+        idleDays: readNumber(hibernate.idle_days),
+        maxSnapshotMb: readNumber(hibernate.max_snapshot_mb),
+        removeRebuildableOutput: readBoolean(hibernate.remove_rebuildable_output),
+        restoreOn: hibernate.restore_on === "send" || hibernate.restore_on === "open" ? hibernate.restore_on : undefined,
       } : undefined,
       storage: readWorktreeStorage(worktrees?.storage),
     },

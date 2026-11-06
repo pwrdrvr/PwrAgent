@@ -653,6 +653,11 @@ export class FederationPtyService {
     return isWithinWorktree(cwd, worktreePath, this.options.platform ?? process.platform);
   }
 
+  hasOpenIn(worktreePath: string): boolean {
+    return [...this.sessionsById.values()].some((session) => this.isInWorktree(session.cwd, worktreePath))
+      || [...this.pendingOpens].some((pending) => pending.cwd === undefined || this.isInWorktree(pending.cwd, worktreePath));
+  }
+
   async withWorktreeClosed<T>(worktreePath: string, work: () => Promise<T>, assertCurrent?: () => void): Promise<T> {
     assertCurrent?.();
     this.assertWorktreeAvailable(worktreePath);

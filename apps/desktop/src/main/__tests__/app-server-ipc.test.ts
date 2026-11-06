@@ -78,6 +78,8 @@ const backendRegistryLifecycle = vi.hoisted(() => {
 const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
   async (_identity: unknown, work: () => Promise<unknown>) => await work(),
 ));
+/** Restore on open, which the owner runs only for its own threads. */
+const wakeHibernatedCheckoutOnOpen = vi.hoisted(() => vi.fn(async (_identity: unknown) => false));
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
@@ -1289,6 +1291,7 @@ vi.mock("../app-server/backend-registry", () => {
     rememberNavigationVisibilityIndex: rememberCompleteNavigationSnapshot,
     getCodexAppServerRestartStatus: () => ({ stopped: false }),
     withThreadLifecycleMutation,
+    wakeHibernatedCheckoutOnOpen,
     onCodexAppServerRestartStatusChanged: (listener: (status: unknown) => void) => {
       codexRestartStatus.listeners.add(listener);
       return () => codexRestartStatus.listeners.delete(listener);
@@ -1486,6 +1489,7 @@ describe("app server ipc", () => {
     backendRegistryLifecycle.existing = true;
     backendRegistryLifecycle.get.mockClear();
     withThreadLifecycleMutation.mockClear();
+    wakeHibernatedCheckoutOnOpen.mockClear();
     prAutomationSettings.state.backgroundPrPollingEnabled = true;
     prAutomationSettings.state.budgetPaused = false;
     prAutomationSettings.state.budgetPausedAt = 1_000;
@@ -7529,6 +7533,8 @@ describe("app server ipc", () => {
     expect(withThreadLifecycleMutation).toHaveBeenCalledWith(
       { backend: "acp:grok", threadId: "thread-1" }, expect.any(Function),
     );
+    // Opening a local thread is where restore_on = "open" brings a hibernated checkout back.
+    expect(wakeHibernatedCheckoutOnOpen).toHaveBeenCalledWith({ backend: "acp:grok", threadId: "thread-1" });
     expect(response).toEqual({
       backend: "acp:grok",
       threadId: "thread-1",
@@ -7562,6 +7568,8 @@ describe("app server ipc", () => {
       seenUpdatedAt: 3_000,
     });
     expect(markThreadSeen).not.toHaveBeenCalled();
+    // The owning peer restores its own checkout; this instance has none.
+    expect(wakeHibernatedCheckoutOnOpen).not.toHaveBeenCalled();
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-remote",
