@@ -6,6 +6,7 @@ import { isUnitRunComplete } from "./retry-failures.mjs";
 export default class CiRetryReporter {
   planned = [];
   finished = [];
+  collected = [];
   startedTests = new Set();
   finishedTests = new Set();
 
@@ -25,6 +26,13 @@ export default class CiRetryReporter {
 
   onTestModuleEnd(module) {
     this.finished.push(JSON.stringify([module.project.name, module.moduleId]));
+  }
+
+  onTestModuleCollected(module) {
+    this.collected.push({
+      key: JSON.stringify([module.project.name, module.moduleId]),
+      ids: [...module.children.allTests()].map((test) => test.id),
+    });
   }
 
   onTestCaseReady(test) {
@@ -56,11 +64,13 @@ export default class CiRetryReporter {
     mkdirSync(path.dirname(destination), { recursive: true });
     const completedModules = new Set(this.finished);
     writeFileSync(destination, JSON.stringify({
-      complete: isUnitRunComplete({ reason, planned: this.planned, finished: this.finished, modules: suites }),
+      complete: isUnitRunComplete({ reason, planned: this.planned, finished: this.finished, modules: suites, collected: this.collected }),
       reason,
       completion: {
         plannedModules: this.planned.length,
         finishedModules: this.finished.length,
+        collectedTests: this.collected.reduce((sum, item) => sum + item.ids.length, 0),
+        reportedTests: suites.reduce((sum, suite) => sum + suite.tests.length, 0),
         unfinishedModules: this.planned.filter((key) => !completedModules.has(key)).map((key) => JSON.parse(key)),
       },
       unhandledErrors: unhandledErrors.length,

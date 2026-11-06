@@ -68,14 +68,21 @@ try {
   mkdirSync(directory, { recursive: true });
   switch (process.argv[2]) {
     case "unit": retryUnits(); break;
-    case "unit-verify":
-      if (!verifyInitialUnitRun(read("unit-first.json"))) throw new Error("The unit slice did not complete successfully");
-      summary("Unit slice completed: 0 initially failed tests.");
+    case "unit-verify": {
+      const report = read("unit-first.json");
+      if (!verifyInitialUnitRun(report)) throw new Error("The unit slice did not complete successfully");
+      const tests = report.suites.flatMap((suite) => suite.tests);
+      const passed = tests.filter((test) => test.state === "passed").length;
+      summary(`Unit slice completed: ${tests.length} discovered, ${passed} passed, ${tests.length - passed} skipped.`);
       break;
-    case "e2e-first-verify":
-      if (!verifyInitialE2eRun(read("e2e-first.json"))) throw new Error("The E2E slice did not complete successfully");
-      summary("E2E slice completed: 0 initially failed tests.");
+    }
+    case "e2e-first-verify": {
+      const report = read("e2e-first.json");
+      if (!verifyInitialE2eRun(report)) throw new Error("The E2E slice did not complete successfully");
+      const expected = report.tests.filter((test) => test.outcome === "expected").length;
+      summary(`E2E slice completed: ${report.tests.length} discovered, ${expected} expected outcomes, ${report.tests.length - expected} skipped.`);
       break;
+    }
     case "e2e-prepare":
       prepareE2e();
       cpSync(path.join(directory, "e2e-last.json"), path.join(directory, "e2e-first-last.json"));

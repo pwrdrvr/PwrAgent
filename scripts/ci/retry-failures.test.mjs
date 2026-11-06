@@ -11,15 +11,15 @@ const report = (tests, overrides = {}) => ({
 
 describe("unit retry selection", () => {
   it("requires every scheduled module and test to reach a result", () => {
-    const module = { key: "project:file", tests: [{ state: "passed", completed: true }] };
-    const run = { reason: "failed", planned: [module.key], finished: [module.key], modules: [module] };
+    const module = { key: "project:file", tests: [{ id: "test", state: "passed", completed: true }] };
+    const run = { reason: "failed", planned: [module.key], finished: [module.key], modules: [module], collected: [{ key: module.key, ids: ["test"] }] };
     expect(isUnitRunComplete(run)).toBe(true);
     expect(isUnitRunComplete({ ...run, planned: [module.key, "project:missing"] })).toBe(false);
     expect(isUnitRunComplete({ ...run, finished: [] })).toBe(false);
     expect(isUnitRunComplete({ ...run, reason: "interrupted" })).toBe(false);
     expect(isUnitRunComplete({ ...run, modules: [{ ...module, tests: [{ state: "pending", completed: false }] }] })).toBe(false);
     expect(isUnitRunComplete({ ...run, modules: [{ ...module, tests: [{ state: "skipped", mode: "run", started: false, completed: true }] }] })).toBe(false);
-    expect(isUnitRunComplete({ ...run, modules: [{ ...module, tests: [{ state: "skipped", mode: "skip", started: true, completed: true }] }] })).toBe(true);
+    expect(isUnitRunComplete({ ...run, modules: [{ ...module, tests: [{ id: "test", state: "skipped", mode: "skip", started: true, completed: true }] }] })).toBe(true);
   });
 
   it("rejects a successful-looking unit command when its report is incomplete", () => {
@@ -28,6 +28,7 @@ describe("unit retry selection", () => {
     expect(verifyInitialUnitRun({ ...first, complete: false })).toBe(false);
     expect(verifyInitialUnitRun({ ...first, suites: [] })).toBe(false);
     expect(verifyInitialUnitRun({ ...first, unhandledErrors: 1 })).toBe(false);
+    expect(verifyInitialUnitRun({ ...first, suites: [{ project: "p", file: "f", errors: 0, tests: [test("a", "a", "skipped")] }] })).toBe(false);
   });
   it("selects exactly the initially failed cases, regardless of order", () => {
     for (let count = 1; count <= 20; count++) {
@@ -77,6 +78,7 @@ describe("E2E retry selection", () => {
     expect(verifyInitialE2eRun(first)).toBe(true);
     expect(verifyInitialE2eRun({ ...first, complete: false })).toBe(false);
     expect(verifyInitialE2eRun({ ...first, tests: [] })).toBe(false);
+    expect(verifyInitialE2eRun({ ...first, tests: [{ id: "a", outcome: "skipped" }] })).toBe(false);
   });
   it("does not reset a shutdown circuit after an abnormal close", () => {
     expect(canRetryAfterShutdown({ schemaVersion: 1, consecutiveAbnormalCloses: 0, open: false })).toBe(true);

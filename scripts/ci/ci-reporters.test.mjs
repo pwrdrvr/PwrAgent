@@ -36,7 +36,10 @@ describe("CI completion reporters", () => {
         errors: () => [],
         children: { allSuites: () => [], allTests: () => [] },
       }));
-      for (const module of modules) reporter.onTestModuleEnd(module);
+      for (const module of modules) {
+        reporter.onTestModuleCollected(module);
+        reporter.onTestModuleEnd(module);
+      }
       reporter.onTestRunEnd(modules, [], "passed");
       expect(JSON.parse(readFileSync(destination, "utf8")).complete).toBe(true);
       reporter.finished.pop();
@@ -60,6 +63,50 @@ describe("CI completion reporters", () => {
       }] });
       reporter.onEnd({ status: "failed" });
       expect(JSON.parse(readFileSync(destination, "utf8")).complete).toBe(complete);
+    }
+  });
+
+  it("compares each collected Vitest test ID with the module's final results", async () => {
+    for (const change of ["none", "reorder", "missing", "extra", "replace", "duplicate"]) {
+      const destination = reportFile();
+      const project = { name: "desktop-main" };
+      const specification = { project, moduleId: "/test" };
+      const makeTest = (id) => ({ id, fullName: id, result: () => ({ state: "passed" }), options: { mode: "run" } });
+      let tests = [makeTest("a"), makeTest("b")];
+      const module = { ...specification, errors: () => [], children: { allSuites: () => [], allTests: () => tests } };
+      const reporter = new VitestReporter();
+      reporter.onInit({ config: { shard: null } });
+      await reporter.onTestRunStart([specification]);
+      reporter.onTestModuleCollected(module);
+      if (change === "reorder") tests = tests.toReversed();
+      if (change === "missing") tests.pop();
+      if (change === "extra") tests.push(makeTest("c"));
+      if (change === "replace") tests[1] = makeTest("c");
+      if (change === "duplicate") tests[1] = makeTest("a");
+      for (const test of tests) {
+        reporter.onTestCaseReady(test);
+        reporter.onTestCaseResult(test);
+      }
+      reporter.onTestModuleEnd(module);
+      reporter.onTestRunEnd([module], [], "passed");
+      expect(JSON.parse(readFileSync(destination, "utf8")).complete, change).toBe(change === "none" || change === "reorder");
+    }
+  });
+
+  it("compares Playwright's selected test IDs before and after execution", () => {
+    for (const change of ["none", "reorder", "missing", "extra", "replace", "duplicate"]) {
+      const destination = reportFile();
+      const makeTest = (id) => ({ id, titlePath: () => [id], outcome: () => "expected", expectedStatus: "passed", results: [{ status: "passed" }] });
+      let tests = [makeTest("a"), makeTest("b")];
+      const reporter = new PlaywrightReporter();
+      reporter.onBegin({}, { allTests: () => tests });
+      if (change === "reorder") tests = tests.toReversed();
+      if (change === "missing") tests.pop();
+      if (change === "extra") tests.push(makeTest("c"));
+      if (change === "replace") tests[1] = makeTest("c");
+      if (change === "duplicate") tests[1] = makeTest("a");
+      reporter.onEnd({ status: "passed" });
+      expect(JSON.parse(readFileSync(destination, "utf8")).complete, change).toBe(change === "none" || change === "reorder");
     }
   });
 });

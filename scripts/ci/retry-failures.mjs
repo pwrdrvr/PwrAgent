@@ -1,13 +1,27 @@
-export function isUnitRunComplete({ reason, planned, finished, modules }) {
+export function sameTestIds(expected, actual) {
+  if (!Array.isArray(expected) || !Array.isArray(actual) || expected.length !== actual.length) return false;
+  const ids = new Set(expected);
+  return ids.size === expected.length && actual.every((id) => typeof id === "string" && id.length > 0 && ids.delete(id))
+    && ids.size === 0;
+}
+
+export function isUnitRunComplete({ reason, planned, finished, modules, collected }) {
   if ((reason !== "passed" && reason !== "failed") || !Array.isArray(planned) || !planned.length
-    || !Array.isArray(finished) || !Array.isArray(modules)) return false;
+    || !Array.isArray(finished) || !Array.isArray(modules) || !Array.isArray(collected)) return false;
   const expected = new Set(planned);
   if (expected.size !== planned.length || finished.length !== expected.size || modules.length !== expected.size
     || new Set(finished).size !== expected.size || finished.some((key) => !expected.has(key))) return false;
+  const selectedTests = new Map();
+  for (const item of collected) {
+    if (!expected.has(item.key) || selectedTests.has(item.key)) return false;
+    selectedTests.set(item.key, item.ids);
+  }
+  if (selectedTests.size !== expected.size) return false;
   const found = new Set();
   for (const module of modules) {
     if (!expected.has(module.key) || found.has(module.key) || !Array.isArray(module.tests)) return false;
     found.add(module.key);
+    if (!sameTestIds(selectedTests.get(module.key), module.tests.map((test) => test.id))) return false;
     for (const test of module.tests) {
       if (!test.completed || !["passed", "failed", "skipped"].includes(test.state)
         || (test.state === "skipped" && test.mode === "run" && !test.started)) return false;
@@ -54,7 +68,7 @@ export function verifyInitialUnitRun(report) {
     && Array.isArray(report.suites) && report.suites.length > 0
     && report.suites.every((suite) => suite.errors === 0 && Array.isArray(suite.tests)
       && suite.tests.every((test) => test.state === "passed" || test.state === "skipped"))
-    && report.suites.some((suite) => suite.tests.length > 0);
+    && report.suites.some((suite) => suite.tests.some((test) => test.state === "passed"));
 }
 
 export function canRetryAfterShutdown(state) {
@@ -101,7 +115,8 @@ export function planE2eRetry(report, lastRun, budget) {
 export function verifyInitialE2eRun(report) {
   return report?.status === "passed" && report.complete === true && report.errors === 0
     && Array.isArray(report.tests) && report.tests.length > 0
-    && report.tests.every((test) => test.outcome === "expected" || test.outcome === "skipped");
+    && report.tests.every((test) => test.outcome === "expected" || test.outcome === "skipped")
+    && report.tests.some((test) => test.outcome === "expected");
 }
 
 export function verifyE2eRetry(plan, report) {

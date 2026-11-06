@@ -1,11 +1,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { sameTestIds } from "./retry-failures.mjs";
 
 export default class CiRetryReporter {
   errors = 0;
 
   onBegin(_config, suite) {
     this.suite = suite;
+    this.selectedIds = suite.allTests().map((test) => test.id);
   }
 
   onError() {
@@ -26,7 +28,9 @@ export default class CiRetryReporter {
     })) ?? [];
     writeFileSync(destination, JSON.stringify({
       status: result.status,
-      complete: result.status !== "interrupted" && tests.length > 0 && tests.every((test) => test.completed),
+      complete: result.status !== "interrupted" && tests.length > 0
+        && sameTestIds(this.selectedIds, tests.map((test) => test.id))
+        && tests.every((test) => test.completed),
       errors: this.errors,
       tests,
     }));
