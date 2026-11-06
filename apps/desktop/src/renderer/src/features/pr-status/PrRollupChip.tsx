@@ -117,7 +117,13 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const hoverTimerRef = useRef<number | null>(null);
   const popoverId = useId();
   const [openMode, setOpenMode] = useState<OpenMode | null>(null);
-  const [position, setPosition] = useState<{ top: number; left: number; maxHeight: number }>();
+  const [position, setPosition] = useState<{
+    top: number;
+    left: number;
+    maxHeight: number;
+    /** The side the chip that opened the list is on: each row's PR chip sits there. */
+    chipSide: "left" | "right";
+  }>();
   const open = openMode !== null;
   const {
     show: showCard,
@@ -212,17 +218,26 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     const contentHeight = list
       ? popover.offsetHeight - list.clientHeight + list.scrollHeight
       : popover.offsetHeight;
-    const next = placeRollupPopover({
-      chip: trigger.getBoundingClientRect(),
+    const chip = trigger.getBoundingClientRect();
+    const placed = placeRollupPopover({
+      chip,
       width: popover.offsetWidth,
       contentHeight,
       viewport: { width: window.innerWidth, height: window.innerHeight },
     });
+    // The rows' chips, and their ✕, sit on the side nearest the pointer.
+    const next = {
+      ...placed,
+      chipSide: (chip.left + chip.right) / 2 < placed.left + popover.offsetWidth / 2
+        ? "left" as const
+        : "right" as const,
+    };
     setPosition((current) =>
       current
       && current.top === next.top
       && current.left === next.left
       && current.maxHeight === next.maxHeight
+      && current.chipSide === next.chipSide
         ? current
         : next);
   }, [open, rollup.ordered.length]);
@@ -426,7 +441,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             id={popoverId}
             role="group"
             aria-label={`Pull requests for ${props.threadTitle}`}
-            className="pr-rollup-popover"
+            className={position?.chipSide === "left"
+              ? "pr-rollup-popover pr-rollup-popover--chips-left"
+              : "pr-rollup-popover"}
             style={position
               ? { top: position.top, left: position.left, maxHeight: position.maxHeight }
               : { top: 0, left: 0, visibility: "hidden" }}
@@ -454,8 +471,16 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                   : prStatusLabel(pr);
                 const rowPresentation = resolvePrChipPresentation(pr);
                 const rowWaitingForCi = Boolean(watchFor(pr)?.ci);
+                const openRow = (): void => {
+                  dismissImmediately();
+                  props.onOpen(pr.url);
+                };
                 return (
-                  <li key={pr.url}>
+                  // The row's card follows the pointer onto the chip too.
+                  <li
+                    key={pr.url}
+                    onMouseEnter={(event) => showRowCard(pr, event.currentTarget, false)}
+                  >
                     <button
                       type="button"
                       className="pr-rollup-popover__row"
@@ -465,13 +490,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                       aria-describedby={
                         cardUrl === pr.url && cardVisible ? cardId : undefined
                       }
-                      onMouseEnter={(event) => showRowCard(pr, event.currentTarget, false)}
                       onFocus={(event) => showRowCard(pr, event.currentTarget, true)}
                       onBlur={hideRowCard}
-                      onClick={() => {
-                        dismissImmediately();
-                        props.onOpen(pr.url);
-                      }}
+                      onClick={openRow}
                       onContextMenu={(event) => {
                         if (!props.onOpenContextMenu) return;
                         event.preventDefault();
@@ -486,50 +507,48 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                       aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}
                       onKeyDown={(event) => handleRowKeyDown(event, pr, index)}
                     >
-                      <span
-                        aria-hidden="true"
-                        className={[
-                          "pr-chip",
-                          ...prChipModifierClasses(rowPresentation),
-                        ].join(" ")}
-                      >
-                        <span
-                          className="pr-chip__dot"
-                          ref={rowPresentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
-                        />
-                        <span className="pr-chip__label">{label}</span>
-                        {rowWaitingForCi ? (
-                          <span className="pr-chip__watch">
-                            <EyeIcon size={12} />
-                          </span>
-                        ) : null}
+                      <span className="pr-rollup-popover__title">
+                        {pr.title ?? `${pr.org}/${pr.repo}`}
                       </span>
-                      <span className="pr-rollup-popover__text">
-                        <span className="pr-rollup-popover__title">
-                          {pr.title ?? `${pr.org}/${pr.repo}`}
-                        </span>
-                        <span className="pr-rollup-popover__status">{status}</span>
-                      </span>
+                      <span className="pr-rollup-popover__status">{status}</span>
                     </button>
-                    {props.onDetach ? (
-                      // Outside the row's button, so it is its own target.
-                      // Out of the Tab order like the chip's ✕: arrows walk
-                      // the rows, and Delete on a row detaches it.
-                      <button
-                        type="button"
-                        tabIndex={-1}
-                        className="pr-rollup-popover__detach"
-                        aria-label={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
-                        title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
-                        onMouseEnter={hideRowCard}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          detachRow(pr, index, false);
-                        }}
-                      >
-                        <CloseIcon size={11} aria-hidden="true" />
-                      </button>
-                    ) : null}
+                    {/* The chip as Mission Control draws it, ✕ included. It is
+                        a pointer shortcut beside the row's button, not a second
+                        control: its number opens the PR as the row does, and
+                        Delete on the row is the keyboard's detach. */}
+                    <span
+                      aria-hidden="true"
+                      className={[
+                        "pr-chip",
+                        "pr-rollup-popover__chip",
+                        ...prChipModifierClasses(rowPresentation),
+                      ].join(" ")}
+                      onClick={openRow}
+                    >
+                      <span
+                        className="pr-chip__dot"
+                        ref={rowPresentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
+                      />
+                      <span className="pr-chip__label">{label}</span>
+                      {rowWaitingForCi ? (
+                        <span className="pr-chip__watch">
+                          <EyeIcon size={12} />
+                        </span>
+                      ) : null}
+                      {props.onDetach ? (
+                        <span
+                          className="pr-chip__detach"
+                          title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
+                          onMouseEnter={hideRowCard}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            detachRow(pr, index, false);
+                          }}
+                        >
+                          <CloseIcon size={11} aria-hidden="true" />
+                        </span>
+                      ) : null}
+                    </span>
                   </li>
                 );
               })}

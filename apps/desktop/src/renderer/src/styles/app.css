@@ -1723,7 +1723,17 @@
 .pr-rollup-popover__list > li {
   display: flex;
   align-items: flex-start;
+  gap: 8px;
+  padding-right: 8px;
   border-radius: 4px;
+}
+
+/* The rows' chips sit on the side nearest the chip that opened the list,
+   so the ✕ is a short move from where the pointer came in. */
+.pr-rollup-popover--chips-left .pr-rollup-popover__list > li {
+  flex-direction: row-reverse;
+  padding-right: 0;
+  padding-left: 8px;
 }
 
 .pr-rollup-popover__list > li:hover,
@@ -1731,13 +1741,14 @@
   background: var(--accent-soft);
 }
 
+/* The title and status take the row's full width; the chip sits beside. */
 .pr-rollup-popover__row {
   display: flex;
   min-width: 0;
   flex: 1;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 6px 8px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 0 6px 8px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -1747,26 +1758,25 @@
   cursor: pointer;
 }
 
+.pr-rollup-popover--chips-left .pr-rollup-popover__row {
+  padding: 6px 8px 6px 0;
+}
+
 .pr-rollup-popover__row:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
-.pr-rollup-popover__row .pr-chip {
+/* The rows' chips, centered on the title line. */
+.pr-rollup-popover__list .pr-chip {
   height: 20px;
   flex: none;
-  pointer-events: none;
-}
-
-.pr-rollup-popover__text {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 1px;
+  margin-top: 5px;
 }
 
 .pr-rollup-popover__title {
   overflow: hidden;
+  max-width: 100%;
   font-size: 12px;
   font-weight: 500;
   line-height: 18px;
@@ -1775,32 +1785,13 @@
 }
 
 .pr-rollup-popover__status {
+  overflow: hidden;
+  max-width: 100%;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 14px;
-}
-
-/* Pointer target for one PR; Delete on the row is the keyboard's way. 24px
-   meets the target-size floor, unlike the chip's 16px ✕. */
-.pr-rollup-popover__detach {
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  margin: 4px 4px 0 0;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.pr-rollup-popover__detach:hover {
-  background: var(--danger-soft);
-  color: var(--danger-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Detach all sits apart from the rows, so a stray click on the list

@@ -51,7 +51,7 @@ function Harness(props: {
 }
 
 function rowLabels(): string[] {
-  return [...document.querySelectorAll(".pr-rollup-popover__row .pr-chip__label")]
+  return [...document.querySelectorAll(".pr-rollup-popover__chip .pr-chip__label")]
     .map((label) => label.textContent ?? "");
 }
 
@@ -100,7 +100,7 @@ describe("PrRollupChip detach properties", () => {
               const rows = document.querySelectorAll<HTMLElement>(".pr-rollup-popover__row");
               if (action.via === "button") {
                 fireEvent.click(
-                  document.querySelectorAll<HTMLElement>(".pr-rollup-popover__detach")[index]!,
+                  document.querySelectorAll<HTMLElement>(".pr-rollup-popover__chip .pr-chip__detach")[index]!,
                 );
               } else {
                 act(() => rows[index]!.focus());
@@ -195,7 +195,7 @@ describe("PrRollupChip detach controls", () => {
       />,
     );
     fireEvent.click(view.container.querySelector("[data-pr-rollup]")!);
-    expect(document.querySelector(".pr-rollup-popover__detach")).toBeNull();
+    expect(document.querySelector(".pr-rollup-popover__chip .pr-chip__detach")).toBeNull();
     expect(document.querySelector(".pr-rollup-popover__detach-all")).toBeNull();
   });
 
@@ -225,5 +225,58 @@ describe("PrRollupChip detach controls", () => {
     });
     expect(moved).toBe(false);
     expect(rows[2]).toHaveFocus();
+  });
+
+  it("opens the PR from the chip's number, and only the ✕ detaches", () => {
+    const onOpen = vi.fn();
+    const onDetach = vi.fn();
+    const prs = [pr(1), pr(2)];
+    const view = render(
+      <PrRollupChip
+        prs={prs}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        onOpen={onOpen}
+        onDetach={onDetach}
+      />,
+    );
+    fireEvent.click(view.container.querySelector("[data-pr-rollup]")!);
+    const chip = document.querySelectorAll<HTMLElement>(".pr-rollup-popover__chip")[1]!;
+    fireEvent.click(chip.querySelector(".pr-chip__label")!);
+    expect(onOpen).toHaveBeenCalledWith(prs[1]!.url);
+    expect(onDetach).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The rows' chips carry the ✕, so they sit on the side of the list nearest
+ * the chip that opened it: a short move from where the pointer came in.
+ */
+describe("PrRollupChip row chip side", () => {
+  function openAt(chipRect: { left: number; right: number }) {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(340);
+    const view = render(
+      <PrRollupChip
+        prs={[pr(1), pr(2)]}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        onOpen={() => undefined}
+        onDetach={() => undefined}
+      />,
+    );
+    const trigger = view.container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(chipRect.left, 40, chipRect.right - chipRect.left, 22),
+    );
+    fireEvent.click(trigger);
+    return document.querySelector<HTMLElement>(".pr-rollup-popover")!;
+  }
+
+  it("puts the chips on the right when the list opens leftward from its chip", () => {
+    expect(openAt({ left: 600, right: 660 })).not.toHaveClass("pr-rollup-popover--chips-left");
+  });
+
+  it("puts the chips on the left when the chip sits at the list's left", () => {
+    expect(openAt({ left: 20, right: 80 })).toHaveClass("pr-rollup-popover--chips-left");
   });
 });
