@@ -44859,8 +44859,8 @@ export class DesktopBackendRegistry {
     const sourceRevision = consentRevision ?? invocation.schemaRevision;
     const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
     const monitor = this.taskMonitorForThread(context);
-    if (monitor && (annotations?.readOnlyHint !== true || annotations.destructiveHint === true)) return false;
     const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
+    if (monitor && !readOnlyCall) return false;
     // A Claude plan turn is read-only. Its permission handler passes gateway
     // calls here unasked, because only the gateway knows the upstream tool.
     // Any other tool is refused at every access level, with no card.

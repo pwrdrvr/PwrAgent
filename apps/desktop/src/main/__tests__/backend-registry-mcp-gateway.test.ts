@@ -1548,15 +1548,18 @@ select_for_new_threads = true
         live = "default";
       });
 
-      it.each([
-        { label: "with no hints", annotations: undefined },
-        { label: "that is not read-only", annotations: { readOnlyHint: false } },
-        { label: "that is read-only but destructive", annotations: { readOnlyHint: true, destructiveHint: true } },
-      ])("refuses a tool $label without a card", async ({ annotations }) => {
-        await expect(approve(annotations)).rejects.toThrow(refusal);
-        expect(events).toEqual([]);
-        expect(internals.pendingServerRequests.size).toBe(0);
-      });
+      // Every hint combination: refused unless read-only and not destructive.
+      const hints = [undefined, true, false] as const;
+      it.each(hints.flatMap((readOnlyHint) => hints.map((destructiveHint) => ({ readOnlyHint, destructiveHint }))))(
+        "decides readOnlyHint $readOnlyHint, destructiveHint $destructiveHint without a card",
+        async ({ readOnlyHint, destructiveHint }) => {
+          const annotations = { ...(readOnlyHint === undefined ? {} : { readOnlyHint }), ...(destructiveHint === undefined ? {} : { destructiveHint }) };
+          if (readOnlyHint === true && destructiveHint !== true) expect(await approve(annotations)).toBe(true);
+          else await expect(approve(annotations)).rejects.toThrow(refusal);
+          expect(events).toEqual([]);
+          expect(internals.pendingServerRequests.size).toBe(0);
+        },
+      );
 
       it("refuses it under bypass permissions, a conversation approval and an automation", async () => {
         reply = { action: "accept", content: {}, _meta: { persist: "session" } };
@@ -1574,8 +1577,15 @@ select_for_new_threads = true
         expect(events).toHaveLength(1);
       });
 
-      it("runs a read-only tool as the connection's Tool approval setting says", async () => {
-        expect(await approve({ readOnlyHint: true })).toBe(true);
+      // Through the gateway service, as Claude's MCP server reaches it after
+      // the permission handler let the call through unasked.
+      it("refuses a write through the gateway before the upstream call", async () => {
+        internals.activeTurnKeys.add("claude:thread-1:turn-1");
+        await store.setThreadMcpConnectionIds({ backend: "claude", threadId: "thread-1", connectionIds: ["one"] });
+        const gateway = (registry as unknown as { mcpGatewayTools: { call(args: unknown, context: AgentToolCallContext): Promise<unknown> } }).mcpGatewayTools;
+        await expect(gateway.call(args, { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" }))
+          .rejects.toThrow(refusal);
+        expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
         expect(events).toEqual([]);
       });
     });
