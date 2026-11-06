@@ -1,7 +1,7 @@
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { canRetryAfterShutdown, groupUnitRetries, planE2eRetry, planUnitRetry, verifyE2eRetry, verifyInitialE2eRun, verifyInitialUnitRun, verifyUnitRetry } from "./retry-failures.mjs";
+import { canRetryAfterShutdown, groupUnitRetries, planE2eRetry, planUnitRetry, unitRetryNamePattern, verifyE2eRetry, verifyInitialE2eRun, verifyInitialUnitRun, verifyUnitRetry } from "./retry-failures.mjs";
 
 const directory = path.resolve(".local/ci/retry");
 const read = (name) => JSON.parse(readFileSync(path.join(directory, name), "utf8"));
@@ -21,7 +21,7 @@ function retryUnits() {
   let passed = true;
   let index = 0;
   for (const { project, files, tests } of groupUnitRetries(plan, first)) {
-    const pattern = `^(?:${tests.map((test) => test.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`;
+    const pattern = unitRetryNamePattern(tests);
     const report = path.join(directory, `unit-retry-${index++}.json`);
     rmSync(report, { force: true });
     const result = spawnSync(process.execPath, [

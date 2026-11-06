@@ -44,20 +44,14 @@ export default class CiRetryReporter {
       key: JSON.stringify([module.project.name, module.moduleId]),
       errors: module.errors().length
         + [...module.children.allSuites()].reduce((sum, suite) => sum + suite.errors().length, 0),
-      tests: [...module.children.allTests()].map((test) => {
-        const parts = [test.name];
-        for (let parent = test.parent; parent.type === "suite"; parent = parent.parent) {
-          parts.unshift(parent.name);
-        }
-        return {
-          id: test.id,
-          name: parts.join(" "),
-          state: test.result().state,
-          mode: test.options.mode,
-          started: this.startedTests.has(test.id),
-          completed: this.finishedTests.has(test.id),
-        };
-      }),
+      tests: [...module.children.allTests()].map((test) => ({
+        id: test.id,
+        name: test.fullName,
+        state: test.result().state,
+        mode: test.options.mode,
+        started: this.startedTests.has(test.id),
+        completed: this.finishedTests.has(test.id),
+      })),
     }));
     mkdirSync(path.dirname(destination), { recursive: true });
     const completedModules = new Set(this.finished);

@@ -16,6 +16,10 @@ export function isUnitRunComplete({ reason, planned, finished, modules }) {
   return true;
 }
 
+export function unitRetryNamePattern(tests) {
+  return `^(?:${tests.map((test) => test.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`;
+}
+
 export function planUnitRetry(report, budget) {
   if (!report?.complete || report.unhandledErrors !== 0 || !Array.isArray(report.suites)) {
     throw new Error("The first run did not finish cleanly enough to select retries");
