@@ -8,6 +8,8 @@ import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federa
 import { BLOB_CHUNK_BYTES, BLOB_RETENTION_MS, FederationResumableBlobReceiver } from "@pwragent/federation/federation-resumable-blob";
 import { FederationFilePushReceiver, FILE_PUSH_METHODS } from "../federation/federation-file-push";
 
+// Real file and directory fsyncs need room for CI disk contention without
+// reducing generated cases or adding retries.
 it("commits each prefix once across generated send/ack/drop/restart interleavings", async () => {
   await fc.assert(fc.asyncProperty(
     fc.array(fc.record({ event: fc.integer({ min: 1, max: 50 }), after: fc.boolean() }), { maxLength: 4 }),
@@ -105,7 +107,7 @@ it("commits each prefix once across generated send/ack/drop/restart interleaving
       }
     },
   ), { numRuns: 15, examples: [[[{ event: 20, after: true }]], [[{ event: 25, after: true }]], [[]]] });
-});
+}, process.platform === "win32" ? 30_000 : 10_000);
 
 it("cancel removes the part file and sidecar", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "blob-cancel-"));

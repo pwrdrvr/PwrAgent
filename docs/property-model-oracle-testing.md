@@ -159,7 +159,7 @@ against the pre-fix code:
 - **Narrow, don't weaken.** A counterexample may be a case the code handles
   on purpose. If so, restrict the generator or add `fc.pre(...)`, with a
   comment saying why. Don't loosen the assertion until it passes.
-- **Budget the runs.** The test timeout is 5 s on Linux and macOS and 30 s on
+- **Budget the runs.** The default test timeout is 5 s on Linux and macOS and 30 s on
   Windows. CI runs unit tests on all three, and Windows desktop-main run time
   can vary by more than 2× between runs.
   - Pure properties: keep the default `numRuns` (100), and a file under
