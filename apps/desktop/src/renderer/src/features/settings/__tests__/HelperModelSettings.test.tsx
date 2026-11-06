@@ -6,6 +6,11 @@ import type {
   DesktopHelperModelSettings,
 } from "@pwragent/shared";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
+import {
+  codexCatalogModels,
+  expectedCodexSelectSections,
+  selectSections,
+} from "../../../test/model-catalog";
 import { HelperModelSettings } from "../HelperModelSettings";
 
 const EFFORTS = ["low", "medium", "high"];
@@ -50,6 +55,16 @@ function renderRow(
 }
 
 describe("HelperModelSettings", () => {
+  it("lists models the way the composer does: current first, superseded under Other models", () => {
+    renderRow({ helpers: {} }, [{
+      ...codex,
+      launchpadOptions: { reasoningEfforts: EFFORTS, models: codexCatalogModels() },
+    } as BackendSummary]);
+    const sections = selectSections(screen.getByRole("combobox", { name: "Helper model" }));
+    expect(sections[0]?.labels[0]).toMatch(/^Automatic/);
+    expect(sections).toEqual(expectedCodexSelectSections([sections[0]!.labels[0]!]));
+  });
+
   it("is one model picker and one reasoning picker, with no row per helper", () => {
     renderRow({ helpers: {} });
 

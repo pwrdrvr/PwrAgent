@@ -11,10 +11,12 @@ import {
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import {
   listRunningDetachedCommands,
+  terminateAllCodexEnvironmentDetachedCommands,
   type DetachedCommandSummary,
 } from "./app-server/codex-environment-runtime";
 import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { getDesktopAutomationService } from "./automations/desktop-automation-service";
+import { runQuietRestart } from "./quiet-restart";
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getIntegratedTerminalQuitSnapshot } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
@@ -77,6 +79,7 @@ export type QuitManagerDependencies = {
     archiveCleanupCount?: number;
     items?: QuitBlockerItem[];
     refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
+    quietRestart?: () => Promise<boolean>;
   }) => Promise<QuitConfirmationDialogResult>;
   /**
    * Raise the confirmation prompt that is already open. Returns false when
@@ -91,6 +94,12 @@ export type QuitManagerDependencies = {
   getQuitBlockers: () => QuitBlockerSnapshot;
   /** Bounded registry provenance, captured only for a new quit request. */
   getBlockerDiagnostics?: () => unknown;
+  /**
+   * Quiet & Continue After Restart: stop running work so each thread
+   * continues after the next launch. Offered by the dialog only when set.
+   * Must not reject; the quit follows whatever it managed.
+   */
+  quietForRestart?: () => Promise<void>;
   /** Hold new automation launches until quitting proceeds or the prompt closes. */
   quiesceAutomationDispatch?: () => () => Promise<void> | void;
   /**
@@ -243,6 +252,24 @@ export function createQuitManager(
             )
           : snapshot.items;
       let resolution: QuitConfirmationDialogResult;
+      // An update's authorization runs before the quiet restart stops any
+      // work, so a refusal leaves everything running and the prompt open.
+      let beforeQuitAuthorized = false;
+      const quietForRestart = dependencies.quietForRestart;
+      const quietRestart = quietForRestart
+        ? async (): Promise<boolean> => {
+            if (pendingBeforeQuit && !pendingBeforeQuit()) return false;
+            beforeQuitAuthorized = true;
+            try {
+              await quietForRestart();
+            } catch (error) {
+              dependencies.log.warn?.("quiet restart failed; quitting", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+            return true;
+          }
+        : undefined;
       try {
         resolution = await (dependencies.confirm ?? showQuitConfirmationDialog)({
           countdownSeconds: QUIT_CONFIRMATION_COUNTDOWN_SECONDS,
@@ -260,8 +287,14 @@ export function createQuitManager(
               dependencies.resolveThreadTitles,
               dependencies.log,
             ),
+          ...(quietRestart ? { quietRestart } : {}),
         });
-        if (resolution !== "manual-cancel" && pendingBeforeQuit && !pendingBeforeQuit()) {
+        if (
+          resolution !== "manual-cancel"
+          && !beforeQuitAuthorized
+          && pendingBeforeQuit
+          && !pendingBeforeQuit()
+        ) {
           resolution = "manual-cancel";
         }
       } catch (error) {
@@ -710,6 +743,13 @@ export const appQuitManager = createQuitManager({
   getBlockerDiagnostics: () => getDesktopBackendRegistry().getQuitBlockerDiagnostics(),
   quiesceAutomationDispatch: () =>
     getDesktopAutomationService().quiesceDispatch(),
+  quietForRestart: async () => {
+    await runQuietRestart({
+      registry: getDesktopBackendRegistry(),
+      terminateActions: terminateAllCodexEnvironmentDetachedCommands,
+      log: quitLog,
+    });
+  },
   // Map/store reads only, no peer round trip. Names remembered from peer
   // snapshots keep remote blockers readable without delaying shutdown.
   resolveThreadTitles: resolveCurrentQuitBlockerTitles,

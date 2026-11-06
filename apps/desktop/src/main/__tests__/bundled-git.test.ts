@@ -14,6 +14,7 @@ import {
   operatorSearchPath,
 } from "../bundled-git";
 import { resolveGitExecutable, runGitCommand, streamGitCommand } from "../app-server/git-executable";
+import { customGitEnvironment } from "../git-runtime";
 
 afterEach(() => {
   configureBundledGit();
@@ -351,3 +352,127 @@ describe.skipIf(process.platform === "win32")("bundled Git keychain credentials"
     }
   });
 });
+
+/** One value as the bundled Git resolves it, for an environment built here. */
+function configGet(env: NodeJS.ProcessEnv, key: string, cwd = os.tmpdir()): string {
+  return spawnSync(bundledGitExecutable(), ["config", "--get", key], {
+    cwd,
+    encoding: "utf8",
+    env,
+    timeout: 10_000,
+  }).stdout.trim();
+}
+
+// Include paths are compared unescaped, which holds for POSIX paths only.
+describe.skipIf(process.platform === "win32")("bundled Git system config visibility", () => {
+  async function fixture() {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-system-config-")));
+    vi.stubEnv("PWRAGENT_HOME", path.join(root, "home"));
+    const globalConfig = path.join(root, "global-config");
+    await writeFile(globalConfig, "");
+    const source: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: globalConfig };
+    delete source.GIT_CONFIG_SYSTEM;
+    return { root, globalConfig, source };
+  }
+
+  it("includes an operator's own GIT_CONFIG_SYSTEM in place of the bundle's", async () => {
+    const { root, source } = await fixture();
+    try {
+      const own = path.join(root, "own-system-config");
+      await writeFile(own, "[pwragent]\n\tfixture = own\n");
+      const env = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: own }, { platform: "linux" });
+      expect(env.GIT_CONFIG_SYSTEM).not.toBe(own);
+      const generated = await readFile(env.GIT_CONFIG_SYSTEM!, "utf8");
+      expect(generated).toContain(`path = "${own}"`);
+      expect(generated).not.toContain(path.join(bundledGitDirectory(), "etc", "gitconfig"));
+      expect(configGet(env, "pwragent.fixture")).toBe("own");
+      // PwrAgent's defaults still sit beneath it.
+      expect(configGet(env, "filter.lfs.required")).toBe("true");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an operator's GIT_CONFIG_SYSTEM when the environment is built twice", async () => {
+    const { root, source } = await fixture();
+    try {
+      const own = path.join(root, "own-system-config");
+      await writeFile(own, "[pwragent]\n\tfixture = own\n");
+      // The terminal and Codex environments are built from a built one.
+      const once = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: own }, { platform: "linux" });
+      const twice = bundledGitEnvironment(once, { platform: "linux" });
+      expect(twice.GIT_CONFIG_SYSTEM).toBe(once.GIT_CONFIG_SYSTEM);
+      expect(configGet(twice, "pwragent.fixture")).toBe("own");
+      // An installed Git chosen afterwards reads the operator's file itself.
+      expect(customGitEnvironment(twice, "/usr/bin/git").GIT_CONFIG_SYSTEM).toBe(own);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rebuilds a GIT_CONFIG_SYSTEM that PwrAgent itself set instead of stacking it", async () => {
+    const { root, source } = await fixture();
+    try {
+      const first = bundledGitEnvironment(source, { platform: "linux" });
+      const bundleInclude = `path = "${path.join(bundledGitDirectory(), "etc", "gitconfig")}"`;
+      // A shell in PwrAgent's terminal carries the generated file.
+      const again = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: first.GIT_CONFIG_SYSTEM }, { platform: "linux" });
+      expect(again.GIT_CONFIG_SYSTEM).toBe(first.GIT_CONFIG_SYSTEM);
+      // A generated file from another PwrAgent root is recognized by its header.
+      const elsewhere = path.join(root, "other-root-gitconfig");
+      await copyFile(first.GIT_CONFIG_SYSTEM!, elsewhere);
+      const fromOtherRoot = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: elsewhere }, { platform: "linux" });
+      expect(await readFile(fromOtherRoot.GIT_CONFIG_SYSTEM!, "utf8")).toContain(bundleInclude);
+      // So is one a sister app generated, which would stack its defaults.
+      const sister = path.join(root, "pwrgit-gitconfig");
+      await writeFile(sister, "# Written by PwrGit: defaults for its bundled Git\n[credential]\n\thelper = sister\n");
+      const fromSister = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: sister }, { platform: "linux" });
+      expect(fromSister.GIT_CONFIG_SYSTEM).toBe(first.GIT_CONFIG_SYSTEM);
+      // So is the bundle's own file.
+      const bundleFile = path.join(bundledGitDirectory(), "etc", "gitconfig");
+      const fromBundle = bundledGitEnvironment({ ...source, GIT_CONFIG_SYSTEM: bundleFile }, { platform: "linux" });
+      expect(fromBundle.GIT_CONFIG_SYSTEM).toBe(first.GIT_CONFIG_SYSTEM);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("enables reflink checkouts at system scope, where global config can turn them off", async () => {
+    const { root, globalConfig, source } = await fixture();
+    try {
+      const env = bundledGitEnvironment(source, { platform: "linux" });
+      expect(configGet(env, "checkout.reflink")).toBe("true");
+      await writeFile(globalConfig, "[checkout]\n\treflink = false\n");
+      expect(configGet(env, "checkout.reflink")).toBe("false");
+      // Windows keeps Dugite's MinGit, which has no reflink support.
+      const windows = bundledGitEnvironment(source, { platform: "win32" });
+      expect(await readFile(windows.GIT_CONFIG_SYSTEM!, "utf8")).not.toContain("[checkout]");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("points Linux Git at the bundle's CA file as Dugite does, beneath an explicit one", async () => {
+    const { root, source } = await fixture();
+    delete source.GIT_SSL_CAINFO;
+    const caBundle = path.join(root, "resources", "git", "ssl", "cacert.pem");
+    try {
+      configureBundledGit(path.join(root, "resources"));
+      // No file, no variable: Git keeps its libcurl default.
+      expect(bundledGitEnvironment(source, { platform: "linux" }).GIT_SSL_CAINFO).toBeUndefined();
+      await mkdir(path.dirname(caBundle), { recursive: true });
+      await writeFile(caBundle, "");
+      const env = bundledGitEnvironment(source, { platform: "linux" });
+      expect(env.GIT_SSL_CAINFO).toBe(caBundle);
+      expect(await readFile(env.GIT_CONFIG_SYSTEM!, "utf8")).not.toContain("[http]");
+      const explicit = bundledGitEnvironment({ ...source, GIT_SSL_CAINFO: "/operator/ca.pem" }, { platform: "linux" });
+      expect(explicit.GIT_SSL_CAINFO).toBe("/operator/ca.pem");
+      // Dugite sets it on Linux only; macOS keeps the system trust store.
+      expect(bundledGitEnvironment(source, { platform: "darwin" }).GIT_SSL_CAINFO).toBeUndefined();
+    } finally {
+      configureBundledGit();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+

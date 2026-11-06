@@ -23,6 +23,17 @@ export function exactLauncherPipes(candidates, inventory) {
     : { error: "Main inventory did not narrow the candidate pool to exactly four complete names.", matchedNameCount: names.length };
 }
 
+export function launcherParentMatches(event, source, child, parent) {
+  if (!source?.verified || !source.liveAfter || source.pid !== event.pid
+    || child?.pid !== source.pid || child.created !== source.created
+    || child.ppid !== event.workerPid || typeof child.name !== "string" || child.name.toLowerCase() !== "electron.exe"
+    || parent?.pid !== event.workerPid || child.parentCreated !== parent.created) return false;
+  if (!/^[1-9][0-9]*$/.test(source.created) || !/^[1-9][0-9]*$/.test(parent.created)) return false;
+  // Date.now() and native process creation can differ by several milliseconds.
+  // Bind the parent by its native identity rather than comparing those clocks.
+  return BigInt(parent.created) <= BigInt(source.created);
+}
+
 // A sampled disappearance time never substitutes for the native exit FILETIME.
 export function ancestry(rows, pid, created) {
   const chain = [];

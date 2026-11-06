@@ -8,6 +8,8 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 
 export type McpOAuthCredential = {
   resourceUrl: string;
+  /** Manually approved IPC session credential; never used by OAuth. */
+  ipcBearerToken?: string;
   redirectUrl?: string;
   clientInformation?: OAuthClientInformationMixed;
   codeVerifier?: string;

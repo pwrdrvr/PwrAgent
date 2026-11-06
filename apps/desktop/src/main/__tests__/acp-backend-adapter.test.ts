@@ -12,6 +12,7 @@ import type {
 } from "@pwragent/shared";
 import {
   AcpBackendAdapter,
+  acpSessionToThreadSummary,
   describeInstalledAcpBackend,
   inputToAcpPrompt,
   isAcpSessionMissingForProjectError,
@@ -605,6 +606,29 @@ describe("describeInstalledAcpBackend", () => {
       "default",
       "full-access",
     ]);
+  });
+});
+
+describe("acpSessionToThreadSummary", () => {
+  const session: AcpSessionMetadata = {
+    backendId: "acp:kimi",
+    sessionId: "kimi-1",
+    title: "ACP session",
+    createdAt: 1,
+    updatedAt: 1,
+    executionMode: "default",
+    status: "idle",
+  };
+
+  it("reports the working directory as the thread's projectKey", () => {
+    // A peer files the thread under the linked directory projectKey names,
+    // so a directory `@`-referenced later cannot move it.
+    const cwd = "/Users/peer/github/PwrAgnt";
+    expect(acpSessionToThreadSummary({ ...session, cwd })).toMatchObject({
+      projectKey: cwd,
+      linkedDirectories: [{ path: cwd }],
+    });
+    expect(acpSessionToThreadSummary(session)).not.toHaveProperty("projectKey");
   });
 });
 

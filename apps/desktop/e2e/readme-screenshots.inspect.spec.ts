@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type ElectronApplication } from "@playwright/test";
+import { expect, test, type ElectronApplication } from "./fixtures/electron-test";
 import {
   bringToFront,
   captureOwnerPidArg,

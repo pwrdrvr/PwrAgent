@@ -68,11 +68,13 @@ async function createFixture(managed: boolean | "claude" = false) {
   const { dbPath, tempDir } = createTempStateDb("pwragent-archive-restart-db-");
   roots.push(tempDir);
   const claudeStore = new ClaudeSessionStore(path.join(root, "claude"));
-  const reopen = (workspace = directory, checkpoint = false, createAcpTransport?: AcpTransportFactory) => {
+  const reopen = (workspace = directory, checkpoint = false, createAcpTransport?: AcpTransportFactory,
+    extraWorkspaces: Array<typeof directory> = []) => {
     const db = StateDb.open(dbPath);
     databases.push(db);
     const store = new SqliteOverlayStore(db);
-    const client = new CodexAppServerClient({ directoryResolver: async (cwd) => cwd === workspace.worktreePath ? [workspace] : [] });
+    const client = new CodexAppServerClient({ directoryResolver: async (cwd) =>
+      [workspace, ...extraWorkspaces].filter((row) => row.worktreePath === cwd) });
     const acpAgentStore = new AcpAgentStore(db);
     const acpSessionStore = new AcpSessionStore(db);
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null, threadTitleGenerationService: null,
@@ -134,6 +136,52 @@ class ArchiveAcpTransport extends FakeAcpAgentTransport {
 }
 
 describe("ACP snapshot archive and restoration", () => {
+  it("preserves archive metadata when an earlier replay read resumes between cleanup inventories", async () => {
+    const fixture = await createFixture("claude");
+    const transport = new ArchiveAcpTransport();
+    let releaseInitialize!: () => void;
+    let initializeStarted!: () => void;
+    const initializeBarrier = new Promise<void>((resolve) => { releaseInitialize = resolve; });
+    const initializing = new Promise<void>((resolve) => { initializeStarted = resolve; });
+    const request = transport.request.bind(transport);
+    vi.spyOn(transport, "request").mockImplementation(async (method, params) => {
+      if (method === "initialize") {
+        initializeStarted();
+        await initializeBarrier;
+      }
+      return await request(method, params);
+    });
+    const instance = fixture.reopen(fixture.directory, false, () => transport);
+    seedAcpOwner(instance, fixture.worktree);
+    // Replay-backed E2E uses the aggregate inventory instead of the paged
+    // Codex cleanup API. Hold initialization until its active pass completes.
+    Object.defineProperty(instance.client, "listArchiveCleanupThreadsPage", { value: undefined });
+    const read = instance.registry.readThread(acpOwner);
+    await initializing;
+    const listThreads = instance.registry.listThreads.bind(instance.registry);
+    let resumedRead = false;
+    vi.spyOn(instance.registry, "listThreads").mockImplementation(async (params) => {
+      const threads = await listThreads(params);
+      if (!resumedRead && params?.callerReason === "archive-cleanup" && params.archived === false) {
+        resumedRead = true;
+        expect(instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+        releaseInitialize();
+        await read;
+      }
+      return threads;
+    });
+    try {
+      const result = await instance.registry.archiveThread(acpOwner);
+      expect(resumedRead).toBe(true);
+      expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      expect(instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+      await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      releaseInitialize();
+      await read;
+    }
+  });
+
   it.each([false, true])("restores dirty files, unpublished commits and original protocol identity across restart (repair=%s)", async (repair) => {
     vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
     const fixture = await createFixture("claude");
@@ -332,7 +380,12 @@ describe("ACP snapshot archive and restoration", () => {
     await writeFile(path.join(fixture.worktree, "file.txt"), "shared dirty edit\n");
     const { writes: archiveWrites } = await measureSqliteWrites(async () => {
       expect((await first.registry.archiveThread(acpOwner)).cleanup).toEqual([expect.objectContaining({ removedWorktree: false })]);
-      expect((await first.registry.archiveThread(other)).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      const cleanup = (await first.registry.archiveThread(other)).cleanup;
+      expect(cleanup).toEqual([expect.objectContaining({ worktreePath: fixture.worktree })]);
+      // Releasing the final reference can let the first owner's queued retry
+      // remove the checkout before this owner's cleanup reaches it.
+      if (!cleanup[0]!.removedWorktree) expect(cleanup[0]!.skippedReason).toBe("Worktree directory no longer exists.");
+      await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
     });
     if (otherBackend === "acp:fixture" && acpFirst) expectSqliteWriteBudget({ scenario: "acp-shared-worktree-archive",
       note: "Archive two ACP owners, retain the active checkout until both archive, then save both recovery snapshots; boundary writes only.", writes: archiveWrites });
@@ -355,6 +408,36 @@ describe("ACP snapshot archive and restoration", () => {
 });
 
 describe("archive worktrees across a desktop restart", () => {
+  it("restores dirty contents after a deferred removal loses its snapshot-store write and restarts", async () => {
+    const fixture = await createFixture(true);
+    ArchiveWorktreeTransport.threads = [
+      { id: "target", cwd: fixture.worktree, source: "cli" },
+      { id: "owner", cwd: fixture.repo, source: "cli" },
+    ];
+    const first = fixture.reopen(fixture.directory, true);
+    await first.store.addLinkedDirectory({ backend: "codex", threadId: "owner", directory: fixture.directory });
+    await writeFile(path.join(fixture.worktree, "file.txt"), "deferred dirty edit\n");
+    expect((await first.registry.archiveThread({ backend: "codex", threadId: "target" })).cleanup[0]?.removedWorktree).toBe(false);
+    vi.spyOn(first.store, "upsertWorktreeSnapshot").mockRejectedValueOnce(new Error("Snapshot store unavailable"));
+    const completed = new Promise<void>((resolve) => first.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "target") resolve();
+    }));
+    await first.store.removeLinkedDirectory({ backend: "codex", threadId: "owner", directory: fixture.directory });
+    await first.registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["owner"] },
+    } });
+    await completed;
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await first.store.getThreadOverlayState({ backend: "codex", threadId: "target" }))?.worktreeSnapshots ?? []).toEqual([]);
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    const resumed = fixture.reopen(fixture.directory, true);
+    await resumed.registry.resumeArchiveCleanupsAtStartup();
+    await resumed.registry.restoreThread({ backend: "codex", threadId: "target" });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("deferred dirty edit\n");
+  });
+
   it.each([
     ["claude", "archive", "claude"], ["claude", "repair", "claude"],
     ["codex", "archive", "claude"], ["codex", "archive", "codex"],
@@ -368,7 +451,9 @@ describe("archive worktrees across a desktop restart", () => {
         expect((await first.registry.repairArchivedThreadWorktrees()).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
       } else {
         expect((await first.registry.archiveThread(fixture.owners[0]!)).cleanup).toEqual([expect.objectContaining({ removedWorktree: false })]);
-        expect((await first.registry.archiveThread(fixture.owners[1]!)).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+        const cleanup = (await first.registry.archiveThread(fixture.owners[1]!)).cleanup;
+        expect(cleanup).toEqual([expect.objectContaining({ worktreePath: fixture.worktree })]);
+        if (!cleanup[0]!.removedWorktree) expect(cleanup[0]!.skippedReason).toBe("Worktree directory no longer exists.");
       }
     });
     if (otherBackend === "codex" && restoreFirst === "codex") expectSqliteWriteBudget({
@@ -801,6 +886,61 @@ describe("archive worktrees across a desktop restart", () => {
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
   });
 
+  it("keeps an orphaned checkout whose repository is gone, as a skip, and still cleans the next one", async () => {
+    const fixture = await createFixture();
+    const goneRepo = path.join(fixture.root, "gone-repo");
+    const orphan = path.join(fixture.root, "orphan");
+    await mkdir(goneRepo);
+    await fixture.git(goneRepo, ["init", "-b", "main"]);
+    await writeFile(path.join(goneRepo, "file.txt"), "gone\n");
+    await fixture.git(goneRepo, ["add", "file.txt"]);
+    await fixture.git(goneRepo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-m", "gone"]);
+    await fixture.git(goneRepo, ["worktree", "add", "-b", "orphan", orphan]);
+    await rm(goneRepo, { recursive: true, force: true });
+    const orphanDirectory = { id: "orphan", kind: "worktree" as const, label: "gone-repo", path: goneRepo, worktreePath: orphan };
+    ArchiveWorktreeTransport.threads = [
+      { id: "orphan-owner", cwd: orphan, source: "cli", archived: true },
+      { id: "old-target", cwd: fixture.worktree, source: "cli", archived: true },
+    ];
+    const instance = fixture.reopen(fixture.directory, false, undefined, [orphanDirectory]);
+    const result = await instance.registry.repairArchivedThreadWorktrees();
+    expect(result.cleanup).toEqual(expect.arrayContaining([
+      expect.objectContaining({ worktreePath: orphan, removedWorktree: false,
+        skippedReason: "Its repository no longer exists; the checkout was kept." }),
+      expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true }),
+    ]));
+    expect(result.cleanup.filter((item) => item.error)).toEqual([]);
+    expect((await stat(orphan)).isDirectory()).toBe(true);
+  });
+
+  it("records a discovery failure for one checkout and still cleans the others", async () => {
+    const fixture = await createFixture();
+    const second = path.join(fixture.root, "second");
+    await fixture.git(fixture.repo, ["worktree", "add", "-b", "second", second]);
+    const secondDirectory = { ...fixture.directory, id: "second", worktreePath: second };
+    ArchiveWorktreeTransport.threads = [
+      { id: "broken-owner", cwd: second, source: "cli", archived: true },
+      { id: "old-target", cwd: fixture.worktree, source: "cli", archived: true },
+    ];
+    const instance = fixture.reopen(fixture.directory, false, undefined, [secondDirectory]);
+    const registry = instance.registry as unknown as { archivedAcpWorktreeBlocker: (worktreePath: string, inventory: unknown) => string | undefined };
+    const original = registry.archivedAcpWorktreeBlocker.bind(registry);
+    let thrown = false;
+    vi.spyOn(registry, "archivedAcpWorktreeBlocker").mockImplementation((worktreePath, inventory) => {
+      if (!thrown && worktreePath === second) {
+        thrown = true;
+        throw new Error("EACCES: permission denied");
+      }
+      return original(worktreePath, inventory);
+    });
+    const result = await instance.registry.repairArchivedThreadWorktrees();
+    expect(result.cleanup).toEqual(expect.arrayContaining([
+      expect.objectContaining({ worktreePath: second, removedWorktree: false, error: "EACCES: permission denied" }),
+      expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true }),
+    ]));
+    expect((await stat(second)).isDirectory()).toBe(true);
+  });
+
   it("does not remove the primary checkout or invent a snapshot for an absent worktree", async () => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.repo, source: "cli", archived: true }];
@@ -1077,7 +1217,7 @@ describe("archive worktrees across a desktop restart", () => {
   it("finds an old target on a later archived page and retains its recovery snapshot", async () => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads = [
-      ...Array.from({ length: 30 }, (_, index) => ({ id: `older-archive-${index}`, cwd: fixture.repo, source: "cli", archived: true })),
+      ...Array.from({ length: 100 }, (_, index) => ({ id: `older-archive-${index}`, cwd: fixture.repo, source: "cli", archived: true })),
       { id: "old-target", cwd: fixture.worktree, source: "cli" },
     ];
     const instance = fixture.reopen();
@@ -1086,9 +1226,12 @@ describe("archive worktrees across a desktop restart", () => {
 
     expect(result.cleanup[0]?.removedWorktree).toBe(true);
     const pages = ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list");
-    expect(pages.filter((request) => request.params.archived && request.params.cursor)).toHaveLength(1);
-    expect(pages.filter((request) => request.params.limit === 100)).toHaveLength(2);
-    expect(pages.every((request) => [25, 100].includes(Number(request.params.limit)) && request.params.useStateDbOnly === true)).toBe(true);
+    // The target must cross a real page boundary even with 100-row metadata
+    // pages. The promise is complete discovery and a retained recovery ref.
+    expect(pages.some((request) => request.params.archived && request.params.cursor)).toBe(true);
+    expect(pages.every((request) => Number(request.params.limit) <= 100 && request.params.useStateDbOnly === true)).toBe(true);
+    expect((await instance.store.getThreadOverlayState({ backend: "codex", threadId: "old-target" }))?.worktreeSnapshots)
+      .toEqual([expect.objectContaining({ state: "archived" })]);
   });
 
   it("accepts a delayed matching archive notification through the production provider subscriber", async () => {

@@ -356,6 +356,43 @@ describe("SubAgentsPanel", () => {
     expect(onRefreshNavigation).toHaveBeenCalledTimes(1);
   });
 
+  it("stops a running Claude sub-agent, which has a task id and no thread", async () => {
+    const stopSubAgent = vi.fn(async () => ({
+      backend: "claude" as const,
+      threadId: "claude-parent",
+      monitorId: "claude-native:agent-1",
+      stoppedAt: 1_800_000_000_100,
+    }));
+    render(
+      <SubAgentsPanel
+        desktopApi={{ stopSubAgent } as DesktopApi}
+        thread={{
+          ...thread,
+          id: "claude-parent",
+          source: "claude",
+          subAgents: [{
+            monitorId: "claude-native:agent-1",
+            task: "Cluster: rules & matching",
+            status: "running",
+            createdAt: 1_800_000_000_000,
+            updatedAt: 1_800_000_000_000,
+            backend: "claude",
+            agentName: "general-purpose",
+          }],
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await waitFor(() => {
+      expect(stopSubAgent).toHaveBeenCalledWith({
+        backend: "claude",
+        threadId: "claude-parent",
+        monitorId: "claude-native:agent-1",
+      });
+    });
+  });
+
   it("offers Stop while a monitor reports pending external work", () => {
     const activeSubAgent = thread.subAgents?.[0];
     expect(activeSubAgent).toBeDefined();

@@ -132,7 +132,7 @@ async function defaultRunGit(
   env?: NodeJS.ProcessEnv,
   input?: string,
 ): Promise<string> {
-  return (await runGitCommand(cwd, args, { env, input })).stdout;
+  return (await runGitCommand(cwd, args, { env, input, purpose: "working-state" })).stdout;
 }
 
 function parseNumstat(output: string): {

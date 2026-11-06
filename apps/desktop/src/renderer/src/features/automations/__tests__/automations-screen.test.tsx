@@ -700,12 +700,14 @@ describe("row runtime and actions", () => {
   });
 
   it("keeps Pause and Delete behind the row overflow menu", async () => {
+    const pauseAutomation = vi.fn(async () => ({ automation: { ...automation, status: "paused" } }));
     render(
       <AutomationsScreen
         desktopApi={
           {
             listAutomations: vi.fn(async () => ({ automations: [automation] })),
             listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+            pauseAutomation,
             onAgentEvent: () => () => undefined,
           } as unknown as DesktopApi
         }
@@ -721,6 +723,23 @@ describe("row runtime and actions", () => {
     fireEvent.click(menuButton);
     expect(screen.getByRole("menuitem", { name: "Pause" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+    // The table clips its rounded corners; the menu must escape that ancestor.
+    expect(screen.getByRole("table")).not.toContainElement(screen.getByRole("menu"));
+
+    fireEvent.pointerDown(screen.getByRole("menuitem", { name: "Pause" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pause" }));
+    await waitFor(() => expect(pauseAutomation).toHaveBeenCalledWith({ automationId: automation.id }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.click(menuButton);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(menuButton).toHaveFocus();
+
+    fireEvent.click(menuButton);
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 });
 

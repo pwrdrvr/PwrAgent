@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 async function createManagedReviewFixture(): Promise<{
@@ -24,7 +24,7 @@ async function createManagedReviewFixture(): Promise<{
           method: "initialize",
           result: {
             serverInfo: { name: "Replay Codex", version: "1.0.0" },
-            methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+            methods: ["thread/list", "thread/read", "skills/list", "thread/start", "turn/start"],
           },
         },
         {
@@ -55,6 +55,14 @@ async function createManagedReviewFixture(): Promise<{
               hasPreviousPage: false,
             },
           },
+        },
+        {
+          // Independent composer reads reuse this answer, including after
+          // thread/start and turn/start have consumed the response block.
+          id: "skills-list-1",
+          kind: "response",
+          method: "skills/list",
+          result: [],
         },
         {
           id: "managed-review-thread-start",
@@ -125,9 +133,15 @@ test("managed review failure leaves one start marker and clears Stop state", asy
 
     const reviewTarget = fixture.app.window.getByRole("group", { name: "Review target" });
     await reviewTarget.getByRole("combobox", { name: "Base branch" }).fill("main");
-    await reviewTarget.getByRole("button", { name: /^Review run mode(?::|$)/, exact: true }).click();
-    await reviewTarget.getByRole("option", { name: "PwrAgent Sub Agent", exact: true }).click();
-    await reviewTarget.getByRole("button", { name: "Start review" }).click();
+    const runMode = reviewTarget.getByRole("button", { name: /^Review run mode(?::|$)/, exact: true });
+    await expect(runMode).toBeEnabled();
+    await runMode.click();
+    const managedMode = reviewTarget.getByRole("option", { name: "PwrAgent Sub Agent", exact: true });
+    await expect(managedMode).toBeEnabled();
+    await managedMode.click();
+    const startReview = reviewTarget.getByRole("button", { name: "Start review" });
+    await expect(startReview).toBeEnabled();
+    await startReview.click();
 
     const transcript = fixture.app.window.getByRole("region", { name: "Transcript" });
     await expect(transcript.getByText("Review changes against main")).toHaveCount(1);

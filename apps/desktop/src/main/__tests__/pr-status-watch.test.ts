@@ -16,6 +16,10 @@ import {
   type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import {
+  mapGraphqlPrNode,
+  type GraphqlPrNode,
+} from "../pr-status/github-graphql-client";
+import {
   PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
   PrStatusWatchCoordinator,
 } from "../pr-status/pr-status-watch";
@@ -240,6 +244,110 @@ describe("PrStatusWatchCoordinator", () => {
     expect(harness.submitTurnIfIdle.mock.calls[0]?.[0].input[0]).toMatchObject({
       text: expect.stringContaining("- Outcome: failure"),
     });
+  });
+
+  it("stays armed on skipped checks while the CI workflow is still pending (#3346)", async () => {
+    const watch = await registerWatch();
+    const harness = createHarness();
+    const skipped = {
+      __typename: "CheckRun",
+      conclusion: "SKIPPED",
+      status: "COMPLETED",
+      completedAt: "2026-11-04T12:44:24Z",
+    };
+    const headAt = (params: {
+      contexts: Array<typeof skipped>;
+      ciStatus: string;
+    }): GraphqlPrNode => ({
+      number: 1105,
+      title: "Wake the thread when CI completes",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+      state: "OPEN",
+      isDraft: false,
+      mergeable: "MERGEABLE",
+      headRefOid: watch.headSha,
+      headRepository: { name: "PwrAgent" },
+      headRepositoryOwner: { login: "pwrdrvr" },
+      commits: {
+        nodes: [{
+          commit: {
+            id: "commit-a",
+            oid: watch.headSha,
+            // GitHub's own rollup, which counted only the skipped jobs.
+            statusCheckRollup: {
+              state: "SUCCESS",
+              contexts: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: params.contexts,
+              },
+            },
+            checkSuites: {
+              nodes: [
+                { status: "QUEUED", workflowRun: null },
+                { status: "COMPLETED", workflowRun: { id: "linux-packaging" } },
+                { status: "COMPLETED", workflowRun: { id: "dev-check-performance" } },
+                { status: "COMPLETED", workflowRun: { id: "windows-native-quit" } },
+                { status: params.ciStatus, workflowRun: { id: "ci" } },
+              ],
+            },
+          },
+        }],
+      },
+    });
+
+    now = Date.parse("2026-11-04T12:45:02Z");
+    const pending = mapGraphqlPrNode(
+      headAt({ contexts: [skipped, skipped, skipped], ciStatus: "QUEUED" }),
+      undefined,
+      now,
+    );
+    await expect(harness.coordinator.handleStatusSnapshot(pending, now))
+      .resolves.toBe(0);
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.listActiveThreadPrStatusWatches({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toEqual([expect.objectContaining({ watchId: watch.watchId })]);
+
+    now = Date.parse("2026-11-04T12:52:00Z");
+    const passed = mapGraphqlPrNode(
+      headAt({
+        contexts: [skipped, skipped, skipped, {
+          __typename: "CheckRun",
+          conclusion: "SUCCESS",
+          status: "COMPLETED",
+          completedAt: "2026-11-04T12:51:40Z",
+        }],
+        ciStatus: "COMPLETED",
+      }),
+      undefined,
+      now,
+    );
+    await expect(harness.coordinator.handleStatusSnapshot(passed, now))
+      .resolves.toBe(1);
+    expect(harness.submitTurnIfIdle.mock.calls[0]?.[0].input[0]).toMatchObject({
+      text: expect.stringContaining("- Outcome: success"),
+    });
+  });
+
+  it("wakes a skipped-only head with success but says nothing was tested", async () => {
+    await registerWatch();
+    const harness = createHarness();
+
+    await expect(harness.coordinator.handleStatusSnapshot(pr({
+      state: "passing",
+      checkState: "passing",
+      checksAllSkipped: true,
+    }), now)).resolves.toBe(1);
+
+    const input = harness.submitTurnIfIdle.mock.calls[0]![0].input[0];
+    const text = input?.type === "text" ? input.text : "";
+    expect(text).toContain("- Outcome: success");
+    expect(text).toContain(
+      "- Checks: every check at this head was skipped, so nothing was tested",
+    );
+    expect(text).toContain("do not report it as passing");
+    expect(text).not.toContain("Report that the watched PR checks succeeded");
   });
 
   it("lets an accepted Auto-fix event satisfy a failure-only watch without a duplicate turn", async () => {

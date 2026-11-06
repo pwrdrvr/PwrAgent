@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { graphemePrefix, graphemeSuffix } from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { DesktopApi } from "./desktop-api";
 
@@ -108,5 +109,5 @@ function elideMiddle(text: string, maxLength: number): string {
   const visible = Math.max(8, maxLength - 3);
   const left = Math.ceil(visible / 2);
   const right = Math.floor(visible / 2);
-  return `${text.slice(0, left)}...${text.slice(-right)}`;
+  return `${graphemePrefix(text, left)}...${graphemeSuffix(text, right)}`;
 }

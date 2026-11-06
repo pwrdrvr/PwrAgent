@@ -1,7 +1,6 @@
-import path from "node:path";
-import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey,
-  orderByHomePreference } from "@pwragent/shared";
-import type { FederationRemoteTarget, LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity,
+import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey,
+  findRemoteHomeDirectoryIndex, remoteThreadPlaceholderDirectory } from "@pwragent/shared";
+import type { FederationRemoteTarget, NavigationDirectorySummary, NavigationIdentity,
   NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -54,138 +53,6 @@ export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: re
 }
 
 /**
- * Consolidate pinned remote threads into the LOCAL project groups they
- * correspond to, so the Directories lens shows them and the title-bar
- * breadcrumb (selectedDirectory resolves by threadKeys membership) carries
- * the project name. Peer paths never match viewer paths, so matching is by
- * project identity: the linked directory's label, or its path basename.
- *
- * Mirrors `buildDirectorySummaries`' one-row-per-thread invariant
- * (`pickHomeDirectory`): a multi-directory thread joins exactly ONE local
- * group — its home directory — never every group it can match. Duplicating
- * the row made selection "jump" groups, because `selectedDirectory` resolves
- * to the first directory containing the key, which is whichever sorts first,
- * not the group the user clicked in. The owner's `projectKey` is authoritative
- * when it identifies a linked directory; otherwise both sides share
- * `orderByHomePreference`.
- *
- * Remote threads whose project has no local counterpart receive an
- * unconfigured placeholder group. That keeps Cmd+K-mounted rows discoverable
- * in the Directories lens until Add Directory registers a matching checkout.
- */
-/**
- * The single local directory group a remote thread belongs to, by project
- * identity (directory label / path basename — peer paths never match viewer
- * paths). When the owner's projectKey identifies one of its linked
- * directories, that primary project wins even if a secondary @-referenced
- * directory is a local checkout. Otherwise, home preference is the owner's
- * own rule (`orderByHomePreference`): tool-managed worktree folders last,
- * otherwise linked order.
- */
-export function findRemoteHomeDirectoryIndex(
-  directories: ReadonlyArray<{ label: string; path?: string; kind?: NavigationDirectorySummary["kind"] }>,
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
-): number | undefined {
-  // Scratch folder names are per-thread identities, not project identities.
-  // Match the containing workspace by kind before considering any raw names.
-  const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
-  const home = linkedByHomePreference[0];
-  if (home && classifyDirectory(home).kind === "workspace") {
-    const index = directories.findIndex((directory) => directory.kind === "workspace");
-    return index === -1 ? undefined : index;
-  }
-  const directoryIndexByName = new Map<string, number>();
-  directories.forEach((directory, index) => {
-    const names = new Set(
-      [directory.label, directory.path ? path.basename(directory.path) : ""]
-        .map((name) => name.trim().toLowerCase())
-        .filter(Boolean),
-    );
-    for (const name of names) {
-      if (!directoryIndexByName.has(name)) {
-        directoryIndexByName.set(name, index);
-      }
-    }
-  });
-  for (const linked of linkedByHomePreference) {
-    // A secondary Workspaces link is matched by kind only when it is home.
-    // Its folder name (`projects`, a scratch hash) names no project, and a
-    // name match would file the thread under Workspaces whenever its real
-    // project has no local checkout.
-    if (classifyDirectory(linked).kind === "workspace") {
-      continue;
-    }
-    const names = [linked.label, path.basename(linked.path)]
-      .map((name) => (name ?? "").trim().toLowerCase())
-      .filter(Boolean);
-    for (const name of names) {
-      const index = directoryIndexByName.get(name);
-      if (index !== undefined) {
-        return index;
-      }
-    }
-  }
-  return undefined;
-}
-
-function remoteLinkedDirectoriesByHomePreference(
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
-): LinkedDirectorySummary[] {
-  const linkedDirectories = thread.linkedDirectories ?? [];
-  const projectKey = thread.projectKey;
-  const primaryProjectDirectory = projectKey
-    ? linkedDirectories.find((directory) =>
-        linkedDirectoryMatchesProjectKey(directory, projectKey)
-      )
-    : undefined;
-  if (primaryProjectDirectory) {
-    return [primaryProjectDirectory];
-  }
-
-  return orderByHomePreference(linkedDirectories, (directory) => classifyDirectory(directory).path);
-}
-
-function remoteDirectoryPlaceholder(
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
-): NavigationDirectorySummary | undefined {
-  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
-  if (!home) {
-    return undefined;
-  }
-  const descriptor = classifyDirectory(home);
-  if (descriptor.kind === "workspace") {
-    // Never expose a peer path as a launchable local directory. All remote
-    // scratch mounts share this group until a local Workspaces row exists.
-    return {
-      key: "unconfigured-workspace",
-      kind: "workspace",
-      label: descriptor.label,
-      localAvailability: "unconfigured",
-      threadKeys: [],
-      needsAttentionCount: 0,
-    };
-  }
-  const label = home.label.trim() || path.basename(home.path).trim();
-  if (!label) {
-    return undefined;
-  }
-
-  // The key stays name-based so existing rows keep their grouping. The
-  // owner's repository identity rides along, so the row's New chat menu
-  // matches peers by origin rather than by folder name alone.
-  return {
-    key: `unconfigured-directory:${encodeURIComponent(label.toLowerCase())}`,
-    kind: "directory",
-    label,
-    localAvailability: "unconfigured",
-    ...(home.repositoryKey ? { repositoryKey: home.repositoryKey } : {}),
-    ...(home.repositoryKeys?.length ? { repositoryKeys: [...home.repositoryKeys] } : {}),
-    threadKeys: [],
-    needsAttentionCount: 0,
-  };
-}
-
-/**
  * One placeholder can hold threads from two repositories that share a
  * folder name. It then stands for both, so a peer with either counts as
  * having the project. A thread whose owner sent no identity adds nothing:
@@ -216,24 +83,26 @@ function repositoriesOf(directory: NavigationDirectorySummary): string[] {
     .filter((repository): repository is string => Boolean(repository));
 }
 
-function linkedDirectoryMatchesProjectKey(
-  directory: Pick<LinkedDirectorySummary, "path" | "worktreePath">,
-  projectKey: string,
-): boolean {
-  const normalizedProjectKey = normalizeFederatedPath(projectKey);
-  if (!normalizedProjectKey) {
-    return false;
-  }
-  return [directory.path, directory.worktreePath].some(
-    (candidate) => normalizeFederatedPath(candidate) === normalizedProjectKey,
-  );
-}
-
-function normalizeFederatedPath(value: string | undefined): string | undefined {
-  const normalized = value?.trim().replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalized || undefined;
-}
-
+/**
+ * Consolidate pinned remote threads into the LOCAL project groups they
+ * correspond to, so the Directories lens shows them and the title-bar
+ * breadcrumb (selectedDirectory resolves by threadKeys membership) carries
+ * the project name. Peer paths never match viewer paths, so matching is by
+ * project identity: the linked directory's label, or its path basename.
+ *
+ * Mirrors `buildDirectorySummaries`' one-row-per-thread invariant
+ * (`pickHomeDirectory`): a multi-directory thread joins exactly ONE local
+ * group — its home directory — never every group it can match. Duplicating
+ * the row made selection "jump" groups, because `selectedDirectory` resolves
+ * to the first directory containing the key, which is whichever sorts first,
+ * not the group the user clicked in. The owner's `projectKey` is authoritative
+ * when it identifies a linked directory; otherwise both sides share
+ * `orderByHomePreference`.
+ *
+ * Remote threads whose project has no local counterpart receive an
+ * unconfigured placeholder group. That keeps Cmd+K-mounted rows discoverable
+ * in the Directories lens until Add Directory registers a matching checkout.
+ */
 export function attachRemoteThreadsToLocalDirectories(
   directories: NavigationDirectorySummary[],
   remoteThreads: NavigationThreadSummary[],
@@ -256,7 +125,7 @@ export function attachRemoteThreadsToLocalDirectories(
       thread,
     );
     if (homeIndex === undefined) {
-      const placeholder = remoteDirectoryPlaceholder(thread);
+      const placeholder = remoteThreadPlaceholderDirectory(thread);
       if (!placeholder) {
         continue;
       }
@@ -270,7 +139,7 @@ export function attachRemoteThreadsToLocalDirectories(
       // A later thread finds an earlier thread's placeholder by name. Only
       // its home project's identity belongs there: a secondary link's name
       // can match too, and the home repository is a different project.
-      const placeholder = remoteDirectoryPlaceholder(thread);
+      const placeholder = remoteThreadPlaceholderDirectory(thread);
       if (placeholder?.key === mergedDirectories[homeIndex]!.key) {
         mergedDirectories[homeIndex] = mergePlaceholderRepositories(mergedDirectories[homeIndex]!, placeholder);
       }

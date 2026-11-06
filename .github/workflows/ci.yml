@@ -488,31 +488,17 @@ jobs:
     needs: [changes, install-deps]
     if: needs.changes.outputs.code_impacting == 'true'
     strategy:
-      # Playwright shards by test COUNT, in file order, without regard to
-      # duration, and a shard boundary never splits a group: with
-      # `fullyParallel: false` each file is one group. `a11y.spec.ts` sorts
-      # first. At 66 tests (six surfaces in each of eleven color themes) and
-      # ~3.5s apiece on macOS against ~2.4s for the rest of the suite, it sat
-      # whole in lane 1 as one group. That lane ran 249s of tests on macOS
-      # against 145-184s for the other lanes, and set the end of the whole CI
-      # run. It is now 57 tests: five surfaces in each of eleven color
-      # themes, plus the composer autocomplete block in the two Tangerine
-      # themes.
+      # Playwright weights test counts, then assigns each indivisible group
+      # by its first test's position. Files stay together except a11y's
+      # parallel groups; workers remain at 1. Include platform-skipped tests
+      # in the allocation even though their execution cost is negligible.
       #
-      # Two settings move that work. `a11y.spec.ts` runs in `parallel` mode,
-      # so each of its tests is its own group (workers stay at 1, so this
-      # changes grouping only). PWTEST_SHARD_WEIGHTS on the test step then
-      # sizes the lanes 9:12:12:14 by test count. When they were fit, with
-      # 66 a11y tests, that was 54/71/71/82 of 278: lane 1 took 54 a11y
-      # tests and lane 2 the rest. The weights count
-      # tests, not seconds. They were fit to per-test times from CI runs on
-      # all three platforms: a11y is relatively slowest on Linux, and the
-      # late files are slowest on Windows, so one set of weights cannot even
-      # out every platform. This set minimizes the worst lane summed over
-      # the three, which models macOS at ~178-198s per lane (was 158-234s).
-      # Refit them when a11y's cost or the suite's size moves a lane well
-      # off the others. Each lane's test count is the `Running N tests using
-      # 1 worker, shard K of 4` log line.
+      # Fit 83:82:67:88 to current spec durations on all three platforms.
+      # At 320 collected tests this moves federation-remote-window to lane 2,
+      # while rendering-diagnostics and onboarding-wizard stay in lane 3.
+      # It minimizes the sum of each platform's longest modeled lane over
+      # all contiguous group allocations. See docs/desktop-e2e-shard-timings.md
+      # for measurements, the Linux tradeoff, and the reproducible fit.
       #
       # The Linux, macOS and Windows test steps set the same weights and all
       # run four lanes, so a lane number names the same tests on every
@@ -552,7 +538,7 @@ jobs:
         timeout-minutes: 10
         env:
           # Lane sizes by test count; see the strategy comment above.
-          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
+          PWTEST_SHARD_WEIGHTS: "83:82:67:88"
         # Wide-layout specs request 1440px windows. Keep the virtual desktop
         # larger so Openbox does not constrain them to Xvfb's default width.
         # Keep Xvfb from resetting while short-lived readiness probes disconnect
@@ -799,7 +785,7 @@ jobs:
           PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
           # Same lane sizes as Linux and Windows; see the desktop-e2e
           # strategy comment.
-          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
+          PWTEST_SHARD_WEIGHTS: "83:82:67:88"
         # The wrapper keeps a cancelled step alive until Playwright has closed
         # Electron, and kills Electron's main first if the runner escalates.
         # Without it, the runner's orphan reap killed the renderer under a
@@ -899,7 +885,7 @@ jobs:
         # then attributable to Windows and not to a different lane split.
         # See the desktop-e2e strategy comment.
         env:
-          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
+          PWTEST_SHARD_WEIGHTS: "83:82:67:88"
         run: >-
           pnpm ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && 'test:desktop-e2e:windows-diagnostics' || 'test:desktop-e2e' }}
           --shard=${{ matrix.lane }}/4

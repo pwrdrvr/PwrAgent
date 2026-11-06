@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { createBranchDriftFixture, readThreadPayload } from "./fixtures/branch-drift-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
 

@@ -36,6 +36,8 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   listThreadsForMigration: "primary",
   readArchiveCleanupThreadSummary: "threadId",
   listArchiveCleanupThreadsPage: "primary",
+  archiveCleanupRecencyReads: "primary",
+  enrichArchiveCleanupThreads: "primary",
   enrichThreadDirectories: "primary",
   listSkills: "primary",
   listMcpServers: "thread",

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type {
   AppServerListSkillsResponse,
+  BackendModelOption,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
@@ -59,6 +60,8 @@ export type ReplayFixture = {
     scenario: string;
     sourceCaptureId?: string;
     threadId?: string;
+    /** The model catalog to report. Omitted, the replay's own default list. */
+    models?: BackendModelOption[];
   };
   steps: ReplayStep[];
 };

@@ -1,6 +1,7 @@
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -9,6 +10,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   AutomationDetail,
   AutomationInboundMessageTriggerDefinition,
@@ -24,7 +26,10 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { ChevronRightIcon, MoreVerticalIcon } from "../../icons";
-import { useDismissableMenu } from "../composer/ComposerDropdown";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { portalViewportTop } from "../../lib/useViewportTooltip";
+import { useCloseOnOutsidePointer } from "../thread-todos/TodoFactMenu";
+import { placeAutomationRowMenu } from "./automation-row-menu-placement";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import {
   formatCostTodayMicros,
@@ -696,10 +701,47 @@ function AutomationRowMenu(props: {
 }) {
   const [open, setOpen] = useState(false);
   const menuId = useId();
-  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const close = useCallback(() => setOpen(false), []);
+  useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
+
+  // Placed on every render, not once: an agent event can re-render the list
+  // and move this row while the menu is open, without any scroll.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const trigger = triggerRef.current?.getBoundingClientRect();
+    const menu = menuRef.current?.getBoundingClientRect();
+    if (!trigger || !menu) return;
+    const next = placeAutomationRowMenu({
+      trigger,
+      menuWidth: menu.width,
+      menuHeight: menu.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      viewportTop: portalViewportTop(),
+    });
+    setPosition((current) =>
+      current.left === next.left && current.top === next.top ? current : next);
+  });
+
+  useCloseOnOutsidePointer({ open, triggerRef, menuRef, onClose: close });
+
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open, close]);
+
   return (
-    <div className="automations-table__menu" ref={ref}>
+    <div className="automations-table__menu">
       <button
+        ref={triggerRef}
         aria-controls={open ? menuId : undefined}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -711,8 +753,14 @@ function AutomationRowMenu(props: {
       >
         <MoreVerticalIcon aria-hidden="true" size={14} />
       </button>
-      {open ? (
-        <div className="automations-table__menu-list" id={menuId} role="menu">
+      {open ? createPortal(
+        <div
+          className="automations-table__menu-list"
+          id={menuId}
+          ref={menuRef}
+          role="menu"
+          style={position}
+        >
           <button
             className="automations-table__menu-item"
             role="menuitem"
@@ -735,7 +783,8 @@ function AutomationRowMenu(props: {
           >
             Delete
           </button>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );

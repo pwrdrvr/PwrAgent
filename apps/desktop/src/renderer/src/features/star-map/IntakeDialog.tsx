@@ -83,9 +83,10 @@ function imageFileKey(file: File, mimeType: string): string {
 function normalizedImageName(
   originalName: string,
   fallbackName: string,
-  mimeType: "image/jpeg" | "image/png",
+  mimeType: string,
 ): string {
   const source = originalName || fallbackName;
+  if (mimeType !== "image/jpeg" && mimeType !== "image/png") return source;
   const baseName = source.replace(/\.[^.]*$/u, "") || "pasted-image";
   return `${baseName}.${mimeType === "image/jpeg" ? "jpg" : "png"}`;
 }
@@ -251,6 +252,7 @@ export function IntakeDialog(props: {
         }
 
         const normalized = await normalizeImageFile(file, {
+          preserveOriginalIfLarger: props.target.federationTarget?.scope === "remote",
           fallback: props.desktopApi?.normalizeImageForUpload,
           maxPatchCount: props.pastedImageMaxPatches,
           sourceMimeType: type,

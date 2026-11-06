@@ -18,6 +18,17 @@ export const FEDERATION_GENERATE_INVITE_CHANNEL = "federation:generate-invite";
 export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";
 export const FEDERATION_REVOKE_PEER_CHANNEL = "federation:revoke-peer";
 export const FEDERATION_HANDOFF_THREAD_CHANNEL = "federation:handoff-thread";
+export const FEDERATION_CANCEL_HANDOFF_THREAD_CHANNEL =
+  "federation:handoff-thread-cancel";
+export const FEDERATION_RETRY_HANDOFF_THREAD_NOW_CHANNEL =
+  "federation:handoff-thread-retry-now";
+export const FEDERATION_HANDOFF_THREAD_PROGRESS_CHANNEL =
+  "federation:handoff-thread-progress";
+/**
+ * The rejection a handoff call ends with when the operator's Cancel stopped
+ * it, so the window can tell a cancel from a failure without reading prose.
+ */
+export const THREAD_HANDOFF_CANCELLED_MESSAGE = "thread_handoff_cancelled";
 export const FEDERATION_PUSH_COMPOSER_FILE_CHANNEL =
   "federation:push-composer-file";
 export const FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL =
@@ -114,12 +125,29 @@ export const APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL =
 export const APP_SERVER_RESTART_CODEX_CHANNEL = "app-server:restart-codex";
 export const CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL =
   "app-server:codex-restart-status-changed";
+export const RESTART_GATE_STATUS_CHANNEL = "restart-gate:status";
+export const RESTART_GATE_RELEASE_CHANNEL = "restart-gate:release";
+export const RESTART_GATE_STATUS_CHANGED_EVENT_CHANNEL = "restart-gate:status-changed";
 export const APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL =
   "app-server:get-thread-archive-sweep-status";
 export const APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL =
   "app-server:run-thread-archive-sweep";
 export const THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL =
   "app-server:thread-archive-sweep-status-changed";
+/** Thread maintenance: a reviewed scan of idle threads and archived
+ * checkouts, and a run of the operator's selections from one scan. */
+export const APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL =
+  "app-server:scan-thread-maintenance";
+export const APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL =
+  "app-server:apply-thread-maintenance";
+export const APP_SERVER_GET_THREAD_MAINTENANCE_RUN_CHANNEL =
+  "app-server:get-thread-maintenance-run";
+export const APP_SERVER_STOP_THREAD_MAINTENANCE_CHANNEL =
+  "app-server:stop-thread-maintenance";
+export const THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL =
+  "app-server:thread-maintenance-run-changed";
+/** Main asks the focused main window to open the Thread maintenance dialog. */
+export const WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL = "window:open-thread-maintenance";
 export const GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL =
   "app-server:github-pr-saml-enforcement";
 export const MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL =
@@ -807,6 +835,8 @@ export const SETTINGS_PICK_GIT_COMMAND_CHANNEL =
 export const SETTINGS_RECEIVING_FOLDER_CHANNEL = "settings:receiving-folder";
 export const SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL =
   "settings:refresh-git-discovery";
+export const SETTINGS_MANAGED_GIT_ACTION_CHANNEL =
+  "settings:managed-git-action";
 export const SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL =
   "settings:inspect-code-signatures";
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =

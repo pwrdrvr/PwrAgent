@@ -1,5 +1,6 @@
-import { codexSpeedOptions, formatModelOptionLabel, selectedCodexSpeed } from "@pwragent/shared";
+import { codexSpeedOptions, selectedCodexSpeed } from "@pwragent/shared";
 import { buildProjectPageIntent, projectPickerPageActions, FOOTER_ROW } from "./messaging-resume-browser";
+import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import type { MessagingBrowsePage } from "./messaging-browse-query-pool";
 import type {
   AppServerBackendKind,
@@ -1447,12 +1448,9 @@ export function buildStatusModelPickerIntent(params: {
   createdAt: number;
   currentModelId?: string;
   id: string;
-  models: Array<{ id: string; label?: string; providerLabel?: string; current?: boolean }>;
+  models: BackendModelOption[];
+  menuValue?: MessagingJsonValue;
 }): MessagingSingleSelectIntent {
-  // Build the full list and let applyActionCapabilityLimits drop the
-  // lowest-priority entries (trailing models) on platforms with tighter
-  // action budgets. Back stays as priority 1 (always kept); models are
-  // priority 10+i so they degrade in display order.
   return {
     id: params.id,
     kind: "single_select",
@@ -1465,32 +1463,23 @@ export function buildStatusModelPickerIntent(params: {
     targetSurface: params.binding.statusSurface,
     fallbackText: "Reply with a model number, Refresh, or Detach.",
     prompt: "Select Model",
-    choices: applyActionCapabilityLimits(
-      [
-        ...params.models.map((model, index) => ({
-          id: "status:set-model",
-          label: `${formatModelOptionLabel(model)}${
-            (params.currentModelId ? model.id === params.currentModelId : model.current)
-              ? " (current)"
-              : ""
-          }`,
-          fallbackText: String(index + 1),
-          style: "secondary" as const,
-          priority: 10 + index,
-          value: {
-            model: model.id,
-          },
-        })),
-        {
-          id: "status:refresh",
-          label: "Back",
-          fallbackText: "back",
-          style: "secondary" as const,
-          priority: 1,
-        },
-      ],
-      params.capabilityProfile,
-    ),
+    choices: buildMessagingModelMenuActions({
+      kind: params.binding.backend,
+      models: params.models,
+      thread: { model: params.currentModelId },
+      currentModelId: params.currentModelId,
+      menuValue: params.menuValue,
+      menuActionId: "status:model",
+      selectActionId: "status:set-model",
+      capabilityProfile: params.capabilityProfile,
+      backAction: {
+        id: "status:refresh",
+        label: "Back",
+        fallbackText: "back",
+        style: "secondary",
+        priority: 1,
+      },
+    }),
   };
 }
 

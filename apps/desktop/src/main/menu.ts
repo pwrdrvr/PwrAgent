@@ -51,6 +51,8 @@ export type ApplicationMenuActions = {
   openSecurityReporter: () => void | Promise<void>;
   openSettings: () => void;
   openSource: () => void | Promise<void>;
+  /** The Thread maintenance dialog in the focused main window. */
+  openThreadMaintenance: () => void;
   /** The Search All screen (⇧⌘F) in the focused main window. */
   openThreadSearch: () => void;
   openWebsite: () => void | Promise<void>;
@@ -188,6 +190,8 @@ function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
         accelerator: menuAccelerator(options, "threads.new"),
         click: options.actions.openNewThread,
       },
+      { type: "separator" },
+      { label: "Thread Maintenance…", click: options.actions.openThreadMaintenance },
       { type: "separator" },
       ...(options.isMac
         ? []

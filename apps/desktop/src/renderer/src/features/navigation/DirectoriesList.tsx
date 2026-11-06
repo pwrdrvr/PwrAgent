@@ -3,7 +3,7 @@ import type { NavigationPresentationOrder } from "./navigation-presentation-orde
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
-import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
+import { buildPagedDirectoryChildren, buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
 import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
@@ -63,7 +63,7 @@ import {
   threadSupportsFederationCapability,
 } from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
-import { isFederationViewerWindow } from "../../lib/federation-window";
+import { isFederationViewerWindow, readRendererFederationTarget } from "../../lib/federation-window";
 import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { useThreadPinOrdering, type ThreadPinScope } from "./useThreadPinOrdering";
@@ -97,9 +97,10 @@ import {
   selectUnlandedStartingThreads,
   type PendingSidebarRow,
 } from "./StartingThreadRow";
+import { startingThreadHomeDirectoryKey, withStartingPlaceholderDirectories } from "./starting-thread-home";
 import { PendingThreadRow } from "./SubthreadDraftRow";
 import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
-import { jumpScrollPlan, jumpTailIsOffscreen } from "./project-index";
+import { jumpScrollPlan, jumpTailIsOffscreen, splitProjectTurnCounts } from "./project-index";
 
 /**
  * Scroll a project's section to the top of the lens, expanding it first.
@@ -466,6 +467,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     },
   });
   const { threadsByKey, pinnedThreadKeys } = pinOrdering;
+  const pagedChildren = useMemo(() => buildPagedDirectoryChildren({
+    resources: props.pagedNavigation?.resources ?? new Map(), presentationOrder: props.presentationOrder, threadsByKey,
+  }), [props.pagedNavigation?.resources, props.presentationOrder, threadsByKey]);
   const pointerDownSubthread = useSubthreadReorderDrag({
     threadByKey: threadsByKey,
     onUpdateSubthreadOrder: props.onUpdateSubthreadOrder,
@@ -488,24 +492,58 @@ export function DirectoriesList(props: DirectoriesListProps) {
    * (having no threads) it would be offered the "Remove Directory" action — which
    * would delete the overlay row of the sub-thread being composed.
    */
-  const visibleDirectories = useMemo(
+  const windowFederationTarget = useMemo(readRendererFederationTarget, []);
+  // A peer's thread whose project has no row here lands in a placeholder
+  // project that main adds when the thread arrives. Draw that row while the
+  // thread starts, so the starting row is already where the thread lands.
+  // The filter is its own step: starting rows update on every setup tick,
+  // and the list must keep its identity unless a placeholder joins it.
+  const listedDirectories = useMemo(
     () =>
       props.directories.filter(
         (directory) => !isSubthreadLaunchpadKey(directory.key),
       ),
     [props.directories],
   );
-  // The projects a starting thread will render in. A sub-thread launchpad's
-  // own key names no project; its thread lands under the parent's row.
+  const visibleDirectories = useMemo(
+    () =>
+      withStartingPlaceholderDirectories(
+        listedDirectories,
+        props.startingThreads,
+        windowFederationTarget,
+        ({ key, kind, label, localAvailability, repositoryKey, repositoryKeys }) => ({
+          key, kind, label, localAvailability,
+          ...(repositoryKey ? { repositoryKey } : {}),
+          ...(repositoryKeys ? { repositoryKeys } : {}),
+        }),
+      ),
+    [listedDirectories, props.startingThreads, windowFederationTarget],
+  );
+  // The projects a starting thread will render in: the row its thread lands
+  // in. For a peer's thread that is the local project main files it under.
+  // A sub-thread launchpad's own key names no project; its thread lands
+  // under the parent's row.
+  // Resolved once per list change: every directory row asks for each one.
+  const startingHomeKeys = useMemo(
+    () => new Map((props.startingThreads ?? []).map((creation) => [
+      creation.selectionKey,
+      startingThreadHomeDirectoryKey(creation, visibleDirectories, windowFederationTarget),
+    ])),
+    [props.startingThreads, visibleDirectories, windowFederationTarget],
+  );
+  const startingThreadHomeKey = useCallback(
+    (creation: PendingSidebarRow): string | undefined => startingHomeKeys.get(creation.selectionKey),
+    [startingHomeKeys],
+  );
   const startingThreadDirectoryKeys = useCallback((creation: PendingSidebarRow): string[] => {
     const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
-    return parent
-      ? parent.linkedDirectories.map((linked) => classifyDirectory(linked).key)
-      : [creation.directoryKey];
-  }, [threadsByKey]);
+    if (parent) return parent.linkedDirectories.map((linked) => classifyDirectory(linked).key);
+    const homeKey = startingThreadHomeKey(creation);
+    return homeKey ? [homeKey] : [];
+  }, [startingThreadHomeKey, threadsByKey]);
   const unplacedStartingThreads = selectUnlandedStartingThreads(
     props.startingThreads?.filter((creation) =>
-      !visibleDirectories.some((directory) => directory.key === creation.directoryKey)
+      !startingThreadHomeKey(creation)
       && !(creation.parentThreadKey && threadsByKey.has(creation.parentThreadKey))),
     threadsByKey,
   );
@@ -1103,8 +1141,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const expanded =
       expandedByKey[directory.key] ??
       (selectedLaunchpad || selectedThreadInDirectory || selectedStartingThread);
-    const remoteActiveThreadCount = isFederationViewerWindow() ? 0 : directory.counts?.activeRemote ?? 0;
-    const activeThreadCount = Math.max(0, (directory.counts?.active ?? 0) - remoteActiveThreadCount);
+    const { local: activeThreadCount, remote: remoteActiveThreadCount } =
+      splitProjectTurnCounts(directory.counts, isFederationViewerWindow());
     const activeThreadLabel = remoteActiveThreadCount > 0
       ? formatLocalActiveThreadCount(activeThreadCount) : formatActiveThreadCount(activeThreadCount);
     const reviewThreadCount = directory.counts?.review ?? 0;
@@ -1129,7 +1167,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       .filter((label): label is string => Boolean(label))
       .join(", ");
     const expandedThreadModel =
-      expanded ? buildPagedDirectoryPresentation({ directory, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
+      expanded ? buildPagedDirectoryPresentation({ directory, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey, children: pagedChildren }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
     const { childThreadsByParentKey, ownerChildOrder } = expandedThreadModel;
     // One tray per top-level row, holding its whole descendant subtree in
     // depth-first order. The owner keys each child under its *true* parent, so
@@ -1320,7 +1358,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const startingSubthreads = directoryStartingThreads.filter((creation) =>
       creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
     const startingRootThreads = directoryStartingThreads.filter((creation) =>
-      creation.directoryKey === directory.key && !startingSubthreads.includes(creation));
+      startingThreadHomeKey(creation) === directory.key && !startingSubthreads.includes(creation));
     // A sub-thread being written opens its parent's tray and gives the
     // parent its chevron, as the thread will once it lands.
     const draftParentKeys = new Set(
@@ -1901,7 +1939,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       {unplacedStartingThreads.length > 0 ? (
         // No project or parent row this lens has loaded will take these, so
         // they wait at the top, the one place every lens can show them.
-        <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Starting threads">
+        <div className="sidebar-list sidebar-list--compact directory-list__starting" role="list" aria-label="Starting threads">
           {unplacedStartingThreads.map((creation) => (
             <PendingThreadRow
               key={creation.selectionKey}

@@ -82,7 +82,12 @@ export type CompactComposerSettingsMenu = {
    */
   onOpen?: () => void;
   executionModes?: Array<{ label: string; mode: ThreadExecutionMode }>;
+  /** The current models. Arrange them with `buildModelMenu`. */
   models?: CompactComposerSettingsOption[];
+  /** Superseded models, listed behind an Other row in the Model view. */
+  otherModels?: CompactComposerSettingsOption[];
+  /** That row's name. Defaults to "Other". */
+  otherModelsLabel?: string;
   reasoningEfforts?: string[];
   supportsFastMode?: boolean;
   speeds?: CodexSpeed[];
@@ -103,6 +108,7 @@ export type CompactComposerDraftRestore = {
 };
 
 export type CompactComposerProps = {
+  preserveImageBytes?: boolean;
   busy?: boolean;
   /**
    * Whether a steer can reach the running turn at all. False turns the steer
@@ -184,7 +190,13 @@ export type CompactComposerProps = {
   threadTitle: string;
 };
 
-type SettingsMenuView = "access" | "model" | "reasoning" | "speed" | "root";
+type SettingsMenuView =
+  | "access"
+  | "model"
+  | "otherModels"
+  | "reasoning"
+  | "speed"
+  | "root";
 
 const MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS = 5;
 const MAX_COMPACT_COMPOSER_FILE_ATTACHMENTS = 20;
@@ -195,6 +207,7 @@ const MENU_VIEW_TITLES: Record<
 > = {
   access: "Access",
   model: "Model",
+  otherModels: "Other",
   reasoning: "Reasoning",
   speed: "Speed",
 };
@@ -296,6 +309,7 @@ export function CompactComposer(props: CompactComposerProps) {
     onSend,
     onSteer,
     pastedImageMaxPatches,
+    preserveImageBytes,
   } = props;
   const steerAvailable = Boolean(props.busy && onSteer);
   const canSteerNow = steerAvailable && props.canSteer !== false;
@@ -513,6 +527,7 @@ export function CompactComposer(props: CompactComposerProps) {
           }
 
           const normalized = await normalizeImageFile(file, {
+            preserveOriginalIfLarger: preserveImageBytes,
             fallback: normalizeImageForUpload,
             maxPatchCount: pastedImageMaxPatches,
             sourceMimeType: type,
@@ -559,6 +574,7 @@ export function CompactComposer(props: CompactComposerProps) {
       normalizeImageForUpload,
       onAttachmentError,
       pastedImageMaxPatches,
+      preserveImageBytes,
     ],
   );
 
@@ -776,7 +792,8 @@ export function CompactComposer(props: CompactComposerProps) {
     settings?.onSelectModel
       && (settings.loading
         || settings.loadFailed
-        || (settings.models?.length ?? 0) > 0),
+        || (settings.models?.length ?? 0) > 0
+        || (settings.otherModels?.length ?? 0) > 0),
   );
   const reasoningSection = Boolean(
     settings?.onSelectReasoningEffort
@@ -796,6 +813,7 @@ export function CompactComposer(props: CompactComposerProps) {
     modelSection || reasoningSection || speedSection || fastSection || accessSection;
   const hasMenu = hasSettingsRows || actions.length > 0;
 
+  const otherModelsTitle = settings?.otherModelsLabel ?? MENU_VIEW_TITLES.otherModels;
   const settingRow = (
     label: string,
     value: ReactNode,
@@ -844,11 +862,15 @@ export function CompactComposer(props: CompactComposerProps) {
     </button>
   );
 
-  const submenu = (title: string, rows: ReactNode) => (
+  const submenu = (
+    title: string,
+    rows: ReactNode,
+    back: SettingsMenuView = "root",
+  ) => (
     <>
       <button
         className="compact-composer__menu-item compact-composer__menu-item--back"
-        onClick={() => setMenuView("root")}
+        onClick={() => setMenuView(back)}
         role="menuitem"
         type="button"
       >
@@ -885,20 +907,35 @@ export function CompactComposer(props: CompactComposerProps) {
   // Built only while the menu is open: this component re-renders per
   // keystroke, and a closed menu must not cost an element tree per key.
   const menuBody = (): ReactNode => {
+    const modelRows = (options: CompactComposerSettingsOption[]) =>
+      options.map((option) =>
+        optionRow({
+          checked: option.id === props.model,
+          key: option.id,
+          label: option.label ?? option.id,
+          onSelect: () => settings?.onSelectModel?.(option.id),
+        }),
+      );
     if (menuView === "model") {
       const options = settings?.models ?? [];
+      const otherModels = settings?.otherModels ?? [];
       return submenu(
         MENU_VIEW_TITLES.model,
-        options.length
-          ? options.map((option) =>
-              optionRow({
-                checked: option.id === props.model,
-                key: option.id,
-                label: option.label ?? option.id,
-                onSelect: () => settings?.onSelectModel?.(option.id),
-              }),
-            )
-          : emptySubmenuNotice,
+        options.length || otherModels.length ? (
+          <>
+            {modelRows(options)}
+            {otherModels.length
+              ? settingRow(otherModelsTitle, null, "otherModels")
+              : null}
+          </>
+        ) : emptySubmenuNotice,
+      );
+    }
+    if (menuView === "otherModels") {
+      return submenu(
+        otherModelsTitle,
+        modelRows(settings?.otherModels ?? []),
+        "model",
       );
     }
     if (menuView === "reasoning") {
@@ -1180,7 +1217,9 @@ export function CompactComposer(props: CompactComposerProps) {
                 aria-label={
                   menuView === "root"
                     ? "Thread settings"
-                    : MENU_VIEW_TITLES[menuView]
+                    : menuView === "otherModels"
+                      ? otherModelsTitle
+                      : MENU_VIEW_TITLES[menuView]
                 }
                 className="compact-composer__menu-list"
                 role="menu"

@@ -1511,6 +1511,13 @@ export type AgentEvent = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   notification: AppServerNotification;
+  /**
+   * Complete all-provider owner-local directory dependencies for this row-only event,
+   * including off-page descendants. Absence (or an unknown version) grants
+   * no exclusion authority. Never applies to another owner's viewer mounts
+   * or to membership changes. Owners omit the field when it exceeds bounds.
+   */
+  navigationDirectoryScope?: { version: 1; directoryKeys: string[] };
   /** Navigable owner of a failure, captured before a private helper is finalized. */
   errorNoticeContext?: {
     backend: AppServerBackendKind;

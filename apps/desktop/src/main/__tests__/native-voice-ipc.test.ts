@@ -1,9 +1,10 @@
 import { NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL } from "../../shared/native-voice-camera";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCameraConversationLine, VoiceCameraObservation, VoiceCameraRepeatVerdict } from "../../shared/native-voice-camera";
 import type { DesktopDecisionModelSettings } from "@pwragent/shared";
 import { SystemOneRejected } from "../decision/system-one";
 import {
+  type NativeVoiceStart,
   NATIVE_VOICE_CAPABILITY_CHANNEL,
   NATIVE_VOICE_OPEN_MANAGER_CHANNEL,
   NATIVE_VOICE_START_CHANNEL,
@@ -61,14 +62,22 @@ const voiceCheck = (contents: unknown, _permission: string, _origin: string, det
 const voiceRequest = (contents: unknown, _permission: string, callback: (granted: boolean) => void, details: unknown) =>
   callback(nativeVoiceMediaRules.request(contents as MediaRuleArgs[0], details as Parameters<typeof nativeVoiceMediaRules.request>[1]));
 
-beforeEach(() => { vi.clearAllMocks(); mocks.decisionSettings = { model: "local" }; mocks.handlers.clear(); registerNativeVoiceIpcHandlers(); });
+beforeEach(() => { vi.resetAllMocks(); mocks.decisionSettings = { model: "local" }; mocks.handlers.clear(); registerNativeVoiceIpcHandlers(); });
 afterEach(() => vi.useRealTimers());
+
+function startVoiceSession(sender: { id: number }, request: NativeVoiceStart): Promise<void> {
+  // Own cleanup even when a later assertion fails. Stop also joins an ongoing
+  // disconnect, so no session can outlive the test that acquired it.
+  const stop = mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!;
+  onTestFinished(() => stop({ sender }, request));
+  return mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, request);
+}
 
 describe("native voice IPC permission boundary", () => {
   it("aborts an in-flight frame before waiting for the camera-off context response", async () => {
     const sender = { id: 992, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
     const target = { sessionId: "camera-status-session" };
-    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-status-thread", sdp: "v=0\r\nfixture" });
+    await startVoiceSession(sender, { ...target, threadId: "camera-status-thread", sdp: "v=0\r\nfixture" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     let signal!: AbortSignal;
     mocks.classify.mockImplementationOnce((_target, _image, abort) => {
@@ -93,7 +102,7 @@ describe("native voice IPC permission boundary", () => {
     const sender = { id: 277, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
     const target = { sessionId: "camera-warmup-session" };
     const frame = { ...target, images: ["data:image/jpeg;base64,AA=="] };
-    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-warmup-thread", sdp: "v=0\r\nfixture" });
+    await startVoiceSession(sender, { ...target, threadId: "camera-warmup-thread", sdp: "v=0\r\nfixture" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     let finish!: (value: VoiceCameraObservation) => void;
     let signal!: AbortSignal;
@@ -160,7 +169,7 @@ describe("native voice IPC permission boundary", () => {
     const target = { sessionId: "camera-settings-session" };
     const frame = { ...target, images: ["data:image/jpeg;base64,AA=="] };
     const capability = () => mocks.handlers.get(NATIVE_VOICE_CAPABILITY_CHANNEL)!() as unknown as Promise<{ camera?: { available: boolean; reason?: string } }>;
-    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-settings-thread", sdp: "v=0\r\nfixture" });
+    await startVoiceSession(sender, { ...target, threadId: "camera-settings-thread", sdp: "v=0\r\nfixture" });
     // Nothing set up: no camera.
     mocks.decisionSettings = {};
     await expect(capability()).resolves.toMatchObject({ camera: { available: false, reason: expect.stringContaining("Choose a decision model") } });
@@ -196,7 +205,7 @@ describe("native voice IPC permission boundary", () => {
     vi.useFakeTimers();
     const sender = { id: 278, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
     const target = { sessionId: "camera-warmup-timeout" };
-    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-timeout-thread", sdp: "v=0\r\nfixture" });
+    await startVoiceSession(sender, { ...target, threadId: "camera-timeout-thread", sdp: "v=0\r\nfixture" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     mocks.classify.mockImplementationOnce((_target, _image, abort) => new Promise((_resolve, reject) => {
       abort.addEventListener("abort", () => reject(abort.reason), { once: true });
@@ -219,7 +228,7 @@ describe("native voice IPC permission boundary", () => {
     const request = voiceRequest;
     const decide = vi.fn();
     expect(check(sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(false);
-    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { threadId: "fixture-thread", sessionId: "fixture-session", sdp: "v=0\r\nfixture" });
+    await startVoiceSession(sender, { threadId: "fixture-thread", sessionId: "fixture-session", sdp: "v=0\r\nfixture" });
     expect(check(sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
     expect(check({ id: 88 }, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(false);
     expect(check(sender, "media", "", { mediaType: "video", isMainFrame: true })).toBe(false);
@@ -258,7 +267,7 @@ describe("native voice IPC permission boundary", () => {
   it("aborts in-flight classification on camera off and preserves voice after a Clef failure", async () => {
     const sender = { id: 177, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
     const target = { sessionId: "camera-abort-session" };
-    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-abort-thread", sdp: "v=0\r\nfixture" });
+    await startVoiceSession(sender, { ...target, threadId: "camera-abort-thread", sdp: "v=0\r\nfixture" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     let signal!: AbortSignal;
     mocks.classify.mockImplementationOnce(async (_target, _image, abort) => {
@@ -285,7 +294,7 @@ describe("native voice IPC permission boundary", () => {
   it.each(["stop", "disconnect"])("aborts a pending frame when voice ends through %s", async (ending) => {
     const sender = { id: 178, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
     const target = { sessionId: "camera-end-session" };
-    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-end-thread", sdp: "v=0\r\nfixture" });
+    await startVoiceSession(sender, { ...target, threadId: "camera-end-thread", sdp: "v=0\r\nfixture" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     let signal!: AbortSignal;
     mocks.classify.mockImplementationOnce(async (_target, _image, abort) => {
@@ -308,7 +317,7 @@ describe("native voice IPC permission boundary", () => {
     const target = { sessionId: "camera-repeat-session" };
     const conversation = [{ ago: 6, speaker: "cue", text: "stop (delivered)" }, { ago: 1, speaker: "voice", text: "Private words: okay, pausing." }];
     const check = mocks.handlers.get(NATIVE_VOICE_CAMERA_REPEAT_CHANNEL)!;
-    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-repeat-thread", sdp: "v=0\r\nfixture" });
+    await startVoiceSession(sender, { ...target, threadId: "camera-repeat-thread", sdp: "v=0\r\nfixture" });
     await expect(check({ sender }, { ...target, conversation })).rejects.toThrow("Enable the camera");
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     // A warm model: checks only ever follow a frame decision.

@@ -10,6 +10,7 @@
 import { listingDiagnostics } from "./listing-diagnostics";
 import { Session } from "node:inspector";
 import { directoryEnrichmentDiagnostics } from "./directory-enrichment-diagnostics";
+import { gitSubprocessDiagnostics } from "./git-subprocess-diagnostics";
 import type { HotCpuTarget } from "./hot-cpu-profiler";
 
 export function createMainProcessHotCpuTarget(): HotCpuTarget {
@@ -49,7 +50,7 @@ export function createMainProcessHotCpuTarget(): HotCpuTarget {
       off: () => {},
     },
     getOSProcessId: () => process.pid,
-    readDiagnostics: () => ({ directoryEnrichment: directoryEnrichmentDiagnostics.snapshot(), listings: listingDiagnostics.snapshot() }),
+    readDiagnostics: () => ({ directoryEnrichment: directoryEnrichmentDiagnostics.snapshot(), listings: listingDiagnostics.snapshot(), gitSubprocesses: gitSubprocessDiagnostics.snapshot() }),
     readHeapUsage: () => {
       const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
       return { heapUsed, heapTotal, external, arrayBuffers };

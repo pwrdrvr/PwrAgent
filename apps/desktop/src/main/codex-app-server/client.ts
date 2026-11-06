@@ -9863,6 +9863,9 @@ export class CodexAppServerClient {
     return await requestPromise;
   }
 
+  /** `listArchiveCleanupThreadsPage` honors `sortKey: "updated_at"`. */
+  readonly archiveCleanupRecencyReads = true;
+
   /** Archive safety reads own their cursor and pace each page and discovery
    * separately. No navigation overlays, native-worker reconciliation or
    * scheduled archived metadata walk belongs on this read-only path. */
@@ -9880,6 +9883,18 @@ export class CodexAppServerClient {
     return threads[0]!;
   }
 
+  /** Enrich a retained identity inventory without rereading provider membership.
+   * Callers supply scan-local observations; these never authorize removal. */
+  async enrichArchiveCleanupThreads(threads: AppServerThreadSummary[], params: {
+    checkpoint: () => Promise<void>;
+    directoryObservations: Map<string, Promise<ThreadDirectoryEnrichment>>;
+    directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
+  }): Promise<AppServerThreadSummary[]> {
+    return await this.enrichRawThreadDirectories(threads as RawCodexThreadSummary[], "thread-list", {
+      ...params, strict: true, concurrency: 1,
+    });
+  }
+
   async listArchiveCleanupThreadsPage(params: {
     archived: boolean;
     cursor?: string;
@@ -9888,6 +9903,12 @@ export class CodexAppServerClient {
     directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
     /** Admission still reads every identity; only disjoint Git probes skip. */
     directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
+    /**
+     * `updated_at` reads newest-changed rows first, for archive admission's
+     * incremental check. Complete inventories keep `created_at`, whose cursor
+     * activity cannot reorder.
+     */
+    sortKey?: "created_at" | "updated_at";
   }): Promise<{ threads: AppServerThreadSummary[]; nextCursor?: string }> {
     await this.ensureInitialized();
     const result = await requestWithFallbacks({
@@ -9900,7 +9921,7 @@ export class CodexAppServerClient {
         archived: params.archived, cursor: params.cursor, limit: params.limit,
         // Title/turn updates must not move an existing checkout user across
         // the cursor while the paced safety inventory is being read.
-        sortKey: "created_at", sourceKinds: CODEX_WORKTREE_SAFETY_SOURCE_KINDS, useStateDbOnly: true,
+        sortKey: params.sortKey ?? "created_at", sourceKinds: CODEX_WORKTREE_SAFETY_SOURCE_KINDS, useStateDbOnly: true,
       } satisfies CodexThreadListParams],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });

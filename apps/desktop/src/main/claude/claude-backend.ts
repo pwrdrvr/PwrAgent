@@ -39,7 +39,9 @@ import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./cla
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeSessionWakeTracker, claudeSessionWakeHooks } from "./claude-session-wakes";
 import { claudeSelfStartedTurn, claudeSelfStartedTurnHooks, type ClaudeSelfStartedTurn } from "./claude-self-started-turns";
-import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
+import {
+  ClaudeTaskTracker, claudeTaskRow, isClaudeSubAgentTask, type ClaudeSubAgentCard, type ClaudeTaskSettlement,
+} from "./claude-tasks";
 import {
   CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactAction, claudeArtifactResult, claudeArtifactShowsOutput,
   claudeFileDiff, claudeShellCommand, claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail, claudeToolDetail,
@@ -100,6 +102,11 @@ export type ClaudeBackendOptions = {
    * False lets the turn run.
    */
   holdSelfStartedTurn?: (params: ClaudeSelfStartedTurn & { threadId: string }) => Promise<boolean>;
+  /**
+   * Saves the Sub-agents cards for Claude's own sub-agents (Agent tool
+   * tasks). Called with the cards that changed, as each one starts and ends.
+   */
+  recordSubAgents?: (params: { threadId: string; subAgents: ClaudeSubAgentCard[] }) => Promise<void>;
 };
 
 const claudeBackendLog = getMainLogger("pwragent:claude-backend");
@@ -383,9 +390,11 @@ type LiveSession = {
   titleEnv?: NodeJS.ProcessEnv;
   /** Shell commands and sub-agents this process runs. */
   tasks: ClaudeTaskTracker;
-  /** The rows last published through `thread/backgroundTasks/updated`. */
+  /** The rows last published through `thread/backgroundTasks/updated`: commands only. */
   publishedTasks: AppServerBackgroundTask[];
   publishedTaskKey: string;
+  /** Each sub-agent card as last recorded, keyed by monitor id. */
+  recordedSubAgentKeys: Map<string, string>;
   /** Turns Claude scheduled in this process: /loop wake-ups and session crons. */
   sessionWakes: ClaudeSessionWakeTracker;
   /** The set last published through `thread/sessionWakes/updated`. */
@@ -753,12 +762,20 @@ export class ClaudeBackend {
     return live ? threadExecutionModeForClaudePermission(live.config.permissionMode) : undefined;
   }
 
+  /** See `ClaudeSessionStore.changeToken`. */
+  async archiveCleanupChangeToken(): Promise<string> {
+    return await this.store.changeToken();
+  }
+
   async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {
     const filter = params.filter?.toLowerCase();
     // Metadata from builds that could not move a Claude thread still carries
-    // their refusal; this build can, so drop it.
-    return (await this.store.list()).map(({ thread: { workspaceHandoff: _refusal, ...thread } }) => ({
-      ...thread, threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
+    // their refusal; this build can, so drop it. The working directory is the
+    // thread's `projectKey`, as Codex reports it: it names which linked
+    // directory is the thread's home once `@`-referenced ones join it.
+    return (await this.store.list()).map(({ cwd, thread: { workspaceHandoff: _refusal, ...thread } }) => ({
+      ...thread, projectKey: cwd,
+      threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
     })).filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
       && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
   }
@@ -950,7 +967,7 @@ export class ClaudeBackend {
       const current: LiveSession = live = {
         session, controller, input: new ClaudeInputStream(), inputWrites: Promise.resolve(),
         config: claudeSessionConfig(params, session), turn, lastTurnId: turn.turnId, onClosed: [],
-        tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", toolRows: new Map(), launchedToolUseIds: new Set(),
+        tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", recordedSubAgentKeys: new Map(), toolRows: new Map(), launchedToolUseIds: new Set(),
         sessionWakes: new ClaudeSessionWakeTracker(), publishedWakeKey: "[]",
         messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0, heldSelfStarts: 0,
         wake: claudeWakeSignal(), stderr: "",
@@ -1658,9 +1675,12 @@ export class ClaudeBackend {
     catch (error) { failure ??= claudeExceptionMessage(error, live.stderr); }
     const cancelled = live.controller.signal.aborted;
     await this.closeOrphanedTaskRows(live, cancelled);
+    // Claude's sub-agents end with its process.
+    live.tasks.endRunningSubAgents(cancelled ? "stopped" : "failed");
+    await this.recordSubAgents(live);
     const release = async () => {
       if (this.sessions.get(threadId) === live) this.sessions.delete(threadId);
-      if (live.publishedTasks.length > 0) {
+      if (live.publishedTaskKey !== "[]") {
         live.publishedTasks = [];
         live.publishedTaskKey = "[]";
         await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId, tasks: [] } });
@@ -1848,13 +1868,44 @@ export class ClaudeBackend {
     if (settled) await this.settleTaskToolCall(live, settled);
   }
 
+  /**
+   * Commands go to the Actions panel; sub-agents go to the Sub-agents panel
+   * as cards. A running sub-agent still keeps the thread working, so a change
+   * in which ones run republishes the set even when its rows are unchanged.
+   */
   private async publishTasks(live: LiveSession): Promise<void> {
+    await this.recordSubAgents(live);
     const tasks = this.taskRows(live);
-    const key = JSON.stringify(tasks);
+    const runningSubAgents = live.tasks.active().filter(isClaudeSubAgentTask).map((task) => task.taskId);
+    // "[]" is the empty set, which `backgroundTaskThreadIds` reads.
+    const key = tasks.length === 0 && runningSubAgents.length === 0 ? "[]" : JSON.stringify({ tasks, runningSubAgents });
     if (key === live.publishedTaskKey) return;
     live.publishedTasks = tasks;
     live.publishedTaskKey = key;
     await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId: live.session.thread.id, tasks } });
+  }
+
+  /**
+   * Records the sub-agent cards that changed since the last record. A card
+   * counts as recorded only once its write succeeds, so a failed write is
+   * retried with the next task event or when the session closes.
+   */
+  private async recordSubAgents(live: LiveSession): Promise<void> {
+    if (!this.options.recordSubAgents) return;
+    const changed = live.tasks.subAgentCards().flatMap((card) => {
+      const key = JSON.stringify(card);
+      return live.recordedSubAgentKeys.get(card.monitorId) === key ? [] : [{ card, key }];
+    });
+    if (changed.length === 0) return;
+    try {
+      await this.options.recordSubAgents({
+        threadId: live.session.thread.id, subAgents: changed.map(({ card }) => card),
+      });
+      for (const { card, key } of changed) live.recordedSubAgentKeys.set(card.monitorId, key);
+    } catch (error) {
+      // A card is a view of the task; the task itself goes on.
+      claudeBackendLog.warn("Could not record Claude sub-agents", { threadId: live.session.thread.id, error });
+    }
   }
 
   /**
@@ -1884,8 +1935,8 @@ export class ClaudeBackend {
     await this.emit({ method: "thread/sessionWakes/updated", params: { threadId: live.session.thread.id, wakes } });
   }
 
-  private taskRows(live: LiveSession): AppServerBackgroundTask[] {
-    return live.tasks.active().map((task) => {
+  private taskRows(live: LiveSession, tasks = live.tasks.actionTasks()): AppServerBackgroundTask[] {
+    return tasks.map((task) => {
       const row = task.toolUseId ? live.toolRows.get(task.toolUseId) : undefined;
       const command = claudeShellCommand(row?.entry.details[0]);
       return claudeTaskRow(task, { cwd: live.session.cwd, ...(command !== undefined ? { command } : {}) });
@@ -1936,9 +1987,28 @@ export class ClaudeBackend {
     return this.sessions.get(threadId)?.sessionWakes.pending() ?? [];
   }
 
-  /** Commands and sub-agents Claude is running for the thread. */
+  /** Commands Claude is running for the thread. Its sub-agents are cards instead. */
   listBackgroundTasks(threadId: string): { supported: true; terminals: AppServerBackgroundTask[] } {
     return { supported: true, terminals: this.sessions.get(threadId)?.publishedTasks ?? [] };
+  }
+
+  /** Commands and sub-agents Claude is running for the thread. */
+  activeTaskCount(threadId: string): number {
+    return this.sessions.get(threadId)?.tasks.active().length ?? 0;
+  }
+
+  /**
+   * Everything Claude continues the thread after, for Waiting For: its
+   * commands and its sub-agents. Actions lists only the commands.
+   */
+  listWaitingTasks(threadId: string): AppServerBackgroundTask[] {
+    const live = this.sessions.get(threadId);
+    return live ? this.taskRows(live, live.tasks.active()) : [];
+  }
+
+  /** Whether Claude's live process is running the task. */
+  runsTask(threadId: string, taskId: string): boolean {
+    return this.sessions.get(threadId)?.tasks.active().some((task) => task.taskId === taskId) ?? false;
   }
 
   /** Stops one task. Claude reports the stop through the task's notification. */
@@ -1964,13 +2034,13 @@ export class ClaudeBackend {
   }
 
   /**
-   * Threads with published background tasks. Each change to that set emits
-   * `thread/backgroundTasks/updated`, including the clear when the session
-   * closes, so navigation can follow it without polling.
+   * Threads running background commands or sub-agents. Each change to that
+   * set emits `thread/backgroundTasks/updated`, including the clear when the
+   * session closes, so navigation can follow it without polling.
    */
   backgroundTaskThreadIds(): string[] {
     return [...this.sessions]
-      .filter(([, live]) => live.publishedTasks.length > 0)
+      .filter(([, live]) => live.publishedTaskKey !== "[]")
       .map(([threadId]) => threadId);
   }
 

@@ -9,7 +9,7 @@ export class ArchiveCleanupCancelledError extends Error {
 }
 
 export type ArchiveCleanupContext = {
-  /** Shared only until this queue drains; discovery must also fence revisions. */
+  /** Shared until this queue drains; writers keep the fleet index current. */
   batch?: object;
   assertCurrent: () => void;
   checkpoint: () => Promise<void>;
@@ -37,7 +37,11 @@ export class ArchiveCleanupQueue<T> {
   private wake?: () => void;
   private readonly checkpointWaiters: (() => void)[] = [];
 
-  constructor(private readonly pauseMs = ARCHIVE_CLEANUP_PAUSE_MS) {}
+  constructor(private readonly pauseMs = ARCHIVE_CLEANUP_PAUSE_MS, private readonly onCapacityAvailable?: () => void) {}
+
+  get availableSlots(): number {
+    return this.closed ? 0 : ARCHIVE_CLEANUP_QUEUE_LIMIT - this.jobs.size;
+  }
 
   /** Resolves once the running cleanup is parked on its checkpoint pause, the
    * only timer the queue owns. Between checkpoints a job awaits provider, DB,
@@ -86,6 +90,7 @@ export class ArchiveCleanupQueue<T> {
       this.waiting.splice(this.waiting.indexOf(job), 1);
       this.jobs.delete(key);
       job.reject(new ArchiveCleanupCancelledError());
+      if (!this.closed) this.onCapacityAvailable?.();
     }
     await job.promise.catch(() => {});
   }
@@ -140,6 +145,7 @@ export class ArchiveCleanupQueue<T> {
       this.jobs.delete(job.key);
       this.running = undefined;
       this.startNext();
+      if (!this.closed) this.onCapacityAvailable?.();
     });
   }
 }

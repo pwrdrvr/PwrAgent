@@ -414,6 +414,12 @@ export type DesktopSettingsConfig = {
     };
     git?: {
       path?: string;
+      /** Downloaded PwrDrvr Git release chosen with Use (generation id). */
+      managed?: string;
+      /** What Roll back returns to: `bundled`, `managed:<id>` or `path:<path>`. */
+      managedPrevious?: string;
+      /** Build track Settings → Git → Updates offers releases from. */
+      managedBuildChannel?: DesktopUpdateChannel;
     };
   };
   worktrees?: {
@@ -2141,6 +2147,15 @@ export function desktopSettingsPatchToEdits(
   if (patch.applications?.git?.path !== undefined) {
     set(["applications", "git", "path"], patch.applications.git.path);
   }
+  if (patch.applications?.git?.managed !== undefined) {
+    set(["applications", "git", "managed"], patch.applications.git.managed);
+  }
+  if (patch.applications?.git?.managedPrevious !== undefined) {
+    set(["applications", "git", "managed_previous"], patch.applications.git.managedPrevious);
+  }
+  if (patch.applications?.git?.managedBuildChannel !== undefined) {
+    set(["applications", "git", "managed_build_channel"], patch.applications.git.managedBuildChannel);
+  }
 
   if (patch.worktrees?.archive) {
     const archive = patch.worktrees.archive;
@@ -2684,6 +2699,9 @@ function normalizeDesktopConfig(
       },
       git: {
         path: readString(gitApplication?.path),
+        managed: readString(gitApplication?.managed),
+        managedPrevious: readString(gitApplication?.managed_previous),
+        managedBuildChannel: readUpdateChannel(gitApplication?.managed_build_channel),
       },
     },
     worktrees: {

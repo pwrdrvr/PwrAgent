@@ -11,6 +11,8 @@ import {
   readGithubDotComAuthToken,
   retryDelayMs,
 } from "../pr-status/github-graphql-client";
+import { SKIPPED_ONLY_CHECKS_SETTLE_MS } from "../pr-status/pr-derivations";
+import { getPrStatusWatchOutcome } from "../pr-status/pr-status-watch";
 import {
   clearForgeRepositoryNames,
   forgeRepositoryName,
@@ -21,6 +23,14 @@ import type {
   GraphqlPrNode,
   PrRef,
 } from "../pr-status/github-graphql-client";
+
+type GraphqlCheckContextFixture = {
+  __typename: string;
+  conclusion?: string;
+  completedAt?: string;
+  state?: string;
+  status?: string;
+};
 
 function node(overrides: Partial<GraphqlPrNode> = {}): GraphqlPrNode {
   return {
@@ -91,6 +101,11 @@ describe("buildBatchedPrQuery", () => {
     expect(query).toContain("pageInfo { hasNextPage endCursor }");
     expect(query).toContain("conclusion detailsUrl status");
     expect(query).toContain("state targetUrl");
+    // Dates a head whose every check was skipped.
+    expect(query).toContain("conclusion detailsUrl status completedAt");
+    // Sees a workflow run that has no check runs yet (#3346).
+    expect(query).toContain("checkSuites(first: 50)");
+    expect(query).toContain("nodes { status workflowRun { id } }");
   });
 
   it("asks for the hover-card stats, which cost no rate-limit points", () => {
@@ -394,6 +409,246 @@ describe("mapGraphqlPrNode", () => {
 
   it("omits title when blank rather than writing an empty string", () => {
     expect(mapGraphqlPrNode(node({ title: "   " }))).not.toHaveProperty("title");
+  });
+});
+
+describe("mapGraphqlPrNode heads with nothing tested yet", () => {
+  // pwrdrvr/PwrAgent#3346 at f0672a25: three workflows skipped their only job
+  // at 12:44:24, CI was queued behind its concurrency group with no jobs, and
+  // the Claude app's suite sat QUEUED as it does on every commit. GitHub's
+  // rollup said SUCCESS, and a success watch fired at 12:45:02.
+  const skippedAt = Date.parse("2026-11-04T12:44:24Z");
+  const watchFiredAt = Date.parse("2026-11-04T12:45:02Z");
+  const skipped = (completedAt = "2026-11-04T12:44:24Z") => ({
+    __typename: "CheckRun",
+    conclusion: "SKIPPED",
+    status: "COMPLETED",
+    completedAt,
+  });
+  const claudeAppSuite = { status: "QUEUED", workflowRun: null };
+  const skippedSuite = { status: "COMPLETED", workflowRun: { id: "skipped-run" } };
+
+  function head(params: {
+    contexts: GraphqlCheckContextFixture[];
+    suites?: { status: string; workflowRun: { id: string } | null }[];
+    rollup?: string | null;
+  }): GraphqlPrNode {
+    return node({
+      commits: {
+        nodes: [{
+          commit: {
+            id: "commit-f",
+            oid: "f".repeat(40),
+            statusCheckRollup: params.rollup === null ? null : {
+              state: params.rollup ?? "SUCCESS",
+              contexts: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: params.contexts,
+              },
+            },
+            checkSuites: { nodes: params.suites ?? [] },
+          },
+        }],
+      },
+    });
+  }
+
+  it("holds a success rollup while a workflow run is still queued without jobs", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [skipped(), skipped(), skipped()],
+        suites: [
+          claudeAppSuite,
+          skippedSuite,
+          skippedSuite,
+          skippedSuite,
+          { status: "QUEUED", workflowRun: { id: "ci-run" } },
+        ],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary).toMatchObject({
+      checkState: "pending",
+      state: "pending",
+      checksStillRunning: true,
+    });
+    expect(getPrStatusWatchOutcome(summary)).toBeUndefined();
+  });
+
+  it("holds a head whose run finished its jobs but not itself", () => {
+    // Shrunk by the model in pr-status-watch.property.test.ts: on the pre-fix
+    // code a one-job run's SUCCESS woke the watch before the run completed.
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [{
+          __typename: "CheckRun",
+          conclusion: "SUCCESS",
+          status: "COMPLETED",
+          completedAt: "2026-11-04T12:44:24Z",
+        }],
+        suites: [{ status: "IN_PROGRESS", workflowRun: { id: "ci-run" } }],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary).toMatchObject({ checkState: "pending", checksStillRunning: true });
+    expect(getPrStatusWatchOutcome(summary)).toBeUndefined();
+  });
+
+  it("holds the head even after the skipped checks settle while CI is queued", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [skipped(), skipped(), skipped()],
+        suites: [claudeAppSuite, { status: "IN_PROGRESS", workflowRun: { id: "ci-run" } }],
+      }),
+      undefined,
+      skippedAt + SKIPPED_ONLY_CHECKS_SETTLE_MS + 60_000,
+    );
+
+    expect(summary).toMatchObject({ checkState: "pending", checksStillRunning: true });
+  });
+
+  it("marks a queued workflow on a head with no checks yet as pending, not unknown", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [],
+        rollup: null,
+        suites: [{ status: "QUEUED", workflowRun: { id: "ci-run" } }],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary).toMatchObject({ checkState: "pending", checksStillRunning: true });
+  });
+
+  it("passes once the workflow finishes with real results", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [
+          skipped(),
+          skipped(),
+          skipped(),
+          {
+            __typename: "CheckRun",
+            conclusion: "SUCCESS",
+            status: "COMPLETED",
+            completedAt: "2026-11-04T12:45:33Z",
+          },
+        ],
+        suites: [
+          claudeAppSuite,
+          skippedSuite,
+          { status: "COMPLETED", workflowRun: { id: "ci-run" } },
+        ],
+      }),
+      undefined,
+      Date.parse("2026-11-04T12:45:40Z"),
+    );
+
+    expect(summary.checkState).toBe("passing");
+    expect(summary).not.toHaveProperty("checksStillRunning");
+    expect(summary).not.toHaveProperty("checksAllSkipped");
+    expect(getPrStatusWatchOutcome(summary)).toBe("success");
+  });
+
+  it("ignores an app suite that never reports", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [{
+          __typename: "CheckRun",
+          conclusion: "SUCCESS",
+          status: "COMPLETED",
+          completedAt: "2026-11-04T12:40:00Z",
+        }],
+        suites: [claudeAppSuite],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary.checkState).toBe("passing");
+    expect(summary).not.toHaveProperty("checksStillRunning");
+  });
+
+  it("waits out the settle window when every check was skipped, then passes", () => {
+    const allSkipped = head({
+      contexts: [
+        skipped(),
+        { ...skipped("2026-11-04T12:44:30Z"), conclusion: "NEUTRAL" },
+      ],
+      suites: [claudeAppSuite, skippedSuite, skippedSuite],
+    });
+    const newestSkip = Date.parse("2026-11-04T12:44:30Z");
+
+    const settling = mapGraphqlPrNode(allSkipped, undefined, watchFiredAt);
+    expect(settling).toMatchObject({ checkState: "pending", checksStillRunning: true });
+    expect(getPrStatusWatchOutcome(settling)).toBeUndefined();
+
+    const justBefore = mapGraphqlPrNode(
+      allSkipped,
+      undefined,
+      newestSkip + SKIPPED_ONLY_CHECKS_SETTLE_MS - 1,
+    );
+    expect(justBefore.checkState).toBe("pending");
+
+    const settled = mapGraphqlPrNode(
+      allSkipped,
+      undefined,
+      newestSkip + SKIPPED_ONLY_CHECKS_SETTLE_MS,
+    );
+    expect(settled.checkState).toBe("passing");
+    expect(settled).not.toHaveProperty("checksStillRunning");
+    // It passes so the watch can end, and says nothing was tested.
+    expect(settled.checksAllSkipped).toBe(true);
+    expect(getPrStatusWatchOutcome(settled)).toBe("success");
+  });
+
+  it("does not hold a head whose first context page is skipped but has more pages", () => {
+    // Page 2 may hold real results, so a partial page is never skipped-only.
+    const summary = mapGraphqlPrNode(
+      node({
+        commits: {
+          nodes: [{
+            commit: {
+              id: "commit-f",
+              oid: "f".repeat(40),
+              statusCheckRollup: {
+                state: "SUCCESS",
+                contexts: {
+                  pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                  nodes: [skipped(), skipped()],
+                },
+              },
+            },
+          }],
+        },
+      }),
+      { checksStillRunning: false },
+      watchFiredAt,
+    );
+
+    expect(summary.checkState).toBe("passing");
+    expect(summary).not.toHaveProperty("checksStillRunning");
+    expect(summary).not.toHaveProperty("checksAllSkipped");
+  });
+
+  it("does not treat a commit status beside skipped checks as skipped-only", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [
+          skipped(),
+          { __typename: "StatusContext", state: "SUCCESS" },
+        ],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary.checkState).toBe("passing");
   });
 });
 

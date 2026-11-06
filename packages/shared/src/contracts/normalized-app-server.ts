@@ -741,7 +741,7 @@ export type AppServerThreadMessageOrigin = {
   causalMessagingAmbiguous?: boolean;
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
-  systemReason?: "monitor-job-suggestion" | "thread-correspondence";
+  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart";
   /**
    * The operator sent this agent-routed message by acting on a to-do card,
    * so a paused project's refusal of messages from other threads skips it.
@@ -2774,6 +2774,10 @@ export type AppServerNotification =
         /** Complete reaction set, ordered by insertion. */
         reactions: string[];
       };
+    }
+  | {
+      method: "thread/mergeHolds/updated";
+      params: { threadId: string; mergeHolds: import("./thread-merge-holds").ThreadMergeHold[] };
     }
   | {
       method: "thread/lock/updated";

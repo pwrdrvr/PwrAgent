@@ -9,6 +9,7 @@ import { HotCpuProfiler } from "../diagnostics/hot-cpu-profiler";
 import { createHotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
 import { directoryEnrichmentDiagnostics } from "../diagnostics/directory-enrichment-diagnostics";
+import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import type { HotCpuProfileCapturedEvent } from "../../shared/hot-cpu-profile";
 
 function metric(pid: number, cpuPercent: number, cumulativeCpu: number): ProcessMetric {
@@ -62,6 +63,7 @@ it.each([false, true])("captures main CPU and heap usage (auxiliary failure: %s)
       directory: "/fixture/cpu-capture", enricherId: 0, caller: "thread-list", reason: "cold",
     }, { requests: 1, gitStarted: 3 });
     listingDiagnostics.record("navigation", "invalidate", { reason: "turn", trigger: "turn/completed" });
+    gitSubprocessDiagnostics.startGit("/fixture/cpu-capture", ["remote"], "pr-remotes")(false);
     await profiler.start();
     const event = await capture;
     await profiler.stop("test-complete");
@@ -79,6 +81,8 @@ it.each([false, true])("captures main CPU and heap usage (auxiliary failure: %s)
       const diagnostics = JSON.parse(await fs.readFile(path.join(created.session.directoryPath, diagnosticsFilename), "utf8"));
       expect(diagnostics.listings.events).toContainEqual(expect.objectContaining({ reason: "turn", trigger: "turn/completed" }));
       expect(diagnostics.directoryEnrichment.schemaVersion).toBe(1);
+      expect(diagnostics.gitSubprocesses.buckets.flatMap((bucket: { rows: unknown[] }) => bucket.rows))
+        .toContainEqual(expect.objectContaining({ command: "remote-list", purpose: "pr-remotes", started: 1 }));
       expect(diagnostics.directoryEnrichment.buckets.flatMap((bucket: { rows: unknown[] }) => bucket.rows))
         .toContainEqual(expect.objectContaining({ directory: "/fixture/cpu-capture", requests: 1, gitStarted: 3 }));
       expect(manifest.artifacts).toContain(diagnosticsFilename);

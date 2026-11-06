@@ -11,20 +11,17 @@ import { isSafeExternalOpenUrl } from "../external-url-policy";
 /**
  * Shared PR-status derivations.
  *
- * Two transports produce a `PrSummary`:
+ * Every GitHub `PrSummary` comes from `github-graphql-client.ts`, the
+ * in-process batched poller. It reads GitHub's pre-aggregated rollup ENUM,
+ * minimal per-context activity so a failed check can remain visibly in flight
+ * while sibling checks run, and the head's check suites so a workflow run with
+ * no jobs yet still counts as running.
  *
- *  - `github-pr-fetcher.ts` — the `gh pr list --json …` subprocess, used for
- *    on-selection / hover / post-turn detail fetches. Its `statusCheckRollup`
- *    is an ARRAY of individual check runs.
- *  - `github-graphql-client.ts` — the in-process batched poller. It reads
- *    GitHub's pre-aggregated rollup ENUM plus minimal per-context activity so
- *    a failed check can remain visibly in flight while sibling checks run.
- *
- * The lifecycle/review/merge derivations are shape-compatible and shared
- * verbatim. The check-state derivation differs by transport
- * (`deriveChipState` vs `deriveChipStateFromRollup`), while
- * `hasChecksStillRunning` reads the individual contexts both transports
- * expose.
+ * `parseGhPrPayload` / `deriveChipState` map the older `gh pr list --json …`
+ * shape, whose `statusCheckRollup` is an ARRAY of check runs. Nothing in
+ * production calls them. They count a skipped-only head as passing and cannot
+ * see a queued workflow run, the pair that fired #3346's success watch, so do
+ * not route status through them again without porting those rules.
  */
 
 /** Subset of fields returned by `gh pr list --json …` that we actually read. */
@@ -48,12 +45,30 @@ export type GhPrPayload = {
 export type GhCheckRunPayload = {
   __typename?: string;
   conclusion?: string | null;
+  /** ISO-8601; check runs only. */
+  completedAt?: string | null;
   detailsUrl?: string | null;
   status?: string | null;
   state?: string | null;
   name?: string;
   targetUrl?: string | null;
 };
+
+/** A head commit's check suite, as the GraphQL poller reads it. */
+export type GhCheckSuitePayload = {
+  status?: string | null;
+  /** Present only for a GitHub Actions workflow run. */
+  workflowRun?: { id?: string | null } | null;
+};
+
+/**
+ * How long a head whose every check was skipped keeps counting as still
+ * running, measured from the newest skipped check's completion.
+ */
+export const SKIPPED_ONLY_CHECKS_SETTLE_MS = 2 * 60_000;
+
+/** Conclusions that report no test result: the check did not judge the head. */
+const NO_RESULT_CHECK_CONCLUSIONS = new Set(["SKIPPED", "NEUTRAL", "STALE"]);
 
 const FAILING_CHECK_CONCLUSIONS = new Set([
   "FAILURE",
@@ -207,6 +222,66 @@ export function hasChecksStillRunning(
   checks: readonly GhCheckRunPayload[],
 ): boolean {
   return checks.some(isCheckStillRunning);
+}
+
+/**
+ * True while a GitHub Actions workflow run on the head commit has not
+ * finished. A run waiting on a concurrency group has a check suite but no
+ * check runs yet, so the status rollup cannot see it and reports SUCCESS for
+ * whatever finished first (pwrdrvr/PwrAgent#3346: three skipped jobs).
+ *
+ * Suites without a workflow run are ignored. GitHub creates a suite for every
+ * installed app with checks access on each push, and an app that never
+ * reports (the Claude app, here) leaves its suite QUEUED forever.
+ */
+export function hasWorkflowRunsStillRunning(
+  suites: readonly GhCheckSuitePayload[],
+): boolean {
+  return suites.some((suite) => {
+    const status = suite.status?.trim();
+    return Boolean(suite.workflowRun && status && status !== "COMPLETED");
+  });
+}
+
+/**
+ * Read a head whose every check was skipped or neutral: a skipped job tests
+ * nothing. Returns `undefined` when any check reported a result, or when
+ * there are no checks. `newestCompletedAt` is the latest completion GitHub
+ * reported, absent when it reported none.
+ */
+export function readSkippedOnlyChecks(
+  checks: readonly GhCheckRunPayload[],
+): { newestCompletedAt?: number } | undefined {
+  if (checks.length === 0) return undefined;
+  let newestCompletedAt: number | undefined;
+  for (const check of checks) {
+    const conclusion = check.conclusion?.trim();
+    // A commit status (`state`) is a reported result, never a skip.
+    if (check.state || !conclusion || !NO_RESULT_CHECK_CONCLUSIONS.has(conclusion)) {
+      return undefined;
+    }
+    const completedAt = Date.parse(check.completedAt ?? "");
+    if (Number.isFinite(completedAt)) {
+      newestCompletedAt = Math.max(newestCompletedAt ?? completedAt, completedAt);
+    }
+  }
+  return newestCompletedAt === undefined ? {} : { newestCompletedAt };
+}
+
+/**
+ * True while a skipped-only head is inside `SKIPPED_ONLY_CHECKS_SETTLE_MS` of
+ * its newest skip: the workflow that does test may not have registered yet.
+ * After the window the head counts as passing, so a PR whose workflows are
+ * all filtered out still resolves. With no completion time there is nothing
+ * to wait out.
+ */
+export function isSkippedOnlyCheckSetSettling(
+  skippedOnly: { newestCompletedAt?: number } | undefined,
+  now: number,
+): boolean {
+  const newestCompletedAt = skippedOnly?.newestCompletedAt;
+  return newestCompletedAt !== undefined
+    && now - newestCompletedAt < SKIPPED_ONLY_CHECKS_SETTLE_MS;
 }
 
 /** Return the first safe destination attached to a failed check or status. */

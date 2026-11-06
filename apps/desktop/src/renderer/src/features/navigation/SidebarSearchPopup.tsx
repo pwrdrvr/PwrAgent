@@ -9,38 +9,26 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
-  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import {
-  createThreadJumpMatcher,
   isSubthreadLaunchpadKey,
   isWindowsFilesystemPath,
   parseThreadJumpQuery,
-  threadHasExactPrNumberMatch,
   textMatchesJumpQuery,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { FolderIcon, SearchIcon } from "../../icons";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { useModalDialog } from "../../lib/useModalDialog";
-import { useNavigationOwnerSearch } from "../../lib/useNavigationOwnerSearch";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
-import {
-  FEDERATED_THREAD_SEARCH_LIMIT,
-  useFederatedThreadSearch,
-} from "../../lib/useFederatedThreadSearch";
 import { insertProjectMention, projectMentionAtCursor } from "../thread-search/ProjectSearchInput";
-import { AgentThreadChip } from "./AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
-import { PrChip } from "../pr-status/PrChip";
-import { formatFullTimestamp, formatRelativeTime } from "./thread-time";
+import { JumpPaletteRowTime, JumpPaletteThreadRow } from "./JumpPaletteThreadRow";
+import { JUMP_MAX_RESULTS, useThreadJumpSearch } from "./useThreadJumpSearch";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import { readRendererFederationLabel, readRendererFederationTarget } from "../../lib/federation-window";
-
-const MAX_RESULTS = 8;
-const MAX_RECENT_THREADS = 10;
 
 /** Provider history can include foreign paths without a federation owner. */
 function foreignProjectPlatform(path: string | undefined, platform: string | undefined): string | undefined {
@@ -60,6 +48,7 @@ function jumpResultKey(row: JumpResult): string {
 
 type SidebarSearchPopupProps = {
   threads: readonly NavigationThreadSummary[];
+  thinkingThreadKeys?: Record<string, boolean>;
   projects?: readonly NavigationDirectoryView[];
   onJumpToProject?: (directory: NavigationDirectoryView) => void;
   onJumpToThread: (thread: NavigationThreadSummary) => void;
@@ -124,11 +113,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   });
 
   const trimmed = query.trim();
-  // `@project` / `in:@project` scope the threads, as in thread search. The
-  // whole query still goes to every matcher, which parses the mentions
-  // itself; only PR-number ranking reads the free text alone.
   const parsedQuery = useMemo(() => parseThreadJumpQuery(trimmed), [trimmed]);
-  const jumpText = parsedQuery.text;
   // While the caret is in an `@…` token, the list completes it with projects,
   // as thread search's field does; picking one narrows the threads below.
   const mention = useMemo(() => projectMentionAtCursor(query, cursor), [query, cursor]);
@@ -141,16 +126,20 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   const federationTarget = readRendererFederationTarget();
   const ownerInstanceId = federationTarget?.instanceId;
   const platform = getDesktopApi()?.platform;
-  const ownerSearch = useNavigationOwnerSearch({ query: threadQuery, desktopApi: getDesktopApi() });
-  const recentThreads = useNavigationQueryResource({
-    desktopApi: getDesktopApi(),
-    request: !trimmed ? {
-      protocol: 2, consumer: "search",
-      inventory: federationTarget ? "owner" : "viewer",
-      federationTarget,
-      query: { kind: "lens", lens: "inbox" }, pageSize: MAX_RECENT_THREADS,
-    } : undefined,
-  });
+  const {
+    jumpText,
+    results,
+    remoteRows,
+    ownerSearch,
+    recentThreads,
+    remote: {
+      available: remoteSearchAvailable,
+      completedPeerCount: remoteCompletedPeerCount,
+      loading: remoteLoading,
+      notes: remoteNotes,
+      totalPeerCount: remoteTotalPeerCount,
+    },
+  } = useThreadJumpSearch({ query, threadQuery, threads: props.threads, desktopApi: getDesktopApi() });
 
   const projectSearch = useNavigationQueryResource({
     desktopApi: getDesktopApi(),
@@ -182,69 +171,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           - Number(Boolean(foreignProjectPlatform(right.path, platform))))
         || rank(left) - rank(right)
         || left.label.localeCompare(right.label))
-      .slice(0, MAX_RESULTS)
+      .slice(0, JUMP_MAX_RESULTS)
       // A foreign-platform path keeps its place behind every local project,
       // so it never leads, however exactly it is named.
       .map((directory) => ({ directory, exact: rank(directory) === 0
         && (Boolean(ownerInstanceId) || !foreignProjectPlatform(directory.path, platform)) }));
   }, [projectFilter, props.projects, projectSearch.state, ownerInstanceId, platform]);
-
-  const results = useMemo(() => {
-    if (!trimmed) {
-      // The Updated lens covers the full inventory without floating pins.
-      // Loaded rows give an immediate first paint while that page arrives.
-      const page = recentThreads.state?.request.query.kind === "lens"
-        ? recentThreads.state.page : undefined;
-      const candidates = page ? page.entries.map(({ row }) => row)
-        : props.threads.filter((thread) => thread.codexNativeSubAgent === undefined);
-      const unique = new Map(candidates
-        .filter((thread) => thread.archivedAt === undefined)
-        .map((thread) => [threadSummaryIdentityKey(thread), thread]));
-      return [...unique.values()].sort((left, right) =>
-        (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
-        || threadSummaryIdentityKey(left).localeCompare(threadSummaryIdentityKey(right)))
-        .slice(0, MAX_RECENT_THREADS);
-    }
-    if (!threadQuery) {
-      return [];
-    }
-    const immediate = props.threads
-      .filter(createThreadJumpMatcher(threadQuery))
-      .sort(
-        (left, right) =>
-          Number(threadHasExactPrNumberMatch(right, jumpText))
-          - Number(threadHasExactPrNumberMatch(left, jumpText)),
-      )
-      .slice(0, MAX_RESULTS);
-    const ownerKeys = new Set(ownerSearch.rows.map(threadSummaryIdentityKey));
-    return [...ownerSearch.rows, ...immediate.filter((thread) => !ownerKeys.has(threadSummaryIdentityKey(thread)))].slice(0, MAX_RESULTS);
-  }, [trimmed, threadQuery, jumpText, props.threads, ownerSearch.rows, recentThreads.state]);
-
-  const {
-    available: remoteSearchAvailable,
-    completedPeerCount: remoteCompletedPeerCount,
-    loading: remoteLoading,
-    notes: remoteNotes,
-    results: remoteResults,
-    totalPeerCount: remoteTotalPeerCount,
-  } = useFederatedThreadSearch({
-    query: threadQuery,
-    limit: FEDERATED_THREAD_SEARCH_LIMIT,
-    search: getDesktopApi()?.jumpSearchRemoteThreads,
-  });
-
-  // A remote thread already pinned into the local list surfaces as a local
-  // hit; don't show it twice.
-  const remoteRows = useMemo(() => {
-    const localKeys = new Set(
-      results.map((thread) =>
-        threadSummaryIdentityKey(thread),
-      ),
-    );
-    return !threadQuery ? [] : remoteResults.filter(
-      (thread) => !localKeys.has(threadSummaryIdentityKey(thread)),
-    );
-  }, [threadQuery, remoteResults, results]);
 
   // Only a project named by the whole query leads the threads. The first row
   // is the one Enter opens, and a prefix or path match is usually incidental:
@@ -431,67 +363,19 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   const renderRow = (
     thread: NavigationThreadSummary,
     index: number,
-  ): ReactElement => {
-    const description = describeThread(thread);
-    const prs = orderPullRequestsForQuery(thread, jumpText);
-    const exactPrQuery = threadHasExactPrNumberMatch(thread, jumpText)
-      ? String(Number(jumpText.replace(/^#/, "")))
-      : "";
-    const prStripResetKey = `${exactPrQuery}|${prs
-      .map((pr) => pr.url)
-      .join("|")}`;
-    const key = threadSummaryIdentityKey(thread);
-    return (
-      <li
-        key={key}
-        id={rowId(index)}
-        role="option"
-        aria-selected={index === activeIndex}
-      >
-        <button
-          type="button"
-          className={`jump-palette__row${
-            index === activeIndex ? " is-active" : ""
-          }`}
-          // Not a tab stop: focus stays in the field so typing never breaks,
-          // and the active row is published via aria-activedescendant.
-          tabIndex={-1}
-          onMouseMove={(event) => pointAtRow(event, index)}
-          onClick={() => jump(thread)}
-        >
-          <span className="jump-palette__row-title">{thread.title}</span>
-          {thread.federation ? (
-            <InstanceChip
-              icon={thread.federation.celestialIcon}
-              instanceId={
-                thread.federation.ref.target.scope === "remote"
-                  ? thread.federation.ref.target.instanceId
-                  : ""
-              }
-              label={thread.federation.instanceLabel}
-            />
-          ) : null}
-          {thread.agent ? <AgentThreadChip /> : null}
-          {prs.length > 0 ? (
-            <PullRequestStrip
-              prs={prs}
-              resetKey={prStripResetKey}
-              onOpen={openPullRequest}
-            />
-          ) : null}
-          {description.branch ? (
-            // Clipped from the LEFT (`direction: rtl` in CSS) so a long
-            // `agent/…` prefix gives way and the disambiguating leaf survives.
-            <span className="jump-palette__row-branch">{description.branch}</span>
-          ) : null}
-          {description.directory ? (
-            <span className="jump-palette__row-repo">{description.directory}</span>
-          ) : null}
-          {thread.updatedAt ? <RowTime timestamp={thread.updatedAt} /> : null}
-        </button>
-      </li>
-    );
-  };
+  ): ReactElement => (
+    <JumpPaletteThreadRow
+      key={threadSummaryIdentityKey(thread)}
+      thread={thread}
+      thinkingThreadKeys={props.thinkingThreadKeys}
+      id={rowId(index)}
+      active={index === activeIndex}
+      query={jumpText}
+      onPoint={(event) => pointAtRow(event, index)}
+      onChoose={() => jump(thread)}
+      onOpenPullRequest={openPullRequest}
+    />
+  );
 
   // The divider only earns its place once there are rows under it. In-flight
   // peer latency is the footer's job now, so a loading state no longer leaves
@@ -532,7 +416,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
         ) : null}
         <span className="jump-palette__row-branch">{directory.path}</span>
         <span className="jump-palette__row-repo">{mention ? "Filter" : "Project"}</span>
-        {directory.latestUpdatedAt ? <RowTime timestamp={directory.latestUpdatedAt} /> : null}
+        {directory.latestUpdatedAt ? <JumpPaletteRowTime timestamp={directory.latestUpdatedAt} /> : null}
       </button>
     </li>
   );
@@ -679,107 +563,4 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     </div>,
     document.body,
   );
-}
-
-/**
- * The sidebar row's age label, so a match from an hour ago and one from last
- * spring no longer look alike. Hover gives the full date with its year.
- */
-function RowTime(props: { timestamp: number }): ReactElement {
-  return (
-    <span
-      className="jump-palette__row-time tooltip-target"
-      data-tooltip={formatFullTimestamp(props.timestamp)}
-    >
-      {formatRelativeTime(props.timestamp)}
-    </span>
-  );
-}
-
-type ThreadDescription = {
-  branch?: string;
-  directory?: string;
-};
-
-function PullRequestStrip(props: {
-  prs: NonNullable<NavigationThreadSummary["prs"]>;
-  resetKey: string;
-  onOpen: (url: string) => void;
-}): ReactElement {
-  const stripRef = useRef<HTMLSpanElement>(null);
-
-  useLayoutEffect(() => {
-    if (stripRef.current) {
-      stripRef.current.scrollLeft = 0;
-    }
-  }, [props.resetKey]);
-
-  return (
-    <span
-      ref={stripRef}
-      className="jump-palette__row-prs"
-      data-overflow={props.prs.length > 2 ? "true" : undefined}
-      aria-label="Pull requests"
-      onWheel={scrollPullRequestsHorizontally}
-    >
-      {props.prs.map((pr) => (
-        <PrChip
-          key={pr.url}
-          pr={pr}
-          showRepoPrefix={false}
-          onOpen={props.onOpen}
-        />
-      ))}
-    </span>
-  );
-}
-
-function orderPullRequestsForQuery(
-  thread: NavigationThreadSummary,
-  query: string,
-): NonNullable<NavigationThreadSummary["prs"]> {
-  const prs = thread.prs ?? [];
-  if (!threadHasExactPrNumberMatch(thread, query)) {
-    return prs;
-  }
-  const number = Number(query.trim().replace(/^#/, ""));
-  return [
-    ...prs.filter((pr) => pr.number === number),
-    ...prs.filter((pr) => pr.number !== number),
-  ];
-}
-
-function scrollPullRequestsHorizontally(
-  event: ReactWheelEvent<HTMLSpanElement>,
-): void {
-  const strip = event.currentTarget;
-  const delta = event.deltaX || event.deltaY;
-  if (delta === 0 || strip.scrollWidth <= strip.clientWidth) {
-    return;
-  }
-  const maxScrollLeft = strip.scrollWidth - strip.clientWidth;
-  const nextScrollLeft = Math.max(
-    0,
-    Math.min(maxScrollLeft, strip.scrollLeft + delta),
-  );
-  if (nextScrollLeft === strip.scrollLeft) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  strip.scrollLeft = nextScrollLeft;
-}
-
-function describeThread(
-  thread: NavigationThreadSummary,
-): ThreadDescription {
-  const description: ThreadDescription = {};
-  if (thread.gitBranch) {
-    description.branch = thread.gitBranch;
-  }
-  const directory = (thread.linkedDirectories ?? [])[0];
-  if (directory?.label) {
-    description.directory = directory.label;
-  }
-  return description;
 }

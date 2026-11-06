@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.3.13 - 2026-11-05
+
+- Wait Until Done - Hold a thread's merge while replies, rebases, and CI repairs continue. Record prerequisite work and follow-up steps, including work on another machine, then receive a reminder when it is marked done without automatically starting a new turn.
+- Thread Maintenance - Review idle threads and archived checkouts together, choose what to archive or keep, and save changes before removing checkouts. Continue archive sweeps past individual failures rather than stopping the whole sweep.
+- Handoff Progress - See the steps, transferred bytes, rate, and time remaining when sending a thread to another machine. Minimize the dialog to a progress toast, or cancel before the receiver starts creating the thread.
+- Remote Transfers - Transfer files and images using resumable binary transport, preserving progress across connection drops and keeping cancellation scoped to the intended transfer.
+- Claude Sub-agents - Show Claude's sub-agents in the Sub-agents panel and beneath their parent in the thread list, with their current activity and status.
+- Local MCP Connections - Connect to HTTP MCP servers over Unix sockets on macOS/Linux and local named pipes on Windows. Verify the connected OS user before sending requests, with support for server-issued session bearer tokens.
+- Archive Performance - Reduce repeated Git checks during bulk archive and cleanup, and keep navigation refreshes scoped to affected resources and directory membership.
+- Settings - Preserve full custom Codex home paths instead of displaying a misleading abbreviation, and prevent automation action menus from being clipped.
+- Git Updates - Download and verify newer PwrDrvr Git runtimes from Settings, then explicitly choose which version to use or roll back to the previous selection. Show download and verification progress, with cancellation. The bundled macOS and Linux runtime is updated to 2.56.0-dev-pwrgit.4.
+
+## v1.3.12 - 2026-11-04
+
+- Quiet Restart - Add "Quiet & Continue After Restart" when quitting with running threads. Stop their turns and continue them a few at a time after the next launch, holding other queued messages and automatic work until those continuations start. A restart notice shows progress and offers "Start everything now."
+- To-do Destinations - Search for an existing destination thread with the jump palette's search engine, including keyboard navigation and clearer thread details.
+- Model Pickers - Apply consistent model ordering across desktop and messaging, grouping superseded models under Other. Save launchpad choices under the correct provider and keep remote choices from changing local defaults.
+- Remote Threads - Keep a new thread in the project selected on its owning machine, without jumping to another project when startup finishes or referenced directories are attached. Show remote running turns in grey in the project index.
+- Pull Request Watches - Keep watches waiting until real CI checks run instead of treating missing checks as success.
+- Archive Recovery - Preserve ACP archive metadata when loading replay history, and limit single-thread cleanup's Git discovery to the relevant worktrees.
+- Navigation and Previews - Show progress badges in the jump palette, keep hover cards clear of their source chip, and shorten text without splitting Unicode characters.
+- Messaging - Request the first typing indicator before backend startup so incoming requests receive earlier feedback.
+- Bundled Git - Ship a pinned PwrDrvr Git runtime on macOS and Linux, with verified runtime inventories and a bundled Linux CA certificate store. Windows continues using bundled Dugite Git.
+
+## v1.3.11 - 2026-11-04
+
+- Thread Locks and Queues - Hold Claude's own follow-ups and wake-ups while a thread is locked. Release lock-held entries in arrival order, preserve each reason when work is held more than once, and keep the lock card visible above To-dos.
+- Scheduled Actions - Stop failed actions from automatically rerunning or returning to the composer. Hold later queued work behind a failed scheduled action until it is resolved.
+- Waiting For - List live Claude /loop wake-ups and session cron jobs alongside other pending work. Route prerequisite PR waits through Continue After and bound the panel's reads and refreshes.
+- Archive Cleanup - Show worktree cleanup progress, protected checkouts, and failures in Settings, with an explicit retry action. Fence cleanup ownership and reclaim worktrees only after their final reference is released.
+- Worktrees and Handoffs - Preserve handoff ancestry, fork handed-off threads without depending on the old source checkout, and avoid carrying Git LFS hooks into imported worktrees. Refuse peer To-do worktrees that would reuse the main checkout.
+- To-do Delivery - Find the owning machine for an existing-thread destination and show its thread information card. Start peer To-do worktrees from the repository's default branch.
+- Reviews and Models - Scope review PR choices and base branches to the selected project. Reject incompatible provider, model, effort, and speed settings instead of silently dropping them.
+- Monitor and MCP Tools - Give job monitors read-only forge tools for CI, PR, log, and artifact checks. Make MCP resource routes discoverable through tool search.
+- Navigation and Rewind - Preserve Back and Forward navigation during thread startup, keep loaded pinned threads after reopening a project, and clear stale rewind overlays and composer prompts.
+- Resource Management - Close idle ACP sessions and their MCP servers, keep Codex alive during foreground reads, and finish shared command discovery before quitting.
+- Responsiveness - Reduce Git and SSH launches for PR metadata and shorten transcript and turn-preparation waits. Keep Outpost navigation and Attention ordering aligned with desktop behavior.
+
 ## v1.3.10 - 2026-11-03
 
 - Calm Motion - Add an appearance option that lets spinners, thinking indicators, and status pulses animate briefly, then hold still. The system's Reduce Motion setting still stops them entirely.

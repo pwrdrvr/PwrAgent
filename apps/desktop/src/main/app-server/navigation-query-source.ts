@@ -81,6 +81,7 @@ export async function loadLocalNavigationQueryIndex(params: {
     // reflects every boundary observed before this value.
     const observedAt = nextNavigationObservation();
     const visibilitySourceVersion = backend === "all" ? overlayStore.readNavigationSourceVersion?.() : undefined;
+    const directoryScopeCheckpoint = registry.navigationDirectoryScope?.checkpoint();
     if (backend === "all") latestVisibilityScanByRegistry.set(registry, observedAt);
     const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
     // Creation uses the same complete membership that the sidebar just read.
@@ -89,11 +90,12 @@ export async function loadLocalNavigationQueryIndex(params: {
     // Normal and forced-refresh scans have independent pool keys. Only the
     // latest scan may publish, and an intervening mutation also makes its
     // membership and pin ranks obsolete even when its coverage is complete.
-    if (backend === "all" && index.coverage?.state === "complete"
+    if (backend === "all"
       && latestVisibilityScanByRegistry.get(registry) === observedAt
       && !navigationChanged
       && visibilitySourceVersion === overlayStore.readNavigationSourceVersion?.()) {
-      registry.rememberNavigationVisibilityIndex?.(index);
+      if (directoryScopeCheckpoint !== undefined) registry.navigationDirectoryScope.remember(index, directoryScopeCheckpoint);
+      if (index.coverage?.state === "complete") registry.rememberNavigationVisibilityIndex?.(index);
     }
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {

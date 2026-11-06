@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { app } from "electron";
 import type {
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
@@ -16,6 +17,8 @@ import type {
 import { ReplayClient } from "./replay-client";
 import type { ReplayFixture, ReplayStepOverride } from "./replay-fixture";
 import { validateReplayFixture } from "./replay-fixture";
+import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 
 const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
@@ -185,6 +188,10 @@ type ReplayRuntimeClient = {
 declare global {
    
   var __PWRAGENT_REPLAY_DRIVER__: ReplayDriver | undefined;
+  var __PWRAGENT_E2E_MAIN_PROCESS_TIMING__: (() => {
+    listings: ReturnType<typeof listingDiagnostics.snapshot>;
+    git: ReturnType<typeof gitSubprocessDiagnostics.snapshot>;
+  }) | undefined;
 }
 
 export function createReplayClientsFromEnv():
@@ -200,6 +207,14 @@ export function createReplayClientsFromEnv():
 
   const fixture = loadReplayFixture(fixturePath);
   const clients = createReplayClients(fixture);
+
+  // Read the existing bounded rings only; never install this bridge in a package.
+  if (process.env.PWRAGENT_E2E === "1" && app?.isPackaged === false) {
+    globalThis.__PWRAGENT_E2E_MAIN_PROCESS_TIMING__ = () => ({
+      listings: listingDiagnostics.snapshot(),
+      git: gitSubprocessDiagnostics.snapshot(),
+    });
+  }
 
   // Note: the driver API still accepts `executionMode` on every method
   // for E2E backward-compat with existing replay specs. After the

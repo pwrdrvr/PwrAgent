@@ -412,6 +412,15 @@ them, since this process never reads them; the point is the `console.error`
 line, so an operator who exports one and then launches a packaged build is
 told it did nothing instead of wondering why the Profiler never connects.
 
+## E2E Failure Timing
+
+Import `test` from `e2e/fixtures/electron-test` in desktop specs. Its automatic
+fixture attaches the main process's existing listing and Git timing snapshots
+only for failed attempts, including timeouts. `launchElectronApp` captures them
+before explicit close calls, while the app is still reachable. Passing attempts
+discard those in-memory copies. The bridge requires `PWRAGENT_E2E=1`, a replay
+fixture, and an unpackaged app.
+
 ## E2E Locator Hygiene Around Global Chrome
 
 The thread/search title bars always render the history Back/Forward

@@ -5,7 +5,7 @@ import {
   test,
   type ElectronApplication,
   type Page,
-} from "@playwright/test";
+} from "./fixtures/electron-test";
 import { createBoundedOutputMatcher } from "./fixtures/bounded-output-matcher";
 import { launchElectronApp } from "./fixtures/electron-app";
 

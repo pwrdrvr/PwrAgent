@@ -6,6 +6,7 @@ import type {
   CodexEnvironmentExecutionTarget,
   LaunchpadWorkMode,
   ModelSettingsRecent,
+  ModelMenuEntry,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
@@ -1102,7 +1103,7 @@ export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
       capabilities?: BackendCapabilities;
       backend: AppServerBackendKind;
       label: string;
-      models: { id: string; label: string; reasoningEfforts: string[] }[];
+      models: (ModelMenuEntry & { label: string; reasoningEfforts: string[] })[];
     }[];
   };
 };

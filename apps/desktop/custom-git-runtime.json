@@ -1,0 +1,64 @@
+{
+  "assets": {
+    "darwin-universal": {
+      "inventory_sha256": "7a1012cb699e10e37b800b0fe81a356b1a4e53899ba7fe71c1210db8964ffb63",
+      "minimum_os": "13.0",
+      "minimum_os_tested": false,
+      "notarized": true,
+      "sha256": "ac017760d56e45395b692ab85c51c213bdde659fdc30dd8905adaeaf6050f220",
+      "signing": "Developer ID Application: PwrDrvr LLC (T44CNHC4UH)",
+      "team_id": "T44CNHC4UH",
+      "url": "https://github.com/huntharo/git/releases/download/v2.56.0-dev-pwrgit.4/pwrgit-2.56.0-dev-pwrgit.4-97dd200-darwin-universal.tar.gz"
+    },
+    "linux-arm64": {
+      "ca_bundle": {
+        "certificate_count": 118,
+        "date": "2026-10-20",
+        "license": "MPL-2.0",
+        "license_sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+        "license_source": "https://www.mozilla.org/media/MPL/2.0/index.815ca599c9df.txt",
+        "path": "ssl/cacert.pem",
+        "sha256": "796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe",
+        "url": "https://curl.se/ca/cacert-2026-10-20.pem"
+      },
+      "inventory_sha256": "05b6f7a4569650b22ec1f96a33047742567b888913d76f56269b3e7e7c876148",
+      "minimum_os": "glibc 2.35",
+      "minimum_os_tested": false,
+      "notarized": false,
+      "sha256": "9f81c626da93b0a0743d1efe4b85ae82a3fe7e614ee19b4c486a18426cb13a7d",
+      "signing": "unsigned",
+      "url": "https://github.com/huntharo/git/releases/download/v2.56.0-dev-pwrgit.4/pwrgit-2.56.0-dev-pwrgit.4-97dd200-linux-arm64.tar.gz"
+    },
+    "linux-x64": {
+      "ca_bundle": {
+        "certificate_count": 118,
+        "date": "2026-10-20",
+        "license": "MPL-2.0",
+        "license_sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+        "license_source": "https://www.mozilla.org/media/MPL/2.0/index.815ca599c9df.txt",
+        "path": "ssl/cacert.pem",
+        "sha256": "796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe",
+        "url": "https://curl.se/ca/cacert-2026-10-20.pem"
+      },
+      "inventory_sha256": "70bc8834cbdb196cc779d141ff1ee8272c0a403cda5e1164eaf65be44d29ed01",
+      "minimum_os": "glibc 2.35",
+      "minimum_os_tested": false,
+      "notarized": false,
+      "sha256": "4c204d577aa073b11df9b9b27e408f7db2a8658798a657bbddbb0da097ac9f71",
+      "signing": "unsigned",
+      "url": "https://github.com/huntharo/git/releases/download/v2.56.0-dev-pwrgit.4/pwrgit-2.56.0-dev-pwrgit.4-97dd200-linux-x64.tar.gz"
+    }
+  },
+  "build_run": "https://github.com/huntharo/git/actions/runs/42050909603",
+  "consumer_sha256": "03a2dac8d3bd2a97f28c580a617b09aeb950ce03e8489b6c604da4e3488a6bf4",
+  "schema": 1,
+  "source_pull_requests": [
+    2,
+    3,
+    5,
+    10,
+    11
+  ],
+  "source_revision": "97dd200ae74c18d4afe94deb03bc79f29b9d774d",
+  "version": "2.56.0-dev-pwrgit.4"
+}

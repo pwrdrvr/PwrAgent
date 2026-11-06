@@ -10,9 +10,12 @@ import {
   type NavigationPageState,
 } from "./navigation-query-state";
 
+/** The two calls a navigation query makes. */
+export type NavigationQueryApi = Pick<DesktopApi, "getNavigationQueryPage" | "releaseNavigationQuery">;
+
 /** Explicitly demanded page range, with one process-pool lease per resource. */
 export function useNavigationQueryResource(params: {
-  desktopApi?: DesktopApi;
+  desktopApi?: NavigationQueryApi;
   request?: NavigationQueryRequest;
   active?: boolean;
 }): {

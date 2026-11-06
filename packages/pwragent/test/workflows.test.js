@@ -2,26 +2,16 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import test from "node:test";
 import { connectFederationClient, decodeFederationInvite, FederationRpcEndpoint, generateFederationIdentityKeyPair,
   generateNoiseStaticKeyPair, FederationFilePushReceiver, FederationFilePushReceipts } from "../dist/federation-core.js";
 import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
 import { OutpostGit } from "../src/projects.js";
-import { setup, eventually } from "./helpers.js";
-
-async function port() {
-  const server = net.createServer();
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const result = server.address().port;
-  await new Promise((resolve) => server.close(resolve));
-  return result;
-}
+import { setup, eventually, restartAfterCompletedTurn } from "./helpers.js";
 
 async function peer(h, prior, onRequest, capabilities = HEADLESS_CAPABILITIES) {
-  const listener = (await h.rpc("federation-status")).listener;
-  const invite = prior?.invite || decodeFederationInvite((await h.rpc("federation-invite", { port: listener ? Number(new URL(listener.url).port) : await port() })).invite);
+  const invite = prior?.invite || decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
   const identity = prior?.identity || { id: randomUUID(), ...generateFederationIdentityKeyPair(), noiseStatic: generateNoiseStaticKeyPair() };
   const events = [];
   const endpoints = [];
@@ -79,15 +69,18 @@ test("project creation, clone, project-specific turns and restart use owner cwd"
   assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "send_private_response")));
   assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "send_messaging_file")));
   assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "render_messaging_pdf_pages")));
-  await v.call("backend.startTurn", { threadId: created.threadId, input: [{ type: "text", text: "project marker" }] });
+  const turn = await v.call("backend.startTurn", { threadId: created.threadId, input: [{ type: "text", text: "project marker" }] });
   await eventually(() => existsSync(path.join(project.path, "fixture-result.txt")));
+  // The output file precedes saved history and turn/completed in the fixture.
+  // Restart only after the daemon has observed completion, so shutdown cannot
+  // interrupt that history write and leave the resumed fixture without a thread.
+  await eventually(async () => (await h.rpc("list")).some((job) => job.threadId === created.threadId && job.status === "completed"));
   assert.equal(existsSync(path.join(h.workspace, "fixture-result.txt")), false);
   const page = await v.call("backend.getNavigationQueryPage", { protocol: 2, query: { kind: "directory", directoryKey: project.path } });
   assert.equal(page.entries[0].row.projectKey, project.path);
   await assert.rejects(v.call("backend.startTurn", { threadId: created.threadId, cwd: h.workspace, input: [{ type: "text", text: "wrong cwd" }] }), /cwd|workspace|project/i);
   v.connection.close();
-  await h.stop(h.daemon);
-  await h.start();
+  await restartAfterCompletedTurn(h, turn);
   const reconnected = await peer(h, v);
   t.after(() => reconnected.connection.close());
   await reconnected.call("backend.startTurn", { threadId: created.threadId, input: [{ type: "text", text: "after restart" }] });
@@ -174,16 +167,18 @@ test("repository intake preflights before file transfer or source archive, then 
   git(source.root, "clone", "--bare", origin, published);
   const sourceProject = await source.rpc("project-clone", { name: "source", remote: published });
   const destProject = await destination.rpc("project-clone", { name: "destination", remote: published });
-  const gatewayPort = await port();
-  const enrollment = await source.rpc("federation-invite", { port: gatewayPort });
+  const enrollment = await source.rpc("federation-invite", { port: 0 });
   await destination.rpc("federation-join", { invite: enrollment.invite });
   await eventually(async () => (await destination.rpc("federation-status")).gateway.status === "connected");
   const targetInstanceId = (await destination.rpc("federation-status")).instanceId;
   const viewer = await peer(source);
   t.after(() => viewer.connection.close());
   const thread = await viewer.call("backend.startThread", { cwd: sourceProject.path });
-  await viewer.call("backend.startTurn", { threadId: thread.threadId, input: [{ type: "text", text: "intake history" }] });
-  await eventually(() => existsSync(path.join(sourceProject.path, "fixture-result.txt")));
+  const turn = await viewer.call("backend.startTurn", { threadId: thread.threadId, input: [{ type: "text", text: "intake history" }] });
+  // A result file precedes persisted history and turn/completed in the fixture.
+  // The owning runtime must observe this exact turn's completion before handoff.
+  await eventually(async () => (await source.rpc("list")).some((job) =>
+    job.threadId === thread.threadId && job.turnId === turn.turnId && job.status === "completed"));
   git(sourceProject.path, "add", ".");
   git(sourceProject.path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture result");
   git(sourceProject.path, "push", "origin", "main");
@@ -224,9 +219,8 @@ test("handoffs validate trusted gateway destinations and transfer between siblin
     runtime: { store: { directory: path.join(gatewayDirectory, "jobs"), jobs: new Map() }, projects: { git: {} } },
     onFailure: (error) => { throw error; } });
   t.after(() => gateway.stop());
-  const listenPort = await port();
-  await source.rpc("federation-join", { invite: (await gateway.invite({ port: listenPort })).invite });
-  await destination.rpc("federation-join", { invite: (await gateway.invite({ port: listenPort })).invite });
+  await source.rpc("federation-join", { invite: (await gateway.invite({ port: 0 })).invite });
+  await destination.rpc("federation-join", { invite: (await gateway.invite({ port: 0 })).invite });
   const sourceId = (await source.rpc("federation-status")).instanceId;
   const destinationId = (await destination.rpc("federation-status")).instanceId;
   const controller = await peer(source);
@@ -282,7 +276,7 @@ test("handoffs validate trusted gateway destinations and transfer between siblin
 test("gateway loss reaps a relayed viewer's terminal while outpost execution continues", { timeout: 30000 }, async (t) => {
   const gateway = await setup(t);
   const outpost = await setup(t);
-  const issued = await gateway.rpc("federation-invite", { port: await port() });
+  const issued = await gateway.rpc("federation-invite", { port: 0 });
   await outpost.rpc("federation-join", { invite: issued.invite });
   const instanceId = (await outpost.rpc("federation-status")).instanceId;
   const viewer = await peer(gateway);

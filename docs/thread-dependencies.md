@@ -1,5 +1,11 @@
 # Durable thread dependencies
 
+For work that is done only when someone says so, use
+[Wait Until Done](thread-merge-holds.md). It holds merging while work
+continues and reminds the operator when the work is marked done. A completed
+turn is a scheduling event; it does not establish that another thread has
+finished its work.
+
 `manage_thread_dependencies` registers one-shot prerequisites for a local
 thread. The thread ends its turn after registration; PwrAgent evaluates
 prerequisites from provider turn boundaries and its existing PR status bus.

@@ -1,3 +1,4 @@
+import { normalizeFederationImageFile } from "./federation-image-normalization";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
@@ -95,7 +96,7 @@ export async function prepareOutgoingFederationTurnInput(params: {
     }
     prepared.push(
       await sendStagedAttachment({
-        attachment: staged,
+        attachment: await normalizeFederationImageFile(staged, true),
         localInstanceId: params.localInstanceId,
         targetInstanceId: params.targetInstanceId,
         sendEnvelope: params.sendEnvelope,
@@ -363,7 +364,7 @@ export class FederationTurnInputAttachmentReceiver {
           transferKey(sourceInstanceId, item.transferId),
           sourceInstanceId,
         );
-        return await transfer.completion;
+        return await normalizeFederationImageFile(await transfer.completion, false);
       }),
     );
   }

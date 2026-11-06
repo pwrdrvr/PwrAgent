@@ -517,6 +517,20 @@ no PR lookup, Git working-state probe, launchpad hydration, directory-fleet
 walk, or connected-peer enumeration. The shared turn FIFO remains the final
 race-safe admission authority if activity changes after the targeted read.
 
+After routing and permission checks, an idle target gets a bounded typing
+lease before the controller awaits backend startup. MCP preparation, a cold
+provider, and the activity API response must not delay the first activity
+request or prevent backend submission. This preparation lease does not invent
+an active backend turn. Failed or queued attempts release it without stopping
+another preparing attempt or a working turn. The accepted turn retains its
+normal activity signal, including retrying a failed preparation request.
+
+`messaging-first-typing.property.test.ts` checks the transport request boundary
+with deferred startup and API responses, injected time, and a 100 ms budget
+after admission with input debounce disabled. The configured 500 ms input
+debounce is separate. Its provider model also requires a late failed response
+to affect only the lease that issued it, never a replacement lease.
+
 Full navigation remains appropriate for explicit browse, monitor, picker,
 handoff, review, and on-demand rich status workflows. Automatic status-card
 updates and thread-state bus fan-out reuse the targeted projection instead of
@@ -658,6 +672,15 @@ backend before materializing or starting the thread. The resulting
 binding stores the backend as immutable thread identity. After that,
 there is no Provider button; the bound-thread status card only reports
 which backend owns the thread.
+
+Messaging's existing-thread, new-thread, and reviewer model pickers use
+`buildModelMenu` through `messaging-model-menu.ts`, matching desktop catalog
+order and superseded-model rules. **Other** (Claude: **Other Models**) opens
+a second page with a **Back** button. New threads and reviewers offer Codex
+model providers as named groups that open their own model pages; existing
+Codex threads offer only their own provider's models. Each list paginates
+within the adapter's action budget. Page navigation travels in callback
+values, so the same menus work across providers without adapter branches.
 
 ### ACP runtime modes
 

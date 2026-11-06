@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { bundledGitEnvironment, bundledGitExecutable, installedGitLfs, validateBundledGit } from "../bundled-git";
 import { customGitEnvironment, GIT_COMMAND_ENV } from "../git-runtime";
+import { managedGitRoot } from "../managed-git-paths";
 export { GIT_COMMAND_ENV } from "../git-runtime";
 import path from "node:path";
 import {
@@ -47,15 +48,37 @@ export function gitCandidateInputs(env: NodeJS.ProcessEnv): Array<{
   ];
 }
 
+export type ManagedGitDiscoveryInput = {
+  generation: string;
+  executable: string;
+  root: string;
+  /** A check this release already failed in this run; it is never probed. */
+  failure?: string;
+};
+
 async function buildGitCandidate(
-  input: { command: string | undefined; source: DesktopGitCandidateSource },
+  input: { command: string | undefined; source: DesktopGitCandidateSource; managed?: ManagedGitDiscoveryInput },
   options: {
     env: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
     signal?: AbortSignal;
   },
 ): Promise<DesktopGitDiscoveryCandidate | undefined> {
-  const probeEnv = input.source === "bundled" ? bundledGitEnvironment(options.env) : customGitEnvironment(options.env, input.command ?? "git");
+  if (input.managed?.failure) {
+    return {
+      command: input.managed.executable,
+      source: "managed",
+      generation: input.managed.generation,
+      executable: false,
+      selected: false,
+      failureReason: input.managed.failure,
+    };
+  }
+  const probeEnv = input.managed
+    ? bundledGitEnvironment(options.env, { root: input.managed.root })
+    : input.source === "bundled"
+      ? bundledGitEnvironment(options.env)
+      : customGitEnvironment(options.env, input.command ?? "git");
   const candidate = await buildCommandDiscoveryCandidate<DesktopGitCandidateSource>(
     input,
     {
@@ -68,6 +91,7 @@ async function buildGitCandidate(
   if (!candidate || options.signal?.aborted) {
     return undefined;
   }
+  const generation = input.managed ? { generation: input.managed.generation } : {};
 
   if (candidate.version) {
     try {
@@ -79,9 +103,9 @@ async function buildGitCandidate(
       });
       const lfsVersion = stdout.match(/git-lfs\/([^\s]+)/)?.[1];
       if (!lfsVersion) throw new Error("Git LFS did not report a version.");
-      return { ...candidate, lfsVersion };
+      return { ...candidate, ...generation, lfsVersion };
     } catch {
-      return { ...candidate, executable: false, failureReason: GIT_LFS_UNAVAILABLE_REASON };
+      return { ...candidate, ...generation, executable: false, failureReason: GIT_LFS_UNAVAILABLE_REASON };
     }
   }
 
@@ -91,6 +115,7 @@ async function buildGitCandidate(
     ?? "version_not_reported";
   return {
     ...candidate,
+    ...generation,
     executable: false,
     failureReason,
     versionFailureReason: undefined,
@@ -117,22 +142,53 @@ export async function discoverGitCommands(params?: {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   signal?: AbortSignal;
+  /**
+   * Downloaded PwrDrvr Git releases, newest first. A loader runs beside the
+   * other probes, so discovery starts the moment it is called.
+   */
+  managed?: ManagedGitDiscoveryInput[] | (() => Promise<ManagedGitDiscoveryInput[]>);
+  /** The release chosen with Use, by generation id. */
+  selectedManaged?: string;
 }): Promise<DesktopGitDiscoverySnapshot> {
   const env = params?.env ?? process.env;
   const configuredCommand = params?.configuredCommand?.trim();
   const build = (input: {
     command: string | undefined;
     source: DesktopGitCandidateSource;
+    managed?: ManagedGitDiscoveryInput;
   }): Promise<DesktopGitDiscoveryCandidate | undefined> =>
     buildGitCandidate(input, { env, platform: params?.platform, signal: params?.signal });
 
   const inputs = gitCandidateInputs(env);
-  const [configured, ...discovered] = await Promise.all([
+  const loadManaged = params?.managed;
+  const chosen = params?.selectedManaged;
+  // Git commands fail while the chosen release is gone, so its row stays
+  // selected and says why rather than handing "In use" to the bundle.
+  const chosenWins = Boolean(chosen && !configuredCommand && !env[GIT_COMMAND_ENV]?.trim());
+  const managedList = (typeof loadManaged === "function"
+    ? loadManaged().catch(() => [])
+    : Promise.resolve(loadManaged ?? []))
+    .then((list) => !chosen || !chosenWins || list.some((release) => release.generation === chosen)
+      ? list
+      : [...list, {
+        generation: chosen,
+        executable: path.join(managedGitRoot(), "versions", chosen),
+        root: path.join(managedGitRoot(), "versions", chosen),
+        failure: "This PwrDrvr Git release is no longer installed.",
+      }]);
+  const managedProbes = managedList.then((list) => Promise.all(
+    list.map((release) => build({ command: release.executable, source: "managed", managed: release })),
+  ));
+  const [configured, first, bundled, ...rest] = await Promise.all([
     build({ command: configuredCommand, source: "config" }),
     build(inputs[0]),
     build({ command: bundledGitExecutable(), source: "bundled" }),
     ...inputs.slice(1).map(build),
   ]);
+  const managed = await managedList;
+  const selectedManaged = managed.find((release) => release.generation === params?.selectedManaged);
+  // Downloaded releases sit beside the bundle they update.
+  const discovered = [first, ...await managedProbes, bundled, ...rest];
   // A configured path that is already one of the well-known locations
   // stays under the source that names it, so the row keeps reading
   // "Homebrew" rather than the far less useful "Custom path". The extra
@@ -148,10 +204,16 @@ export async function discoverGitCommands(params?: {
   // The candidates' own commands, because discovery resolves a bare `git`
   // against PATH: comparing the raw setting would match no row and leave the
   // pane reporting no Git at all while every spawn ran that one.
-  const requested = discovered[0]?.command || configured?.command || bundledGitExecutable();
+  const requested = discovered[0]?.command
+    || configured?.command
+    || selectedManaged?.executable
+    || bundledGitExecutable();
+  const requestedSource: DesktopGitCandidateSource = env[GIT_COMMAND_ENV]?.trim()
+    ? "env"
+    : configuredCommand ? "config" : selectedManaged ? "managed" : "bundled";
   // An explicit but broken selection remains selected; never silently switch.
   const selected = candidates.find((candidate) => candidate.command === requested)
-    ?? candidates.find((candidate) => candidate.source === (env[GIT_COMMAND_ENV]?.trim() ? "env" : configuredCommand ? "config" : "bundled"));
+    ?? candidates.find((candidate) => candidate.source === requestedSource);
   if (selected) selected.selected = true;
   return {
     selectedCommand: selected?.command,

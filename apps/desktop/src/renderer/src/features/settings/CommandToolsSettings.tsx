@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DesktopCodeSignature,
   DesktopGitDiscoveryCandidate,
+  DesktopGitRuntimeChoice,
   DesktopGhDiscoveryCandidate,
   DesktopSettingsSnapshot,
   GhStatus,
@@ -18,6 +19,7 @@ import { GitHubIcon, GitLabIcon, GitIcon } from "../../icons";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { GitHubCliSetup, isGhVersionTooOldForAttachments } from "./github-cli-setup";
 import {
+  SegmentedField,
   SettingsField,
   SettingsSection,
   type SettingsChipTone,
@@ -29,6 +31,8 @@ import {
 } from "./SettingsPathRow";
 import { codeSignatureChip } from "./code-signature-chip";
 import { useCodeSignatures } from "./useCodeSignatures";
+import { ManagedGitUpdates } from "./ManagedGitUpdates";
+import { MANAGED_GIT_BUILD_TRACK_SUB, managedGitTrackOptions } from "./managed-git-updates-copy";
 import {
   commandDiscoveryFailureDetail as sharedCommandDiscoveryFailureDetail,
   describeCommandDiscoveryFailure as describeSharedCommandDiscoveryFailure,
@@ -66,6 +70,7 @@ export function GitToolSection(props: {
   const desktopApi = props.desktopApi;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [trackError, setTrackError] = useState<string | undefined>(undefined);
   const discovery = props.snapshot.applications.git.discovery;
   const gitPath = props.snapshot.applications.git.path;
   const envForced = gitPath.source === "env";
@@ -77,6 +82,8 @@ export function GitToolSection(props: {
       candidate.executable
       // The bundled row is the default and the only way back to it.
       || candidate.source === "bundled"
+      // A download that failed a check says so on its own row.
+      || candidate.source === "managed"
       || candidate.selected
       // Installed but blocked on something the operator can fix. The bundle
       // always works, so without these a Homebrew git lacking git-lfs would
@@ -143,10 +150,36 @@ export function GitToolSection(props: {
     await refresh();
   };
 
+  const selectGitRuntime = async (choice: DesktopGitRuntimeChoice): Promise<void> => {
+    if (!desktopApi?.managedGitAction) {
+      await saveGitPath(choice.kind === "path" ? choice.path : "");
+      return;
+    }
+    setError(undefined);
+    setLoading(true);
+    try {
+      // One write for the path, the downloaded release and what Roll back
+      // returns to; a downloaded release is verified again first.
+      const response = await desktopApi.managedGitAction({ action: "select", choice });
+      if (response.error) setError(response.error);
+      await props.onRefresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const selectCandidate = (candidate: DesktopGitDiscoveryCandidate): void => {
     // Choosing the bundle clears the override rather than pinning the
     // bundle's path, which moves whenever the app does.
-    void saveGitPath(candidate.source === "bundled" ? "" : candidate.command);
+    void selectGitRuntime(
+      candidate.source === "bundled"
+        ? { kind: "bundled" }
+        : candidate.source === "managed" && candidate.generation
+          ? { kind: "managed", generation: candidate.generation }
+          : { kind: "path", path: candidate.command },
+    );
   };
 
   return (
@@ -277,6 +310,43 @@ export function GitToolSection(props: {
             </div>
           }
         />
+        {props.snapshot.applications.git.managed?.supported && desktopApi?.managedGitAction ? (
+          <SegmentedField
+            label="Build track"
+            sub={MANAGED_GIT_BUILD_TRACK_SUB}
+            disabled={props.saving || loading || props.snapshot.applications.git.managed.installing !== undefined}
+            error={trackError}
+            options={managedGitTrackOptions(props.snapshot.applications.git.managed)}
+            value={props.snapshot.applications.git.managed.track}
+            onChange={async (track) => {
+              setTrackError(undefined);
+              // Writes the track only: what Updates offers changes, the Git
+              // in use does not, and nothing downloads.
+              const response = await desktopApi.managedGitAction?.({ action: "track", track });
+              if (response?.error) setTrackError(response.error);
+              await props.onRefresh();
+            }}
+          />
+        ) : null}
+        {props.snapshot.applications.git.managed?.supported ? (
+          <SettingsField
+            label="Updates"
+            sub="Newer PwrDrvr builds of Git and Git LFS. Each download is checked against its published checksum and signature before you can use it."
+            control={
+              <ManagedGitUpdates
+                desktopApi={desktopApi}
+                managed={props.snapshot.applications.git.managed}
+                envForced={envForced}
+                manualPathSelected={configuredCommand.length > 0}
+                disabled={props.saving || loading}
+                onRefresh={async (rescan) => {
+                  if (rescan && desktopApi?.refreshGitDiscovery) await desktopApi.refreshGitDiscovery();
+                  await props.onRefresh();
+                }}
+              />
+            }
+          />
+        ) : null}
         <SettingsField
           label="Manual path"
           sub="Pick a git executable outside the discovered locations."
@@ -298,7 +368,7 @@ export function GitToolSection(props: {
                       setError(result.error ?? "No git path was selected.");
                       return;
                     }
-                    await saveGitPath(result.path);
+                    await selectGitRuntime({ kind: "path", path: result.path });
                   })();
                 }}
               >
@@ -717,7 +787,15 @@ function GitCandidateRow(props: {
   if (signatureChip) {
     chips.push(signatureChip);
   }
-  if (!candidate.executable) {
+  if (!candidate.executable && candidate.source === "managed") {
+    // A downloaded release that failed a check is never run.
+    chips.push({
+      key: "state",
+      label: "Failed check",
+      tone: "err",
+      title: candidate.failureReason,
+    });
+  } else if (!candidate.executable) {
     chips.push({
       key: "state",
       label: failureLabel ?? "Unavailable",
@@ -902,6 +980,7 @@ function describeGitCandidateSource(
   source: DesktopGitDiscoveryCandidate["source"],
 ): string {
   if (source === "bundled") return "Bundled";
+  if (source === "managed") return "Downloaded";
   if (source === "xcode") return "Apple";
   if (source === "homebrew") return "Homebrew";
   if (source === "user") return "User bin";

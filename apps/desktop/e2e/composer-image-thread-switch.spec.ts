@@ -2,8 +2,9 @@ import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../src/renderer/src/t
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { waitForCreatedThreadTranscript } from "./fixtures/created-thread";
 import { mastheadAction } from "./fixtures/window-chrome";
 
 async function createComposerImageThreadSwitchFixture(): Promise<{
@@ -314,13 +315,7 @@ test("keeps a pasted composer image after switching away from a newly created th
       .fill("Start the regression thread");
     await app.window.getByRole("button", { name: "Start thread" }).click();
 
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Thread composer regression",
-      }),
-    ).toBeVisible();
-    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    const transcript = await waitForCreatedThreadTranscript(app.window, "Thread composer regression");
     await app.advance({ stepId: "turn-started-1" });
     await app.advance({ stepId: "assistant-message-1" });
     await app.advance({ stepId: "assistant-message-2" });

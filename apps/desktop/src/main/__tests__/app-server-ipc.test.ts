@@ -748,6 +748,7 @@ function emitRegistryEvent(event: unknown): void {
   }
 }
 const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
+const withThreadWorkspaceMutation = vi.fn(async (_identity: unknown, work: () => Promise<unknown>) => await work());
 const setForgeReadHandlers = vi.fn();
 const setForgePrToolHandler = vi.fn();
 const setForgeToolPolicyResolver = vi.fn();
@@ -758,6 +759,9 @@ const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadDependencyToolHandler = vi.fn();
+const setThreadMergeHoldToolHandler = vi.fn();
+const setMergeHoldReminderDelivery = vi.fn();
+const setThreadMaintenanceToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
 const setThreadPrWatchesPeerHandler = vi.fn();
@@ -1239,6 +1243,8 @@ vi.mock("../app-server/backend-registry", () => {
     resolveEditCommitStates,
     onEvent,
     publishLocalEvent,
+    withThreadWorkspaceMutation,
+    withArchiveWorkspaceWrite: async (_paths: string[], work: () => Promise<unknown>) => await work(),
     setForgeReadHandlers,
     setForgePrToolHandler,
     setForgeToolPolicyResolver,
@@ -1252,6 +1258,9 @@ vi.mock("../app-server/backend-registry", () => {
     setLocalPullRequestAuthorityResolver,
     setThreadPullRequestWatchToolHandler,
     setThreadDependencyToolHandler,
+    setThreadMergeHoldToolHandler,
+    setMergeHoldReminderDelivery,
+    setThreadMaintenanceToolHandler,
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
     setThreadPrWatchesPeerHandler,
@@ -1556,11 +1565,15 @@ describe("app server ipc", () => {
     onEvent.mockClear();
     registryEventListeners.length = 0;
     publishLocalEvent.mockClear();
+    withThreadWorkspaceMutation.mockClear();
     setThreadPullRequestStatusToolHandler.mockClear();
     setThreadPullRequestCanonicalizer.mockClear();
     setLocalPullRequestAuthorityResolver.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadDependencyToolHandler.mockClear();
+    setThreadMergeHoldToolHandler.mockClear();
+    setMergeHoldReminderDelivery.mockClear();
+    setThreadMaintenanceToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
     setThreadPrWatchesPeerHandler.mockClear();
@@ -13916,6 +13929,8 @@ describe("app server ipc", () => {
         path: directoryPathId,
       },
     });
+    expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" }, expect.any(Function), ["/repo/app"]);
+    expect(withThreadWorkspaceMutation.mock.invocationCallOrder[0]).toBeLessThan(registerDirectoryFromDiskService.mock.invocationCallOrder[0]!);
     expect(response).toEqual({
       ok: true,
       backend: "codex",
