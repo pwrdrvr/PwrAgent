@@ -34,7 +34,8 @@ vi.mock("../operator-requests/operator-request-service", () => ({ OperatorReques
   start() {}
   stop() {}
 } }));
-vi.mock("../operator-requests/operator-request-runtime", () => ({
+vi.mock("../operator-requests/operator-request-runtime", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../operator-requests/operator-request-runtime")>(),
   installOperatorRequestService: () => {},
   localOperatorQuestionOperations: { dismiss: fixture.localDismiss, listDismissed: fixture.localList },
 }));

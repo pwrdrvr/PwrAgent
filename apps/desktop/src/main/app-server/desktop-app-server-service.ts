@@ -1,0 +1,10566 @@
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
+import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
+import { type ManageThreadMergeHoldsRequest, type ManageThreadMergeHoldsResponse } from "@pwragent/shared";
+import { appendMergeHoldDependents, assertNoMergeHolds, qualifyMergeHoldOwners, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
+import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
+import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
+import { ForgeCiClient } from "../pr-status/forge-ci-client";
+import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
+import { ForgePrToolService, type ForgePrToolPreparedCall, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
+import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
+import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
+import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
+import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
+import { publishedPrCommitShas } from "../../shared/pull-request-publication";
+import { THREAD_PR_WATCH_HISTORY_MAX_LIMIT, type ThreadPrAutoFixState, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse, type WatchThreadPullRequestReason } from "@pwragent/shared";
+import { type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
+import { ThreadDependencyStore } from "../state/thread-dependency-store";
+import { type ThreadPendingWakesList, type ThreadPendingWakesRequest, type ThreadPendingWakesResponse } from "@pwragent/shared";
+import { findRemoteHomeDirectoryIndex } from "@pwragent/shared";
+import {
+  buildThreadPendingWakes,
+  stopThreadPendingWake,
+  type ThreadPendingWakeReaders,
+} from "../app-server/thread-pending-wakes";
+import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
+import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import {
+  getProjectForgeAutomationIndex,
+  summarizeProjectHeldWakeup,
+  type ProjectForgeAutomationResolution,
+} from "../app-server/project-forge-automation-index";
+import { getThreadTodoService, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
+import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
+import { threadArtifactDirectory } from "../app-server/thread-assets";
+import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
+import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
+import { conditionalThreadRead } from "../app-server/conditional-thread-read";
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
+import { summarizeThreadAgentChange, type PrActivitySnapshot } from "@pwragent/shared";
+import { isDeepStrictEqual } from "node:util";
+import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
+import { OneTimeProfileNotice } from "../notices/one-time-profile-notice";
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
+import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import { BrowserWindow, dialog } from "electron";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type {
+  DirectoryGitStatusCacheEntry,
+  OverlayStoreLike,
+  PrAutoDispatchCandidateChange,
+  PrLookupCacheEntry,
+  PrStatusCacheEntry,
+  SqliteOverlayStore,
+} from "../state/overlay-store-sqlite";
+import { canonicalizeDetachedPrKeys } from "../state/overlay-store-sqlite";
+import {
+  type AgentEvent,
+  type AppServerBackendKind,
+  type AppServerBackendScope,
+  type AppServerThreadSummary,
+  type ArchiveWorktreeRequest,
+  type ArchiveWorktreeResponse,
+  type ArchiveThreadRequest,
+  type ArchiveThreadResponse,
+  type AppServerListSkillsRequest,
+  type AppServerListSkillsResponse,
+  type AppServerListThreadsRequest,
+  type AppServerListThreadsResponse,
+  type AttachDirectoryToThreadRequest,
+  type AttachDirectoryToThreadResponse,
+  type DetachDirectoryFromThreadRequest,
+  type DetachDirectoryFromThreadResponse,
+  type CheckThreadPullRequestStatusToolArgs,
+  type WatchThreadPullRequestToolArgs,
+  type WatchThreadPullRequestResult,
+  type ThreadPullRequestWatchListResult,
+  type ThreadPullRequestAutomationStatus,
+  type ThreadPullRequestWatchEvent,
+  type ThreadPullRequestWatchSummary,
+  type ThreadPullRequestWatchBaseline,
+  type CancelThreadPrAutoDispatchRequest,
+  type SendThreadPrAutoDispatchNowRequest,
+  type SetThreadPrAutoDispatchRequest,
+  type SetEligibleThreadsPrAutoDispatchRequest,
+  type SetEligibleThreadsPrAutoDispatchResponse,
+  type ThreadSearchRequest,
+  type ThreadSearchResponse,
+  type PersistThreadUsageActivityRequest,
+  type PersistThreadUsageActivityResponse,
+  type AppServerReadThreadRequest,
+  type AppServerReadThreadResponse,
+  type InspectTokenMiserOutputRequest,
+  type InspectTokenMiserOutputResponse,
+  type AnalyzeThreadToolHistoryRequest,
+  type AnalyzeThreadToolHistoryResponse,
+  type EnsureDirectoryLaunchpadRequest,
+  type EnsureDirectoryLaunchpadResponse,
+  type FocusedDiffAnalysisRequest,
+  type FocusedDiffAnalysisResponse,
+  type GetNavigationSnapshotRequest,
+  type HandoffThreadWorkspaceRequest,
+  type HandoffThreadWorkspaceResponse,
+  type MoveThreadToMainCheckoutRequest,
+  type MoveThreadToMainCheckoutResponse,
+  type RecreateThreadWorktreeRequest,
+  type RecreateThreadWorktreeResponse,
+  type GetGhStatusRequest,
+  type GetGlabStatusRequest,
+  type GlabStatus,
+  type GhStatus,
+  type LinkedDirectorySummary,
+  isWorkspaceHandoffDirectory,
+  type ListModelSettingsRecentsRequest,
+  type ListModelSettingsRecentsResponse,
+  type ListRecentFileReferencesRequest,
+  type ListRecentFileReferencesResponse,
+  type RecordModelSettingsRecentRequest,
+  type PickDirectoryFromDiskResponse,
+  type PickFileFromDiskResponse,
+  type PickReferenceFromDiskResponse,
+  type RenderComposerPdfPreviewRequest,
+  type RenderComposerPdfPreviewResponse,
+  type RecordRecentFileReferencesRequest,
+  type DetachThreadPullRequestRequest,
+  type DetachThreadPullRequestResponse,
+  type RefreshDirectoryGitStatusesRequest,
+  type RefreshDirectoryGitStatusesResponse,
+  type RefreshThreadGitWorkingStateRequest,
+  type RefreshThreadGitWorkingStateResponse,
+  type RefreshOwnedThreadPullRequestsRequest,
+  type RefreshThreadPullRequestsRequest,
+  type SetPullRequestPollingFocusRequest,
+  type SetTranscriptPullRequestsRequest,
+  type TranscriptPullRequestStatuses,
+  type RefreshThreadPullRequestsResponse,
+  type RegisterDirectoryFromDiskRequest,
+  type RegisterDirectoryFromDiskResponse,
+  type MarkThreadSeenRequest,
+  type MarkThreadSeenResponse,
+  type NavigationDirectoryRow,
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
+  type NavigationDirectoryGitStatus,
+  type NavigationDirectoryGitStatusUpdatedNotification,
+  type NavigationQueryPage,
+  type NavigationQueryRequest,
+  type NavigationQueueProjection,
+  type NavigationQueueProjectionRequest,
+  type NavigationLaunchpadConfigRequest,
+  type NavigationLaunchpadConfigResponse,
+  type NavigationLaunchpadDraft,
+  type BackendSummary,
+  type NavigationSelectedDetailRequest,
+  type NavigationSelectedDetailResponse,
+  type NavigationSnapshot,
+  type NavigationThreadSummary,
+  type AutomationThreadSummary,
+  type PrSummary,
+  type PrAutoDispatchBudgetConfig,
+  type PrAutoDispatchBudgetStatus,
+  type AddRemoteThreadPinRequest,
+  type AddRemoteThreadPinResponse,
+  type FederatedThreadRef,
+  type FederationJumpSearchProgress,
+  type FederationRemoteTarget,
+  type FederationJumpSearchRequest,
+  type FederationJumpSearchResponse,
+  type RemoveRemoteThreadPinRequest,
+  type HasRemoteThreadPinRequest,
+  type RemoveRemoteThreadPinResponse,
+  type SetRemoteThreadLocalPinRequest,
+  type SetRemoteThreadLocalPinResponse,
+  type ReorderDirectoryPinsRequest,
+  type ReorderDirectoryPinsResponse,
+  type ReorderThreadPinsRequest,
+  type ReorderThreadPinsResponse,
+  type SetSubthreadsCollapsedRequest,
+  type SetSubthreadsCollapsedResponse,
+  type SetDirectoryPinRequest,
+  type SetDirectoryPinResponse,
+  type SetDirectoryThreadsCollapsedRequest,
+  type SetDirectoryThreadsCollapsedResponse,
+  type SetProjectForgeAutomationRequest,
+  type SetProjectForgeAutomationResponse,
+  type ListProjectHeldWakeupsRequest,
+  type ListProjectHeldWakeupsResponse,
+  type ResolveProjectHeldWakeupsRequest,
+  type ResolveProjectHeldWakeupsResponse,
+  type ProjectForgeAutomation,
+  buildProjectPrDependencyNotice,
+  buildProjectPrWatchRefusal,
+  isDefaultProjectForgeAutomation,
+  PROJECT_PAUSED_ERROR_CODE,
+  projectAllowsAutoFixKind,
+  projectAllowsForgePolling,
+  projectAllowsPrWatches,
+  resolveProjectForgeAutomation,
+  type SetThreadParentRequest,
+  type SetThreadParentResponse,
+  type SetThreadAgentRequest,
+  type SetThreadTokenMiserRequest,
+  type SetThreadMonitorJobSuggestionsRequest,
+  type SetThreadMonitorJobSuggestionsResponse,
+  type SetThreadTokenMiserResponse,
+  type SetThreadAgentResponse,
+  type SetThreadPinRequest,
+  type SetThreadPinResponse,
+  type SetThreadReactionRequest,
+  type SetThreadReactionResponse,
+  type SetThreadLockRequest,
+  type SetThreadLockResponse,
+  type SetThreadToolIncidentNoticeRequest,
+  type SetThreadToolIncidentNoticeResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
+  type AcknowledgeThreadEnvironmentFailureRequest,
+  type AcknowledgeThreadEnvironmentFailureResponse,
+  type ListPendingThreadSpendAlertsRequest,
+  type ListPendingThreadSpendAlertsResponse,
+  type AcknowledgeThreadSpendAlertRequest,
+  type AcknowledgeThreadSpendAlertResponse,
+  type SetNavigationBrowseModeRequest,
+  type NavigationResumeState,
+  type SetNavigationBrowseModeResponse,
+  type SetPinnedGroupCollapsedRequest,
+  type SetPinnedGroupCollapsedResponse,
+  type RecentThreadLockNotesResponse,
+  type ThreadLockNoteRequest,
+  type ListThreadMigrationSourceThreadsRequest,
+  type ListThreadMigrationSourceThreadsResponse,
+  type ListThreadMigrationSourcesResponse,
+  type RetryThreadMigrationRequest,
+  type StartThreadMigrationRequest,
+  type StartThreadMigrationResponse,
+  type ResetDirectoryLaunchpadRequest,
+  type ResetDirectoryLaunchpadResponse,
+  type RenameThreadRequest,
+  type RenameThreadResponse,
+  type RestoreWorktreeRequest,
+  type RestoreWorktreeResponse,
+  type ResolveEditCommitStatesRequest,
+  type ResolveEditCommitStatesResponse,
+  type ListWorktreeOtherChangesRequest,
+  type ListWorktreeOtherChangesResponse,
+  type GetWorktreeOtherChangeDiffRequest,
+  type GetWorktreeOtherChangeDiffResponse,
+  type ListWorktreeUnpublishedCommitsRequest,
+  type ListWorktreeUnpublishedCommitsResponse,
+  type GetWorktreeUnpublishedCommitDiffRequest,
+  type GetWorktreeUnpublishedCommitDiffResponse,
+  type ReadWorktreeImageRequest,
+  type ReadWorktreeImageResponse,
+  type ResolveMissingCodexThreadsRequest,
+  type ResolveMissingCodexThreadsResponse,
+  type RestoreThreadRequest,
+  type RestoreThreadResponse,
+  type ThreadOverlayState,
+  type ThreadPrAutoDispatchPending,
+  type UpdateDirectoryLaunchpadRequest,
+  type UpdateDirectoryLaunchpadResponse,
+  type UpdateSubthreadOrderRequest,
+  type UpdateSubthreadOrderResponse,
+  type PwrAgentThreadInspectionResponse,
+  type PwrAgentThreadInspectionContext,
+} from "@pwragent/shared";
+import {
+  DEFAULT_BACKGROUND_PR_POLLING,
+  DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  DEFAULT_PULL_REQUEST_PROVIDER,
+  buildPrependPinRank,
+  buildFederatedThreadRef,
+  buildPullRequestStatusKey,
+  resolvePullRequestIdentity,
+  buildThreadIdentityKey,
+  federatedThreadIdentityKey,
+  isAppServerBackendKind,
+  isThreadPendingWakeInvalidation,
+  isFederationInstanceId,
+  isRemoteFederationTarget,
+  type FederationTarget,
+  mergeThreadLinkedDirectories,
+  normalizePullRequestProvider as normalizeSharedPullRequestProvider,
+  parseThreadIdentityKey,
+  rankInboxThreadKeys,
+  resolveNewThreadBackend,
+} from "@pwragent/shared";
+import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
+import { readWorktreeImage } from "../app-server/worktree-image-reader";
+import {
+  disposeDesktopBackendRegistry,
+  getExistingDesktopBackendRegistry,
+  getDesktopBackendRegistry,
+} from "../app-server/backend-registry";
+import {
+  selectStaleWorktreeWorkingStatePaths,
+} from "../app-server/thread-working-state-refresh-policy";
+import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
+import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
+import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
+import {
+  DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE,
+  DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS,
+  isFreshDirectoryGitStatusCacheEntry,
+} from "../app-server/directory-git-status-refresh-policy";
+import { getAppScheduledThreadActionStore, getAppStateDb, getAppStateMode } from "../state/app-state";
+import { ThreadSandboxStore } from "../state/thread-sandbox-store";
+import {
+  SandboxerPrCleanupService,
+  formatSandboxCleanupLines,
+  summarizeSandboxCleanup,
+  type SandboxCleanupReport,
+} from "../mcp-connections/sandboxer-pr-cleanup";
+import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import {
+  listModelSettingsRecents,
+  recordModelSettingsRecent,
+} from "../state/model-settings-recents-store";
+import {
+  listRecentFileReferencePaths,
+  recordRecentFileReferencePaths,
+} from "../state/recent-file-references-store";
+import {
+  PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
+  GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
+  GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
+  NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
+} from "../../shared/ipc";
+import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
+import { subscribersForChannel } from "../window-channels";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE,
+  type FederationRemoteBackendClient,
+} from "../federation/federation-backend-bridge";
+import {
+  assertProjectHeldWakeupResolutions,
+  readProjectForgeDirectoryKey,
+} from "../app-server/project-forge-automation-requests";
+import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
+import { searchNavigationOwners } from "../app-server/navigation-jump-search";
+import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
+import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
+import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
+import {
+  isFederationPeerUnavailableError,
+} from "../federation/federation-peer-unavailable-error";
+import { FocusedDiffService } from "../diff-focus/focused-diff-service";
+import { renderComposerPdfPreview } from "../pdf/composer-pdf-preview";
+import { getMainLogger } from "../log";
+import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
+import { getDesktopAutomationService } from "../automations/desktop-automation-service";
+import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
+import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef } from "../pr-status/forge-pr-fetcher";
+import {
+  detectPullRequestsForThread,
+  filterStoredDiscoveredPullRequests,
+  resolvePrLookupBranches,
+} from "../pr-status/pr-detection";
+import {
+  GithubGraphqlPrClient,
+  branchRefKey,
+} from "../pr-status/github-graphql-client";
+import type { BranchRef } from "../pr-status/github-graphql-client";
+import {
+  parseForgeRemote,
+  resolveGitHubRepoForDirectory,
+  resolveGitHubReposForDirectory,
+} from "../pr-status/git-remote";
+import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
+import { TranscriptPrSubscriptions } from "../pr-status/transcript-pr-subscriptions";
+import { PrThreadIndex } from "../pr-status/pr-thread-index";
+import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
+import { PrPollingFocusTracker } from "../pr-status/pr-polling-focus";
+import {
+  PrAutoDispatchCoordinator,
+  buildPrRepositoryKey,
+  getPrAutoDispatchEventKinds,
+  pullRequestMatchesRepositoryKey,
+} from "../pr-status/pr-auto-dispatch";
+import {
+  PrActivityJournal,
+  describePrCheck,
+  describePrRepairDecision,
+  prCheckTone,
+  prRepairDecisionTone,
+} from "../pr-status/pr-activity";
+import { PrLookupsInFlight } from "../pr-status/pr-lookups-in-flight";
+import { PullRequestRepositoryAliases } from "../pr-status/pr-repository-aliases";
+import {
+  PR_STATUS_TOKEN_BUCKET_CAPACITY,
+  PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE,
+  PrStatusTokenBucket,
+} from "../pr-status/pr-status-token-bucket";
+import {
+  buildPullRequestReferenceUrl,
+  isSameNumberInAnotherRepository,
+  parsePullRequestReferenceUrl,
+  type PullRequestReferenceIdentity,
+} from "../pr-status/forge-reference";
+import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
+import {
+  PrStatusWatchCoordinator,
+  getPrStatusWatchOutcome,
+} from "../pr-status/pr-status-watch";
+import { isTerminalPullRequest, mergeCommitShas } from "../pr-status/pr-derivations";
+import {
+  computePrStatusTransition,
+  summarizePrStatusTransition,
+} from "../pr-status/pr-transitions";
+import type { PrStatusTransition } from "../pr-status/pr-transitions";
+import { selectDiscoveryDueThreadKeys } from "../pr-status/pr-discovery";
+
+/** Listener registered via `onPrStatusTransition`. */
+type PrStatusTransitionListener = (transition: PrStatusTransition) => void;
+import {
+  getDesktopConfigStore,
+  getDesktopSettingsService,
+} from "../settings/desktop-settings-singleton";
+import { resolvePrAutomationConfig } from "../settings/config-store/config-domains";
+import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
+import { ThreadMigrationService } from "../app-server/thread-migration-service";
+import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
+import { ThreadSearchService } from "../thread-search/thread-search-service";
+import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import {
+  shapeReadThreadFileDiffsForRenderer,
+} from "../app-server/thread-file-diff-cache";
+
+/** The note in a recent-lock-note request; the renderer's payload is untrusted. */
+function readThreadLockNoteRequest(request: ThreadLockNoteRequest | undefined): string {
+  return typeof request?.note === "string" ? request.note : "";
+}
+
+const navigationQueryPool = getDesktopNavigationQueryPool();
+let nextTransientNavigationConsumer = 0;
+
+const isDevelopment = process.env.NODE_ENV !== "production";
+const PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS = 30_000;
+/**
+ * GitHub can take this long to show a queued re-run, so a status read this
+ * soon after `rerun_failed_ci_jobs` may still be the attempt it replaced.
+ */
+const RERUN_SETTLE_MS = 20_000;
+/** A recorded re-run older than this no longer explains a cached outcome. */
+const RERUN_RECORD_MAX_AGE_MS = 24 * 60 * 60_000;
+/** How long a merge/close wake waits for sandbox cleanup to report. */
+const SANDBOX_CLEANUP_WAKE_WAIT_MS = 30_000;
+/** How long a by-URL resolve the forge could not answer waits before asking again. */
+const PR_REFERENCE_RETRY_MS = 10 * 60_000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T | "timeout"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
+const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
+/**
+ * The renderer's selected-thread tick is also 60s, but it runs on its own
+ * timer and its age is measured here from a later stamp (the IPC hop, and the
+ * lookup's observation token). With no slack, jitter of a few milliseconds
+ * postponed every other tick and halved the cadence. The cooldown exists to
+ * stop floods, which this slack still does.
+ */
+const SCHEDULED_THREAD_PR_REFRESH_SLACK_MS = 5_000;
+const TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
+const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT =
+  DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE;
+// PR discovery (Layer B): a slow branch-lookup rotation across ALL open threads
+// to catch newly opened PRs on projects the operator is not looking at. Tick
+// often, but sweep each thread rarely and only a few per tick, so discovery
+// never drains the shared PR token bucket away from the fast status poller.
+const PR_DISCOVERY_TICK_INTERVAL_MS = 60_000;
+const PR_DISCOVERY_CADENCE_MS = 5 * 60_000;
+const PR_DISCOVERY_MAX_PER_TICK = 3;
+type DirectoryGitRefreshTarget = Pick<NavigationDirectoryRow, "key" | "path" | "latestUpdatedAt">;
+
+type AppServerOverlayStoreLike = OverlayStoreLike &
+  Pick<
+    SqliteOverlayStore,
+    | "readDetachedThreadPullRequests"
+    | "initializeNavigationUnreadBaseline"
+    | "readDirectoryGitStatusCache"
+    | "writeDirectoryGitStatusCacheEntry"
+    | "readThreadGitWorkingStateCache"
+    | "writeThreadGitWorkingStateCacheEntry"
+    | "addRemoteThreadPin"
+    | "hasRemoteThreadPin"
+    | "listPinnedThreadOverlayRanks"
+    | "removeRemoteThreadPin"
+    | "setRemoteThreadLocalPin"
+    | "listRemoteThreadPins"
+    | "updateRemoteThreadPinSnapshots"
+    | "setThreadToolIncidentNotice"
+    | "listPendingThreadSpendAlerts"
+    | "acknowledgeThreadSpendAlert"
+    | "acknowledgeThreadEnvironmentFailure"
+  >;
+
+type ThreadPrRefreshContext = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  branch: string;
+  directoryPaths: string[];
+  branchScoped: boolean;
+};
+
+const appServerLog = getMainLogger("pwragent:app-server");
+
+/**
+ * Forge Automation is owner-local and per Directories project. A remote
+ * window's request belongs to the peer that owns the project, which v1 does
+ * not reach.
+ */
+/**
+ * The peer that owns the project a Forge Automation request names, or
+ * undefined when this instance owns it. A peer that does not advertise
+ * `project_forge_automation`, or grants no `turn_control`, is refused here
+ * rather than asked.
+ */
+function remoteProjectForgeOwner(request: {
+  federationTarget?: FederationTarget;
+}): FederationRemoteBackendClient | undefined {
+  const target = request?.federationTarget;
+  if (!target || !isRemoteFederationTarget(target)) return undefined;
+  const runtime = getDesktopFederationRuntime();
+  if (!runtime.remoteTargetSupportsCapability(target, "project_forge_automation")) {
+    throw new Error(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
+  }
+  if (!runtime.remoteTargetSupportsCapability(target, "turn_control")) {
+    throw new Error("The owning instance does not allow this machine to control its turns.");
+  }
+  return runtime.remoteBackend(target);
+}
+
+/**
+ * Reject directory preference writes that target the synthetic
+ * catch-all bucket (`unlinked`). Both real directories
+ * (`directory:*`) and workspaces (`workspace:*`) are named entries
+ * the user actually browses. The `unlinked` bucket is a roll-up of
+ * threads with no linked directory and doesn't model a single
+ * entry, so sticky preferences there are meaningless.
+ */
+function rejectNonUserDirectoryKey(directoryKey: string): void {
+  if (
+    !directoryKey.startsWith("directory:") &&
+    !directoryKey.startsWith("workspace:")
+  ) {
+    throw new Error(
+      `Cannot persist preferences for synthetic directory entry: ${directoryKey} (only directory:* and workspace:* keys are supported)`,
+    );
+  }
+}
+
+/**
+ * `preferredBackendFallback` for an ensure response, given the provider the
+ * thread's owner resolved its defaults to. Ensure resolves `preferredBackend`
+ * to itself whenever the owner can start it, so any other answer is the
+ * owner's fallback.
+ */
+function preferredBackendFallback(
+  preferredBackend: AppServerBackendKind | undefined,
+  ownerBackend: AppServerBackendKind | undefined,
+): Pick<EnsureDirectoryLaunchpadResponse, "preferredBackendFallback"> {
+  return preferredBackend && ownerBackend && ownerBackend !== preferredBackend
+    ? { preferredBackendFallback: ownerBackend }
+    : {};
+}
+
+/**
+ * The viewer's draft for a thread another instance runs, switched to a
+ * provider that instance can start.
+ *
+ * The viewer stores the draft and resolves its provider against its own
+ * providers: its sticky default, the request's `preferredBackend`, or what
+ * the draft already held. That can name one the owner lacks, such as this
+ * instance's Claude on a peer without a Claude sign-in, and the thread could
+ * not start. The owner resolves `preferredBackend` to itself whenever it can
+ * start it, so its `defaults.backend` answers the question when the owner was
+ * asked about the draft's provider. Otherwise the owner's provider list does,
+ * by the rule the owner itself applies, without a second ensure there.
+ *
+ * A provider the owner can start stays. So does a draft whose settings the
+ * operator picked (`settingsTouchedAt`): that choice is theirs to change.
+ */
+async function resolveRemoteLaunchpadSettings(params: {
+  localResponse: EnsureDirectoryLaunchpadResponse;
+  ownerResponse: EnsureDirectoryLaunchpadResponse;
+  preferredBackend: AppServerBackendKind | undefined;
+  listOwnerBackends: () => Promise<BackendSummary[]>;
+  /** Seeds the stored draft only while it still holds `from`, untouched. */
+  updateDraftSettings: (
+    from: AppServerBackendKind,
+    patch: Partial<NavigationLaunchpadDraft>,
+  ) => Promise<NavigationLaunchpadDraft>;
+}): Promise<EnsureDirectoryLaunchpadResponse> {
+  const { localResponse, ownerResponse } = params;
+  const draftBackend = localResponse.launchpad.backend;
+  if (localResponse.launchpad.settingsTouchedAt !== undefined) {
+    return localResponse;
+  }
+  let ownerBackend: AppServerBackendKind | undefined =
+    ownerResponse.defaults.backend;
+  if (ownerBackend !== draftBackend && params.preferredBackend !== draftBackend) {
+    try {
+      // Undefined while the owner can start nothing (discovery still
+      // running): keep the draft rather than guess.
+      ownerBackend = resolveNewThreadBackend(
+        await params.listOwnerBackends(),
+        draftBackend,
+      )?.kind;
+    } catch (error) {
+      // The draft is already stored; keep it rather than fail the open.
+      appServerLog.warn("remote_launchpad_backend_check_failed", {
+        backend: draftBackend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return localResponse;
+    }
+  }
+  if (!ownerBackend) {
+    return localResponse;
+  }
+  // The viewer stores the prompt, but automatic model settings belong to the
+  // owner. Its independent draft may have edits, so take resolved defaults.
+  // For another supported provider, omit viewer preferences and let the owner
+  // resolve that provider's defaults when the draft is sent.
+  const defaults = ownerResponse.defaults.backend === ownerBackend
+    ? ownerResponse.defaults
+    : undefined;
+  const patch: Partial<NavigationLaunchpadDraft> = {
+    ...(ownerBackend !== draftBackend ? { backend: ownerBackend } : {}),
+    model: defaults?.model,
+    reasoningEffort: defaults?.reasoningEffort,
+    serviceTier: defaults?.serviceTier,
+    fastMode: defaults?.fastMode,
+    acpRuntime: defaults?.acpRuntime,
+  };
+  if (Object.entries(patch).every(([key, value]) =>
+    isDeepStrictEqual(localResponse.launchpad[key as keyof NavigationLaunchpadDraft], value))) {
+    return localResponse;
+  }
+  return {
+    ...localResponse,
+    launchpad: await params.updateDraftSettings(draftBackend, patch),
+  };
+}
+
+/**
+ * Classify combined reference-picker paths as files or directories via
+ * `fs.stat`. Unreadable paths (and exotic kinds like sockets) are
+ * skipped — the renderer only knows how to route these two kinds.
+ */
+function classifyReferencePaths(
+  paths: string[],
+): { path: string; kind: "file" | "directory" }[] {
+  const entries: { path: string; kind: "file" | "directory" }[] = [];
+  for (const candidate of paths) {
+    try {
+      const stats = fs.statSync(candidate);
+      if (stats.isDirectory()) {
+        entries.push({ path: candidate, kind: "directory" });
+      } else if (stats.isFile()) {
+        entries.push({ path: candidate, kind: "file" });
+      }
+    } catch {
+      // Skip unreadable paths.
+    }
+  }
+  return entries;
+}
+
+const PDF_MAGIC = Buffer.from("%PDF-");
+const MAX_PDF_REFERENCE_PATHS = 20;
+const MAX_COMPOSER_PDF_PREVIEW_FILE_BYTES = 64 * 1024 * 1024;
+
+export function inspectPdfReferencePaths(paths: string[]): {
+  filePaths: string[];
+  pdfPaths: string[];
+} {
+  const filePaths: string[] = [];
+  const pdfPaths: string[] = [];
+  const candidates = [...new Set(paths.filter((candidate) => candidate.trim()))]
+    .slice(0, MAX_PDF_REFERENCE_PATHS);
+  for (const candidate of candidates) {
+    let descriptor: number | undefined;
+    try {
+      descriptor = fs.openSync(candidate, "r");
+      if (!fs.fstatSync(descriptor).isFile()) {
+        continue;
+      }
+      filePaths.push(candidate);
+      const header = Buffer.alloc(PDF_MAGIC.byteLength);
+      const bytesRead = fs.readSync(descriptor, header, 0, header.byteLength, 0);
+      if (bytesRead === PDF_MAGIC.byteLength && header.equals(PDF_MAGIC)) {
+        pdfPaths.push(candidate);
+      }
+    } catch {
+      // The path may have been removed or be an unreadable non-file.
+    } finally {
+      if (descriptor !== undefined) {
+        fs.closeSync(descriptor);
+      }
+    }
+  }
+  return { filePaths, pdfPaths };
+}
+
+/**
+ * Read one explicitly referenced PDF from a stable descriptor. The preview
+ * endpoint rechecks the magic bytes itself so a path swapped after Composer's
+ * earlier inspection cannot become an arbitrary local-file renderer.
+ */
+function readComposerPdfPreviewFile(filePath: string): {
+  data: Buffer;
+  fileIdentity: string;
+} {
+  const candidate = filePath.trim();
+  if (!candidate || !path.isAbsolute(candidate)) {
+    throw new Error("Select a local PDF before opening its preview.");
+  }
+
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(candidate, "r");
+    const before = fs.fstatSync(descriptor);
+    if (!before.isFile()) {
+      throw new Error("The selected PDF is no longer a regular file.");
+    }
+    if (before.size > MAX_COMPOSER_PDF_PREVIEW_FILE_BYTES) {
+      throw new Error("This PDF is too large to preview locally.");
+    }
+
+    const header = Buffer.alloc(PDF_MAGIC.byteLength);
+    const bytesRead = fs.readSync(descriptor, header, 0, header.byteLength, 0);
+    if (bytesRead !== PDF_MAGIC.byteLength || !header.equals(PDF_MAGIC)) {
+      throw new Error("The selected file is no longer a PDF.");
+    }
+
+    // The header read uses an explicit position, leaving the descriptor at
+    // offset zero. Reading through that descriptor avoids a path-level
+    // time-of-check/time-of-use gap while pdfjs consumes the document.
+    const data = fs.readFileSync(descriptor);
+    const after = fs.fstatSync(descriptor);
+    const fileIdentity = composerPdfPreviewFileIdentity(before);
+    if (
+      data.byteLength !== after.size
+      || fileIdentity !== composerPdfPreviewFileIdentity(after)
+    ) {
+      throw new Error("The selected PDF changed while its preview was loading.");
+    }
+    return { data, fileIdentity };
+  } catch (error) {
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error("The selected PDF could not be read.", { cause: error });
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+  }
+}
+
+function composerPdfPreviewFileIdentity(stats: {
+  ctimeMs: number;
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  size: number;
+}): string {
+  return [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(":");
+}
+
+export async function renderExplicitComposerPdfPreview(
+  request: RenderComposerPdfPreviewRequest,
+): Promise<RenderComposerPdfPreviewResponse> {
+  const file = readComposerPdfPreviewFile(request.path);
+  if (request.knownFileIdentity === file.fileIdentity) {
+    return { fileIdentity: file.fileIdentity, unchanged: true };
+  }
+
+  return {
+    ...(await renderComposerPdfPreview({ data: file.data })),
+    fileIdentity: file.fileIdentity,
+    unchanged: false,
+  };
+}
+
+/**
+ * Service-boundary validation for remote-pin refs. The sqlite key is
+ * (instanceId, backend, threadId); a malformed ref from a buggy caller
+ * would persist a row that dims forever with no owner to resolve it, so
+ * reject anything that is not a well-formed remote target with a known
+ * backend before it reaches the store. Returns the validated instance id.
+ */
+function validateRemoteThreadPinRef(ref: FederatedThreadRef): string {
+  if (
+    !isRemoteFederationTarget(ref.target)
+    || !isFederationInstanceId(ref.target.instanceId)
+  ) {
+    throw new Error("Remote thread pins require a valid remote federation target.");
+  }
+  if (!isAppServerBackendKind(ref.backend)) {
+    throw new Error("Remote thread pins require a known backend kind.");
+  }
+  return ref.target.instanceId;
+}
+
+function logDebug(event: string, payload: Record<string, unknown>): void {
+  if (!isDevelopment) {
+    return;
+  }
+
+  appServerLog.debug(event, payload);
+}
+
+function isFederationMethodNotFoundError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && error.code === "method_not_found",
+  );
+}
+
+async function hydrateRetainedThreadOverlayData(
+  overlayStore: OverlayStoreLike,
+  threads: AppServerThreadSummary[],
+): Promise<AppServerThreadSummary[]> {
+  if (threads.length === 0) {
+    return threads;
+  }
+
+  const threadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
+  for (const thread of threads) {
+    const threadIds = threadIdsByBackend.get(thread.source) ?? new Set<string>();
+    threadIds.add(thread.id);
+    threadIdsByBackend.set(thread.source, threadIds);
+  }
+
+  const overlayEntries: Array<
+    readonly [AppServerBackendKind, Record<string, ThreadOverlayState | undefined>]
+  > = await Promise.all(
+    [...threadIdsByBackend.entries()].map(
+      async ([backend, threadIds]): Promise<
+        readonly [
+          AppServerBackendKind,
+          Record<string, ThreadOverlayState | undefined>,
+        ]
+      > => [
+        backend,
+        // Listing metadata only: retention reads no transcript field.
+        overlayStore.getThreadListingOverlayStates
+          ? await overlayStore.getThreadListingOverlayStates({
+              backend,
+              threadIds: [...threadIds],
+              withPrAutoDispatchPending: true,
+            })
+          : await overlayStore.getThreadOverlayStates({
+              backend,
+              threadIds: [...threadIds],
+            }),
+      ],
+    ),
+  );
+  const overlaysByBackend = new Map(overlayEntries);
+
+  return threads.map((thread) => {
+    const overlay = overlaysByBackend.get(thread.source)?.[thread.id];
+    if (!overlay) return thread;
+    return {
+      ...thread,
+      ...(overlay.worktreeSnapshots?.length ? { worktreeSnapshots: overlay.worktreeSnapshots } : {}),
+      archiveRetentionStartedAt: overlay.archiveRetentionStartedAt,
+      archiveRetentionProtectedReason: archiveCandidateProtectionReason({ thread, overlay }),
+    };
+  });
+}
+
+function buildAutomationSummariesByThreadKey():
+  | Record<string, AutomationThreadSummary | undefined>
+  | undefined {
+  try {
+    return getDesktopAutomationService().buildThreadSummaries();
+  } catch (error) {
+    appServerLog.warn("automation store unavailable for navigation snapshot", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+function directoryStatusesEqual(
+  left: NavigationSnapshot["directories"],
+  right: NavigationSnapshot["directories"],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((directory, index) => {
+    const candidate = right[index];
+    if (!candidate || directory.key !== candidate.key) {
+      return false;
+    }
+
+    const leftStatus = directory.gitStatus;
+    const rightStatus = candidate.gitStatus;
+    const leftCodexEnvironmentOptions =
+      directory.launchpad?.codexEnvironmentOptions ?? null;
+    const rightCodexEnvironmentOptions =
+      candidate.launchpad?.codexEnvironmentOptions ?? null;
+    return (
+      JSON.stringify(leftStatus ?? null) === JSON.stringify(rightStatus ?? null) &&
+      JSON.stringify(leftCodexEnvironmentOptions) ===
+        JSON.stringify(rightCodexEnvironmentOptions)
+    );
+  });
+}
+
+function applyDirectoryGitStatus(
+  directory: NavigationSnapshot["directories"][number],
+  gitStatus: NavigationDirectoryGitStatus | undefined,
+): NavigationSnapshot["directories"][number] {
+  const next = { ...directory };
+  if (gitStatus) {
+    next.gitStatus = gitStatus;
+  } else {
+    delete next.gitStatus;
+  }
+  return next;
+}
+
+async function hydrateDirectoryLaunchpads(
+  directories: NavigationSnapshot["directories"],
+): Promise<NavigationSnapshot["directories"]> {
+  return await Promise.all(
+    directories.map(async (directory) => {
+      if (!directory.launchpad) {
+        return directory;
+      }
+
+      try {
+        return {
+          ...directory,
+          launchpad: await hydrateLaunchpadCodexEnvironmentOptions(
+            directory.launchpad,
+          ),
+        };
+      } catch (error) {
+        logDebug("getNavigationSnapshot:launchpad-environments-failed", {
+          directoryKey: directory.key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return directory;
+      }
+    }),
+  );
+}
+
+function getNavigationSnapshotRequestKey(
+  request: GetNavigationSnapshotRequest,
+): string {
+  return JSON.stringify({
+    backend: request.backend ?? "all",
+    federationTarget: request.federationTarget ?? { scope: "local" },
+    filter: request.filter ?? "",
+    forceRefresh: request.forceRefresh === true,
+  });
+}
+
+function getRemoteNavigationSnapshotCacheKey(
+  request: GetNavigationSnapshotRequest & {
+    federationTarget: { scope: "remote"; instanceId: string };
+  },
+): string {
+  // forceRefresh is a renderer scheduling hint. The remote RPC
+  // reads the same owner snapshot either way, so every variant shares one
+  // last-known fallback during a disconnect.
+  return JSON.stringify({
+    backend: request.backend ?? "all",
+    federationTarget: request.federationTarget,
+    filter: request.filter ?? "",
+  });
+}
+
+function getThreadPullRequestsRequestKey(
+  backend: AppServerBackendKind,
+  request: RefreshThreadPullRequestsRequest,
+): string {
+  return JSON.stringify({
+    lookupVersion: 3,
+    backend,
+    threadId: request.threadId,
+    provider: normalizePullRequestProvider(request.provider),
+    branch: request.branch.trim(),
+    directoryPaths: request.directoryPaths,
+  });
+}
+
+function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
+  return [...new Set(directoryPaths.map((path) => path.trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function toLinkedDirectoryPathId(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/");
+}
+
+function reconcileRemoteLaunchpadBranch(
+  branchName: string | undefined,
+  gitStatus: NavigationDirectoryGitStatus | null | undefined,
+): string | undefined {
+  const branchNames = new Set([
+    ...(gitStatus?.branches ?? []),
+    ...(gitStatus?.branchDetails ?? []).map((branch) => branch.name),
+    ...(gitStatus?.baseBranches ?? []),
+    ...(gitStatus?.baseBranchDetails ?? []).map((branch) => branch.name),
+  ]);
+  if (!branchName) {
+    return gitStatus?.currentBranch;
+  }
+  if (branchNames.size === 0) {
+    return gitStatus?.currentBranch ?? branchName;
+  }
+  if (branchNames.has(branchName)) {
+    return branchName;
+  }
+  return gitStatus?.currentBranch;
+}
+
+function getPullRequestLookupKey(
+  request: Pick<
+    RefreshThreadPullRequestsRequest,
+    "provider" | "branch" | "directoryPaths"
+  >,
+): string {
+  return JSON.stringify({
+    lookupVersion: 2,
+    provider: normalizePullRequestProvider(request.provider),
+    branch: request.branch.trim(),
+    directoryPaths: normalizePrLookupDirectoryPaths(request.directoryPaths),
+  });
+}
+
+function normalizePullRequestProvider(provider: string | undefined): string {
+  return normalizeSharedPullRequestProvider(provider);
+}
+
+function normalizePrSummary(pr: PrSummary): PrSummary {
+  const checkState = normalizePrCheckState(pr.checkState ?? pr.state);
+  const headSha = normalizeCommitShas(
+    pr.headSha ? [pr.headSha] : undefined,
+  )?.[0];
+  const normalized: PrSummary = {
+    ...pr,
+    ...resolvePullRequestIdentity(pr),
+    state: checkState,
+    checkState,
+    lifecycleState: pr.lifecycleState ?? legacyPrLifecycleState(pr.state),
+    reviewState: pr.reviewState ?? legacyPrReviewState(pr.state),
+    mergeState: pr.mergeState ?? "unknown",
+    commitShas: normalizeCommitShas(pr.commitShas),
+  };
+  if (headSha) {
+    normalized.headSha = headSha;
+  } else {
+    delete normalized.headSha;
+  }
+  const baseRefName = pr.baseRefName?.trim();
+  if (baseRefName) {
+    normalized.baseRefName = baseRefName;
+  } else {
+    delete normalized.baseRefName;
+  }
+  const headRefName = pr.headRefName?.trim();
+  if (headRefName) {
+    normalized.headRefName = headRefName;
+  } else {
+    delete normalized.headRefName;
+  }
+  const linkedDirectoryPaths = normalizePrLookupDirectoryPaths(
+    pr.linkedDirectoryPaths ?? [],
+  );
+  if (linkedDirectoryPaths.length > 0) {
+    normalized.linkedDirectoryPaths = linkedDirectoryPaths;
+  } else {
+    delete normalized.linkedDirectoryPaths;
+  }
+  return normalized;
+}
+
+function mergeLinkedDirectoryPaths(
+  left: string[] | undefined,
+  right: string[] | undefined,
+): string[] | undefined {
+  const merged = normalizePrLookupDirectoryPaths([
+    ...(left ?? []),
+    ...(right ?? []),
+  ]);
+  return merged.length > 0 ? merged : undefined;
+}
+
+function associatePrsWithLinkedDirectories(
+  prs: PrSummary[],
+  directoryPaths: string[],
+): PrSummary[] {
+  const linkedDirectoryPaths = normalizePrLookupDirectoryPaths(directoryPaths);
+  return prs.map((pr) => {
+    if (!pr.headSha?.trim()) {
+      return pr;
+    }
+    const discoveredDirectoryPaths = normalizePrLookupDirectoryPaths(
+      pr.linkedDirectoryPaths ?? [],
+    );
+    // Discovery records which checkout returned each PR. A multi-repository
+    // lookup cannot safely use every requested path as a fallback: doing so
+    // makes a PR from one repository appear to constrain all sibling repos.
+    const associatedDirectoryPaths = discoveredDirectoryPaths.length > 0
+      ? discoveredDirectoryPaths
+      : linkedDirectoryPaths.length === 1
+        ? linkedDirectoryPaths
+        : [];
+    return normalizePrSummary({
+      ...pr,
+      linkedDirectoryPaths: associatedDirectoryPaths,
+    });
+  });
+}
+
+function stripPrLinkedDirectoryPaths(pr: PrSummary): PrSummary {
+  const normalized = normalizePrSummary(pr);
+  delete normalized.linkedDirectoryPaths;
+  delete normalized.explicitlyAttached;
+  return normalized;
+}
+
+function normalizeCommitShas(commitShas: string[] | undefined): string[] | undefined {
+  const normalized = [
+    ...new Set(
+      (commitShas ?? [])
+        .map((sha) => sha.trim().toLowerCase())
+        .filter((sha) => /^[0-9a-f]{40}$/.test(sha)),
+    ),
+  ].sort();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function dedupePrsByStatusKey(prs: PrSummary[]): PrSummary[] {
+  const seen = new Set<string>();
+  const out: PrSummary[] = [];
+  for (const pr of prs.map(normalizePrSummary)) {
+    const key = getPrStatusKey(pr);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(pr);
+  }
+  return out;
+}
+
+function normalizePrCheckState(
+  state: string | undefined,
+): NonNullable<PrSummary["checkState"]> {
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function legacyPrLifecycleState(state: string | undefined): PrSummary["lifecycleState"] {
+  if (state === "merged" || state === "closed") {
+    return state;
+  }
+  return "open";
+}
+
+function legacyPrReviewState(state: string | undefined): PrSummary["reviewState"] {
+  return state === "draft" ? "draft" : "ready_for_review";
+}
+
+function getPrStatusKey(
+  pr: Pick<PrSummary, "provider" | "org" | "repo" | "number"> & { url?: string },
+): string {
+  return buildPullRequestStatusKey(pr);
+}
+
+function normalizePrStatusWatchEvents(
+  events: ThreadPullRequestWatchEvent[] | undefined,
+): ThreadPullRequestWatchEvent[] | undefined {
+  if (events === undefined) return ["success", "failure"];
+  const normalized = [...new Set(events)];
+  if (
+    normalized.length === 0
+    || normalized.some((event) => !PR_STATUS_WATCH_EVENTS.has(event))
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+const PR_STATUS_WATCH_EVENTS: ReadonlySet<string> = new Set([
+  "success",
+  "failure",
+  "merged",
+  "closed",
+]);
+
+/** One or two plain sentences on what will wake the thread, for the agent. */
+function describePrWatchArming(params: {
+  prNumber: number;
+  headSha: string;
+  ciEvents: ThreadPullRequestWatchEvent[];
+  watch?: ThreadPullRequestWatchSummary;
+  watchExisted: boolean;
+  terminalWatch?: ThreadPullRequestWatchSummary;
+  terminalWatchExisted: boolean;
+  knownOutcome?: ThreadPullRequestWatchEvent;
+  knownAgeMs?: number;
+  /** The checkout's head, past the cached head the watch was armed at. */
+  pushedHeadSha?: string;
+  /** Who reads it: an agent learns the tool argument that waits anyway. */
+  audience: "agent" | "operator";
+}): string {
+  const head = params.headSha.slice(0, 7);
+  const sentences: string[] = [];
+  if (params.watch) {
+    const baseline = params.watch.baseline;
+    const runAttempt = params.watch.runAttempt ?? baseline?.runAttempt;
+    const attempt = runAttempt !== undefined
+      ? ` (attempt ${runAttempt})`
+      : "";
+    sentences.push(
+      `${params.watchExisted ? "Already watching" : "Watching"} PR #${params.prNumber} at ${head} for the next ${
+        params.watch.notifyOn.join(" or ")
+      }${attempt}.`,
+    );
+    if (baseline) {
+      sentences.push(
+        `The ${baseline.outcome} observed at ${new Date(baseline.observedAt).toISOString()} ${
+          baseline.rerunRequestedAt !== undefined ? "predates the re-run and " : ""
+        }will not fire this watch.`,
+      );
+    }
+    if (params.pushedHeadSha) {
+      sentences.push(
+        `Your checkout is at ${params.pushedHeadSha.slice(0, 7)}, past ${head}, so that result is stale. The watch moves to the pushed head when PwrAgent sees it.`,
+      );
+    }
+  } else if (params.knownOutcome && params.ciEvents.length > 0) {
+    const seconds = Math.max(0, Math.round((params.knownAgeMs ?? 0) / 1000));
+    sentences.push(
+      `No ${params.terminalWatch ? "CI " : ""}watch was created: checks on ${head} already finished with ${params.knownOutcome} ${seconds}s ago.${
+        params.audience === "agent"
+          ? " If CI was re-run outside PwrAgent, call again with waitForNextResult: true."
+          : ""
+      }`,
+    );
+  }
+  if (params.terminalWatch) {
+    const outcomes = params.terminalWatch.notifyOn.map((event) =>
+      event === "merged" ? "merges" : "closes without merge"
+    );
+    sentences.push(
+      `${params.terminalWatchExisted ? "Already watching" : "Watching"} PR #${params.prNumber} until it ${
+        outcomes.join(" or ")
+      }.`,
+    );
+  }
+  return sentences.join(" ");
+}
+
+function describePrWatchBrief(watch: ThreadPullRequestWatchSummary): string {
+  return (watch.kind ?? "checks") === "checks"
+    ? `CI on PR #${watch.prNumber}`
+    : `merge or close of PR #${watch.prNumber}`;
+}
+
+function describePrWatchList(watches: readonly ThreadPullRequestWatchSummary[]): string {
+  if (watches.length === 0) return "No PR watch is waiting on this thread.";
+  return `${watches.length} ${watches.length === 1 ? "watch waits" : "watches wait"} on this thread: ${
+    watches.map((watch) => `${describePrWatchBrief(watch)} (watchId ${watch.watchId})`).join(", ")
+  }.`;
+}
+
+function describePrWatchCancel(
+  cancelled: ThreadPullRequestWatchSummary,
+  remaining: readonly ThreadPullRequestWatchSummary[],
+): string {
+  const stopped = (cancelled.kind ?? "checks") === "checks"
+    ? `Stopped waiting for CI on PR #${cancelled.prNumber}.`
+    : `Stopped watching PR #${cancelled.prNumber} for merge or close.`;
+  return remaining.length === 0
+    ? `${stopped} Nothing else waits on this thread.`
+    : `${stopped} ${describePrWatchList(remaining)}`;
+}
+
+function normalizePrWatchUrl(url: string | undefined): string | undefined {
+  const normalized = url?.trim().replace(/\/+$/, "").toLowerCase();
+  return normalized || undefined;
+}
+
+function filterDetachedPullRequests(
+  prs: PrSummary[],
+  detachedPrKeys: string[] | undefined,
+): PrSummary[] {
+  if (!detachedPrKeys?.length) {
+    return prs;
+  }
+  const detached = new Set(
+    detachedPrKeys.map((key) => key.trim().toLowerCase()).filter(Boolean),
+  );
+  return prs.filter((pr) => !detached.has(getPrStatusKey(pr)));
+}
+
+/**
+ * Whether two PR lists are the same for snapshot purposes.
+ *
+ * This decides whether a navigation snapshot is republished, so a field that
+ * clients render or the main process reads for behavior but this function
+ * ignores becomes a silent staleness bug: the value moves, the snapshot is
+ * judged unchanged, and no window ever hears about it. Add every such field
+ * here. Exported for the test that pins exactly that.
+ */
+export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((pr, index) => {
+    const candidate = right[index];
+    return (
+      candidate?.number === pr.number &&
+      normalizePullRequestProvider(candidate.provider)
+        === normalizePullRequestProvider(pr.provider) &&
+      candidate.org === pr.org &&
+      candidate.repo === pr.repo &&
+      candidate.sourceRepository?.provider === pr.sourceRepository?.provider &&
+      candidate.sourceRepository?.org === pr.sourceRepository?.org &&
+      candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
+      candidate.title === pr.title &&
+      candidate.state === pr.state &&
+      candidate.checkState === pr.checkState &&
+      candidate.checksStillRunning === pr.checksStillRunning &&
+      candidate.checksAllSkipped === pr.checksAllSkipped &&
+      candidate.lifecycleState === pr.lifecycleState &&
+      candidate.reviewState === pr.reviewState &&
+      candidate.mergeState === pr.mergeState &&
+      candidate.baseRefName === pr.baseRefName &&
+      candidate.headRefName === pr.headRefName &&
+      candidate.headSha === pr.headSha &&
+      JSON.stringify(candidate.linkedDirectoryPaths ?? [])
+        === JSON.stringify(pr.linkedDirectoryPaths ?? []) &&
+      candidate.explicitlyAttached === pr.explicitlyAttached &&
+      JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
+      // Hover-card fields. They belong here for the same reason as every field
+      // above: this comparison decides whether a snapshot is republished, so a
+      // poll whose only movement is "+412 → +530" must not be judged unchanged.
+      candidate.additions === pr.additions &&
+      candidate.deletions === pr.deletions &&
+      candidate.changedFiles === pr.changedFiles &&
+      candidate.commitCount === pr.commitCount &&
+      candidate.createdAt === pr.createdAt &&
+      candidate.mergedAt === pr.mergedAt &&
+      candidate.closedAt === pr.closedAt &&
+      candidate.url === pr.url
+    );
+  });
+}
+
+type PrStatusRegistryEntry = {
+  pr: PrSummary;
+  fetchedAt: number;
+  lastScheduledRefreshRequestedAt?: number;
+  lastUserRefreshRequestedAt?: number;
+};
+
+type PullRequestLookupParams = {
+  backend: AppServerBackendKind;
+  request: RefreshThreadPullRequestsRequest;
+  lookupKey: string;
+  lookupDirectoryPaths: string[];
+  previousPrs: PrSummary[];
+};
+
+type PullRequestLookupResult = {
+  prs: PrSummary[];
+  statusPrs: PrSummary[];
+  fetchedAt: number;
+  incomplete: boolean;
+};
+
+type PrLookupRegistryEntry = {
+  prs: PrSummary[];
+  fetchedAt: number;
+  provider: string;
+  branch: string;
+  directoryPaths: string[];
+  lastScheduledRefreshRequestedAt?: number;
+  lastUserRefreshRequestedAt?: number;
+};
+
+type PrLookupSubscriber = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  requestKey: string;
+  linkedDirectoryPaths: string[];
+  previousPrs: PrSummary[];
+};
+
+type PrLookupRefreshParams = {
+  backend: AppServerBackendKind;
+  request: RefreshThreadPullRequestsRequest;
+  requestKey: string;
+  lookupKey: string;
+  lookupDirectoryPaths: string[];
+  previousPrs: PrSummary[];
+  // When this thread's own overlay last answered this lookup. It counts
+  // toward this thread's refresh cooldown only and never enters the shared
+  // lookup registry.
+  threadLookupObservedAt?: number;
+};
+
+type PendingPrLookupRefresh = {
+  authoritative: boolean;
+  promise: Promise<void>;
+};
+
+type PrLookupRefreshClaim =
+  | {
+      refreshKey: string;
+      skippedReason?: undefined;
+    }
+  | {
+      refreshKey?: undefined;
+      skippedReason: "cooldown" | "scheduled-token-bucket";
+      ageMs?: number;
+      minIntervalMs?: number;
+      nextAllowedInMs?: number;
+    };
+
+function prLogIds(prs: PrSummary[]): string[] {
+  return prs.map((pr) => getPrStatusKey(pr));
+}
+
+/** Bounded sample of PR keys carried by the stale-observation debug line. */
+const STALE_PR_OBSERVATION_LOG_SAMPLE = 5;
+
+function prLogStatuses(prs: PrSummary[]): Record<string, unknown>[] {
+  return prs.map((pr) => {
+    const normalized = normalizePrSummary(pr);
+    return {
+      prKey: getPrStatusKey(normalized),
+      checkState: normalized.checkState,
+      checksStillRunning: normalized.checksStillRunning ?? false,
+      lifecycleState: normalized.lifecycleState,
+      mergeState: normalized.mergeState,
+      reviewState: normalized.reviewState,
+      commitCount: normalized.commitShas?.length ?? 0,
+    };
+  });
+}
+
+function userPrRefreshLogPayload(params: {
+  backend: AppServerBackendKind;
+  branch: string;
+  directoryPathCount: number;
+  existingLookupMatches?: boolean;
+  ghAvailable?: boolean;
+  lookupCacheHit?: boolean;
+  lookupKey?: string;
+  previousPrs?: PrSummary[];
+  provider: string;
+  reason?: string;
+  requestKey?: string;
+  threadId: string;
+  trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>;
+}): Record<string, unknown> {
+  return {
+    backend: params.backend,
+    branch: params.branch,
+    directoryPathCount: params.directoryPathCount,
+    existingLookupMatches: params.existingLookupMatches,
+    ghAvailable: params.ghAvailable,
+    lookupCacheHit: params.lookupCacheHit,
+    lookupKey: params.lookupKey,
+    previousPrIds: prLogIds(params.previousPrs ?? []),
+    previousPrStatuses: prLogStatuses(params.previousPrs ?? []),
+    provider: params.provider,
+    reason: params.reason,
+    requestKey: params.requestKey,
+    threadId: params.threadId,
+    trigger: params.trigger,
+  };
+}
+
+function pullRequestStatusFreshness(
+  fetchedAt: number | undefined,
+  now: number,
+): Pick<
+  RefreshThreadPullRequestsResponse,
+  "lastStatusCheckAt" | "lastStatusCheckAgeMs"
+> {
+  if (!fetchedAt || fetchedAt <= 0) {
+    return {};
+  }
+  return {
+    lastStatusCheckAt: fetchedAt,
+    lastStatusCheckAgeMs: Math.max(0, now - fetchedAt),
+  };
+}
+
+class DesktopAppServerService {
+  private readonly pendingWakesCache = new ThreadPendingWakesCache(async (thread, options) =>
+    await buildThreadPendingWakes(this.pendingWakeReaders(), thread, {
+      ...options,
+      onReadError: (source, error) => appServerLog.warn("pending wake source unreadable", {
+        source, backend: thread.backend, threadId: thread.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    }));
+  private focusedDiffService: FocusedDiffService | null = null;
+  private prFetcher: ForgePrFetcher | undefined;
+  private readonly pendingNavigationSnapshots = new Map<
+    string,
+    Promise<NavigationSnapshot>
+  >();
+  private readonly remoteNavigationSnapshotCache = new Map<
+    string,
+    NavigationSnapshot
+  >();
+  private readonly pendingThreadPullRequestRefreshes = new Map<
+    string,
+    Promise<RefreshThreadPullRequestsResponse>
+  >();
+  private readonly pendingEditCommitResolves = new Map<
+    string,
+    Promise<ResolveEditCommitStatesResponse>
+  >();
+  private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
+  private readonly prLookupRegistry = new Map<string, PrLookupRegistryEntry>();
+  private readonly pendingPrLookupRefreshes = new Map<
+    string,
+    PendingPrLookupRefresh
+  >();
+  private readonly queuedAuthoritativePrLookupRefreshes = new Map<
+    string,
+    Map<string, PrLookupRefreshParams>
+  >();
+  private readonly prLookupSubscribers = new Map<
+    string,
+    Map<string, PrLookupSubscriber>
+  >();
+  private readonly pendingPrOverlayWrites = new Map<string, Promise<void>>();
+  private readonly prActivity = new PrActivityJournal();
+  private readonly prLookupsInFlight = new PrLookupsInFlight();
+  /** Repository renames the forge has answered with. See its class. */
+  private readonly prRepositoryAliases = new PullRequestRepositoryAliases();
+  /** Counts learned renames, so stored watch keys move once per rename. */
+  private prRepositoryAliasGeneration = 0;
+  private prWatchKeysGeneration = 0;
+  private prWatchKeySync: Promise<void> = Promise.resolve();
+  /** One terminal-watch retry covers every rename learned in the same tick. */
+  private prRenameRetryQueued = false;
+  /**
+   * By-URL resolves asked for stored references, by URL. An answer is kept
+   * for the session; a failure is asked again after `PR_REFERENCE_RETRY_MS`.
+   */
+  private readonly prReferenceResolutions = new Map<string, {
+    askedAt: number;
+    result: Promise<string | undefined>;
+    answered: boolean;
+  }>();
+  private readonly prStatusTokenBucket = new PrStatusTokenBucket();
+  private lastPrObservationTimestamp = 0;
+  private prStatusRegistryLoaded = false;
+  private prStatusRegistryLoadPromise: Promise<void> | undefined;
+  private prLookupRegistryLoaded = false;
+  private prLookupRegistryLoadPromise: Promise<void> | undefined;
+  private prGraphqlClient: GithubGraphqlPrClient | undefined;
+  private readonly githubSamlBlockedRepositories = new Set<string>();
+  private readonly githubPrAuthenticationNotice = new OneTimeProfileNotice(
+    OneTimeProfileNotice.markerFor("github-pr-authentication-failure"),
+    (error) => appServerLog.warn("Could not persist GitHub PR authentication notice", { error }),
+  );
+  private readonly bundledGitLfsNotice = new OneTimeProfileNotice(
+    OneTimeProfileNotice.markerFor("bundled-git-lfs"),
+    (error) => appServerLog.warn("Could not persist bundled Git LFS advisory", { error }),
+  );
+  private prPollingScheduler: PrPollingScheduler | undefined;
+  private readonly transcriptPrSubscriptions = new TranscriptPrSubscriptions((key) => {
+    if (!this.primaryPrThreadsByKey.has(key)) this.prPollingScheduler?.forgetTarget(key);
+  });
+  private backgroundPrPollingEnabled = false;
+  private prAutoDispatchAllowed = false;
+  private prAutoDispatchBudgetConfig: PrAutoDispatchBudgetConfig = {
+    capacity: DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+    refillPerMinute: DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+    pauseWhenEmpty: DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  };
+  private prAutoDispatchBudgetPaused = false;
+  private prAutoDispatchBudgetPausedAt: number | undefined;
+  private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
+  private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
+  /**
+   * CI re-runs this instance requested, by PR. In memory only: they explain
+   * why a cached result at the same head is not the next one.
+   */
+  private readonly ciRerunsByPrKey = new Map<string, {
+    headSha?: string;
+    runId: number;
+    runAttempt?: number;
+    requestedAt: number;
+  }>();
+  private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
+  private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
+  private ownerNavigationActive = false;
+  private unsubscribeRestartGate?: () => void;
+  private ownerNavigationMetadataVersion = 0;
+  private ownerNavigationMetadataRead: Promise<void> | undefined;
+  private ownerNavigationMetadataAbort: AbortController | undefined;
+  private readonly primaryPrThreadsByKey = new PrThreadIndex();
+  /** Owner thread→PR attachments plus the primary workspace's repository. */
+  private readonly attachedPrsByThreadKey = new Map<
+    string,
+    {
+      backend: AppServerBackendKind;
+      primaryRepoKey?: string;
+      prs: PrSummary[];
+    }
+  >();
+  /**
+   * This enrichment follows overlay snapshot hashing, so retain the last value
+   * sent to the renderer and invalidate when repository resolution changes.
+   */
+  private readonly publishedPrimaryGitRepositoriesByThreadKey = new Map<
+    string,
+    string | undefined
+  >();
+  private prDiscoveryTimer: NodeJS.Timeout | undefined;
+  /** Per-thread last discovery branch-lookup time, driving the slow rotation. */
+  private readonly prDiscoveryLastRefreshedAt = new Map<string, number>();
+  /** Set once we subscribe to settings writes for live flag re-sync. */
+  private prPollingSettingsUnsubscribe: (() => void) | undefined;
+  /** Monotonically increases so an older settings read cannot overwrite a newer one. */
+  private prPollingSettingsSyncGeneration = 0;
+  /**
+   * Threads the operator currently has selected / on screen, pushed from the
+   * renderer per window. Drives the poller's fast tier — main cannot infer
+   * selection.
+   */
+  private readonly prPollingFocus = new PrPollingFocusTracker();
+  /** prKey → backend to publish its status updates on. Rebuilt per poll pass. */
+  private readonly prPollBackendByKey = new Map<string, AppServerBackendKind>();
+  /** Subscribers to typed PR status transitions. */
+  private readonly prStatusTransitionListeners = new Set<PrStatusTransitionListener>();
+  private readonly previousDirectoriesByBackend = new Map<
+    AppServerBackendScope,
+    NavigationSnapshot["directories"]
+  >();
+  // Seeded with the empty-list hash so a pinless boot never flips
+  // `unchanged` on the first snapshot.
+  private lastRemoteThreadPinsMergeHash = "[]";
+  private readonly directoryGitStatusByKey = new Map<
+    string,
+    DirectoryGitStatusCacheEntry
+  >();
+  private directoryGitStatusCacheLoaded = false;
+  private automaticDirectoryGitStatusRefreshesStarted = 0;
+  private readonly lastDirectoriesByKey = new Map<
+    string,
+    NavigationSnapshot["directories"][number]
+  >();
+  private readonly pendingDirectoryGitStatusRefreshes = new Map<string, Promise<void>>();
+  private readonly pendingDirectoryGitStatusKeys = new Set<string>();
+  // Maps a thread identity (`backend:threadId`) to its working directory so
+  // a turn/command-completion event can refresh the right worktree's chips
+  // without re-reading the navigation snapshot. Populated on every snapshot.
+  private readonly worktreePathByThreadKey = new Map<string, string>();
+  private readonly prRefreshContextByThreadKey = new Map<
+    string,
+    ThreadPrRefreshContext[]
+  >();
+  // Provider-observed PR commits are published even with stale local remote
+  // refs or a deleted source branch. Keep PR identities to read fresh status.
+  private readonly publishedPrCommitsByThread = new Map<
+    string,
+    { worktreePath: string; prs: PrSummary[] }
+  >();
+  private threadSearchService: ThreadSearchService | null = null;
+  private threadMigrationService: ThreadMigrationService | null = null;
+  // Parent of the most recently picked directory, used as the "Add directory"
+  // dialog's defaultPath so it reopens where you last browsed instead of the
+  // OS default (Documents on a fresh Windows profile). Falls back to the home
+  // folder. In-memory: resets to home on app restart.
+  private lastPickedDirectoryParent: string | undefined;
+
+  private getThreadMigrationService(): ThreadMigrationService {
+    if (!this.threadMigrationService) {
+      this.threadMigrationService = new ThreadMigrationService({
+        destination: getDesktopBackendRegistry(),
+      });
+    }
+    return this.threadMigrationService;
+  }
+
+  private getThreadSearchService(): ThreadSearchService {
+    if (!this.threadSearchService) {
+      this.threadSearchService = new ThreadSearchService(
+        new ThreadSearchStore(getAppStateDb()),
+        async ({ backend, archived }) => {
+          const threads = await getDesktopBackendRegistry().listThreads({
+            backend,
+            archived,
+            callerReason: "thread-search",
+            enrichDirectories: true,
+          });
+          return await hydrateRetainedThreadOverlayData(this.getOverlayStore(), threads);
+        },
+        new ProviderTranscriptThreadSearchAdapter(
+          async ({ backend, threadId, limit }) =>
+            await getDesktopBackendRegistry().readThread({
+              backend,
+              threadId,
+              limit,
+            }),
+        ),
+      );
+    }
+    return this.threadSearchService;
+  }
+
+  async listThreads(
+    request: AppServerListThreadsRequest = {}
+  ): Promise<AppServerListThreadsResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listThreads({
+          backend: request.backend,
+          archived: request.archived,
+          filter: request.filter,
+        });
+    }
+    const backend = request.backend;
+    const threads = await getDesktopBackendRegistry().listThreads({
+      backend,
+      archived: request.archived,
+      callerReason: "ipc-list-threads",
+      forceRefresh: request.archived === true,
+      filter: request.filter,
+    });
+    if (request.archived) {
+      await getDesktopBackendRegistry().observeArchivedThreads(
+        threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), Date.now(),
+      );
+    }
+    const hydratedThreads = await hydrateRetainedThreadOverlayData(
+      this.getOverlayStore(),
+      threads,
+    );
+
+    logDebug("listThreads", {
+      backend: backend ?? "all",
+      count: hydratedThreads.length,
+      threadIds: hydratedThreads.slice(0, 5).map((thread) => thread.id),
+    });
+
+    return {
+      backend: backend ?? "all",
+      fetchedAt: Date.now(),
+      threads: hydratedThreads,
+      workspaceRoots: resolveScratchProjectsRoots(),
+    };
+  }
+
+  async searchThreads(
+    request: ThreadSearchRequest = {},
+    onProgress?: (response: ThreadSearchResponse) => void,
+    signal?: AbortSignal,
+  ): Promise<ThreadSearchResponse> {
+    return await getDesktopFederationRuntime().searchThreadContent(
+      request,
+      async (localRequest, localSignal) => await this.getThreadSearchService().search(localRequest, localSignal),
+      onProgress,
+      signal,
+    );
+  }
+
+  async listSkills(
+    request: AppServerListSkillsRequest = {},
+  ): Promise<AppServerListSkillsResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listSkills({
+          backend: request.backend,
+          cwd: request.cwd,
+          cwds: request.cwds,
+          threadId: request.threadId,
+        });
+    }
+    const backend = request.backend ?? "codex";
+    const response = await getDesktopBackendRegistry().listSkills({
+      backend,
+      cwd: request.cwd,
+      cwds: request.cwds,
+      threadId: request.threadId,
+    });
+
+    logDebug("listSkills", {
+      backend,
+      cwd: request.cwd ?? null,
+      cwds: request.cwds ?? [],
+      entries: response.data.length,
+      commands: response.data.reduce(
+        (count, entry) => count + (entry.commands?.length ?? 0),
+        0,
+      ),
+      skills: response.data.reduce((count, entry) => count + entry.skills.length, 0),
+    });
+
+    return {
+      backend,
+      fetchedAt: Date.now(),
+      data: response.data,
+    };
+  }
+
+  async readThread(
+    request: AppServerReadThreadRequest
+  ): Promise<AppServerReadThreadResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .readThread({
+          backend: request.backend,
+          display: request.display,
+          ...(request.countsAsActivity !== undefined ? { countsAsActivity: request.countsAsActivity } : {}),
+          threadId: request.threadId,
+          before: request.before,
+          includeAllToolInvocations: request.includeAllToolInvocations,
+          includeTurns: request.includeTurns,
+          limit: request.limit,
+          viewOnly: request.viewOnly,
+          knownRevision: request.knownRevision,
+          readReason: request.readReason,
+        });
+    }
+    const backend = request.backend ?? "codex";
+    const registry = getDesktopBackendRegistry();
+    const response = await registry.readThread({
+      backend,
+      display: request.display,
+      ...(request.countsAsActivity !== undefined ? { countsAsActivity: request.countsAsActivity } : {}),
+      threadId: request.threadId,
+      includeAllToolInvocations: request.includeAllToolInvocations,
+      includeTurns: request.includeTurns,
+      before: request.before,
+      limit: request.limit,
+      viewOnly: request.viewOnly,
+    });
+
+    logDebug("readThread", {
+      backend,
+      displayResource: request.display?.resource,
+      threadId: request.threadId,
+      messageCount: response.replay.messages.length,
+      hasLastUserMessage: Boolean(response.replay.lastUserMessage),
+      hasLastAssistantMessage: Boolean(response.replay.lastAssistantMessage),
+      hasPreviousPage: response.replay.pagination.hasPreviousPage,
+      threadStatus: response.threadStatus ?? response.replay.threadStatus,
+    });
+
+    const hydrated = await getDesktopFederationRuntime()
+      .hydrateThreadMessageOrigins(response);
+    const materialized = await materializeTranscriptImageUrlsForRenderer(
+      hydrated,
+      {},
+      {
+        includeTemporaryImageRoots: true,
+        resolveApprovedLocalImageRoots: async () =>
+          await registry.getThreadTranscriptImageRoots({
+            backend,
+            threadId: request.threadId,
+          }),
+      },
+    );
+    // Transcript bodies are lossless. Character cuts can split Markdown tables,
+    // code fences, and cross-thread message arguments in the middle.
+    // A viewer holding this exact page keeps it, as federation owners allow.
+    return conditionalThreadRead(
+      shapeReadThreadFileDiffsForRenderer(materialized),
+      request.knownRevision,
+    );
+  }
+
+  async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget).readUsageActivity(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().readUsageActivity(request);
+  }
+
+  /**
+   * A family can span machines: each owner keeps its own threads' totals, so
+   * this machine asks each one for its part, wherever the root lives.
+   */
+  async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
+    const federation = getDesktopFederationRuntime();
+    // Without health, pins still resolve by their recorded owner; only the
+    // alias for this machine's own id is lost.
+    const health = await Promise.resolve().then(() => federation.health()).catch(() => undefined);
+    const localInstanceId = health?.instanceId;
+    const owner = request.federationTarget && isRemoteFederationTarget(request.federationTarget)
+      ? request.federationTarget.instanceId : undefined;
+    return await readFederatedThreadFamilyPricing({
+      root: { backend: request.backend, threadId: request.threadId, ...(owner ? { ownerInstanceId: owner } : {}) },
+      readLocal: createLocalThreadFamilyPricingReader(localInstanceId),
+      readRemote: (instanceId, root, deadlineAt) => federation.remoteBackend({ scope: "remote", instanceId })
+        .readThreadFamilyPricing(root, { deadlineAt }),
+      localInstanceId,
+      peerLabel: (instanceId) => health?.peers?.find((peer) => peer.id === instanceId)?.label,
+    });
+  }
+
+  async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget).analyzeUsageActivity(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().analyzeUsageActivity(request);
+  }
+
+  async inspectTokenMiserOutput(
+    request: InspectTokenMiserOutputRequest,
+  ): Promise<InspectTokenMiserOutputResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .inspectTokenMiserOutput(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().inspectTokenMiserOutput(request);
+  }
+
+  async analyzeThreadToolHistory(
+    request: AnalyzeThreadToolHistoryRequest,
+  ): Promise<AnalyzeThreadToolHistoryResponse> {
+    /* The scan pages the thread's transcript, which only the owning instance
+       can serve. A viewer analyzing a peer's thread runs it over there. */
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .analyzeThreadToolHistory(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().analyzeThreadToolHistory(request);
+  }
+
+  async persistThreadUsageActivity(
+    request: PersistThreadUsageActivityRequest,
+  ): Promise<PersistThreadUsageActivityResponse> {
+    const response = await this.getOverlayStore().persistThreadUsageActivity({
+      backend: request.backend,
+      threadId: request.threadId,
+      activity: request.activity,
+    });
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      activityId: request.activity.id,
+      persisted: response.persisted,
+    };
+  }
+
+  async archiveThread(
+    request: ArchiveThreadRequest,
+  ): Promise<ArchiveThreadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .archiveThread(remoteRequest);
+    }
+    const backend = request.backend ?? "codex";
+    await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
+      backend, parentThreadId: request.threadId, expectedParent: request.expectedParent,
+    });
+    const response = await getDesktopBackendRegistry().archiveThread({ ...request, backend });
+
+    logDebug("archiveThread", {
+      backend,
+      threadId: request.threadId,
+      cleanupCount: response.cleanup.length,
+    });
+
+    return response;
+  }
+
+  async resolveMissingCodexThreads(
+    request: ResolveMissingCodexThreadsRequest,
+  ): Promise<ResolveMissingCodexThreadsResponse> {
+    const response = await getDesktopBackendRegistry()
+      .resolveMissingCodexThreads(request);
+    for (const threadId of response.archivedThreadIds) {
+      // The archives are already committed. One unreachable peer must not
+      // skip the ungrouping the remaining threads still need, nor reject a
+      // call whose result the caller uses to report what happened.
+      try {
+        await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
+          backend: "codex",
+          parentThreadId: threadId,
+        });
+      } catch (error) {
+        logDebug("resolveMissingCodexThreads remote ungroup failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId,
+        });
+      }
+    }
+    logDebug("resolveMissingCodexThreads", {
+      action: response.action,
+      archivedCount: response.archivedThreadIds.length,
+      failedCount: response.failedThreadIds.length,
+    });
+    return response;
+  }
+
+  async restoreThread(
+    request: RestoreThreadRequest,
+  ): Promise<RestoreThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const response = await getDesktopBackendRegistry().restoreThread({
+      ...request,
+      backend,
+    });
+
+    logDebug("restoreThread", {
+      backend,
+      threadId: request.threadId,
+    });
+
+    return response;
+  }
+
+  async listThreadMigrationSources(): Promise<ListThreadMigrationSourcesResponse> {
+    return await this.getThreadMigrationService().listSources();
+  }
+
+  async listThreadMigrationSourceThreads(
+    request: ListThreadMigrationSourceThreadsRequest,
+  ): Promise<ListThreadMigrationSourceThreadsResponse> {
+    return await this.getThreadMigrationService().listSourceThreads(request);
+  }
+
+  async startThreadMigration(
+    request: StartThreadMigrationRequest,
+  ): Promise<StartThreadMigrationResponse> {
+    return await this.getThreadMigrationService().startMigration(request);
+  }
+
+  async retryThreadMigration(
+    request: RetryThreadMigrationRequest,
+  ): Promise<StartThreadMigrationResponse> {
+    return await this.getThreadMigrationService().retryMigration(request);
+  }
+
+  async archiveWorktree(
+    request: ArchiveWorktreeRequest,
+  ): Promise<ArchiveWorktreeResponse> {
+    const response = await getDesktopBackendRegistry().archiveWorktree(request);
+
+    logDebug("archiveWorktree", {
+      backend: request.backend,
+      threadId: request.threadId,
+      worktreePath: request.worktreePath,
+      snapshotRef: response.snapshot.snapshotRef,
+    });
+
+    return response;
+  }
+
+  async restoreWorktree(
+    request: RestoreWorktreeRequest,
+  ): Promise<RestoreWorktreeResponse> {
+    const response = await getDesktopBackendRegistry().restoreWorktree(request);
+
+    logDebug("restoreWorktree", {
+      backend: request.backend,
+      threadId: request.threadId,
+      worktreePath: request.worktreePath,
+      snapshotRef: response.snapshot.snapshotRef,
+    });
+
+    return response;
+  }
+
+  async handoffThreadWorkspace(
+    request: HandoffThreadWorkspaceRequest,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget: _federationTarget, ...remoteRequest } = request;
+      const response = await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .handoffThreadWorkspace(remoteRequest);
+      logDebug("handoffThreadWorkspace", {
+        backend: request.backend,
+        threadId: request.threadId,
+        direction: request.direction,
+        workMode: response.workMode,
+        targetPath: response.targetPath,
+        federationTarget: request.federationTarget.instanceId,
+      });
+      return response;
+    }
+    const response = await getDesktopBackendRegistry().handoffThreadWorkspace(request);
+
+    logDebug("handoffThreadWorkspace", {
+      backend: request.backend,
+      threadId: request.threadId,
+      direction: request.direction,
+      workMode: response.workMode,
+      targetPath: response.targetPath,
+    });
+
+    return response;
+  }
+
+  async recreateThreadWorktree(
+    request: RecreateThreadWorktreeRequest,
+  ): Promise<RecreateThreadWorktreeResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .recreateThreadWorktree(remoteRequest);
+    }
+    const { federationTarget: _federationTarget, ...localRequest } = request;
+    return await getDesktopBackendRegistry().recreateThreadWorktree(localRequest);
+  }
+
+  async moveThreadToMainCheckout(
+    request: MoveThreadToMainCheckoutRequest,
+  ): Promise<MoveThreadToMainCheckoutResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .moveThreadToMainCheckout(remoteRequest);
+    }
+    const { federationTarget: _federationTarget, ...localRequest } = request;
+    return await getDesktopBackendRegistry().moveThreadToMainCheckout(localRequest);
+  }
+
+  async renameThread(
+    request: RenameThreadRequest,
+  ): Promise<RenameThreadResponse> {
+    const backend = request.backend ?? "codex";
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget: _federationTarget, ...remoteRequest } = request;
+      const response = await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .renameThread({
+          ...remoteRequest,
+          backend,
+        });
+      logDebug("renameThread", {
+        backend,
+        threadId: request.threadId,
+        federationTarget: request.federationTarget.instanceId,
+      });
+      return response;
+    }
+    const response = await getDesktopBackendRegistry().renameThread({
+      ...request,
+      backend,
+    });
+
+    logDebug("renameThread", {
+      backend,
+      threadId: request.threadId,
+    });
+
+    return response;
+  }
+
+  async getNavigationSnapshot(
+    request: GetNavigationSnapshotRequest = {},
+  ): Promise<NavigationSnapshot> {
+    const requestKey = request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+      ? getRemoteNavigationSnapshotCacheKey({
+          ...request,
+          federationTarget: request.federationTarget,
+        })
+      : getNavigationSnapshotRequestKey(request);
+    const pending = this.pendingNavigationSnapshots.get(requestKey);
+    if (pending) {
+      return await pending;
+    }
+
+    const promise = this.readNavigationSnapshot(request).finally(() => {
+      if (this.pendingNavigationSnapshots.get(requestKey) === promise) {
+        this.pendingNavigationSnapshots.delete(requestKey);
+      }
+    });
+    this.pendingNavigationSnapshots.set(requestKey, promise);
+
+    return await promise;
+  }
+
+  async getNavigationQueryPage(
+    request: NavigationQueryRequest,
+    consumerId?: string,
+  ): Promise<NavigationQueryPage> {
+    if (consumerId) {
+      return navigationQueryPool.read({
+        consumerId,
+        request,
+        load: async ({ signal, deadlineAt }) => {
+          signal.throwIfAborted();
+          return this.readNavigationQueryPage(request, { signal, deadlineAt });
+        },
+      });
+    }
+    return this.readNavigationQueryPage(request);
+  }
+
+  private readonly remoteNavigationPageBaselines = new RemoteNavigationPageBaselines();
+
+  private async readNavigationQueryPage(
+    request: NavigationQueryRequest,
+    rpcOptions?: { deadlineAt: number; signal: AbortSignal },
+  ): Promise<NavigationQueryPage> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      // Owner resolution reads this machine's peers for its own viewer. It must
+      // never become a request this instance sends to an owner.
+      if (request.query.kind === "exact" && request.query.resolveFromOwners) {
+        throw new Error("Owner-resolved navigation is available only to this machine's viewer inventory.");
+      }
+      const target = request.federationTarget;
+      const runtime = getDesktopFederationRuntime();
+      const ownerPage = await this.remoteNavigationPageBaselines.read(request, async (ownerRequest) => {
+        const result = await runtime.remoteNavigationQueryPage(target, ownerRequest, rpcOptions);
+        rpcOptions?.signal.throwIfAborted();
+        return result;
+      });
+      rpcOptions?.signal.throwIfAborted();
+      const page = runtime.stampRemoteNavigationQueryPage(target, ownerPage);
+      if (request.query.kind === "exact" && request.consumer === "main-sidebar" && !page.unchanged && !page.rangeUnchanged) {
+        const instanceId = request.federationTarget.instanceId;
+        const snapshots = page.entries.flatMap(({ row }) => {
+          const federation = row.federation;
+          if (federation?.ref.target.scope !== "remote" || federation.ref.target.instanceId !== instanceId) return [];
+          return [{ ref: federation.ref, summary: row, instanceLabel: federation.instanceLabel }];
+        });
+        const hydrated = await this.getOverlayStore().updateRemoteThreadPinSnapshots(snapshots, { onlyMissing: true });
+        if (hydrated) {
+          appServerLog.info("hydrated summaryless remote thread pins from exact owner rows", { instanceId,
+            candidates: snapshots.slice(0, 10).map(({ ref, summary }) => ({ backend: ref.backend,
+              threadId: ref.threadId.slice(0, 200), parentThreadId: summary.parentThreadId?.slice(0, 200),
+              parentInstanceId: summary.parentThreadInstanceId?.slice(0, 200), directoryCount: summary.linkedDirectories.length })) });
+          await getDesktopBackendRegistry().publishLocalEvent({
+            backend: snapshots[0]!.ref.backend,
+            notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId } },
+          });
+        }
+      }
+      const directoryKeys = [...new Set([...(page.directories ?? []).map((directory) => directory.key),
+        ...(page.selectionDirectory ? [page.selectionDirectory.key] : [])])];
+      if (!directoryKeys.length) return page;
+      const overlays = await this.getOverlayStore().readRemoteDirectoryOverlays({
+        instanceId: request.federationTarget.instanceId, directoryKeys,
+      });
+      rpcOptions?.signal.throwIfAborted();
+      // The owner's Forge Automation rides on its rows as stored there; only
+      // the disclosure is this viewer's own.
+      const apply = (directory: NavigationDirectoryRow): NavigationDirectoryRow => {
+        const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
+        return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
+          ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
+      };
+      const result = { ...page, directories: page.directories?.map(apply),
+        selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
+      if (Buffer.byteLength(JSON.stringify(result), "utf8") > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+        throw new Error("Navigation page with viewer preferences exceeds the byte budget. Request a smaller page.");
+      }
+      return result;
+    }
+    return await getDesktopNavigationQueryStore().readPage({
+      loadIndex: async () => {
+        rpcOptions?.signal.throwIfAborted();
+        const index = await loadLocalNavigationQueryIndex({
+          backend: request.backend,
+          callerReason: "renderer-navigation-query",
+          signal: rpcOptions?.signal,
+        });
+        rpcOptions?.signal.throwIfAborted();
+        if (request.inventory === "viewer") {
+          const summaries = getDesktopFederationRuntime().remoteThreadSummaries();
+          const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
+          rpcOptions?.signal.throwIfAborted();
+          // Drafts name threads on any instance. Peer rows come from the cache
+          // that keeps pins current, so this read never waits on a peer.
+          const watched = request.query.kind === "exact" && request.query.resolveFromOwners
+            ? loadViewerWatchedNavigationRows(summaries, request.query.identities, pins) : [];
+          if (!pins.length && !watched.length) return index;
+          const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
+          rpcOptions?.signal.throwIfAborted();
+          // Watched rows join local project groups as pins do, so a selected
+          // draft resolves its project. The index serves this one read only.
+          return appendViewerNavigationPins({ ...index, localInstanceId }, [...pins, ...watched]);
+        }
+        return index;
+      },
+      request,
+      scopeKey: request.inventory === "viewer" ? "renderer-viewer" : "renderer-local",
+    });
+  }
+
+  async releaseNavigationAttentionView(request: NavigationAttentionViewReleaseRequest): Promise<void> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteReleaseNavigationAttentionView(request.federationTarget, request);
+    }
+    getDesktopNavigationQueryStore().releaseAttentionView("renderer-local", request.viewId);
+    getDesktopNavigationQueryStore().releaseAttentionView("renderer-viewer", request.viewId);
+  }
+
+  async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> {
+    const target = request.federationTarget;
+    try {
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime().remoteMarkNavigationDirectorySeen(target, request);
+      }
+      return await markLocalNavigationDirectorySeen(request);
+    } catch (error) {
+      const owner = getDesktopFederationRuntime().navigationActionOwnerLabel(target);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not mark ${request.directoryKey} read on ${owner}: ${message}`);
+    }
+  }
+
+  async removeNavigationDirectory(request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteRemoveNavigationDirectory(request.federationTarget, request);
+    }
+    return removeLocalNavigationDirectory(request, (member) => this.archiveThread(member));
+  }
+
+  async getNavigationLaunchpadConfig(
+    request: NavigationLaunchpadConfigRequest,
+    consumerId?: string,
+  ): Promise<NavigationLaunchpadConfigResponse> {
+    if (request.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
+    const token = consumerId ?? `service-exact:${++nextTransientNavigationConsumer}`;
+    try {
+      return await navigationQueryPool.readExact({ kind: "launchpad", consumerId: token,
+        owner: request.federationTarget,
+        identity: JSON.stringify([request.directoryKey ?? null]),
+        operation: JSON.stringify([request.knownRevision ?? null]),
+        load: async (options) => {
+          if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+            return getDesktopFederationRuntime().remoteNavigationLaunchpadConfig(request.federationTarget, request, options);
+          }
+          return getDesktopNavigationDetailService().readLaunchpadConfig(request);
+        },
+      });
+    } finally { if (!consumerId) navigationQueryPool.release(token); }
+  }
+
+  async getNavigationSelectedDetail(
+    request: NavigationSelectedDetailRequest,
+    consumerId?: string,
+  ): Promise<NavigationSelectedDetailResponse> {
+    if (request.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
+    const token = consumerId ?? `service-exact:${++nextTransientNavigationConsumer}`;
+    try {
+      return await navigationQueryPool.readExact({ kind: "detail", consumerId: token,
+        owner: request.federationTarget, ref: request.ref,
+        identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
+        operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true, request.includeWorkspaceConfiguration === true, request.collection ?? null]),
+        load: async (options) => {
+          if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+            return getDesktopFederationRuntime().remoteNavigationSelectedDetail(request.federationTarget, request, options);
+          }
+          return getDesktopNavigationDetailService().readSelectedDetail(request);
+        },
+      });
+    } finally { if (!consumerId) navigationQueryPool.release(token); }
+  }
+
+  async getNavigationQueueProjection(
+    request: NavigationQueueProjectionRequest,
+    consumerId?: string,
+  ): Promise<NavigationQueueProjection> {
+    if (request.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
+    const token = consumerId ?? `service-exact:${++nextTransientNavigationConsumer}`;
+    try {
+      return await navigationQueryPool.readExact({ kind: "queue", consumerId: token,
+        owner: request.federationTarget, ref: request.ref,
+        identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
+        operation: JSON.stringify([request.knownRevision ?? null, request.cursor ?? null]),
+        deadlineAt: request.deadlineAt,
+        load: async (options) => {
+          if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+            return getDesktopFederationRuntime().remoteNavigationQueueProjection(request.federationTarget, request, options);
+          }
+          return getDesktopNavigationDetailService().readQueueProjection(request);
+        },
+      });
+    } finally { if (!consumerId) navigationQueryPool.release(token); }
+  }
+
+  setNavigationResumeState(state: NavigationResumeState): void {
+    this.getOverlayStore().setNavigationResumeState?.(state);
+  }
+
+  async setNavigationBrowseMode(
+    request: SetNavigationBrowseModeRequest,
+  ): Promise<SetNavigationBrowseModeResponse> {
+    const browseMode = await this.getOverlayStore().setNavigationBrowseMode(
+      request.browseMode,
+    );
+
+    logDebug("setNavigationBrowseMode", { browseMode });
+
+    return { browseMode };
+  }
+
+  async setPinnedGroupCollapsed(
+    request: SetPinnedGroupCollapsedRequest,
+  ): Promise<SetPinnedGroupCollapsedResponse> {
+    const collapsed = await this.getOverlayStore().setPinnedGroupCollapsed?.(
+      request.collapsed === true,
+    ) ?? request.collapsed === true;
+    return { collapsed };
+  }
+
+  async listRecentThreadLockNotes(): Promise<RecentThreadLockNotesResponse> {
+    return { notes: this.getOverlayStore().listRecentThreadLockNotes?.() ?? [] };
+  }
+
+  /**
+   * Remembers a note the operator saved in the lock dialog. Local to this
+   * profile even when the thread lives on a peer: the operator typed it here.
+   */
+  async rememberThreadLockNote(
+    request: ThreadLockNoteRequest,
+  ): Promise<RecentThreadLockNotesResponse> {
+    const note = readThreadLockNoteRequest(request);
+    return {
+      notes: await this.getOverlayStore().rememberRecentThreadLockNote?.(note) ?? [],
+    };
+  }
+
+  /** Removes a note from the recent list, as a chip's remove button asks. */
+  async forgetThreadLockNote(
+    request: ThreadLockNoteRequest,
+  ): Promise<RecentThreadLockNotesResponse> {
+    const note = readThreadLockNoteRequest(request);
+    return {
+      notes: await this.getOverlayStore().forgetRecentThreadLockNote?.(note) ?? [],
+    };
+  }
+
+  private async readNavigationSnapshot(
+    request: GetNavigationSnapshotRequest,
+  ): Promise<NavigationSnapshot> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const federationTarget = request.federationTarget;
+      const cacheKey = getRemoteNavigationSnapshotCacheKey({
+        ...request,
+        federationTarget,
+      });
+      // Reserved before the peer round trip. Two navigation refreshes for one
+      // peer can be in flight together and can finish out of order; without
+      // this, the older snapshot's rows land last and revert a rename the
+      // operator has already seen.
+      // The same cache instance must both reserve and spend the sequence. A
+      // federation restart between the two drops the cache, and the rebuilt
+      // one counts from zero — every later refresh would then lose to this
+      // one snapshot's high sequence and peer renames would stop appearing.
+      const remoteThreadSummaries = getDesktopFederationRuntime()
+        .remoteThreadSummaries();
+      const nameObservationSequence =
+        remoteThreadSummaries.reserveThreadNameObservation();
+      try {
+        const snapshot = await getDesktopFederationRuntime()
+          .remoteNavigationSnapshot(
+            federationTarget,
+            {
+              backend: request.backend === "all" ? undefined : request.backend,
+              filter: request.filter,
+            },
+          );
+        this.remoteNavigationSnapshotCache.set(cacheKey, snapshot);
+        // A federation window reads its navigation here, not through
+        // RemoteThreadSummaryCache, so this is the only place most remote
+        // threads are ever named on this instance. Anything that later needs
+        // a display name without paying for a peer round trip — the quit
+        // dialog's blocker rows, for one — depends on this.
+        //
+        // Remembering a name is a side errand, never a reason to fail the
+        // snapshot the operator actually asked for: the worst case of losing
+        // it is a row that reads as a thread id somewhere else.
+        try {
+          remoteThreadSummaries.rememberThreadNames(
+            federationTarget.instanceId,
+            snapshot.threads,
+            nameObservationSequence,
+          );
+        } catch (error) {
+          logDebug("rememberRemoteThreadNames failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return await this.applyRemoteDirectoryViewerOverlays(
+          snapshot,
+          federationTarget.instanceId,
+        );
+      } catch (error) {
+        if (!isFederationPeerUnavailableError(error)) {
+          throw error;
+        }
+        const cached = this.remoteNavigationSnapshotCache.get(cacheKey);
+        const fallback: NavigationSnapshot = cached ?? {
+          backend: request.backend ?? "all",
+          fetchedAt: Date.now(),
+          federationTarget: request.federationTarget,
+          unchanged: false,
+          threads: [],
+          inboxThreadKeys: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex",
+            executionMode: "default",
+          },
+        };
+        return await this.applyRemoteDirectoryViewerOverlays(
+          {
+            ...fallback,
+            unchanged: false,
+            threads: fallback.threads.map((thread) =>
+              thread.federation
+                ? {
+                    ...thread,
+                    federation: {
+                      ...thread.federation,
+                      peerStatus: "disconnected",
+                    },
+                  }
+                : thread,
+            ),
+          },
+          federationTarget.instanceId,
+        );
+      }
+    }
+    const backend: AppServerBackendScope = request.backend ?? "all";
+    const threads = await getDesktopBackendRegistry().listThreads({
+      backend: backend === "all" ? undefined : backend,
+      callerReason: "navigation-snapshot",
+      filter: request.filter,
+      forceRefresh: request.forceRefresh,
+    });
+    const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
+    const automationsByThreadKey = buildAutomationSummariesByThreadKey();
+    const queuedExecutionModesByThreadKey = getDesktopBackendRegistry()
+      .getQueuedExecutionModesSnapshot();
+    const queuedTurnsByThreadKey = getDesktopBackendRegistry()
+      .getQueuedTurnsSnapshot();
+    const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
+      backend,
+      automationsByThreadKey,
+      fetchedAt: Date.now(),
+      messagingBindingsByThreadKey,
+      queuedExecutionModesByThreadKey,
+      queuedTurnsByThreadKey,
+      threads,
+      workspaceRoots: resolveScratchProjectsRoots(),
+    });
+    await this.loadPrStatusRegistry();
+    await this.loadPrLookupRegistry();
+    this.seedPrStatusRegistryFromThreads(snapshot.threads);
+    const canonicalSnapshot = this.applyCanonicalPrStatuses(snapshot.threads);
+    const replaceThreadPrAttachments =
+      backend === "all" && !request.filter?.trim();
+    await this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
+      replace: replaceThreadPrAttachments,
+    });
+    const threadsWithPrimaryGitRepositories =
+      this.applyPrimaryGitRepositories(canonicalSnapshot.threads);
+    const primaryGitRepositoriesChanged =
+      this.rememberPublishedPrimaryGitRepositories(
+        threadsWithPrimaryGitRepositories,
+        { replace: replaceThreadPrAttachments },
+      );
+    void this.getPrAutoDispatchCoordinator().resume();
+    await this.loadDirectoryGitStatusCache();
+    for (const directory of snapshot.directories) {
+      this.lastDirectoriesByKey.set(directory.key, directory);
+    }
+    const directories = await hydrateDirectoryLaunchpads(
+      snapshot.directories.map((directory) => {
+        const cached = this.directoryGitStatusByKey.get(directory.key);
+        if (!cached) {
+          return directory;
+        }
+        return applyDirectoryGitStatus(directory, cached.gitStatus);
+      }),
+    );
+    const previousDirectories = this.previousDirectoriesByBackend.get(backend);
+    const directoriesUnchanged = previousDirectories
+      ? directoryStatusesEqual(previousDirectories, directories)
+      : false;
+    this.previousDirectoriesByBackend.set(backend, directories);
+    this.startDirectoryGitStatusRefresh({
+      automatic: true,
+      directories: snapshot.directories,
+      requestKey: getNavigationSnapshotRequestKey(request),
+    });
+
+    await this.loadThreadGitWorkingStateCache();
+    this.rememberThreadWorktreePaths(canonicalSnapshot.threads);
+    this.rememberThreadPrRefreshContexts(canonicalSnapshot.threads);
+    this.syncPrPollingSchedulerState();
+    const detachedPrsByThreadKey = await this.readDetachedPrsByThreadKey(
+      canonicalSnapshot.threads,
+    );
+    this.rememberPublishedPrCommitShas(
+      canonicalSnapshot.threads,
+      detachedPrsByThreadKey,
+    );
+    const threadsWithWorkingState = await getDesktopBackendRegistry()
+      .hydrateThreadGitWorkingStates(
+        threadsWithPrimaryGitRepositories.map((thread) =>
+          this.applyCachedWorktreeWorkingState(thread),
+        ),
+      );
+    // The registry owns the one automatic fleet round shared by renderer,
+    // messaging, and federated navigation. Focused, user, and event-driven
+    // refreshes still use this window's single-worktree lane below.
+    void getDesktopBackendRegistry()
+      .refreshThreadGitWorkingStates(canonicalSnapshot.threads)
+      .catch((error) => {
+        logDebug("worktreeWorkingStateRefresh:failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+
+    const remotePins = await this.mergePinnedRemoteThreads();
+
+    const registry = getDesktopBackendRegistry();
+    const providerRefresh =
+      backend === "all"
+      && !request.filter?.trim()
+      && typeof registry.getStartupProviderRefreshStatus === "function"
+        ? registry.getStartupProviderRefreshStatus()
+        : undefined;
+    const responseWithoutLiveTokenMiser = {
+      ...snapshot,
+      threads: [...threadsWithWorkingState, ...remotePins.threads],
+      // One unified ranking over local + remote rows: the local keys were
+      // computed by this same function inside the reconcile, so re-ranking
+      // the combined set preserves their order while letting a fresher
+      // remote unread outrank stale local entries instead of always
+      // trailing them.
+      inboxThreadKeys:
+        remotePins.threads.length === 0
+          ? snapshot.inboxThreadKeys
+          : rankInboxThreadKeys([
+              ...threadsWithWorkingState,
+              ...remotePins.threads,
+            ]),
+      directories: attachRemoteThreadsToLocalDirectories(
+        directories,
+        remotePins.threads,
+      ),
+      unchanged:
+        snapshot.unchanged
+        && directoriesUnchanged
+        && !canonicalSnapshot.changed
+        && !primaryGitRepositoriesChanged
+        && !remotePins.changed,
+      ...(providerRefresh ? { providerRefresh } : {}),
+    };
+    const response = typeof registry.withLiveTokenMiserNavigationSnapshot
+      === "function"
+      ? registry.withLiveTokenMiserNavigationSnapshot(
+          responseWithoutLiveTokenMiser,
+        )
+      : responseWithoutLiveTokenMiser;
+    if (
+      backend === "all"
+      && !request.filter?.trim()
+    ) {
+      // Creation-time visibility and append-rank decisions must see the same
+      // merged local + viewer-owned remote pin list the renderer sees.
+      getDesktopBackendRegistry().rememberCompleteNavigationSnapshot(response);
+    }
+    return response;
+  }
+
+  private async applyRemoteDirectoryViewerOverlays(
+    snapshot: NavigationSnapshot,
+    instanceId: string,
+  ): Promise<NavigationSnapshot> {
+    const overlays = await this.getOverlayStore().readRemoteDirectoryOverlays({
+      instanceId,
+    });
+    let changed = false;
+    const directories = snapshot.directories.map((directory) => {
+      const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
+      // The owner's Forge Automation stays on its rows; only the disclosure
+      // is this viewer's own.
+      if (collapsed === undefined || directory.directoryThreadsCollapsed === collapsed) {
+        return directory;
+      }
+      changed = true;
+      return { ...directory, directoryThreadsCollapsed: collapsed };
+    });
+    return changed
+      ? {
+          ...snapshot,
+          directories,
+          // The owner's unchanged hash does not include viewer-local state.
+          unchanged: false,
+        }
+      : snapshot;
+  }
+
+  /**
+   * Viewer-side remote thread pins, merged into the main window's snapshot.
+   * Reachable owners serve their cached stamped rows (and refresh the
+   * cached pin payload); unreachable owners fall back to the persisted
+   * payload stamped with their current non-connected status so rows render
+   * dimmed. The merge never awaits a peer — stale summaries refetch in the
+   * background and land via `navigation/remoteThreadPins/changed`, so
+   * navigation refresh latency stays independent of peer responsiveness.
+   * The merged rows get their own change hash so a peer-side
+   * title/PR/reaction/status change can never be suppressed by the local
+   * `unchanged` optimization.
+   */
+  private async mergePinnedRemoteThreads(): Promise<{
+    threads: NavigationThreadSummary[];
+    changed: boolean;
+  }> {
+    let resolved: { threads: NavigationThreadSummary[] } = { threads: [] };
+    try {
+      const overlayStore = this.getOverlayStore();
+      const pins =
+        typeof overlayStore.listRemoteThreadPins === "function"
+          ? await overlayStore.listRemoteThreadPins()
+          : [];
+      if (pins.length > 0) {
+        const cache = getDesktopFederationRuntime().remoteThreadSummaries();
+        const resolution = await cache.resolvePinnedThreads(pins);
+        // The owner's pinnedRank describes ITS pinned section — carrying it
+        // over would promote the row into the viewer's Pins section by a
+        // foreign rank and wire the pin chip to an owner-side unpin. Replace
+        // it with the VIEWER-owned rank from the pin row (usually absent):
+        // pin or unpin locally and only the viewer knows. The remote-viewer
+        // window path is untouched — owner semantics are correct there.
+        const localRankByKey = new Map(
+          pins.map((pin) => [
+            federatedThreadIdentityKey(pin.ref),
+            pin.localPinnedRank,
+          ]),
+        );
+        resolved = {
+          ...resolution,
+          threads: resolution.threads.map(
+            ({ pinnedRank: _pinnedRank, ...thread }) => {
+              const localRank = localRankByKey.get(
+                thread.federation?.ref
+                  ? federatedThreadIdentityKey(thread.federation.ref)
+                  : buildThreadIdentityKey(thread.source, thread.id),
+              );
+              return localRank ? { ...thread, pinnedRank: localRank } : thread;
+            },
+          ),
+        };
+        if (resolution.archived.length > 0) {
+          await Promise.all(
+            resolution.archived.map(async (ref) => {
+              await this.getOverlayStore().removeRemoteThreadPin({ ref });
+            }),
+          );
+        }
+        if (resolution.refreshed.length > 0) {
+          await this.getOverlayStore().updateRemoteThreadPinSnapshots(
+            resolution.refreshed,
+          );
+        }
+      }
+    } catch (error) {
+      appServerLog.warn("Pinned remote thread merge failed.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const hash = JSON.stringify(
+      resolved.threads.map((thread) => ({
+        id: thread.id,
+        source: thread.source,
+        title: thread.title,
+        updatedAt: thread.updatedAt,
+        threadStatus: thread.threadStatus,
+        inbox: thread.inbox,
+        prs: thread.prs,
+        federation: thread.federation,
+        reactions: thread.reactions,
+        parentThreadId: thread.parentThreadId,
+        parentThreadBackend: thread.parentThreadBackend,
+        parentThreadInstanceId: thread.parentThreadInstanceId,
+        // Viewer-owned rank: a local pin/unpin must invalidate the snapshot.
+        pinnedRank: thread.pinnedRank,
+        // Directory-group membership derives from these; a peer-side project
+        // change must invalidate the snapshot like a title change does.
+        linkedDirectories: thread.linkedDirectories,
+      })),
+    );
+    const changed = hash !== this.lastRemoteThreadPinsMergeHash;
+    this.lastRemoteThreadPinsMergeHash = hash;
+    return { threads: resolved.threads, changed };
+  }
+
+  async resolveEditCommitStates(
+    request: ResolveEditCommitStatesRequest,
+  ): Promise<ResolveEditCommitStatesResponse> {
+    const acceptedPushedCommitShas = this.getPublishedPrCommitShasForWorktree(
+      request.worktreePath,
+    );
+    // Coalesce identical in-flight requests (same worktree + groups) so an
+    // overlapping renderer re-resolve doesn't spawn a second git burst — they
+    // share one result.
+    const requestKey = JSON.stringify({
+      worktreePath: request.worktreePath,
+      groups: request.groups,
+      acceptedPushedCommitShas,
+    });
+    const pending = this.pendingEditCommitResolves.get(requestKey);
+    if (pending) {
+      return await pending;
+    }
+
+    const promise = getDesktopBackendRegistry()
+      .resolveEditCommitStates(request.worktreePath, request.groups, {
+        acceptedPushedCommitShas,
+      })
+      .then((states) => ({ states }));
+    this.pendingEditCommitResolves.set(requestKey, promise);
+    try {
+      return await promise;
+    } finally {
+      this.pendingEditCommitResolves.delete(requestKey);
+    }
+  }
+
+  async listWorktreeOtherChanges(
+    request: ListWorktreeOtherChangesRequest,
+  ): Promise<ListWorktreeOtherChangesResponse> {
+    return await getDesktopBackendRegistry().listWorktreeOtherChanges(
+      request.worktreePath,
+      {
+        excludePaths: request.excludePaths,
+        maxFiles: request.maxFiles,
+      },
+    );
+  }
+
+  async getWorktreeOtherChangeDiff(
+    request: GetWorktreeOtherChangeDiffRequest,
+  ): Promise<GetWorktreeOtherChangeDiffResponse> {
+    return await getDesktopBackendRegistry().getWorktreeOtherChangeDiff(
+      request.worktreePath,
+      request.path,
+      { maxBytes: request.maxBytes },
+    );
+  }
+
+  async listWorktreeUnpublishedCommits(
+    request: ListWorktreeUnpublishedCommitsRequest,
+  ): Promise<ListWorktreeUnpublishedCommitsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      if (!request.backend || !request.threadId?.trim()) {
+        throw new Error(
+          "Remote unpublished commit reads require an owning thread identity.",
+        );
+      }
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listWorktreeUnpublishedCommits({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+          maxCommits: request.maxCommits,
+          maxFilesPerCommit: request.maxFilesPerCommit,
+        });
+    }
+    return await getDesktopBackendRegistry().listWorktreeUnpublishedCommits(
+      request.worktreePath,
+      {
+        acceptedPushedCommitShas: this.getPublishedPrCommitShasForWorktree(
+          request.worktreePath,
+        ),
+        maxCommits: request.maxCommits,
+        maxFilesPerCommit: request.maxFilesPerCommit,
+      },
+    );
+  }
+
+  async readWorktreeImage(
+    request: ReadWorktreeImageRequest,
+  ): Promise<ReadWorktreeImageResponse> {
+    return await readWorktreeImage(request);
+  }
+
+  async getWorktreeUnpublishedCommitDiff(
+    request: GetWorktreeUnpublishedCommitDiffRequest,
+  ): Promise<GetWorktreeUnpublishedCommitDiffResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      if (!request.backend || !request.threadId?.trim()) {
+        throw new Error(
+          "Remote unpublished commit reads require an owning thread identity.",
+        );
+      }
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .getWorktreeUnpublishedCommitDiff({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+          commitSha: request.commitSha,
+          path: request.path,
+          maxBytes: request.maxBytes,
+        });
+    }
+    return await getDesktopBackendRegistry().getWorktreeUnpublishedCommitDiff(
+      request.worktreePath,
+      request.commitSha,
+      request.path,
+      {
+        acceptedPushedCommitShas: this.getPublishedPrCommitShasForWorktree(
+          request.worktreePath,
+        ),
+        maxBytes: request.maxBytes,
+      },
+    );
+  }
+
+  private rememberThreadWorktreePaths(
+    threads: NavigationSnapshot["threads"],
+  ): void {
+    for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const worktreePath = this.resolveThreadWorkingStatePath(thread);
+      if (worktreePath) {
+        this.worktreePathByThreadKey.set(threadKey, worktreePath);
+      } else {
+        this.worktreePathByThreadKey.delete(threadKey);
+      }
+    }
+  }
+
+  private rememberThreadPrRefreshContexts(
+    threads: NavigationSnapshot["threads"],
+  ): void {
+    for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const contexts = resolveThreadPullRequestContexts(thread);
+      if (contexts.length === 0) {
+        this.prRefreshContextByThreadKey.delete(threadKey);
+        continue;
+      }
+      this.prRefreshContextByThreadKey.set(threadKey, contexts);
+    }
+  }
+
+  /**
+   * `pullRequestMatchesRepositoryKey` for a thread's primary repository. A
+   * checkout whose remote still uses a renamed repository's old name holds the
+   * repository the forge reports PRs under, so once the forge has named it,
+   * both sides compare under its current name.
+   */
+  private matchesPrimaryRepository(pr: PrSummary, primaryRepoKey: string | undefined): boolean {
+    if (pullRequestMatchesRepositoryKey(pr, primaryRepoKey)) return true;
+    if (!primaryRepoKey || !this.prRepositoryAliases.hasRenames()) return false;
+    return pullRequestMatchesRepositoryKey(
+      this.prRepositoryAliases.canonicalize(pr),
+      this.prRepositoryAliases.canonicalizeRepositoryKey(primaryRepoKey),
+    );
+  }
+
+  /** A primary repository key under the forge's current name. */
+  private canonicalPrimaryRepoKey(primaryRepoKey: string | undefined): string | undefined {
+    return primaryRepoKey && this.prRepositoryAliases.canonicalizeRepositoryKey(primaryRepoKey);
+  }
+
+  private setThreadPrAttachment(
+    threadKey: string,
+    attachment: { backend: AppServerBackendKind; primaryRepoKey?: string; prs: PrSummary[] } | undefined,
+  ): void {
+    const identity = parseThreadIdentityKey(threadKey);
+    // An in-flight lookup can finish after archive removed the subscription.
+    if (attachment && identity && getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true) attachment = undefined;
+    this.primaryPrThreadsByKey.set(threadKey, (attachment?.prs ?? [])
+      .filter((pr) => this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey))
+      .map((pr) => getPrStatusKey(this.prRepositoryAliases.canonicalize(pr))));
+    if (attachment) this.attachedPrsByThreadKey.set(threadKey, attachment);
+    else this.attachedPrsByThreadKey.delete(threadKey);
+  }
+
+  private async rememberThreadPrAttachments(
+    threads: NavigationSnapshot["threads"],
+    options: { replace: boolean; isCurrent?: () => boolean },
+  ): Promise<void> {
+    const primaryRepoResolutionByPath = new Map<
+      string,
+      Promise<string | undefined>
+    >();
+    const primaryRepoKeys = await Promise.all(
+      threads.map(async (thread) =>
+        await resolvePrimaryThreadRepoKey(
+          thread,
+          primaryRepoResolutionByPath,
+        ),
+      ),
+    );
+    const liveThreadKeys = new Set<string>();
+    const candidates: Array<{ backend: AppServerBackendKind; threadId: string; prKeys: string[] }> = [];
+    for (const [index, thread] of threads.entries()) {
+      if (options.isCurrent && !options.isCurrent()) return;
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      liveThreadKeys.add(threadKey);
+      const primaryRepoKey = primaryRepoKeys[index];
+      this.setThreadPrAttachment(threadKey, {
+        backend: thread.source,
+        ...(primaryRepoKey ? { primaryRepoKey } : {}),
+        prs: thread.prs ?? [],
+      });
+      candidates.push({
+        backend: thread.source,
+        threadId: thread.id,
+        prKeys: (thread.prs ?? []).filter((pr) => this.matchesPrimaryRepository(pr, primaryRepoKey)).map(getPrStatusKey),
+      });
+    }
+    if (options.replace) {
+      for (const threadKey of this.attachedPrsByThreadKey.keys()) {
+        if (options.isCurrent && !options.isCurrent()) return;
+        if (!liveThreadKeys.has(threadKey)) {
+          this.setThreadPrAttachment(threadKey, undefined);
+          const identity = parseThreadIdentityKey(threadKey);
+          if (identity) {
+            candidates.push({ ...identity, prKeys: [] });
+          }
+        }
+      }
+    }
+    if (options.isCurrent && !options.isCurrent()) return;
+    this.publishPrAutoFixCandidateChanges(
+      await this.getOverlayStore().syncThreadPrAutoDispatchCandidatesBatch({ threads: candidates, now: Date.now() }),
+    );
+  }
+
+  private async rememberThreadPrAttachmentUpdate(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prs: PrSummary[];
+  }): Promise<void> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.attachedPrsByThreadKey.get(threadKey);
+    // Write the PR list before any await so overlapping updates keep their
+    // arrival order.
+    this.setThreadPrAttachment(
+      threadKey,
+      {
+        backend: params.backend,
+        ...(current?.primaryRepoKey
+          ? { primaryRepoKey: current.primaryRepoKey }
+          : {}),
+        prs: params.prs,
+      },
+    );
+    if (!current?.primaryRepoKey) {
+      const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
+      // Patch only the key onto whatever list is now current. A refresh may
+      // have supplied a key, or dropped the thread, while this resolved.
+      const latest = this.attachedPrsByThreadKey.get(threadKey);
+      if (primaryRepoKey && latest && !latest.primaryRepoKey) {
+        this.setThreadPrAttachment(threadKey, { ...latest, primaryRepoKey });
+      }
+    }
+    await this.syncThreadPrAutoDispatchCandidates(params);
+  }
+
+  /**
+   * The owner navigation refresh normally supplies a thread's primary
+   * repository. A thread created mid-session can attach and watch a PR before
+   * that refresh lists it; without this, its PR would not count as primary
+   * and the watch tool would refuse it until the next refresh.
+   */
+  private async resolveUncachedPrimaryRepoKey(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string | undefined> {
+    const summary = getDesktopBackendRegistry().getCachedThreadSummary(params);
+    if (!summary) return undefined;
+    const overlay = await this.getOverlayStore().getThreadOverlayState(params);
+    return await resolvePrimaryThreadRepoKey({
+      gitOriginUrl: summary.gitOriginUrl,
+      linkedDirectories: mergeThreadLinkedDirectories([
+        ...summary.linkedDirectories,
+        ...(overlay?.extraLinkedDirectories ?? []),
+      ]),
+    });
+  }
+
+  readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
+    return this.canonicalPrimaryRepoKey(
+      this.attachedPrsByThreadKey.get(buildThreadIdentityKey(backend, threadId))?.primaryRepoKey,
+    );
+  }
+
+  private applyPrimaryGitRepositories(
+    threads: NavigationSnapshot["threads"],
+  ): NavigationSnapshot["threads"] {
+    return threads.map((thread) => {
+      const primaryGitRepository = this.canonicalPrimaryRepoKey(this.attachedPrsByThreadKey.get(
+        buildThreadIdentityKey(thread.source, thread.id),
+      )?.primaryRepoKey);
+      return primaryGitRepository
+        ? { ...thread, primaryGitRepository }
+        : thread;
+    });
+  }
+
+  private rememberPublishedPrimaryGitRepositories(
+    threads: NavigationSnapshot["threads"],
+    options: { replace: boolean },
+  ): boolean {
+    const liveThreadKeys = new Set<string>();
+    let changed = false;
+    for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const primaryGitRepository = thread.primaryGitRepository;
+      liveThreadKeys.add(threadKey);
+      if (
+        !this.publishedPrimaryGitRepositoriesByThreadKey.has(threadKey)
+        || this.publishedPrimaryGitRepositoriesByThreadKey.get(threadKey) !==
+          primaryGitRepository
+      ) {
+        changed = true;
+        this.publishedPrimaryGitRepositoriesByThreadKey.set(
+          threadKey,
+          primaryGitRepository,
+        );
+      }
+    }
+    if (options.replace) {
+      for (const threadKey of this.publishedPrimaryGitRepositoriesByThreadKey.keys()) {
+        if (!liveThreadKeys.has(threadKey)) {
+          changed = true;
+          this.publishedPrimaryGitRepositoriesByThreadKey.delete(threadKey);
+        }
+      }
+    }
+    return changed;
+  }
+
+  private async syncThreadPrAutoDispatchCandidates(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<PrAutoDispatchCandidateChange[]> {
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    const prKeys = attachment
+      ? attachment.prs
+          .filter((pr) =>
+            this.matchesPrimaryRepository(pr, attachment.primaryRepoKey),
+          )
+          .map(getPrStatusKey)
+      : [];
+    const changes = await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
+      ...params,
+      prKeys,
+      now: Date.now(),
+    });
+    this.publishPrAutoFixCandidateChanges(changes);
+    return changes;
+  }
+
+  /**
+   * Auto-fix candidacy changed after a window may have listed it. Each
+   * thread holding an affected PR re-lists: one thread's candidacy can move
+   * another between active and handled by another thread.
+   */
+  private publishPrAutoFixCandidateChanges(
+    changes: PrAutoDispatchCandidateChange[] | undefined,
+  ): void {
+    if (!changes?.length) return;
+    void (async () => {
+      const prKeys = new Set(changes.map((change) => change.prKey));
+      const holders = (await this.getOverlayStore().listPrAutoDispatchCandidates())
+        .filter((candidate) => prKeys.has(candidate.prKey));
+      const threads = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
+      for (const thread of [...changes, ...holders]) {
+        threads.set(buildThreadIdentityKey(thread.backend, thread.threadId), {
+          backend: thread.backend,
+          threadId: thread.threadId,
+        });
+      }
+      await this.publishPrWatchesUpdated([...threads.values()]);
+    })().catch((error: unknown) => {
+      appServerLog.warn("failed to publish Auto-fix candidate change", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  /**
+   * These PRs merged, closed or reopened. Auto-fix on each one changes
+   * between live and idle, so every thread holding it re-lists.
+   */
+  private publishPrAutoFixPrEndedChanges(prKeys: ReadonlySet<string>): void {
+    if (prKeys.size === 0 || !this.backgroundPrPollingEnabled || !this.prAutoDispatchAllowed) return;
+    void (async () => {
+      const holders = (await this.getOverlayStore().listPrAutoDispatchCandidates())
+        .filter((candidate) => prKeys.has(candidate.prKey));
+      await this.publishPrWatchesUpdated(holders.map((holder) => ({
+        backend: holder.backend,
+        threadId: holder.threadId,
+      })));
+    })().catch((error: unknown) => {
+      appServerLog.warn("failed to publish Auto-fix PR end", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  /**
+   * The thread's attached PRs on its primary repository, from the overlay.
+   * A thread no navigation refresh has listed yet gets its primary
+   * repository resolved first, so its PRs are not read as non-primary.
+   */
+  private async readPrimaryAttachedPrs(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<{ overlay: ThreadOverlayState | undefined; prs: PrSummary[] }> {
+    const overlay = await this.getOverlayStore().getThreadOverlayState(params);
+    const overlayPrs = this.canonicalizePrs(overlay?.prs ?? []);
+    if (!this.readPrimaryGitRepository(params.backend, params.threadId)) {
+      await this.rememberThreadPrAttachmentUpdate({ ...params, prs: overlayPrs });
+    }
+    return {
+      overlay,
+      prs: this.primaryAttachedPrsForThread({ ...params, prs: overlayPrs }),
+    };
+  }
+
+  /**
+   * The thread's checkout head when it is past the PR head the status cache
+   * holds, else undefined. Git failures read as undefined.
+   */
+  private async readPushedPrHeadSha(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    pr: PrSummary;
+    headSha: string;
+    overlay: ThreadOverlayState | undefined;
+  }): Promise<string | undefined> {
+    const summary = getDesktopBackendRegistry().getCachedThreadSummary(params);
+    const directories = params.pr.linkedDirectoryPaths?.length
+      ? params.pr.linkedDirectoryPaths
+      : resolveThreadPullRequestDirectoryPaths({
+          linkedDirectories: [
+            ...(summary?.linkedDirectories ?? []),
+            ...(params.overlay?.extraLinkedDirectories ?? []),
+          ],
+        });
+    return await readLocalHeadPastPrHead({
+      directories: directories.slice(0, 4),
+      cachedHeadSha: params.headSha,
+      ...(params.pr.headRefName ? { headRefName: params.pr.headRefName } : {}),
+    });
+  }
+
+  private primaryAttachedPrsForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prs: PrSummary[];
+  }): PrSummary[] {
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    return params.prs.filter((pr) =>
+      this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
+    );
+  }
+
+  private isPrimaryPrAttached(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prKey: string;
+  }): boolean {
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    return attachment?.prs.some((pr) =>
+      getPrStatusKey(pr) === params.prKey
+      && this.matchesPrimaryRepository(pr, attachment.primaryRepoKey),
+    ) ?? false;
+  }
+
+  private applyPrStatusToAttachments(pr: PrSummary): void {
+    const prKey = getPrStatusKey(pr);
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      let changed = false;
+      const prs = attachment.prs.map((candidate) => {
+        if (getPrStatusKey(candidate) !== prKey) return candidate;
+        changed = true;
+        return normalizePrSummary({
+          ...pr,
+          linkedDirectoryPaths: candidate.linkedDirectoryPaths,
+          ...(candidate.explicitlyAttached ? { explicitlyAttached: true } : {}),
+        });
+      });
+      if (changed) {
+        this.attachedPrsByThreadKey.set(threadKey, { ...attachment, prs });
+      }
+    }
+  }
+
+  private async readDetachedPrsByThreadKey(
+    threads: NavigationSnapshot["threads"],
+  ): Promise<Map<string, PrSummary[]>> {
+    const threadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
+    for (const thread of threads) {
+      const threadIds = threadIdsByBackend.get(thread.source) ?? new Set<string>();
+      threadIds.add(thread.id);
+      threadIdsByBackend.set(thread.source, threadIds);
+    }
+
+    const detachedPrsByThreadKey = new Map<string, PrSummary[]>();
+    await Promise.all(
+      [...threadIdsByBackend.entries()].map(async ([backend, threadIds]) => {
+        const detached = this.getOverlayStore().readDetachedThreadPullRequests({
+          backend,
+          threadIds: [...threadIds],
+        });
+        for (const [threadId, prs] of Object.entries(detached)) {
+          if (prs.length) {
+            detachedPrsByThreadKey.set(
+              buildThreadIdentityKey(backend, threadId),
+              prs,
+            );
+          }
+        }
+      }),
+    );
+    return detachedPrsByThreadKey;
+  }
+
+  private rememberPublishedPrCommitShas(
+    threads: NavigationSnapshot["threads"],
+    detachedPrsByThreadKey: Map<string, PrSummary[]> = new Map(),
+  ): void {
+    for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      this.rememberPublishedPrCommitShasForThread({
+        backend: thread.source,
+        threadId: thread.id,
+        worktreePath: this.resolveThreadWorkingStatePath(thread),
+        prs: [
+          ...(thread.prs ?? []),
+          ...(detachedPrsByThreadKey.get(threadKey) ?? []),
+        ],
+      });
+    }
+  }
+
+  private rememberPublishedPrCommitShasForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    worktreePath?: string;
+    prs: PrSummary[];
+  }): string | undefined {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const worktreePath = params.worktreePath?.trim()
+      || this.worktreePathByThreadKey.get(threadKey);
+    if (!worktreePath) {
+      this.publishedPrCommitsByThread.delete(threadKey);
+      return undefined;
+    }
+    const prs = this.canonicalizePrs(params.prs);
+    if (prs.length === 0) {
+      this.publishedPrCommitsByThread.delete(threadKey);
+      return worktreePath;
+    }
+    this.publishedPrCommitsByThread.set(threadKey, {
+      worktreePath,
+      prs,
+    });
+    return worktreePath;
+  }
+
+  private getPublishedPrCommitShasForWorktree(worktreePath: string): string[] {
+    const accepted = new Set<string>();
+    const normalizedWorktreePath = worktreePath.trim();
+    for (const entry of this.publishedPrCommitsByThread.values()) {
+      if (entry.worktreePath !== normalizedWorktreePath) {
+        continue;
+      }
+      for (const sha of publishedPrCommitShas(this.canonicalizePrs(entry.prs))) {
+        accepted.add(sha);
+      }
+    }
+    return [...accepted];
+  }
+
+  private applyCachedWorktreeWorkingState(
+    thread: NavigationSnapshot["threads"][number],
+  ): NavigationSnapshot["threads"][number] {
+    const worktreePath = this.resolveThreadWorkingStatePath(thread);
+    const cached = worktreePath
+      ? getDesktopBackendRegistry()
+          .getThreadGitWorkingStateCache()
+          .get(worktreePath)
+      : undefined;
+    // Threads arrive without working state (the enricher no longer computes
+    // it), so hydration only ever adds the cached value. A worktree the cache
+    // doesn't know about yet shows no chips until the background probe lands.
+    if (cached) {
+      return {
+        ...thread,
+        gitWorkingStateFetchedAt: cached.fetchedAt,
+        ...(cached.gitWorkingState
+          ? { gitWorkingState: cached.gitWorkingState }
+          : {}),
+      };
+    }
+    return thread;
+  }
+
+  private resolveThreadWorkingStatePath(
+    thread: Pick<
+      NavigationSnapshot["threads"][number],
+      "projectKey" | "linkedDirectories"
+    >,
+  ): string | undefined {
+    const projectKey = thread.projectKey?.trim();
+    if (projectKey) {
+      return projectKey;
+    }
+
+    for (const directory of thread.linkedDirectories ?? []) {
+      const worktreePath = directory.worktreePath?.trim();
+      if (worktreePath) {
+        return worktreePath;
+      }
+    }
+
+    for (const directory of thread.linkedDirectories ?? []) {
+      if (directory.kind !== "local") {
+        continue;
+      }
+      const directoryPath = directory.path?.trim();
+      if (directoryPath) {
+        return directoryPath;
+      }
+    }
+
+    return undefined;
+  }
+
+  async refreshDirectoryGitStatusesForKeys(
+    request: RefreshDirectoryGitStatusesRequest,
+  ): Promise<RefreshDirectoryGitStatusesResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .refreshDirectoryGitStatuses(remoteRequest);
+    }
+    await this.loadDirectoryGitStatusCache();
+    const directoryKeys = [
+      ...new Set(request.directoryKeys.map((key) => key.trim()).filter(Boolean)),
+    ];
+    if (directoryKeys.length > 100) throw new Error("Refresh at most 100 directories at a time.");
+    if (!directoryKeys.length) return { scheduledCount: 0 };
+    const token = `directory-git-refresh:${randomUUID()}`;
+    const deadlineAt = Date.now() + 10_000;
+    const directories: DirectoryGitRefreshTarget[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    let bytes = 0;
+    try {
+      for (let count = 0; count < 16; count += 1) {
+        const page = await this.getNavigationQueryPage({ protocol: 2, consumer: "main-sidebar", inventory: "owner",
+          query: { kind: "directory-index", keys: directoryKeys }, pageSize: 100, cursor, deadlineAt,
+        }, token);
+        // Coverage describes provider thread discovery, not whether a returned
+        // directory's path is usable. Probe only the requested owner members
+        // already present in this page, even while another provider is checking
+        // or degraded. Missing members schedule no work and are never inferred
+        // from caller-supplied keys.
+        if (page.unchanged) throw new Error("Directory refresh returned no metadata.");
+        bytes += Buffer.byteLength(JSON.stringify(page), "utf8");
+        if (bytes > 512 * 1024) throw new Error("Directory refresh metadata exceeds its bounded budget.");
+        for (const directory of page.directories ?? []) {
+          if (!directoryKeys.includes(directory.key) || seen.has(directory.key)) throw new Error("Directory refresh returned inconsistent owner membership.");
+          seen.add(directory.key);
+          if (directory.path?.trim()) directories.push({ key: directory.key, path: directory.path, latestUpdatedAt: directory.latestUpdatedAt });
+        }
+        if (page.complete) break;
+        if (!page.nextCursor || count === 15) throw new Error("Directory refresh did not reach a complete owner page range.");
+        cursor = page.nextCursor;
+      }
+    } finally { navigationQueryPool.release(token); }
+    const scheduledCount = this.startDirectoryGitStatusRefresh({
+      automatic: false,
+      directories,
+      force: request.force ?? true,
+      requestKey: "explicit",
+    });
+
+    return { scheduledCount };
+  }
+
+  private async loadDirectoryGitStatusCache(): Promise<void> {
+    if (this.directoryGitStatusCacheLoaded) {
+      return;
+    }
+    this.directoryGitStatusCacheLoaded = true;
+
+    const entries = await this.getOverlayStore().readDirectoryGitStatusCache();
+    for (const entry of Object.values(entries)) {
+      this.directoryGitStatusByKey.set(entry.directoryKey, entry);
+    }
+  }
+
+  private startDirectoryGitStatusRefresh(params: {
+    automatic: boolean;
+    directories: DirectoryGitRefreshTarget[];
+    force?: boolean;
+    requestKey: string;
+  }): number {
+    const directories = this.selectDirectoryGitStatusRefreshCandidates(params).filter(
+      (directory) => !this.pendingDirectoryGitStatusKeys.has(directory.key),
+    );
+    if (directories.length === 0) {
+      return 0;
+    }
+
+    const refreshKey = JSON.stringify({
+      request: params.requestKey,
+      directoryKeys: directories.map((directory) => directory.key),
+      force: params.force === true,
+    });
+    if (this.pendingDirectoryGitStatusRefreshes.has(refreshKey)) {
+      return 0;
+    }
+
+    if (params.automatic) {
+      this.automaticDirectoryGitStatusRefreshesStarted += directories.length;
+    }
+    for (const directory of directories) {
+      this.pendingDirectoryGitStatusKeys.add(directory.key);
+    }
+
+    logDebug("directoryGitStatusRefresh:scheduled", {
+      mode: params.automatic ? "automatic" : "explicit",
+      count: directories.length,
+      automaticStarted: this.automaticDirectoryGitStatusRefreshesStarted,
+      automaticLimit: STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT,
+    });
+
+    const promise = this.refreshDirectoryGitStatuses(
+      directories,
+      params.force === true,
+    )
+      .catch((error) => {
+        logDebug("directoryGitStatusRefresh:failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        for (const directory of directories) {
+          this.pendingDirectoryGitStatusKeys.delete(directory.key);
+        }
+        if (this.pendingDirectoryGitStatusRefreshes.get(refreshKey) === promise) {
+          this.pendingDirectoryGitStatusRefreshes.delete(refreshKey);
+        }
+      });
+    this.pendingDirectoryGitStatusRefreshes.set(refreshKey, promise);
+    return directories.length;
+  }
+
+  private selectDirectoryGitStatusRefreshCandidates(params: {
+    automatic: boolean;
+    directories: DirectoryGitRefreshTarget[];
+    force?: boolean;
+  }): DirectoryGitRefreshTarget[] {
+    const candidates = params.directories.filter((directory) => {
+      if (!directory.path?.trim()) {
+        return false;
+      }
+      const cached = this.directoryGitStatusByKey.get(directory.key);
+      if (params.force) {
+        // Forced refreshes bypass the normal freshness gate, but still
+        // collapse a burst of same-key re-enqueues that land within a few
+        // seconds of the previous probe completing (e.g. rapidly flipping
+        // between two threads in the same repo). In-flight requests already
+        // coalesce via `pendingDirectoryGitStatusKeys`; this closes the
+        // sequential post-completion gap.
+        return (
+          !cached ||
+          Date.now() - cached.fetchedAt >=
+            DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS
+        );
+      }
+      if (!cached) {
+        return true;
+      }
+      if (!isFreshDirectoryGitStatusCacheEntry(cached)) {
+        return true;
+      }
+      return (directory.latestUpdatedAt ?? 0) > (cached.directoryUpdatedAt ?? 0);
+    });
+
+    if (!params.automatic) {
+      return candidates;
+    }
+
+    const remaining =
+      STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT -
+      this.automaticDirectoryGitStatusRefreshesStarted;
+    if (remaining <= 0) {
+      return [];
+    }
+
+    return [...candidates]
+      .sort((left, right) => (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0))
+      .slice(0, remaining);
+  }
+
+  private async refreshLaunchpadDirectoryGitStatus(
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<{
+    gitStatus?: NavigationDirectoryGitStatus | null;
+    request: EnsureDirectoryLaunchpadRequest;
+  }> {
+    const launchpadPath = request.directoryPath?.trim();
+    const statusSourcePath =
+      request.gitStatusSourcePath?.trim() || launchpadPath;
+    if (!statusSourcePath) {
+      return { request };
+    }
+
+    const cachedDirectory = this.lastDirectoriesByKey.get(request.directoryKey);
+    const statusDirectory: NavigationSnapshot["directories"][number] = {
+      key: request.directoryKey,
+      kind: request.directoryKind,
+      label: request.directoryLabel,
+      path: statusSourcePath,
+      threadKeys: [],
+      needsAttentionCount: 0,
+      ...(cachedDirectory?.latestUpdatedAt !== undefined
+        ? { latestUpdatedAt: cachedDirectory.latestUpdatedAt }
+        : {}),
+    };
+    const cacheDirectory = {
+      ...statusDirectory,
+      path: launchpadPath ?? statusSourcePath,
+    };
+
+    try {
+      const registry = getDesktopBackendRegistry();
+      for await (const entry of registry.readDirectoryStatusEntries([statusDirectory])) {
+        const fetchedAt = Date.now();
+        // Non-Git workspaces have no status; the reader reports actual probe
+        // failures as status-unavailable. An explicit source path is used for
+        // ordinary scratch-workspace subthreads too, so it does not imply Git.
+        const gitStatus = entry.gitStatus;
+        try {
+          await this.writeDirectoryGitStatusEntry({
+            directory: cacheDirectory,
+            directoryKey: entry.directoryKey,
+            fetchedAt,
+            gitStatus,
+          });
+        } catch (error) {
+          appServerLog.warn("failed to persist launchpad branch status", {
+            directoryKey: request.directoryKey,
+            error: error instanceof Error ? error.message : String(error),
+            statusSourcePath,
+          });
+        }
+        if (gitStatus?.syncState === "status-unavailable") {
+          appServerLog.warn("launchpad branch status unavailable", {
+            directoryKey: request.directoryKey,
+            error: gitStatus.statusUnavailableReason,
+            statusSourcePath,
+          });
+        }
+        return {
+          gitStatus: gitStatus ?? null,
+          request: gitStatus?.currentBranch
+            ? {
+                ...request,
+                currentBranch: gitStatus.currentBranch,
+              }
+            : request,
+        };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appServerLog.warn("launchpad branch status refresh failed", {
+        directoryKey: request.directoryKey,
+        error: message,
+        statusSourcePath,
+      });
+      return {
+        gitStatus: {
+          syncState: "status-unavailable",
+          statusUnavailableReason: message,
+        },
+        request,
+      };
+    }
+
+    if (request.gitStatusSourcePath) {
+      const statusUnavailableReason =
+        `Git branch information is unavailable for ${statusSourcePath}.`;
+      appServerLog.warn("launchpad branch status unavailable", {
+        directoryKey: request.directoryKey,
+        error: statusUnavailableReason,
+        statusSourcePath,
+      });
+      return {
+        gitStatus: {
+          syncState: "status-unavailable",
+          statusUnavailableReason,
+        },
+        request,
+      };
+    }
+
+    return { gitStatus: null, request };
+  }
+
+  private async refreshDirectoryGitStatuses(
+    directories: DirectoryGitRefreshTarget[],
+    force = false,
+  ): Promise<void> {
+    const refreshableDirectories = directories.filter((directory) => directory.path?.trim());
+    if (refreshableDirectories.length === 0) {
+      return;
+    }
+
+    const registry = getDesktopBackendRegistry();
+    const directoryByKey = new Map(
+      refreshableDirectories.map((directory) => [directory.key, directory]),
+    );
+    for await (const entry of registry.readDirectoryStatusEntries(refreshableDirectories, {
+      userAction: force, caller: "directory-status-ipc",
+    })) {
+      const directory = directoryByKey.get(entry.directoryKey);
+      const fetchedAt = Date.now();
+      await this.writeDirectoryGitStatusEntry({
+        directory,
+        directoryKey: entry.directoryKey,
+        fetchedAt,
+        gitStatus: entry.gitStatus,
+      });
+    }
+  }
+
+  async writeDirectoryGitStatusEntry(params: {
+    directory?: DirectoryGitRefreshTarget;
+    directoryKey: string;
+    fetchedAt: number;
+    gitStatus?: NavigationDirectoryGitStatus;
+  }): Promise<void> {
+    const current = this.directoryGitStatusByKey.get(params.directoryKey);
+    const directoryPath = params.directory?.path ?? current?.directoryPath;
+    const directoryUpdatedAt =
+      params.directory?.latestUpdatedAt ?? current?.directoryUpdatedAt;
+    const cacheEntry: DirectoryGitStatusCacheEntry = {
+      directoryKey: params.directoryKey,
+      ...(directoryPath ? { directoryPath } : {}),
+      ...(directoryUpdatedAt !== undefined ? { directoryUpdatedAt } : {}),
+      fetchedAt: params.fetchedAt,
+      ...(params.gitStatus ? { gitStatus: params.gitStatus } : {}),
+    };
+    this.directoryGitStatusByKey.set(params.directoryKey, cacheEntry);
+    await this.getOverlayStore().writeDirectoryGitStatusCacheEntry(cacheEntry);
+    if (isDeepStrictEqual(current?.gitStatus ?? null, params.gitStatus ?? null)) return;
+    const notification: NavigationDirectoryGitStatusUpdatedNotification = {
+      method: "navigation/directoryGitStatus/updated",
+      params: {
+        directoryKey: params.directoryKey,
+        gitStatus: params.gitStatus ?? null,
+        fetchedAt: params.fetchedAt,
+      },
+    };
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification,
+    } as unknown as AgentEvent);
+  }
+
+  /**
+   * The registry owns the cache both refresh lanes read. This window's lane
+   * used to keep a second copy, loaded exactly once and never re-read, so a
+   * registry-lane probe landing after startup was invisible here: the stale
+   * pre-stamp from `applyCachedWorktreeWorkingState` satisfied the registry's
+   * own `if (thread.gitWorkingState)` short-circuit and the newer value was
+   * dropped.
+   */
+  private async loadThreadGitWorkingStateCache(): Promise<void> {
+    await getDesktopBackendRegistry().loadThreadGitWorkingStateCache();
+  }
+
+  /**
+   * Schedule focused, user-triggered, and event-triggered probes through the
+   * registry's shared per-worktree owner. Automatic and focused probes cannot
+   * race, and one fresh focused follow-up queues behind an older fleet probe.
+   */
+  private startWorktreeWorkingStateRefresh(params: {
+    worktreePaths: string[];
+    force?: boolean;
+    userAction?: boolean;
+  }): number {
+    const worktreePaths =
+      this.selectWorktreeWorkingStateRefreshCandidates(params);
+    if (worktreePaths.length === 0) {
+      return 0;
+    }
+
+    const registry = getDesktopBackendRegistry();
+    let scheduled = 0;
+    for (const worktreePath of worktreePaths) {
+      if (registry.scheduleWorktreeGitWorkingStateRefresh({
+        worktreePath,
+        ...(params.userAction ? { userAction: true } : {}),
+        acceptedPushedCommitShas:
+          this.getPublishedPrCommitShasForWorktree(worktreePath),
+      })) {
+        scheduled += 1;
+      }
+    }
+    return scheduled;
+  }
+
+  async refreshThreadGitWorkingState(
+    request: RefreshThreadGitWorkingStateRequest,
+  ): Promise<RefreshThreadGitWorkingStateResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      return await this.refreshRemoteThreadGitWorkingState(
+        request,
+        request.federationTarget,
+      );
+    }
+    await getDesktopBackendRegistry().refreshThreadDirectoryRelationship(request);
+    const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
+    const worktreePath = this.worktreePathByThreadKey.get(threadKey);
+    if (!worktreePath) {
+      return { scheduled: false };
+    }
+
+    await this.loadThreadGitWorkingStateCache();
+    const force = request.trigger === "user";
+    return {
+      scheduled: this.startWorktreeWorkingStateRefresh({
+        worktreePaths: [worktreePath],
+        force,
+        userAction: request.trigger === "user",
+      }) > 0,
+    };
+  }
+
+  /**
+   * The owner's Git info store decides whether a request probes: its cache,
+   * focused-refresh coalescing, and user-refresh budget all live there. The
+   * viewer learns the result from the owner's forwarded
+   * `navigation/threadGitWorkingState/updated`, which fires only on change.
+   */
+  private async refreshRemoteThreadGitWorkingState(
+    request: RefreshThreadGitWorkingStateRequest,
+    federationTarget: FederationRemoteTarget,
+  ): Promise<RefreshThreadGitWorkingStateResponse> {
+    const federationRuntime = getDesktopFederationRuntime();
+    // Capabilities can survive a disconnect in remembered peer metadata.
+    // Hover and scheduled refreshes stay silent until the owner reconnects.
+    const connected = federationRuntime.connectedPeerTargets().some(
+      (peer) => peer.target.instanceId === federationTarget.instanceId,
+    );
+    if (
+      !connected
+      || !federationRuntime.remoteTargetSupportsCapability(
+        federationTarget,
+        "thread_navigation",
+      )
+    ) {
+      return { scheduled: false };
+    }
+    try {
+      return await federationRuntime
+        .remoteBackend(federationTarget)
+        .refreshThreadGitWorkingState({
+          backend: request.backend,
+          threadId: request.threadId,
+          trigger: request.trigger,
+        });
+    } catch (error) {
+      // The route can disappear after the connected-peer check, and an owner
+      // from before this method cannot take it.
+      if (
+        isFederationPeerUnavailableError(error)
+        || isFederationMethodNotFoundError(error)
+      ) {
+        return { scheduled: false };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Focused and user-triggered lanes name one worktree and want it now. The
+   * registry owns automatic fleet selection and coalescing.
+   */
+  private selectWorktreeWorkingStateRefreshCandidates(params: {
+    worktreePaths: string[];
+    force?: boolean;
+  }): string[] {
+    return selectStaleWorktreeWorkingStatePaths({
+      cache: getDesktopBackendRegistry().getThreadGitWorkingStateCache(),
+      ...(params.force ? { force: true } : {}),
+      worktreePaths: params.worktreePaths,
+    });
+  }
+
+  /**
+   * React to turn/command-completion events by refreshing the affected
+   * thread's working-state chips, so a commit/edit made by the agent updates
+   * the dirty/unpushed chips without waiting for the next snapshot re-fetch.
+   * Filters out our own published notifications (and the directory-status
+   * sibling) to avoid a publish→listen loop.
+   */
+  handleAgentEventForWorkingState(event: AgentEvent): void {
+    const method = event.notification.method as string;
+    if (
+      method !== "turn/completed" &&
+      method !== "turn/failed" &&
+      method !== "turn/cancelled" &&
+      method !== "item/completed" &&
+      method !== "thread/branch/updated"
+    ) {
+      return;
+    }
+
+    const params = event.notification.params as {
+      branch?: string;
+      threadId?: string;
+      item?: { command?: string };
+    };
+    const threadId = params.threadId?.trim();
+    if (!threadId) {
+      return;
+    }
+
+    // A command item only matters here when it mutated git state; a turn
+    // ending or expected-branch adoption always warrants a re-probe.
+    if (method === "item/completed") {
+      const command = params.item?.command;
+      if (!command || !commandLooksLikeGitMutation(command)) {
+        return;
+      }
+    }
+
+    const threadKey = buildThreadIdentityKey(event.backend, threadId);
+    if (method === "thread/branch/updated") {
+      const branch = params.branch?.trim();
+      const existingContexts = this.prRefreshContextByThreadKey.get(threadKey);
+      if (branch && existingContexts) {
+        this.prRefreshContextByThreadKey.set(
+          threadKey,
+          existingContexts.map((context) =>
+            context.branchScoped ? context : { ...context, branch },
+          ),
+        );
+      }
+    }
+
+    const worktreePath = this.worktreePathByThreadKey.get(threadKey);
+    if (worktreePath) {
+      getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
+      void this.loadThreadGitWorkingStateCache().then(() => {
+        this.startWorktreeWorkingStateRefresh({
+          worktreePaths: [worktreePath],
+          force: true,
+        });
+      });
+    }
+
+    if (method === "turn/completed" || method === "thread/branch/updated") {
+      if (method === "turn/completed") {
+        // A finished turn is real activity on this thread even when it is off
+        // screen — thaw its PRs if the poller had iceboxed them.
+        this.prPollingScheduler?.noteThreadInteraction([threadKey]);
+      }
+
+      // Codex can publish turn/completed before its asynchronous branch
+      // adoption finishes. Refresh again from the causally newer branch event
+      // so a PR created on that branch does not wait for thread selection.
+      const prContexts = this.prRefreshContextByThreadKey.get(threadKey);
+      if (prContexts?.length) {
+        for (const prContext of prContexts) {
+          void this.refreshThreadPullRequests({
+            ...prContext,
+            provider: "github.com",
+            trigger: "post-turn",
+          }).catch((error) => {
+            appServerLog.warn("turn-boundary PR refresh failed", {
+              method,
+              threadId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+      }
+    }
+  }
+
+  handleAgentEventForPrAttachments(event: AgentEvent): void {
+    if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
+    if (event.notification.method === "thread/archived") {
+      this.setThreadPrAttachment(buildThreadIdentityKey(event.backend, event.notification.params.threadId), undefined);
+    }
+    if (["navigation/providerThreads/refreshed", "thread/started", "thread/archived", "thread/unarchived",
+      "navigation/threadDirectories/updated", "navigation/directory/removed", "thread/parent/set", "thread/parent/cleared",
+      "thread/branch/updated"].includes(event.notification.method)) {
+      if (this.ownerNavigationActive) void this.refreshOwnerNavigationMetadata().catch((error) => {
+        appServerLog.warn("failed to refresh owner navigation metadata", { error: String(error) });
+      });
+      return;
+    }
+    if (event.notification.method !== "thread/pullRequests/updated") return;
+    this.ownerNavigationMetadataVersion += 1;
+    const params = event.notification.params as {
+      threadId: string;
+      prs: PrSummary[];
+    };
+    void this.rememberThreadPrAttachmentUpdate({
+      backend: event.backend,
+      threadId: params.threadId,
+      prs: params.prs,
+    }).catch((error) => {
+      appServerLog.warn("failed to reconcile PR automation candidates", {
+        backend: event.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  async startOwnerNavigation(): Promise<void> {
+    this.ownerNavigationActive = true;
+    // Continue After waits while a quiet restart's continuations go first.
+    this.unsubscribeRestartGate ??= getDesktopBackendRegistry().onRestartGateChanged?.((closed) => {
+      if (!closed && this.ownerNavigationActive) {
+        void this.reconcileThreadDependencies().catch((error: unknown) => {
+          appServerLog.warn("dependency reconcile after restart gate failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    });
+    // Gates read Forge Automation from memory; load it before polling starts.
+    await this.hydrateProjectForgeAutomation();
+    this.syncPrPollingSchedulerState();
+    const state = getDesktopBackendRegistry().getStartupProviderRefreshStatus()?.state;
+    if (state === "ready" || state === "degraded") {
+      await this.refreshOwnerNavigationMetadata();
+    }
+  }
+
+  private async hydrateProjectForgeAutomation(): Promise<void> {
+    const index = getProjectForgeAutomationIndex();
+    if (index.isHydrated()) return;
+    try {
+      index.hydrate(await this.getOverlayStore().readAllDirectoryOverlays());
+    } catch (error) {
+      appServerLog.warn("failed to load project Forge Automation", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private refreshOwnerNavigationMetadata(): Promise<void> {
+    this.ownerNavigationMetadataVersion += 1;
+    if (this.ownerNavigationMetadataRead) {
+      return this.ownerNavigationMetadataAbort?.signal.aborted
+        ? this.ownerNavigationMetadataRead.then(() => this.ownerNavigationActive ? this.refreshOwnerNavigationMetadata() : undefined)
+        : this.ownerNavigationMetadataRead;
+    }
+    const abort = new AbortController();
+    this.ownerNavigationMetadataAbort = abort;
+    const read = (async () => {
+      while (this.ownerNavigationActive) {
+        const version = this.ownerNavigationMetadataVersion;
+        const isCurrent = () => this.ownerNavigationActive && this.ownerNavigationMetadataVersion === version;
+        const index = await loadLocalNavigationQueryIndex({ backend: "all", callerReason: "owner-navigation-metadata", signal: abort.signal });
+        if (!this.ownerNavigationActive) return;
+        if (!isCurrent()) continue;
+        if (index.coverage?.state === "checking") return;
+        if (!index.coverage || index.coverage.state === "complete") {
+          this.getOverlayStore().initializeNavigationUnreadBaseline(index.threads);
+        }
+        await Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()]);
+        if (!isCurrent()) continue;
+        this.seedPrStatusRegistryFromThreads(index.threads);
+        const canonical = this.applyCanonicalPrStatuses(index.threads);
+        const complete = !index.coverage || index.coverage.state === "complete";
+        await this.rememberThreadPrAttachments(canonical.threads, { replace: complete, isCurrent });
+        if (!isCurrent()) continue;
+        const ownerThreads = this.applyPrimaryGitRepositories(canonical.threads);
+        this.rememberPublishedPrimaryGitRepositories(ownerThreads, { replace: complete });
+        await Promise.all([this.loadDirectoryGitStatusCache(), this.loadThreadGitWorkingStateCache()]);
+        if (!isCurrent()) continue;
+        for (const directory of index.directories) this.lastDirectoriesByKey.set(directory.key, directory);
+        this.startDirectoryGitStatusRefresh({ automatic: true, directories: index.directories, requestKey: "owner-navigation-metadata" });
+        this.rememberThreadWorktreePaths(ownerThreads);
+        this.rememberThreadPrRefreshContexts(ownerThreads);
+        const detachedPrs = await this.readDetachedPrsByThreadKey(ownerThreads);
+        if (!isCurrent()) continue;
+        this.rememberPublishedPrCommitShas(ownerThreads, detachedPrs);
+        this.syncPrPollingSchedulerState();
+        void getDesktopBackendRegistry().refreshThreadGitWorkingStates(ownerThreads).catch((error: unknown) => {
+          appServerLog.warn("owner worktree status refresh failed", { error: String(error) });
+        });
+        if (complete) {
+          const live = new Set(canonical.threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
+          for (const map of [this.prRefreshContextByThreadKey, this.worktreePathByThreadKey, this.publishedPrCommitsByThread]) {
+            for (const key of map.keys()) if (!live.has(key)) map.delete(key);
+          }
+          const liveDirectories = new Set(index.directories.map((directory) => directory.key));
+          for (const key of this.lastDirectoriesByKey.keys()) if (!liveDirectories.has(key)) this.lastDirectoriesByKey.delete(key);
+        }
+        await this.getPrAutoDispatchCoordinator().resume();
+        if (isCurrent()) return;
+      }
+    })().catch((error: unknown) => { if (!abort.signal.aborted) throw error; }).finally(() => {
+      if (this.ownerNavigationMetadataRead === read) this.ownerNavigationMetadataRead = undefined;
+    });
+    this.ownerNavigationMetadataRead = read;
+    return read;
+  }
+
+  async markThreadSeen(
+    request: MarkThreadSeenRequest,
+  ): Promise<MarkThreadSeenResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .markThreadSeen(remoteRequest);
+    }
+    const backend = request.backend ?? "codex";
+    const response = await markLocalThreadSeen({
+      backend,
+      seenAt: request.seenAt,
+      seenUpdatedAt: request.seenUpdatedAt,
+      threadId: request.threadId,
+    });
+
+    logDebug("markThreadSeen", {
+      backend,
+      threadId: request.threadId,
+      seenUpdatedAt: request.seenUpdatedAt ?? null,
+    });
+    return response;
+  }
+
+  async refreshThreadPullRequests(
+    request: RefreshThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const federationTarget = request.federationTarget;
+      const federationRuntime = getDesktopFederationRuntime();
+      const connectedPeer = federationRuntime.connectedPeerTargets().find(
+        (peer) => peer.target.instanceId === federationTarget.instanceId,
+      );
+      const unavailableResponse = (): RefreshThreadPullRequestsResponse => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        provider: request.provider ?? DEFAULT_PULL_REQUEST_PROVIDER,
+        ghAvailable: false,
+        prs: [],
+        refreshStarted: false,
+        skippedReason: "remote_peer_unavailable",
+      });
+      // Capabilities can survive a disconnect in remembered peer metadata.
+      // Background refreshes should stay silent until the owner reconnects.
+      if (!connectedPeer) {
+        return unavailableResponse();
+      }
+      const instanceLabel = connectedPeer.label;
+      const skippedResponse = (
+        reason:
+          | "missing-thread-navigation-capability"
+          | "remote-method-not-found",
+      ): RefreshThreadPullRequestsResponse => {
+        const backend = request.backend ?? "codex";
+        appServerLog.info(
+          `thread PR refresh skipped: attached instance "${instanceLabel}" does not support remote PR refresh`,
+          {
+            backend,
+            instanceId: federationTarget.instanceId,
+            reason,
+            threadId: request.threadId,
+          },
+        );
+        return {
+          backend,
+          threadId: request.threadId,
+          provider: request.provider ?? DEFAULT_PULL_REQUEST_PROVIDER,
+          ghAvailable: false,
+          prs: [],
+          refreshStarted: false,
+          skippedReason: "remote_refresh_unsupported",
+        };
+      };
+      if (!federationRuntime.remoteTargetSupportsCapability(
+        federationTarget,
+        "thread_navigation",
+      )) {
+        return skippedResponse("missing-thread-navigation-capability");
+      }
+      try {
+        return await federationRuntime
+          .remoteBackend(federationTarget)
+          .refreshThreadPullRequests({
+            backend: request.backend,
+            threadId: request.threadId,
+            ...(request.provider ? { provider: request.provider } : {}),
+            ...(request.trigger ? { trigger: request.trigger } : {}),
+          });
+      } catch (error) {
+        // The route can disappear after the connected-peer check above.
+        if (isFederationPeerUnavailableError(error)) {
+          return unavailableResponse();
+        }
+        if (isFederationMethodNotFoundError(error)) {
+          return skippedResponse("remote-method-not-found");
+        }
+        throw error;
+      }
+    }
+    const backend = request.backend ?? "codex";
+    const requestKey = getThreadPullRequestsRequestKey(backend, request);
+    const pending = this.pendingThreadPullRequestRefreshes.get(requestKey);
+    if (pending) {
+      if (request.trigger === "user") {
+        logDebug("threadPullRequestsRefresh:coalesced-request", {
+          backend,
+          branch: request.branch.trim(),
+          directoryPathCount: request.directoryPaths.length,
+          requestKey,
+          threadId: request.threadId,
+          trigger: request.trigger,
+        });
+      }
+      return await pending;
+    }
+
+    const refreshPromise = this.refreshThreadPullRequestsUncached(
+      backend,
+      request,
+      requestKey,
+    );
+    this.pendingThreadPullRequestRefreshes.set(requestKey, refreshPromise);
+    try {
+      return await refreshPromise;
+    } finally {
+      this.pendingThreadPullRequestRefreshes.delete(requestKey);
+    }
+  }
+
+  async refreshOwnedThreadPullRequests(
+    request: RefreshOwnedThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse> {
+    const backend = request.backend ?? "codex";
+    const threadKey = buildThreadIdentityKey(backend, request.threadId);
+    const [firstContext, ...remainingContexts] =
+      this.prRefreshContextByThreadKey.get(threadKey) ?? [];
+    if (!firstContext) {
+      throw new Error(
+        `No owner PR refresh context is available for ${threadKey}.`,
+      );
+    }
+    const refreshContext = async (
+      context: ThreadPrRefreshContext,
+    ): Promise<RefreshThreadPullRequestsResponse> => {
+      const { branchScoped: _branchScoped, ...lookupRequest } = context;
+      return await this.refreshThreadPullRequests({
+        ...lookupRequest,
+        ...(request.provider ? { provider: request.provider } : {}),
+        ...(request.trigger ? { trigger: request.trigger } : {}),
+      });
+    };
+
+    let response = await refreshContext(firstContext);
+    for (const context of remainingContexts) {
+      response = await refreshContext(context);
+    }
+    return response;
+  }
+
+  private forgeCiClient?: ForgeCiClient;
+  private githubPrToolClient?: GithubPrToolClient;
+  private gitlabPrToolClient?: GitlabPrToolClient;
+
+  private getForgeCiClient(): ForgeCiClient {
+    this.forgeCiClient ??= new ForgeCiClient({
+      gitlab: this.getPrFetcher().gitlab,
+      enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
+      takeToken: () => this.takePrPollingToken("Agent CI read"),
+    });
+    return this.forgeCiClient;
+  }
+
+  /** The repositories, PRs and branch a forge tool may act on for one local thread. */
+  private async resolveForgeThreadScope(backend: string, threadId: string) {
+    if (!isAppServerBackendKind(backend)) throw new ForgeReadError("invalid_arguments", "Unknown PwrAgent backend.");
+    const active = await this.listThreads({ backend });
+    const thread = active.threads.find((t) => t.id === threadId)
+      ?? (await this.listThreads({ backend, archived: true })).threads.find((t) => t.id === threadId);
+    if (!thread) throw new ForgeReadError("thread_not_found", "Thread is not owned by this instance.");
+    const overlay = await this.getOverlayStore().getThreadOverlayState({ backend, threadId });
+    const directories = resolveThreadPullRequestDirectoryPaths({ linkedDirectories: [...(thread.linkedDirectories ?? []), ...(overlay?.extraLinkedDirectories ?? [])] });
+    if (directories.length > 20) throw new ForgeReadError("scope_too_large", "Forge reads support up to 20 linked directories per thread.");
+    const remotes = (await Promise.all(directories.map((cwd) => readForgeRepositoryRemotes(cwd)))).flat();
+    return { backend, thread, overlay, directories, remotes, attached: overlay?.prs ?? [], branch: thread.observedGitBranch ?? thread.gitBranch };
+  }
+
+  /** The calling thread's repositories, PRs, branch and directories. */
+  private async forgePrToolScope(context: AgentToolCallContext): Promise<ForgePrToolScope> {
+    const scope = await this.resolveForgeThreadScope(context.backend, context.threadId);
+    return {
+      remotes: scope.remotes, attached: scope.attached, branch: scope.branch, directories: scope.directories,
+      privateRoots: getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
+    };
+  }
+
+  private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {
+    this.githubPrToolClient ??= new GithubPrToolClient({ ci: this.getForgeCiClient() });
+    this.gitlabPrToolClient ??= new GitlabPrToolClient({ gitlab: this.getPrFetcher().gitlab });
+    return new ForgePrToolService({
+      enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
+      clients: { github: this.githubPrToolClient, gitlab: this.gitlabPrToolClient },
+      defaultMergeMethod: () => getDesktopSettingsService().resolveDefaultMergeMethod(),
+      assertCanMerge: (repository, number) => {
+        const marker = repository.provider === "gitlab" ? "-/merge_requests" : "pull";
+        try {
+          assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+            backend: context?.backend ?? "", threadId: context?.threadId ?? "",
+            pullRequest: `https://${repository.host}/${repository.owner}/${repository.repo}/${marker}/${number}`,
+          });
+        } catch (error) {
+          throw new ForgeReadError("merge_held", error instanceof Error ? error.message : String(error));
+        }
+      },
+    });
+  }
+
+  /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
+  async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreparedCall> {
+    return await this.forgePrToolService().prepare(operation, args, await this.forgePrToolScope(context), context.signal);
+  }
+
+  /** Pull request and issue tools act only in the calling thread's own repositories. */
+  async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
+    const result = await this.forgePrToolService(context).execute(operation, args, await this.forgePrToolScope(context), context.signal);
+    if (operation === "rerun_failed_ci_jobs") {
+      // The re-run already happened; failing to remember it must not fail the call.
+      await this.recordCiRerun(result, context).catch((error: unknown) => {
+        appServerLog.warn("failed to record a CI re-run", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    return { ...(result as Record<string, unknown>), backend: context.backend, threadId: context.threadId };
+  }
+
+  /**
+   * A re-run keeps the head, so the cached failure it replaces still looks
+   * current. Record it for the calling thread's open PRs at that head, then
+   * refresh those PRs once through the shared poll budget.
+   */
+  private async recordCiRerun(result: unknown, context: AgentToolCallContext): Promise<void> {
+    const rerun = result as {
+      requested?: unknown;
+      runId?: unknown;
+      runAttempt?: unknown;
+      headSha?: unknown;
+      repository?: { host?: unknown; owner?: unknown; repo?: unknown };
+    } | undefined;
+    if (rerun?.requested !== true || typeof rerun.runId !== "number") return;
+    const repository = rerun.repository;
+    const fold = (value: unknown) => typeof value === "string" ? value.toLowerCase() : undefined;
+    const headSha = typeof rerun.headSha === "string" && rerun.headSha.trim()
+      ? rerun.headSha.trim()
+      : undefined;
+    const requestedAt = Date.now();
+    // Read the overlay, as the watch tool does: a thread no navigation
+    // refresh has listed yet has no in-memory attachment.
+    const { prs: attachedPrs } = await this.readPrimaryAttachedPrs({
+      backend: context.backend,
+      threadId: context.threadId,
+    });
+    const prKeys = new Set<string>();
+    for (const attached of attachedPrs) {
+      const prKey = getPrStatusKey(attached);
+      const pr = this.prStatusRegistry.get(prKey)?.pr ?? attached;
+      if (isTerminalPullRequest(pr)) continue;
+      const prRepository = repositoryFromPr(pr.url);
+      if (
+        !prRepository
+        || fold(prRepository.host) !== fold(repository?.host)
+        || fold(prRepository.owner) !== fold(repository?.owner)
+        || fold(prRepository.repo) !== fold(repository?.repo)
+      ) {
+        continue;
+      }
+      if (headSha && pr.headSha && pr.headSha.trim() !== headSha) continue;
+      prKeys.add(prKey);
+    }
+    for (const [prKey, entry] of this.ciRerunsByPrKey) {
+      if (requestedAt - entry.requestedAt > RERUN_RECORD_MAX_AGE_MS) this.ciRerunsByPrKey.delete(prKey);
+    }
+    for (const prKey of prKeys) {
+      this.ciRerunsByPrKey.set(prKey, {
+        ...(headSha ? { headSha } : {}),
+        runId: rerun.runId,
+        ...(typeof rerun.runAttempt === "number" ? { runAttempt: rerun.runAttempt } : {}),
+        requestedAt,
+      });
+    }
+    this.requestPriorityPrRefresh(prKeys);
+  }
+
+  /** Poll these PRs on the next pass whatever their cadence, within the shared token budget. */
+  private requestPriorityPrRefresh(prKeys: ReadonlySet<string>): void {
+    const scheduler = this.prPollingScheduler;
+    if (!scheduler || prKeys.size === 0 || !this.backgroundPrPollingEnabled) return;
+    const targets = this.collectPrPollTargets()
+      .filter((target) => prKeys.has(target.prKey))
+      .map(({ fetchedAt: _fetchedAt, ...target }) => target);
+    if (targets.length === 0) return;
+    for (const target of targets) scheduler.forgetTarget(target.prKey);
+    void scheduler.tick(() => targets);
+  }
+
+  async readForgeForTool(operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext): Promise<unknown> {
+    const { backend, thread, overlay, directories, remotes, attached } = await this.resolveForgeThreadScope(args.backend ?? context.backend, args.threadId ?? context.threadId);
+    const threadId = thread.id;
+    // Snapshot reads must not call rememberPrStatuses: it publishes transitions.
+    const observations = new Map<string, { pr: PrSummary; fetchedAt: number }>();
+    const persisted = this.prStatusRegistryLoaded ? [] : Object.values(await this.getOverlayStore().readPrStatusCache());
+    for (const entry of [...attached.map((pr) => ({ pr, fetchedAt: overlay?.prsFetchedAt ?? 0 })), ...persisted, ...this.prStatusRegistry.values()]) {
+      const key = getPrStatusKey(entry.pr);
+      if (!observations.has(key) || observations.get(key)!.fetchedAt < entry.fetchedAt) observations.set(key, { pr: entry.pr, fetchedAt: entry.fetchedAt });
+    }
+    const enabled = (provider: "github" | "gitlab") => getDesktopSettingsService().isForgeEnabled(provider);
+    const service = new ForgeReadService({
+      enabled, ci: this.getForgeCiClient(),
+      refresh: async (request, repositories) => {
+        context.signal?.throwIfAborted();
+        const urls = request.url ? [request.url] : attached.filter((pr) => {
+          const r = repositoryFromPr(pr.url);
+          return r && repositories.some((selected) => selected.provider === r.provider && selected.host === r.host && selected.owner === r.owner && selected.repo === r.repo)
+            && (!request.branch || pr.headRefName === request.branch);
+        }).map((pr) => pr.url);
+        if (urls.length > 20) throw new ForgeReadError("scope_too_large", "Select a PR/MR URL or branch to refresh at most 20 requests.");
+        const fetcher = this.getPrFetcher();
+        const availability = await fetcher.getProviderAvailability(directories, urls);
+        if (repositories.some((r) => !availability.some((a) => a.provider === r.host && a.available))) throw new ForgeReadError("unavailable", "A selected forge provider is unavailable. Check its CLI installation and host login in Settings → Git.");
+        let failed = false;
+        const results: PrSummary[] = [];
+        if (urls.length) {
+          for (const url of urls) {
+            context.signal?.throwIfAborted();
+            if (!this.takePrPollingToken("Agent explicit forge refresh")) throw new ForgeReadError("rate_limited", "The shared PR refresh budget is exhausted.");
+            const pr = await fetcher.fetchPullRequestByUrl({ cwd: directories[0] ?? os.homedir(), url, onProviderFailure: () => { failed = true; } });
+            this.learnPullRequestRepository(url, pr);
+            if (!pr) failed = true;
+            else results.push(pr);
+          }
+        } else {
+          for (const cwd of directories) {
+            context.signal?.throwIfAborted();
+            if (!this.takePrPollingToken("Agent branch forge refresh")) throw new ForgeReadError("rate_limited", "The shared PR refresh budget is exhausted.");
+            results.push(...await fetcher.fetchAllPullRequestsForBranch({ allowPrimed: false, providers: [...new Set(repositories.map((r) => r.provider))], cwd, branch: request.branch ?? thread.observedGitBranch ?? thread.gitBranch ?? "HEAD", onProviderFailure: () => { failed = true; } }));
+          }
+        }
+        if (failed) throw new ForgeReadError("provider_error", "PR/MR refresh failed or was unavailable. Check the host's CLI login, read permissions and provider settings. Cached observations were not changed.");
+        return results;
+      },
+    });
+    const result = await service.execute(operation, args, {
+      remotes,
+      attached,
+      observations: [...observations.values()],
+      branch: thread.observedGitBranch ?? thread.gitBranch,
+      artifactDirectory: threadArtifactDirectory({ backend, threadId }),
+    }, context.signal);
+    const prAutomation = await this.getThreadPullRequestAutomationStatus({ backend, threadId }, { backend: context.backend, threadId: context.threadId });
+    return { ...(result as Record<string, unknown>), backend, threadId, prAutomation };
+  }
+
+  async checkThreadPullRequestStatusForTool(
+    args: CheckThreadPullRequestStatusToolArgs,
+    context?: PwrAgentThreadInspectionContext,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+
+    const activeThreads = await this.listThreads({ backend: args.backend });
+    let thread = activeThreads.threads.find((candidate) => candidate.id === threadId);
+    if (!thread) {
+      const archivedThreads = await this.listThreads({
+        backend: args.backend,
+        archived: true,
+      });
+      thread = archivedThreads.threads.find((candidate) => candidate.id === threadId);
+    }
+    if (!thread) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: `Thread ${args.backend}:${threadId} was not found.`,
+        },
+      };
+    }
+
+    const overlay = await this.getOverlayStore().getThreadOverlayState({
+      backend: args.backend,
+      threadId,
+    });
+    const branch = args.branch?.trim()
+      || thread.observedGitBranch?.trim()
+      || thread.gitBranch?.trim()
+      || "HEAD";
+    const directoryPaths = normalizePrLookupDirectoryPaths(
+      args.directoryPaths?.length
+        ? args.directoryPaths
+        : resolveThreadPullRequestDirectoryPaths({
+            linkedDirectories: [
+              ...(thread.linkedDirectories ?? []),
+              ...(overlay?.extraLinkedDirectories ?? []),
+            ],
+          }),
+    );
+    const lookupDirectoryPaths = directoryPaths.length > 0
+      ? directoryPaths
+      : (overlay?.prs?.length ? [os.homedir()] : []);
+    const requestedAt = Date.now();
+    const response = await this.refreshThreadPullRequests({
+      backend: args.backend,
+      threadId,
+      provider: args.provider,
+      trigger: "user",
+      branch,
+      directoryPaths: lookupDirectoryPaths,
+      includeStatusFreshness: true,
+    });
+    const prAutomation = await this.getThreadPullRequestAutomationStatus(
+      {
+        backend: args.backend,
+        threadId,
+      },
+      context,
+    );
+
+    return {
+      ok: true,
+      data: {
+        pullRequestStatus: {
+          ...response,
+          requestedAt,
+          branch,
+          directoryPaths: lookupDirectoryPaths,
+          prAutomation,
+        },
+      },
+    };
+  }
+
+  async watchThreadPullRequestForTool(
+    args: WatchThreadPullRequestToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    const action = args.action ?? "watch";
+    if (action === "list" || action === "cancel") {
+      return await this.listOrCancelThreadPrWatchesForTool({ ...args, action });
+    }
+    if (action !== "watch") {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "action must be watch, list, or cancel.",
+        },
+      };
+    }
+    const armed = await this.armThreadPrWatch({ ...args, createdBy: "agent" });
+    return armed.ok
+      ? { ok: true, data: { pullRequestWatch: armed.result } }
+      : { ok: false, error: armed.error };
+  }
+
+  /** The agent's own list and cancel, scoped to one thread's waiting watches. */
+  private async listOrCancelThreadPrWatchesForTool(
+    args: WatchThreadPullRequestToolArgs & { action: "list" | "cancel" },
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    const invalid = (message: string): PwrAgentThreadInspectionResponse => ({
+      ok: false,
+      error: { code: "invalid_arguments", message },
+    });
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
+      return invalid("backend must be a known PwrAgent backend.");
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) return invalid("threadId is required.");
+    const backend = args.backend;
+    const store = this.getOverlayStore();
+    const waiting = await store.listActiveThreadPrStatusWatches({ backend, threadId });
+    const respond = (result: ThreadPullRequestWatchListResult): PwrAgentThreadInspectionResponse => ({
+      ok: true,
+      data: { pullRequestWatches: result },
+    });
+    if (args.action === "list") {
+      const requestedUrl = normalizePrWatchUrl(args.url);
+      const watches = requestedUrl
+        ? waiting.filter((watch) => normalizePrWatchUrl(watch.prUrl) === requestedUrl)
+        : waiting;
+      return respond({ action: "list", watches, message: describePrWatchList(watches) });
+    }
+    const watchId = args.watchId?.trim();
+    if (!watchId) {
+      return invalid("watchId is required to cancel. Call with action list to find it.");
+    }
+    const target = waiting.find((watch) => watch.watchId === watchId);
+    const cancelled = target
+      ? await store.cancelThreadPrStatusWatch({
+          backend,
+          threadId,
+          watchId,
+          now: Date.now(),
+          endedReason: "cancelled_by_agent",
+        })
+      : undefined;
+    if (!target || !cancelled) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: target
+            ? "That watch is waking the thread now, so it can no longer be cancelled."
+            : "No waiting watch on this thread has that watchId. Call with action list to see them.",
+        },
+      };
+    }
+    await this.publishPrWatchesUpdated([cancelled]);
+    const watches = waiting.filter((watch) => watch.watchId !== watchId);
+    return respond({
+      action: "cancel",
+      watches,
+      cancelled: target,
+      message: describePrWatchCancel(target, watches),
+    });
+  }
+
+  /**
+   * Arms the watches `watch_thread_pull_request` and the operator's Watch CI
+   * create. Both run this, so a watch means the same thing whoever asked.
+   */
+  private async armThreadPrWatch(
+    args: WatchThreadPullRequestToolArgs & { createdBy: "agent" | "operator" },
+  ): Promise<
+    | { ok: true; result: WatchThreadPullRequestResult }
+    | {
+        ok: false;
+        error: {
+          code: "invalid_arguments" | "not_found" | "forbidden" | typeof PROJECT_PAUSED_ERROR_CODE;
+          message: string;
+        };
+      }
+  > {
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+    if (!this.backgroundPrPollingEnabled) {
+      return {
+        ok: false,
+        error: {
+          code: "forbidden",
+          message:
+            "Background pull request polling is off. Enable it before asking PwrAgent to watch a PR.",
+        },
+      };
+    }
+    const project = this.resolveThreadForgeProject({ backend: args.backend, threadId });
+    if (project && !projectAllowsPrWatches(project.automation)) {
+      const pullRequest = args.url?.trim().match(/\/(?:pull|merge_requests)\/(\d+)/)?.[1];
+      return {
+        ok: false,
+        error: {
+          code: project.automation.paused ? PROJECT_PAUSED_ERROR_CODE : "forbidden",
+          message: buildProjectPrWatchRefusal({
+            projectLabel: project.label,
+            ...(pullRequest ? { pullRequest: `PR #${pullRequest}` } : {}),
+            paused: project.automation.paused,
+          }),
+        },
+      };
+    }
+    const requestedEvents = normalizePrStatusWatchEvents(args.notifyOn);
+    if (!requestedEvents) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "notifyOn must contain one or more of success, failure, merged, and closed.",
+        },
+      };
+    }
+
+    const { overlay, prs: primaryPrs } = await this.readPrimaryAttachedPrs({
+      backend: args.backend,
+      threadId,
+    });
+    let attachedPrs = primaryPrs;
+    const matchesUrl = (url: string | undefined) => {
+      const requested = normalizePrWatchUrl(url);
+      return requested
+        ? attachedPrs.filter((pr) => normalizePrWatchUrl(pr.url) === requested)
+        : attachedPrs;
+    };
+    const requestedUrl = normalizePrWatchUrl(args.url);
+    let matches = matchesUrl(args.url && this.prRepositoryAliases.canonicalizeUrl(args.url.trim()));
+    if (requestedUrl && matches.length === 0) {
+      // A renamed repository's old URL: ask the forge which PR it names.
+      const cwd = attachedPrs[0]?.linkedDirectoryPaths?.[0];
+      const resolved = await this.resolvePullRequestReference({
+        url: args.url!.trim(),
+        ...(cwd ? { cwd } : {}),
+      });
+      if (resolved) {
+        // The answer can teach a rename, which changes both the rows and
+        // which of them belong to the primary repository.
+        attachedPrs = this.primaryAttachedPrsForThread({
+          backend: args.backend,
+          threadId,
+          prs: this.canonicalizePrs(overlay?.prs ?? []),
+        });
+        matches = matchesUrl(resolved.url);
+      }
+    }
+    if (matches.length !== 1) {
+      const message = requestedUrl
+        ? "The requested pull request is not attached to this thread's primary workspace."
+        : attachedPrs.length === 0
+          ? "This thread's primary workspace does not have an attached pull request to watch."
+          : "url is required when a thread has more than one attached pull request.";
+      return {
+        ok: false,
+        error: {
+          code: matches.length === 0 ? "not_found" : "invalid_arguments",
+          message,
+        },
+      };
+    }
+
+    const attachedPr = matches[0]!;
+    const prKey = getPrStatusKey(attachedPr);
+    const currentPrEntry = this.prStatusRegistry.get(prKey);
+    const pr = currentPrEntry?.pr ?? attachedPr;
+    const headSha = pr.headSha?.trim();
+    const ciEvents = requestedEvents.filter((event) =>
+      event === "success" || event === "failure"
+    );
+    const terminalEvents = requestedEvents.filter((event) =>
+      event === "merged" || event === "closed"
+    );
+    const prAutomation = await this.getThreadPullRequestAutomationStatus({
+      backend: args.backend,
+      threadId,
+    });
+    const failureCoveredByAutoFix = prAutomation.autoFixActive
+      && ciEvents.includes("failure");
+    if (isTerminalPullRequest(pr)) {
+      // A merged or closed PR has nothing left to watch. Report it now, with
+      // the same merge details a merge/close wake would carry.
+      const terminal = await this.getPrStatusWatchCoordinator()
+        .resolveTerminalDetails(pr);
+      const terminalOutcome = pr.lifecycleState === "merged" ? "merged" : "closed";
+      const currentOutcome = terminalEvents.length > 0 || ciEvents.length === 0
+        ? terminalOutcome
+        : getPrStatusWatchOutcome(pr);
+      return {
+        ok: true,
+        result: {
+          ...(currentOutcome ? { currentOutcome } : {}),
+          ...(terminal ? { terminal } : {}),
+          coveredByAutoFix: failureCoveredByAutoFix ? ["failure"] : [],
+          prAutomation,
+          armed: false,
+          reason: "pr_terminal",
+          message: `No watch was created: PR #${pr.number} is already ${
+            terminalOutcome === "merged" ? "merged" : "closed without merge"
+          }.`,
+        },
+      };
+    }
+    // A terminal PR is answered above without a head; a CI watch needs one.
+    if (!headSha && ciEvents.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "The attached pull request does not have a known head SHA yet. Check its status once, then create the watch.",
+        },
+      };
+    }
+    const createdAt = Date.now();
+    const currentOutcome = getPrStatusWatchOutcome(pr);
+    const observedAt = currentPrEntry?.fetchedAt;
+    const currentOutcomeIsFresh = observedAt !== undefined
+      && createdAt - observedAt <= PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS;
+    // A re-run keeps the head, so neither the head nor the cache's age can
+    // tell its result from the attempt it replaced. A status read before the
+    // re-run settled is the old attempt, fresh or not.
+    const recordedRerun = this.ciRerunsByPrKey.get(prKey);
+    const rerun = recordedRerun && (!recordedRerun.headSha || recordedRerun.headSha === headSha)
+      ? recordedRerun
+      : undefined;
+    const staleAfterRerun = Boolean(
+      rerun && (observedAt ?? 0) <= rerun.requestedAt + RERUN_SETTLE_MS,
+    );
+    // Right after a push the cache can still hold the previous head's final
+    // outcome, fresh or not. A checkout past that head makes it stale: the
+    // watch waits at the cached head with it as the baseline, and the next
+    // poll moves the watch to the pushed head.
+    const pushedHeadSha = currentOutcome && ciEvents.length > 0 && headSha
+      ? await this.readPushedPrHeadSha({
+          backend: args.backend,
+          threadId,
+          pr: attachedPr,
+          headSha,
+          overlay,
+        })
+      : undefined;
+    const baseline: ThreadPullRequestWatchBaseline | undefined = currentOutcome
+      && ciEvents.length > 0
+      && (staleAfterRerun || pushedHeadSha !== undefined || args.waitForNextResult === true)
+      ? {
+          outcome: currentOutcome,
+          observedAt: observedAt ?? createdAt,
+          ...(currentOutcome === "failure" && pr.failedCheckUrl
+            ? { failedCheckUrl: pr.failedCheckUrl }
+            : {}),
+          ...(rerun ? { rerunRequestedAt: rerun.requestedAt } : {}),
+          ...(rerun?.runAttempt !== undefined ? { runAttempt: rerun.runAttempt } : {}),
+        }
+      : undefined;
+    const ciOutcomeAlreadyKnown = Boolean(
+      currentOutcome
+      && ciEvents.includes(currentOutcome)
+      && currentOutcomeIsFresh
+      && !baseline,
+    );
+    // Auto-fix dedupes a repeat failure at the same head, so it will not wake
+    // the thread for a failure that follows a baseline failure there. A
+    // pushed head is a new head, where Auto-fix sees any failure.
+    const coversFailure = (watchBaseline: ThreadPullRequestWatchBaseline | undefined) =>
+      failureCoveredByAutoFix
+      && (pushedHeadSha !== undefined || watchBaseline?.outcome !== "failure");
+    // The re-run's attempt is what this watch waits for while its result is
+    // not known yet. Kept beside the baseline, which clears once checks run.
+    const watchRun = rerun && pushedHeadSha === undefined && (staleAfterRerun || !currentOutcome)
+      ? {
+          ...(rerun.runAttempt !== undefined ? { runAttempt: rerun.runAttempt } : {}),
+          runId: rerun.runId,
+        }
+      : {};
+    const baseWatch = {
+      backend: args.backend,
+      threadId,
+      prKey,
+      prUrl: pr.url,
+      prNumber: pr.number,
+      ...(pr.title ? { prTitle: pr.title } : {}),
+      createdAt,
+      createdBy: args.createdBy,
+    };
+    let watch: ThreadPullRequestWatchSummary | undefined;
+    let watchExisted = false;
+    if (ciEvents.length > 0 && headSha && !ciOutcomeAlreadyKnown) {
+      const registration = await this.getOverlayStore().registerThreadPrStatusWatch({
+        watch: {
+          ...baseWatch,
+          watchId: randomUUID(),
+          headSha,
+          notifyOn: ciEvents,
+          failureHandledByAutoFix: coversFailure(baseline),
+          kind: "checks",
+          ...watchRun,
+          ...(baseline ? { baseline } : {}),
+        },
+        now: createdAt,
+      });
+      watch = registration.watch;
+      watchExisted = registration.existed;
+    }
+    let terminalWatch: ThreadPullRequestWatchSummary | undefined;
+    let terminalWatchExisted = false;
+    if (terminalEvents.length > 0) {
+      // Not bound to a head: pushes and CI results leave it in place until
+      // the PR merges or closes, and it survives restarts in sqlite.
+      const registration = await this.getOverlayStore().registerThreadPrStatusWatch({
+        watch: {
+          ...baseWatch,
+          watchId: randomUUID(),
+          headSha: headSha ?? "",
+          notifyOn: terminalEvents,
+          failureHandledByAutoFix: false,
+          kind: "terminal",
+        },
+        now: createdAt,
+      });
+      terminalWatch = registration.watch;
+      terminalWatchExisted = registration.existed;
+    }
+    if (watch || terminalWatch) {
+      await this.publishPrWatchesUpdated([{ backend: args.backend, threadId, prKey }]);
+    }
+    // A baseline is the outcome the watch must not fire on, so it is never
+    // offered as a snapshot.
+    if (watch && currentOutcomeIsFresh && !watch.baseline) {
+      await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
+    }
+
+    const coveredByAutoFix: ThreadPullRequestWatchEvent[] =
+      ciEvents.includes("failure") && coversFailure(watch?.baseline ?? baseline)
+        ? ["failure"]
+        : [];
+    // Armed only when every requested event has a waiting watch. A merge
+    // watch alone must not read as a wait for a CI result that already came.
+    const armed = (ciEvents.length === 0 || Boolean(watch))
+      && (terminalEvents.length === 0 || Boolean(terminalWatch));
+    const reason: WatchThreadPullRequestReason = !armed
+      ? "outcome_already_final"
+      : (!watch || watchExisted) && (!terminalWatch || terminalWatchExisted)
+        ? "already_armed"
+        : "armed";
+    return {
+      ok: true,
+      result: {
+        ...(watch ? { watch } : {}),
+        ...(terminalWatch ? { terminalWatch } : {}),
+        ...(ciOutcomeAlreadyKnown && currentOutcome ? { currentOutcome } : {}),
+        coveredByAutoFix,
+        prAutomation: await this.getThreadPullRequestAutomationStatus({
+          backend: args.backend,
+          threadId,
+        }),
+        armed,
+        reason,
+        message: describePrWatchArming({
+          prNumber: pr.number,
+          headSha: headSha ?? "",
+          ciEvents,
+          watch,
+          watchExisted,
+          terminalWatch,
+          terminalWatchExisted,
+          knownOutcome: ciOutcomeAlreadyKnown ? currentOutcome : undefined,
+          knownAgeMs: observedAt !== undefined ? createdAt - observedAt : undefined,
+          pushedHeadSha,
+          audience: args.createdBy,
+        }),
+      },
+    };
+  }
+
+  /** The operator's list, history, and Stop for PR watches on local threads. */
+  async manageThreadPrWatches(
+    request: ThreadPrWatchesRequest,
+  ): Promise<ThreadPrWatchesResponse> {
+    const invalid = (message: string): ThreadPrWatchesResponse => ({
+      ok: false,
+      error: { code: "invalid_arguments", message },
+    });
+    if (request?.action === "active") {
+      // Before a profile's state opens there is nothing to list, not an error.
+      if (!getAppStateMode()) return { ok: true, active: [], autoFix: [] };
+      return {
+        ok: true,
+        active: await this.getOverlayStore().listAllActivePrStatusWatches(),
+        autoFix: await this.listThreadPrAutoFixStates(),
+      };
+    }
+    if (
+      request?.action !== "history"
+      && request?.action !== "cancel"
+      && request?.action !== "watch"
+    ) {
+      return invalid("action must be active, history, cancel, or watch.");
+    }
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return {
+        ok: false,
+        error: {
+          code: "federation_unsupported",
+          message: "PR watches run on the instance that owns the thread. Stop them there.",
+        },
+      };
+    }
+    if (!isAppServerBackendKind(request.backend) || !request.threadId?.trim()) {
+      return invalid("backend and threadId are required.");
+    }
+    if (request.action === "history") {
+      const limit = Math.min(
+        THREAD_PR_WATCH_HISTORY_MAX_LIMIT,
+        Math.max(1, Math.floor(request.limit ?? 10)),
+      );
+      return {
+        ok: true,
+        history: await this.getOverlayStore().listThreadPrStatusWatchHistory({
+          backend: request.backend,
+          threadId: request.threadId,
+          limit: Number.isFinite(limit) ? limit : 10,
+        }),
+      };
+    }
+    if (request.action === "watch") {
+      if (!request.prUrl?.trim()) return invalid("prUrl is required.");
+      // Watch CI asks for the next pass or failure, as an agent's default does.
+      const armed = await this.armThreadPrWatch({
+        backend: request.backend,
+        threadId: request.threadId,
+        url: request.prUrl,
+        notifyOn: ["success", "failure"],
+        createdBy: "operator",
+      });
+      return armed.ok ? { ok: true, watch: armed.result } : { ok: false, error: armed.error };
+    }
+    if (!request.watchId?.trim()) return invalid("watchId is required.");
+    const cancelled = await this.getOverlayStore().cancelThreadPrStatusWatch({
+      backend: request.backend,
+      threadId: request.threadId,
+      watchId: request.watchId,
+      now: Date.now(),
+    });
+    if (!cancelled) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: "That watch is no longer waiting, or it is waking the thread now.",
+        },
+      };
+    }
+    await this.publishPrWatchesUpdated([cancelled]);
+    return { ok: true, cancelled: true };
+  }
+
+  /** The readers the Waiting for list draws on, all reads of existing state. */
+  private pendingWakeReaders(): ThreadPendingWakeReaders {
+    const registry = getDesktopBackendRegistry();
+    return {
+      prWatches: async (thread) => await this.getOverlayStore().listActiveThreadPrStatusWatches(thread),
+      prWatchHistory: async (thread, limit) => limit === 0 ? []
+        : await this.getOverlayStore().listThreadPrStatusWatchHistory({
+          ...thread, limit: Math.min(limit, THREAD_PR_WATCH_HISTORY_MAX_LIMIT),
+        }),
+      autoFix: async (thread) => await this.listThreadPrAutoFixStates(thread),
+      // A plain store read: the coordinator's list waits behind evaluations,
+      // and selected detail reads this list.
+      dependencies: async (thread, endedLimit) => new ThreadDependencyStore(getAppStateDb().raw)
+        .listPendingWakes(thread.backend, thread.threadId, endedLimit),
+      scheduledActions: (thread, endedLimit) => getAppScheduledThreadActionStore().listPendingWakes({ ...thread, endedLimit }),
+      monitors: (thread) => registry.listPendingTaskMonitorWakes(thread),
+      recentSubAgents: async (thread, limit) => limit === 0 ? []
+        : await this.getOverlayStore().listEndedThreadTaskMonitors({ ...thread, limit }),
+      // Only Claude continues a thread when a background task ends.
+      backendTasks: async (thread) => registry.listBackendTaskWakes(thread),
+      backendWakes: (thread) => registry.listBackendWakes(thread),
+      hold: async (thread) => await registry.readThreadWakeHold(thread),
+      heldEntries: (thread) => registry.listHeldThreadQueueEntries(thread),
+    };
+  }
+
+  /** The thread's pending wakes, for its owner's windows and its detail. */
+  async listThreadPendingWakes(
+    thread: { backend: AppServerBackendKind; threadId: string },
+    endedLimit?: number,
+    activePrWatches?: readonly ThreadPullRequestWatchSummary[],
+  ): Promise<ThreadPendingWakesList> {
+    // Before a profile's state opens nothing can wake a thread.
+    if (!getAppStateMode()) return { wakes: [], ended: [] };
+    return await this.pendingWakesCache.read(thread, { endedLimit, activePrWatches });
+  }
+
+  invalidateThreadPendingWakes(event: AgentEvent): void {
+    if (event.federationTarget?.scope === "remote"
+      || !isThreadPendingWakeInvalidation(event.notification.method, event.notification.params)) return;
+    const params = event.notification.params as { threadId?: unknown; action?: { threadId?: unknown } } | undefined;
+    const threadId = params?.threadId ?? params?.action?.threadId;
+    this.pendingWakesCache.invalidate(typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
+  }
+
+  /** The Waiting for list and its Stop, for a thread this instance owns. */
+  async manageThreadPendingWakes(
+    request: ThreadPendingWakesRequest,
+  ): Promise<ThreadPendingWakesResponse> {
+    if (
+      !request
+      || (request.action !== "list" && request.action !== "stop")
+      || !isAppServerBackendKind(request.backend)
+      || typeof request.threadId !== "string"
+      || !request.threadId.trim()
+    ) {
+      return { ok: false, error: { code: "invalid_arguments", message: "action, backend and threadId are required." } };
+    }
+    const thread = { backend: request.backend, threadId: request.threadId.trim() };
+    if (request.action === "list") {
+      return { ok: true, ...await this.listThreadPendingWakes(thread, request.endedLimit) };
+    }
+    if (typeof request.key !== "string") {
+      return { ok: false, error: { code: "invalid_arguments", message: "key is required." } };
+    }
+    const registry = getDesktopBackendRegistry();
+    try {
+      return await stopThreadPendingWake({
+        cancelPrWatch: async (owner, watchId) => {
+          const response = await this.manageThreadPrWatches({ action: "cancel", ...owner, watchId });
+          return response.ok ? { ok: true } : { ok: false, code: response.error.code === "not_found" ? "not_found" : "failed", message: response.error.message };
+        },
+        cancelDependency: async (owner, dependencyId) => {
+          await this.manageThreadDependencies({ action: "cancel", ...owner, dependencyId });
+        },
+        stopMonitor: async (owner, monitorId) => {
+          await registry.stopSubAgent({ ...owner, monitorId });
+        },
+        cancelScheduledAction: async (owner, actionId) => {
+          const service = getScheduledThreadActionService();
+          // Cancel takes a bare id; a stop names this thread's wake only.
+          if (!getAppScheduledThreadActionStore().ownsPendingWake(owner, actionId)) {
+            throw new Error("That scheduled action is no longer waiting on this thread.");
+          }
+          await service.cancel({ id: actionId });
+        },
+        stopBackendTask: async (owner, processId) => {
+          const { terminated } = await registry.terminateBackgroundTerminal({ ...owner, processId });
+          if (!terminated) throw new Error("The task has already ended.");
+        },
+        discardHeldMessage: async (owner, entryId) => {
+          // The queue cancels by bare id; a stop names this thread's entry only.
+          // Cancelling a project-held entry also drops its stored copy.
+          if (!registry.listHeldThreadQueueEntries(owner).some((entry) => entry.entryId === entryId)
+            || !registry.cancelQueuedTurn(entryId, "Discarded from Waiting for.")) {
+            throw new Error("That message is no longer held on this thread.");
+          }
+        },
+      }, thread, request.key);
+    } finally {
+      this.pendingWakesCache.invalidate(thread);
+    }
+  }
+
+  /**
+   * What Auto-fix does on each opted-in thread for each of its PRs. It runs
+   * on the elected thread only, and not while the repair budget is paused.
+   * Nothing when Git settings stop it, which the windows already know.
+   */
+  private async listThreadPrAutoFixStates(thread?: { backend: AppServerBackendKind; threadId: string }): Promise<ThreadPrAutoFixState[]> {
+    if (!this.backgroundPrPollingEnabled || !this.prAutoDispatchAllowed) return [];
+    const candidates = await this.getOverlayStore().listPrAutoDispatchCandidates(thread);
+    const winners = new Map<string, (typeof candidates)[number]>();
+    for (const candidate of candidates) {
+      if (!winners.has(candidate.prKey)) winners.set(candidate.prKey, candidate);
+    }
+    const selected = thread ? candidates.filter((candidate) => candidate.backend === thread.backend && candidate.threadId === thread.threadId) : candidates;
+    return selected.map((candidate): ThreadPrAutoFixState => {
+      const lifecycle = this.prStatusRegistry.get(candidate.prKey)?.pr.lifecycleState;
+      const base = {
+        backend: candidate.backend,
+        threadId: candidate.threadId,
+        prKey: candidate.prKey,
+        // A merged or closed PR has nothing left to repair.
+        ...(lifecycle === "merged" || lifecycle === "closed" ? { prEnded: lifecycle } : {}),
+      };
+      if (this.prAutoDispatchBudgetPaused) return { ...base, state: "paused" };
+      const winner = winners.get(candidate.prKey)!;
+      if (winner.backend === candidate.backend && winner.threadId === candidate.threadId) {
+        return { ...base, state: "active" };
+      }
+      const title = getDesktopBackendRegistry().getCachedThreadSummary({
+        backend: winner.backend,
+        threadId: winner.threadId,
+      })?.title;
+      return {
+        ...base,
+        state: "handled_by_other_thread",
+        handledBy: {
+          backend: winner.backend,
+          threadId: winner.threadId,
+          ...(title ? { title } : {}),
+        },
+      };
+    });
+  }
+
+  /** Auto-fix's states changed: opted-in threads' windows re-list them. */
+  private async publishPrAutoFixStatesChanged(): Promise<void> {
+    const candidates = await this.getOverlayStore().listPrAutoDispatchCandidates();
+    const threads = new Map(candidates.map((candidate) => [
+      buildThreadIdentityKey(candidate.backend, candidate.threadId),
+      { backend: candidate.backend, threadId: candidate.threadId },
+    ]));
+    await this.publishPrWatchesUpdated([...threads.values()]);
+  }
+
+  /** Tell windows a thread's PR watches changed; they re-list them. */
+  private async publishPrWatchesUpdated(
+    threads: Array<{ backend: AppServerBackendKind; threadId: string; prKey?: string }>,
+  ): Promise<void> {
+    for (const thread of threads) {
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: thread.backend,
+        notification: {
+          method: "thread/prWatches/updated",
+          params: {
+            backend: thread.backend,
+            threadId: thread.threadId,
+            ...(thread.prKey ? { prKey: thread.prKey } : {}),
+          },
+        },
+      });
+    }
+  }
+
+  async getThreadPullRequestAutomationStatus(
+    params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+    },
+    context?: PwrAgentThreadInspectionContext,
+  ): Promise<ThreadPullRequestAutomationStatus> {
+    const overlay = await this.getOverlayStore().getThreadOverlayState(params);
+    const autoFixEnabled = overlay?.prAutoDispatchEnabled === true;
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    const hasPrimaryRepo = Boolean(attachment?.primaryRepoKey);
+    const primaryPrs = this.primaryAttachedPrsForThread({
+      ...params,
+      prs: this.canonicalizePrs(overlay?.prs ?? []),
+    });
+    const winners = await Promise.all(
+      primaryPrs.map(async (pr) =>
+        await this.getOverlayStore().getPrAutoDispatchCandidateWinner({
+          prKey: getPrStatusKey(pr),
+        }),
+      ),
+    );
+    const ownsAttachedPr = winners.some((winner) =>
+      winner?.backend === params.backend && winner.threadId === params.threadId,
+    );
+    const waitingForPr = hasPrimaryRepo && primaryPrs.length === 0;
+    // The thread's project can narrow Auto-fix, never widen it.
+    const forgeProject = this.resolveThreadForgeProject(params);
+    const projectSkipsMergeConflicts = !projectAllowsAutoFixKind(forgeProject?.automation, "merge-conflict");
+    const projectSkipsCiFailures = !projectAllowsAutoFixKind(forgeProject?.automation, "ci-failure");
+    const projectBlocksAutoFix = projectSkipsMergeConflicts && projectSkipsCiFailures;
+    const autoFixActive =
+      autoFixEnabled
+      && !projectBlocksAutoFix
+      && this.isPrAutoDispatchAvailable()
+      && (waitingForPr || ownsAttachedPr);
+    const isInvokingThread =
+      context?.backend === params.backend
+      && context.threadId === params.threadId;
+    const watches = await this.getOverlayStore().listActiveThreadPrStatusWatches(
+      params,
+    );
+    const baseGuidance = autoFixActive && waitingForPr
+      ? "Auto-fix PR monitoring is armed. This is monitoring state, not a repair-turn event. This primary workspace has no linked PR yet; PwrAgent will begin monitoring when one is linked. Do not poll CI or create a monitor thread after a PR is linked."
+      : autoFixActive
+      ? isInvokingThread
+        ? "Auto-fix PR monitoring is active. Reading this status did not start or convert the current turn into a repair turn. autoFixActive only means this thread owns automatic monitoring. Monitoring ownership does not mean another agent is repairing the PR. The current turn is a repair turn only if PwrAgent started it with an Auto-fix PR event. In that repair turn, investigate and fix only the reported failure or conflict, then validate, commit, and push the fix to the PR branch. Do not fix anything else from prior conversation context, including review findings the user did not ask this turn to address. If the current turn has no Auto-fix PR event, do not poll CI or create a monitor; end the turn and PwrAgent will start a repair turn when a new failure or conflict appears. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
+        : "Auto-fix PR monitoring is active for the inspected thread. Reading this status did not start or convert the current turn into a repair turn. autoFixActive only reports the inspected thread's monitoring ownership. This result never authorizes the current turn to repair that thread's PR. Monitoring ownership does not mean another agent is already repairing it. The inspected thread will receive its own repair turn for a new CI failure or merge conflict."
+      : autoFixEnabled
+        ? this.backgroundPrPollingEnabled
+          ? this.prAutoDispatchAllowed
+            ? this.prAutoDispatchBudgetPaused
+              ? "Auto-fix PR is paused because the profile's automatic repair budget is empty. Thread-level preferences were left unchanged; resume it from the safety notice when you are ready."
+              : hasPrimaryRepo
+                ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
+                : "Auto-fix PR is enabled, but this thread has no GitHub primary workspace. PwrAgent cannot monitor PR automation for it; check the PR directly until the thread is attached to a Git workspace."
+            : "Auto-fix PR is saved but disabled globally in Git settings. Do not assume PwrAgent will wake this thread until automatic PR repair is allowed again."
+          : "Auto-fix PR is saved but paused because background PR polling is off. Do not assume PwrAgent will wake this thread until polling is enabled."
+        : this.backgroundPrPollingEnabled
+          ? this.prAutoDispatchAllowed
+            ? this.prAutoDispatchBudgetPaused
+              ? "Background PR polling is active, but Auto-fix PR is paused because the profile's automatic repair budget is empty. Resume it from the safety notice when you are ready."
+              : "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
+            : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
+          : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
+    const projectSkippedKind = projectSkipsMergeConflicts ? "merge conflicts" : "failing CI";
+    const guidance = autoFixEnabled && forgeProject && projectBlocksAutoFix
+      ? `Auto-fix PR is saved for this thread, but it is in ${forgeProject.label}, where ${forgeProject.automation.paused ? "forge activity is paused" : "Auto-fix is turned off in Forge Automation"}. PwrAgent will not start a repair turn. Do not poll CI or create a monitor in its place. Tell the operator, who can change it from the project menu: Forge Automation.`
+      : autoFixActive && forgeProject && (projectSkipsMergeConflicts || projectSkipsCiFailures)
+        ? `${baseGuidance} ${forgeProject.label} skips ${projectSkippedKind} in Forge Automation, so PwrAgent will not start a repair turn for ${projectSkippedKind}.`
+        : baseGuidance;
+    return {
+      backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+      autoFixAllowed: this.prAutoDispatchAllowed,
+      autoFixEnabled,
+      autoFixActive,
+      ...(overlay?.prAutoDispatchPending
+        ? { autoFixPending: overlay.prAutoDispatchPending }
+        : {}),
+      ...(watches.length > 0 ? { watches } : {}),
+      guidance,
+    };
+  }
+
+  async detachThreadPullRequest(
+    request: DetachThreadPullRequestRequest,
+  ): Promise<DetachThreadPullRequestResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      // PR attachments live on the owning instance; detaching locally
+      // would only write a phantom row into the viewer's overlay store
+      // that the next remote snapshot reverts.
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .detachThreadPullRequest(remoteRequest);
+    }
+    const backend = request.backend ?? "codex";
+    const prKey = getPrStatusKey(request.pr);
+    const currentPr = this.prStatusRegistry.get(prKey)?.pr;
+    let overlay = await this.getOverlayStore().detachThreadPullRequest({
+      backend,
+      threadId: request.threadId,
+      pr: request.pr,
+    });
+    // A row still stored under a renamed repository's old name is the same
+    // PR; the client only saw its canonical chip.
+    let cancelledWatches = 0;
+    for (const alias of (overlay.prs ?? []).filter((pr) =>
+      getPrStatusKey(pr) !== prKey
+      && getPrStatusKey(this.prRepositoryAliases.canonicalize(normalizePrSummary(pr))) === prKey
+    )) {
+      overlay = await this.getOverlayStore().detachThreadPullRequest({
+        backend,
+        threadId: request.threadId,
+        pr: alias,
+      });
+      cancelledWatches += await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
+        backend,
+        threadId: request.threadId,
+        prKey: getPrStatusKey(alias),
+        now: Date.now(),
+      });
+    }
+    cancelledWatches += await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
+      backend,
+      threadId: request.threadId,
+      prKey,
+      now: Date.now(),
+    });
+    if (cancelledWatches > 0) {
+      await this.publishPrWatchesUpdated([{ backend, threadId: request.threadId, prKey }]);
+    }
+    const prs = overlay.prs ?? [];
+    await this.publishThreadPullRequestsUpdated({
+      backend,
+      threadId: request.threadId,
+      prs,
+      detachedPrs: overlay.detachedPrs ?? [],
+    });
+    await this.getPrAutoDispatchCoordinator().cancelPendingForPr({
+      backend,
+      threadId: request.threadId,
+      prKey,
+    });
+    if (currentPr && this.backgroundPrPollingEnabled) {
+      await this.handlePrAutoDispatchSnapshots(
+        [currentPr],
+        this.nextPrObservationTimestamp(),
+        true,
+      );
+    }
+    return {
+      backend,
+      threadId: request.threadId,
+      detachedPrKeys: overlay.detachedPrKeys ?? [],
+      prs,
+    };
+  }
+
+  private async refreshThreadPullRequestsUncached(
+    backend: AppServerBackendKind,
+    request: RefreshThreadPullRequestsRequest,
+    requestKey: string,
+  ): Promise<RefreshThreadPullRequestsResponse> {
+    const now = Date.now();
+    const provider = normalizePullRequestProvider(request.provider);
+    const trigger = request.trigger ?? "scheduled";
+    const overlay = this.getOverlayStore();
+    const existing = await overlay.getThreadOverlayState({
+      backend,
+      threadId: request.threadId,
+    });
+    await this.loadPrStatusRegistry();
+    await this.loadPrLookupRegistry();
+    const storedPrs = existing?.prs ?? [];
+    const retainedStoredPrs = await this.filterStoredDiscoveredPrs(storedPrs);
+    const persistedPrs = this.mergePrHistory(
+      retainedStoredPrs,
+      await this.filterStoredDiscoveredPrs(existing?.detachedPrs ?? []),
+    );
+    this.rememberPrStatuses(
+      persistedPrs,
+      existing?.prsFetchedAt ?? 0,
+      "thread-overlay",
+    );
+    const existingPrs = this.canonicalizePrs(persistedPrs);
+    const branch = request.branch.trim();
+    const lookupKey = getPullRequestLookupKey(request);
+    const lookupDirectoryPaths = normalizePrLookupDirectoryPaths(
+      request.directoryPaths,
+    );
+    const existingLookupMatches = existing?.prsRefreshKey === requestKey;
+    // The lookup registry is shared by every thread on this branch and
+    // checkout, so it holds only what a branch lookup returned. Never seed it
+    // from this thread's overlay: that list carries the thread's own history
+    // (PRs from earlier branches, detached PRs), and a seeded entry attached
+    // that history to every other thread in the same checkout.
+    // A claim leaves a placeholder entry (fetchedAt 0) until its lookup
+    // answers. Only an answered entry is a result; until then this thread's
+    // own matching overlay stands in for it.
+    const registryEntry = this.prLookupRegistry.get(lookupKey);
+    const lookupEntry = registryEntry && registryEntry.fetchedAt > 0
+      ? registryEntry
+      : undefined;
+    const lookupPrs = lookupEntry
+      ? this.canonicalizePrs(lookupEntry.prs)
+      : existingLookupMatches
+        ? existingPrs
+        : [];
+    const currentLookupPrs = await this.filterStoredDiscoveredPrs(
+      associatePrsWithLinkedDirectories(lookupPrs, lookupDirectoryPaths),
+    );
+    // Legacy automatic matches may already be in an overlay even though the
+    // current default-branch lookup correctly answers []. Repair before a
+    // cache hit or terminal short-circuit can keep serving those attachments.
+    if (!prSummariesEqual(storedPrs, retainedStoredPrs)) {
+      await this.enqueuePullRequestOverlayWrite({
+        backend,
+        threadId: request.threadId,
+        write: async () => {
+          const latest = await overlay.getThreadOverlayState({ backend, threadId: request.threadId });
+          if (!latest) return;
+          const prs = await this.filterStoredDiscoveredPrs(latest.prs ?? []);
+          if (prSummariesEqual(latest.prs ?? [], prs)) return;
+          const updated = await overlay.setThreadPullRequests({
+            backend,
+            threadId: request.threadId,
+            prs,
+            fetchedAt: latest.prsFetchedAt ?? 0,
+            refreshKey: latest.prsRefreshKey,
+            ...this.detachedPrKeyCanonicalizer(),
+          });
+          await this.publishThreadPullRequestsUpdated({
+            backend,
+            threadId: request.threadId,
+            prs: this.canonicalizePrs(updated.prs ?? []),
+            detachedPrs: this.canonicalizePrs(updated.detachedPrs ?? []),
+          });
+        },
+      });
+    }
+    let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    // The same rule as the store's write, so a response never hides a chip
+    // the store keeps.
+    const visibleKnownPrs = (): PrSummary[] =>
+      filterDetachedPullRequests(
+        knownPrs,
+        canonicalizeDetachedPrKeys({
+          detachedPrKeys: existing?.detachedPrKeys,
+          attachedPrKeys: storedPrs.map(getPrStatusKey),
+          canonicalizePrKey: (key) => this.prRepositoryAliases.canonicalizeKey(key),
+        }).detachedPrKeys,
+      );
+    const statusFetchedAt = lookupEntry?.fetchedAt
+      ?? (existingPrs.length > 0 || existingLookupMatches
+        ? existing?.prsFetchedAt
+        : undefined);
+    const freshness = pullRequestStatusFreshness(statusFetchedAt, now);
+    const fetcher = this.getPrFetcher();
+    const providerAvailability = await fetcher.getProviderAvailability(
+      request.directoryPaths, visibleKnownPrs().map((pr) => pr.url),
+    );
+    const providerAvailable = providerAvailability.some((status) => status.available);
+    const ghAvailable = providerAvailability.some((status) => status.cli === "gh" && status.available);
+    const responseFreshness = request.includeStatusFreshness === true
+      ? (refreshStarted: boolean) => ({
+          ...freshness,
+          providerAvailable,
+          providerAvailability,
+          refreshStarted,
+        })
+      : () => ({});
+    if (trigger === "user") {
+      logDebug("threadPullRequestsRefresh:requested", userPrRefreshLogPayload({
+        backend,
+        branch,
+        directoryPathCount: request.directoryPaths.length,
+        existingLookupMatches,
+        ghAvailable,
+        lookupCacheHit: Boolean(lookupEntry),
+        lookupKey,
+        previousPrs: visibleKnownPrs(),
+        provider,
+        requestKey,
+        threadId: request.threadId,
+        trigger,
+      }));
+    }
+    if (!providerAvailable) {
+      if (trigger === "user") {
+        logDebug("threadPullRequestsRefresh:skipped", userPrRefreshLogPayload({
+          backend,
+          branch,
+          directoryPathCount: request.directoryPaths.length,
+          ghAvailable,
+          previousPrs: visibleKnownPrs(),
+          provider,
+          reason: "provider-unavailable",
+          requestKey,
+          threadId: request.threadId,
+          trigger,
+        }));
+      }
+      return {
+        backend,
+        threadId: request.threadId,
+        provider,
+        prs: visibleKnownPrs(),
+        ...responseFreshness(false),
+        ghAvailable: false,
+      };
+    }
+    if (lookupEntry) {
+      knownPrs = await this.persistPullRequestLookupHit({
+        backend,
+        request,
+        requestKey,
+        persistedPrs,
+        persistedRefreshKey: existing?.prsRefreshKey,
+        prs: currentLookupPrs,
+        fetchedAt: lookupEntry.fetchedAt,
+        renamePending: this.storedPrsNeedRename(existing),
+      });
+    }
+    // Terminal-state short-circuit: once every cached PR for a lookup is
+    // merged or closed, we do not need to re-query GitHub for the same
+    // branch/directory lookup.
+    // A different lookup can mean the thread moved to a new branch after
+    // merging an older PR, so stale terminal chips must not block it.
+    //
+    // No log here on purpose — this path runs on every navigation
+    // refresh tick (once a minute per renderer) for every thread with
+    // a terminal PR, so logging would produce one line per thread per
+    // minute of pure noise. The interesting path is the cache-miss
+    // fetch below, and callers that need to observe the no-op
+    // programmatically can read `shortCircuited: true` off the
+    // response.
+    const allExistingPrsTerminal =
+      currentLookupPrs.length > 0
+      && currentLookupPrs.every(
+        (pr) => pr.lifecycleState === "merged" || pr.lifecycleState === "closed",
+      );
+    if (
+      allExistingPrsTerminal
+      && branch !== "HEAD"
+      && request.trigger !== "user"
+      && request.trigger !== "post-turn"
+      // A PR shown under two repository names is one the lookup's by-URL
+      // fetch can merge, and aliases are relearned after each launch.
+      && this.prRepositoryAliases.renameCandidates(visibleKnownPrs()).length === 0
+    ) {
+      return {
+        backend,
+        threadId: request.threadId,
+        provider,
+        prs: visibleKnownPrs(),
+        ghAvailable,
+        ...responseFreshness(false),
+        shortCircuited: true,
+      };
+    }
+
+    if (!branch || request.directoryPaths.length === 0) {
+      if (trigger === "user") {
+        logDebug("threadPullRequestsRefresh:skipped", userPrRefreshLogPayload({
+          backend,
+          branch,
+          directoryPathCount: request.directoryPaths.length,
+          ghAvailable,
+          previousPrs: visibleKnownPrs(),
+          provider,
+          reason: !branch ? "missing-branch" : "missing-directory-paths",
+          requestKey,
+          threadId: request.threadId,
+          trigger,
+        }));
+      }
+      return {
+        backend,
+        threadId: request.threadId,
+        provider,
+        prs: visibleKnownPrs(),
+        ...responseFreshness(false),
+        ghAvailable,
+      };
+    }
+
+    // A paused project runs no background lookups. The operator's own
+    // refresh and the post-turn lookup still run; the Auto-fix, watch and
+    // dependency gates keep them from starting automatic turns.
+    if (
+      trigger === "scheduled"
+      && !projectAllowsForgePolling(this.threadForgeAutomation({ backend, threadId: request.threadId }))
+    ) {
+      return {
+        backend,
+        threadId: request.threadId,
+        provider,
+        prs: visibleKnownPrs(),
+        ...responseFreshness(false),
+        ghAvailable,
+      };
+    }
+
+    const refreshStarted = this.startPullRequestLookupRefresh({
+      backend,
+      request,
+      requestKey,
+      lookupKey,
+      lookupDirectoryPaths,
+      previousPrs: knownPrs,
+      ...(existingLookupMatches && existing?.prsFetchedAt
+        ? { threadLookupObservedAt: existing.prsFetchedAt }
+        : {}),
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      provider,
+      prs: visibleKnownPrs(),
+      ...responseFreshness(refreshStarted),
+      ghAvailable,
+    };
+  }
+
+  private async fetchPullRequestLookup(
+    params: PullRequestLookupParams,
+  ): Promise<PullRequestLookupResult> {
+    // This timestamp is an observation-order token. Capture it before the
+    // network request so an older slow response cannot outrank a newer one.
+    const fetchedAt = this.nextPrObservationTimestamp();
+    // The lookup re-reads every PR it already knows, so the poller must not
+    // fetch them again while it runs. See `PrLookupsInFlight`.
+    const release = this.prLookupsInFlight.begin(
+      params.previousPrs.map(getPrStatusKey),
+      fetchedAt,
+    );
+    try {
+      return await this.runPullRequestLookup(params, fetchedAt);
+    } finally {
+      release();
+    }
+  }
+
+  private async runPullRequestLookup(
+    params: PullRequestLookupParams,
+    fetchedAt: number,
+  ): Promise<PullRequestLookupResult> {
+    let incomplete = false;
+    const onProviderFailure = () => { incomplete = true; };
+    const trigger = params.request.trigger ?? "scheduled";
+    const prs = (await detectPullRequestsForThread({
+      fetcher: this.getPrFetcher(),
+      onProviderFailure,
+      branch: params.request.branch.trim(),
+      directoryPaths: params.request.directoryPaths,
+      ...(trigger === "user" || trigger === "post-turn"
+        ? { allowPrimedBranchLookup: false }
+        : {}),
+    })).map(normalizePrSummary);
+    this.prRepositoryAliases.confirm(prs);
+    const retainedPrs = await this.fetchRetainedNonTerminalPullRequests({
+      prs: this.getPullRequestLookupSubscriberPreviousPrs({
+        lookupKey: params.lookupKey,
+        fallbackPrs: params.previousPrs,
+      }),
+      discoveredPrs: prs,
+      onProviderFailure,
+      cwd: params.lookupDirectoryPaths[0] ?? params.request.directoryPaths[0],
+    });
+    const statusPrs = dedupePrsByStatusKey([...prs, ...retainedPrs]);
+    const changedStatusPrs = this.rememberPrStatuses(
+      statusPrs,
+      fetchedAt,
+      `thread-lookup:${trigger}`,
+    );
+    await this.writePrStatusesToCache(statusPrs, fetchedAt);
+    await this.publishPullRequestStatusUpdates({
+      backend: params.backend,
+      prs: changedStatusPrs,
+    });
+    // A partial lookup is not an authoritative (possibly empty) branch result.
+    if (!incomplete) {
+      this.rememberPrLookup({
+        lookupKey: params.lookupKey,
+        provider: normalizePullRequestProvider(params.request.provider),
+        branch: params.request.branch.trim(),
+        directoryPaths: params.lookupDirectoryPaths,
+        prs,
+        fetchedAt,
+      });
+      await this.writePrLookupToCache({
+        lookupKey: params.lookupKey,
+        provider: normalizePullRequestProvider(params.request.provider),
+        branch: params.request.branch.trim(),
+        directoryPaths: params.lookupDirectoryPaths,
+        prs,
+        fetchedAt,
+      });
+    }
+
+    return { prs, statusPrs, fetchedAt, incomplete };
+  }
+
+  private getPullRequestLookupSubscriberPreviousPrs(params: {
+    lookupKey: string;
+    fallbackPrs: PrSummary[];
+  }): PrSummary[] {
+    const subscribers = this.prLookupSubscribers.get(params.lookupKey);
+    if (!subscribers?.size) {
+      return params.fallbackPrs;
+    }
+    return [...subscribers.values()].flatMap((subscriber) => subscriber.previousPrs);
+  }
+
+  private async fetchRetainedNonTerminalPullRequests(params: {
+    prs: PrSummary[];
+    discoveredPrs: PrSummary[];
+    cwd?: string;
+    onProviderFailure?: () => void;
+  }): Promise<PrSummary[]> {
+    const cwd = params.cwd;
+    if (!cwd) {
+      return [];
+    }
+
+    const discoveredKeys = new Set(
+      params.discoveredPrs.map((pr) => getPrStatusKey(pr)),
+    );
+    const seenRetainedKeys = new Set<string>();
+    const normalizedPrs = params.prs.map(normalizePrSummary);
+    // A finished PR is fetched again only to learn whether its repository is
+    // another's old name.
+    const renameCandidateKeys = new Set(
+      this.prRepositoryAliases
+        .renameCandidates([...params.discoveredPrs, ...normalizedPrs])
+        .map(getPrStatusKey),
+    );
+    const retainedPrs = normalizedPrs
+      .filter((pr) => {
+        const key = getPrStatusKey(pr);
+        if (discoveredKeys.has(key)) return false;
+        if (seenRetainedKeys.has(key)) return false;
+        if (
+          (pr.lifecycleState === "merged" || pr.lifecycleState === "closed")
+          && !renameCandidateKeys.has(key)
+        ) {
+          return false;
+        }
+        seenRetainedKeys.add(key);
+        return true;
+      });
+
+    if (retainedPrs.length === 0) {
+      return [];
+    }
+
+    const fetcher = this.getPrFetcher();
+    const refreshed = await Promise.all(
+      retainedPrs.map((pr) =>
+        fetcher
+          .fetchPullRequestByUrl({
+            cwd,
+            url: pr.url,
+            ...(params.onProviderFailure
+              ? { onProviderFailure: params.onProviderFailure }
+              : {}),
+          })
+          .catch(() => {
+            params.onProviderFailure?.();
+            return undefined;
+          }),
+      ),
+    );
+    // The pairing with the URL asked for is how a renamed repository is
+    // learned: the forge answers its old URL under the new name.
+    refreshed.forEach((pr, index) => {
+      this.learnPullRequestRepository(retainedPrs[index]!.url, pr);
+    });
+    return refreshed.filter((pr): pr is PrSummary => Boolean(pr))
+      .map(normalizePrSummary);
+  }
+
+  private startPullRequestLookupRefresh(
+    params: PrLookupRefreshParams,
+    options: {
+      additionalSubscribers?: PrLookupRefreshParams[];
+      skipClaim?: boolean;
+    } = {},
+  ): boolean {
+    const trigger = params.request.trigger ?? "scheduled";
+    const authoritative = trigger === "user" || trigger === "post-turn";
+    const provider = normalizePullRequestProvider(params.request.provider);
+    const pending = this.pendingPrLookupRefreshes.get(params.lookupKey);
+    if (pending) {
+      if (authoritative && !pending.authoritative) {
+        return this.queueAuthoritativePullRequestLookupRefresh(params);
+      }
+      this.addPullRequestLookupSubscriber(params.lookupKey, params);
+      if (trigger === "user") {
+        logDebug("threadPullRequestsRefresh:coalesced-background", userPrRefreshLogPayload({
+          backend: params.backend,
+          branch: params.request.branch.trim(),
+          directoryPathCount: params.request.directoryPaths.length,
+          lookupKey: params.lookupKey,
+          previousPrs: params.previousPrs,
+          provider,
+          requestKey: params.requestKey,
+          threadId: params.request.threadId,
+          trigger,
+        }));
+      }
+      return true;
+    }
+
+    let refreshKey = params.lookupKey;
+    if (!options.skipClaim) {
+      const claim = this.claimPullRequestLookupRefreshKey(
+        params.lookupKey,
+        trigger,
+        provider,
+        params.previousPrs.length > 0
+          && params.previousPrs.every(
+            (pr) => pr.lifecycleState === "merged" || pr.lifecycleState === "closed",
+          ),
+        {
+          prKeys: params.previousPrs.map(getPrStatusKey),
+          threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
+        },
+        params.threadLookupObservedAt,
+      );
+      if (claim.skippedReason) {
+        // Not recorded as activity. A cooldown skip means the data is seconds
+        // old, and an empty request budget was already recorded by
+        // `takePrPollingToken`, so a row here was noise or a duplicate.
+        if (trigger === "user") {
+          logDebug("threadPullRequestsRefresh:skipped", {
+            ...userPrRefreshLogPayload({
+              backend: params.backend,
+              branch: params.request.branch.trim(),
+              directoryPathCount: params.request.directoryPaths.length,
+              lookupKey: params.lookupKey,
+              previousPrs: params.previousPrs,
+              provider,
+              reason: claim.skippedReason,
+              requestKey: params.requestKey,
+              threadId: params.request.threadId,
+              trigger,
+            }),
+            ageMs: claim.ageMs,
+            minIntervalMs: claim.minIntervalMs,
+            nextAllowedInMs: claim.nextAllowedInMs,
+          });
+        }
+        return false;
+      }
+      refreshKey = claim.refreshKey;
+    }
+
+    this.addPullRequestLookupSubscriber(params.lookupKey, params);
+    for (const subscriber of options.additionalSubscribers ?? []) {
+      this.addPullRequestLookupSubscriber(params.lookupKey, subscriber);
+    }
+    if (trigger === "user") {
+      logDebug("threadPullRequestsRefresh:background-start", userPrRefreshLogPayload({
+        backend: params.backend,
+        branch: params.request.branch.trim(),
+        directoryPathCount: params.request.directoryPaths.length,
+        lookupKey: params.lookupKey,
+        previousPrs: params.previousPrs,
+        provider,
+        requestKey: params.requestKey,
+        threadId: params.request.threadId,
+        trigger,
+      }));
+    }
+    const promise = this.fetchPullRequestLookup(params)
+      .then(async ({ prs, statusPrs, fetchedAt, incomplete }) => {
+        const publishResult = await this.persistPullRequestLookupSubscribers({
+          lookupKey: params.lookupKey,
+          prs,
+          fetchedAt,
+          incomplete,
+        });
+        const canonical = this.canonicalizePrs(statusPrs);
+        if (canonical.length === 0) this.prActivity.record({
+          category: "check", source: `thread lookup (${trigger})`,
+          threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)], prKeys: [],
+          message: incomplete ? "Partial check: no PR status returned" : "No PR for this branch",
+        });
+        this.recordPrCheck(canonical, `thread lookup (${trigger})`, incomplete, [
+          buildThreadIdentityKey(params.backend, params.request.threadId),
+        ]);
+        await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
+        if (trigger === "user") {
+          const completedAt = Date.now();
+          logDebug("threadPullRequestsRefresh:background-complete", {
+            ...userPrRefreshLogPayload({
+              backend: params.backend,
+              branch: params.request.branch.trim(),
+              directoryPathCount: params.request.directoryPaths.length,
+              lookupKey: params.lookupKey,
+              previousPrs: params.previousPrs,
+              provider,
+              requestKey: params.requestKey,
+              threadId: params.request.threadId,
+              trigger,
+            }),
+            changedThreadCount: publishResult.changedThreadCount,
+            fetchedAt,
+            fetchedPrIds: prLogIds(prs),
+            fetchedPrStatuses: prLogStatuses(prs),
+            completedAt,
+            durationMs: Math.max(0, completedAt - fetchedAt),
+            subscriberCount: publishResult.subscriberCount,
+          });
+        }
+      })
+      .catch((error) => {
+        this.prActivity.record({
+          category: "check",
+          source: `thread lookup (${trigger})`,
+          threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
+          prKeys: params.previousPrs.map(getPrStatusKey),
+          tone: "error",
+          message: "PR lookup failed; see the application log for details",
+        });
+        appServerLog.warn("background PR lookup refresh failed", {
+          threadId: params.request.threadId,
+          branch: params.request.branch.trim(),
+          previousPrIds: prLogIds(params.previousPrs),
+          provider,
+          refreshKey,
+          requestKey: params.requestKey,
+          trigger,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (
+          this.pendingPrLookupRefreshes.get(params.lookupKey)?.promise
+          === promise
+        ) {
+          this.pendingPrLookupRefreshes.delete(params.lookupKey);
+          this.prLookupSubscribers.delete(params.lookupKey);
+          this.startQueuedAuthoritativePullRequestLookupRefresh(params.lookupKey);
+        }
+      });
+    this.pendingPrLookupRefreshes.set(params.lookupKey, {
+      authoritative,
+      promise,
+    });
+    return true;
+  }
+
+  private queueAuthoritativePullRequestLookupRefresh(
+    params: PrLookupRefreshParams,
+  ): boolean {
+    const queued = this.queuedAuthoritativePrLookupRefreshes.get(params.lookupKey)
+      ?? new Map<string, PrLookupRefreshParams>();
+    const threadKey = buildThreadIdentityKey(
+      params.backend,
+      params.request.threadId,
+    );
+    queued.set(threadKey, params);
+    this.queuedAuthoritativePrLookupRefreshes.set(params.lookupKey, queued);
+    if (params.request.trigger === "user") {
+      logDebug("threadPullRequestsRefresh:queued-authoritative", userPrRefreshLogPayload({
+        backend: params.backend,
+        branch: params.request.branch.trim(),
+        directoryPathCount: params.request.directoryPaths.length,
+        lookupKey: params.lookupKey,
+        previousPrs: params.previousPrs,
+        provider: normalizePullRequestProvider(params.request.provider),
+        requestKey: params.requestKey,
+        threadId: params.request.threadId,
+        trigger: "user",
+      }));
+    }
+    return true;
+  }
+
+  private startQueuedAuthoritativePullRequestLookupRefresh(
+    lookupKey: string,
+  ): void {
+    const queued = this.queuedAuthoritativePrLookupRefreshes.get(lookupKey);
+    if (!queued?.size) {
+      return;
+    }
+    this.queuedAuthoritativePrLookupRefreshes.delete(lookupKey);
+    const [first, ...additionalSubscribers] = [...queued.values()];
+    if (!first) {
+      return;
+    }
+    this.startPullRequestLookupRefresh(first, {
+      additionalSubscribers,
+      skipClaim: true,
+    });
+  }
+
+  private addPullRequestLookupSubscriber(
+    lookupKey: string,
+    params: {
+      backend: AppServerBackendKind;
+      request: RefreshThreadPullRequestsRequest;
+      requestKey: string;
+      previousPrs: PrSummary[];
+    },
+  ): void {
+    const subscribers =
+      this.prLookupSubscribers.get(lookupKey) ?? new Map<string, PrLookupSubscriber>();
+    const threadKey = buildThreadIdentityKey(
+      params.backend,
+      params.request.threadId,
+    );
+    subscribers.set(threadKey, {
+      backend: params.backend,
+      threadId: params.request.threadId,
+      requestKey: params.requestKey,
+      linkedDirectoryPaths: normalizePrLookupDirectoryPaths(
+        params.request.directoryPaths,
+      ),
+      previousPrs: params.previousPrs,
+    });
+    this.prLookupSubscribers.set(lookupKey, subscribers);
+  }
+
+  private async persistPullRequestLookupSubscribers(params: {
+    lookupKey: string;
+    prs: PrSummary[];
+    fetchedAt: number;
+    incomplete?: boolean;
+  }): Promise<{ changedThreadCount: number; subscriberCount: number }> {
+    const subscribers = this.prLookupSubscribers.get(params.lookupKey);
+    if (!subscribers?.size) {
+      return { changedThreadCount: 0, subscriberCount: 0 };
+    }
+
+    let changedThreadCount = 0;
+    await Promise.all(
+      [...subscribers.values()].map(async (subscriber) => {
+        await this.enqueuePullRequestOverlayWrite({
+          backend: subscriber.backend,
+          threadId: subscriber.threadId,
+          write: async () => {
+            const overlay = this.getOverlayStore();
+            // Branch changes use a different lookup key, so their refresh can
+            // overlap the preceding branch's lookup. Re-read inside the
+            // per-thread write queue to retain history from either lookup.
+            const latest = await overlay.getThreadOverlayState({
+              backend: subscriber.backend,
+              threadId: subscriber.threadId,
+            });
+            const previousPersistedPrs = latest?.prs ?? subscriber.previousPrs;
+            const latestPrs = this.mergePrHistory(
+              latest?.prs ?? [],
+              latest?.detachedPrs ?? [],
+            );
+            const previousPrs = await this.filterStoredDiscoveredPrs(this.mergePrHistory(
+              subscriber.previousPrs,
+              latestPrs,
+            ));
+            const associatedPrs = associatePrsWithLinkedDirectories(
+              params.prs,
+              subscriber.linkedDirectoryPaths,
+            );
+            const nextPrs = this.mergePrHistory(previousPrs, associatedPrs);
+            const updated = await overlay.setThreadPullRequests({
+              backend: subscriber.backend,
+              threadId: subscriber.threadId,
+              prs: nextPrs,
+              // Successful status rows were published separately. Retained
+              // failed-provider observations must keep their old freshness.
+              fetchedAt: params.incomplete ? latest?.prsFetchedAt ?? 0 : params.fetchedAt,
+              refreshKey: subscriber.requestKey,
+              ...this.detachedPrKeyCanonicalizer(),
+            });
+            const persistedPrs = updated.prs ?? [];
+            if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
+              appServerLog.info("thread PR overlay observation ignored", {
+                backend: subscriber.backend,
+                threadId: subscriber.threadId,
+                requestKey: subscriber.requestKey,
+                observedAt: params.fetchedAt,
+                currentObservedAt: updated.prsFetchedAt,
+                currentRequestKey: updated.prsRefreshKey,
+              });
+              return;
+            }
+
+            if (!prSummariesEqual(previousPersistedPrs, persistedPrs)) {
+              changedThreadCount += 1;
+              await this.publishThreadPullRequestsUpdated({
+                backend: subscriber.backend,
+                threadId: subscriber.threadId,
+                prs: persistedPrs,
+                detachedPrs: updated.detachedPrs ?? [],
+              });
+            }
+          },
+        });
+      }),
+    );
+    return { changedThreadCount, subscriberCount: subscribers.size };
+  }
+
+  private enqueuePullRequestOverlayWrite<T>(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    write: () => Promise<T>;
+  }): Promise<T> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const previous = this.pendingPrOverlayWrites.get(threadKey) ?? Promise.resolve();
+    const result = previous.then(params.write);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.pendingPrOverlayWrites.set(threadKey, settled);
+    void settled.then(() => {
+      if (this.pendingPrOverlayWrites.get(threadKey) === settled) {
+        this.pendingPrOverlayWrites.delete(threadKey);
+      }
+    });
+    return result;
+  }
+
+  private async persistPullRequestLookupHit(params: {
+    backend: AppServerBackendKind;
+    request: RefreshThreadPullRequestsRequest;
+    requestKey: string;
+    persistedPrs: PrSummary[];
+    persistedRefreshKey?: string;
+    prs: PrSummary[];
+    fetchedAt: number;
+    /** Stored rows or detached keys still use a renamed repository's old name. */
+    renamePending?: boolean;
+  }): Promise<PrSummary[]> {
+    const associatedPrs = associatePrsWithLinkedDirectories(
+      params.prs,
+      params.request.directoryPaths,
+    );
+    const nextPrs = this.mergePrHistory(params.persistedPrs, associatedPrs);
+    // `persistedPrs` is already projected under the forge's names, so it can
+    // equal the result while storage still holds the old ones.
+    if (
+      params.persistedRefreshKey === params.requestKey
+      && !params.renamePending
+      && prSummariesEqual(params.persistedPrs, nextPrs)
+    ) {
+      return params.persistedPrs;
+    }
+
+    const updated = await this.getOverlayStore().setThreadPullRequests({
+      backend: params.backend,
+      threadId: params.request.threadId,
+      prs: nextPrs,
+      fetchedAt: params.fetchedAt,
+      refreshKey: params.requestKey,
+      ...this.detachedPrKeyCanonicalizer(),
+    });
+    const persistedPrs = updated.prs ?? [];
+    if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
+      return persistedPrs;
+    }
+
+    if (!prSummariesEqual(params.persistedPrs, persistedPrs)) {
+      await this.publishThreadPullRequestsUpdated({
+        backend: params.backend,
+        threadId: params.request.threadId,
+        prs: persistedPrs,
+        detachedPrs: updated.detachedPrs ?? [],
+      });
+    }
+    return persistedPrs;
+  }
+
+  private claimPullRequestLookupRefreshKey(
+    lookupKey: string,
+    trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
+    provider: string,
+    terminalOnly: boolean,
+    activityContext?: { prKeys: string[]; threadKeys: string[] },
+    threadLookupObservedAt = 0,
+  ): PrLookupRefreshClaim {
+    const now = Date.now();
+    const minInterval =
+      trigger === "post-turn"
+        ? 0
+        : trigger === "user"
+        ? terminalOnly
+          ? TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
+          : USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
+        : THREAD_PR_REFRESH_MIN_INTERVAL_MS;
+    const timestampField =
+      trigger === "user"
+        ? "lastUserRefreshRequestedAt"
+        : "lastScheduledRefreshRequestedAt";
+    const entry = this.prLookupRegistry.get(lookupKey);
+    const lastRequestedAt = Math.max(
+      entry?.[timestampField] ?? 0,
+      entry?.fetchedAt ?? 0,
+      threadLookupObservedAt,
+    );
+    const ageMs = now - lastRequestedAt;
+    const slack = trigger === "scheduled" ? SCHEDULED_THREAD_PR_REFRESH_SLACK_MS : 0;
+    const due = ageMs >= minInterval - slack;
+    if (!due) {
+      return {
+        skippedReason: "cooldown",
+        ageMs,
+        minIntervalMs: minInterval,
+        nextAllowedInMs: minInterval - ageMs,
+      };
+    }
+    if (trigger === "scheduled" && !this.takePrPollingToken("scheduled thread lookup", activityContext?.prKeys, activityContext?.threadKeys)) {
+      return { skippedReason: "scheduled-token-bucket" };
+    }
+
+    if (entry) {
+      entry[timestampField] = now;
+    } else {
+      this.prLookupRegistry.set(lookupKey, {
+        prs: [],
+        fetchedAt: 0,
+        provider: normalizePullRequestProvider(provider),
+        branch: "",
+        directoryPaths: [],
+        [timestampField]: now,
+      });
+    }
+
+    return { refreshKey: lookupKey };
+  }
+
+  private rememberPrStatuses(
+    prs: PrSummary[],
+    fetchedAt: number,
+    source: string,
+  ): PrSummary[] {
+    const changedPrs: PrSummary[] = [];
+    const transitions: PrStatusTransition[] = [];
+    const staleKeys: string[] = [];
+    const endedChanged = new Set<string>();
+    for (const pr of prs.map(stripPrLinkedDirectoryPaths)) {
+      const key = getPrStatusKey(pr);
+      const current = this.prStatusRegistry.get(key);
+      if (current && current.fetchedAt > fetchedAt) {
+        staleKeys.push(key);
+        continue;
+      }
+      if (!current || !prSummariesEqual([current.pr], [pr])) {
+        changedPrs.push(pr);
+        // A meaningful field flip (CI, merge, conflict, draft, title) becomes a
+        // typed transition. `current?.pr` undefined (first sight / cache load)
+        // yields no transition, so boot does not emit a flood.
+        const transition = computePrStatusTransition(current?.pr, pr);
+        if (transition) {
+          transition.threadKeys = this.findThreadKeysForPrKey(key);
+          transitions.push(transition);
+        }
+        if (current && isTerminalPullRequest(current.pr) !== isTerminalPullRequest(pr)) {
+          endedChanged.add(key);
+        }
+      }
+      this.prStatusRegistry.set(key, {
+        ...current,
+        pr,
+        fetchedAt,
+      });
+      this.applyPrStatusToAttachments(pr);
+      this.transcriptPrSubscriptions.observe([pr], fetchedAt);
+    }
+    if (staleKeys.length > 0) {
+      // Losing to a newer registry entry is ordinary bookkeeping: cache loads
+      // and overlay seeds observe at timestamp 0, so every known PR reports one.
+      // A single bounded debug line keeps the detail reachable through
+      // Help -> Logs without burying the startup log under a line per PR.
+      appServerLog.debug("pr status observations ignored as stale", {
+        source,
+        observedAt: fetchedAt,
+        staleCount: staleKeys.length,
+        prKeys: staleKeys.slice(0, STALE_PR_OBSERVATION_LOG_SAMPLE),
+      });
+    }
+    if (transitions.length > 0) {
+      this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source });
+    }
+    this.publishPrAutoFixPrEndedChanges(endedChanged);
+    return changedPrs;
+  }
+
+  private nextPrObservationTimestamp(): number {
+    const observedAt = Math.max(
+      Date.now(),
+      this.lastPrObservationTimestamp + 1,
+    );
+    this.lastPrObservationTimestamp = observedAt;
+    return observedAt;
+  }
+
+  /**
+   * Subscribe to PR status transitions without coupling consumers to polling.
+   * Returns an unsubscribe function.
+   */
+  onPrStatusTransition(listener: PrStatusTransitionListener): () => void {
+    this.prStatusTransitionListeners.add(listener);
+    return () => {
+      this.prStatusTransitionListeners.delete(listener);
+    };
+  }
+
+  private emitPrStatusTransitions(
+    transitions: PrStatusTransition[],
+    observation: { observedAt: number; source: string },
+  ): void {
+    for (const transition of transitions) {
+      appServerLog.info(
+        "pr status transition",
+        {
+          ...summarizePrStatusTransition(transition),
+          ...observation,
+        },
+      );
+      for (const listener of this.prStatusTransitionListeners) {
+        try {
+          listener(transition);
+        } catch (error) {
+          appServerLog.warn("pr status transition listener failed", {
+            prKey: transition.prKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+  }
+
+  /** Resolve only primary visible attachments; detached and informational links never qualify. */
+  private findThreadKeysForPrKey(prKey: string): string[] {
+    return [...(this.primaryPrThreadsByKey.get(prKey) ?? [])];
+  }
+
+  /**
+   * True when this instance already owns the status of a PR, because the
+   * PR is attached to the primary workspace of one of its own threads —
+   * the same test `collectPrPollTargets` uses to decide what to poll.
+   *
+   * Terminal PRs count. They drop out of the poll rotation, but the
+   * status this instance last observed for them is final, so a peer's
+   * observation of the same PR must not be allowed to overwrite it.
+   *
+   * Note the primary-workspace qualifier: a PR attached to a local
+   * thread but not to its primary repository is deliberately NOT ours.
+   * `collectPrPollTargets` skips those too, so we hold no fresher view
+   * of them than the peer does — deferring is the better answer.
+   */
+  isPullRequestLocallyMonitored(prKey: string): boolean {
+    return this.findThreadKeysForPrKey(prKey).length > 0;
+  }
+
+  private rememberPrLookup(entry: {
+    lookupKey: string;
+    provider: string;
+    branch: string;
+    directoryPaths: string[];
+    prs: PrSummary[];
+    fetchedAt: number;
+  }): void {
+    const current = this.prLookupRegistry.get(entry.lookupKey);
+    if (current && current.fetchedAt > entry.fetchedAt) {
+      return;
+    }
+    this.prLookupRegistry.set(entry.lookupKey, {
+      ...current,
+      provider: normalizePullRequestProvider(entry.provider),
+      branch: entry.branch,
+      directoryPaths: entry.directoryPaths,
+      prs: entry.prs.map(normalizePrSummary),
+      fetchedAt: entry.fetchedAt,
+    });
+  }
+
+  private async loadPrStatusRegistry(): Promise<void> {
+    if (this.prStatusRegistryLoaded) {
+      return;
+    }
+    if (!this.prStatusRegistryLoadPromise) {
+      this.prStatusRegistryLoadPromise = (async () => {
+        const entries = await this.getOverlayStore().readPrStatusCache();
+        for (const entry of Object.values(entries)) {
+          this.rememberPrStatuses([entry.pr], entry.fetchedAt, "pr-status-cache");
+        }
+        this.prStatusRegistryLoaded = true;
+      })();
+    }
+    const loadPromise = this.prStatusRegistryLoadPromise;
+    try {
+      await loadPromise;
+    } finally {
+      if (this.prStatusRegistryLoadPromise === loadPromise) {
+        this.prStatusRegistryLoadPromise = undefined;
+      }
+    }
+  }
+
+  private async loadPrLookupRegistry(): Promise<void> {
+    if (this.prLookupRegistryLoaded) {
+      return;
+    }
+    if (!this.prLookupRegistryLoadPromise) {
+      this.prLookupRegistryLoadPromise = (async () => {
+        const entries = await this.getOverlayStore().readPrLookupCache();
+        for (const entry of Object.values(entries)) {
+          this.rememberPrLookup(entry);
+          this.rememberPrStatuses(entry.prs, entry.fetchedAt, "pr-lookup-cache");
+        }
+        this.prLookupRegistryLoaded = true;
+      })();
+    }
+    const loadPromise = this.prLookupRegistryLoadPromise;
+    try {
+      await loadPromise;
+    } finally {
+      if (this.prLookupRegistryLoadPromise === loadPromise) {
+        this.prLookupRegistryLoadPromise = undefined;
+      }
+    }
+  }
+
+  private async writePrStatusesToCache(
+    prs: PrSummary[],
+    fetchedAt: number,
+  ): Promise<void> {
+    const entries: PrStatusCacheEntry[] = prs.map(normalizePrSummary).map((pr) => ({
+      provider: normalizePullRequestProvider(pr.provider),
+      prKey: getPrStatusKey(pr),
+      fetchedAt,
+      pr,
+    }));
+    await this.getOverlayStore().writePrStatusCacheEntries(entries);
+  }
+
+  private async writePrLookupToCache(entry: PrLookupCacheEntry): Promise<void> {
+    await this.getOverlayStore().writePrLookupCacheEntry(entry);
+  }
+
+  /**
+   * Rows under the forge's repository name with the registry's status, one per
+   * PR. A row stored under a renamed repository's old name and the same PR
+   * under the new name share one key here, so they merge: the first keeps its
+   * position, attachment intent and directory provenance are united.
+   */
+  private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
+    const merged: PrSummary[] = [];
+    const renamed: boolean[] = [];
+    const indexes = new Map<string, number>();
+    for (const pr of prs) {
+      const stored = normalizePrSummary(pr);
+      const aliased = this.prRepositoryAliases.canonicalize(stored);
+      const normalized = aliased === stored ? stored : normalizePrSummary(aliased);
+      const key = getPrStatusKey(normalized);
+      const status = this.prStatusRegistry.get(key)?.pr;
+      const row = status
+        ? normalizePrSummary({
+            ...status,
+            linkedDirectoryPaths: normalized.linkedDirectoryPaths,
+            ...(normalized.explicitlyAttached ? { explicitlyAttached: true } : {}),
+          })
+        : normalized;
+      const existingIndex = indexes.get(key);
+      if (existingIndex === undefined) {
+        indexes.set(key, merged.length);
+        merged.push(row);
+        renamed.push(aliased !== stored);
+        continue;
+      }
+      const existing = merged[existingIndex]!;
+      // Without a registry status, a row the forge stored under the current
+      // name is fresher than one rewritten from an old name.
+      const base = renamed[existingIndex] && aliased === stored ? row : existing;
+      renamed[existingIndex] = renamed[existingIndex]! && aliased !== stored;
+      merged[existingIndex] = normalizePrSummary({
+        ...base,
+        linkedDirectoryPaths: mergeLinkedDirectoryPaths(
+          existing.linkedDirectoryPaths,
+          row.linkedDirectoryPaths,
+        ),
+        ...((existing.explicitlyAttached || row.explicitlyAttached) ? { explicitlyAttached: true } : {}),
+      });
+    }
+    return merged;
+  }
+
+  /**
+   * Whether a write would move a thread's stored rows or detached keys to the
+   * forge's repository names. Detached rows are left out: they keep the name
+   * they were detached under, and their keys carry the decision.
+   */
+  private storedPrsNeedRename(state: ThreadOverlayState | undefined): boolean {
+    if (!state || !this.prRepositoryAliases.hasRenames()) return false;
+    return (state.prs ?? []).some((pr) =>
+      getPrStatusKey(this.prRepositoryAliases.canonicalize(normalizePrSummary(pr))) !== getPrStatusKey(pr)
+    ) || (state.detachedPrKeys ?? []).some((key) => {
+      const folded = key.trim().toLowerCase();
+      return this.prRepositoryAliases.canonicalizeKey(folded) !== folded;
+    });
+  }
+
+  /** Store option that keeps detachments recorded under a renamed repository's old name. */
+  private detachedPrKeyCanonicalizer(): { canonicalizePrKey?: (key: string) => string } {
+    return this.prRepositoryAliases.hasRenames()
+      ? { canonicalizePrKey: (key) => this.prRepositoryAliases.canonicalizeKey(key) }
+      : {};
+  }
+
+  /** Record what the forge answered for a by-URL fetch. */
+  private learnPullRequestRepository(requestedUrl: string, returned: PrSummary | undefined): void {
+    if (!this.prRepositoryAliases.learn(requestedUrl, returned)) return;
+    this.prRepositoryAliasGeneration += 1;
+    // A thread's primary PRs can now include rows under either name.
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      this.setThreadPrAttachment(threadKey, attachment);
+    }
+    // The poller no longer fetches a merged or closed PR, so a merge watch
+    // saved under the old name needs its cached status offered again. A poll
+    // can learn several renames at once; one retry scan covers them all.
+    if (!this.prRenameRetryQueued) {
+      this.prRenameRetryQueued = true;
+      queueMicrotask(() => {
+        this.prRenameRetryQueued = false;
+        void this.retryPendingPrTerminalWatches().catch((error) => {
+          appServerLog.warn("pr terminal watch retry after a repository rename failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      });
+    }
+    const requested = parsePullRequestReferenceUrl(requestedUrl);
+    appServerLog.info("forge answered a pull request under another repository name", {
+      requested: requested ? `${requested.provider}/${requested.org}/${requested.repo}` : requestedUrl,
+      canonical: returned?.url,
+    });
+  }
+
+  /**
+   * Ask the forge which repository a PR URL names now, for an attach. One
+   * by-URL fetch from the shared budget; undefined when it cannot answer.
+   */
+  async resolvePullRequestReference(params: {
+    url: string;
+    cwd?: string;
+  }): Promise<PullRequestReferenceIdentity | undefined> {
+    const requested = parsePullRequestReferenceUrl(params.url);
+    if (!requested) return undefined;
+    const known = parsePullRequestReferenceUrl(this.prRepositoryAliases.canonicalizeUrl(params.url));
+    if (known && (known.org !== requested.org || known.repo !== requested.repo)) {
+      return known;
+    }
+    if (!this.takePrPollingToken("Agent PR attach")) return undefined;
+    const pr = await this.getPrFetcher().fetchPullRequestByUrl({
+      cwd: params.cwd ?? os.homedir(),
+      url: params.url,
+    });
+    this.learnPullRequestRepository(params.url, pr);
+    const answered = parsePullRequestReferenceUrl(pr?.url);
+    return answered
+      && answered.provider === requested.provider
+      && answered.number === requested.number
+      ? answered
+      : undefined;
+  }
+
+  /**
+   * A stored PR URL under the repository name the forge reports now. Asks the
+   * forge at most once per URL per session, or again after a failed answer,
+   * because learned names live in memory and a reference saved under an old
+   * name has nothing else to learn it from after a restart.
+   */
+  private async resolveCurrentPullRequestUrl(url: string, cwd?: string): Promise<string | undefined> {
+    const known = this.prRepositoryAliases.canonicalizeUrl(url);
+    if (known !== url) return known;
+    const now = Date.now();
+    const cached = this.prReferenceResolutions.get(url);
+    if (cached && (cached.answered || now - cached.askedAt < PR_REFERENCE_RETRY_MS)) {
+      return await cached.result;
+    }
+    const entry = {
+      askedAt: now,
+      answered: false,
+      result: this.resolvePullRequestReference({ url, ...(cwd ? { cwd } : {}) })
+        .then((identity) => identity ? this.prRepositoryAliases.canonicalizeUrl(url) : undefined)
+        .catch(() => undefined),
+    };
+    this.prReferenceResolutions.set(url, entry);
+    const result = await entry.result;
+    entry.answered = result !== undefined;
+    return result;
+  }
+
+  /**
+   * Move stored watch keys to the repository names the forge has answered
+   * with, once per learned rename. Status snapshots carry the new name and a
+   * claim matches its key exactly.
+   */
+  private syncPrStatusWatchKeys(): Promise<void> {
+    const run = this.prWatchKeySync.then(async () => {
+      const generation = this.prRepositoryAliasGeneration;
+      if (generation === this.prWatchKeysGeneration) return;
+      try {
+        const moved = await this.getOverlayStore().canonicalizeThreadPrStatusWatchKeys({
+          canonicalizePrKey: (key) => this.prRepositoryAliases.canonicalizeKey(key),
+          canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
+          now: Date.now(),
+        });
+        this.prWatchKeysGeneration = generation;
+        if (moved > 0) {
+          appServerLog.info("pr status watches moved to a renamed repository", { watchCount: moved });
+        }
+      } catch (error) {
+        // Claims still run; the next one tries the move again.
+        appServerLog.warn("pr status watch rename failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+    this.prWatchKeySync = run;
+    return run;
+  }
+
+  /**
+   * Ask the forge about watches whose PR is attached to their thread only
+   * under another repository name. Stored rows and status snapshots already
+   * use a renamed repository's new name, so after a restart a watch saved
+   * under the old one has nothing else to learn the rename from.
+   */
+  private async resolveRenamedPrWatchRepositories(): Promise<void> {
+    if (!this.backgroundPrPollingEnabled) return;
+    const store = this.getOverlayStore();
+    const watches = await store.listAllActiveThreadPrStatusWatches();
+    if (watches.length === 0) return;
+    await this.loadPrStatusRegistry();
+    const asked = new Set<string>();
+    // A thread usually holds a CI watch and a merge watch for the same PR.
+    const rowsByThread = new Map<string, PrSummary[]>();
+    for (const watch of watches) {
+      if (asked.has(watch.prUrl)) continue;
+      const prKey = this.prRepositoryAliases.canonicalizeKey(watch.prKey);
+      const threadKey = buildThreadIdentityKey(watch.backend, watch.threadId);
+      let rows = rowsByThread.get(threadKey);
+      if (!rows) {
+        const overlay = await store.getThreadOverlayState({ backend: watch.backend, threadId: watch.threadId });
+        rows = this.canonicalizePrs(overlay?.prs ?? []);
+        rowsByThread.set(threadKey, rows);
+      }
+      if (rows.some((pr) => getPrStatusKey(pr) === prKey)) continue;
+      const renamed = rows.find((pr) =>
+        isSameNumberInAnotherRepository(pr.url, this.prRepositoryAliases.canonicalizeUrl(watch.prUrl))
+      );
+      if (!renamed) continue;
+      asked.add(watch.prUrl);
+      await this.resolveCurrentPullRequestUrl(watch.prUrl, renamed.linkedDirectoryPaths?.[0]);
+    }
+  }
+
+  /**
+   * Project stored PR rows through the canonical status registry,
+   * loading it from `pr_status_cache` first so this works even when no
+   * window has driven a lookup yet. Injected into the backend registry,
+   * which serves both thread inspection and the navigation snapshot the
+   * federation/messaging bridge hands to remote viewers.
+   */
+  async canonicalizeStoredPullRequests(
+    prs: PrSummary[],
+  ): Promise<PrSummary[]> {
+    await this.loadPrStatusRegistry();
+    return await this.filterStoredDiscoveredPrs(this.canonicalizePrs(prs));
+  }
+
+  private mergePrHistory(
+    existingPrs: PrSummary[],
+    discoveredPrs: PrSummary[],
+  ): PrSummary[] {
+    const merged = this.canonicalizePrs(existingPrs);
+    const indexes = new Map<string, number>();
+    merged.forEach((pr, index) => {
+      indexes.set(getPrStatusKey(pr), index);
+    });
+
+    for (const pr of this.canonicalizePrs(discoveredPrs)) {
+      const key = getPrStatusKey(pr);
+      const existingIndex = indexes.get(key);
+      if (existingIndex === undefined) {
+        indexes.set(key, merged.length);
+        merged.push(pr);
+      } else {
+        const existing = merged[existingIndex];
+        merged[existingIndex] = normalizePrSummary({
+          ...pr,
+          linkedDirectoryPaths: mergeLinkedDirectoryPaths(
+            existing?.linkedDirectoryPaths,
+            pr.linkedDirectoryPaths,
+          ),
+          ...((existing?.explicitlyAttached || pr.explicitlyAttached) ? { explicitlyAttached: true } : {}),
+        });
+      }
+    }
+
+    return merged;
+  }
+
+  private seedPrStatusRegistryFromThreads(
+    threads: NavigationSnapshot["threads"],
+  ): void {
+    for (const thread of threads) {
+      if (!thread.prs?.length) {
+        continue;
+      }
+      this.rememberPrStatuses(thread.prs, 0, "navigation-overlay");
+    }
+  }
+
+  private applyCanonicalPrStatuses(
+    threads: NavigationSnapshot["threads"],
+  ): { threads: NavigationSnapshot["threads"]; changed: boolean } {
+    let changed = false;
+    const canonicalThreads = threads.map((thread) => {
+      if (!thread.prs?.length) {
+        return thread;
+      }
+      const prs = this.canonicalizePrs(thread.prs);
+      if (prSummariesEqual(thread.prs, prs)) {
+        return thread;
+      }
+      changed = true;
+      return { ...thread, prs };
+    });
+
+    return { threads: canonicalThreads, changed };
+  }
+
+  private async publishThreadPullRequestsUpdated(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prs: PrSummary[];
+    detachedPrs?: PrSummary[];
+  }): Promise<void> {
+    await this.rememberThreadPrAttachmentUpdate(params);
+    const worktreePath = this.rememberPublishedPrCommitShasForThread({
+      ...params,
+      prs: [...params.prs, ...(params.detachedPrs ?? [])],
+    });
+    if (worktreePath) {
+      getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
+      void this.loadThreadGitWorkingStateCache().then(() => {
+        this.startWorktreeWorkingStateRefresh({
+          worktreePaths: [worktreePath],
+          force: true,
+        });
+      });
+    }
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: params.backend,
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId: params.threadId,
+          prs: params.prs,
+        },
+      },
+    });
+  }
+
+  private async publishPullRequestStatusUpdates(params: {
+    backend: AppServerBackendKind;
+    prs: PrSummary[];
+  }): Promise<void> {
+    await Promise.all(
+      params.prs.map(async (pr) => {
+        await getDesktopBackendRegistry().publishLocalEvent({
+          backend: params.backend,
+          notification: {
+            method: "pullRequest/status/updated",
+            params: {
+              prKey: getPrStatusKey(pr),
+              pr,
+            },
+          },
+        });
+      }),
+    );
+  }
+
+  /**
+   * Renderer tells us which threads are selected / on screen. Their PRs move to
+   * the poller's fast tier; everything else backs off. Cheap and idempotent —
+   * the renderer debounces, and this only swaps a Set. Each window's focus is
+   * tracked under its webContents id so windows don't clobber each other.
+   */
+  setPullRequestPollingFocus(
+    request: SetPullRequestPollingFocusRequest,
+    senderKey = 0,
+  ): void {
+    this.prPollingFocus.set(senderKey, request.threadKeys);
+  }
+
+  /** Drop a closed window's focus so its threads leave the fast tier. */
+  clearPullRequestPollingFocusForSender(senderKey: number): void {
+    this.prPollingFocus.clearSender(senderKey);
+  }
+
+  setTranscriptPullRequests(
+    request: SetTranscriptPullRequestsRequest,
+    senderKey: number,
+    publish: (statuses: TranscriptPullRequestStatuses) => void,
+  ): TranscriptPullRequestStatuses {
+    const snapshot = this.transcriptPrSubscriptions.set(senderKey, request, publish);
+    this.transcriptPrSubscriptions.requestRefresh(this.refreshTranscriptPrTargets);
+    return snapshot;
+  }
+
+  private readonly refreshTranscriptPrTargets = async (): Promise<void> => {
+    await Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()]);
+    if (!this.transcriptPrSubscriptions.hasSubscribers) return;
+    this.ensurePrPollingSchedulerStarted();
+    await this.prPollingScheduler?.tick(this.pendingTranscriptPrTargets);
+  };
+
+  private readonly pendingTranscriptPrTargets = (): PrPollTarget[] =>
+    this.transcriptPrSubscriptions.pendingTargets().map((target) => this.hydrateTranscriptPrTarget(target));
+
+  private hydrateTranscriptPrTarget(target: PrPollTarget): PrPollTarget {
+    const threadKey = this.primaryPrThreadsByKey.get(target.prKey)?.values().next().value;
+    const attachment = threadKey ? this.attachedPrsByThreadKey.get(threadKey) : undefined;
+    if (attachment) this.prPollBackendByKey.set(target.prKey, attachment.backend);
+    const known = this.prStatusRegistry.get(target.prKey);
+    if (known && known.fetchedAt > (target.fetchedAt ?? 0)) {
+      this.transcriptPrSubscriptions.observe([known.pr], known.fetchedAt);
+      return { ...target, pr: known.pr, fetchedAt: known.fetchedAt };
+    }
+    return target;
+  }
+
+  clearTranscriptPullRequestsForSender(senderKey: number): void {
+    this.transcriptPrSubscriptions.clearSender(senderKey);
+  }
+
+  async probePullRequestPollingAfterReconnect(): Promise<void> {
+    // Arm the shared client even when background polling is disabled or has no
+    // eligible target; the next foreground lookup can consume the bypass.
+    if (!this.getPrGraphqlClient().noteNetworkReconnect()) {
+      return;
+    }
+    await this.prPollingScheduler?.probeAfterNetworkReconnect();
+  }
+
+  acknowledgeGithubPrAuthenticationNotice(): void {
+    this.githubPrAuthenticationNotice.acknowledge();
+  }
+
+  /** PwrAgent set Git LFS up where the operator's own Git cannot push. */
+  publishBundledGitLfsAdvisory(repositoryPath: string): void {
+    const event = { occurredAt: Date.now(), repositoryPath };
+    this.bundledGitLfsNotice.publish(
+      subscribersForChannel(BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL)
+        .filter((webContents) => !webContents.isDestroyed())
+        .map((webContents) => () => webContents.send(
+          BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
+          event,
+        )),
+    );
+  }
+
+  acknowledgeBundledGitLfsAdvisory(): void {
+    this.bundledGitLfsNotice.acknowledge();
+  }
+
+  /**
+   * Repair stored automatic attachments. A renamed repository's remote can
+   * still carry the old name, so a stored PR no remote names asks GitHub what
+   * that remote is called now before it is dropped.
+   */
+  private async filterStoredDiscoveredPrs(prs: PrSummary[]): Promise<PrSummary[]> {
+    return await filterStoredDiscoveredPullRequests(prs, {
+      resolveRepositoryNames: async (repos) => {
+        if (!getDesktopSettingsService().isForgeEnabled("github")) return;
+        await this.getPrGraphqlClient().resolveRepositoryNames(repos);
+      },
+    });
+  }
+
+  private getPrGraphqlClient(): GithubGraphqlPrClient {
+    if (!this.prGraphqlClient) {
+      this.prGraphqlClient = new GithubGraphqlPrClient({
+        getConfiguredGhCommand: () =>
+          getDesktopSettingsService().resolveGhCommandPreference(),
+        onAuthenticationFailure: (event) => {
+          const notice = {
+            occurredAt: Date.now(),
+            ...(event.detail ? { detail: event.detail } : {}),
+          };
+          this.githubPrAuthenticationNotice.publish(
+            subscribersForChannel(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL)
+              .filter((webContents) => !webContents.isDestroyed())
+              .map((webContents) => () => webContents.send(
+                GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
+                notice,
+              )),
+          );
+        },
+        onRepositoryAccess: (event) => {
+          const target = {
+            kind: "github-repository" as const,
+            owner: event.owner,
+            repo: event.repo,
+          };
+          const key = githubPrAccessTargetKey(target);
+          if (event.status === "available") {
+            this.githubSamlBlockedRepositories.delete(key);
+            return;
+          }
+          if (this.githubSamlBlockedRepositories.has(key)) {
+            return;
+          }
+          this.githubSamlBlockedRepositories.add(key);
+          const notice = {
+            branch: event.branch,
+            occurredAt: Date.now(),
+            target,
+          };
+          for (const webContents of subscribersForChannel(
+            GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
+          )) {
+            if (!webContents.isDestroyed()) {
+              webContents.send(GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL, notice);
+            }
+          }
+        },
+      });
+    }
+    return this.prGraphqlClient;
+  }
+
+  private async readPrAutoDispatchBudgetConfig(): Promise<PrAutoDispatchBudgetConfig> {
+    return resolvePrAutomationConfig(getDesktopConfigStore().read("git")).budget;
+  }
+
+  /**
+   * Start or stop background PR polling and automatic repair dispatch to match
+   * the Git settings. Called at owner startup and after settings writes, so
+   * both gates take effect independently of renderer navigation demand.
+   */
+  syncPrPollingSchedulerState(): void {
+    const settingsSyncGeneration = ++this.prPollingSettingsSyncGeneration;
+    void (async () => {
+      let backgroundPollingEnabled = DEFAULT_BACKGROUND_PR_POLLING;
+      let prAutoDispatchAllowed = DEFAULT_PR_AUTO_DISPATCH_ALLOWED;
+      let budgetConfig: PrAutoDispatchBudgetConfig = {
+        capacity: DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+        refillPerMinute: DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+        pauseWhenEmpty: DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+      };
+      let budgetStatus: PrAutoDispatchBudgetStatus | undefined;
+      try {
+        // Owner startup establishes this subscription even when no renderer
+        // opens a navigation collection.
+        if (!this.prPollingSettingsUnsubscribe) {
+          this.prPollingSettingsUnsubscribe = getDesktopConfigStore().subscribe(
+            ["git"],
+            () => {
+              // Pause dispatch pessimistically while the new snapshot is read.
+              // This closes settings-write races for both global kill switches.
+              this.backgroundPrPollingEnabled = false;
+              this.prAutoDispatchAllowed = false;
+              this.prAutoDispatchCoordinator?.pause();
+              this.syncPrPollingSchedulerState();
+            },
+          );
+        }
+        const config = resolvePrAutomationConfig(
+          getDesktopConfigStore().read("git"),
+        );
+        backgroundPollingEnabled = config.backgroundPollingEnabled;
+        prAutoDispatchAllowed = config.prAutoDispatchAllowed;
+        budgetConfig = config.budget;
+        budgetStatus = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
+          config: budgetConfig,
+          now: Date.now(),
+        });
+      } catch (error) {
+        appServerLog.warn("failed to read GitHub PR automation settings", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (settingsSyncGeneration !== this.prPollingSettingsSyncGeneration) {
+        return;
+      }
+
+      this.backgroundPrPollingEnabled = backgroundPollingEnabled;
+      this.prAutoDispatchAllowed = prAutoDispatchAllowed;
+      this.prAutoDispatchBudgetConfig = budgetConfig;
+      if (budgetStatus?.paused) {
+        this.updatePrAutoDispatchBudgetStatus(budgetStatus);
+      }
+
+      if (!backgroundPollingEnabled) {
+        this.prAutoDispatchCoordinator?.pause();
+        this.stopPrPollingScheduler();
+        return;
+      }
+      this.ensurePrPollingSchedulerStarted();
+      if (!this.isPrAutoDispatchAvailable()) {
+        this.prAutoDispatchCoordinator?.pause();
+        return;
+      }
+      void this.getPrAutoDispatchCoordinator().resume();
+    })();
+  }
+
+  private isPrAutoDispatchAvailable(): boolean {
+    return (
+      this.backgroundPrPollingEnabled
+      && this.prAutoDispatchAllowed
+      && !this.prAutoDispatchBudgetPaused
+    );
+  }
+
+  private takePrPollingToken(source: string, prKeys: string[] = [], threadKeys: string[] = []): boolean {
+    const admitted = this.prStatusTokenBucket.tryTake();
+    this.prActivity.record({
+      category: "budget",
+      budget: "polling",
+      source,
+      prKeys,
+      threadKeys,
+      delta: admitted ? -1 : 0,
+      availableTokens: this.prStatusTokenBucket.availableTokens,
+      ...(admitted ? {} : { tone: "warning" as const }),
+      message: admitted ? "PR check allowed" : "PR check postponed: request budget empty",
+    });
+    return admitted;
+  }
+
+  getPrActivity(): PrActivitySnapshot {
+    return {
+      ...this.prActivity.snapshot({
+        threadTitle: (key) => {
+          const identity = parseThreadIdentityKey(key);
+          return identity ? getDesktopBackendRegistry().getCachedThreadSummary(identity)?.title : undefined;
+        },
+        prUrl: (key) => this.prStatusRegistry.get(key)?.pr.url,
+      }),
+      monitoring: {
+        backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+        autoFixAllowed: this.prAutoDispatchAllowed,
+        repairBudgetPaused: this.prAutoDispatchBudgetPaused,
+        pollingBudget: {
+          availableTokens: this.prStatusTokenBucket.peek(),
+          capacity: PR_STATUS_TOKEN_BUCKET_CAPACITY,
+          refillPerMinute: PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE,
+        },
+        repairBudget: {
+          capacity: this.prAutoDispatchBudgetConfig.capacity,
+          refillPerMinute: this.prAutoDispatchBudgetConfig.refillPerMinute,
+        },
+      },
+    };
+  }
+
+  async getPrAutoDispatchBudgetStatus(): Promise<PrAutoDispatchBudgetStatus> {
+    // The renderer requests this while mounting, before a navigation snapshot
+    // necessarily synchronizes the cached config. Reading bucket status applies
+    // refill durably, so it must use the profile settings rather than defaults.
+    const budgetConfig = await this.readPrAutoDispatchBudgetConfig();
+    this.prAutoDispatchBudgetConfig = budgetConfig;
+    const status = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
+      config: budgetConfig,
+      now: Date.now(),
+    });
+    if (status.paused) {
+      this.updatePrAutoDispatchBudgetStatus(status);
+    }
+    return status;
+  }
+
+  async resumePrAutoDispatchBudget(): Promise<PrAutoDispatchBudgetStatus> {
+    const budgetConfig = await this.readPrAutoDispatchBudgetConfig();
+    this.prAutoDispatchBudgetConfig = budgetConfig;
+    const status = await this.getOverlayStore().resumePrAutoDispatchBudget({
+      config: budgetConfig,
+      now: Date.now(),
+    });
+    this.updatePrAutoDispatchBudgetStatus(status, { allowResume: true });
+    if (this.isPrAutoDispatchAvailable()) {
+      void this.getPrAutoDispatchCoordinator().resume();
+    }
+    return status;
+  }
+
+  private async refreshPrAutoDispatchBudgetSafetyStop(): Promise<void> {
+    if (!this.prAutoDispatchBudgetPaused) return;
+    try {
+      const status = await this.getOverlayStore().peekPrAutoDispatchBudgetStatus({
+        config: this.prAutoDispatchBudgetConfig,
+        now: Date.now(),
+      });
+      if (status.paused) return;
+      this.updatePrAutoDispatchBudgetStatus(status, { allowResume: true });
+      if (this.isPrAutoDispatchAvailable()) {
+        void this.getPrAutoDispatchCoordinator().resume();
+      }
+    } catch (error) {
+      appServerLog.warn("failed to refresh automatic PR repair budget", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private updatePrAutoDispatchBudgetStatus(
+    status: PrAutoDispatchBudgetStatus,
+    options?: { allowResume?: boolean },
+  ): void {
+    const previousPaused = this.prAutoDispatchBudgetPaused;
+    const previousPausedAt = this.prAutoDispatchBudgetPausedAt;
+    if (status.paused) {
+      this.prAutoDispatchBudgetPaused = true;
+      this.prAutoDispatchBudgetPausedAt = status.pausedAt;
+      this.prAutoDispatchCoordinator?.pause();
+    } else if (options?.allowResume) {
+      this.prAutoDispatchBudgetPaused = false;
+      this.prAutoDispatchBudgetPausedAt = undefined;
+    }
+    const pauseStateChanged = previousPaused !== this.prAutoDispatchBudgetPaused;
+    const pauseEventChanged =
+      status.paused && status.pausedAt !== previousPausedAt;
+    if (pauseStateChanged || pauseEventChanged) {
+      this.broadcastPrAutoDispatchBudgetStatus(status);
+    }
+    if (pauseStateChanged) {
+      // Auto-fix rows read "paused" from the PR watch list.
+      void this.publishPrAutoFixStatesChanged().catch((error: unknown) => {
+        appServerLog.warn("failed to publish Auto-fix state change", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+
+  private broadcastPrAutoDispatchBudgetStatus(
+    status: PrAutoDispatchBudgetStatus,
+  ): void {
+    for (const webContents of subscribersForChannel(
+      PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+    )) {
+      if (!webContents.isDestroyed()) {
+        webContents.send(PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL, status);
+      }
+    }
+  }
+
+  private stopPrPollingScheduler(): void {
+    const wasRunning = this.prPollingScheduler !== undefined;
+    if (this.prPollingScheduler) {
+      this.prPollingScheduler.stop();
+      this.prPollingScheduler = undefined;
+    }
+    if (this.prDiscoveryTimer) {
+      clearInterval(this.prDiscoveryTimer);
+      this.prDiscoveryTimer = undefined;
+    }
+    this.prDiscoveryLastRefreshedAt.clear();
+    if (wasRunning) {
+      // Info, not debug: an operator toggling the experimental flag should see
+      // it take effect in the normal log without turning on debug collection.
+      appServerLog.info("background PR polling disabled");
+    }
+  }
+
+  /**
+   * Boot the background poller once we have a navigation snapshot (and thus
+   * thread→PR contexts to poll). Idempotent: called on every snapshot.
+   */
+  private ensurePrPollingSchedulerStarted(): void {
+    if (this.prPollingScheduler) {
+      if (this.backgroundPrPollingEnabled && this.prStatusRegistryLoaded && this.prLookupRegistryLoaded) {
+        this.prPollingScheduler.start();
+        this.startPrDiscoveryRefresh();
+      }
+      return;
+    }
+    appServerLog.debug("creating PR polling scheduler");
+    const scheduler = new PrPollingScheduler({
+      listTargets: () => this.collectPrPollTargets(),
+      getFocusedThreadKeys: () => this.prPollingFocus.union(),
+      isWindowVisible: () =>
+        BrowserWindow.getAllWindows().some(
+          (window) =>
+            !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
+        ),
+      // Admission pays for one GitHub batch or one GitLab MR read.
+      // Additional GitLab REST reads consume their own shared token.
+      onPollUnavailable: (targets, failed) => {
+        for (const target of targets) this.prActivity.record({
+          category: "check", source: "background poll", threadKeys: target.threadKeys, prKeys: [target.prKey],
+          tone: failed ? "error" : "warning",
+          message: failed ? "PR check failed; retry on next poll" : "No fresh status returned; provider may be unavailable or cooling down",
+        });
+      },
+      tryTakeToken: (targets = []) => this.takePrPollingToken("background poll", targets.map((t) => t.prKey), targets.flatMap((t) => t.threadKeys)),
+      fetchPullRequests: async (refs) =>
+        await this.fetchForgePullRequests(refs, false, true),
+      fetchPullRequestsAfterReconnect: async (refs) =>
+        await this.fetchForgePullRequests(refs, true, true),
+      getObservationTimestamp: () => this.nextPrObservationTimestamp(),
+      onTargetsHandled: (keys) => this.transcriptPrSubscriptions.markHandled(keys),
+      applyResults: async (prs, fetchedAt) => {
+        // Mention-only results must never enter persistence, transitions, or
+        // automatic repair. Attached PRs keep their existing result path.
+        this.transcriptPrSubscriptions.observe(prs, fetchedAt);
+        const attached = prs.filter((pr) =>
+          this.primaryPrThreadsByKey.has(getPrStatusKey(pr))
+        );
+        return attached.length ? await this.applyPolledPrStatuses(attached, fetchedAt) : [];
+      },
+    });
+    this.prPollingScheduler = scheduler;
+
+    // The registries are lazily hydrated from sqlite; polling before they load
+    // would see an empty target list and idle for a tick.
+    void Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()])
+      .then(() => {
+        // A late toggle-off could have torn the scheduler down while the
+        // registries were still loading; don't resurrect it.
+        if (this.prPollingScheduler !== scheduler) {
+          return;
+        }
+        if (!this.backgroundPrPollingEnabled) return;
+        scheduler.start();
+        this.startPrDiscoveryRefresh();
+        appServerLog.info("background PR polling started", {
+          trackedPrCount: this.collectPrPollTargets().length,
+        });
+        void this.resolveRenamedPrWatchRepositories()
+          .catch((error) => {
+            appServerLog.warn("pr watch repository resolve failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          })
+          .then(() => this.retryPendingPrTerminalWatches())
+          .catch((error) => {
+            appServerLog.warn("pr terminal watch startup retry failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        void this.retryPendingSandboxCleanups().catch((error) => {
+          appServerLog.warn("sandboxer cleanup startup retry failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      })
+      .catch((error) => {
+        appServerLog.warn("failed to start PR polling scheduler", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  /**
+   * Start the slow discovery rotation (Layer B). Idempotent. See
+   * `pr-discovery.ts` for why this re-runs the branch lookup rather than a
+   * search/`since` crawl.
+   */
+  private startPrDiscoveryRefresh(): void {
+    if (this.prDiscoveryTimer) {
+      return;
+    }
+    this.prDiscoveryTimer = setInterval(() => {
+      this.runPrDiscoveryTick();
+    }, PR_DISCOVERY_TICK_INTERVAL_MS);
+    // Discovery must never hold the process open.
+    this.prDiscoveryTimer.unref?.();
+  }
+
+  private runPrDiscoveryTick(): void {
+    // Discovery is a background nicety; skip it entirely while hidden rather
+    // than spend `gh` subprocesses and tokens no one will see.
+    const visible = BrowserWindow.getAllWindows().some(
+      (window) => !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
+    );
+    if (!visible) {
+      return;
+    }
+
+    const now = Date.now();
+    const threadKeys = [...this.prRefreshContextByThreadKey.keys()];
+    this.prunePrDiscoveryState(threadKeys);
+
+    const due = selectDiscoveryDueThreadKeys({
+      // A paused project discovers no PRs; its clocks are kept for resume.
+      threadKeys: threadKeys.filter((threadKey) =>
+        projectAllowsForgePolling(this.threadKeyForgeAutomation(threadKey))
+      ),
+      lastRefreshedAt: this.prDiscoveryLastRefreshedAt,
+      now,
+      cadenceMs: PR_DISCOVERY_CADENCE_MS,
+      maxPerTick: PR_DISCOVERY_MAX_PER_TICK,
+      // The selected / on-screen threads already get a fast branch-lookup from
+      // the renderer — re-doing it here would just burn budget.
+      skipThreadKeys: this.prPollingFocus.union(),
+    });
+
+    const dueContexts: ThreadPrRefreshContext[] = [];
+    for (const threadKey of due) {
+      // Mark before firing so a slow refresh cannot keep re-selecting the same
+      // thread on the next tick.
+      this.prDiscoveryLastRefreshedAt.set(threadKey, now);
+      dueContexts.push(...(this.prRefreshContextByThreadKey.get(threadKey) ?? []));
+    }
+    if (dueContexts.length === 0) {
+      return;
+    }
+
+    // Answer every due branch lookup in one batched in-process request, then
+    // let the normal refresh path consume those answers. Anything not primed
+    // gets a fresh in-process request through the normal refresh path.
+    void this.primeDiscoveryBranchLookups(dueContexts)
+      .catch((error) => {
+        appServerLog.debug("pr discovery prefetch failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.startDiscoveryRefreshes(dueContexts);
+      });
+  }
+
+  /**
+   * Resolve each due (directory, branch) to a GitHub repo and look them all up
+   * in one batched GraphQL request, priming the fetcher with the results.
+   *
+   * This keeps discovery to one batched request instead of one request per
+   * branch. Only directory/branch pairs whose every configured GitHub repo
+   * answered are primed; a missing answer is not recorded as "no PRs".
+   */
+  private async primeDiscoveryBranchLookups(
+    contexts: ThreadPrRefreshContext[],
+  ): Promise<void> {
+    if (!this.getPrFetcher().isProviderEnabled("github")) return;
+    const wanted = new Map<
+      string,
+      { cwd: string; branch: string; refs: BranchRef[] }
+    >();
+    for (const context of contexts) {
+      const branch = context.branch.trim();
+      // "HEAD" contexts are not branch lookups, and the detection path skips
+      // default branches entirely — priming either would be wasted work.
+      if (!branch || branch === "HEAD") {
+        continue;
+      }
+      for (const cwd of context.directoryPaths) {
+        const dedupeKey = `${cwd} ${branch}`;
+        if (wanted.has(dedupeKey)) {
+          continue;
+        }
+        const repos = await resolveGitHubReposForDirectory(cwd);
+        if (repos.length === 0) {
+          continue;
+        }
+        const lookupBranches = await resolvePrLookupBranches({ cwd, branch });
+        if (!lookupBranches.includes(branch)) continue;
+        wanted.set(dedupeKey, {
+          cwd,
+          branch,
+          refs: repos.map((repo) => ({
+            owner: repo.owner,
+            repo: repo.repo,
+            branch,
+          })),
+        });
+      }
+    }
+
+    if (wanted.size === 0) {
+      return;
+    }
+
+    const entries = [...wanted.values()];
+    const refs = entries.flatMap((entry) => entry.refs);
+    const byRefKey = await this.getPrGraphqlClient().fetchPullRequestsForBranches(
+      refs,
+    );
+    const primed = entries
+      .map((entry) => {
+        const answers = entry.refs.map((ref) => byRefKey.get(branchRefKey(ref)));
+        return {
+          cwd: entry.cwd,
+          branch: entry.branch,
+          prs: answers.some((answer) => answer === undefined)
+            ? undefined
+            : dedupePrsByStatusKey(answers.flatMap((answer) => answer ?? [])),
+        };
+      })
+      .filter(
+        (entry): entry is { cwd: string; branch: string; prs: PrSummary[] } =>
+          entry.prs !== undefined,
+      );
+    if (primed.length === 0) {
+      return;
+    }
+    this.getPrFetcher().github.primeBranchLookup(primed);
+    appServerLog.debug("pr discovery primed branch lookups", {
+      requested: refs.length,
+      primed: primed.length,
+    });
+  }
+
+  private startDiscoveryRefreshes(contexts: ThreadPrRefreshContext[]): void {
+    for (const context of contexts) {
+      // `trigger: "scheduled"` routes through the existing per-lookup cooldown
+      // and the shared token bucket, so discovery self-limits against the
+      // fast poller and the terminal short-circuit still applies.
+      void this.refreshThreadPullRequests({
+        backend: context.backend,
+        threadId: context.threadId,
+        provider: DEFAULT_PULL_REQUEST_PROVIDER,
+        trigger: "scheduled",
+        branch: context.branch,
+        directoryPaths: context.directoryPaths,
+      }).catch((error) => {
+        appServerLog.debug("pr discovery refresh failed", {
+          threadId: context.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+
+  private prunePrDiscoveryState(threadKeys: string[]): void {
+    if (this.prDiscoveryLastRefreshedAt.size === 0) {
+      return;
+    }
+    const live = new Set(threadKeys);
+    for (const threadKey of this.prDiscoveryLastRefreshedAt.keys()) {
+      if (!live.has(threadKey)) {
+        this.prDiscoveryLastRefreshedAt.delete(threadKey);
+      }
+    }
+  }
+
+  /**
+   * Every tracked, non-terminal PR the poller should keep fresh, with the
+   * threads that display it.
+   *
+   * Uses the owner attachment set populated at startup/provider completion and
+   * attachment events. This includes explicit PRs on directoryless threads
+   * and excludes detached PRs even though lookup history retains them for
+   * non-UI bookkeeping.
+   */
+  private collectPrPollTargets(): PrPollTarget[] {
+    const byKey = new Map<string, PrPollTarget>();
+    this.prPollBackendByKey.clear();
+
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      if (!this.backgroundPrPollingEnabled) break;
+      // A paused project's PRs are not polled; their chips keep the last
+      // status. Another project's thread on the same PR still polls it.
+      if (!projectAllowsForgePolling(this.threadKeyForgeAutomation(threadKey))) continue;
+      for (const pr of attachment.prs.filter((candidate) =>
+        this.matchesPrimaryRepository(candidate, attachment.primaryRepoKey)
+      )) {
+        const prKey = getPrStatusKey(pr);
+        const status = this.prStatusRegistry.get(prKey);
+        const latest = status?.pr ?? pr;
+        if (isTerminalPullRequest(latest)) continue;
+        this.prPollBackendByKey.set(prKey, attachment.backend);
+        const existing = byKey.get(prKey);
+        if (existing) {
+          if (!existing.threadKeys.includes(threadKey)) {
+            existing.threadKeys.push(threadKey);
+          }
+          continue;
+        }
+        // A lookup that fetched this PR, or is fetching it, counts as a poll.
+        // Without it, selecting a thread fetched each of its PRs twice: once
+        // for the renderer's lookup and once for the poller's focused tier.
+        const fetchedAt = Math.max(
+          status?.fetchedAt ?? 0,
+          this.prLookupsInFlight.startedAt(prKey) ?? 0,
+        );
+        byKey.set(prKey, {
+          prKey,
+          pr: latest,
+          threadKeys: [threadKey],
+          ...(fetchedAt > 0 ? { fetchedAt } : {}),
+        });
+      }
+    }
+    for (const candidate of this.transcriptPrSubscriptions.targets()) {
+      const target = this.hydrateTranscriptPrTarget(candidate);
+      const existing = byKey.get(target.prKey);
+      const fetchedAt = Math.max(existing?.fetchedAt ?? 0, target.fetchedAt ?? 0);
+      byKey.set(target.prKey, existing ? {
+        ...existing,
+        subscriptionTier: target.subscriptionTier,
+        ...(fetchedAt > 0 ? { fetchedAt } : {}),
+      } : target);
+    }
+    return [...byKey.values()];
+  }
+
+  /**
+   * The stored Forge Automation of a thread's project, from the in-memory
+   * index. The registry is read only for a thread the last navigation scan
+   * did not list, and only while some project stores a setting.
+   */
+  private threadForgeAutomation(ref: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomation | undefined {
+    return getProjectForgeAutomationIndex().automationForThread(
+      ref,
+      () => getDesktopBackendRegistry().getCachedThreadSummary(ref),
+    );
+  }
+
+  private threadKeyForgeAutomation(threadKey: string): ProjectForgeAutomation | undefined {
+    if (!getProjectForgeAutomationIndex().hasAny()) return undefined;
+    const identity = parseThreadIdentityKey(threadKey);
+    return identity ? this.threadForgeAutomation(identity) : undefined;
+  }
+
+  private resolveThreadForgeProject(ref: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomationResolution | undefined {
+    return getProjectForgeAutomationIndex().resolveThread(
+      ref,
+      () => getDesktopBackendRegistry().getCachedThreadSummary(ref),
+    );
+  }
+
+  private recordPrCheck(
+    prs: PrSummary[],
+    source: string,
+    incomplete = false,
+    requestingThreadKeys: string[] = [],
+  ): void {
+    for (const pr of prs) {
+      const prKey = getPrStatusKey(pr);
+      const threadKeys = [...new Set([
+        ...(this.primaryPrThreadsByKey.get(prKey) ?? []),
+        ...requestingThreadKeys,
+      ])];
+      this.prActivity.record({
+        category: "check",
+        source,
+        threadKeys,
+        prKeys: [prKey],
+        tone: prCheckTone(pr),
+        message: describePrCheck(pr, incomplete),
+      });
+    }
+  }
+
+  /**
+   * The thread that owns Auto-fix for a PR. A project switch narrows only its
+   * own threads, so the oldest thread whose project allows one of the PR's
+   * current incidents wins. When none does, the plain winner stands and its
+   * outcome reports the project setting.
+   */
+  private async getPrAutoDispatchWinner(pr: PrSummary, prKey: string) {
+    const store = this.getOverlayStore();
+    const eventKinds = getProjectForgeAutomationIndex().hasAny()
+      ? getPrAutoDispatchEventKinds(pr)
+      : [];
+    const allowed = eventKinds.length > 0
+      ? await store.getPrAutoDispatchCandidateWinner({
+          prKey,
+          accepts: (candidate) => {
+            const automation = this.threadForgeAutomation(candidate);
+            return eventKinds.some((kind) => projectAllowsAutoFixKind(automation, kind));
+          },
+        })
+      : undefined;
+    return allowed ?? await store.getPrAutoDispatchCandidateWinner({ prKey });
+  }
+
+  private async handlePrAutoDispatchSnapshots(
+    prs: PrSummary[],
+    observedAt: number,
+    operatorInitiated = false,
+  ): Promise<void> {
+    await this.refreshPrAutoDispatchBudgetSafetyStop();
+    const coordinator = this.getPrAutoDispatchCoordinator();
+    for (const pr of prs) {
+      const prKey = getPrStatusKey(pr);
+      const winner = await this.getPrAutoDispatchWinner(pr, prKey);
+      const threadKeys = winner
+        ? [buildThreadIdentityKey(winner.backend, winner.threadId)]
+        : [];
+      const outcomes = threadKeys.length > 0
+        ? await coordinator.handleStatusSnapshot({
+            pr,
+            threadKeys,
+            observedAt,
+            backgroundPollingEnabled: this.isPrAutoDispatchAvailable(),
+            operatorInitiated,
+          })
+        : [];
+      if (!winner) {
+        this.prActivity.record({
+          category: "repair",
+          source: "Auto-fix",
+          prKeys: [prKey],
+          threadKeys: [...(this.primaryPrThreadsByKey.get(prKey) ?? [])],
+          tone: "warning",
+          message: "Not scheduled: no eligible thread owns Auto-fix for this PR",
+        });
+      }
+      for (const outcome of outcomes) {
+        const budgetBlocked = outcome.status === "gate-off" && this.prAutoDispatchBudgetPaused;
+        const reason = outcome.status === "gate-off"
+          ? budgetBlocked ? "Repair blocked: budget paused"
+            : !this.backgroundPrPollingEnabled ? "Background polling is off" : "Auto-fix is disabled globally"
+          : describePrRepairDecision(outcome.status);
+        this.prActivity.record({
+          category: budgetBlocked ? "budget" : "repair",
+          source: "Auto-fix",
+          prKeys: [prKey],
+          threadKeys: [outcome.threadKey],
+          tone: prRepairDecisionTone(outcome.status),
+          message: reason,
+          ...(budgetBlocked ? { budget: "repair" as const, delta: 0 } : {}),
+        });
+        logPrAutoDispatchOutcome(appServerLog, prKey, outcome);
+      }
+      // Every thread showing this PR is in a project whose PR watches are
+      // off: skip the claim-and-release a watch would cost on each poll.
+      const watchThreadKeys = this.primaryPrThreadsByKey.get(prKey);
+      const watchesHeld = Boolean(watchThreadKeys?.size)
+        && [...watchThreadKeys!].every((threadKey) =>
+          !projectAllowsPrWatches(this.threadKeyForgeAutomation(threadKey))
+        );
+      if (this.backgroundPrPollingEnabled && !watchesHeld) {
+        const failureCoveredThreadKeys = new Set(
+          outcomes.flatMap((outcome) =>
+            outcome.status === "scheduled"
+            || outcome.status === "pending"
+              ? [outcome.threadKey]
+              : [],
+          ),
+        );
+        const dispatched = await this.getPrStatusWatchCoordinator()
+          .handleStatusSnapshot(pr, observedAt, failureCoveredThreadKeys);
+        if (dispatched > 0) {
+          appServerLog.info("pr status watch completed", {
+            prKey,
+            watchCount: dispatched,
+          });
+        }
+      }
+      if (isTerminalPullRequest(pr)) {
+        this.startSandboxCleanupForPr(prKey);
+      }
+    }
+  }
+
+  /**
+   * A PR reached merged or closed: release the sandboxes of each thread it is
+   * attached to, once all of that thread's PRs are terminal. Never awaited by
+   * the poll; a merge/close wake waits for it separately, with a bound.
+   */
+  private startSandboxCleanupForPr(prKey: string): void {
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      if (!attachment.prs.some((candidate) => getPrStatusKey(candidate) === prKey)) continue;
+      const identity = parseThreadIdentityKey(threadKey);
+      if (!identity) continue;
+      void this.cleanupThreadSandboxesIfDone(identity.backend, identity.threadId)
+        .catch((error) => appServerLog.warn("sandboxer cleanup failed", {
+          threadKey,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+    }
+  }
+
+  /**
+   * Release the Sandboxer sandboxes this thread created, but only once every
+   * PR attached to it has merged or closed. A thread with several PRs may
+   * still be testing the open ones, and a thread with no attached PR has
+   * nothing to say its work is done, so neither is touched. Detached PRs do
+   * not count.
+   */
+  private async cleanupThreadSandboxesIfDone(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<SandboxCleanupReport | undefined> {
+    const service = this.getSandboxerPrCleanup();
+    if (!service) return undefined;
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(backend, threadId),
+    );
+    const prs = (attachment?.prs ?? []).map((pr) =>
+      this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr
+    );
+    if (prs.length === 0) return undefined;
+    if (!prs.every((pr) => isTerminalPullRequest(pr))) return undefined;
+    // A sandbox created after the last PR closed is for later work on this
+    // thread. Without a forge timestamp, everything recorded so far counts.
+    const closedAt = prs.map((pr) => pr.mergedAt ?? pr.closedAt);
+    const createdBefore = closedAt.every((value) => typeof value === "number")
+      ? Math.max(...(closedAt as number[]))
+      : undefined;
+    return await service.cleanupThread({
+      backend,
+      threadId,
+      ...(createdBefore !== undefined ? { createdBefore } : {}),
+    });
+  }
+
+  /** Startup: threads whose PRs all closed while a cleanup was pending. */
+  private async retryPendingSandboxCleanups(): Promise<void> {
+    const service = this.getSandboxerPrCleanup();
+    if (!service) return;
+    const pendingThreadIds = new Set(service.threadIdsWithPending());
+    if (pendingThreadIds.size === 0) return;
+    await this.loadPrStatusRegistry();
+    for (const threadKey of this.attachedPrsByThreadKey.keys()) {
+      const identity = parseThreadIdentityKey(threadKey);
+      if (!identity || !pendingThreadIds.has(identity.threadId)) continue;
+      await this.cleanupThreadSandboxesIfDone(identity.backend, identity.threadId);
+    }
+  }
+
+  private getSandboxerPrCleanup(): SandboxerPrCleanupService | undefined {
+    if (!getAppStateMode()) return undefined;
+    if (!this.sandboxerPrCleanup) {
+      const store = new ThreadSandboxStore(getAppStateDb().raw);
+      this.sandboxerPrCleanup = new SandboxerPrCleanupService({
+        store,
+        openTransport: async (params) =>
+          await getMcpConnectionGatewayService().openPwrAgentToolSession({
+            connectionId: params.connectionId,
+            scopeKey: JSON.stringify([
+              "pwragent-cleanup",
+              params.backend,
+              params.threadId,
+            ]),
+            signal: params.signal,
+          }),
+        isEnabled: () =>
+          getMcpConnectionGatewayService().isSandboxerCleanupOnPrCloseEnabled(),
+        onReport: (report) => this.recordSandboxCleanup(report),
+      });
+    }
+    return this.sandboxerPrCleanup;
+  }
+
+  private recordSandboxCleanup(report: SandboxCleanupReport): void {
+    if (report.entries.length === 0) return;
+    const threadKey = buildThreadIdentityKey(
+      report.backend as AppServerBackendKind,
+      report.threadId,
+    );
+    const prKeys = (this.attachedPrsByThreadKey.get(threadKey)?.prs ?? [])
+      .map((pr) => getPrStatusKey(pr));
+    const failed = report.entries.some((entry) => entry.action === "failed");
+    const skipped = report.entries.every((entry) => entry.action === "skipped");
+    this.prActivity.record({
+      category: "cleanup",
+      source: "Sandboxer cleanup",
+      threadKeys: [threadKey],
+      prKeys,
+      tone: failed ? "error" : skipped ? "warning" : "ok",
+      message: report.entries.map((entry) =>
+        `${entry.sandboxId}: ${entry.action}${entry.detail ? ` (${entry.detail})` : ""}`
+      ).join("; "),
+    });
+    appServerLog.info("sandboxer cleanup", {
+      threadKey,
+      summary: summarizeSandboxCleanup(report),
+      sandboxes: report.entries.map((entry) => ({
+        sandboxId: entry.sandboxId,
+        action: entry.action,
+      })),
+    });
+  }
+
+  async handleThreadPrAutoDispatchPreference(
+    request: SetThreadPrAutoDispatchRequest,
+  ): Promise<void> {
+    await this.handleThreadPrAutoDispatchPreferences([request]);
+  }
+
+  /**
+   * Coalesce an operator's bulk preference change before reading provider
+   * state. Several threads can attach the same PR; evaluating the final
+   * candidate set once keeps the first eligible thread authoritative and
+   * avoids a GraphQL request per thread.
+   */
+  async handleThreadPrAutoDispatchPreferences(
+    requests: SetThreadPrAutoDispatchRequest[],
+  ): Promise<void> {
+    if (requests.length === 0) {
+      return;
+    }
+    try {
+      await this.applyThreadPrAutoDispatchPreferences(requests);
+    } finally {
+      // A toggle can move the election to or from another thread, so every
+      // window re-lists the Auto-fix rows.
+      await this.publishPrWatchesUpdated(requests);
+    }
+  }
+
+  /**
+   * A lock hands the thread's PRs to another agent, so the thread leaves the
+   * Auto-fix election as if its PRs were not attached, and its pending repair
+   * is cancelled. The next eligible thread is elected now rather than at the
+   * next poll. An unlock re-enters the election behind the threads that hold
+   * the PRs by then, so it never takes a repair back from the agent that
+   * picked it up. The lock has already landed when this runs, so a failure
+   * here is logged rather than failing the lock; the next poll re-elects.
+   */
+  async handleThreadLockChanged(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    locked: boolean;
+  }): Promise<void> {
+    try {
+      await this.applyThreadLockToPrAutoDispatch(request);
+    } catch (error) {
+      appServerLog.warn("failed to move Auto-fix after a thread lock change", {
+        threadKey: buildThreadIdentityKey(request.backend, request.threadId),
+        locked: request.locked,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async applyThreadLockToPrAutoDispatch(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    locked: boolean;
+  }): Promise<void> {
+    const identity = { backend: request.backend, threadId: request.threadId };
+    if (request.locked) {
+      await this.getPrAutoDispatchCoordinator().cancelAllPendingForThread(identity);
+    }
+    const changes = await this.syncThreadPrAutoDispatchCandidates(identity);
+    if (changes.length === 0 || !this.isPrAutoDispatchAvailable()) return;
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(request.backend, request.threadId),
+    );
+    const changedPrKeys = new Set(changes.map((change) => change.prKey));
+    const prs = this.canonicalizePrs(attachment?.prs ?? [])
+      .filter((pr) => changedPrKeys.has(getPrStatusKey(pr)));
+    if (prs.length === 0) return;
+    // Not operator-initiated: a repair the operator cancelled on the newly
+    // elected thread stays cancelled.
+    await this.handlePrAutoDispatchSnapshots(
+      dedupePrsByStatusKey(prs),
+      this.nextPrObservationTimestamp(),
+    );
+  }
+
+  private async applyThreadPrAutoDispatchPreferences(
+    requests: SetThreadPrAutoDispatchRequest[],
+  ): Promise<void> {
+
+    const coordinator = this.getPrAutoDispatchCoordinator();
+    const disabledRequests = requests.filter((request) => !request.enabled);
+    const enabledRequests = requests.filter((request) => request.enabled);
+
+    const previouslyEligiblePrs: PrSummary[] = [];
+    for (const request of disabledRequests) {
+      const attachment = this.attachedPrsByThreadKey.get(
+        buildThreadIdentityKey(request.backend, request.threadId),
+      );
+      previouslyEligiblePrs.push(
+        ...(attachment?.prs ?? []).filter((pr) =>
+          this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
+        ),
+      );
+      await coordinator.cancelAllPendingForThread(request);
+      await this.syncThreadPrAutoDispatchCandidates(request);
+    }
+    if (this.isPrAutoDispatchAvailable() && previouslyEligiblePrs.length > 0) {
+      await this.handlePrAutoDispatchSnapshots(
+        dedupePrsByStatusKey(previouslyEligiblePrs),
+        this.nextPrObservationTimestamp(),
+        true,
+      );
+    }
+
+    if (enabledRequests.length === 0) {
+      return;
+    }
+
+    const primaryPrs: PrSummary[] = [];
+    for (const request of enabledRequests) {
+      const overlay = await this.getOverlayStore().getThreadOverlayState(request);
+      const prs = this.canonicalizePrs(overlay?.prs ?? []);
+      await this.rememberThreadPrAttachmentUpdate({ ...request, prs });
+      await coordinator.resetForOperator(request);
+      primaryPrs.push(...this.primaryAttachedPrsForThread({ ...request, prs }));
+    }
+    if (!this.isPrAutoDispatchAvailable()) {
+      return;
+    }
+
+    const uniquePrimaryPrs = dedupePrsByStatusKey(primaryPrs);
+    await this.handlePrAutoDispatchSnapshots(
+      uniquePrimaryPrs,
+      this.nextPrObservationTimestamp(),
+      true,
+    );
+
+    const refs = [
+      ...new Map(
+        uniquePrimaryPrs.flatMap((pr) => {
+          const ref = parsePrRefFromUrl(pr.url);
+          return ref ? [[`${ref.host}/${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
+        }),
+      ).values(),
+    ];
+    if (refs.length === 0) {
+      return;
+    }
+    const refreshed = await this.fetchForgePullRequests(refs);
+    if (refreshed.length === 0) {
+      return;
+    }
+    const fetchedAt = this.nextPrObservationTimestamp();
+    const changed = this.rememberPrStatuses(
+      refreshed,
+      fetchedAt,
+      "auto-fix-enable",
+    );
+    await this.writePrStatusesToCache(refreshed, fetchedAt);
+    await this.publishPullRequestStatusUpdates({
+      backend: enabledRequests[0]!.backend,
+      prs: changed,
+    });
+    await this.handlePrAutoDispatchSnapshots(
+      refreshed,
+      fetchedAt,
+      true,
+    );
+  }
+
+  /**
+   * The Settings bulk action refreshes the complete attachment view before it
+   * decides which saved preferences to change. Detached and informational PR
+   * links are never eligible because primary-workspace matching happens here
+   * in the main process.
+   */
+  async setEligibleThreadsPrAutoDispatch(
+    request: SetEligibleThreadsPrAutoDispatchRequest,
+  ): Promise<SetEligibleThreadsPrAutoDispatchResponse> {
+    const index = await loadLocalNavigationQueryIndex({
+      backend: "all",
+      callerReason: "settings-bulk-pr-auto-dispatch",
+    });
+    if (index.coverage && index.coverage.state !== "complete") {
+      throw new Error("Thread discovery is incomplete. Wait for providers to finish loading before changing Auto-fix for all eligible threads.");
+    }
+    await this.loadPrStatusRegistry();
+    await this.loadPrLookupRegistry();
+    this.seedPrStatusRegistryFromThreads(index.threads);
+    const canonical = this.applyCanonicalPrStatuses(index.threads);
+    await this.rememberThreadPrAttachments(canonical.threads, { replace: true });
+    const eligibleThreads = canonical.threads.filter((thread) => {
+      const attachment = this.attachedPrsByThreadKey.get(
+        buildThreadIdentityKey(thread.source, thread.id),
+      );
+      return Boolean(
+        attachment?.primaryRepoKey
+        && attachment.prs.some((pr) =>
+          this.matchesPrimaryRepository(pr, attachment.primaryRepoKey)
+          && !isTerminalPullRequest(pr)
+        ),
+      );
+    });
+    const updates = eligibleThreads
+      .filter((thread) => thread.prAutoDispatchEnabled !== request.enabled)
+      .map((thread) => ({
+        backend: thread.source,
+        threadId: thread.id,
+        enabled: request.enabled,
+      }));
+
+    if (!request.dryRun && updates.length > 0) {
+      await getDesktopBackendRegistry().setThreadPrAutoDispatchBatch(updates);
+    }
+
+    return {
+      enabled: request.enabled,
+      eligibleThreadCount: eligibleThreads.length,
+      updatedThreadCount: updates.length,
+    };
+  }
+
+  async cancelThreadPrAutoDispatch(
+    request: CancelThreadPrAutoDispatchRequest,
+  ): Promise<boolean> {
+    return await this.getPrAutoDispatchCoordinator().cancelPending(request);
+  }
+
+  async sendThreadPrAutoDispatchNow(
+    request: SendThreadPrAutoDispatchNowRequest,
+  ): Promise<boolean> {
+    return await this.getPrAutoDispatchCoordinator().sendPendingNow(request);
+  }
+
+  /**
+   * Fold a poll result into the registry + cache, and publish only what
+   * actually changed. Returns the changed prKeys so the scheduler can keep its
+   * quiet-demotion clock.
+   */
+  private async applyPolledPrStatuses(
+    prs: PrSummary[],
+    fetchedAt: number,
+  ): Promise<string[]> {
+    // The GraphQL client fetches only the PR's head commit (see the cost note
+    // in github-graphql-client). Union forward so a status poll does not
+    // overwrite a richer commit set retained from an older snapshot.
+    const merged = prs.map((pr) => {
+      const previous = this.prStatusRegistry.get(getPrStatusKey(pr))?.pr;
+      const commitShas = mergeCommitShas(previous?.commitShas, pr.commitShas);
+      return commitShas.length > 0 ? { ...pr, commitShas } : pr;
+    });
+
+    const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll");
+    const canonical = this.canonicalizePrs(merged);
+    this.recordPrCheck(canonical, "background poll");
+    await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
+    // An unchanged accepted poll refreshes CI freshness without publishing a
+    // field-change event. Dependencies still need that observation for admission.
+    const freshPrUrls = canonical
+      .filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt)
+      .map((pr) => pr.url);
+    // Evaluation can start a continuation turn; the poll must not wait on it.
+    if (freshPrUrls.length > 0) {
+      void this.threadDependencyCoordinator?.handlePrEvent(freshPrUrls)
+        .catch((error) => appServerLog.warn("thread dependency evaluation failed", { error: String(error) }));
+    }
+    if (changed.length === 0) {
+      return [];
+    }
+
+    await this.writePrStatusesToCache(changed, fetchedAt);
+
+    // Publish on the backend that owns each PR's thread. Group so we emit one
+    // batch per backend rather than one call per PR.
+    const changedByBackend = new Map<AppServerBackendKind, PrSummary[]>();
+    for (const pr of changed) {
+      const backend = this.prPollBackendByKey.get(getPrStatusKey(pr)) ?? "codex";
+      const bucket = changedByBackend.get(backend);
+      if (bucket) {
+        bucket.push(pr);
+      } else {
+        changedByBackend.set(backend, [pr]);
+      }
+    }
+    await Promise.all(
+      [...changedByBackend].map(async ([backend, prs]) =>
+        await this.publishPullRequestStatusUpdates({ backend, prs }),
+      ),
+    );
+    return changed.map((pr) => getPrStatusKey(pr));
+  }
+
+  private async refreshPendingPrAutoDispatches(
+    pending: ThreadPrAutoDispatchPending[],
+  ): Promise<ReadonlySet<string>> {
+    const refsByPrKey = new Map(
+      pending.flatMap((item) => {
+        const ref = parsePrRefFromUrl(item.prUrl);
+        return ref ? [[item.prKey, ref] as const] : [];
+      }),
+    );
+    if (refsByPrKey.size === 0) {
+      return new Set();
+    }
+    if (!this.takePrPollingToken("recovery refresh")) {
+      throw new Error("PR status refresh budget is temporarily exhausted");
+    }
+    const refreshed = await this.fetchForgePullRequests(
+      [...refsByPrKey.values()],
+    );
+    if (refreshed.length > 0) {
+      await this.applyPolledPrStatuses(
+        refreshed,
+        this.nextPrObservationTimestamp(),
+      );
+    }
+    return new Set(refreshed.map((pr) => getPrStatusKey(pr)));
+  }
+
+  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, requestTokenTaken = false): Promise<PrSummary[]> {
+    const prs = await this.getPrFetcher().fetchPullRequests(refs, { reconnect, requestTokenTaken });
+    this.learnPolledPullRequestRepositories(refs, prs);
+    return prs;
+  }
+
+  /**
+   * A forge answers a renamed or transferred repository's old name with the
+   * PR under its current name. A poll result under another repository than
+   * any ref asked for is that answer: pair it with the one ref of the same
+   * host and number, and learn the rename before the result is matched to
+   * the threads that attached the PR under the old name.
+   */
+  private learnPolledPullRequestRepositories(refs: readonly ForgePrRef[], prs: readonly PrSummary[]): void {
+    const requested = refs.map((ref) => ({
+      host: normalizePullRequestProvider(ref.host),
+      key: getPrStatusKey({ provider: ref.host, org: ref.owner, repo: ref.repo, number: ref.number }),
+      url: buildPullRequestReferenceUrl({
+        kind: ref.kind, provider: ref.host, org: ref.owner, repo: ref.repo, number: ref.number,
+      }),
+      number: ref.number,
+    }));
+    const requestedKeys = new Set(requested.map((ref) => ref.key));
+    const answeredKeys = new Set(prs.map((pr) => getPrStatusKey(pr)));
+    for (const pr of prs) {
+      if (requestedKeys.has(getPrStatusKey(pr))) continue;
+      const host = normalizePullRequestProvider(pr.provider);
+      // A ref that got its own answer is not the one this result renames.
+      const matches = requested.filter((ref) =>
+        ref.number === pr.number && ref.host === host && !answeredKeys.has(ref.key)
+      );
+      if (matches.length === 1) this.learnPullRequestRepository(matches[0]!.url, pr);
+    }
+  }
+
+  async getGlabStatus(request: GetGlabStatusRequest): Promise<GlabStatus> {
+    return await this.getPrFetcher().gitlab.getAuthStatus(request.host, request.recheck);
+  }
+
+  async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
+    const fetcher = this.getPrFetcher();
+    if (request.recheck) {
+      fetcher.github.invalidateGhCaches();
+      this.getPrGraphqlClient().invalidateToken();
+    }
+    // The fetcher logs once per fresh probe (cache + in-flight dedup
+    // keep StrictMode mount duplicates silent). The IPC layer just
+    // returns the parsed status.
+    return await fetcher.github.getAuthStatus();
+  }
+
+  async setThreadToolIncidentNotice(
+    request: SetThreadToolIncidentNoticeRequest,
+  ): Promise<SetThreadToolIncidentNoticeResponse> {
+    /* Deliberately not federated. Dismissing or muting a cost warning is the
+       viewer's own preference about what it wants to be told, the same
+       reasoning that keeps composer drafts machine-local — a peer should not
+       inherit this operator's decision to stop being warned. */
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setThreadToolIncidentNotice({
+      backend,
+      ...(request.dismissedSeverity
+        ? { dismissedSeverity: request.dismissedSeverity }
+        : {}),
+      ...(request.firstWarningAt !== undefined
+        ? { firstWarningAt: request.firstWarningAt }
+        : {}),
+      ...(request.mutedSeverity ? { mutedSeverity: request.mutedSeverity } : {}),
+      ...(request.reset ? { reset: request.reset } : {}),
+      threadId: request.threadId,
+    });
+    logDebug("setThreadToolIncidentNotice", {
+      backend,
+      dismissedSeverity: request.dismissedSeverity,
+      mutedSeverity: request.mutedSeverity,
+      reset: request.reset === true,
+      threadId: request.threadId,
+    });
+    return {
+      backend,
+      state: overlay.toolIncidentNotice ?? {},
+      threadId: request.threadId,
+    };
+  }
+
+  async listPendingThreadSpendAlerts(request: ListPendingThreadSpendAlertsRequest): Promise<ListPendingThreadSpendAlertsResponse> {
+    return this.getOverlayStore().listPendingThreadSpendAlerts(request);
+  }
+
+  async acknowledgeThreadSpendAlert(
+    request: AcknowledgeThreadSpendAlertRequest,
+  ): Promise<AcknowledgeThreadSpendAlertResponse> {
+    const backend = request.backend ?? "codex";
+    const acknowledged = await this.getOverlayStore()
+      .acknowledgeThreadSpendAlert({
+        alertId: request.alertId,
+        backend,
+        threadId: request.threadId,
+      });
+    logDebug("acknowledgeThreadSpendAlert", {
+      acknowledged,
+      alertId: request.alertId,
+      backend,
+      threadId: request.threadId,
+    });
+    return {
+      acknowledged,
+      backend,
+      threadId: request.threadId,
+    };
+  }
+
+  async continueThreadEnvironmentStartup(
+    request: ContinueThreadEnvironmentStartupRequest,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .continueThreadEnvironmentStartup(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request);
+  }
+
+  async acknowledgeThreadEnvironmentFailure(
+    request: AcknowledgeThreadEnvironmentFailureRequest,
+  ): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .acknowledgeThreadEnvironmentFailure(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().acknowledgeThreadEnvironmentFailure(request);
+  }
+
+  async setThreadReaction(
+    request: SetThreadReactionRequest,
+  ): Promise<SetThreadReactionResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadReaction(remoteRequest);
+    }
+    const backend = request.backend ?? "codex";
+
+    const overlay = await this.getOverlayStore().setThreadReaction({
+      backend,
+      threadId: request.threadId,
+      emoji: request.emoji,
+      present: request.present,
+    });
+
+    logDebug("setThreadReaction", {
+      backend,
+      threadId: request.threadId,
+      emoji: request.emoji,
+      present: request.present,
+      reactionCount: overlay.reactions?.length ?? 0,
+    });
+
+    const reactions = overlay.reactions ?? [];
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/reactions/updated",
+        params: {
+          threadId: request.threadId,
+          reactions,
+        },
+      },
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      reactions,
+    };
+  }
+
+  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, actor = "operator"): Promise<ManageThreadMergeHoldsResponse> {
+    validateMergeHoldRequest({ ...request, backend: request.backend ?? "codex", threadId: request.threadId ?? "" });
+    const runtime = getDesktopFederationRuntime();
+    if (request.federationTarget?.scope === "remote") {
+      const { federationTarget, ...ownerRequest } = request;
+      const localId = (await runtime.health()).instanceId;
+      if (federationTarget.instanceId !== localId) {
+        const response = await runtime.remoteBackend(federationTarget).manageThreadMergeHolds(ownerRequest);
+        return qualifyMergeHoldOwners(response, federationTarget, localId);
+      }
+    }
+    const response = await getDesktopBackendRegistry().manageThreadMergeHolds(request, actor);
+    return await appendMergeHoldDependents(response, request, runtime);
+  }
+
+  async setThreadLock(
+    request: SetThreadLockRequest,
+  ): Promise<SetThreadLockResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadLock(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().setThreadLock({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      locked: request.locked,
+      ...(request.note !== undefined ? { note: request.note } : {}),
+    }, { source: "operator" });
+  }
+
+  async setThreadPin(
+    request: SetThreadPinRequest,
+  ): Promise<SetThreadPinResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      // Pin state lives in the owning instance's overlay store; writing
+      // it locally would only create a phantom pin on the viewer machine
+      // that the next remote snapshot overwrites.
+      const { federationTarget, ...remoteRequest } = request;
+      if (request.pinned !== undefined) {
+        getDesktopFederationRuntime().assertRemoteNavigationQueryProtocol(federationTarget);
+      }
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadPin(remoteRequest);
+    }
+    const backend = request.backend ?? "codex";
+
+    const setPin = async () => await this.getOverlayStore().setThreadPin({
+      backend,
+      threadId: request.threadId,
+      pinned: request.pinned,
+      pinnedRank: request.pinnedRank,
+    });
+    const registry = getExistingDesktopBackendRegistry();
+    const overlay = registry
+      ? await registry.withThreadLifecycleMutation({ backend, threadId: request.threadId }, setPin)
+      : await setPin();
+
+    logDebug("setThreadPin", {
+      backend,
+      threadId: request.threadId,
+      pinnedRank: overlay.pinnedRank ?? null,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: overlay.pinnedRank
+        ? {
+            method: "thread/pin/added",
+            params: {
+              threadId: request.threadId,
+              pinnedRank: overlay.pinnedRank,
+            },
+          }
+        : {
+            method: "thread/pin/removed",
+            params: {
+              threadId: request.threadId,
+            },
+          },
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      pinnedRank: overlay.pinnedRank,
+    };
+  }
+
+  async setThreadAgent(
+    request: SetThreadAgentRequest,
+  ): Promise<SetThreadAgentResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .setThreadAgent(remoteRequest);
+    }
+    const backend = request.backend ?? "codex";
+
+    const overlay = await getDesktopBackendRegistry().setThreadAgent({
+      backend,
+      threadId: request.threadId,
+      agent: request.agent,
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      agent: overlay.agent,
+      agentChange: summarizeThreadAgentChange(overlay.queuedAgentChange),
+    };
+  }
+
+  async setThreadTokenMiser(
+    request: SetThreadTokenMiserRequest,
+  ): Promise<SetThreadTokenMiserResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .setThreadTokenMiser(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().setThreadTokenMiser(request);
+  }
+
+  async setThreadMonitorJobSuggestions(
+    request: SetThreadMonitorJobSuggestionsRequest,
+  ): Promise<SetThreadMonitorJobSuggestionsResponse> {
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setThreadMonitorJobSuggestions({
+      backend,
+      threadId: request.threadId,
+      enabled: request.enabled,
+    });
+    logDebug("setThreadMonitorJobSuggestions", {
+      backend,
+      threadId: request.threadId,
+      monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled ?? null,
+    });
+    // Reuse the thread-agent notification path: it already tells every window
+    // to re-read this thread's summary, and the override lives on the same
+    // overlay row.
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/agent/updated",
+        params: {
+          threadId: request.threadId,
+        },
+      },
+    });
+    return {
+      backend,
+      threadId: request.threadId,
+      ...(overlay.monitorJobSuggestionsEnabled !== undefined
+        ? { monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled }
+        : {}),
+    };
+  }
+
+  async reorderThreadPins(
+    request: ReorderThreadPinsRequest,
+  ): Promise<ReorderThreadPinsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      if (request.move) {
+        getDesktopFederationRuntime().assertRemoteNavigationQueryProtocol(federationTarget);
+      }
+      const ownerPrefix = `remote:${federationTarget.instanceId}:`;
+      const ownerKey = (key: string): string => key.startsWith(ownerPrefix) ? key.slice(ownerPrefix.length) : key;
+      const result = await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .reorderThreadPins({
+          ...remoteRequest,
+          threadKeys: remoteRequest.threadKeys?.map(ownerKey),
+          move: remoteRequest.move ? (remoteRequest.move.direction
+            ? { key: ownerKey(remoteRequest.move.key), direction: remoteRequest.move.direction }
+            : remoteRequest.move.keepAtTop !== undefined
+              ? { key: ownerKey(remoteRequest.move.key), keepAtTop: remoteRequest.move.keepAtTop }
+              : { key: ownerKey(remoteRequest.move.key), anchorKey: ownerKey(remoteRequest.move.anchorKey), placement: remoteRequest.move.placement })
+            : undefined,
+        });
+      return { pinnedRanks: Object.fromEntries(Object.entries(result.pinnedRanks).map(([key, rank]) => [
+        key.startsWith("remote:") ? key : `${ownerPrefix}${key}`, rank,
+      ])) };
+    }
+    // The pinned section interleaves local pins and viewer-owned remote
+    // pins. The store assigns ranks from the FULL requested order in one
+    // transaction, routing each key to its own storage — local thread
+    // overlay vs the remote pin row — so remote ranks never reach the owner
+    // and a mixed reorder is atomic.
+    const overlayStore = this.getOverlayStore();
+    const remotePins =
+      !request.move && typeof overlayStore.listRemoteThreadPins === "function"
+        ? await overlayStore.listRemoteThreadPins()
+        : [];
+    const remoteRefsByKey = Object.fromEntries(
+      remotePins.map((pin) => [
+        federatedThreadIdentityKey(pin.ref),
+        pin.ref,
+      ]),
+    );
+    const pinnedRanks = await overlayStore.reorderThreadPins({
+      threadKeys: request.threadKeys,
+      ...(request.move ? { move: request.move } : {}),
+      remoteRefsByKey,
+    });
+
+    logDebug("reorderThreadPins", {
+      pinCount: request.threadKeys?.length ?? 1,
+      remotePinCount: Object.keys(remoteRefsByKey).length,
+    });
+
+    // Pin order is global across backends, so this is a global notification.
+    // `backend` is required by publishLocalEvent but irrelevant here — use a
+    // fixed value (matches the directory/pin/reordered handler).
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/pin/reordered",
+        params: {
+          pinnedRanks,
+        },
+      },
+    });
+
+    return { pinnedRanks };
+  }
+
+  async hasRemoteThreadPin(request: HasRemoteThreadPinRequest): Promise<boolean> {
+    validateRemoteThreadPinRef(request.ref);
+    return await this.getOverlayStore().hasRemoteThreadPin({ ref: request.ref });
+  }
+
+  async addRemoteThreadPin(
+    request: AddRemoteThreadPinRequest,
+  ): Promise<AddRemoteThreadPinResponse> {
+    const instanceId = validateRemoteThreadPinRef(request.ref);
+    const instanceLabel =
+      request.instanceLabel
+      ?? request.summary?.federation?.instanceLabel
+      ?? instanceId;
+    const pin = await this.getOverlayStore().addRemoteThreadPin({
+      ref: request.ref,
+      summary: request.summary,
+      instanceLabel,
+      pinnedVia: "explicit",
+    });
+    const companionParentRef = await this.pinCompanionParent(
+      request,
+      instanceId,
+      instanceLabel,
+    );
+    await this.rankRemotePinForVisibility(request, companionParentRef);
+
+    logDebug("addRemoteThreadPin", {
+      backend: request.ref.backend,
+      instanceId,
+      threadId: request.ref.threadId,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: request.ref.backend,
+      notification: {
+        method: "navigation/remoteThreadPins/changed",
+        params: {
+          instanceId,
+          threadId: request.ref.threadId,
+          pinned: true,
+        },
+      },
+    });
+
+    return { pin };
+  }
+
+  /**
+   * Deliberate opinion: pinning a remote sub-thread also pins its parent —
+   * an orphan child renders as a bare top-level row, losing the nesting and
+   * the parent's PR context that make it legible. One hop only (sub-threads
+   * are one level deep), best-effort (the parent must exist in its owning
+   * instance's current snapshot — an archived parent must not resurrect as a
+   * phantom row), and never downgrades an existing explicit pin. Removal stays
+   * per-row: companion pins are ordinary independent pins, tagged
+   * `pinnedVia: "companion"` for future group-removal UX.
+   */
+  private async pinCompanionParent(
+    request: AddRemoteThreadPinRequest,
+    instanceId: string,
+    instanceLabel: string,
+  ): Promise<FederatedThreadRef | undefined> {
+    const parentThreadId = request.summary?.parentThreadId;
+    const parentBackend =
+      request.summary?.parentThreadBackend ?? request.ref.backend;
+    const parentInstanceId =
+      request.summary?.parentThreadInstanceId ?? instanceId;
+    if (
+      !parentThreadId
+      || (
+        parentThreadId === request.ref.threadId
+        && parentBackend === request.ref.backend
+      )
+    ) {
+      return undefined;
+    }
+    try {
+      if (
+        parentInstanceId
+        === (await getDesktopFederationRuntime().health()).instanceId
+      ) {
+        return undefined;
+      }
+      const parentRef = buildFederatedThreadRef({
+        backend: parentBackend,
+        instanceId: parentInstanceId,
+        threadId: parentThreadId,
+      });
+      const overlayStore = this.getOverlayStore();
+      if (await overlayStore.hasRemoteThreadPin({ ref: parentRef })) {
+        return parentRef;
+      }
+      const consumer = `pin-parent:${randomUUID()}`;
+      let page: NavigationQueryPage;
+      try {
+        page = await this.getNavigationQueryPage({
+          protocol: 2,
+          consumer: "exact-link",
+          inventory: "owner",
+          federationTarget: { scope: "remote", instanceId: parentInstanceId },
+          query: {
+            kind: "exact",
+            identities: [{ backend: parentBackend, threadId: parentThreadId, ownerInstanceId: parentInstanceId }],
+            includeAncestry: false,
+          },
+          pageSize: 1,
+        }, consumer);
+      } finally {
+        navigationQueryPool.release(consumer);
+      }
+      if (page.protocol !== 2 || page.coverage.state !== "complete" || !page.complete || page.nextCursor || page.unchanged) {
+        return undefined;
+      }
+      const parentSummary = page.entries.find(({ row }) => row.ref.backend === parentBackend
+        && row.ref.threadId === parentThreadId && row.ref.ownerInstanceId === parentInstanceId
+        && row.source === parentBackend && row.id === parentThreadId)?.row;
+      if (!parentSummary || parentSummary.archivedAt !== undefined) {
+        return undefined;
+      }
+      await overlayStore.addRemoteThreadPin({
+        ref: parentRef,
+        summary: parentSummary,
+        instanceLabel:
+          parentSummary.federation?.instanceLabel ?? instanceLabel,
+        pinnedVia: "companion",
+      });
+      logDebug("addRemoteThreadPin:companion-parent", {
+        backend: parentBackend,
+        instanceId: parentInstanceId,
+        threadId: parentThreadId,
+        childThreadId: request.ref.threadId,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: parentBackend,
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: {
+            instanceId: parentInstanceId,
+            threadId: parentThreadId,
+            pinned: true,
+          },
+        },
+      });
+      return parentRef;
+    } catch (error) {
+      // Companion pinning is a convenience — the explicit pin must succeed
+      // regardless.
+      appServerLog.warn("Companion parent pin failed.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Mirror of the created-thread visibility auto-pin (backend-registry):
+   * when the freshly pinned remote thread's home directory group has its
+   * Directory Threads section collapsed and the pinned section is in use,
+   * the row would be invisible — give its top-level row a VIEWER-owned rank
+   * so it surfaces at the top of Pins. The top-level row is the companion
+   * parent when one is pinned; otherwise the thread itself, since a child
+   * whose parent is absent from the list renders top-level. Reads
+   * overlay-store scans and
+   * the cached directory summaries from the last snapshot build — never a
+   * fresh snapshot, so pin latency stays independent of backends and peers.
+   * Best-effort; the pin itself must succeed regardless.
+   */
+  private async rankRemotePinForVisibility(
+    request: AddRemoteThreadPinRequest,
+    companionParentRef: FederatedThreadRef | undefined,
+  ): Promise<void> {
+    try {
+      const targetRef = companionParentRef ?? request.ref;
+      const overlayStore = this.getOverlayStore();
+      const pins =
+        typeof overlayStore.listRemoteThreadPins === "function"
+          ? await overlayStore.listRemoteThreadPins()
+          : [];
+      const targetPin = pins.find(
+        (pin) =>
+          pin.ref.backend === targetRef.backend
+          && pin.ref.threadId === targetRef.threadId
+          && isRemoteFederationTarget(pin.ref.target)
+          && isRemoteFederationTarget(targetRef.target)
+          && pin.ref.target.instanceId === targetRef.target.instanceId,
+      );
+      // An already-ranked row needs nothing.
+      if (!targetPin || targetPin.localPinnedRank) {
+        return;
+      }
+      const targetSummary = targetPin.summary ?? request.summary;
+      // Cached from the last snapshot build — always warm in a running
+      // window; a cold cache just skips this best-effort step.
+      const directories = [...this.lastDirectoriesByKey.values()];
+      const homeIndex = findRemoteHomeDirectoryIndex(
+        directories,
+        targetSummary ?? { linkedDirectories: [] },
+      );
+      const home = homeIndex === undefined ? undefined : directories[homeIndex];
+      if (!home?.directoryThreadsCollapsed) {
+        return;
+      }
+      const localRanks = await overlayStore.listPinnedThreadOverlayRanks();
+      // Mirror the created-thread rule: only when the pinned section is in
+      // use would the row otherwise be invisible.
+      const hasPinnedTopLevelThread =
+        localRanks.some((entry) => !entry.parentThreadId)
+        || pins.some(
+          (pin) => pin.localPinnedRank && !pin.summary?.parentThreadId,
+        );
+      if (!hasPinnedTopLevelThread) {
+        return;
+      }
+      const pinnedRank = buildPrependPinRank([
+        ...localRanks.map((entry) => entry.pinnedRank),
+        ...pins.map((pin) => pin.localPinnedRank),
+      ]);
+      await overlayStore.setRemoteThreadLocalPin({
+        ref: targetRef,
+        pinnedRank,
+      });
+      logDebug("addRemoteThreadPin:visibility-rank", {
+        backend: targetRef.backend,
+        threadId: targetRef.threadId,
+        directoryKey: home.key,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: targetRef.backend,
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: {
+            instanceId:
+              targetRef.target.scope === "remote"
+                ? targetRef.target.instanceId
+                : "",
+            threadId: targetRef.threadId,
+            pinned: true,
+          },
+        },
+      });
+    } catch (error) {
+      appServerLog.warn("Remote pin visibility rank failed.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async removeRemoteThreadPin(
+    request: RemoveRemoteThreadPinRequest,
+  ): Promise<RemoveRemoteThreadPinResponse> {
+    const instanceId = validateRemoteThreadPinRef(request.ref);
+    // Local DELETE only — removal must keep working while the owning
+    // instance is unreachable, and the owner's thread is untouched.
+    const removed = await this.getOverlayStore().removeRemoteThreadPin({
+      ref: request.ref,
+    });
+
+    logDebug("removeRemoteThreadPin", {
+      backend: request.ref.backend,
+      instanceId,
+      threadId: request.ref.threadId,
+      removed,
+    });
+
+    if (removed) {
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: request.ref.backend,
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: {
+            instanceId,
+            threadId: request.ref.threadId,
+            pinned: false,
+          },
+        },
+      });
+    }
+
+    return { removed };
+  }
+
+  /**
+   * VIEWER-owned pin rank for a remote thread in the main window's list.
+   * Never routed to the owner: pin or unpin here and only the viewer knows.
+   * (Remote-viewer windows keep the existing setThreadPin owner routing —
+   * operating the owner's pinned section is intended there.)
+   */
+  async setRemoteThreadLocalPin(
+    request: SetRemoteThreadLocalPinRequest,
+  ): Promise<SetRemoteThreadLocalPinResponse> {
+    const instanceId = validateRemoteThreadPinRef(request.ref);
+    const result = await this.getOverlayStore().setRemoteThreadLocalPin({
+      ref: request.ref,
+      pinned: request.pinned,
+      pinnedRank: request.pinnedRank,
+    });
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: request.ref.backend,
+      notification: {
+        method: "navigation/remoteThreadPins/changed",
+        params: {
+          instanceId,
+          threadId: request.ref.threadId,
+          pinned: Boolean(result.pinnedRank),
+        },
+      },
+    });
+    return { ref: request.ref, pinnedRank: result.pinnedRank };
+  }
+
+  async jumpSearchRemoteThreads(
+    request: FederationJumpSearchRequest,
+    onProgress?: (progress: FederationJumpSearchProgress) => void,
+  ): Promise<FederationJumpSearchResponse> {
+    return await searchNavigationOwners({ request, onProgress,
+      owners: getDesktopFederationRuntime().connectedPeerTargets().filter((peer) => peer.capabilities.includes("thread_navigation")),
+      readPage: async (query) => {
+        const consumer = `jump-search:${randomUUID()}`;
+        try { return await this.getNavigationQueryPage(query, consumer); }
+        finally { navigationQueryPool.release(consumer); }
+      },
+    });
+  }
+
+  async setThreadParent(
+    request: SetThreadParentRequest,
+  ): Promise<SetThreadParentResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      const federationRuntime = getDesktopFederationRuntime();
+      if (request.expectedParent !== undefined) {
+        federationRuntime.assertRemoteNavigationQueryProtocol(federationTarget);
+      }
+      const response = await federationRuntime
+        .remoteBackend(federationTarget)
+        .setThreadParent(ownerRequest);
+      try {
+        const pins = await this.getOverlayStore().listRemoteThreadPins();
+        const pin = pins.find(
+          (candidate) =>
+            candidate.ref.backend === response.backend
+            && candidate.ref.threadId === response.threadId
+            && isRemoteFederationTarget(candidate.ref.target)
+            && candidate.ref.target.instanceId === federationTarget.instanceId,
+        );
+        if (pin?.summary) {
+          const summary = { ...pin.summary };
+          if (response.parentThreadId) {
+            summary.parentThreadId = response.parentThreadId;
+            summary.parentThreadBackend = response.parentThreadBackend;
+            summary.parentThreadInstanceId = response.parentThreadInstanceId;
+          } else {
+            delete summary.parentThreadId;
+            delete summary.parentThreadBackend;
+            delete summary.parentThreadInstanceId;
+          }
+          await this.getOverlayStore().updateRemoteThreadPinSnapshots([{
+            ref: pin.ref,
+            summary,
+            instanceLabel: pin.instanceLabel,
+          }]);
+        }
+        // Nesting unpins, as a local thread's link does. This viewer's own
+        // rank would otherwise bring the row back to its pins on refresh.
+        if (pin?.localPinnedRank && response.parentThreadId) {
+          await this.getOverlayStore().setRemoteThreadLocalPin({ ref: pin.ref, pinned: false });
+        }
+      } catch (error) {
+        // The relationship mutation already committed on the owner. Keep that
+        // success authoritative even if this viewer's cached pin cannot patch.
+        appServerLog.warn("Remote parent change cache update failed.", {
+          error: error instanceof Error ? error.message : String(error),
+          instanceId: federationTarget.instanceId,
+          threadId: response.threadId,
+        });
+      }
+      federationRuntime.remoteThreadSummaries().invalidate(
+        federationTarget.instanceId,
+      );
+      return response;
+    }
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setThreadParent({
+      backend,
+      threadId: request.threadId,
+      parentThreadId: request.parentThreadId,
+      parentThreadBackend: request.parentThreadBackend,
+      parentThreadInstanceId: request.parentThreadInstanceId,
+      expectedParent: request.expectedParent,
+    });
+
+    logDebug("setThreadParent", {
+      backend,
+      threadId: request.threadId,
+      parentThreadId: overlay.parentThreadId ?? null,
+      parentThreadBackend: overlay.parentThreadBackend ?? null,
+      parentThreadInstanceId: overlay.parentThreadInstanceId ?? null,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: overlay.parentThreadId
+        ? {
+            method: "thread/parent/set",
+            params: {
+              threadId: request.threadId,
+              parentThreadId: overlay.parentThreadId,
+              parentThreadBackend: overlay.parentThreadBackend,
+              parentThreadInstanceId: overlay.parentThreadInstanceId,
+            },
+          }
+        : {
+            method: "thread/parent/cleared",
+            params: {
+              threadId: request.threadId,
+            },
+          },
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      parentThreadId: overlay.parentThreadId,
+      parentThreadBackend: overlay.parentThreadBackend,
+      parentThreadInstanceId: overlay.parentThreadInstanceId,
+    };
+  }
+
+  async updateSubthreadOrder(
+    request: UpdateSubthreadOrderRequest,
+  ): Promise<UpdateSubthreadOrderResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .updateSubthreadOrder(ownerRequest);
+    }
+    const response = await updateLocalSubthreadOrder(request, {
+      peers: getDesktopFederationRuntime().peerChildSource(),
+    });
+    logDebug("updateSubthreadOrder", {
+      backend: response.backend,
+      parentThreadId: request.parentThreadId,
+      // A relative move answers no order; name what moved instead.
+      ...(response.threadIds
+        ? { childCount: response.threadIds.length }
+        : { movedThreadId: request.move?.threadId ?? request.insertAfter?.threadId }),
+    });
+    return response;
+  }
+
+  async setSubthreadsCollapsed(
+    request: SetSubthreadsCollapsedRequest,
+  ): Promise<SetSubthreadsCollapsedResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setSubthreadsCollapsed(ownerRequest);
+    }
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setSubthreadsCollapsed({
+      backend,
+      parentThreadId: request.parentThreadId,
+      collapsed: request.collapsed,
+    });
+
+    logDebug("setSubthreadsCollapsed", {
+      backend,
+      parentThreadId: request.parentThreadId,
+      collapsed: overlay.subthreadsCollapsed === true,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/subthreadsCollapsed/updated",
+        params: {
+          parentThreadId: request.parentThreadId,
+          collapsed: overlay.subthreadsCollapsed === true,
+        },
+      },
+    });
+
+    return {
+      backend,
+      parentThreadId: request.parentThreadId,
+      collapsed: overlay.subthreadsCollapsed === true,
+    };
+  }
+
+  /**
+   * Directory pin handlers (plan 2026-05-09-002, Unit G). Mirror of
+   * `setThreadPin` / `reorderThreadPins` with the `backend` dim
+   * dropped. The handlers reject pseudo-directory keys (workspace /
+   * unlinked) — these are synthesized aggregator entries that don't
+   * represent a user-picked folder, so pinning them is meaningless.
+   * The check is on the key prefix rather than a snapshot lookup
+   * because the overlay store doesn't have visibility into the
+   * snapshot at write time, and we want the rejection to be
+   * deterministic.
+   *
+   * `publishLocalEvent` reuses the existing local-bus infrastructure
+   * (no per-directory bus scope — these are global events on the
+   * default backend `codex` for routing purposes; the renderer
+   * listens for the `method` regardless of `backend`).
+   */
+  async setDirectoryPin(
+    request: SetDirectoryPinRequest,
+  ): Promise<SetDirectoryPinResponse> {
+    rejectNonUserDirectoryKey(request.directoryKey);
+
+    const overlay = await this.getOverlayStore().setDirectoryPin({
+      directoryKey: request.directoryKey,
+      pinned: request.pinned,
+      pinnedRank: request.pinnedRank,
+    });
+
+    logDebug("setDirectoryPin", {
+      directoryKey: request.directoryKey,
+      pinnedRank: overlay.pinnedRank ?? null,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: overlay.pinnedRank
+        ? {
+            method: "directory/pin/added",
+            params: {
+              directoryKey: request.directoryKey,
+              pinnedRank: overlay.pinnedRank,
+            },
+          }
+        : {
+            method: "directory/pin/removed",
+            params: {
+              directoryKey: request.directoryKey,
+            },
+          },
+    });
+
+    return {
+      directoryKey: request.directoryKey,
+      pinnedRank: overlay.pinnedRank,
+    };
+  }
+
+  async reorderDirectoryPins(
+    request: ReorderDirectoryPinsRequest,
+  ): Promise<ReorderDirectoryPinsResponse> {
+    for (const directoryKey of request.directoryKeys ?? [request.move?.key, request.move?.anchorKey].filter((key): key is string => Boolean(key))) {
+      rejectNonUserDirectoryKey(directoryKey);
+    }
+
+    const pinnedRanks = await this.getOverlayStore().reorderDirectoryPins({
+      directoryKeys: request.directoryKeys,
+      ...(request.move ? { move: request.move } : {}),
+    });
+
+    logDebug("reorderDirectoryPins", {
+      pinCount: request.directoryKeys?.length ?? 1,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/pin/reordered",
+        params: {
+          pinnedRanks,
+        },
+      },
+    });
+
+    return { pinnedRanks };
+  }
+
+  async setDirectoryThreadsCollapsed(
+    request: SetDirectoryThreadsCollapsedRequest,
+  ): Promise<SetDirectoryThreadsCollapsedResponse> {
+    rejectNonUserDirectoryKey(request.directoryKey);
+
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const overlay = await this.getOverlayStore()
+        .setRemoteDirectoryThreadsCollapsed({
+          instanceId: request.federationTarget.instanceId,
+          directoryKey: request.directoryKey,
+          collapsed: request.collapsed,
+        });
+      const collapsed = overlay.directoryThreadsCollapsed === true;
+      logDebug("setDirectoryThreadsCollapsed:remote-viewer", {
+        instanceId: request.federationTarget.instanceId,
+        directoryKey: request.directoryKey,
+        collapsed,
+      });
+      return {
+        directoryKey: request.directoryKey,
+        collapsed,
+      };
+    }
+
+    const overlay = await this.getOverlayStore().setDirectoryThreadsCollapsed({
+      directoryKey: request.directoryKey,
+      collapsed: request.collapsed,
+    });
+    const collapsed = overlay.directoryThreadsCollapsed === true;
+
+    logDebug("setDirectoryThreadsCollapsed", {
+      directoryKey: request.directoryKey,
+      collapsed,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/threadsCollapsed/updated",
+        params: {
+          directoryKey: request.directoryKey,
+          collapsed,
+        },
+      },
+    });
+
+    return {
+      directoryKey: request.directoryKey,
+      collapsed,
+    };
+  }
+
+  /**
+   * Save a local Directories project's Forge Automation in one commit, then
+   * apply it: repairs the project no longer allows are cancelled, and a
+   * resume re-checks its PRs and PR prerequisites at once. Polling follows
+   * on its next tick, since every tick reads the index.
+   */
+  async setProjectForgeAutomation(
+    request: SetProjectForgeAutomationRequest,
+  ): Promise<SetProjectForgeAutomationResponse> {
+    const directoryKey = readProjectForgeDirectoryKey(request);
+    if (!request.automation || typeof request.automation !== "object") {
+      throw new Error("Forge Automation settings are required.");
+    }
+    const owner = remoteProjectForgeOwner(request);
+    if (owner) {
+      return await owner.setProjectForgeAutomation({
+        directoryKey,
+        automation: resolveProjectForgeAutomation(request.automation),
+      });
+    }
+    const index = getProjectForgeAutomationIndex();
+    const previous = index.get(directoryKey);
+    const overlay = await this.getOverlayStore().setDirectoryForgeAutomation({
+      directoryKey,
+      automation: resolveProjectForgeAutomation(request.automation),
+      now: Date.now(),
+    });
+    const automation = resolveProjectForgeAutomation(overlay.forgeAutomation);
+    const stored = isDefaultProjectForgeAutomation(automation) ? undefined : automation;
+    index.set(directoryKey, stored ?? null);
+
+    logDebug("setProjectForgeAutomation", {
+      directoryKey,
+      paused: automation.paused,
+      autoFixMergeConflicts: automation.autoFixMergeConflicts,
+      autoFixCiFailures: automation.autoFixCiFailures,
+      prWatches: automation.prWatches,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/forgeAutomation/updated",
+        params: { directoryKey, automation: stored ?? null },
+      },
+    });
+    await this.applyProjectForgeAutomationChange(directoryKey, previous, stored)
+      .catch((error: unknown) => {
+        appServerLog.warn("failed to apply project Forge Automation", {
+          directoryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return { directoryKey, automation };
+  }
+
+  /** Wake-ups the project's paused threads hold, for the resume dialog. */
+  async listProjectHeldWakeups(
+    request: ListProjectHeldWakeupsRequest,
+  ): Promise<ListProjectHeldWakeupsResponse> {
+    const directoryKey = readProjectForgeDirectoryKey(request);
+    const owner = remoteProjectForgeOwner(request);
+    if (owner) return await owner.listProjectHeldWakeups({ directoryKey });
+    return {
+      directoryKey,
+      wakeups: getDesktopBackendRegistry().listProjectHeldWakeups(directoryKey),
+    };
+  }
+
+  /** Send or discard held wake-ups; an operator action, allowed while paused. */
+  async resolveProjectHeldWakeups(
+    request: ResolveProjectHeldWakeupsRequest,
+  ): Promise<ResolveProjectHeldWakeupsResponse> {
+    const directoryKey = readProjectForgeDirectoryKey(request);
+    assertProjectHeldWakeupResolutions(request.resolutions);
+    const owner = remoteProjectForgeOwner(request);
+    if (owner) {
+      return await owner.resolveProjectHeldWakeups({
+        directoryKey,
+        resolutions: request.resolutions,
+      });
+    }
+    return await getDesktopBackendRegistry().resolveProjectHeldWakeups({
+      directoryKey,
+      resolutions: request.resolutions,
+    });
+  }
+
+  /** Threads filed under a project: the last scan's, plus any newer ones. */
+  private projectThreadKeys(directoryKey: string): string[] {
+    const index = getProjectForgeAutomationIndex();
+    const threadKeys = new Set(index.threadKeysForDirectory(directoryKey));
+    for (const threadKey of this.attachedPrsByThreadKey.keys()) {
+      if (threadKeys.has(threadKey)) continue;
+      const identity = parseThreadIdentityKey(threadKey);
+      if (identity && index.directoryKeyForThread(
+        identity,
+        () => getDesktopBackendRegistry().getCachedThreadSummary(identity),
+      ) === directoryKey) {
+        threadKeys.add(threadKey);
+      }
+    }
+    return [...threadKeys];
+  }
+
+  private async applyProjectForgeAutomationChange(
+    directoryKey: string,
+    previous: ProjectForgeAutomation | undefined,
+    next: ProjectForgeAutomation | undefined,
+  ): Promise<void> {
+    const threadKeys = this.projectThreadKeys(directoryKey);
+    if (threadKeys.length === 0) return;
+    const narrowsAutoFix = Boolean(next)
+      && (!projectAllowsAutoFixKind(next, "merge-conflict") || !projectAllowsAutoFixKind(next, "ci-failure"));
+    if (narrowsAutoFix && getAppStateMode()) {
+      const coordinator = this.getPrAutoDispatchCoordinator();
+      for (const threadKey of threadKeys) {
+        const identity = parseThreadIdentityKey(threadKey);
+        if (identity) await coordinator.cancelPendingDisallowedByProject(identity);
+      }
+    }
+    const resumedPolling = !projectAllowsForgePolling(previous) && projectAllowsForgePolling(next);
+    if (resumedPolling) {
+      // Thaw and poll the project's PRs now rather than on their next slot.
+      // Nothing missed while paused is replayed: only current status counts.
+      this.prPollingScheduler?.noteThreadInteraction(threadKeys);
+      void this.prPollingScheduler?.tick().catch((error: unknown) => {
+        appServerLog.debug("resume PR poll failed", {
+          directoryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    if (!projectAllowsPrWatches(previous) && projectAllowsPrWatches(next) && getAppStateMode()) {
+      await this.getThreadDependencyCoordinator().handlePrEvent();
+      // A merge or close seen while watches were held left its watch
+      // pending, and the poller no longer fetches a terminal PR. Re-offer it.
+      for (const threadKey of threadKeys) {
+        const identity = parseThreadIdentityKey(threadKey);
+        if (identity) await this.retryPendingPrTerminalWatches(identity);
+      }
+    }
+  }
+
+  async ensureDirectoryLaunchpad(
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<EnsureDirectoryLaunchpadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const {
+        federationTarget,
+        gitStatus: snapshotGitStatus,
+        ...ownerRequest
+      } = request;
+      const federationRuntime = getDesktopFederationRuntime();
+      const ownerResponse =
+        federationRuntime.remoteTargetSupportsCapability(
+          federationTarget,
+          "launchpad_metadata",
+        )
+          ? await federationRuntime
+              .remoteBackend(federationTarget)
+              .ensureDirectoryLaunchpad(ownerRequest)
+          : undefined;
+      const ownerGitStatus =
+        ownerResponse?.gitStatus
+        ?? snapshotGitStatus
+        ?? (request.currentBranch
+          ? { currentBranch: request.currentBranch }
+          : undefined);
+      const registry = getDesktopBackendRegistry();
+      const localResponse = await registry.ensureDirectoryLaunchpad(
+        {
+          ...ownerRequest,
+          directoryKind:
+            ownerResponse?.launchpad.directoryKind ?? request.directoryKind,
+          directoryLabel:
+            ownerResponse?.launchpad.directoryLabel ?? request.directoryLabel,
+          directoryPath:
+            ownerResponse?.launchpad.directoryPath ?? request.directoryPath,
+          currentBranch: undefined,
+        },
+        {
+          skipFilesystemInspection: true,
+          skipMcpConnectionDefaults: true,
+          owner: federationTarget,
+        },
+      );
+      const resolvedLocalResponse = ownerResponse
+        ? await resolveRemoteLaunchpadSettings({
+            localResponse,
+            ownerResponse,
+            preferredBackend: request.preferredBackend,
+            listOwnerBackends: async () =>
+              (await federationRuntime
+                .remoteBackend(federationTarget)
+                .listBackends({ includeUnavailable: true })).backends,
+            updateDraftSettings: async (from, patch) =>
+              (await registry.updateDirectoryLaunchpad(
+                { directoryKey: request.directoryKey, patch },
+                {
+                  skipFilesystemInspection: true,
+                  // The owner was asked over the wire; an operator pick made
+                  // meanwhile, here or in another window, is theirs.
+                  onlyIf: (current) =>
+                    current.backend === from
+                    && current.settingsTouchedAt === undefined,
+                  owner: federationTarget,
+                },
+              )).launchpad,
+          })
+        : localResponse;
+      const branchName = reconcileRemoteLaunchpadBranch(
+        resolvedLocalResponse.launchpad.branchName,
+        ownerGitStatus,
+      );
+      return {
+        ...resolvedLocalResponse,
+        launchpad: {
+          ...resolvedLocalResponse.launchpad,
+          federationTarget,
+          directoryKind:
+            ownerResponse?.launchpad.directoryKind ?? request.directoryKind,
+          directoryLabel:
+            ownerResponse?.launchpad.directoryLabel ?? request.directoryLabel,
+          directoryPath:
+            ownerResponse?.launchpad.directoryPath ?? request.directoryPath,
+          codexEnvironmentOptions:
+            ownerResponse?.launchpad.codexEnvironmentOptions,
+          branchName,
+        },
+        gitStatus: ownerGitStatus,
+        // The owner resolved its defaults from `preferredBackend` against its
+        // own providers; the local draft above used this instance's.
+        ...preferredBackendFallback(
+          request.preferredBackend,
+          ownerResponse?.defaults.backend,
+        ),
+      };
+    }
+
+    const refreshed = await this.refreshLaunchpadDirectoryGitStatus(request);
+    const response = await getDesktopBackendRegistry().ensureDirectoryLaunchpad(
+      refreshed.request,
+    );
+    return {
+      ...response,
+      ...(refreshed.gitStatus !== undefined
+        ? { gitStatus: refreshed.gitStatus }
+        : {}),
+      ...preferredBackendFallback(request.preferredBackend, response.defaults.backend),
+    };
+  }
+
+  async updateDirectoryLaunchpad(
+    request: UpdateDirectoryLaunchpadRequest,
+  ): Promise<UpdateDirectoryLaunchpadResponse> {
+    // A peer's draft is stored apart from this machine's draft for its key.
+    return await getDesktopBackendRegistry().updateDirectoryLaunchpad(request, {
+      owner: request.federationTarget,
+    });
+  }
+
+  async resetDirectoryLaunchpad(
+    request: ResetDirectoryLaunchpadRequest,
+  ): Promise<ResetDirectoryLaunchpadResponse> {
+    return await getDesktopBackendRegistry().resetDirectoryLaunchpad(request, {
+      owner: request.federationTarget,
+    });
+  }
+
+  async pickDirectoryFromDisk(
+    parentWindow?: BrowserWindow,
+  ): Promise<PickDirectoryFromDiskResponse> {
+    const e2ePickPath = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
+      ? process.env.PWRAGENT_E2E_PICK_DIRECTORY_PATH?.trim()
+      : undefined;
+    if (e2ePickPath) {
+      return { canceled: false, path: e2ePickPath };
+    }
+
+    // Anchor the dialog to whichever window dispatched the IPC so it
+    // appears as a sheet on macOS (the renderer's expectation) instead
+    // of floating free. `dialog.showOpenDialog` accepts an optional
+    // `BrowserWindow` first arg for exactly this; if the caller didn't
+    // pass one we fall back to the focused window.
+    const window =
+      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    // Open where the user last browsed (the parent of their last pick), else the
+    // home folder — much friendlier than the OS default, which is Documents on a
+    // fresh Windows profile and looks like you can't escape it.
+    const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
+    const result = window
+      ? await dialog.showOpenDialog(window, {
+          title: "Add directory",
+          buttonLabel: "Add directory",
+          defaultPath,
+          properties: ["openDirectory", "createDirectory"],
+        })
+      : await dialog.showOpenDialog({
+          title: "Add directory",
+          buttonLabel: "Add directory",
+          defaultPath,
+          properties: ["openDirectory", "createDirectory"],
+        });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    this.lastPickedDirectoryParent = path.dirname(result.filePaths[0]);
+    return { canceled: false, path: result.filePaths[0] };
+  }
+
+  async pickFileFromDisk(
+    parentWindow?: BrowserWindow,
+  ): Promise<PickFileFromDiskResponse> {
+    const e2ePickPaths = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
+      ? process.env.PWRAGENT_E2E_PICK_FILE_PATHS?.trim()
+      : undefined;
+    if (e2ePickPaths) {
+      return {
+        canceled: false,
+        paths: e2ePickPaths.split(":").filter(Boolean),
+      };
+    }
+
+    const window =
+      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
+    const options = {
+      title: "Add file",
+      buttonLabel: "Add file",
+      defaultPath,
+      properties: ["openFile", "multiSelections"] as Array<
+        "openFile" | "multiSelections"
+      >,
+    };
+    const result = window
+      ? await dialog.showOpenDialog(window, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    this.lastPickedDirectoryParent = path.dirname(result.filePaths[0]);
+    return { canceled: false, paths: result.filePaths };
+  }
+
+  /**
+   * Combined file-or-directory reference picker. Only macOS can combine
+   * `openFile` + `openDirectory` in one dialog (Electron limitation on
+   * Windows/Linux — which is why the composer's reference picker keeps
+   * separate "Add directory…" / "Add file…" actions off-macOS). Each
+   * pick is classified via `fs.stat`; unreadable paths are skipped.
+   */
+  async pickReferenceFromDisk(
+    parentWindow?: BrowserWindow,
+  ): Promise<PickReferenceFromDiskResponse> {
+    const e2ePickPaths = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
+      ? process.env.PWRAGENT_E2E_PICK_REFERENCE_PATHS?.trim()
+      : undefined;
+    if (e2ePickPaths) {
+      return {
+        canceled: false,
+        entries: classifyReferencePaths(e2ePickPaths.split(":").filter(Boolean)),
+      };
+    }
+
+    const window =
+      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
+    const options = {
+      title: "Add reference",
+      buttonLabel: "Add reference",
+      defaultPath,
+      properties: (process.platform === "darwin"
+        ? ["openFile", "openDirectory", "multiSelections"]
+        : ["openFile", "multiSelections"]) as Array<
+        "openFile" | "openDirectory" | "multiSelections"
+      >,
+    };
+    const result = window
+      ? await dialog.showOpenDialog(window, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    this.lastPickedDirectoryParent = path.dirname(result.filePaths[0]);
+    return { canceled: false, entries: classifyReferencePaths(result.filePaths) };
+  }
+
+  async listRecentFileReferences(
+    request: ListRecentFileReferencesRequest = {},
+  ): Promise<ListRecentFileReferencesResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listRecentFileReferences();
+    }
+    return {
+      files: listRecentFileReferencePaths(getAppStateDb()).map((filePath) => ({
+        label: path.basename(filePath),
+        path: filePath,
+      })),
+    };
+  }
+
+  async recordRecentFileReferences(
+    request: RecordRecentFileReferencesRequest,
+  ): Promise<void> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .recordRecentFileReferences(ownerRequest);
+      return;
+    }
+    recordRecentFileReferencePaths(getAppStateDb(), request.paths ?? []);
+  }
+
+  async listModelSettingsRecents(
+    request: ListModelSettingsRecentsRequest,
+  ): Promise<ListModelSettingsRecentsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .listModelSettingsRecents(ownerRequest);
+    }
+    return {
+      recents: listModelSettingsRecents(getAppStateDb(), request.scope),
+    };
+  }
+
+  async recordModelSettingsRecent(
+    request: RecordModelSettingsRecentRequest,
+  ): Promise<void> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .recordModelSettingsRecent(ownerRequest);
+      return;
+    }
+    recordModelSettingsRecent(getAppStateDb(), request.scope, request.recent);
+  }
+
+  async registerDirectoryFromDisk(
+    request: RegisterDirectoryFromDiskRequest,
+  ): Promise<RegisterDirectoryFromDiskResponse> {
+    const response = await registerDirectoryFromDisk(request, {
+      ensureDirectoryLaunchpad: (req) => this.ensureDirectoryLaunchpad(req),
+    });
+    if (response.ok) {
+      this.lastDirectoriesByKey.set(response.directoryKey, {
+        key: response.directoryKey,
+        kind: "directory",
+        label: response.directoryLabel,
+        path: response.directoryPath,
+        threadKeys: [],
+        needsAttentionCount: 0,
+      });
+      for (const webContents of subscribersForChannel(
+        NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
+      )) {
+        webContents.send(NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL);
+      }
+    }
+    return response;
+  }
+
+  async attachDirectoryToThread(
+    request: AttachDirectoryToThreadRequest,
+  ): Promise<AttachDirectoryToThreadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .attachDirectoryToThread(ownerRequest);
+    }
+    const backend = request.backend ?? "codex";
+    return await getDesktopBackendRegistry().withThreadWorkspaceMutation({ backend, threadId: request.threadId }, async () => {
+      const registered = await this.registerDirectoryFromDisk({
+        path: request.path,
+        preferredBackend: request.preferredBackend ?? backend,
+      });
+      if (!registered.ok) {
+        return {
+          ok: false,
+          backend,
+          threadId: request.threadId,
+          reason: registered.reason,
+          message: registered.message,
+        };
+      }
+
+      const directoryPathId = toLinkedDirectoryPathId(registered.directoryPath);
+      const directory: LinkedDirectorySummary = {
+        id: directoryPathId,
+        kind: "local",
+        label: registered.directoryLabel,
+        path: directoryPathId,
+      };
+      await getDesktopBackendRegistry().withArchiveWorkspaceWrite([directory.path], async () => await this.getOverlayStore().addLinkedDirectory({
+        backend,
+        threadId: request.threadId,
+        directory,
+      }));
+
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: {
+            reason: "selected-thread",
+            threadIds: [request.threadId],
+          },
+        },
+      });
+
+      return {
+        ok: true,
+        backend,
+        threadId: request.threadId,
+        directory,
+      };
+    }, [request.path]);
+  }
+
+  async detachDirectoryFromThread(
+    request: DetachDirectoryFromThreadRequest,
+  ): Promise<DetachDirectoryFromThreadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .detachDirectoryFromThread(ownerRequest);
+    }
+    return await detachOwnedThreadDirectory(request, {
+      overlayStore: this.getOverlayStore(),
+      readThread: async (backend, threadId) => {
+        const response = await this.listThreads({ backend });
+        return response.threads.find((thread) => thread.id === threadId);
+      },
+      publishUpdate: async (backend, threadId) => {
+        await getDesktopBackendRegistry().publishLocalEvent({
+          backend,
+          notification: {
+            method: "navigation/threadDirectories/updated",
+            params: { reason: "selected-thread", threadIds: [threadId] },
+          },
+        });
+      },
+    });
+  }
+
+  async analyzeFocusedDiff(
+    request: FocusedDiffAnalysisRequest
+  ): Promise<FocusedDiffAnalysisResponse> {
+    // Diff condensation is gated by an experimental setting. When the
+    // user has it disabled, never call the focused-diff service — return
+    // the synthetic "full" response that the renderer treats as
+    // "render every hunk, hide nothing". This is the diff-eliding gate
+    // that keeps us from sending unsolicited structured-generation requests.
+    //
+    // PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE bypasses the gate so E2Es that
+    // exercise the focused-diff path keep working with the default-off
+    // setting; without that bypass the override (consumed inside
+    // FocusedDiffService.analyze) never gets a chance to run.
+    const condensation = getDesktopSettingsService()
+      .readExperimentalConfig()
+      .diffCondensation;
+    const testOverridePresent = Boolean(
+      process.env.PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE,
+    );
+    if (condensation?.enabled !== true && !testOverridePresent) {
+      logDebug("analyzeFocusedDiff", {
+        filePath: request.filePath ?? null,
+        hunkCount: request.hunks.length,
+        mode: "full",
+        source: "condensation-disabled",
+        hiddenHunkCount: 0,
+      });
+      return {
+        mode: "full",
+        source: "condensation-disabled",
+        hiddenHunkIndices: [],
+        hiddenHunkCount: 0,
+        decisions: request.hunks.map((hunk) => ({
+          index: hunk.index,
+          disposition: "show" as const,
+          reasonCode: "keep" as const,
+          reason: "diff condensation disabled in settings",
+          confidence: 1,
+        })),
+      };
+    }
+
+    const response = await this.getFocusedDiffService().analyze(request);
+
+    logDebug("analyzeFocusedDiff", {
+      filePath: request.filePath ?? null,
+      hunkCount: request.hunks.length,
+      mode: response.mode,
+      source: response.source,
+      hiddenHunkCount: response.hiddenHunkCount,
+    });
+
+    return response;
+  }
+
+  async close(): Promise<void> {
+    this.unsubscribeRestartGate?.();
+    this.unsubscribeRestartGate = undefined;
+    this.pendingWakesCache.clear();
+    this.ownerNavigationActive = false;
+    this.ownerNavigationMetadataVersion += 1;
+    this.ownerNavigationMetadataAbort?.abort();
+    this.focusedDiffService = null;
+    this.prFetcher = undefined;
+    this.forgeCiClient = undefined;
+    this.prPollingScheduler?.stop();
+    this.prPollingScheduler = undefined;
+    this.prPollingSettingsSyncGeneration += 1;
+    this.backgroundPrPollingEnabled = false;
+    this.prAutoDispatchAllowed = false;
+    this.prAutoDispatchBudgetPaused = false;
+    this.prAutoDispatchBudgetPausedAt = undefined;
+    if (this.prDiscoveryTimer) {
+      clearInterval(this.prDiscoveryTimer);
+      this.prDiscoveryTimer = undefined;
+    }
+    this.prDiscoveryLastRefreshedAt.clear();
+    this.prPollingSettingsUnsubscribe?.();
+    this.prPollingSettingsUnsubscribe = undefined;
+    this.prGraphqlClient = undefined;
+    this.githubSamlBlockedRepositories.clear();
+    this.prPollingFocus.clear();
+    this.transcriptPrSubscriptions.clear();
+    this.prPollBackendByKey.clear();
+    this.prStatusTransitionListeners.clear();
+    this.prAutoDispatchCoordinator?.close();
+    this.prAutoDispatchCoordinator = undefined;
+    this.prStatusWatchCoordinator = undefined;
+    this.sandboxerPrCleanup = undefined;
+    this.attachedPrsByThreadKey.clear();
+    this.primaryPrThreadsByKey.clear();
+    this.publishedPrimaryGitRepositoriesByThreadKey.clear();
+    this.pendingNavigationSnapshots.clear();
+    this.remoteNavigationSnapshotCache.clear();
+    this.pendingThreadPullRequestRefreshes.clear();
+    this.pendingEditCommitResolves.clear();
+    this.prStatusRegistry.clear();
+    this.prRepositoryAliases.clear();
+    this.prRepositoryAliasGeneration = 0;
+    this.prWatchKeysGeneration = 0;
+    this.prWatchKeySync = Promise.resolve();
+    this.prRenameRetryQueued = false;
+    this.prReferenceResolutions.clear();
+    this.lastPrObservationTimestamp = 0;
+    this.prLookupRegistry.clear();
+    this.pendingPrLookupRefreshes.clear();
+    this.queuedAuthoritativePrLookupRefreshes.clear();
+    this.prLookupSubscribers.clear();
+    this.pendingPrOverlayWrites.clear();
+    this.prStatusRegistryLoaded = false;
+    this.prStatusRegistryLoadPromise = undefined;
+    this.prLookupRegistryLoaded = false;
+    this.prLookupRegistryLoadPromise = undefined;
+    this.pendingDirectoryGitStatusRefreshes.clear();
+    this.pendingDirectoryGitStatusKeys.clear();
+    this.previousDirectoriesByBackend.clear();
+    this.directoryGitStatusByKey.clear();
+    this.directoryGitStatusCacheLoaded = false;
+    this.automaticDirectoryGitStatusRefreshesStarted = 0;
+    this.lastDirectoriesByKey.clear();
+    this.worktreePathByThreadKey.clear();
+    this.prRefreshContextByThreadKey.clear();
+    await disposeDesktopBackendRegistry();
+    await this.threadMigrationService?.dispose();
+    this.threadMigrationService = null;
+  }
+
+  private getPrFetcher(): ForgePrFetcher {
+    if (!this.prFetcher) {
+      this.prFetcher = new ForgePrFetcher({
+        graphqlClient: this.getPrGraphqlClient(),
+        // Read per call, not captured: the operator can toggle a forge
+        // while the app runs and the very next poll must respect it.
+        isProviderEnabled: (provider) =>
+          getDesktopSettingsService().isForgeEnabled(provider),
+      }, new GitLabPrFetcher({ tryTakeRequestToken: () => this.takePrPollingToken("GitLab additional request") }));
+    }
+    return this.prFetcher;
+  }
+
+  private getOverlayStore(): AppServerOverlayStoreLike {
+    return getDesktopOverlayStore();
+  }
+
+  private getPrAutoDispatchCoordinator(): PrAutoDispatchCoordinator {
+    if (!this.prAutoDispatchCoordinator) {
+      this.prAutoDispatchCoordinator = new PrAutoDispatchCoordinator({
+        store: this.getOverlayStore(),
+        registry: getDesktopBackendRegistry(),
+        isBackgroundPollingEnabled: () => this.isPrAutoDispatchAvailable(),
+        getBudgetConfig: () => this.prAutoDispatchBudgetConfig,
+        onActivity: (event) => this.prActivity.record(event),
+        getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+        allowsEventKind: (identity, kind) =>
+          projectAllowsAutoFixKind(this.threadForgeAutomation(identity), kind),
+        refreshPendingPrs: async (pending) =>
+          await this.refreshPendingPrAutoDispatches(pending),
+        isPrAttached: ({ backend, threadId, prKey }) =>
+          this.isPrimaryPrAttached({ backend, threadId, prKey }),
+        onPendingChanged: async ({ backend, threadId, pending }) => {
+          await getDesktopBackendRegistry().publishLocalEvent({
+            backend,
+            notification: {
+              method: "thread/prAutoDispatch/pendingUpdated",
+              params: { threadId, pending },
+            },
+          });
+        },
+        onBudgetStatusChanged: (status) => {
+          this.updatePrAutoDispatchBudgetStatus(status);
+        },
+      });
+    }
+    return this.prAutoDispatchCoordinator;
+  }
+
+  private getPrStatusWatchCoordinator(): PrStatusWatchCoordinator {
+    if (!this.prStatusWatchCoordinator) {
+      let archivedSubscriptionsRetired = false;
+      this.prStatusWatchCoordinator = new PrStatusWatchCoordinator({
+        store: this.getOverlayStore(),
+        registry: getDesktopBackendRegistry(),
+        isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+        allowsWatchDispatch: (watch) =>
+          getDesktopBackendRegistry().getThreadInfo(watch)?.archived !== true
+          && projectAllowsPrWatches(this.threadForgeAutomation(watch)),
+        fetchTerminalDetails: async (pr) =>
+          await this.getPrFetcher().fetchPullRequestTerminalDetails(pr),
+        prepareTerminalWake: async ({ watch }) => {
+          const report = await withTimeout(
+            this.cleanupThreadSandboxesIfDone(watch.backend, watch.threadId),
+            SANDBOX_CLEANUP_WAKE_WAIT_MS,
+          );
+          if (report === "timeout") {
+            return [
+              "",
+              "Sandboxer cleanup by PwrAgent is still running; its result will appear in PR activity.",
+            ];
+          }
+          return formatSandboxCleanupLines(report);
+        },
+        onWatchesChanged: async (threads) => await this.publishPrWatchesUpdated(threads),
+        prepareClaims: async () => {
+          if (!archivedSubscriptionsRetired) {
+            const retired = await this.getOverlayStore().retireArchivedThreadPrAutomation(Date.now());
+            await getDesktopBackendRegistry().publishArchivedThreadAutomationRetirements(retired);
+            archivedSubscriptionsRetired = true;
+          }
+          await this.syncPrStatusWatchKeys();
+        },
+      });
+    }
+    return this.prStatusWatchCoordinator;
+  }
+
+  private getThreadDependencyCoordinator(): ThreadDependencyCoordinator {
+    if (!this.threadDependencyCoordinator) {
+      const store = new ThreadDependencyStore(getAppStateDb().raw);
+      this.threadDependencyCoordinator = new ThreadDependencyCoordinator({
+        store,
+        hasDeliveryReceipt: (dependency) => store.hasDeliveryReceipt(dependency),
+        operatorTodos: {
+          prepare: (dependency) => readThreadTodoPlacement(getDesktopBackendRegistry(), dependency),
+          raise: (card, placement) => getThreadTodoService().raiseForDependency({ ...card, ...placement }).todo,
+          publish: (todo) => getThreadTodoService().publish(todo),
+        },
+        readThread: (condition) => this.readDependencyThread(condition),
+        canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
+        resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
+        submit: async (request) => await this.submitDependencyWakeup(request),
+        isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
+        // PR conditions also wait while the consumer's project holds PR
+        // watches. A paused project's turn-only wake is held or discarded
+        // in submit, by its wake-up policy.
+        // A quiet restart's continuations go first; the gate opening
+        // reconciles again (see `startAppServerOwnerNavigation`).
+        canDispatch: (dependency) => this.ownerNavigationActive
+          && !getDesktopBackendRegistry().isRestartGateClosed?.()
+          && (dependency.conditions.every((condition) => condition.when === "turn_completed")
+            || (this.backgroundPrPollingEnabled
+              && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
+        changed: async (dependency) => {
+          // Prerequisite threads list their dependents, so they refresh too.
+          const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
+          for (const target of [dependency, ...dependency.conditions]) {
+            targets.set(JSON.stringify([target.backend, target.threadId]), { backend: target.backend, threadId: target.threadId });
+          }
+          for (const target of targets.values()) {
+            await getDesktopBackendRegistry().publishLocalEvent({
+              backend: target.backend,
+              notification: { method: "thread/dependencies/updated", params: { threadId: target.threadId, dependencyId: dependency.id } },
+            });
+          }
+        },
+      });
+    }
+    return this.threadDependencyCoordinator;
+  }
+
+  /**
+   * A dependency's wake. When the consumer's project is paused, its wake-up
+   * policy holds it as a project-held message or discards it with a note;
+   * the dependency counts as delivered either way.
+   */
+  private async submitDependencyWakeup(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: { type: "text"; text: string }[];
+    origin: "automation";
+    messageOrigin: import("@pwragent/shared").AppServerThreadMessageOrigin;
+  }): Promise<{ status: "started" | "busy" | "held" | "discarded"; turnId?: string }> {
+    const registry = getDesktopBackendRegistry();
+    const project = this.resolveThreadForgeProject(request);
+    // A lock already holds every source, so it wins: the dependency waits
+    // for unlock exactly as it does in an active project.
+    if (!project?.automation.paused || await registry.isThreadLocked(request)) {
+      return await registry.submitTurnIfIdle(request);
+    }
+    // The prompt's first evidence line names the prerequisite that fired.
+    const evidence = (request.input[0]?.text ?? "").split("\n")
+      .find((line) => line.startsWith("- "))?.slice(2);
+    const delivered = await registry.deliverProjectPausedWakeup({
+      ...request,
+      project,
+      queueEntryId: `dependency:${request.messageOrigin.dependencyId ?? randomUUID()}`,
+      source: "dependency",
+      summary: summarizeProjectHeldWakeup(`Continue After: ${evidence ?? "prerequisites met"}`),
+    });
+    return { status: delivered.status === "discarded" ? "discarded" : "held" };
+  }
+
+  private async readDependencyThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot> {
+    const registry = getDesktopBackendRegistry();
+    const turns = new Map<string, AppServerThreadTurnMetadata>();
+    // Use the provider protocol for validation and turn catch-up. PR event
+    // evaluation reads only PwrAgent's attachment/status stores.
+    if (!condition.when || condition.when === "turn_completed") {
+      let before: string | undefined;
+      for (let page = 0; page < 50; page++) {
+        const response = await registry.readThread({
+          backend: condition.backend, threadId: condition.threadId,
+          includeTurns: true, limit: 100, viewOnly: true, ...(before ? { before } : {}),
+        });
+        for (const entry of response.replay.entries) {
+          if (entry.turn) turns.set(entry.turn.id, entry.turn);
+        }
+        const pagination = response.replay.pagination;
+        if (!condition.turnId || turns.has(condition.turnId) || !pagination.hasPreviousPage
+          || !pagination.previousCursor || pagination.previousCursor === before) break;
+        before = pagination.previousCursor;
+      }
+    }
+    const overlay = await this.getOverlayStore().getThreadOverlayState(condition);
+    const prs = this.primaryAttachedPrsForThread({
+      ...condition, prs: await this.canonicalizeStoredPullRequests(overlay?.prs ?? []),
+    });
+    return {
+      activeTurnId: registry.getActiveTurnForThread(condition)?.turnId,
+      turns: [...turns.values()],
+      prs: prs.map((pr) => {
+        const current = this.prStatusRegistry.get(getPrStatusKey(pr));
+        return { pr: current?.pr ?? pr, fetchedAt: current?.fetchedAt ?? 0 };
+      }),
+    };
+  }
+
+  listActiveThreadDependencies(): ManageThreadDependenciesResponse {
+    // Before a profile's state opens there is nothing to list, not an error.
+    if (!getAppStateMode()) return { dependencies: [] };
+    return { dependencies: this.getThreadDependencyCoordinator().active() };
+  }
+
+  async manageThreadDependencies(request: ManageThreadDependenciesRequest,
+    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">): Promise<ManageThreadDependenciesResponse> {
+    if (!request || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
+      throw new Error("A local backend and waiting threadId are required.");
+    }
+    if (Object.keys(request).some((key) => !["action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff", "dependencyId"].includes(key))) throw new Error("Unknown dependency request field.");
+    if (request.action === "create") {
+      validateDependencyCreate(request);
+      // The resumed turn starts from this text alone, for the operator's
+      // dialog as for an agent's tool call.
+      if (typeof request.continuation !== "string" || !request.continuation.trim()) {
+        throw new Error("Write what this thread should do when the prerequisites are met.");
+      }
+      if (request.conditions?.some((condition) => !isAppServerBackendKind(condition?.backend))) throw new Error("Prerequisites must use known local backends.");
+      // Validate PR-only prerequisites through the protocol before
+      // registration; the coordinator already reads turn prerequisites.
+      for (const condition of request.conditions ?? []) {
+        if (condition.when !== "turn_completed") await this.readDependencyThread({ backend: condition.backend, threadId: condition.threadId });
+      }
+      if (request.conditions?.some((condition) => condition.when !== "turn_completed") && !this.backgroundPrPollingEnabled) {
+        throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
+      }
+    }
+    return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() }, provenance);
+  }
+
+  /**
+   * An agent's PR prerequisite is stored while the waiting thread's project
+   * holds PR watches, and `canDispatch` keeps it waiting until they return.
+   * The agent is told why. Turn prerequisites need no notice: their wake is
+   * held or discarded by the project's wake-up policy.
+   */
+  dependencyProjectNotice(request: ManageThreadDependenciesRequest): string | undefined {
+    if (
+      request?.action !== "create"
+      || !request.conditions?.some((condition) => condition?.when !== "turn_completed")
+      || typeof request.backend !== "string"
+      || !isAppServerBackendKind(request.backend)
+      || typeof request.threadId !== "string"
+      || !request.threadId.trim()
+    ) {
+      return undefined;
+    }
+    const project = this.resolveThreadForgeProject({
+      backend: request.backend,
+      threadId: request.threadId.trim(),
+    });
+    if (!project || projectAllowsPrWatches(project.automation)) return undefined;
+    return buildProjectPrDependencyNotice({
+      projectLabel: project.label,
+      paused: project.automation.paused,
+    });
+  }
+
+  async reconcileThreadDependencies(): Promise<void> {
+    if (!getAppStateMode()) return;
+    await this.getThreadDependencyCoordinator().reconcile();
+  }
+
+  /**
+   * A merge/close wake that found its thread busy is retried when the thread
+   * goes idle. The poller no longer fetches the PR, so nothing else would.
+   */
+  handleAgentEventForPrWatches(event: AgentEvent): void {
+    if (!getAppStateMode()) return;
+    if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
+    const notification = event.notification as AppServerNotification;
+    if (notification.method === "thread/archived") {
+      void this.prAutoDispatchCoordinator?.cancelAllPendingForThread({ backend: event.backend, threadId: notification.params.threadId })
+        .catch((error) => appServerLog.warn("archived thread repair cancellation failed", { error: String(error) }));
+      return;
+    }
+    const settled = notification.method === "turn/completed"
+      || notification.method === "turn/failed"
+      || notification.method === "turn/cancelled"
+      || (
+        notification.method === "thread/status/changed"
+        && typeof notification.params.status === "object"
+        && notification.params.status !== null
+        && "type" in notification.params.status
+        && notification.params.status.type === "idle"
+      );
+    if (!settled) return;
+    const threadId = (notification.params as { threadId?: string }).threadId?.trim();
+    if (!threadId) return;
+    void this.retryPendingPrTerminalWatches({ backend: event.backend, threadId })
+      .catch((error) => appServerLog.warn("pr terminal watch retry failed", {
+        threadId,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+  }
+
+  /**
+   * Re-offer cached terminal status to undelivered merge/close watches: for
+   * one thread when it goes idle, or for all at startup. A wake interrupted by
+   * a busy thread or a quit has no later poll to deliver it, because
+   * `collectPrPollTargets` drops a PR once it is merged or closed. A watch
+   * whose PR is still open in the cache waits for the poller instead.
+   */
+  private async retryPendingPrTerminalWatches(
+    thread?: { backend: AppServerBackendKind; threadId: string },
+  ): Promise<void> {
+    if (!this.backgroundPrPollingEnabled) return;
+    await this.syncPrStatusWatchKeys();
+    const prKeys = await this.getOverlayStore()
+      .listPendingPrTerminalWatchPrKeys(thread ?? {});
+    if (prKeys.length === 0) return;
+    await this.loadPrStatusRegistry();
+    for (const prKey of prKeys) {
+      const pr = this.prStatusRegistry.get(prKey)?.pr;
+      if (!pr || !isTerminalPullRequest(pr)) continue;
+      const dispatched = await this.getPrStatusWatchCoordinator()
+        .handleTerminalSnapshot(pr, this.nextPrObservationTimestamp());
+      if (dispatched > 0) {
+        appServerLog.info("pr terminal watch completed", {
+          prKey,
+          watchCount: dispatched,
+        });
+      }
+    }
+  }
+
+  handleAgentEventForDependencies(event: AgentEvent): void {
+    if (!getAppStateMode()) return;
+    if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
+    const notification = event.notification as AppServerNotification;
+    let task: Promise<void> | undefined;
+    if (notification.method === "turn/completed" || notification.method === "turn/failed" || notification.method === "turn/cancelled") {
+      // Codex also completes interrupted turns through this method. Missing
+      // terminal metadata must reconcile through provider history, not imply success.
+      const turn = notification.params.turn;
+      const observedStatus = turn && typeof turn === "object" && "status" in turn ? turn.status : undefined;
+      const status = typeof observedStatus === "string" && ["completed", "failed", "cancelled", "interrupted"].includes(observedStatus)
+        ? observedStatus as AppServerThreadTurnMetadata["status"]
+        : notification.method === "turn/failed" ? "failed" : notification.method === "turn/cancelled" ? "cancelled" : undefined;
+      const turnId = notification.params.turnId;
+      task = this.getThreadDependencyCoordinator().handleThreadEvent(
+        { backend: event.backend, threadId: notification.params.threadId },
+        status && turnId ? { id: turnId, status } : undefined,
+        true,
+      );
+    } else if (notification.method === "thread/pullRequests/updated") {
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId });
+    } else if (notification.method === "thread/status/changed") {
+      const status = notification.params.status;
+      if (status && typeof status === "object" && "type" in status && status.type === "idle") {
+        task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+      }
+    } else if (notification.method === "thread/turnQueue/updated" && typeof notification.params.status === "string"
+      && ["cancelled", "terminal"].includes(notification.params.status)) {
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+    } else if (notification.method === "pullRequest/status/updated") {
+      const pr = notification.params.pr;
+      if (pr && typeof pr === "object" && "url" in pr && typeof pr.url === "string") {
+        task = this.getThreadDependencyCoordinator().handlePrEvent(pr.url);
+      }
+    } else if (notification.method === "thread/lock/updated" && !notification.params.lock) {
+      // A lock reads as busy at admission. Unlocking is the consumer's only
+      // availability signal when it stays idle.
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+    } else if (notification.method === "navigation/providerThreads/refreshed") {
+      task = this.getThreadDependencyCoordinator().reconcile();
+    }
+    void task?.catch((error) => appServerLog.warn("thread dependency evaluation failed", { error: String(error) }));
+  }
+
+  private getFocusedDiffService(): FocusedDiffService {
+    if (this.focusedDiffService) {
+      return this.focusedDiffService;
+    }
+
+    this.focusedDiffService = new FocusedDiffService({
+      client: {
+        generateObject: async (request) => {
+          const result = await getDesktopBackendRegistry().generateStructuredObject(request);
+          if (result.status !== "ok") {
+            throw new Error(result.reason);
+          }
+          return { object: result.object };
+        },
+      },
+    });
+    return this.focusedDiffService;
+  }
+}
+
+async function resolvePrimaryThreadRepoKey(
+  thread: Pick<
+    NavigationSnapshot["threads"][number],
+    "gitOriginUrl" | "linkedDirectories"
+  >,
+  resolutionByPath = new Map<string, Promise<string | undefined>>(),
+): Promise<string | undefined> {
+  // A workspace move (move_thread_workspace) is the thread's primary
+  // workspace. The provider's origin describes the checkout the session
+  // started in, which can be another project after a to-project move.
+  const movedWorkspace = thread.linkedDirectories.findLast(
+    isWorkspaceHandoffDirectory,
+  );
+  const origin = !movedWorkspace && thread.gitOriginUrl
+    ? parseForgeRemote(thread.gitOriginUrl)
+    : undefined;
+  if (origin) return buildPrRepositoryKey(origin.host, origin.owner, origin.repo);
+
+  const primaryDirectory = movedWorkspace ?? thread.linkedDirectories[0];
+  const primaryPath = primaryDirectory
+    ? resolvePullRequestDirectoryPath(primaryDirectory)
+    : undefined;
+  if (!primaryPath) return undefined;
+  const existing = resolutionByPath.get(primaryPath);
+  if (existing) return await existing;
+  const resolution = resolveGitHubRepoForDirectory(primaryPath)
+    .then((resolved) => resolved
+      ? buildPrRepositoryKey(resolved.host, resolved.owner, resolved.repo)
+      : undefined);
+  resolutionByPath.set(primaryPath, resolution);
+  return await resolution;
+}
+
+function resolveThreadPullRequestContexts(
+  thread: Pick<
+    NavigationSnapshot["threads"][number],
+    | "gitBranch"
+    | "id"
+    | "linkedDirectories"
+    | "observedGitBranch"
+    | "prs"
+    | "source"
+  >,
+): ThreadPrRefreshContext[] {
+  const contexts: ThreadPrRefreshContext[] = [];
+  const threadBranch =
+    thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || "";
+  const hasRetainedPrs = (thread.prs?.length ?? 0) > 0;
+  const unscopedDirectoryPaths = resolveThreadPullRequestDirectoryPaths({
+    linkedDirectories: (thread.linkedDirectories ?? []).filter(
+      (directory) => {
+        const branch = directory.gitBranch?.trim();
+        return !branch || branch === "HEAD";
+      },
+    ),
+  });
+  if (threadBranch && unscopedDirectoryPaths.length > 0) {
+    contexts.push({
+      backend: thread.source,
+      threadId: thread.id,
+      branch: threadBranch,
+      directoryPaths: unscopedDirectoryPaths,
+      branchScoped: false,
+    });
+  }
+  const headDirectoryPaths = resolveThreadPullRequestDirectoryPaths({
+    linkedDirectories: (thread.linkedDirectories ?? []).filter(
+      (directory) => directory.gitBranch?.trim() === "HEAD",
+    ),
+  });
+  if (!threadBranch && hasRetainedPrs && headDirectoryPaths.length > 0) {
+    contexts.push({
+      backend: thread.source,
+      threadId: thread.id,
+      branch: "HEAD",
+      directoryPaths: headDirectoryPaths,
+      branchScoped: false,
+    });
+  }
+
+  const seenScopedKeys = new Set<string>();
+  for (const directory of thread.linkedDirectories ?? []) {
+    const branch = directory.gitBranch?.trim();
+    const directoryPath = resolvePullRequestDirectoryPath(directory);
+    if (!branch || branch === "HEAD" || !directoryPath) {
+      continue;
+    }
+    const key = `${branch}\0${directoryPath}`;
+    if (seenScopedKeys.has(key)) {
+      continue;
+    }
+    seenScopedKeys.add(key);
+    contexts.push({
+      backend: thread.source,
+      threadId: thread.id,
+      branch,
+      directoryPaths: [directoryPath],
+      branchScoped: true,
+    });
+  }
+
+  return contexts;
+}
+
+function resolveThreadPullRequestDirectoryPaths(
+  thread: Pick<AppServerThreadSummary, "linkedDirectories">,
+): string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const directory of thread.linkedDirectories ?? []) {
+    const normalized = resolvePullRequestDirectoryPath(directory);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    paths.push(normalized);
+  }
+  return paths;
+}
+
+function resolvePullRequestDirectoryPath(
+  directory: AppServerThreadSummary["linkedDirectories"][number],
+): string | undefined {
+  const candidate =
+    directory.kind === "worktree"
+      ? directory.worktreePath ?? directory.path
+      : directory.path;
+  return candidate?.trim() || undefined;
+}
+
+/**
+ * True when a command string runs a git subcommand that can change the
+ * working tree, the index, or local commits (and therefore the
+ * dirty/unpushed chips). Mirrors the option-skipping shape of the
+ * edited-file-groups commit matcher so `git -C <path> commit` still
+ * matches, while a command that merely mentions "commit" later does not.
+ */
+function commandLooksLikeGitMutation(command: string): boolean {
+  return GIT_MUTATION_COMMAND.test(command);
+}
+
+const GIT_MUTATION_COMMAND =
+  /(?:^|[;&|]\s*)git\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*(?:commit|merge|rebase|reset|revert|stash|checkout|switch|restore|cherry-pick|pull|push|am|apply|clean)\b/;
+
+/** Internal owner service; legacy materialization is retained only for unit regression coverage. */
+export let appServerService = new DesktopAppServerService();
+
+/**
+ * Test seam: swap in a fresh owner service so no test sees PR registries,
+ * caches or budgets an earlier test left behind. Run
+ * `disposeAppServerIpcHandlers` first; it closes the outgoing instance.
+ * Importers read the live binding, so the IPC handlers use the new instance.
+ */
+export function resetAppServerServiceForTests(): void {
+  appServerService = new DesktopAppServerService();
+}
+
+export async function startAppServerOwnerNavigation(): Promise<void> {
+  await appServerService.startOwnerNavigation();
+  await appServerService.reconcileThreadDependencies();
+}

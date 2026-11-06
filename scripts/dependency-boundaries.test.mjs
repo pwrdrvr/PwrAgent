@@ -28,6 +28,7 @@ const targets = [
 ];
 const cases = [];
 const storageCases = [];
+const ipcStateCases = [];
 let root;
 let result;
 
@@ -79,6 +80,16 @@ beforeAll(async () => {
     const from = `packages/owner-core/src/probes/storage-${storageCases.length}.js`;
     source(from, `import ${JSON.stringify(relative(dirname(from), target).replaceAll("\\", "/"))};\n`);
     storageCases.push({ from, to: target });
+  }
+
+  for (const area of ["ipc", "ipc/nested", "app-server", "federation", "settings"]) {
+    for (const target of ["overlay", "app-state", "nested/store"]) {
+      const to = `apps/desktop/src/main/state/${target}.js`;
+      const from = `apps/desktop/src/main/${area}/state-${target.replaceAll("/", "-")}.js`;
+      source(to, "export const value = 1;\n");
+      source(from, `import ${JSON.stringify(relative(dirname(from), to).replaceAll("\\", "/"))};\n`);
+      ipcStateCases.push({ from, to, forbidden: area.split("/")[0] === "ipc" });
+    }
   }
 
   // dependency-cruiser normalizes entry paths against cwd, even with baseDir.
@@ -133,6 +144,16 @@ describe("workspace dependency layers", () => {
         ?.dependencies.find((dependency) => dependency.resolved === to);
       expect(dependency?.rules?.map((rule) => rule.name), `${from} -> ${to}`)
         .toContain("owner-core-has-no-storage-format-dependencies");
+    }
+  });
+
+  it("keeps state private from every IPC path without extending the rule to other areas", () => {
+    for (const { from, to, forbidden } of ipcStateCases) {
+      const dependency = result.modules.find((module) => module.source === from)
+        ?.dependencies.find((dependency) => dependency.resolved === to);
+      expect(dependency, `${from} -> ${to}`).toBeDefined();
+      expect(dependency.rules?.some((rule) => rule.name === "desktop-ipc-state-is-service-private") ?? false,
+        `${from} -> ${to}`).toBe(forbidden);
     }
   });
 });
