@@ -175,6 +175,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
+import { ReviewAutoFixSwitch } from "./ReviewAutoFixSwitch";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import {
@@ -1365,6 +1366,7 @@ function createReviewConfig(params: {
   thread?: NavigationThreadSummary;
   reviewCommand?: {
     cwd?: string;
+    afterReview?: ReviewAfterAction;
     target: AppServerReviewTarget;
   };
 }): ReviewConfigState {
@@ -1376,6 +1378,8 @@ function createReviewConfig(params: {
     commit: "",
     customInstructions: "",
     runMode: "codex-sub-agent",
+    // A review rebuilt from its command keeps the choice it was queued with.
+    ...(params.reviewCommand?.afterReview === "wait" ? { waitAfterReview: true } : {}),
     target: "baseBranch",
     workspaceCwd: params.reviewCommand?.cwd ?? (
       preferredWorkspaceCwd ??
@@ -13906,13 +13910,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
             <div className="composer__review-actions">
               {reviewAutoFixSupported ? (
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={!reviewConfig?.waitAfterReview}
-                  className="composer__review-after tooltip-target"
-                  data-tooltip="When the review finishes, this thread's agent decides which findings to fix, defer to a to-do, or decline"
-                  onClick={() => {
+                <ReviewAutoFixSwitch
+                  checked={!reviewConfig?.waitAfterReview}
+                  onToggle={() => {
                     setReviewConfig((current) => {
                       const base = current ?? createReviewConfig({
                         directory: props.directory,
@@ -13921,12 +13921,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       return { ...base, waitAfterReview: !base.waitAfterReview };
                     });
                   }}
-                >
-                  <span aria-hidden="true" className="composer__review-after-box">
-                    {reviewConfig?.waitAfterReview ? null : <CheckIcon size={11} />}
-                  </span>
-                  Auto-fix findings
-                </button>
+                />
               ) : null}
               <button
                 type="button"

@@ -140,17 +140,7 @@ export function SettledFindingLabel(props: { status: string; size: number }) {
   return <><Icon size={props.size} />{label}</>;
 }
 
-/** Open findings first, then by priority; ties keep the reviewer's order. */
-export function orderReviewItems(items: readonly ThreadReviewItem[]): ThreadReviewItem[] {
-  const rank = (item: ThreadReviewItem): number => item.priority ?? 9;
-  return items
-    .map((item, index) => ({ item, index }))
-    .sort((a, b) =>
-      Number(a.item.status !== "open") - Number(b.item.status !== "open")
-      || rank(a.item) - rank(b.item)
-      || a.index - b.index)
-    .map(({ item }) => item);
-}
+export { orderReviewItems } from "../../../../shared/review-fix-prompts";
 
 export function openReviewItems(review: ThreadReview): ThreadReviewItem[] {
   return review.items.filter((item) => item.status === "open");

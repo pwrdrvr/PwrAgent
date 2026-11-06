@@ -5,7 +5,7 @@ import type {
   ThreadReview,
 } from "@pwragent/shared";
 import { threadReviewDisplayTitle } from "@pwragent/shared";
-import { autoFixReviewFindingsPrompt } from "../../shared/review-fix-prompts";
+import { autoFixReviewFindingsPrompt, orderReviewItems } from "../../shared/review-fix-prompts";
 
 export type ReviewAutoFixThread = { backend: AppServerBackendKind; threadId: string };
 
@@ -115,11 +115,7 @@ export function reviewAutoFixMessage(review: ThreadReview): {
   messageOrigin: AppServerThreadMessageOrigin;
 } | undefined {
   if (review.status !== "open") return undefined;
-  const open = review.items
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item.status === "open")
-    .sort((a, b) => (a.item.priority ?? 9) - (b.item.priority ?? 9) || a.index - b.index)
-    .map(({ item }) => item);
+  const open = orderReviewItems(review.items).filter((item) => item.status === "open");
   if (open.length === 0) return undefined;
   const title = threadReviewDisplayTitle(review);
   return {

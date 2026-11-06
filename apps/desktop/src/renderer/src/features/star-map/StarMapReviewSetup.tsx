@@ -1,4 +1,4 @@
-import { CheckIcon } from "../../icons";
+import { ReviewAutoFixSwitch } from "../composer/ReviewAutoFixSwitch";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { ReviewLocationDropdown } from "../composer/ReviewLocationDropdown";
 import { reviewThreadForWorkspace } from "../../../../shared/pull-request-review";
@@ -519,20 +519,11 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
 
         <footer className="star-map-review-setup__actions">
           {autoFixSupported ? (
-            <button
-              type="button"
-              role="switch"
-              aria-checked={autoFix}
-              className="composer__review-after tooltip-target"
-              data-tooltip="When the review finishes, this thread's agent decides which findings to fix, defer to a to-do, or decline"
+            <ReviewAutoFixSwitch
+              checked={autoFix}
               disabled={props.submitting}
-              onClick={() => setAutoFix((current) => !current)}
-            >
-              <span aria-hidden="true" className="composer__review-after-box">
-                {autoFix ? <CheckIcon size={11} /> : null}
-              </span>
-              Auto-fix findings
-            </button>
+              onToggle={() => setAutoFix((current) => !current)}
+            />
           ) : null}
           <button
             className="composer__secondary-action"

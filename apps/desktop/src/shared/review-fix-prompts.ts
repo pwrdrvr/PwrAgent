@@ -3,6 +3,21 @@ import { reviewFindingTag } from "./review-output";
 
 type ReviewFinding = Pick<ThreadReviewItem, "title" | "priority" | "category">;
 
+/**
+ * Open findings first, then by priority; ties keep the reviewer's order. The
+ * card lists findings this way, and every fix prompt sends them this way.
+ */
+export function orderReviewItems<T extends Pick<ThreadReviewItem, "status" | "priority">>(items: readonly T[]): T[] {
+  const rank = (item: T): number => item.priority ?? 9;
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) =>
+      Number(a.item.status !== "open") - Number(b.item.status !== "open")
+      || rank(a.item) - rank(b.item)
+      || a.index - b.index)
+    .map(({ item }) => item);
+}
+
 function findingLines(items: readonly ReviewFinding[]): string[] {
   return items.map((item, index) => {
     const tag = reviewFindingTag(item);
