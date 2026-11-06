@@ -299,6 +299,51 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
 }
 
 describe("real Playwright worker shutdown diagnostics", () => {
+  it("observes global-setup launches without declaring the controller a worker", async () => {
+    const root = createProbeRoot();
+    const output = path.join(root, "results");
+    writeFileSync(path.join(root, "playwright.config.mjs"), `
+      export default { testDir: '.', testMatch: '*.spec.cjs', globalSetup: './setup.mjs',
+        outputDir: ${JSON.stringify(output)}, reporter: 'list' };
+    `);
+    writeFileSync(path.join(root, "setup.mjs"), `
+      import { createRequire } from 'node:module';
+      import { installShutdownDiagnostics } from ${JSON.stringify(diagnostics)};
+      const require = createRequire(import.meta.url);
+      const { utils } = require(${JSON.stringify(core)});
+      export default async () => {
+        installShutdownDiagnostics({ outputDir: ${JSON.stringify(output)},
+          currentTest: () => undefined, scope: 'global-setup' });
+        const launched = await utils.launchProcess({ command: process.execPath,
+          args: ['-e', 'setInterval(() => {}, 1000)'], env: { ...process.env },
+          stdio: 'pipe', tempDirectories: [], log() {}, onExit() {},
+          attemptToGracefullyClose: () => Promise.resolve() });
+        await launched.kill();
+      };
+    `);
+    writeFileSync(path.join(root, "probe.spec.cjs"), `
+      const { test } = require(${JSON.stringify(require.resolve("@playwright/test"))});
+      test('fixture', async () => {});
+    `);
+    const started = startProbe([cli, "test", "-c", path.join(root, "playwright.config.mjs")], {
+      cwd: desktop,
+      env: { ...process.env, TEST_WORKER_INDEX: "7", PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1" },
+      maxBuffer: 1024 * 1024,
+    }, root);
+    const result = await withinBudget(started, started.result, COLD_START_BUDGET_MS,
+      "Global setup observation did not finish within the cold-start budget.");
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    const directory = path.join(output, "worker-shutdown");
+    const timelines = existsSync(directory)
+      ? readdirSync(directory, { recursive: true }).filter((file) => file.endsWith("timeline.jsonl")) : [];
+    expect(timelines).toHaveLength(1);
+    const timeline = readFileSync(path.join(directory, timelines[0]), "utf8");
+    expect(timeline).toContain('"kind":"global-setup-start"');
+    expect(timeline).toContain('"kind":"launch"');
+    expect(timeline).toContain('"kind":"process-close"');
+    expect(timeline).not.toContain('"kind":"worker-start"');
+  }, COLD_START_BUDGET_MS + BACKSTOP_MS);
+
   it("does not report worker readiness from a controller with an inherited worker index", async () => {
     const root = createProbeRoot();
     const output = path.join(root, "results");

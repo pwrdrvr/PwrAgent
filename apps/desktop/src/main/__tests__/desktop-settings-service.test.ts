@@ -427,6 +427,7 @@ describe("DesktopSettingsService", () => {
     expect(discover).toHaveBeenCalledWith(undefined, {
       allowStaleSuccess: false,
       force: true,
+      signal: expect.any(AbortSignal),
     });
 
     await service.writeConfigPatchTargeted({
@@ -2458,6 +2459,7 @@ describe("DesktopSettingsService", () => {
     expect(discover).toHaveBeenLastCalledWith("/operator/codex", {
       allowStaleSuccess: false,
       force: true,
+      signal: expect.any(AbortSignal),
     });
   });
 

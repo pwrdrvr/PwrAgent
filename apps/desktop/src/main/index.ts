@@ -533,9 +533,10 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   const startupProviderRefresh = getDesktopSettingsService().resolveCodexCommand()
     // A missing executable must still publish the provider's degraded state.
     .catch(() => undefined)
-    .then(async () =>
-      await getDesktopBackendRegistry().refreshProvidersAtStartup(permit),
-    )
+    .then(async () => {
+      if (quitInProgress) return;
+      await getDesktopBackendRegistry().refreshProvidersAtStartup(permit);
+    })
     .catch((error) => {
       mainLog.warn("startup provider refresh failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -554,6 +555,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   // Its own chain, so an archive sweeper failure cannot leave idle Codex
   // threads (and their MCP servers) loaded for the whole session.
   void startupProviderRefresh.then(() => {
+    if (quitInProgress) return;
     getExistingDesktopBackendRegistry()?.startCodexIdleThreadUnsubscriber();
   }).catch((error) => {
     mainLog.warn("startup idle Codex thread unsubscriber initialization failed", {
@@ -563,6 +565,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   // The idle app-server recycle is the leak backstop; it gets its own chain
   // for the same reason.
   void startupProviderRefresh.then(() => {
+    if (quitInProgress) return;
     getExistingDesktopBackendRegistry()?.startCodexAppServerRecycler();
   }).catch((error) => {
     mainLog.warn("startup Codex app server recycler initialization failed", {
@@ -571,6 +574,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   });
   // And for idle ACP sessions.
   void startupProviderRefresh.then(() => {
+    if (quitInProgress) return;
     getExistingDesktopBackendRegistry()?.startAcpIdleSessionCloser();
   }).catch((error) => {
     mainLog.warn("startup idle ACP session closer initialization failed", {
@@ -580,6 +584,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   // Continuations a quiet restart left start once providers can take a
   // turn, a few threads at a time.
   void startupProviderRefresh.then(() => {
+    if (quitInProgress) return;
     getExistingDesktopBackendRegistry()?.beginRestartContinuationDispatch();
   }).catch((error) => {
     mainLog.warn("restart continuation dispatch failed to start", {
@@ -587,6 +592,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     });
   });
   void startupProviderRefresh.then(() => {
+    if (quitInProgress) return;
     getExistingDesktopBackendRegistry()?.startThreadArchiveSweeper();
   }).catch((error) => {
     mainLog.warn("startup thread archive sweeper initialization failed", {
@@ -594,6 +600,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     });
   });
   void startupProviderRefresh.then(async () => {
+    if (quitInProgress) return;
     const registry = getExistingDesktopBackendRegistry();
     if (!registry) return;
     await registry.resumeArchiveCleanupsAtStartup();
@@ -601,9 +608,10 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     mainLog.warn("archived worktree repair interrupted", { error: error instanceof Error ? error.message : String(error) });
   });
   void startupProviderRefresh
-    .then(async () =>
-      await getDesktopBackendRegistry().prepareTokenMiserRuntimeAtStartup(),
-    )
+    .then(async () => {
+      if (quitInProgress) return;
+      await getDesktopBackendRegistry().prepareTokenMiserRuntimeAtStartup();
+    })
     .catch((error) => {
       mainLog.warn("startup Token Miser preparation failed", {
         error: error instanceof Error ? error.message : String(error),

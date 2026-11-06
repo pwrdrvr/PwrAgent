@@ -56,6 +56,28 @@ function deferred<T>(): {
 }
 
 describe("CodexDiscoveryCoordinator", () => {
+  it.each(["queued", "environment"] as const)("admission oracle: an aborted %s probe cannot enter discovery", async (boundary) => {
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const controller = new AbortController();
+    const discover = vi.fn(async () => notInstalledSnapshot());
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover,
+      resolveEnv: async () => {
+        entered.resolve();
+        await release.promise;
+        return {};
+      },
+    });
+    const running = coordinator.discover("fixture", { signal: controller.signal });
+    if (boundary === "environment") await entered.promise;
+    controller.abort();
+    release.resolve();
+    await running;
+    expect(discover).not.toHaveBeenCalled();
+    expect(coordinator.peek("fixture")).toBeUndefined();
+  });
+
   it("delegates Windows PATHEXT resolution to shared Codex discovery", async () => {
     const windowsCommand = "C:\\nvm4w\\nodejs\\codex.CMD";
     const env = {

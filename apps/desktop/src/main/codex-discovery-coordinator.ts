@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import {
+  COMMAND_DISCOVERY_ABORTED,
   CodexCliNotInstalledError,
   MINIMUM_CODEX_CLI_VERSION,
   discoverCodexCommands,
@@ -49,6 +50,7 @@ export type CodexDiscoveryCoordinatorOptions = {
 export type CodexDiscoveryRequest = {
   allowStaleSuccess?: boolean;
   force?: boolean;
+  signal?: AbortSignal;
 };
 
 /**
@@ -104,6 +106,7 @@ export class CodexDiscoveryCoordinator {
     configuredCommand?: string,
     request: CodexDiscoveryRequest = {},
   ): Promise<CodexDiscoverySnapshot> {
+    if (request.signal?.aborted) return { candidates: [], error: COMMAND_DISCOVERY_ABORTED };
     const key = configuredCommand?.trim() ?? "";
     const active = this.inFlight.get(key);
     const cached = this.cache.get(key);
@@ -121,7 +124,7 @@ export class CodexDiscoveryCoordinator {
         return this.readOutcome(cached.outcome);
       }
       this.invalidate();
-      return await this.startProbe(key, configuredCommand);
+      return await this.startProbe(key, configuredCommand, request.signal);
     }
 
     if (cached && this.isFresh(cached)) {
@@ -141,7 +144,7 @@ export class CodexDiscoveryCoordinator {
       return await active.promise;
     }
 
-    return await this.startProbe(key, configuredCommand);
+    return await this.startProbe(key, configuredCommand, request.signal);
   }
 
   async resolve(
@@ -215,6 +218,7 @@ export class CodexDiscoveryCoordinator {
   private async startProbe(
     key: string,
     configuredCommand: string | undefined,
+    signal?: AbortSignal,
   ): Promise<CodexDiscoverySnapshot> {
     const existing = this.inFlight.get(key);
     if (existing) {
@@ -223,7 +227,7 @@ export class CodexDiscoveryCoordinator {
 
     const generation = this.generation;
     const promise = this.probeTail.then(
-      async () => await this.runProbe(configuredCommand, generation),
+      async () => await this.runProbe(configuredCommand, generation, signal),
     );
     this.probeTail = promise.then(
       () => undefined,
@@ -243,9 +247,12 @@ export class CodexDiscoveryCoordinator {
   private async runProbe(
     configuredCommand: string | undefined,
     generation: number,
+    signal?: AbortSignal,
   ): Promise<CodexDiscoverySnapshot> {
     try {
+      if (signal?.aborted) return { candidates: [], error: COMMAND_DISCOVERY_ABORTED };
       const env = await this.options.resolveEnv();
+      if (signal?.aborted) return { candidates: [], error: COMMAND_DISCOVERY_ABORTED };
       const platform = this.options.platform ?? process.platform;
       // @pwrdrvr/codex-discovery resolves PATHEXT shims itself. Do not turn
       // its Windows PATH result into a configured candidate first: fixed and
@@ -259,6 +266,10 @@ export class CodexDiscoveryCoordinator {
           : {}),
         ...(this.options.platform ? { platform: this.options.platform } : {}),
       });
+      // Admission closes at the queued/env boundaries above. An admitted
+      // package call still owns its children until it settles; its AbortSignal
+      // path can return before child stdio closes, so do not detach that drain.
+      if (signal?.aborted) return { candidates: [], error: COMMAND_DISCOVERY_ABORTED };
       const snapshot = normalizeCodexDiscoverySnapshot(discovered);
       if (generation === this.generation) {
         this.cache.set(configuredCommand?.trim() ?? "", {

@@ -2826,6 +2826,7 @@ export class DesktopSettingsService {
     permit: ProviderDiscoveryPermit,
   ): Promise<DesktopSettingsSnapshot> {
     assertProviderDiscoveryPermit(permit, ["startup"]);
+    if (this.commandDiscoveryLifetime.signal.aborted) return await this.readSettingsProjection();
     const startedAt = performance.now();
     // Keep startup timings at info level without logging probe results or
     // settings values. Failures still flow to the existing allSettled boundary.
@@ -2858,9 +2859,13 @@ export class DesktopSettingsService {
           // finish. Neither failure may poison subsequent discovery attempts.
           this.rejectedStartupCachedCommand = true;
           this.sessionCodexRetention = Promise.resolve()
-            .then(() => (this.options.retainCachedCodexCommand ?? retainManagedCodexCommand)(cached.command))
+            .then(async () => {
+              if (this.commandDiscoveryLifetime.signal.aborted) return;
+              await (this.options.retainCachedCodexCommand ?? retainManagedCodexCommand)(cached.command);
+            })
             .then(() => {
-              if (generation !== this.sessionCodexSelectionGeneration) return;
+              if (this.commandDiscoveryLifetime.signal.aborted
+                || generation !== this.sessionCodexSelectionGeneration) return;
               this.sessionCodexCommand = cached;
               this.rejectedStartupCachedCommand = false;
               settingsLog.info("startup Codex selection reused", { source: cached.source });
@@ -2937,7 +2942,17 @@ export class DesktopSettingsService {
     return await this.readSettingsProjection();
   }
 
-  private async runCodexDiscovery(
+  private runCodexDiscovery(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<void> {
+    assertProviderDiscoveryPermit(permit);
+    return this.commandDiscoveryLifetime.run(
+      () => this.runAdmittedCodexDiscovery(permit),
+      undefined,
+    );
+  }
+
+  private async runAdmittedCodexDiscovery(
     permit: ProviderDiscoveryPermit,
   ): Promise<void> {
     assertProviderDiscoveryPermit(permit);
@@ -2968,6 +2983,8 @@ export class DesktopSettingsService {
     releaseCommandSelection: () => void,
   ): Promise<void> {
     await this.sessionCodexRetention;
+    const signal = this.commandDiscoveryLifetime.signal;
+    if (signal.aborted) return;
     this.codexSpawnEnvHydratedAt = undefined;
     const config = this.readConfig().config;
     const checkMode = permit.intent === "startup" ? "ttl" : "force";
@@ -2993,6 +3010,7 @@ export class DesktopSettingsService {
         failed: Boolean(this.managedCodexError),
       });
     }
+    if (signal.aborted) return;
     if (this.managedCodexRuntime) {
       // Release callers already awaiting selection before a listener closes
       // their client. close() drains initialization, which would otherwise
@@ -3012,6 +3030,7 @@ export class DesktopSettingsService {
         runtime: this.managedCodexRuntime,
       });
     }
+    if (signal.aborted) return;
     const configuredCommand = this.resolveActiveCodexCommand(config);
     const executableStartedAt = performance.now();
     const discovery = await this.codexDiscoveryCoordinator.discover(
@@ -3019,8 +3038,10 @@ export class DesktopSettingsService {
       {
         allowStaleSuccess: permit.intent === "startup",
         force: permit.intent !== "startup",
+        signal,
       },
     );
+    if (signal.aborted) return;
     settingsLog.info("Codex discovery executable probes completed", {
       durationMs: Math.round(performance.now() - executableStartedAt),
       candidateCount: discovery.candidates.length,

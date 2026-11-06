@@ -61,15 +61,17 @@ function logSnapshot(snapshot) {
   });
 }
 
-// Called while Playwright loads its config in the worker, before tests launch
-// anything. The two versioned pnpm patches only emit observations; they do
+// Called by worker config loading or explicitly by global setup, before either
+// launches anything. The two versioned pnpm patches only emit observations; they do
 // not replace promises, adjust deadlines, swallow errors, or kill processes.
-export function installShutdownDiagnostics({ outputDir, currentTest, captureAfterMs = 5_000 }) {
-  if (!playwrightGlobals.isWorkerProcess()
+export function installShutdownDiagnostics({ outputDir, currentTest, captureAfterMs = 5_000, scope = "worker" }) {
+  const globalSetup = scope === "global-setup";
+  if ((!globalSetup && !playwrightGlobals.isWorkerProcess())
     || process.env.PWRAGENT_E2E_WORKER_DIAGNOSTICS === "0"
     || globalThis[key]) return;
 
-  const directory = path.resolve(outputDir, "worker-shutdown", `worker-${process.env.TEST_WORKER_INDEX}-${process.pid}`);
+  const directory = path.resolve(outputDir, "worker-shutdown", globalSetup
+    ? `global-setup-${process.pid}` : `worker-${process.env.TEST_WORKER_INDEX}-${process.pid}`);
   const processes = new Map();
   const resources = new Map();
   let droppedResources = 0;
@@ -110,11 +112,11 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
     destroy(id) { resources.delete(id); },
   });
   hook.enable();
-  // This is the worker-side readiness boundary. The config module also runs in
-  // Playwright's controller, which may inherit TEST_WORKER_INDEX but returns
-  // above because Playwright has not marked it as a worker. A timeline proves the
-  // worker loaded the recorder before its test body or cleanup starts.
-  safe(() => event({ kind: "worker-start", workerIndex: process.env.TEST_WORKER_INDEX }))();
+  // Config loading in a controller (even with an inherited worker index) cannot
+  // declare worker readiness. Explicit global setup records its own scope.
+  safe(() => event(globalSetup
+    ? { kind: "global-setup-start" }
+    : { kind: "worker-start", workerIndex: process.env.TEST_WORKER_INDEX }))();
 
   const captureTree = () => {
     if (treeStarted) return;
