@@ -14824,6 +14824,7 @@ export class DesktopBackendRegistry {
 
   refreshProvidersAtStartup(permit: ProviderDiscoveryPermit): Promise<void> {
     assertProviderDiscoveryPermit(permit, ["startup"]);
+    if (this.shutdownRequested) return Promise.resolve();
     if (this.startupProviderRefreshPromise) {
       return this.startupProviderRefreshPromise;
     }
@@ -14833,6 +14834,7 @@ export class DesktopBackendRegistry {
     this.startupProviderRefreshAttempted = true;
     this.startupProviderRefreshStatus = { state: "checking" };
     this.startupProviderRefreshPromise = Promise.resolve().then(async () => {
+      if (this.shutdownRequested) return;
       const startedAt = Date.now();
       const results = await Promise.allSettled([
         this.refreshCodexProviderAtStartup(permit),

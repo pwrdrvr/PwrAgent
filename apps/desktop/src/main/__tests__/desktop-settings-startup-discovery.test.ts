@@ -87,6 +87,69 @@ const APPLICATIONS_DISCOVERY: DesktopApplicationsSnapshot = {
 };
 
 describe("DesktopSettingsService startup discovery", () => {
+  it.each(["before-start", "before-retention", "retention", "probe"] as const)("discovery ownership oracle: close at %s", async (boundary) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-discovery-owner-"));
+    tempRoots.push(root);
+    const configPath = path.join(root, "config.toml");
+    const command = path.join(root, "fixture-codex");
+    fs.writeFileSync(command, "fixture", { mode: 0o755 });
+    const configStore = new DesktopConfigStore({ configPath });
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command, source: "config", version: "0.153.4" }],
+      selectedCommand: command, selectedVersion: "0.153.4",
+    });
+    vi.mocked(discoverGitCommands).mockResolvedValue(GIT_DISCOVERY);
+    vi.mocked(discoverDesktopApplications).mockResolvedValue(APPLICATIONS_DISCOVERY);
+    vi.mocked(discoverGhCommands).mockResolvedValue({ candidates: [] });
+    vi.mocked(discoverGlabCommands).mockResolvedValue({ candidates: [] });
+    const entered = gate<void>();
+    const release = gate<void>();
+    const discover = vi.fn(async () => {
+      if (boundary === "probe") {
+        entered.release();
+        await release.promise;
+      }
+      return { candidates: [] };
+    });
+    const retain = vi.fn(async () => {
+      if (boundary === "retention") {
+        entered.release();
+        await release.promise;
+      }
+    });
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {}, secretStore: new MemoryDesktopSecretStore(),
+      codexDiscoveryCoordinator: { discover, invalidate: vi.fn(), resolve: vi.fn() },
+      retainCachedCodexCommand: retain,
+    });
+    let startup: Promise<DesktopSettingsSnapshot> | undefined;
+    try {
+      if (boundary !== "before-start") {
+        startup = service.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
+        if (boundary !== "before-retention") await entered.promise;
+      }
+      const admittedRetentions = retain.mock.calls.length;
+      let closed = false;
+      const closing = service.closeCommandDiscovery().then(() => { closed = true; });
+      // Observe close after the microtask queue drains, without releasing the
+      // external operation whose ownership we are checking.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (boundary === "retention" || boundary === "probe") expect(closed).toBe(false);
+      const admitted = discover.mock.calls.length;
+      startup ??= service.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
+      release.release();
+      await startup;
+      await closing;
+      expect(discover).toHaveBeenCalledTimes(admitted);
+      expect(retain).toHaveBeenCalledTimes(admittedRetentions);
+    } finally {
+      release.release();
+      await startup;
+      await service.closeCommandDiscovery();
+      configStore.dispose();
+    }
+  });
+
   it.each([true, false])("handles failed discovery with a waiting command consumer: %s", async (waitingConsumer) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-"));
     tempRoots.push(root);

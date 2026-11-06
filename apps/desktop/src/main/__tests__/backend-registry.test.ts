@@ -11609,6 +11609,22 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it.each(["queued", "closed"] as const)("startup registry ownership oracle: no discovery after %s close", async (boundary) => {
+    const discoverLocalAcpAgents = vi.fn(async () => []);
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      discoverLocalAcpAgents,
+    });
+    const refresh = boundary === "queued"
+      ? registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"))
+      : undefined;
+    await registry.close();
+    await (refresh ?? registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup")));
+    expect(discoverLocalAcpAgents).not.toHaveBeenCalled();
+  });
+
   it("never reaches ACP discovery from ordinary backend summaries", async () => {
     const codexClient = new MockBackendClient({});
     const closeSpy = vi.spyOn(codexClient, "close");

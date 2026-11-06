@@ -36,6 +36,8 @@
 import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { FullConfig } from "@playwright/test";
+import { installShutdownDiagnostics } from "../scripts/playwright-shutdown-diagnostics.mjs";
 import {
   E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
 } from "../src/main/e2e-shutdown-diagnostics";
@@ -66,7 +68,15 @@ const SMOKE_FIXTURE = path.resolve(
  */
 const CANARY_TIMEOUT_MS = 60_000;
 
-export default async function globalSetup(): Promise<void> {
+export default async function globalSetup(config: FullConfig): Promise<void> {
+  // Global setup runs in the controller, outside the ordinary worker recorder.
+  // Install before the canary so its launch/pipe identity exists even if close
+  // stalls before the first worker is created.
+  installShutdownDiagnostics({
+    outputDir: config.projects[0]?.outputDir ?? path.resolve(setupDir, "../test-results"),
+    currentTest: () => undefined,
+    scope: "global-setup",
+  });
   // Before the canary, which launches the app too.
   recordSourceCheckoutHooks(path.resolve(setupDir, "../../.."));
   const diagnosticsFile = process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];

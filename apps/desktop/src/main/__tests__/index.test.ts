@@ -188,6 +188,14 @@ const refreshProvidersAtStartupMock = vi.fn<() => Promise<void>>(
   async () => undefined,
 );
 const startThreadArchiveSweeperMock = vi.fn();
+const startupBackgroundMocks = {
+  startCodexIdleThreadUnsubscriber: vi.fn(),
+  startCodexAppServerRecycler: vi.fn(),
+  startAcpIdleSessionCloser: vi.fn(),
+  beginRestartContinuationDispatch: vi.fn(),
+  resumeArchiveCleanupsAtStartup: vi.fn(async () => undefined),
+  prepareTokenMiserRuntimeAtStartup: vi.fn(async () => undefined),
+};
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
@@ -684,10 +692,12 @@ const runtimeFederationLeaseCoordinatorMock = {
 
 vi.mock("../app-server/backend-registry", () => ({
   getExistingDesktopBackendRegistry: vi.fn(() => ({
+    ...startupBackgroundMocks,
     startThreadArchiveSweeper: startThreadArchiveSweeperMock,
     stopRunningTurnsForShutdown: vi.fn(async () => undefined),
   })),
   getDesktopBackendRegistry: vi.fn(() => ({
+    ...startupBackgroundMocks,
     onEvent: vi.fn(() => () => {}),
     synchronizeProviderRuntimeSelections: synchronizeProviderRuntimeSelectionsMock,
     listThreads: listThreadsMock,
@@ -935,6 +945,7 @@ describe("bootstrapApp", () => {
     listThreadsMock.mockResolvedValue([]);
     refreshProvidersAtStartupMock.mockReset();
     refreshProvidersAtStartupMock.mockResolvedValue(undefined);
+    for (const mock of Object.values(startupBackgroundMocks)) mock.mockClear();
     startThreadArchiveSweeperMock.mockReset();
     resolveCodexCommandMock.mockReset();
     resolveCodexCommandMock.mockResolvedValue({ command: "/cached/codex", source: "config" });
@@ -1847,6 +1858,73 @@ describe("bootstrapApp", () => {
     await import("../index");
     await flushMicrotasks();
     expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
+  });
+
+  // The native quit event owns admission, even while startup is suspended.
+  // Exercise both dependency boundaries and both ways each can settle.
+  it.each([
+    ["selection", false], ["selection", true],
+    ["providers", false], ["providers", true],
+  ] as const)("startup ownership oracle: quit before %s settles (reject=%s)", async (boundary, reject) => {
+    let release!: () => void;
+    const dependency = new Promise<void>((resolve, fail) => {
+      release = () => reject ? fail(new Error("fixture startup failure")) : resolve();
+    });
+    if (boundary === "selection") {
+      resolveCodexCommandMock.mockImplementation(async () => {
+        await dependency;
+        return { command: "/fixture/codex", source: "config" };
+      });
+    } else {
+      refreshProvidersAtStartupMock.mockReturnValue(dependency);
+    }
+    await import("../index");
+    await flushMicrotasks();
+    const admitted = refreshProvidersAtStartupMock.mock.calls.length;
+    appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
+    await flushMicrotasks();
+    release();
+    await flushMicrotasks();
+
+    expect(refreshProvidersAtStartupMock).toHaveBeenCalledTimes(admitted);
+    expect(startThreadArchiveSweeperMock).not.toHaveBeenCalled();
+    for (const mock of Object.values(startupBackgroundMocks)) expect(mock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["selection", "cancel"], ["selection", "reject"],
+    ["providers", "cancel"], ["providers", "reject"],
+  ] as const)("startup ownership oracle: a %s result survives quit confirmation %s", async (boundary, outcome) => {
+    let releaseStartup!: () => void;
+    const dependency = new Promise<void>((resolve) => { releaseStartup = resolve; });
+    if (boundary === "selection") {
+      resolveCodexCommandMock.mockImplementation(async () => {
+        await dependency;
+        return { command: "/fixture/codex", source: "config" };
+      });
+    } else {
+      refreshProvidersAtStartupMock.mockReturnValue(dependency);
+    }
+    await import("../index");
+    await flushMicrotasks();
+
+    let finishConfirmation!: () => void;
+    requestQuitMock.mockReturnValue(new Promise<boolean>((resolve, reject) => {
+      finishConfirmation = () => outcome === "cancel"
+        ? resolve(false) : reject(new Error("fixture confirmation failed"));
+    }));
+    isQuitAllowedMock.mockReturnValue(false);
+    appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
+    releaseStartup();
+    await flushMicrotasks();
+    expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
+    finishConfirmation();
+    await flushMicrotasks();
+
+    expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
+    expect(startThreadArchiveSweeperMock).toHaveBeenCalledOnce();
+    for (const mock of Object.values(startupBackgroundMocks)) expect(mock).toHaveBeenCalledOnce();
+    expect(quitMock).not.toHaveBeenCalled();
   });
 
   it("skips the prewarm when the Codex bootstrap is deferred for onboarding", async () => {
