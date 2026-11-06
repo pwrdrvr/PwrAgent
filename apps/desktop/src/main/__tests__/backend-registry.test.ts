@@ -3630,6 +3630,34 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("reviews PwrAgent's Claude threads in Thread maintenance but leaves them out of the hourly sweep", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(root, "sessions")),
+        getSessionInfo: vi.fn().mockResolvedValue(undefined),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+      const reviewed = await registry.listThreadMaintenanceCandidates();
+      const claude = reviewed.find(({ thread }) => thread.source === "claude");
+      expect(claude?.thread.id).toBe(threadId);
+      expect((await registry.listAutoArchiveCandidates()).some(({ thread }) => thread.source === "claude")).toBe(false);
+      // The run's recheck reads the same store, not the Codex client.
+      const refreshed = await registry.refreshArchiveCandidate(claude!);
+      expect(refreshed.thread).toMatchObject({ id: threadId, source: "claude", projectKey: root });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("emits a PwrAgent wake on a Claude thread with its origin, not as the operator's message", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
     const turnFinished = Promise.withResolvers<AgentEvent>();
@@ -72696,7 +72724,7 @@ describe("thread maintenance agent tools", () => {
     expired: { enabled: false, retentionDays: 0 },
     failures: [],
   };
-  const finished = { runId: "run-1", scanId: "scan-1", running: false, startedAt: 3, finishedAt: 4,
+  const finished = { runId: "run-1", revision: 2, scanId: "scan-1", running: false, startedAt: 3, finishedAt: 4,
     steps: [{ step: "threads" as const, ran: true, done: 1, kept: 0, failed: 0 }], problems: [] };
 
   async function setup() {

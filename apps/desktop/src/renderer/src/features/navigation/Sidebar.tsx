@@ -21,7 +21,8 @@ import type {
   SubthreadLaunchpadDraft,
 } from "../../lib/useThreadNavigation";
 import type { PendingSidebarRow } from "./StartingThreadRow";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ThreadMaintenanceLauncherContext } from "../maintenance/thread-maintenance-launcher";
 import type {
   ComponentType,
   KeyboardEvent as ReactKeyboardEvent,
@@ -694,6 +695,7 @@ export function Sidebar(props: SidebarProps) {
   const pinnedGroupShown = lensHasPinnedGroup(props.browseMode, pinnedThreadsOnTop);
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
+  const openThreadMaintenance = useContext(ThreadMaintenanceLauncherContext);
   const dependencyIndicators = useThreadDependencyIndicatorsContext();
   const openMergeHolds = useThreadMergeHoldsOpener();
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -3121,6 +3123,13 @@ export function Sidebar(props: SidebarProps) {
   const directoryMenuIsPlaceholder =
     directoryContextMenu?.directory.localAvailability === "unconfigured";
   const directoryMenuCanMarkRead = Boolean(props.onMarkDirectoriesSeen && !directoryMenuIsPlaceholder);
+  // Thread maintenance runs on this machine only; a placeholder or a peer
+  // window has no provider, so the item hides itself there.
+  const directoryMenuCleanUpPath = !directoryContextMenuIsBulk && !directoryMenuIsPlaceholder
+    && directoryContextMenu?.directory.kind === "directory"
+    ? directoryContextMenu.directory.path
+    : undefined;
+  const directoryMenuCanCleanUp = Boolean(openThreadMaintenance && directoryMenuCleanUpPath);
   const directoryMenuCanArchive = Boolean(props.onArchiveDirectories
     && !directoryMenuIsPlaceholder
     && directoryContextMenuDirectories.some((directory) => directory.kind === "directory" || directory.kind === "workspace"));
@@ -4488,26 +4497,41 @@ export function Sidebar(props: SidebarProps) {
               ) : null}
             </div>
           ) : null}
-          {directoryMenuHasForgeSection && directoryMenuCanArchive ? (
+          {directoryMenuHasForgeSection && (directoryMenuCanArchive || directoryMenuCanCleanUp) ? (
             <div className="thread-context-menu__separator" role="separator" />
           ) : null}
-          {directoryMenuCanArchive ? (
+          {directoryMenuCanCleanUp || directoryMenuCanArchive ? (
             <div className="thread-context-menu__section">
-              <button
-                role="menuitem"
-                type="button"
-                onClick={() => {
-                  const keys = directoryContextMenuDirectories
-                    .filter((directory) => directory.kind === "directory" || directory.kind === "workspace")
-                    .map((directory) => directory.key);
-                  setDirectoryContextMenu(undefined);
-                  void revealHoverStableSnapshot(() => props.onArchiveDirectories?.(keys));
-                }}
-              >
-                {directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
-                  ? `Archive Threads and Remove ${directoryContextMenuIsBulk ? "Projects" : "Project"}`
-                  : "Archive Threads"}
-              </button>
+              {directoryMenuCanCleanUp ? (
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    const projectKey = directoryMenuCleanUpPath!;
+                    setDirectoryContextMenu(undefined);
+                    openThreadMaintenance?.({ projectKey });
+                  }}
+                >
+                  Clean Up Project…
+                </button>
+              ) : null}
+              {directoryMenuCanArchive ? (
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    const keys = directoryContextMenuDirectories
+                      .filter((directory) => directory.kind === "directory" || directory.kind === "workspace")
+                      .map((directory) => directory.key);
+                    setDirectoryContextMenu(undefined);
+                    void revealHoverStableSnapshot(() => props.onArchiveDirectories?.(keys));
+                  }}
+                >
+                  {directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
+                    ? `Archive Threads and Remove ${directoryContextMenuIsBulk ? "Projects" : "Project"}`
+                    : "Archive Threads"}
+                </button>
+              ) : null}
             </div>
           ) : null}
           {directoryMenuCanRemove

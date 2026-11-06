@@ -5,7 +5,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { DEFAULT_THREAD_ARCHIVE_POLICY, REBUILDABLE_OUTPUT_NAMES, type ThreadMaintenanceWorkspace } from "@pwragent/shared";
+import {
+  DEFAULT_THREAD_ARCHIVE_POLICY,
+  REBUILDABLE_OUTPUT_NAMES,
+  type ThreadMaintenanceRun,
+  type ThreadMaintenanceWorkspace,
+} from "@pwragent/shared";
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import {
   ThreadMaintenanceService,
@@ -162,7 +167,92 @@ describe("ThreadMaintenanceService.scan", () => {
   });
 });
 
+describe("sub-thread parents", () => {
+  const child = (id: string, parent: string, options: { pinned?: boolean; daysIdle?: number } = {}): ThreadArchiveCandidate => ({
+    ...candidate(id, { cwd: `/w/${id}`, ...options }),
+    overlay: { parentThreadId: parent, parentThreadBackend: "codex" } as ThreadArchiveCandidate["overlay"],
+  });
+  const agePolicy = () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" as const, inactivityDays: 7 });
+
+  it("offers a parent whose remaining sub-threads would be 2 or fewer, and keeps one that would leave 3", async () => {
+    const twoLeft = harness([
+      candidate("parent", { cwd: "/w/parent" }),
+      child("idle1", "parent"), child("idle2", "parent"),
+      child("pinned1", "parent", { pinned: true }), child("pinned2", "parent", { pinned: true }),
+    ], { getPolicy: agePolicy });
+    const offered = await twoLeft.service.scan();
+    expect(offered.threads.projects[0]!.idle.map((row) => row.threadId)).toEqual(expect.arrayContaining(["parent", "idle1", "idle2"]));
+
+    const threeLeft = harness([
+      candidate("parent", { cwd: "/w/parent" }),
+      child("idle1", "parent"),
+      child("pinned1", "parent", { pinned: true }), child("pinned2", "parent", { pinned: true }),
+      child("pinned3", "parent", { pinned: true }),
+    ], { getPolicy: agePolicy });
+    const kept = await threeLeft.service.scan();
+    const [project] = kept.threads.projects;
+    expect(project!.idle.map((row) => row.threadId)).toEqual(["idle1"]);
+    expect(project!.kept["Parent of 3+ sub-threads"]).toBe(1);
+  });
+
+  it("keeps a parent at run time when the operator archives it without enough of its sub-threads", async () => {
+    const { service, deps } = harness([
+      candidate("parent", { cwd: "/w/parent", daysIdle: 40 }),
+      child("a", "parent"), child("b", "parent"), child("c", "parent"),
+    ], { getPolicy: agePolicy });
+    const scan = await service.scan();
+    expect(scan.threads.projects[0]!.idle).toHaveLength(4);
+    const onlyParent = await service.apply({ scanId: scan.scanId, archive: [{ backend: "codex", threadId: "parent" }],
+      removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+    expect(onlyParent.problems).toEqual([expect.objectContaining({ threadId: "parent", kind: "kept",
+      reason: "Would leave 3 sub-threads without their parent" })]);
+    expect(deps.archiveFamily).not.toHaveBeenCalled();
+
+    const rescan = await service.scan();
+    const withChild = await service.apply({ scanId: rescan.scanId,
+      archive: [{ backend: "codex", threadId: "parent" }, { backend: "codex", threadId: "a" }],
+      removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+    expect(withChild.problems).toEqual([]);
+    // The sub-thread is archived before its parent, so it keeps its place.
+    expect(vi.mocked(deps.archiveFamily).mock.calls.map(([family]) => family[0]!.thread.id)).toEqual(["a", "parent"]);
+  });
+
+  it("archives a nested family from the deepest sub-threads up", async () => {
+    const { service, deps } = harness([
+      candidate("top", { cwd: "/w/top", daysIdle: 40 }),
+      child("mid", "top"), child("x", "mid"), child("y", "mid"), child("z", "mid"),
+    ], { getPolicy: agePolicy });
+    const scan = await service.scan();
+    const run = await service.apply({ scanId: scan.scanId,
+      archive: ["top", "mid", "x", "y", "z"].map((threadId) => ({ backend: "codex", threadId })),
+      removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+    expect(run.problems).toEqual([]);
+    expect(vi.mocked(deps.archiveFamily).mock.calls.map(([family]) => family[0]!.thread.id))
+      .toEqual(["x", "y", "z", "mid", "top"]);
+  });
+});
+
 describe("ThreadMaintenanceService.apply", () => {
+  it("stamps every published snapshot with a larger revision, across runs", async () => {
+    const published: ThreadMaintenanceRun[] = [];
+    const { service } = harness([candidate("a", { daysIdle: 30, cwd: "/w/a" })], {
+      getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age", inactivityDays: 7 }),
+      onRun: (run: ThreadMaintenanceRun) => { published.push(run); },
+    });
+    for (let index = 0; index < 2; index++) {
+      const scan = await service.scan();
+      const { run, done } = service.start({ scanId: scan.scanId, archive: [{ backend: "codex", threadId: "a" }],
+        removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+      const finished = await done;
+      // The reply the dialog gets is older than the result it may already have.
+      expect(run.revision).toBeLessThan(finished.revision);
+      expect(service.getRun()).toEqual(finished);
+    }
+    const revisions = published.map((run) => run.revision);
+    expect(revisions).toEqual([...revisions].sort((a, b) => a - b));
+    expect(new Set(revisions).size).toBe(revisions.length);
+  });
+
   it("archives selections, keeps one with new activity, and keeps going after a failure", async () => {
     const items = [
       candidate("a", { daysIdle: 30, cwd: "/w/a" }),

@@ -16,6 +16,9 @@ afterEach(() => {
 });
 
 const NOW = new Date(2026, 10, 4, 11, 0).getTime();
+/** Main's revision counter: each fixture snapshot is newer than the last. */
+let revision = 0;
+const REV = () => ++revision;
 const DAY = 86_400_000;
 
 function fixtureScan(): ThreadMaintenanceScan {
@@ -86,7 +89,7 @@ function fixtureApi(overrides: Partial<DesktopApi> = {}) {
   const api = {
     scanThreadMaintenance: vi.fn(async () => scan),
     applyThreadMaintenance: vi.fn(async (request: ThreadMaintenanceApplyRequest): Promise<ThreadMaintenanceRun> => ({
-      runId: "run-1", scanId: request.scanId, running: true, startedAt: NOW, steps: [], problems: [],
+      runId: "run-1", revision: REV(), scanId: request.scanId, running: true, startedAt: NOW, steps: [], problems: [],
       current: { step: "threads", processed: 0, total: request.archive.length },
     })),
     getThreadMaintenanceRun: vi.fn(async () => null),
@@ -101,9 +104,9 @@ function fixtureApi(overrides: Partial<DesktopApi> = {}) {
   return { api, emit, scan };
 }
 
-async function openReview(api: DesktopApi) {
+async function openReview(api: DesktopApi, onOpenThread?: (thread: { backend: string; threadId: string }) => void) {
   const onClose = vi.fn();
-  render(<ThreadMaintenanceDialog desktopApi={api} onClose={onClose} />);
+  render(<ThreadMaintenanceDialog desktopApi={api} onClose={onClose} onOpenThread={onOpenThread} />);
   const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
   await screen.findByText("3 idle threads");
@@ -175,20 +178,61 @@ describe("ThreadMaintenanceDialog", () => {
     });
   });
 
-  it("refuses to close while a run is busy and offers Stop", async () => {
-    const { api, emit } = fixtureApi();
+  it("can be closed while a run keeps going, and Stop reads main's run back", async () => {
+    const finished: ThreadMaintenanceRun = { runId: "run-1", revision: 0, scanId: "scan-1", running: false,
+      startedAt: NOW, finishedAt: NOW + 1_000, steps: [{ step: "threads", ran: true, done: 2, kept: 0, failed: 0 }], problems: [] };
+    const { api, emit } = fixtureApi({
+      getThreadMaintenanceRun: vi.fn(async () => ({ ...finished, revision: 10_000 })),
+    } as Partial<DesktopApi>);
     const { dialog, onClose } = await openReview(api);
     fireEvent.click(within(dialog).getByRole("button", { name: "Archive 2 and continue" }));
     fireEvent.click(await within(dialog).findByRole("button", { name: "Remove 1 and finish" }));
     await within(dialog).findByRole("button", { name: "Stop after this item" });
-    emit({ runId: "run-1", scanId: "scan-1", running: true, startedAt: NOW, steps: [], problems: [],
+    emit({ runId: "run-1", revision: REV(), scanId: "scan-1", running: true, startedAt: NOW, steps: [], problems: [],
       current: { step: "threads", processed: 1, total: 2, object: "Fix tooltip flicker" } });
 
+    const close = within(dialog).getByRole("button", { name: "Close thread maintenance" });
+    expect(close).toBeEnabled();
     pressEscape();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(within(dialog).getByRole("button", { name: "Close thread maintenance" })).toBeDisabled();
+    expect(onClose).toHaveBeenCalledOnce();
+
+    // The run's last event never arrived; Stop reads the finished run back.
     fireEvent.click(within(dialog).getByRole("button", { name: "Stop after this item" }));
     expect(api.stopThreadMaintenance).toHaveBeenCalledOnce();
+    expect(await within(dialog).findByText("Maintenance finished")).toBeInTheDocument();
+  });
+
+  it("finishes when a run with nothing to do ends before its apply reply arrives", async () => {
+    let emitRun: (run: ThreadMaintenanceRun) => void = () => {};
+    const { api, emit } = fixtureApi({
+      // Main publishes the finished run as an event, then the apply reply
+      // carries the first, still-running snapshot.
+      applyThreadMaintenance: vi.fn(async (request: ThreadMaintenanceApplyRequest): Promise<ThreadMaintenanceRun> => {
+        const started = { runId: "run-1", revision: REV(), scanId: request.scanId, running: true, startedAt: NOW,
+          steps: [], problems: [] };
+        emitRun({ ...started, revision: REV(), running: false, finishedAt: NOW + 5,
+          steps: [{ step: "checkouts", ran: true, done: 0, kept: 0, failed: 0 }] });
+        return started;
+      }),
+    } as Partial<DesktopApi>);
+    emitRun = emit;
+    const { dialog } = await openReview(api);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Archive 2 and continue" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Remove 1 and finish" }));
+    expect(await within(dialog).findByText("Maintenance finished")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Stop after this item" })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Close" })).toBeInTheDocument();
+  });
+
+  it("closes on a click outside the dialog", () => {
+    const { api } = fixtureApi();
+    const onClose = vi.fn();
+    render(<ThreadMaintenanceDialog desktopApi={api} onClose={onClose} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    fireEvent.mouseDown(dialog);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.mouseDown(dialog.parentElement!);
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("finishes with a red card for failures and a blue card for what was kept", async () => {
@@ -198,7 +242,7 @@ describe("ThreadMaintenanceDialog", () => {
     fireEvent.click(await within(dialog).findByRole("button", { name: "Remove 1 and finish" }));
     await within(dialog).findByRole("button", { name: "Stop after this item" });
     emit({
-      runId: "run-1", scanId: "scan-1", running: false, startedAt: NOW, finishedAt: NOW + 72_000,
+      runId: "run-1", revision: REV(), scanId: "scan-1", running: false, startedAt: NOW, finishedAt: NOW + 72_000,
       steps: [
         { step: "threads", ran: true, done: 1, kept: 0, failed: 1 },
         { step: "checkouts", ran: true, done: 3, kept: 1, failed: 0 },
@@ -219,6 +263,30 @@ describe("ThreadMaintenanceDialog", () => {
     expect(within(dialog).getByRole("button", { name: "New scan" })).toBeInTheDocument();
   });
 
+  it("links each outcome row that names a thread, once the run has finished", async () => {
+    const { api, emit } = fixtureApi();
+    const onOpenThread = vi.fn();
+    const { dialog } = await openReview(api, onOpenThread);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Archive 2 and continue" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Remove 1 and finish" }));
+    await within(dialog).findByRole("button", { name: "Stop after this item" });
+    const problems: ThreadMaintenanceRun["problems"] = [
+      { step: "threads", kind: "kept", object: "Fix tooltip flicker", reason: "New activity during the run",
+        backend: "codex", threadId: "t-changes" },
+      { step: "checkouts", kind: "kept", object: "/home/.codex/worktrees/r4t7/kiln-sandbox", reason: "Repository no longer exists" },
+    ];
+    emit({ runId: "run-1", revision: REV(), scanId: "scan-1", running: true, startedAt: NOW, steps: [], problems,
+      current: { step: "checkouts", processed: 0, total: 1 } });
+    expect(within(dialog).queryByRole("button", { name: /^Open thread/ })).toBeNull();
+
+    emit({ runId: "run-1", revision: REV(), scanId: "scan-1", running: false, startedAt: NOW, finishedAt: NOW + 9_000, problems,
+      steps: [{ step: "threads", ran: true, done: 1, kept: 1, failed: 0 }] });
+    const links = await within(dialog).findAllByRole("button", { name: /^Open thread/ });
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual(["Open thread Fix tooltip flicker"]);
+    fireEvent.click(links[0]!);
+    expect(onOpenThread).toHaveBeenCalledWith({ backend: "codex", threadId: "t-changes" });
+  });
+
   it("runs only the archived checkouts step from its tab", async () => {
     const { api } = fixtureApi();
     render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
@@ -234,7 +302,7 @@ describe("ThreadMaintenanceDialog", () => {
   it("shows a run another surface started", async () => {
     const { api } = fixtureApi({
       getThreadMaintenanceRun: vi.fn(async (): Promise<ThreadMaintenanceRun> => ({
-        runId: "agent-run", scanId: "scan-9", running: true, startedAt: NOW, steps: [], problems: [],
+        runId: "agent-run", revision: REV(), scanId: "scan-9", running: true, startedAt: NOW, steps: [], problems: [],
         current: { step: "checkouts", processed: 1, total: 4, object: "/home/.pwragent/worktrees/x/y" },
       })),
     } as Partial<DesktopApi>);

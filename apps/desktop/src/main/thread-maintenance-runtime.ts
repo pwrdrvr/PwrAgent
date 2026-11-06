@@ -18,7 +18,7 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
   return service ??= new ThreadMaintenanceService({
     getPolicy: () => getDesktopBackendRegistry().getThreadArchivePolicy(),
     snapshotLimitBytes: MAX_WORKTREE_SNAPSHOT_BYTES,
-    listCandidates: async () => await getDesktopBackendRegistry().listAutoArchiveCandidates(),
+    listCandidates: async () => await getDesktopBackendRegistry().listThreadMaintenanceCandidates(),
     resolveProject: async (candidate) => await getDesktopBackendRegistry().resolveAutoArchiveProject(candidate),
     refreshCandidate: async (candidate) => await getDesktopBackendRegistry().refreshArchiveCandidate(candidate),
     isBusy: (candidate) => getDesktopBackendRegistry().isArchiveCandidateBusy(candidate),

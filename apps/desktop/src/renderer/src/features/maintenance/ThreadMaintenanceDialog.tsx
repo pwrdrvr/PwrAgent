@@ -32,8 +32,14 @@ import {
   type ThreadMaintenanceMode,
   type ThreadMaintenanceSelection,
 } from "./thread-maintenance-selection";
+import {
+  newerRun,
+  threadMaintenancePhase,
+  type ThreadMaintenancePhase,
+  type ThreadMaintenanceStoredPhase,
+} from "./thread-maintenance-run-state";
 
-type Phase = "plan" | "scanning" | "threads" | "checkouts" | "running" | "finished";
+type Phase = ThreadMaintenancePhase;
 
 const MODE_TABS: { mode: ThreadMaintenanceMode; label: string }[] = [
   { mode: "combined", label: "Combined" },
@@ -64,38 +70,46 @@ export function ThreadMaintenanceDialog(props: {
   desktopApi?: DesktopApi;
   policy?: DesktopThreadArchivePolicy;
   projectKey?: string;
+  /** Shows a thread from a finished run's outcome rows. The caller closes
+   * the dialog; a run still in progress keeps it open. */
+  onOpenThread?: (thread: { backend: string; threadId: string }) => void;
   onClose: () => void;
 }) {
   const api = props.desktopApi;
   const policy = useMemo(() => normalizeThreadArchivePolicy(props.policy), [props.policy]);
   const [mode, setMode] = useState<ThreadMaintenanceMode>("combined");
   const [rules, setRules] = useState<ThreadMaintenanceRules>(() => defaultThreadMaintenanceRules(policy));
-  const [phase, setPhase] = useState<Phase>("plan");
+  const [storedPhase, setPhase] = useState<ThreadMaintenanceStoredPhase>("plan");
   const [scan, setScan] = useState<ThreadMaintenanceScan>();
   const [selection, setSelection] = useState<ThreadMaintenanceSelection>();
   const [run, setRun] = useState<ThreadMaintenanceRun>();
   const [error, setError] = useState<string>();
+  const phase = threadMaintenancePhase(storedPhase, run);
   const busy = phase === "running";
-  const dialogRef = useModalDialog<HTMLDivElement>({
-    onClose: () => { if (!busy) props.onClose(); },
-  });
+  // Closing never stops a run: it keeps going in the background, and opening
+  // the dialog again shows it.
+  const dialogRef = useModalDialog<HTMLDivElement>({ onClose: props.onClose });
+
+  // Every snapshot goes through newerRun, so a late apply reply cannot undo
+  // a result that already arrived as an event.
+  const showRun = useCallback((next: ThreadMaintenanceRun | null | undefined) => {
+    if (!next) return;
+    setRun((current) => newerRun(current, next));
+    setPhase("run");
+  }, []);
 
   // A run another surface started (an agent tool) shows here as it goes.
   useEffect(() => {
     if (!api) return;
     let cancelled = false;
     const unsubscribe = api.onThreadMaintenanceRunChanged?.((next) => {
-      if (cancelled) return;
-      setRun((current) => current && current.runId !== next.runId && current.running ? current : next);
-      setPhase((current) => next.running ? "running" : current === "running" ? "finished" : current);
+      if (!cancelled) showRun(next);
     });
     void api.getThreadMaintenanceRun?.().then((current) => {
-      if (cancelled || !current?.running) return;
-      setRun(current);
-      setPhase("running");
+      if (!cancelled && current?.running) showRun(current);
     }, () => {});
     return () => { cancelled = true; unsubscribe?.(); };
-  }, [api]);
+  }, [api, showRun]);
 
   const startScan = useCallback(async () => {
     if (!api?.scanThreadMaintenance) return;
@@ -116,13 +130,11 @@ export function ThreadMaintenanceDialog(props: {
     if (!api?.applyThreadMaintenance || !scan || !chosen) return;
     setError(undefined);
     try {
-      const started = await api.applyThreadMaintenance(buildApplyRequest(scan, chosen, runMode));
-      setRun(started);
-      setPhase(started.running ? "running" : "finished");
+      showRun(await api.applyThreadMaintenance(buildApplyRequest(scan, chosen, runMode)));
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : String(runError));
     }
-  }, [api, scan, selection]);
+  }, [api, scan, selection, showRun]);
 
   const finishThreads = () => {
     if (mode === "threads") void startRun("threads");
@@ -138,7 +150,8 @@ export function ThreadMaintenanceDialog(props: {
         : undefined;
 
   return (
-    <div className="thread-maintenance-modal">
+    <div className="thread-maintenance-modal"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
       <div ref={dialogRef} aria-labelledby="thread-maintenance-title" aria-modal="true"
         className="thread-maintenance" role="dialog" tabIndex={-1}>
         <div className="thread-maintenance__head">
@@ -151,7 +164,7 @@ export function ThreadMaintenanceDialog(props: {
           <div className="thread-maintenance__head-side">
             {headChip ? <span className="settings-pathrow__chip">{headChip}</span> : null}
             <button aria-label="Close thread maintenance" className="workspace-handoff-dialog__close"
-              disabled={busy} type="button" onClick={props.onClose}><CloseIcon size={14} /></button>
+              type="button" onClick={props.onClose}><CloseIcon size={14} /></button>
           </div>
         </div>
         <div className="thread-maintenance__body">
@@ -178,7 +191,7 @@ export function ThreadMaintenanceDialog(props: {
             </>
           ) : null}
           {(phase === "running" || phase === "finished") && run ? (
-            <RunView run={run} scan={scan} mode={mode} />
+            <RunView run={run} scan={scan} mode={mode} onOpenThread={busy ? undefined : props.onOpenThread} />
           ) : null}
           {error ? <p className="thread-maintenance__error" role="alert">{error}</p> : null}
         </div>
@@ -203,7 +216,13 @@ export function ThreadMaintenanceDialog(props: {
               else void startRun(mode, next);
             }}
             onFinishCheckouts={() => { void startRun(mode); }}
-            onStop={() => { void api?.stopThreadMaintenance?.(); }}
+            onStop={() => {
+              // Read main's run back as well, so a lost event cannot leave
+              // the dialog showing a run that has ended.
+              void Promise.resolve(api?.stopThreadMaintenance?.())
+                .then(() => api?.getThreadMaintenanceRun?.())
+                .then((current) => { if (current) setRun((shown) => newerRun(shown, current)); }, () => {});
+            }}
             onNewScan={() => { setRun(undefined); setScan(undefined); setSelection(undefined); setPhase("plan"); }}
           />
         </div>
@@ -643,7 +662,9 @@ const STEP_TITLES: Record<ThreadMaintenanceStep, string> = {
   expired: "Expired archives",
 };
 
-function RunView(props: { run: ThreadMaintenanceRun; scan?: ThreadMaintenanceScan; mode: ThreadMaintenanceMode }) {
+type OpenThread = (thread: { backend: string; threadId: string }) => void;
+
+function RunView(props: { run: ThreadMaintenanceRun; scan?: ThreadMaintenanceScan; mode: ThreadMaintenanceMode; onOpenThread?: OpenThread }) {
   const { run, mode } = props;
   const failed = run.problems.filter((problem) => problem.kind === "failed");
   const done = run.steps.reduce((sum, step) => sum + step.done, 0);
@@ -663,7 +684,8 @@ function RunView(props: { run: ThreadMaintenanceRun; scan?: ThreadMaintenanceSca
       )}
       {run.running ? <Rail mode={mode} phase="running" run={run} /> : null}
       {(["threads", "checkouts"] as const).map((step) => (
-        <ProblemCards key={step} step={step} problems={run.problems.filter((problem) => problem.step === step)} run={run} />
+        <ProblemCards key={step} step={step} problems={run.problems.filter((problem) => problem.step === step)} run={run}
+          onOpenThread={props.onOpenThread} />
       ))}
       {run.running && run.current ? (
         <div className="thread-maintenance__progress-card" role="status">
@@ -712,7 +734,12 @@ function receiptLine(run: ThreadMaintenanceRun): string {
 
 /** One red card for what failed and one blue card for what was kept on
  * purpose, per step. Headline is count + object + what happened. */
-function ProblemCards(props: { step: ThreadMaintenanceStep; problems: ThreadMaintenanceProblem[]; run: ThreadMaintenanceRun }) {
+function ProblemCards(props: {
+  step: ThreadMaintenanceStep;
+  problems: ThreadMaintenanceProblem[];
+  run: ThreadMaintenanceRun;
+  onOpenThread?: OpenThread;
+}) {
   const failed = props.problems.filter((problem) => problem.kind === "failed");
   const kept = props.problems.filter((problem) => problem.kind === "kept");
   const noun = props.step === "threads" ? ["thread", "threads"] : ["checkout", "checkouts"];
@@ -720,12 +747,12 @@ function ProblemCards(props: { step: ThreadMaintenanceStep; problems: ThreadMain
   return (
     <>
       {failed.length ? (
-        <ProblemCard tone="failed" problems={failed}
+        <ProblemCard tone="failed" problems={failed} onOpenThread={props.onOpenThread}
           title={`${failed.length} ${failed.length === 1 ? noun[0] : noun[1]} ${props.step === "threads" ? "weren't archived" : "weren't removed"}`.replace(/^1 (\w+) weren't/, "1 $1 wasn't")}
           sub={`${failed.length === 1 ? "It is" : "They are"} unchanged.${result?.done ? ` The other ${result.done} ${props.step === "threads" ? "were archived" : "were removed"}.` : ""}`} />
       ) : null}
       {kept.length ? (
-        <ProblemCard tone="kept" problems={kept}
+        <ProblemCard tone="kept" problems={kept} onOpenThread={props.onOpenThread}
           title={`${kept.length} ${kept.length === 1 ? noun[0] : noun[1]} kept`}
           sub="Kept on purpose. Nothing about them changed." />
       ) : null}
@@ -733,7 +760,13 @@ function ProblemCards(props: { step: ThreadMaintenanceStep; problems: ThreadMain
   );
 }
 
-function ProblemCard(props: { tone: "failed" | "kept"; title: string; sub: string; problems: ThreadMaintenanceProblem[] }) {
+function ProblemCard(props: {
+  tone: "failed" | "kept";
+  title: string;
+  sub: string;
+  problems: ThreadMaintenanceProblem[];
+  onOpenThread?: OpenThread;
+}) {
   return (
     <section className={`thread-maintenance__problem is-${props.tone}`} aria-label={props.title}>
       <div className="thread-maintenance__problem-head">
@@ -746,8 +779,17 @@ function ProblemCard(props: { tone: "failed" | "kept"; title: string; sub: strin
       <ul className="thread-maintenance__problem-rows" tabIndex={props.problems.length > 4 ? 0 : undefined}>
         {props.problems.map((problem, index) => (
           <li key={`${problem.object}:${index}`}>
-            <p className="thread-maintenance__problem-object">{problem.object}</p>
-            <p className="thread-maintenance__problem-why"><b>{problem.reason}.</b>{problem.detail ? ` ${problem.detail}` : ""}</p>
+            <div className="thread-maintenance__problem-text">
+              <p className="thread-maintenance__problem-object">{problem.object}</p>
+              <p className="thread-maintenance__problem-why"><b>{problem.reason}.</b>{problem.detail ? ` ${problem.detail}` : ""}</p>
+            </div>
+            {props.onOpenThread && problem.backend && problem.threadId ? (
+              <button className="thread-maintenance__open-thread" type="button"
+                aria-label={`Open thread ${problem.object}`}
+                onClick={() => props.onOpenThread!({ backend: problem.backend!, threadId: problem.threadId! })}>
+                Open thread
+              </button>
+            ) : null}
           </li>
         ))}
       </ul>

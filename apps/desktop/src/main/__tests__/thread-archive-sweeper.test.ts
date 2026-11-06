@@ -5,8 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import {
   archiveCandidateProtectionReason,
+  CLAUDE_CHECKOUT_KEEP_REASON,
+  keepSubthreadParents,
+  subthreadChildren,
+  subthreadsFirst,
   isProtectedArchiveCandidate,
   isStaleArchiveCandidate,
   ThreadArchiveSweeper,
@@ -41,7 +46,7 @@ function harness(candidates = [candidate()]) {
     listCandidates: vi.fn(async () => candidates),
     refreshCandidate: vi.fn(async (item: ThreadArchiveCandidate) => item),
     isBusy: vi.fn(() => false),
-    canArchive: vi.fn(async () => true),
+    canArchive: vi.fn(async (_family: ThreadArchiveCandidate[]) => true),
     archive: vi.fn<ConstructorParameters<typeof ThreadArchiveSweeper>[0]["archive"]>(async () => {}),
     workspaceIsSafe: vi.fn(async (_cwd: string, _signal: AbortSignal) => true),
     onError: vi.fn(),
@@ -529,5 +534,136 @@ describe("archive policy selection", () => {
     policy = { ...policy, enabled: false };
     await sweeper.sweep();
     expect(deps.archive).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sub-thread parents", () => {
+  it("keeps a selected parent only while it would leave more than 2 sub-threads, repeating as parents drop out", () => {
+    // grand -> mid (selected) -> 3 unselected children; grand also has 2 more.
+    const children = new Map([
+      ["codex:grand", ["codex:mid", "codex:g1", "codex:g2"]],
+      ["codex:mid", ["codex:m1", "codex:m2", "codex:m3"]],
+    ]);
+    const selected = new Set(["codex:grand", "codex:mid", "codex:g1", "codex:g2"]);
+    // mid leaves 3 behind, so it stays; then grand would leave mid behind
+    // only, which is within the limit.
+    expect(keepSubthreadParents(selected, children)).toEqual(["codex:mid"]);
+    expect([...selected].sort()).toEqual(["codex:g1", "codex:g2", "codex:grand"]);
+  });
+
+  it("never leaves a selected parent with more than 2 unselected sub-threads", () => {
+    const ids = fc.constantFrom(...Array.from({ length: 8 }, (_, index) => `codex:t${index}`));
+    fc.assert(fc.property(
+      fc.array(fc.tuple(ids, ids), { maxLength: 24 }),
+      fc.uniqueArray(ids, { maxLength: 8 }),
+      (edges, chosen) => {
+        const children = new Map<string, string[]>();
+        for (const [parent, child] of edges) {
+          if (parent !== child) children.set(parent, [...new Set([...children.get(parent) ?? [], child])]);
+        }
+        const selected = new Set(chosen);
+        const kept = keepSubthreadParents(selected, children);
+        for (const key of selected) {
+          expect((children.get(key) ?? []).filter((child) => !selected.has(child)).length).toBeLessThanOrEqual(2);
+        }
+        for (const key of kept) expect(selected.has(key)).toBe(false);
+      },
+    ));
+  });
+
+  it("cleans up a Claude thread only in a worktree PwrAgent created", () => {
+    const claude = (projectKey: string, directory: Record<string, unknown> = {}): ThreadArchiveCandidate => ({
+      thread: { ...candidate("c").thread, source: "claude", projectKey,
+        linkedDirectories: [{ id: "d", label: "repo", path: "/src/repo", kind: "local", ...directory }] },
+    });
+    const managed = "/Users/me/.pwragent/worktrees/k3m9/repo";
+    expect(archiveCandidateProtectionReason(claude(managed, { worktreePath: managed }))).toBeUndefined();
+    expect(archiveCandidateProtectionReason(claude("/Users/me/.pwragent/profiles/work/worktrees/k3m9/repo"))).toBeUndefined();
+    for (const independent of [
+      "/src/repo",
+      "/src/repo/.claude/worktrees/fix-login",
+      "/Users/me/.claude/worktrees/fix-login",
+      "/Users/me/.codex/worktrees/a1b2/repo",
+      "/Users/me/.codex/worktrees/.pwragent/worktrees/repo",
+    ]) {
+      expect(archiveCandidateProtectionReason(claude(independent))).toBe(CLAUDE_CHECKOUT_KEEP_REASON);
+    }
+    expect(archiveCandidateProtectionReason(claude(managed, { worktreePath: "/src/repo/.claude/worktrees/x" })))
+      .toBe(CLAUDE_CHECKOUT_KEEP_REASON);
+    expect(archiveCandidateProtectionReason(claude(managed, { worktreeOwnership: "external" })))
+      .toBe(CLAUDE_CHECKOUT_KEEP_REASON);
+    // Other providers keep their own rules.
+    expect(archiveCandidateProtectionReason({ thread: { ...candidate("x").thread, projectKey: "/src/repo" } })).toBeUndefined();
+  });
+
+  it("never offers a Claude thread outside PwrAgent's worktree root", () => {
+    fc.assert(fc.property(
+      fc.array(fc.constantFrom(".pwragent", ".pwragnt", ".codex", ".claude", "src", "worktrees", "profiles", "work", "k3m9", "repo"),
+        { minLength: 1, maxLength: 7 }),
+      (segments) => {
+        const projectKey = `/Users/me/${segments.join("/")}`;
+        const reason = archiveCandidateProtectionReason({
+          thread: { ...candidate("c").thread, source: "claude", projectKey, linkedDirectories: [] },
+        });
+        // The leftmost tool worktree root in the path must be PwrAgent's.
+        const root = /\/\.(codex|pwrag(?:ent|nt))(?:\/profiles\/[^/]+)?\/worktrees\/[^/]+\/[^/]+/.exec(projectKey);
+        if (reason === undefined) expect(root?.[1]).toMatch(/^pwrag/);
+      },
+    ));
+  });
+
+  it("orders every thread after all of its sub-threads, however deep", () => {
+    fc.assert(fc.property(
+      fc.array(fc.nat({ max: 12 }), { minLength: 1, maxLength: 13 }),
+      fc.array(fc.nat({ max: 12 }), { maxLength: 13 }),
+      (parents, order) => {
+        // Node i's parent is an earlier node, so the links form a forest.
+        const nodes = parents.map((parent, index) => ({
+          thread: { ...candidate(`n${index}`).thread },
+          ...(index > 0 && parent % (index + 1) !== index
+            ? { overlay: { parentThreadId: `n${parent % index}` } as ThreadArchiveCandidate["overlay"] }
+            : {}),
+        }));
+        const shuffled = [...nodes];
+        for (const [index, swap] of order.entries()) {
+          const a = index % shuffled.length;
+          const b = swap % shuffled.length;
+          [shuffled[a], shuffled[b]] = [shuffled[b]!, shuffled[a]!];
+        }
+        const position = new Map(subthreadsFirst(shuffled).map(({ thread }, index) => [thread.id, index]));
+        for (const node of nodes) {
+          const parent = node.overlay?.parentThreadId;
+          if (parent) expect(position.get(node.thread.id)!).toBeLessThan(position.get(parent)!);
+        }
+      },
+    ));
+  });
+
+  it("keeps a parent when sub-threads kept during the sweep would leave 3 behind", async () => {
+    const parent = candidate("parent");
+    const child = (id: string): ThreadArchiveCandidate => ({
+      ...candidate(id), overlay: { parentThreadId: "parent" } as ThreadArchiveCandidate["overlay"],
+    });
+    const { deps, sweeper } = harness([parent, child("a"), child("b"), child("c"), child("d")]);
+    // Refused only when the run reaches them, after the up-front parent rule.
+    deps.canArchive.mockImplementation(async (family: ThreadArchiveCandidate[]) => !["a", "b", "c"].includes(family[0]!.thread.id));
+    await sweeper.sweep();
+    expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["d"]);
+    await sweeper.stop();
+  });
+
+  it("counts only local, non-archived sub-threads and orders them before parents", () => {
+    const row = (id: string, overlay?: Record<string, unknown>) => ({
+      thread: { ...candidate(id).thread },
+      ...(overlay ? { overlay: overlay as ThreadArchiveCandidate["overlay"] } : {}),
+    });
+    const candidates = [
+      row("parent"),
+      row("local", { parentThreadId: "parent" }),
+      row("peer", { parentThreadId: "parent", parentThreadInstanceId: "pwr_peer" }),
+      row("archived", { parentThreadId: "parent", archiveRetentionStartedAt: 1 }),
+    ];
+    expect(subthreadChildren(candidates)).toEqual(new Map([["codex:parent", ["codex:local"]]]));
+    expect(subthreadsFirst(candidates).map(({ thread }) => thread.id)).toEqual(["local", "peer", "archived", "parent"]);
   });
 });

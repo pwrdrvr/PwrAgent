@@ -8,6 +8,7 @@ import {
   type DesktopThreadArchiveSweepStatus,
   buildThreadIdentityKey,
   isCodexChatsDirectory,
+  isToolManagedWorktreePath,
 } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
@@ -125,6 +126,27 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
     ...(overlay?.worktreeSnapshots ?? []).map((snapshot) => snapshot.restoredAt ?? 0));
 }
 
+export const CLAUDE_CHECKOUT_KEEP_REASON = "Checkout not created by PwrAgent";
+
+const TOOL_WORKTREE_ROOT = /[\\/]\.(codex|pwrag(?:ent|nt))(?:[\\/]profiles[\\/][^\\/]+)?[\\/]worktrees[\\/][^\\/]+[\\/][^\\/]+/;
+
+/** A worktree under PwrAgent's own root (`~/.pwragent/…/worktrees/<id>/<name>`).
+ * The first tool root in the path decides, so a Codex worktree with a folder
+ * named `.pwragent` inside it is still Codex's. */
+export function isPwrAgentWorktreePath(value: string | undefined): boolean {
+  if (!value || !isToolManagedWorktreePath(value)) return false;
+  return TOOL_WORKTREE_ROOT.exec(value)?.[1]?.startsWith("pwrag") === true;
+}
+
+/** The Claude thread works in a PwrAgent worktree, and no directory it uses
+ * is marked as someone else's checkout. */
+export function isPwrAgentClaudeCheckout({ thread, overlay }: Pick<ThreadArchiveCandidate, "thread" | "overlay">): boolean {
+  const directories = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []];
+  return isPwrAgentWorktreePath(thread.projectKey)
+    && directories.every((directory) => directory.worktreeOwnership !== "external"
+      && (!directory.worktreePath || isPwrAgentWorktreePath(directory.worktreePath)));
+}
+
 export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent, activePrWatch, unreadable }: ThreadArchiveCandidate): string | undefined {
   if (unreadable) return "Thread state unreadable";
   if (thread.isPinned || overlay?.pinnedRank !== undefined) return "Pinned thread";
@@ -135,6 +157,9 @@ export function archiveCandidateProtectionReason({ thread, overlay, activeSubAge
   if (activePrWatch) return "Watching a PR";
   if (overlay?.scheduledStart?.state === "scheduled") return "Scheduled work";
   if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";
+  // Claude threads are cleaned up only in a worktree PwrAgent created. A
+  // Claude session can also run in a checkout the operator or Claude Code made.
+  if (thread.source === "claude" && !isPwrAgentClaudeCheckout({ thread, overlay })) return CLAUDE_CHECKOUT_KEEP_REASON;
   // The Codex app owns its chat folders' threads; housekeeping leaves them alone.
   if ([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []].some(isCodexChatsDirectory)) return "Codex chat folder";
   if (activeSubAgent) return "Active subagent";
@@ -171,6 +196,82 @@ export function archiveCandidateKeepReason(
   return policy.mode === "count" || now - archiveCandidateLastActivity(candidate) >= policy.inactivityDays * 86_400_000
     ? undefined
     : "Recently active";
+}
+
+/** A parent archived with more sub-threads left than this would scatter
+ * them: archive ungroups or promotes them. Archiving the children is fine. */
+export const MAX_SUBTHREADS_LEFT_BY_ARCHIVE = 2;
+
+export const SUBTHREAD_PARENT_KEEP_REASON = "Parent of 3+ sub-threads";
+
+/** Direct, non-archived local sub-threads per parent identity key. A sub-thread's
+ * parent link lives on its own overlay. Peer parents and native sub-agents
+ * (which archive with their root) are not counted. */
+export function subthreadChildren(candidates: readonly ThreadArchiveCandidate[]): Map<string, string[]> {
+  const children = new Map<string, string[]>();
+  for (const { thread, overlay } of candidates) {
+    const parentId = overlay?.parentThreadId?.trim();
+    if (!parentId || overlay?.parentThreadInstanceId || thread.codexNativeSubAgent) continue;
+    if (overlay?.archiveTombstonedAt !== undefined || overlay?.archiveRetentionStartedAt !== undefined) continue;
+    const key = buildThreadIdentityKey(overlay?.parentThreadBackend ?? thread.source, parentId);
+    children.set(key, [...children.get(key) ?? [], buildThreadIdentityKey(thread.source, thread.id)]);
+  }
+  return children;
+}
+
+/** Removes from `selected` every parent that would leave more than
+ * MAX_SUBTHREADS_LEFT_BY_ARCHIVE sub-threads behind, counting selected
+ * children as gone. Repeats until stable, since keeping a child that is itself
+ * a parent can push its own parent over the limit. Returns the kept keys. */
+export function keepSubthreadParents(selected: Set<string>, children: ReadonlyMap<string, readonly string[]>): string[] {
+  const kept: string[] = [];
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const key of [...selected]) {
+      const left = (children.get(key) ?? []).filter((child) => !selected.has(child)).length;
+      if (left > MAX_SUBTHREADS_LEFT_BY_ARCHIVE) {
+        selected.delete(key);
+        kept.push(key);
+        changed = true;
+      }
+    }
+  }
+  return kept;
+}
+
+/** Deepest sub-threads first, then their parents, then top-level threads;
+ * otherwise in the given order. A sub-thread that is itself a parent must wait
+ * for its own sub-threads, or its archive promotes them. */
+export function subthreadsFirst<T>(
+  items: readonly T[],
+  candidateOf: (item: T) => Pick<ThreadArchiveCandidate, "thread" | "overlay"> | undefined =
+    (item) => item as unknown as ThreadArchiveCandidate,
+): T[] {
+  const parentOf = new Map<string, string | undefined>();
+  for (const item of items) {
+    const candidate = candidateOf(item);
+    if (!candidate) continue;
+    const parentId = candidate.overlay?.parentThreadId?.trim();
+    parentOf.set(buildThreadIdentityKey(candidate.thread.source, candidate.thread.id), parentId
+      ? buildThreadIdentityKey(candidate.overlay?.parentThreadBackend ?? candidate.thread.source, parentId)
+      : undefined);
+  }
+  // Parent links walked from the item, bounded so a parent loop cannot spin.
+  const depth = (item: T): number => {
+    const candidate = candidateOf(item);
+    if (!candidate) return 0;
+    let key = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
+    let levels = 0;
+    while (levels <= items.length) {
+      const parent = parentOf.get(key);
+      if (!parent) break;
+      levels += 1;
+      key = parent;
+    }
+    return levels;
+  };
+  const depths = new Map(items.map((item) => [item, depth(item)]));
+  return [...items].sort((a, b) => depths.get(b)! - depths.get(a)!);
 }
 
 /** Groups each root with its native sub-agent threads, which archive with it. */
@@ -379,9 +480,29 @@ export class ThreadArchiveSweeper {
     } else {
       for (const candidate of eligibleRoots) selected.add(candidate);
     }
-    for (const candidate of candidates) {
+    // Never scatter a parent's sub-threads: a parent stays while archiving it
+    // would leave 3 or more of them behind.
+    const selectedKeys = new Set([...selected].map(({ thread }) => buildThreadIdentityKey(thread.source, thread.id)));
+    const subthreads = subthreadChildren(candidates);
+    const keptParents = new Set(keepSubthreadParents(selectedKeys, subthreads));
+    for (const candidate of [...selected]) {
+      if (!keptParents.has(buildThreadIdentityKey(candidate.thread.source, candidate.thread.id))) continue;
+      selected.delete(candidate);
+      keep(SUBTHREAD_PARENT_KEEP_REASON);
+    }
+    // Sub-threads go first, so a parent's own archive finds them archived
+    // rather than promoting them.
+    const archivedKeys = new Set<string>();
+    for (const candidate of subthreadsFirst(candidates)) {
       if (this.abort.signal.aborted) return;
       if (!selected.has(candidate)) continue;
+      const candidateKey = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
+      // A sub-thread kept during this run still needs its parent.
+      const left = (subthreads.get(candidateKey) ?? []).filter((child) => !archivedKeys.has(child)).length;
+      if (left > MAX_SUBTHREADS_LEFT_BY_ARCHIVE) {
+        keep(SUBTHREAD_PARENT_KEEP_REASON);
+        continue;
+      }
       const group = groupFor(candidate);
       const listed = familyKeepReason(group);
       if (listed) {
@@ -419,6 +540,7 @@ export class ThreadArchiveSweeper {
         if (await this.deps.archive(refreshed[0]!, refreshed) !== false) {
           tally.archived += 1;
           threads.archived += 1;
+          archivedKeys.add(candidateKey);
         } else keep("Archive cancelled");
       } catch (error) {
         if (!this.abort.signal.aborted) this.fail(tally, "threads", error, candidate.thread.id);
