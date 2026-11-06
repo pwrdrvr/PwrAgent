@@ -1,3 +1,4 @@
+import { forgeMergeMethods, settleMergeMethod, type ThreadTodoMergeMethod } from "@pwragent/shared";
 import { ForgeReadError, repositoryKey, type ForgeRepository } from "./forge-tool-contract";
 import { repositoryFromPr, resolveForgeRepositories, type ForgeReadScope } from "./forge-read-service";
 import type { ForgePrToolContext } from "./forge-pr-tool-shared";
@@ -9,7 +10,15 @@ export type ForgePrToolScope = Pick<ForgeReadScope, "remotes" | "attached" | "br
 };
 
 /** What a call acts on, settled before the operator is asked. */
-export type ForgePrToolPreparedCall = { repository: ForgeRepository; args: ForgePrToolArgs };
+export type ForgePrToolPreparedCall = {
+  repository: ForgeRepository;
+  args: ForgePrToolArgs;
+  /**
+   * A merge's choices: `args.method` is the one it runs with, and `offered`
+   * holds every method the forge accepts, so the approval can offer the rest.
+   */
+  mergeMethods?: { offered: ThreadTodoMergeMethod[] };
+};
 
 type ProviderClient = {
   execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown>;
@@ -41,8 +50,29 @@ export class ForgePrToolService {
    * head was never pushed fails at the forge, and the agent's retry asks
    * the operator a second time.
    */
-  async prepare(operation: ForgePrToolOperation, args: ForgePrToolArgs, scope: ForgePrToolScope, signal?: AbortSignal): Promise<ForgePrToolPreparedCall> {
+  async prepare(
+    operation: ForgePrToolOperation,
+    args: ForgePrToolArgs,
+    scope: ForgePrToolScope,
+    signal?: AbortSignal,
+    preferences?: { rememberedMergeMethod?: ThreadTodoMergeMethod },
+  ): Promise<ForgePrToolPreparedCall> {
     const repository = this.resolveRepository(args, scope);
+    if (operation === "merge_pull_request") {
+      // The method is settled here, as a to-do card settles it, so the card
+      // names the merge it approves and every surface merges the same way.
+      const offered = forgeMergeMethods(repository.provider);
+      if (args.method && !offered.includes(args.method)) {
+        throw new ForgeReadError("unsupported_operation", "GitLab merges with the project's merge method. Use merge or squash.");
+      }
+      const method = settleMergeMethod({
+        offered,
+        requested: args.method,
+        remembered: preferences?.rememberedMergeMethod,
+        fallback: this.options.defaultMergeMethod(),
+      });
+      return { repository, args: { ...args, method }, mergeMethods: { offered } };
+    }
     if (operation === "create_pull_request" && args.head) {
       const exists = await this.options.clients[repository.provider].headBranchExists?.(repository, args.head, signal);
       if (exists === false) {

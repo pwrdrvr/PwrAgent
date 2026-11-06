@@ -69,6 +69,7 @@ import type {
   ThreadUsageLineRecord,
   ToolOutputIncidentExplorerLens,
   ForgeApprovalRememberOptionId,
+  ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import {
   buildPendingRequestResponse,
@@ -3951,6 +3952,7 @@ export function ThreadView(props: ThreadViewProps) {
     action: "accept" | "decline" | "cancel",
     persist?: McpApprovalPersistence,
     remember?: ForgeApprovalRememberOptionId,
+    mergeMethod?: ThreadTodoMergeMethod,
   ): Promise<void> {
     if (!props.desktopApi?.submitServerRequest || !selectedThread) {
       setPendingRequestError("Desktop bridge is missing submitServerRequest().");
@@ -3971,7 +3973,7 @@ export function ThreadView(props: ThreadViewProps) {
             ? pendingMcpInteraction.turnId
             : undefined,
         requestId: pendingMcpInteraction.requestId,
-        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist, remember),
+        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist, remember, mergeMethod),
       });
       props.clearPendingRequest(
         pendingMcpInteraction.requestId,

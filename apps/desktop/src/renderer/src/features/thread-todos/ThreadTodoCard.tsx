@@ -25,6 +25,7 @@ import type {
 import {
   THREAD_TODO_MERGE_METHODS,
   resolveThreadTodoMergeMethod,
+  THREAD_TODO_MERGE_METHOD_LABELS,
   resolveThreadTodoModelSettings,
   threadTodoBlockingItems,
   threadTodoItemNoun,
@@ -90,15 +91,6 @@ const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> =
   handoff: HandoffIcon,
 };
 
-/** The button says what it will do; the menu says it as GitHub does. */
-const MERGE_METHOD_LABELS: Record<
-  ThreadTodoMergeMethod,
-  { button: string; menu: string; verb: string }
-> = {
-  squash: { button: "Squash merge", menu: "Squash and merge", verb: "Squash merge" },
-  rebase: { button: "Rebase merge", menu: "Rebase and merge", verb: "Rebase and merge" },
-  merge: { button: "Merge", menu: "Create a merge commit", verb: "Merge" },
-};
 
 const COPIED_MS = 1_500;
 
@@ -859,7 +851,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
                 }}
               >
                 <MergeIcon size={12} />
-                {MERGE_METHOD_LABELS[confirmingMerge.method].verb}
+                {THREAD_TODO_MERGE_METHOD_LABELS[confirmingMerge.method].verb}
               </button>
             </>
           );
@@ -869,14 +861,14 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           <>
             {done}
             <TodoSplitButton
-              label={todo.error ? "Retry merge" : MERGE_METHOD_LABELS[method].button}
+              label={todo.error ? "Retry merge" : THREAD_TODO_MERGE_METHOD_LABELS[method].button}
               Icon={MergeIcon}
               menuLabel="Merge options"
               onClick={() => setConfirmingMerge({ method, remember: false })}
               entries={THREAD_TODO_MERGE_METHODS.map((option) => ({
                 kind: "item",
                 id: option,
-                label: MERGE_METHOD_LABELS[option].menu,
+                label: THREAD_TODO_MERGE_METHOD_LABELS[option].menu,
                 checked: option === method,
                 onSelect: () => setConfirmingMerge({ method: option, remember: true }),
               }))}
@@ -1427,7 +1419,7 @@ function confirmMergeText(
 ): string {
   const target = /^\d+$/.test(pullRequest) ? `#${pullRequest}` : "this pull request";
   const where = projectLabel ? ` in ${projectLabel}` : "";
-  return `${MERGE_METHOD_LABELS[method].verb} ${target}${where}? This cannot be undone here.`;
+  return `${THREAD_TODO_MERGE_METHOD_LABELS[method].verb} ${target}${where}? This cannot be undone here.`;
 }
 
 export function formatTodoAge(createdAt: number, now = Date.now()): string {

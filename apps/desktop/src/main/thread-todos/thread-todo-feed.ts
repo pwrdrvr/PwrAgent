@@ -215,6 +215,16 @@ export class ThreadTodoFeed {
     }
   }
 
+  /**
+   * Publishes the merge-method preferences alone, after a pick that changed
+   * no card: an agent's merge approval. Open merge cards relabel their
+   * buttons from it.
+   */
+  mergeMethodsChanged(): void {
+    this.revision += 1;
+    this.onDelta({ epoch: this.epoch, revision: this.revision, mergeMethods: this.source.mergeMethods() });
+  }
+
   /** Re-projects the named threads' cards and publishes what changed. */
   private async publish(keys: string[]): Promise<void> {
     const scope = new Set(keys);

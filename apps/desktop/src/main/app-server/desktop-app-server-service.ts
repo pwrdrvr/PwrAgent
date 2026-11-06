@@ -6,7 +6,8 @@ import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detac
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
-import { ForgePrToolService, type ForgePrToolPreparedCall, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import { ForgePrToolService, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import type { ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
@@ -31,7 +32,7 @@ import {
   summarizeProjectHeldWakeup,
   type ProjectForgeAutomationResolution,
 } from "../app-server/project-forge-automation-index";
-import { getThreadTodoService, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
+import { getThreadTodoService, readProjectMergeMethodPreference, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { threadArtifactDirectory } from "../app-server/thread-assets";
 import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
@@ -4439,8 +4440,19 @@ class DesktopAppServerService {
   }
 
   /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
-  async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreparedCall> {
-    return await this.forgePrToolService().prepare(operation, args, await this.forgePrToolScope(context), context.signal);
+  async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreflightResult> {
+    const scope = await this.forgePrToolScope(context);
+    if (operation !== "merge_pull_request") {
+      return await this.forgePrToolService().prepare(operation, args, scope, context.signal);
+    }
+    // A merge reads and keeps the project's merge-method pick, the one a
+    // to-do merge card for this project would use.
+    const preference = await readProjectMergeMethodPreference(getDesktopBackendRegistry(), context);
+    const prepared = await this.forgePrToolService().prepare(operation, args, scope, context.signal, {
+      rememberedMergeMethod: preference.remembered,
+    });
+    if (!prepared.mergeMethods || !preference.remember) return prepared;
+    return { ...prepared, mergeMethods: { ...prepared.mergeMethods, remember: preference.remember } };
   }
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */

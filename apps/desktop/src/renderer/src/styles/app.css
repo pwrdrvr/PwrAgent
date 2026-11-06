@@ -34071,6 +34071,21 @@ div.composer-error-row__toggle {
   line-height: 1.35;
 }
 
+/* A merge method menu marks the method the main button runs, as the to-do
+   card's merge menu does. */
+.transcript-mcp__split-item--radio {
+  position: relative;
+  padding-left: 28px;
+}
+
+.transcript-mcp__split-item-check {
+  position: absolute;
+  top: 8px;
+  left: 9px;
+  display: inline-flex;
+  color: var(--accent);
+}
+
 .transcript-request__actions .button {
   max-width: 100%;
   white-space: normal;

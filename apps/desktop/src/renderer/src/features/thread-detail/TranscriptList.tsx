@@ -33,6 +33,7 @@ import type {
   ThreadSubAgentSummary,
   MarkdownFileViewerContext,
   ForgeApprovalRememberOptionId,
+  ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import {
   anchorTurnUsageEntries,
@@ -192,6 +193,7 @@ type TranscriptListProps = {
     action: "accept" | "decline" | "cancel",
     persist?: McpApprovalPersistence,
     remember?: ForgeApprovalRememberOptionId,
+    mergeMethod?: ThreadTodoMergeMethod,
   ) => Promise<void>;
   onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
   onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
@@ -1783,8 +1785,8 @@ export function TranscriptList(props: TranscriptListProps) {
               onChange={(state) => {
                 props.onPendingMcpInteractionChange?.(state);
               }}
-              onSubmit={async (state, action, persist, remember) => {
-                await props.onSubmitPendingMcpInteraction?.(state, action, persist, remember);
+              onSubmit={async (state, action, persist, remember, mergeMethod) => {
+                await props.onSubmitPendingMcpInteraction?.(state, action, persist, remember, mergeMethod);
               }}
             />
           ) : null}

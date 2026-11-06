@@ -153,6 +153,32 @@ export async function readThreadTodoPlacement(
 }
 
 /**
+ * The merge-method pick for the project a thread's merge belongs to, the one
+ * its to-do merge cards use, and how to keep a new pick. The project is the
+ * one add_todo files the thread's cards under. Empty when the thread has no
+ * project.
+ */
+export async function readProjectMergeMethodPreference(
+  registry: Pick<DesktopBackendRegistry, "resolveThreadPrimaryDirectory">,
+  thread: { backend: AppServerBackendKind; threadId: string },
+): Promise<{ remembered?: ThreadTodoMergeMethod; remember?: (method: ThreadTodoMergeMethod) => void }> {
+  const directory = await registry.resolveThreadPrimaryDirectory(thread.backend, thread.threadId)
+    .catch(() => undefined);
+  // The key comes from the directory alone; the project list adds labels.
+  const projectKey = threadTodoProjectForDirectory(directory, [])?.key;
+  if (!projectKey) return {};
+  const todos = getThreadTodoService();
+  const remembered = todos.projectMergeMethod(projectKey);
+  return {
+    ...(remembered ? { remembered } : {}),
+    remember: (method) => {
+      // Open merge cards relabel from a pick that changed no card.
+      if (todos.rememberProjectMergeMethod(projectKey, method)) feed?.mergeMethodsChanged();
+    },
+  };
+}
+
+/**
  * Raises a started thread's plan card on this owner, filed where add_todo
  * would file a card the thread raised itself.
  */

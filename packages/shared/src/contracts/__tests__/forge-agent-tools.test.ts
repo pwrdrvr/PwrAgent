@@ -13,6 +13,8 @@ import {
   forgeRuleProjectLabel,
   normalizeForgeAgentToolRules,
   normalizeForgeRuleRepository,
+  readForgeApprovalMergeMethodChoice,
+  readForgeApprovalMergeMethods,
   readForgeApprovalRememberChoice,
   readForgeApprovalRememberOptions,
   removeForgeAgentToolRule,
@@ -553,5 +555,23 @@ describe("approval card remember options", () => {
     expect(readForgeApprovalRememberOptions(null)).toEqual([]);
     expect(readForgeApprovalRememberChoice({ [FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY]: "agent_model" })).toBe("agent_model");
     expect(readForgeApprovalRememberChoice({ [FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY]: "everything" })).toBeUndefined();
+  });
+});
+
+describe("merge approval methods", () => {
+  it("reads the offered methods in display order and refuses a selection it does not offer", () => {
+    expect(readForgeApprovalMergeMethods({
+      pwragent_merge_methods: { selected: "merge", methods: ["merge", "bogus", "squash"] },
+    })).toEqual({ selected: "merge", methods: ["squash", "merge"] });
+    expect(readForgeApprovalMergeMethods({
+      pwragent_merge_methods: { selected: "rebase", methods: ["squash", "merge"] },
+    })).toBeUndefined();
+    expect(readForgeApprovalMergeMethods({ pwragent_merge_methods: "squash" })).toBeUndefined();
+    expect(readForgeApprovalMergeMethods(null)).toBeUndefined();
+  });
+
+  it("reads only a known merge method choice", () => {
+    expect(readForgeApprovalMergeMethodChoice({ pwragent_merge_method_choice: "rebase" })).toBe("rebase");
+    expect(readForgeApprovalMergeMethodChoice({ pwragent_merge_method_choice: "fast-forward" })).toBeUndefined();
   });
 });

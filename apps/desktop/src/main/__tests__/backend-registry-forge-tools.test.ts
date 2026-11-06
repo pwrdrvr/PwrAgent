@@ -251,6 +251,66 @@ describe("backend forge tool dispatch", () => {
     expect(text(await pending)).toContain("declined");
   });
 
+  it("names the merge method on the card and runs the operator's pick from its menu", async () => {
+    const repository = { provider: "github" as const, host: "github.com", owner: "fixture", repo: "project" };
+    const remember = vi.fn();
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({
+      repository,
+      args: { ...args, method: "squash" },
+      mergeMethods: { offered: ["squash", "rebase", "merge"], remember },
+    }));
+    const merge = { number: 9, expectedHeadSha: "a".repeat(40) };
+    const respond = async (notification: AppServerMcpElicitationRequestNotification, meta: Record<string, unknown> | null) => {
+      await registry.submitServerRequest({
+        backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(notification.params.requestId),
+        response: { action: "accept", content: {}, _meta: meta },
+      });
+    };
+
+    // The button: the settled method runs and nothing is remembered.
+    let prompt = nextApproval();
+    let pending = internals.handleServerRequest("codex", request("merge_pull_request", merge, "call-merge-button"));
+    let notification = await prompt;
+    expect(notification.params.message).toBe("Allow the agent to squash and merge pull request #9 on GitHub?");
+    expect(notification.params._meta).toMatchObject({ pwragent_merge_methods: { selected: "squash", methods: ["squash", "rebase", "merge"] } });
+    // The question and the button name the method, so no row repeats it.
+    expect(notification.params._meta?.tool_params_display).not.toContainEqual(expect.objectContaining({ name: "method" }));
+    await respond(notification, null);
+    expect((await pending).success).toBe(true);
+    expect(github).toHaveBeenLastCalledWith("merge_pull_request", { ...merge, method: "squash", repository }, expect.anything());
+    expect(remember).not.toHaveBeenCalled();
+
+    // The menu: the picked method runs and is kept for the project.
+    prompt = nextApproval();
+    pending = internals.handleServerRequest("codex", request("merge_pull_request", merge, "call-merge-menu"));
+    await respond(await prompt, { pwragent_merge_method_choice: "rebase" });
+    expect((await pending).success).toBe(true);
+    expect(github).toHaveBeenLastCalledWith("merge_pull_request", { ...merge, method: "rebase", repository }, expect.anything());
+    expect(remember).toHaveBeenCalledExactlyOnceWith("rebase");
+  });
+
+  it("ignores a merge method the card did not offer", async () => {
+    const repository = { provider: "gitlab" as const, host: "gitlab.example.test", owner: "group", repo: "project" };
+    const remember = vi.fn();
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({
+      repository,
+      args: { ...args, method: "merge" },
+      mergeMethods: { offered: ["squash", "merge"], remember },
+    }));
+    const merge = { number: 4, expectedHeadSha: "b".repeat(40) };
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("merge_pull_request", merge, "call-merge-unoffered"));
+    const notification = await prompt;
+    expect(notification.params.message).toBe("Allow the agent to merge merge request !4 on GitLab with a merge commit?");
+    await registry.submitServerRequest({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(notification.params.requestId),
+      response: { action: "accept", content: {}, _meta: { pwragent_merge_method_choice: "rebase" } },
+    });
+    expect((await pending).success).toBe(true);
+    expect(github).toHaveBeenLastCalledWith("merge_pull_request", { ...merge, method: "merge", repository }, expect.anything());
+    expect(remember).not.toHaveBeenCalled();
+  });
+
   it("runs a write in the approved repository and scopes conversation grants to it", async () => {
     const repoA = { provider: "github" as const, host: "github.com", owner: "acme", repo: "app" };
     const repoB = { provider: "github" as const, host: "github.com", owner: "acme", repo: "site" };

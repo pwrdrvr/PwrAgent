@@ -351,14 +351,17 @@ export class ThreadTodoStore {
     return isThreadTodoMergeMethod(row?.merge_method) ? row.merge_method : undefined;
   }
 
-  /** One commit, and none when the pick is already the remembered one. */
+  /**
+   * One commit, and none when the pick is already the remembered one.
+   * Returns whether the remembered pick changed.
+   */
   setProjectMergeMethod(params: {
     directoryKey: string;
     method: ThreadTodoMergeMethod;
     now: number;
-  }): void {
+  }): boolean {
     if (this.getProjectMergeMethod(params.directoryKey) === params.method) {
-      return;
+      return false;
     }
     this.stateDb.raw
       .prepare(
@@ -368,6 +371,7 @@ export class ThreadTodoStore {
            SET merge_method = excluded.merge_method, updated_at = excluded.updated_at`,
       )
       .run(params.directoryKey, params.method, params.now);
+    return true;
   }
 
   private require(id: string): ThreadTodo {

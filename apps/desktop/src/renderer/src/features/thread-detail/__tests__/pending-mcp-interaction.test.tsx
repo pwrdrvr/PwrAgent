@@ -8,6 +8,8 @@ import {
   type PendingMcpInteractionState,
 } from "../mcp-elicitation";
 import {
+  FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY,
+  FORGE_APPROVAL_MERGE_METHODS_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
   type AppServerMcpElicitationRequestNotification,
@@ -552,5 +554,66 @@ describe("PendingMcpInteraction forge remember menu", () => {
 
     expect(screen.queryByRole("button", { name: "More approval choices" })).not.toBeInTheDocument();
     expect(() => buildMcpElicitationResponse(state, "accept", undefined, "agent")).toThrow(/rule/);
+  });
+});
+
+describe("PendingMcpInteraction merge approval", () => {
+  function mergeState(selected: string, methods: string[]): PendingMcpInteractionState {
+    return createMcpElicitationState({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "forge-tool:merge",
+        serverName: "GitHub", mode: "form",
+        message: "Allow the agent to squash and merge pull request #9 on GitHub?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          pwragent_approval_kind: "mcp_tool_call",
+          riskLevel: "high",
+          [FORGE_APPROVAL_MERGE_METHODS_META_KEY]: { selected, methods },
+        },
+      },
+    })!;
+  }
+
+  it("names the merge on its button, as a to-do merge card does", () => {
+    const onSubmit = vi.fn();
+    const state = mergeState("squash", ["squash", "rebase", "merge"]);
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+
+    expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Squash merge" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept");
+    expect(buildMcpElicitationResponse(state, "accept")._meta).toBeNull();
+  });
+
+  it("offers every method the forge takes, marks the button's, and sends the pick", () => {
+    const onSubmit = vi.fn();
+    const state = mergeState("squash", ["squash", "rebase", "merge"]);
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge options" }));
+    screen.getByRole("menu", { name: "Merge methods" });
+    const items = screen.getAllByRole("menuitemradio");
+    expect(items.map((item) => item.querySelector(".transcript-mcp__split-item-label")?.textContent)).toEqual([
+      "Squash and merge", "Rebase and merge", "Create a merge commit",
+    ]);
+    expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Rebase and merge" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", undefined, undefined, "rebase");
+    expect(buildMcpElicitationResponse(state, "accept", undefined, undefined, "rebase")._meta).toEqual({
+      [FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY]: "rebase",
+    });
+  });
+
+  it("offers GitLab's two methods and refuses one it did not offer", () => {
+    const state = mergeState("merge", ["squash", "merge"]);
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Merge options" }));
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(2);
+    expect(() => buildMcpElicitationResponse(state, "accept", undefined, undefined, "rebase"))
+      .toThrow("does not offer that merge method");
   });
 });

@@ -1,14 +1,18 @@
 import {
+  FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   isSecretFieldLabel,
   isSecretFieldName,
   mcpElicitationPurpose,
+  readForgeApprovalMergeMethods,
   readForgeApprovalRememberOptions,
   type AppServerMcpElicitationRequestNotification,
   type AppServerMcpElicitationResponse,
+  type ForgeApprovalMergeMethods,
   type ForgeApprovalRememberOption,
   type ForgeApprovalRememberOptionId,
   type McpElicitationPurpose,
+  type ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 
 export type PendingMcpFieldOption = {
@@ -153,6 +157,15 @@ export function readMcpRememberOptions(state: PendingMcpInteractionState): Forge
   return readForgeApprovalRememberOptions(state._meta);
 }
 
+/**
+ * A forge merge approval's methods: the one the merge runs with and the
+ * others the forge accepts. Undefined for every other request.
+ */
+export function readMcpMergeMethods(state: PendingMcpInteractionState): ForgeApprovalMergeMethods | undefined {
+  if (state.mode !== "form" || state._meta?.pwragent_approval_kind !== "mcp_tool_call") return undefined;
+  return readForgeApprovalMergeMethods(state._meta);
+}
+
 /** Permission to run a tool, not a request for data. */
 export function isMcpToolApproval(state: PendingMcpInteractionState): boolean {
   return state.purpose === "tool-approval";
@@ -255,6 +268,7 @@ export function buildMcpElicitationResponse(
   action: "accept" | "decline" | "cancel",
   persist?: McpApprovalPersistence,
   remember?: ForgeApprovalRememberOptionId,
+  mergeMethod?: ThreadTodoMergeMethod,
 ): AppServerMcpElicitationResponse {
   if (action !== "accept") {
     return {
@@ -265,7 +279,7 @@ export function buildMcpElicitationResponse(
   }
 
   if (state.mode === "url") {
-    if (persist || remember) {
+    if (persist || remember || mergeMethod) {
       throw new Error("This MCP request does not support approval persistence.");
     }
     return {
@@ -283,6 +297,11 @@ export function buildMcpElicitationResponse(
   if (remember && !readMcpRememberOptions(state).some((option) => option.id === remember)) {
     throw new Error("This request does not offer the selected rule.");
   }
+  // A merge goes ahead the way its button said unless the operator picked
+  // another offered method. Main checks the offer again.
+  if (mergeMethod && !readMcpMergeMethods(state)?.methods.includes(mergeMethod)) {
+    throw new Error("This request does not offer that merge method.");
+  }
 
   return {
     action,
@@ -292,10 +311,11 @@ export function buildMcpElicitationResponse(
           ? []
           : [[field.key, fieldContentValue(field)] as const]) ?? []
     ),
-    _meta: persist || remember
+    _meta: persist || remember || mergeMethod
       ? {
           ...(persist ? { persist } : {}),
           ...(remember ? { [FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY]: remember } : {}),
+          ...(mergeMethod ? { [FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY]: mergeMethod } : {}),
         }
       : null,
   };

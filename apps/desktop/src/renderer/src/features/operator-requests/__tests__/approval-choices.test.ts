@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY,
+  FORGE_APPROVAL_MERGE_METHODS_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
 } from "@pwragent/shared";
@@ -57,5 +59,21 @@ describe("approvalChoices for a forge approval", () => {
   it("adds nothing when the request offers no rule", () => {
     const choices = approvalChoices(forgeWait({}))!;
     expect(choices.alternatives.map((choice) => choice.id)).toEqual(["cancel"]);
+  });
+});
+
+describe("approvalChoices for a merge approval", () => {
+  it("names the merge on its accept and offers the other methods, as its card does", () => {
+    const choices = approvalChoices(forgeWait({
+      [FORGE_APPROVAL_MERGE_METHODS_META_KEY]: { selected: "squash", methods: ["squash", "rebase", "merge"] },
+    }))!;
+    expect(choices.accept?.label).toBe("Squash merge");
+    expect(choices.accept?.buildResponse()).toMatchObject({ action: "accept", _meta: null });
+    const methods = choices.alternatives.filter((choice) => choice.id.startsWith("merge:"));
+    expect(methods.map((choice) => choice.label)).toEqual(["Rebase and merge", "Create a merge commit"]);
+    expect(methods[0]!.buildResponse()).toMatchObject({
+      action: "accept",
+      _meta: { [FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY]: "rebase" },
+    });
   });
 });

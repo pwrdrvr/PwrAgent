@@ -1,4 +1,9 @@
 import { parseCodexProviderModelId } from "../codex-model-providers";
+import {
+  isThreadTodoMergeMethod,
+  THREAD_TODO_MERGE_METHODS,
+  type ThreadTodoMergeMethod,
+} from "./thread-todos";
 
 /**
  * Operator policy for PwrAgent's own forge tools: the CI reads, the GitHub
@@ -991,6 +996,52 @@ export function readForgeApprovalRememberOptions(
     options.push({ id, label, description: typeof description === "string" ? description : "" });
   }
   return options;
+}
+
+// ---------------------------------------------------------------------------
+// Approval card merge method
+// ---------------------------------------------------------------------------
+
+/**
+ * Elicitation request `_meta` key on a merge approval: the method the merge
+ * will run with and the others the forge accepts
+ * (`ForgeApprovalMergeMethods`). The card's primary button names `selected`;
+ * its menu offers the rest, as a to-do merge card does.
+ */
+export const FORGE_APPROVAL_MERGE_METHODS_META_KEY = "pwragent_merge_methods";
+
+/**
+ * Elicitation response `_meta` key: the method the operator chose from the
+ * menu. Main honors it only if the request offered it, and remembers it for
+ * the project, as a pick from a to-do card's menu is.
+ */
+export const FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY = "pwragent_merge_method_choice";
+
+export type ForgeApprovalMergeMethods = {
+  selected: ThreadTodoMergeMethod;
+  /** Every method offered, `selected` included, in display order. */
+  methods: ThreadTodoMergeMethod[];
+};
+
+/** Read a merge approval's methods from an elicitation request's `_meta`. */
+export function readForgeApprovalMergeMethods(
+  meta: Record<string, unknown> | null | undefined,
+): ForgeApprovalMergeMethods | undefined {
+  const value = meta?.[FORGE_APPROVAL_MERGE_METHODS_META_KEY];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { selected, methods } = value as Record<string, unknown>;
+  if (!isThreadTodoMergeMethod(selected) || !Array.isArray(methods)) return undefined;
+  const offered = THREAD_TODO_MERGE_METHODS.filter((method) => methods.includes(method));
+  if (!offered.includes(selected)) return undefined;
+  return { selected, methods: offered };
+}
+
+/** Read the chosen merge method from an elicitation response's `_meta`. */
+export function readForgeApprovalMergeMethodChoice(
+  meta: Record<string, unknown> | null | undefined,
+): ThreadTodoMergeMethod | undefined {
+  const value = meta?.[FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY];
+  return isThreadTodoMergeMethod(value) ? value : undefined;
 }
 
 /** Read the chosen option id from an elicitation response's `_meta`. */

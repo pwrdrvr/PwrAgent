@@ -13,7 +13,7 @@ import { inspectClaudeInstallation } from "../claude/claude-executable";
 import { openClaudeSessionReader } from "../claude/claude-session-reader";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
-import { buildForgeToolDefinitions, type ForgePrToolHandler, type ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
+import { buildForgeToolDefinitions, type ForgePrToolHandler, type ForgePrToolPreflight, type ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
@@ -56,6 +56,7 @@ import {
 import {
   buildForgeApprovalRememberOptions,
   FORGE_AGENT_RULE_APPROVAL_SOURCE,
+  FORGE_APPROVAL_MERGE_METHODS_META_KEY,
   FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
   forgeAgentRuleAgentKey,
   forgeAgentToolRuleDescription,
@@ -66,6 +67,7 @@ import {
   forgeRuleRepositoryLabel,
   isForgeApprovalRememberGroup,
   normalizeForgeRuleRepository,
+  readForgeApprovalMergeMethodChoice,
   readForgeApprovalRememberChoice,
   resolveForgeAgentToolAccess,
   type ForgeAgentIdentity,
@@ -73,7 +75,9 @@ import {
   type ForgeAgentRuleNames,
   type ForgeAgentToolRuleApprovalNote,
   type ForgeAgentToolRuleGroup,
+  type ForgeApprovalMergeMethods,
   type ForgeApprovalRememberOptionId,
+  type ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
@@ -10504,8 +10508,11 @@ export class DesktopBackendRegistry {
       // arguments makes the agent retry and the operator approve it twice.
       const prepared = this.forgePrToolPreflight ? await this.forgePrToolPreflight(operation, args, context) : undefined;
       const repository = prepared?.repository ?? args.repository;
-      const settled = prepared?.args ?? args;
-      notes = await this.approveForgeToolWrite(operation, settled, context, group, repository);
+      let settled = prepared?.args ?? args;
+      const approval = await this.approveForgeToolWrite(operation, settled, context, group, repository, prepared?.mergeMethods);
+      notes = approval.notes;
+      // The operator's pick from the merge menu replaces the settled method.
+      if (approval.mergeMethod) settled = { ...settled, method: approval.mergeMethod };
       // Act exactly where the card said, even if the thread's remotes or branch change while it waits.
       target = repository ? { ...settled, repository } : settled;
     }
@@ -10644,7 +10651,8 @@ export class DesktopBackendRegistry {
     context: AgentToolCallContext,
     group: ForgeAgentToolGroup,
     repository?: ForgeRepository,
-  ): Promise<ForgeWriteApprovalNotes | undefined> {
+    mergeMethods?: ForgePrToolPreflightResult["mergeMethods"],
+  ): Promise<{ notes?: ForgeWriteApprovalNotes; mergeMethod?: ThreadTodoMergeMethod }> {
     const identity = await this.resolveForgeAgentIdentity(context);
     const resolution = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), group, repository, identity);
     const access = resolution.level;
@@ -10664,7 +10672,7 @@ export class DesktopBackendRegistry {
       throw new ForgeReadError("tools_disabled", `${FORGE_AGENT_TOOL_GROUP_LABELS[group]} is Off in Settings → Git → Agent forge tools, so ${operation} is unavailable.`);
     }
     if (access === "allow") {
-      if (!rule) return undefined;
+      if (!rule) return {};
       const description = forgeAgentToolRuleDescription(rule, wording);
       backendRegistryLog.info("running forge write allowed by a project rule", {
         backend: context.backend,
@@ -10673,7 +10681,7 @@ export class DesktopBackendRegistry {
         operation,
         rule: description,
       });
-      return { approval: { source: FORGE_AGENT_RULE_APPROVAL_SOURCE, rule: description } };
+      return { notes: { approval: { source: FORGE_AGENT_RULE_APPROVAL_SOURCE, rule: description } } };
     }
     const signal = context.signal ?? new AbortController().signal;
     signal.throwIfAborted();
@@ -10718,7 +10726,7 @@ export class DesktopBackendRegistry {
         operation,
         ...(rule ? { rule: forgeAgentToolRuleDescription(rule, wording) } : {}),
       });
-      return undefined;
+      return {};
     }
     if (automation) {
       throw new ForgeReadError("approval_required", rule
@@ -10738,7 +10746,7 @@ export class DesktopBackendRegistry {
     const grantKey = `${group}:${access}${rule
       ? `:${rule.repository}:${forgeAgentRuleAgentKey(rule.agent)}`
       : resolution.source === "unreadable_rule" ? ":unreadable" : ""}`;
-    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return undefined;
+    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return {};
     const cardWording = { ...wording, projectLabel: await this.forgeProjectLabel(repository) };
     signal.throwIfAborted();
     meta.subtitle = rule
@@ -10761,8 +10769,23 @@ export class DesktopBackendRegistry {
       })
       : [];
     if (rememberOptions.length > 0) meta[FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY] = rememberOptions;
+    // A merge names its method on the button and offers the others, as a
+    // to-do merge card does. The settled method is the button's.
+    const offeredMergeMethods = mergeMethods && args.method && mergeMethods.offered.includes(args.method)
+      ? mergeMethods.offered
+      : undefined;
+    if (offeredMergeMethods && args.method) {
+      meta[FORGE_APPROVAL_MERGE_METHODS_META_KEY] = {
+        selected: args.method,
+        methods: offeredMergeMethods,
+      } satisfies ForgeApprovalMergeMethods;
+    }
     const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
-    type Approval = { grant: "once" | "session"; remember?: ForgeApprovalRememberOptionId } | false;
+    type Approval = {
+      grant: "once" | "session";
+      remember?: ForgeApprovalRememberOptionId;
+      mergeMethod?: ThreadTodoMergeMethod;
+    } | false;
     const approved = await new Promise<Approval>((resolve, reject) => {
       const finish = (value: Approval, error?: unknown): void => {
         signal.removeEventListener("abort", aborted);
@@ -10788,9 +10811,15 @@ export class DesktopBackendRegistry {
           if (choice && !remember) {
             backendRegistryLog.warn("ignoring a forge remember choice this card did not offer", { threadId: context.threadId, requestId, choice });
           }
+          const pickedMethod = readForgeApprovalMergeMethodChoice(responseMeta);
+          const mergeMethod = pickedMethod && offeredMergeMethods?.includes(pickedMethod) ? pickedMethod : undefined;
+          if (pickedMethod && !mergeMethod) {
+            backendRegistryLog.warn("ignoring a merge method this card did not offer", { threadId: context.threadId, requestId, method: pickedMethod });
+          }
           finish({
             grant: sessionGrant && responseMeta?.persist === "session" ? "session" : "once",
             ...(remember ? { remember } : {}),
+            ...(mergeMethod ? { mergeMethod } : {}),
           });
         },
         reject: (error) => finish(false, error),
@@ -10805,11 +10834,24 @@ export class DesktopBackendRegistry {
       grants.set(grantTarget, grantKey);
       this.forgeToolSessionApprovals.set(sessionKey, grants);
     }
-    if (!approved.remember || !ruleRepository || !isForgeApprovalRememberGroup(group)) return undefined;
+    if (approved.mergeMethod) {
+      // A pick from the menu is the operator's preference for the project,
+      // whether or not this merge succeeds, as on a to-do card.
+      try {
+        mergeMethods?.remember?.(approved.mergeMethod);
+      } catch (error) {
+        backendRegistryLog.warn("could not remember a merge method pick", { threadId: context.threadId, error: String(error) });
+      }
+    }
+    const merge = approved.mergeMethod ? { mergeMethod: approved.mergeMethod } : {};
+    if (!approved.remember || !ruleRepository || !isForgeApprovalRememberGroup(group)) return merge;
     return {
-      rememberedRule: await this.rememberForgeApprovalRule(approved.remember, {
-        group, repository: ruleRepository, identity, context, wording,
-      }),
+      ...merge,
+      notes: {
+        rememberedRule: await this.rememberForgeApprovalRule(approved.remember, {
+          group, repository: ruleRepository, identity, context, wording,
+        }),
+      },
     };
   }
 
@@ -55969,7 +56011,13 @@ function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePr
       : `Allow the agent to rerun failed jobs and their dependents in GitHub Actions run ${args.runId}?`;
     case "create_pull_request": return `Allow the agent to open a ${request} on ${forge}?`;
     case "update_pull_request": return `Allow the agent to edit ${request}${pr} on ${forge}?`;
-    case "merge_pull_request": return `Allow the agent to merge ${request}${pr} on ${forge}?`;
+    case "merge_pull_request": switch (args.method) {
+      // Every surface that shows the request reads which merge it is.
+      case "squash": return `Allow the agent to squash and merge ${request}${pr} on ${forge}?`;
+      case "rebase": return `Allow the agent to rebase and merge ${request}${pr} on ${forge}?`;
+      case "merge": return `Allow the agent to merge ${request}${pr} on ${forge} with a merge commit?`;
+      default: return `Allow the agent to merge ${request}${pr} on ${forge}?`;
+    }
     case "submit_pull_request_review": {
       const verb = args.event === "APPROVE" ? "approve" : args.event === "REQUEST_CHANGES" ? "request changes on" : "review";
       return `Allow the agent to ${verb} ${request}${pr} on ${forge}?`;
@@ -55992,7 +56040,8 @@ function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePr
 function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string; format?: "markdown"; location?: string }> {
   const rows: Array<{ name: string; value: string; format?: "markdown"; location?: string }> = [];
   for (const [name, value] of Object.entries(args)) {
-    if (value === undefined || name === "repository") continue;
+    // The question and the card's merge button both name the method.
+    if (value === undefined || name === "repository" || name === "method") continue;
     if (name === "body") {
       rows.push({ name, value: String(value), format: "markdown" });
     } else if (name === "commitMessage") {

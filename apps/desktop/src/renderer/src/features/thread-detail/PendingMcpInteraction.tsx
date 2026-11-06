@@ -1,8 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ForgeApprovalRememberOption, ForgeApprovalRememberOptionId } from "@pwragent/shared";
+import {
+  THREAD_TODO_MERGE_METHOD_LABELS,
+  type ForgeApprovalRememberOptionId,
+  type ThreadTodoMergeMethod,
+} from "@pwragent/shared";
 import { placeListbox, type ListboxPlacement } from "../../components/Select";
-import { ChevronDownIcon } from "../../icons";
+import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { openExternalUrl } from "../../lib/open-external-url";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { portalViewportTop } from "../../lib/useViewportTooltip";
@@ -14,6 +18,7 @@ import {
   mcpSecretFields,
   redactDisplayValue,
   readMcpApprovalPersistence,
+  readMcpMergeMethods,
   readMcpRememberOptions,
   updateMcpFieldValue,
   type McpApprovalPersistence,
@@ -32,6 +37,7 @@ type PendingMcpInteractionProps = {
     action: "accept" | "decline" | "cancel",
     persist?: McpApprovalPersistence,
     remember?: ForgeApprovalRememberOptionId,
+    mergeMethod?: ThreadTodoMergeMethod,
   ) => Promise<void> | void;
 };
 
@@ -52,8 +58,13 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   // A forge approval can remember the answer as a project rule. Allow then
   // splits: its menu holds Allow once and each rule the card offers.
   const rememberOptions = url ? [] : readMcpRememberOptions(props.state);
+  // A merge names its method, as a to-do merge card does, and its menu
+  // offers the other methods the forge accepts.
+  const mergeMethods = readMcpMergeMethods(props.state);
   const primaryLabel = url
     ? "Open in browser"
+    : mergeMethods
+      ? THREAD_TODO_MERGE_METHOD_LABELS[mergeMethods.selected].button
     : serverApproval
       ? `Allow ${props.state.serverName} for this conversation`
     : sessionApproval
@@ -244,19 +255,50 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
           >
             Decline
           </button>
-          {rememberOptions.length > 0 ? (
+          {mergeMethods ? (
             <PendingMcpAllowSplit
               key={props.state.requestId}
               disabled={Boolean(props.busy) || !canAccept}
               label={primaryLabel}
-              options={rememberOptions}
+              toggleLabel="Merge options"
+              menuLabel="Merge methods"
+              items={mergeMethods.methods.map((method) => ({
+                id: method,
+                label: THREAD_TODO_MERGE_METHOD_LABELS[method].menu,
+                description: THREAD_TODO_MERGE_METHOD_LABELS[method].description,
+                checked: method === mergeMethods.selected,
+                onSelect: () => {
+                  void props.onSubmit(props.state, "accept", undefined, undefined, method);
+                },
+              }))}
               onAllow={submitPrimary}
-              onAllowOnce={() => {
-                void props.onSubmit(props.state, "accept");
-              }}
-              onRemember={(id) => {
-                void props.onSubmit(props.state, "accept", undefined, id);
-              }}
+            />
+          ) : rememberOptions.length > 0 ? (
+            <PendingMcpAllowSplit
+              key={props.state.requestId}
+              disabled={Boolean(props.busy) || !canAccept}
+              label={primaryLabel}
+              toggleLabel="More approval choices"
+              menuLabel="Approval choices"
+              items={[
+                {
+                  id: "once",
+                  label: "Allow once",
+                  description: "Allow this call only. The next one asks again.",
+                  onSelect: () => {
+                    void props.onSubmit(props.state, "accept");
+                  },
+                },
+                ...rememberOptions.map((option) => ({
+                  id: option.id,
+                  label: option.label,
+                  description: option.description,
+                  onSelect: () => {
+                    void props.onSubmit(props.state, "accept", undefined, option.id);
+                  },
+                })),
+              ]}
+              onAllow={submitPrimary}
             />
           ) : (
             <button
@@ -274,20 +316,31 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   );
 }
 
+type PendingMcpSplitItem = {
+  id: string;
+  label: string;
+  description: string;
+  /** The choice the main button already makes, marked in the menu. */
+  checked?: boolean;
+  onSelect: () => void;
+};
+
 type PendingMcpAllowSplitProps = {
   disabled: boolean;
   label: string;
-  options: ForgeApprovalRememberOption[];
+  /** The chevron's name. */
+  toggleLabel: string;
+  menuLabel: string;
+  items: PendingMcpSplitItem[];
   onAllow: () => void;
-  onAllowOnce: () => void;
-  onRemember: (id: ForgeApprovalRememberOptionId) => void;
 };
 
 /**
  * Allow with its alternatives one press away. The label runs the card's own
- * grant; the chevron opens Allow once and the project rules the card offers.
- * The chevron's name leaves out "allow", because Playwright matches a name as
- * a substring and a locator for the Allow button must still find one control.
+ * grant; the chevron opens the other answers: Allow once and the project
+ * rules the card offers, or a merge's other methods. The chevron's name
+ * leaves out the main button's words, because Playwright matches a name as a
+ * substring and a locator for that button must still find one control.
  */
 function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
   const [open, setOpen] = useState(false);
@@ -349,20 +402,7 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
     }));
   }, [showMenu]);
 
-  const items: Array<{ id: string; label: string; description: string; onSelect: () => void }> = [
-    {
-      id: "once",
-      label: "Allow once",
-      description: "Allow this call only. The next one asks again.",
-      onSelect: props.onAllowOnce,
-    },
-    ...props.options.map((option) => ({
-      id: option.id,
-      label: option.label,
-      description: option.description,
-      onSelect: () => props.onRemember(option.id),
-    })),
-  ];
+  const items = props.items;
 
   return (
     <div
@@ -380,7 +420,7 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
       <button
         ref={triggerRef}
         className="button button--primary transcript-mcp__split-toggle"
-        aria-label="More approval choices"
+        aria-label={props.toggleLabel}
         aria-haspopup="menu"
         aria-expanded={showMenu}
         aria-controls={showMenu ? menuId : undefined}
@@ -396,7 +436,7 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
           id={menuId}
           className="transcript-mcp__split-menu"
           role="menu"
-          aria-label="Approval choices"
+          aria-label={props.menuLabel}
           tabIndex={-1}
           style={
             placement === null
@@ -407,8 +447,9 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
           {items.map((item) => (
             <button
               key={item.id}
-              className="transcript-mcp__split-item"
-              role="menuitem"
+              className={`transcript-mcp__split-item${item.checked === undefined ? "" : " transcript-mcp__split-item--radio"}`}
+              role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+              aria-checked={item.checked === undefined ? undefined : item.checked}
               type="button"
               aria-labelledby={`${menuId}-${item.id}-label`}
               aria-describedby={item.description ? `${menuId}-${item.id}-description` : undefined}
@@ -417,6 +458,11 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
                 item.onSelect();
               }}
             >
+              {item.checked ? (
+                <span className="transcript-mcp__split-item-check" aria-hidden="true">
+                  <CheckIcon size={12} />
+                </span>
+              ) : null}
               <span id={`${menuId}-${item.id}-label`} className="transcript-mcp__split-item-label">
                 {item.label}
               </span>
