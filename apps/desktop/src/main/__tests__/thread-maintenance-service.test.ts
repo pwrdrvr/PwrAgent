@@ -11,7 +11,7 @@ import {
   type ThreadMaintenanceRun,
   type ThreadMaintenanceWorkspace,
 } from "@pwragent/shared";
-import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
+import { PEER_SUBTHREADS_UNREADABLE, peerSubthreadKey, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import {
   ThreadMaintenanceService,
   UNREFERENCED_KEEP_PREFIX,
@@ -219,6 +219,48 @@ describe("sub-thread parents", () => {
     expect(withChild.problems).toEqual([]);
     // The sub-thread is archived before its parent, so it keeps its place.
     expect(vi.mocked(deps.archiveFamily).mock.calls.map(([family]) => family[0]!.thread.id)).toEqual(["a", "parent"]);
+  });
+
+  it("counts a parent's sub-threads on peers at scan and at run time", async () => {
+    const peerChildren = (count: number) => new Map([["codex:parent",
+      Array.from({ length: count }, (_, index) => peerSubthreadKey("pwr_peer", "codex", `p${index}`))]]);
+    const family = () => [candidate("parent", { cwd: "/w/parent", daysIdle: 40 }), child("a", "parent")];
+    // One local and two peer sub-threads: archiving them all leaves the 2 peers.
+    const offered = harness(family(), { getPolicy: agePolicy, listPeerSubthreads: vi.fn(async () => peerChildren(2)) });
+    const scan = await offered.service.scan();
+    expect(scan.threads.projects[0]!.idle.map((row) => row.threadId)).toEqual(expect.arrayContaining(["parent", "a"]));
+    // A third peer sub-thread appears after the scan: the run keeps the parent.
+    vi.mocked(offered.deps.listPeerSubthreads!).mockResolvedValue(peerChildren(3));
+    const run = await offered.service.apply({ scanId: scan.scanId,
+      archive: [{ backend: "codex", threadId: "parent" }, { backend: "codex", threadId: "a" }],
+      removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+    expect(run.problems).toEqual([expect.objectContaining({ threadId: "parent", kind: "kept",
+      reason: "Would leave 3 sub-threads without their parent" })]);
+    expect(vi.mocked(offered.deps.archiveFamily).mock.calls.map(([items]) => items[0]!.thread.id)).toEqual(["a"]);
+
+    const kept = harness(family(), { getPolicy: agePolicy, listPeerSubthreads: vi.fn(async () => peerChildren(3)) });
+    const keptScan = await kept.service.scan();
+    expect(keptScan.threads.projects[0]!.idle.map((row) => row.threadId)).toEqual(["a"]);
+    expect(keptScan.threads.projects[0]!.kept["Parent of 3+ sub-threads"]).toBe(1);
+  });
+
+  it("offers no threads when peer sub-threads cannot be read, and keeps a peer parent when the run cannot", async () => {
+    const unreadable = harness([candidate("solo", { cwd: "/w/solo", daysIdle: 40 })], { getPolicy: agePolicy,
+      listPeerSubthreads: vi.fn(async () => { throw new Error("db locked"); }) });
+    const scan = await unreadable.service.scan();
+    expect(scan.threads.skipped).toBe(PEER_SUBTHREADS_UNREADABLE);
+    expect(scan.threads.projects).toEqual([]);
+
+    const listPeerSubthreads = vi.fn(async () => new Map([["codex:parent", [peerSubthreadKey("pwr_peer", "codex", "p0")]]]));
+    const { service, deps } = harness([candidate("parent", { cwd: "/w/parent", daysIdle: 40 }),
+      candidate("other", { cwd: "/w/other", daysIdle: 40 })], { getPolicy: agePolicy, listPeerSubthreads });
+    const ready = await service.scan();
+    listPeerSubthreads.mockRejectedValue(new Error("db locked"));
+    const run = await service.apply({ scanId: ready.scanId,
+      archive: [{ backend: "codex", threadId: "parent" }, { backend: "codex", threadId: "other" }],
+      removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+    expect(run.problems).toEqual([expect.objectContaining({ threadId: "parent", kind: "kept", reason: PEER_SUBTHREADS_UNREADABLE })]);
+    expect(vi.mocked(deps.archiveFamily).mock.calls.map(([items]) => items[0]!.thread.id)).toEqual(["other"]);
   });
 
   it("archives a nested family from the deepest sub-threads up", async () => {

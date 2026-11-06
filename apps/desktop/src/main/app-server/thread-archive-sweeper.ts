@@ -1,4 +1,4 @@
-import type { AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
+import type { AppServerBackendKind, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
   type DesktopCheckoutHibernationPolicy,
@@ -151,11 +151,31 @@ export const MAX_SUBTHREADS_LEFT_BY_ARCHIVE = 2;
 
 export const SUBTHREAD_PARENT_KEEP_REASON = "Parent of 3+ sub-threads";
 
-/** Direct, non-archived local sub-threads per parent identity key. A sub-thread's
- * parent link lives on its own overlay. Peer parents and native sub-agents
- * (which archive with their root) are not counted. */
-export function subthreadChildren(candidates: readonly ThreadArchiveCandidate[]): Map<string, string[]> {
+export const PEER_SUBTHREADS_UNREADABLE = "Sub-threads on other instances could not be read";
+
+const PEER_SUBTHREAD_KEY_PREFIX = "peer/";
+
+/** The key a peer's sub-thread is counted under. It never equals a local
+ * identity key, so an archive here never counts it as archived. */
+export function peerSubthreadKey(instanceId: string, backend: AppServerBackendKind, threadId: string): string {
+  return `${PEER_SUBTHREAD_KEY_PREFIX}${instanceId}/${buildThreadIdentityKey(backend, threadId)}`;
+}
+
+export function isPeerSubthreadKey(key: string): boolean {
+  return key.startsWith(PEER_SUBTHREAD_KEY_PREFIX);
+}
+
+/** Direct, non-archived sub-threads per parent identity key. A local
+ * sub-thread's parent link lives on its own overlay. `peerChildren` adds this
+ * machine's threads' sub-threads on peers (`peerSubthreadChildren`): archive
+ * ungroups those too. Peer parents and native sub-agents (which archive with
+ * their root) are not counted. */
+export function subthreadChildren(
+  candidates: readonly ThreadArchiveCandidate[],
+  peerChildren?: ReadonlyMap<string, readonly string[]>,
+): Map<string, string[]> {
   const children = new Map<string, string[]>();
+  for (const [key, list] of peerChildren ?? []) children.set(key, [...list]);
   for (const { thread, overlay } of candidates) {
     const parentId = overlay?.parentThreadId?.trim();
     if (!parentId || overlay?.parentThreadInstanceId || thread.codexNativeSubAgent) continue;

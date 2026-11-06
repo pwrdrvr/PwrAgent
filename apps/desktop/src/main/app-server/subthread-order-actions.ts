@@ -1,9 +1,10 @@
 import { buildThreadIdentityKey, isRemoteFederationTarget, resolveThreadParentKey } from "@pwragent/shared";
-import type { NavigationThreadSummary, UpdateSubthreadOrderRequest, UpdateSubthreadOrderResponse } from "@pwragent/shared";
+import type { NavigationThreadSummary, RemoteThreadPin, UpdateSubthreadOrderRequest, UpdateSubthreadOrderResponse } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
 import { loadViewerNavigationPins } from "./navigation-viewer-pins";
+import { peerSubthreadKey } from "./thread-archive-sweeper";
 
 /**
  * Whether a peer's thread names one of this machine's threads as its parent.
@@ -25,6 +26,34 @@ export function isPeerChildOfLocalThread(params: {
     && summary.parentThreadInstanceId === params.localInstanceId
     && summary.archivedAt === undefined
     && summary.codexNativeSubAgent === undefined;
+}
+
+/**
+ * Peer threads that are sub-threads of this machine's threads, by parent
+ * identity key, from the pins this machine keeps of them. Child keys carry
+ * the owner, so they never match a local thread and always count as left by
+ * an archive here. The saved summary can trail its peer; that only keeps a
+ * parent that might no longer need keeping.
+ */
+export function peerSubthreadChildren(
+  pins: readonly Pick<RemoteThreadPin, "ref" | "summary" | "revokedAt">[],
+  localInstanceId: string | undefined,
+): Map<string, string[]> {
+  const children = new Map<string, string[]>();
+  if (!localInstanceId) return children;
+  for (const { ref, summary, revokedAt } of pins) {
+    if (!summary || revokedAt !== undefined || !isRemoteFederationTarget(ref.target)) continue;
+    const parentId = summary.parentThreadId;
+    if (!parentId) continue;
+    const parent = { backend: summary.parentThreadBackend ?? summary.source, threadId: parentId };
+    if (!isPeerChildOfLocalThread({ ownerInstanceId: ref.target.instanceId, summary, parent, localInstanceId })) continue;
+    const key = buildThreadIdentityKey(parent.backend, parentId);
+    const child = peerSubthreadKey(ref.target.instanceId, ref.backend, ref.threadId);
+    const list = children.get(key) ?? [];
+    if (!list.includes(child)) list.push(child);
+    children.set(key, list);
+  }
+  return children;
 }
 
 /** What the owner needs to count a peer's threads into this machine's groups. */
