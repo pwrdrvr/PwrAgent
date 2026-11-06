@@ -248,6 +248,77 @@ describe("PrRollupChip detach controls", () => {
   });
 });
 
+describe("PrRollupChip detach focus and menus", () => {
+  it("leaves focus in a confirmation dialog that Delete opened", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const dialogButton = document.createElement("button");
+    document.body.append(dialogButton);
+    try {
+      const view = render(
+        <PrRollupChip
+          prs={[pr(1), pr(2), pr(3)]}
+          repoPrefixedUrls=""
+          threadTitle="Orbit refactor"
+          onOpen={() => undefined}
+          // The Sidebar's warning takes focus as it opens.
+          onDetach={() => dialogButton.focus()}
+        />,
+      );
+      fireEvent.click(view.container.querySelector("[data-pr-rollup]")!);
+      const row = document.querySelectorAll<HTMLElement>(".pr-rollup-popover__row")[0]!;
+      act(() => row.focus());
+      fireEvent.keyDown(row, { key: "Delete" });
+      act(() => {
+        frames.splice(0).forEach((frame) => frame(0));
+      });
+      expect(dialogButton).toHaveFocus();
+    } finally {
+      dialogButton.remove();
+    }
+  });
+
+  it("opens the PR menu from a right-click on the row's chip", () => {
+    const onOpenContextMenu = vi.fn();
+    const prs = [pr(1), pr(2)];
+    const view = render(
+      <PrRollupChip
+        prs={prs}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        onOpen={() => undefined}
+        onOpenContextMenu={onOpenContextMenu}
+      />,
+    );
+    fireEvent.click(view.container.querySelector("[data-pr-rollup]")!);
+    const chip = document.querySelectorAll<HTMLElement>(".pr-rollup-popover__chip")[1]!;
+    fireEvent.contextMenu(chip.querySelector(".pr-chip__label")!, { clientX: 5, clientY: 6 });
+    expect(onOpenContextMenu).toHaveBeenCalledWith(prs[1], expect.objectContaining({ x: 5, y: 6 }));
+  });
+
+  it("hands focus to the chip before Detach all asks for confirmation", () => {
+    let focusedAtDetach: Element | null = null;
+    const view = render(
+      <PrRollupChip
+        prs={[pr(1), pr(2)]}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        onOpen={() => undefined}
+        onDetachAll={() => {
+          focusedAtDetach = document.activeElement;
+        }}
+      />,
+    );
+    const trigger = view.container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+    fireEvent.click(trigger);
+    fireEvent.click(document.querySelector(".pr-rollup-popover__detach-all")!);
+    expect(focusedAtDetach).toBe(trigger);
+  });
+});
+
 /**
  * The rows' chips carry the ✕, so they sit on the side of the list nearest
  * the chip that opened it: a short move from where the pointer came in.

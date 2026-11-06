@@ -2399,6 +2399,13 @@ export function Sidebar(props: SidebarProps) {
     if (!props.onDetachPullRequest || prs.length === 0) {
       return;
     }
+    // From a chip or the PR list, not the menu: the dialog returns focus to
+    // what holds it now, never to an older menu's opener.
+    if (!contextMenu) {
+      const active = document.activeElement;
+      contextMenuOpenerRef.current =
+        active instanceof HTMLElement && active !== document.body ? active : null;
+    }
     setContextMenu(undefined);
     if (shouldShowDetachPullRequestWarning()) {
       setPendingDetachPullRequest({ thread, prs });

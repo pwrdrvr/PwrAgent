@@ -304,6 +304,11 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     props.onDetach(pr);
     if (refocus) {
       window.requestAnimationFrame(() => {
+        // A confirmation dialog took focus: leave it there.
+        const active = document.activeElement;
+        if (active && active !== document.body && !popoverRef.current?.contains(active)) {
+          return;
+        }
         const rows = popoverRef.current?.querySelectorAll<HTMLButtonElement>(
           ".pr-rollup-popover__row",
         );
@@ -476,10 +481,21 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                   props.onOpen(pr.url);
                 };
                 return (
-                  // The row's card follows the pointer onto the chip too.
+                  // The card and the PR menu cover the row's chip too.
                   <li
                     key={pr.url}
                     onMouseEnter={(event) => showRowCard(pr, event.currentTarget, false)}
+                    onContextMenu={(event) => {
+                      if (!props.onOpenContextMenu) return;
+                      event.preventDefault();
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      dismissImmediately();
+                      props.onOpenContextMenu(pr, {
+                        x: event.clientX,
+                        y: event.clientY,
+                        anchorTop: rect.top,
+                      });
+                    }}
                   >
                     <button
                       type="button"
@@ -493,17 +509,6 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                       onFocus={(event) => showRowCard(pr, event.currentTarget, true)}
                       onBlur={hideRowCard}
                       onClick={openRow}
-                      onContextMenu={(event) => {
-                        if (!props.onOpenContextMenu) return;
-                        event.preventDefault();
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        dismissImmediately();
-                        props.onOpenContextMenu(pr, {
-                          x: event.clientX,
-                          y: event.clientY,
-                          anchorTop: rect.top,
-                        });
-                      }}
                       aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}
                       onKeyDown={(event) => handleRowKeyDown(event, pr, index)}
                     >
@@ -570,6 +575,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                   }}
                   onClick={() => {
                     const prs = rollup.ordered;
+                    // The chip outlives the list, so the confirmation returns
+                    // focus there rather than to an unmounted button.
+                    triggerRef.current?.focus();
                     dismissImmediately();
                     props.onDetachAll?.(prs);
                   }}
