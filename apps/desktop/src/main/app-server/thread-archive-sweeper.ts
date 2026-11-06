@@ -8,6 +8,7 @@ import {
   type DesktopThreadArchiveSweepStatus,
   buildThreadIdentityKey,
   isCodexChatsDirectory,
+  isToolManagedWorktreePath,
 } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
@@ -125,6 +126,22 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
     ...(overlay?.worktreeSnapshots ?? []).map((snapshot) => snapshot.restoredAt ?? 0));
 }
 
+export const CLAUDE_CHECKOUT_KEEP_REASON = "Checkout not created by PwrAgent";
+
+/** A worktree under PwrAgent's own root (`~/.pwragent/…/worktrees/<id>/<name>`). */
+export function isPwrAgentWorktreePath(value: string | undefined): boolean {
+  return isToolManagedWorktreePath(value) && /[\\/]\.pwrag(?:ent|nt)[\\/]/.test(value ?? "");
+}
+
+/** The Claude thread works in a PwrAgent worktree, and no directory it uses
+ * is marked as someone else's checkout. */
+export function isPwrAgentClaudeCheckout({ thread, overlay }: Pick<ThreadArchiveCandidate, "thread" | "overlay">): boolean {
+  const directories = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []];
+  return isPwrAgentWorktreePath(thread.projectKey)
+    && directories.every((directory) => directory.worktreeOwnership !== "external"
+      && (!directory.worktreePath || isPwrAgentWorktreePath(directory.worktreePath)));
+}
+
 export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent, activePrWatch, unreadable }: ThreadArchiveCandidate): string | undefined {
   if (unreadable) return "Thread state unreadable";
   if (thread.isPinned || overlay?.pinnedRank !== undefined) return "Pinned thread";
@@ -135,6 +152,9 @@ export function archiveCandidateProtectionReason({ thread, overlay, activeSubAge
   if (activePrWatch) return "Watching a PR";
   if (overlay?.scheduledStart?.state === "scheduled") return "Scheduled work";
   if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";
+  // Claude threads are cleaned up only in a worktree PwrAgent created. A
+  // Claude session can also run in a checkout the operator or Claude Code made.
+  if (thread.source === "claude" && !isPwrAgentClaudeCheckout({ thread, overlay })) return CLAUDE_CHECKOUT_KEEP_REASON;
   // The Codex app owns its chat folders' threads; housekeeping leaves them alone.
   if ([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []].some(isCodexChatsDirectory)) return "Codex chat folder";
   if (activeSubAgent) return "Active subagent";

@@ -16717,7 +16717,14 @@ export class DesktopBackendRegistry {
   /** Every non-archived thread as a housekeeping candidate. Complete
    * provider reads without navigation projection or display persistence, so
    * an idle sweep makes no SQLite commits. */
-  async listAutoArchiveCandidates(): Promise<ThreadArchiveCandidate[]> {
+  /** Thread maintenance reviews every provider PwrAgent runs, including
+   * Claude threads from PwrAgent's own session store. The hourly sweep keeps
+   * its narrower list until Claude auto-archive is a deliberate setting. */
+  async listThreadMaintenanceCandidates(): Promise<ThreadArchiveCandidate[]> {
+    return await this.listAutoArchiveCandidates({ includeClaude: true });
+  }
+
+  async listAutoArchiveCandidates(options: { includeClaude?: boolean } = {}): Promise<ThreadArchiveCandidate[]> {
     await this.subAgentStartupReconciliation;
     if (this.closed || this.isBootstrapModeFn()) return [];
     // Use complete provider reads without navigation projection or display
@@ -16729,6 +16736,16 @@ export class DesktopBackendRegistry {
       this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
     ])).flat();
     const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
+    if (options.includeClaude) {
+      // Only sessions PwrAgent started: its store, never ~/.claude.
+      try {
+        threads.push(...await this.claudeBackend.listThreads({ archived: false }));
+      } catch (error) {
+        backendRegistryLog.warn("auto-archive Claude thread read failed; Claude threads are kept", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     // One read for every thread a PR watch will wake.
     const watchedThreadKeys = new Set(
       (await this.overlayStore.listAllActivePrStatusWatches()).map((watch) =>
@@ -17081,10 +17098,12 @@ export class DesktopBackendRegistry {
           const session = this.acpBackend.getSession(backend, threadId);
           return session ? this.acpBackend.sessionToThreadSummary(session) : undefined;
         })()
-      : await this.withCodexThreadClient(threadId, async (client) => {
-          if (!client.readThreadSummary) throw new Error("Thread metadata reads are unavailable.");
-          return await client.readThreadSummary(threadId);
-        });
+      : backend === "claude"
+        ? await this.claudeBackend.readThreadSummary(threadId)
+        : await this.withCodexThreadClient(threadId, async (client) => {
+            if (!client.readThreadSummary) throw new Error("Thread metadata reads are unavailable.");
+            return await client.readThreadSummary(threadId);
+          });
     if (!thread) throw new Error(`Thread metadata was not found: ${threadId}`);
     return {
       thread: {

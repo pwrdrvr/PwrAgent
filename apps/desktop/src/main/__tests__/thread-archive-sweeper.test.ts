@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import {
   archiveCandidateProtectionReason,
+  CLAUDE_CHECKOUT_KEEP_REASON,
   keepSubthreadParents,
   subthreadChildren,
   subthreadsFirst,
@@ -566,6 +567,46 @@ describe("sub-thread parents", () => {
           expect((children.get(key) ?? []).filter((child) => !selected.has(child)).length).toBeLessThanOrEqual(2);
         }
         for (const key of kept) expect(selected.has(key)).toBe(false);
+      },
+    ));
+  });
+
+  it("cleans up a Claude thread only in a worktree PwrAgent created", () => {
+    const claude = (projectKey: string, directory: Record<string, unknown> = {}): ThreadArchiveCandidate => ({
+      thread: { ...candidate("c").thread, source: "claude", projectKey,
+        linkedDirectories: [{ id: "d", label: "repo", path: "/src/repo", kind: "local", ...directory }] },
+    });
+    const managed = "/Users/me/.pwragent/worktrees/k3m9/repo";
+    expect(archiveCandidateProtectionReason(claude(managed, { worktreePath: managed }))).toBeUndefined();
+    expect(archiveCandidateProtectionReason(claude("/Users/me/.pwragent/profiles/work/worktrees/k3m9/repo"))).toBeUndefined();
+    for (const independent of [
+      "/src/repo",
+      "/src/repo/.claude/worktrees/fix-login",
+      "/Users/me/.claude/worktrees/fix-login",
+      "/Users/me/.codex/worktrees/a1b2/repo",
+    ]) {
+      expect(archiveCandidateProtectionReason(claude(independent))).toBe(CLAUDE_CHECKOUT_KEEP_REASON);
+    }
+    expect(archiveCandidateProtectionReason(claude(managed, { worktreePath: "/src/repo/.claude/worktrees/x" })))
+      .toBe(CLAUDE_CHECKOUT_KEEP_REASON);
+    expect(archiveCandidateProtectionReason(claude(managed, { worktreeOwnership: "external" })))
+      .toBe(CLAUDE_CHECKOUT_KEEP_REASON);
+    // Other providers keep their own rules.
+    expect(archiveCandidateProtectionReason({ thread: { ...candidate("x").thread, projectKey: "/src/repo" } })).toBeUndefined();
+  });
+
+  it("never offers a Claude thread outside PwrAgent's worktree root", () => {
+    fc.assert(fc.property(
+      fc.array(fc.constantFrom(".pwragent", ".pwragnt", ".codex", ".claude", "src", "worktrees", "profiles", "work", "k3m9", "repo"),
+        { minLength: 1, maxLength: 7 }),
+      (segments) => {
+        const projectKey = `/Users/me/${segments.join("/")}`;
+        const reason = archiveCandidateProtectionReason({
+          thread: { ...candidate("c").thread, source: "claude", projectKey, linkedDirectories: [] },
+        });
+        if (reason === undefined) {
+          expect(projectKey).toMatch(/\/\.pwrag(?:ent|nt)\/(?:profiles\/[^/]+\/)?worktrees\/[^/]+\/[^/]+/);
+        }
       },
     ));
   });

@@ -745,15 +745,30 @@ export class ClaudeBackend {
 
   async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {
     const filter = params.filter?.toLowerCase();
-    // Metadata from builds that could not move a Claude thread still carries
-    // their refusal; this build can, so drop it. The working directory is the
-    // thread's `projectKey`, as Codex reports it: it names which linked
-    // directory is the thread's home once `@`-referenced ones join it.
-    return (await this.store.list()).map(({ cwd, thread: { workspaceHandoff: _refusal, ...thread } }) => ({
+    return (await this.store.list()).map((session) => this.threadSummary(session))
+      .filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
+        && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
+  }
+
+  /** One stored thread, as listThreads reports it, or undefined when its
+   * metadata is gone or unreadable. */
+  async readThreadSummary(threadId: string): Promise<AppServerThreadSummary | undefined> {
+    try {
+      return this.threadSummary(await this.store.read(threadId));
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Metadata from builds that could not move a Claude thread still carries
+  // their refusal; this build can, so drop it. The working directory is the
+  // thread's `projectKey`, as Codex reports it: it names which linked
+  // directory is the thread's home once `@`-referenced ones join it.
+  private threadSummary({ cwd, thread: { workspaceHandoff: _refusal, ...thread } }: ClaudeSession): AppServerThreadSummary {
+    return {
       ...thread, projectKey: cwd,
       threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
-    })).filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
-      && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
+    };
   }
 
   /**
