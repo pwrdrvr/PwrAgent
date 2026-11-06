@@ -385,7 +385,10 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       <ThreadTodoCardMeta todo={todo} now={props.now} progress={progress} />
       <div className="thread-todo-card__body">
         {review ? (
-          <ReviewAutoFixLine run={autoFix.status?.runs[review.id]} openCount={openItems.length} />
+          <ReviewAutoFixLine
+            run={autoFix.status?.runs[review.id]}
+            openCount={review.status === "open" ? openItems.length : 0}
+          />
         ) : null}
         {review && items.length === 0 ? (
           <p className="review-todo__summary">

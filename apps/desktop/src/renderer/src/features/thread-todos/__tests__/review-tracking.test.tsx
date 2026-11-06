@@ -455,6 +455,24 @@ describe("review Auto-fix status", () => {
     await screen.findByText("Auto-fix armed");
   });
 
+  it("does not let a read from before a change answer for it", async () => {
+    const base = installApi(review);
+    let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+    vi.mocked(base.onThreadTodosChanged!).mockImplementation((listener) => { changed = listener; return () => {}; });
+    const api = installAutoFix(base, { armedTurnIds: [], runs: {} });
+    let answerFirst: (value: { status: ReviewAutoFixStatus }) => void = () => {};
+    vi.mocked(api.readReviewAutoFix)
+      .mockImplementationOnce(() => new Promise((resolve) => { answerFirst = resolve; }))
+      .mockResolvedValueOnce({ status: { armedTurnIds: [], runs: {} } });
+    render(<TranscriptReview entry={runningEntry} parentThreadId="owner" />);
+    await waitFor(() => expect(api.readReviewAutoFix).toHaveBeenCalledTimes(1));
+    // Disarmed elsewhere while the first read is still out.
+    act(() => changed({ backend: "codex", threadId: "owner", at: 2 }));
+    await waitFor(() => expect(api.readReviewAutoFix).toHaveBeenCalledTimes(2));
+    await act(async () => answerFirst({ status: { armedTurnIds: ["turn-review"], runs: {} } }));
+    expect(screen.queryByText("Auto-fix armed")).not.toBeInTheDocument();
+  });
+
   it.each<[string, ReviewAutoFixRun, string | undefined]>([
     ["running", { phase: "running", at: 1 }, "Auto-fixing · started when the review finished"],
     ["queued", { phase: "queued", at: 1 }, "Auto-fix queued · sends when the current turn ends"],
@@ -469,6 +487,16 @@ describe("review Auto-fix status", () => {
   });
 
   it("shows no Auto-fix line when the run left nothing open or the owner does not answer", async () => {
+    const dismissed: ThreadReview = { ...review, status: "dismissed" };
+    const dismissedApi = installAutoFix(installApi(dismissed, dismissed),
+      { armedTurnIds: [], runs: { review: { phase: "finished", at: 1 } } });
+    const dismissedCard = render(<ThreadTodoCard todo={threadReviewTodo(dismissed)} running={false}
+      onRun={vi.fn()} onStartReview={vi.fn()} onResolve={vi.fn()} onDoHere={vi.fn()} onSetItemChecked={vi.fn()} />);
+    await waitFor(() => expect(dismissedApi.readReviewAutoFix).toHaveBeenCalled());
+    await act(async () => {});
+    // A dismissed review has nothing left to settle, whatever its findings say.
+    expect(document.querySelector(".review-todo__auto")).toBeNull();
+    dismissedCard.unmount();
     const settled: ThreadReview = { ...review, items: [{ ...review.items[0]!, status: "addressed" }] };
     const props = { running: false, onRun: vi.fn(), onStartReview: vi.fn(), onResolve: vi.fn(), onDoHere: vi.fn(), onSetItemChecked: vi.fn() };
     let api = installAutoFix(installApi(settled, settled), { armedTurnIds: [], runs: { review: { phase: "finished", at: 1 } } });

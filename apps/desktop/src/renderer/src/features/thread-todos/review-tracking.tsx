@@ -13,46 +13,52 @@ import { PendingSpinner } from "../../components/PendingSpinner";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 
-const pendingReads = new WeakMap<DesktopApi, Map<string, Promise<ThreadReview[]>>>();
+const pendingReads = new WeakMap<DesktopApi, Map<string, Promise<unknown>>>();
 
-/** The transcript and its To-do card share one read when the same event arrives. */
-function readReviews(api: DesktopApi, identity: ThreadReviewIdentity): Promise<ThreadReview[]> {
+/**
+ * One read per thread at a time, shared by every surface that asks, such as
+ * the transcript and its To-do card. `round` names what prompted the read: a
+ * change event's time keeps a read that started before the change from
+ * answering for it.
+ */
+function sharedRead<T>(
+  api: DesktopApi,
+  kind: string,
+  identity: ThreadReviewIdentity,
+  read: () => Promise<T>,
+  round?: number,
+): Promise<T> {
   let pending = pendingReads.get(api);
   if (!pending) {
     pending = new Map();
     pendingReads.set(api, pending);
   }
-  const key = JSON.stringify([identity.federationTarget?.instanceId, identity.backend, identity.threadId]);
+  const key = JSON.stringify([kind, identity.federationTarget?.instanceId, identity.backend, identity.threadId, round]);
   const current = pending.get(key);
-  if (current) return current;
-  const request = api.listThreadReviews!({ ...identity, status: "all" })
-    .then((response) => response.reviews)
-    .finally(() => pending.delete(key));
+  if (current) return current as Promise<T>;
+  const request = read().finally(() => pending.delete(key));
   pending.set(key, request);
   return request;
 }
 
-const pendingAutoFixReads = new WeakMap<DesktopApi, Map<string, Promise<ReviewAutoFixStatus | undefined>>>();
+/** The transcript and its To-do card share one read when the same event arrives. */
+function readReviews(api: DesktopApi, identity: ThreadReviewIdentity): Promise<ThreadReview[]> {
+  return sharedRead(api, "reviews", identity, () => api.listThreadReviews!({ ...identity, status: "all" })
+    .then((response) => response.reviews));
+}
 
 /**
- * The thread's Auto-fix state from its owner, shared like `readReviews`. An
- * owner that predates it does not answer, which reads as no state at all.
+ * The thread's Auto-fix state from its owner. An owner that predates it does
+ * not answer, which reads as no state at all.
  */
-function readAutoFix(api: DesktopApi, identity: ThreadReviewIdentity): Promise<ReviewAutoFixStatus | undefined> {
-  let pending = pendingAutoFixReads.get(api);
-  if (!pending) {
-    pending = new Map();
-    pendingAutoFixReads.set(api, pending);
-  }
-  const key = JSON.stringify([identity.federationTarget?.instanceId, identity.backend, identity.threadId]);
-  const current = pending.get(key);
-  if (current) return current;
-  const request = api.readReviewAutoFix!(identity)
+function readAutoFix(
+  api: DesktopApi,
+  identity: ThreadReviewIdentity,
+  round: number | undefined,
+): Promise<ReviewAutoFixStatus | undefined> {
+  return sharedRead(api, "auto-fix", identity, () => api.readReviewAutoFix!(identity)
     .then((response) => response.status)
-    .catch(() => undefined)
-    .finally(() => pending.delete(key));
-  pending.set(key, request);
-  return request;
+    .catch(() => undefined), round);
 }
 
 /**
@@ -74,15 +80,18 @@ export function useReviewAutoFix(identity: ThreadReviewIdentity | undefined) {
     if (!backend || !threadId || !api?.readReviewAutoFix) return;
     let cancelled = false;
     const target = instanceId ? { federationTarget: { scope: "remote" as const, instanceId } } : {};
-    const reload = () => {
-      void readAutoFix(api, { backend, threadId, ...target }).then((next) => {
-        if (!cancelled) setStatus(next);
+    let latest = 0;
+    const reload = (round?: number) => {
+      const read = ++latest;
+      void readAutoFix(api, { backend, threadId, ...target }, round).then((next) => {
+        // An earlier read can answer after a later one; keep the later one.
+        if (!cancelled && read === latest) setStatus(next);
       });
     };
     reload();
     const unsubscribe = api.onThreadTodosChanged?.((event) => {
       if (event.federationTarget?.instanceId !== instanceId && event.backend !== undefined) return;
-      if (event.backend === undefined || (event.backend === backend && event.threadId === threadId)) reload();
+      if (event.backend === undefined || (event.backend === backend && event.threadId === threadId)) reload(event.at);
     });
     return () => {
       cancelled = true;
