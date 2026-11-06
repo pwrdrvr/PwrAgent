@@ -1,6 +1,7 @@
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { assertNoMergeHolds } from "../thread-merge-holds/thread-merge-holds";
 import type {
+  AgentEvent,
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
   AppServerThreadReviewEntry,
@@ -55,7 +56,12 @@ import {
 } from "../thread-reviews/thread-review-runtime";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 import { ThreadReviewError } from "../thread-reviews/thread-review-service";
-import { getReviewAutoFixArming, reviewAutoFixMessage } from "../thread-reviews/review-auto-fix";
+import {
+  getReviewAutoFixArming,
+  getReviewAutoFixRuns,
+  reviewAutoFixMessage,
+  setReviewAutoFixListener,
+} from "../thread-reviews/review-auto-fix";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
 
@@ -265,6 +271,10 @@ export function installThreadTodoRuntime(params: {
   // own agent as soon as it lands. Behind a running turn it queues, never
   // steers, so it cannot interrupt work the operator started.
   const reviewAutoFix = getReviewAutoFixArming();
+  const reviewAutoFixRuns = getReviewAutoFixRuns();
+  // Viewers read the armed reviews and each run from the owner; a change
+  // reaches them on the to-do change event they already reload on.
+  setReviewAutoFixListener((thread) => params.broadcast({ ...thread, at: Date.now() }));
   const sendReviewAutoFix = (review: ThreadReview): void => {
     const message = reviewAutoFixMessage(review);
     if (!message) return;
@@ -275,10 +285,10 @@ export function installThreadTodoRuntime(params: {
       origin: "automation",
       messageOrigin: message.messageOrigin,
     }).catch((error: unknown) => {
-      threadTodoLog.warn("could not send a review's auto-fix", {
-        error: error instanceof Error ? error.message : String(error),
-        threadId: review.threadId,
-      });
+      const reason = error instanceof Error ? error.message : String(error);
+      threadTodoLog.warn("could not send a review's auto-fix", { error: reason, threadId: review.threadId });
+      // The arm is spent, so the card says so and offers Auto-fix by hand.
+      reviewAutoFixRuns.record(review, review.id, { kind: "sendFailed", reason, at: Date.now() });
     });
   };
   readDefaultMergeMethod = params.readDefaultMergeMethod;
@@ -324,6 +334,13 @@ export function installThreadTodoRuntime(params: {
     if (event.notification.method === "turn/completed") {
       const { threadId, turnId } = event.notification.params;
       if (typeof turnId === "string") reviewAutoFix.turnEnded({ backend: event.backend, threadId }, turnId);
+    }
+    const autoFixQueue = reviewAutoFixQueueEvent(event);
+    if (autoFixQueue) {
+      reviewAutoFixRuns.record(autoFixQueue.thread, autoFixQueue.reviewId, {
+        kind: "queue", status: autoFixQueue.status, at: Date.now(),
+        ...(autoFixQueue.errorMessage ? { errorMessage: autoFixQueue.errorMessage } : {}),
+      });
     }
     const reported = reportedThreadReviewOutcomes(event);
     if (reported) {
@@ -885,4 +902,26 @@ function optional<K extends string, V>(
   value: V | undefined,
 ): Partial<Record<K, V>> {
   return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
+}
+
+/** A queue step of a review's Auto-fix turn, found by its message origin. */
+function reviewAutoFixQueueEvent(event: AgentEvent): {
+  thread: { backend: AppServerBackendKind; threadId: string };
+  reviewId: string;
+  status: string;
+  errorMessage?: string;
+} | undefined {
+  if (event.notification.method !== "thread/turnQueue/updated") return undefined;
+  const params = event.notification.params as {
+    threadId?: unknown; status?: unknown; errorMessage?: unknown;
+    messageOrigin?: AppServerThreadMessageOrigin;
+  };
+  const reviewId = params.messageOrigin?.reviewAutoFix?.reviewId;
+  if (!reviewId || typeof params.threadId !== "string" || typeof params.status !== "string") return undefined;
+  return {
+    thread: { backend: event.backend, threadId: params.threadId },
+    reviewId,
+    status: params.status,
+    ...(typeof params.errorMessage === "string" ? { errorMessage: params.errorMessage } : {}),
+  };
 }

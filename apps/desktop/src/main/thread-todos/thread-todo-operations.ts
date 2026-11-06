@@ -11,7 +11,9 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodoFeedSnapshot,
+  DisarmReviewAutoFixRequest,
   ListThreadReviewsRequest,
+  ReadReviewAutoFixRequest,
   UpdateThreadReviewRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
@@ -20,6 +22,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  isAppServerBackendKind,
   parseThreadTodoItemTexts,
   parseThreadTodoMessageTarget,
   THREAD_TODO_TITLE_MAX_LENGTH,
@@ -38,6 +41,7 @@ import {
 } from "../thread-todos/thread-todo-runtime";
 import { listThreadTodoDispatchEnvironments } from "../thread-todos/thread-todo-dispatch";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
+import { getReviewAutoFixArming, readReviewAutoFixStatus } from "../thread-reviews/review-auto-fix";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { listThreadTodosForAvailableOwners } from "../thread-todos/thread-todo-owners";
@@ -101,11 +105,30 @@ function reviewResolveRequest(
   return { id, status, ...(note ? { note } : {}) };
 }
 
+/** The owner-local thread an Auto-fix request names; peers cross with plain data. */
+function reviewAutoFixThread(request: { backend?: unknown; threadId?: unknown }) {
+  if (typeof request.threadId !== "string" || !request.threadId
+    || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend)) {
+    throw new Error("A thread's backend and id are required.");
+  }
+  return { backend: request.backend, threadId: request.threadId };
+}
+
 export const localThreadTodoOperations = {
   listReviews: (request: ListThreadReviewsRequest = {}) => ({ reviews: getThreadReviewService().list(request) }),
   updateReview: (request: UpdateThreadReviewRequest) => ({ review: getThreadReviewService().update({
     ...request, note: request.note ?? operatorReviewNote(request),
   }, "user") }),
+  /** The thread's armed reviews and each landed review's Auto-fix run. */
+  readReviewAutoFix: (request: ReadReviewAutoFixRequest) => ({
+    status: readReviewAutoFixStatus(reviewAutoFixThread(request)),
+  }),
+  /** The operator's Don't auto-fix on one running review. */
+  disarmReviewAutoFix: (request: DisarmReviewAutoFixRequest) => {
+    const thread = reviewAutoFixThread(request);
+    if (typeof request.turnId !== "string" || !request.turnId) throw new Error("A review turn id is required.");
+    return { disarmed: getReviewAutoFixArming().disarm(thread, request.turnId), status: readReviewAutoFixStatus(thread) };
+  },
   listTodos: async (request: ListThreadTodosRequest = {}): Promise<ListThreadTodosResponse> => {
     const todos = getThreadTodoService();
     return {

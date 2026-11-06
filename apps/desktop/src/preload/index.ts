@@ -52,6 +52,9 @@ import type {
   ThreadReview,
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
+  ReadReviewAutoFixRequest,
+  DisarmReviewAutoFixRequest,
+  ReviewAutoFixStatus,
   DismissOperatorQuestionRequest,
   OperatorQuestionThreadRequest,
   ListOperatorRequestsResponse,
@@ -718,6 +721,8 @@ import {
   THREAD_TODOS_SNAPSHOT_CHANNEL,
   THREAD_REVIEWS_LIST_CHANNEL,
   THREAD_REVIEWS_UPDATE_CHANNEL,
+  THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL,
+  THREAD_REVIEWS_DISARM_AUTO_FIX_CHANNEL,
   THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
@@ -2480,6 +2485,12 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(THREAD_REVIEWS_LIST_CHANNEL, request ?? {}),
   updateThreadReview: async (request: UpdateThreadReviewRequest): Promise<{ review: ThreadReview }> =>
     await ipcRenderer.invoke(THREAD_REVIEWS_UPDATE_CHANNEL, request),
+  readReviewAutoFix: async (request: ReadReviewAutoFixRequest): Promise<{ status: ReviewAutoFixStatus }> =>
+    await ipcRenderer.invoke(THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL, request),
+  disarmReviewAutoFix: async (
+    request: DisarmReviewAutoFixRequest,
+  ): Promise<{ disarmed: boolean; status: ReviewAutoFixStatus }> =>
+    await ipcRenderer.invoke(THREAD_REVIEWS_DISARM_AUTO_FIX_CHANNEL, request),
   resolveThreadTodo: async (
     request: ResolveThreadTodoRequest,
   ): Promise<ThreadTodoMutationResponse> =>

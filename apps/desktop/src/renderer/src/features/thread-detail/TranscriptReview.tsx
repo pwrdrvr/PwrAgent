@@ -33,7 +33,9 @@ import {
   ReviewFindingActions,
   ReviewFindingResolution,
   ReviewFindingState,
+  ReviewAutoFixArmedRow,
   ReviewStatusRow,
+  useReviewAutoFix,
   useTrackedReview,
 } from "../thread-todos/review-tracking";
 
@@ -179,15 +181,17 @@ function ReviewVerdictBadge(props: {
 }
 
 export function TranscriptReview(props: TranscriptReviewProps) {
-  const tracking = useTrackedReview(
-    props.parentThreadId
-      ? { backend: props.parentThreadBackend ?? "codex", threadId: props.parentThreadId,
-          ...(props.fileViewerContext?.federationTarget?.scope === "remote"
-            ? { federationTarget: props.fileViewerContext.federationTarget } : {}),
-        }
-      : undefined,
-    { sourceKey: props.entry.id },
-  );
+  const reviewThread = props.parentThreadId
+    ? { backend: props.parentThreadBackend ?? "codex", threadId: props.parentThreadId,
+        ...(props.fileViewerContext?.federationTarget?.scope === "remote"
+          ? { federationTarget: props.fileViewerContext.federationTarget } : {}),
+      }
+    : undefined;
+  const tracking = useTrackedReview(reviewThread, { sourceKey: props.entry.id });
+  // A review still running: the owner says whether it will auto-fix.
+  const runningTurnId = props.entry.turn?.status === "in_progress" ? props.entry.turn.id : undefined;
+  const autoFix = useReviewAutoFix(runningTurnId ? reviewThread : undefined);
+  const armed = runningTurnId !== undefined && autoFix.status?.armedTurnIds.includes(runningTurnId) === true;
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -368,6 +372,13 @@ export function TranscriptReview(props: TranscriptReviewProps) {
 
       {tracking.review ? (
         <ReviewStatusRow review={tracking.review} busy={tracking.busy} update={tracking.update} />
+      ) : null}
+      {armed ? (
+        <ReviewAutoFixArmedRow
+          busy={autoFix.busy}
+          error={autoFix.error}
+          onDisarm={() => void autoFix.disarm(runningTurnId)}
+        />
       ) : null}
       {tracking.error ? (
         <p className="review-status__error" role="alert">{tracking.error}</p>

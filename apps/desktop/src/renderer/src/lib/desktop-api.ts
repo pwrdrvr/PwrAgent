@@ -26,6 +26,9 @@ import type {
   ThreadReview,
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
+  ReadReviewAutoFixRequest,
+  DisarmReviewAutoFixRequest,
+  ReviewAutoFixStatus,
   DismissOperatorQuestionRequest,
   OperatorQuestionThreadRequest,
   ListOperatorRequestsResponse,
@@ -1171,6 +1174,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<ListThreadTodosResponse>;
   listThreadReviews?: (request?: ListThreadReviewsRequest) => Promise<{ reviews: ThreadReview[] }>;
   updateThreadReview?: (request: UpdateThreadReviewRequest) => Promise<{ review: ThreadReview }>;
+  readReviewAutoFix?: (request: ReadReviewAutoFixRequest) => Promise<{ status: ReviewAutoFixStatus }>;
+  disarmReviewAutoFix?: (
+    request: DisarmReviewAutoFixRequest,
+  ) => Promise<{ disarmed: boolean; status: ReviewAutoFixStatus }>;
   resolveThreadTodo?: (
     request: ResolveThreadTodoRequest,
   ) => Promise<ThreadTodoMutationResponse>;

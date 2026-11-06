@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  ReviewAutoFixRun,
+  ReviewAutoFixStatus,
   ThreadReview,
   ThreadReviewIdentity,
   ThreadReviewItem,
   ThreadReviewResolution,
   UpdateThreadReviewRequest,
 } from "@pwragent/shared";
-import { BanIcon, CheckIcon, TodoIcon } from "../../icons";
+import { BanIcon, CheckIcon, ClockIcon, TodoIcon } from "../../icons";
+import { PendingSpinner } from "../../components/PendingSpinner";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 
@@ -27,6 +30,81 @@ function readReviews(api: DesktopApi, identity: ThreadReviewIdentity): Promise<T
     .finally(() => pending.delete(key));
   pending.set(key, request);
   return request;
+}
+
+const pendingAutoFixReads = new WeakMap<DesktopApi, Map<string, Promise<ReviewAutoFixStatus | undefined>>>();
+
+/**
+ * The thread's Auto-fix state from its owner, shared like `readReviews`. An
+ * owner that predates it does not answer, which reads as no state at all.
+ */
+function readAutoFix(api: DesktopApi, identity: ThreadReviewIdentity): Promise<ReviewAutoFixStatus | undefined> {
+  let pending = pendingAutoFixReads.get(api);
+  if (!pending) {
+    pending = new Map();
+    pendingAutoFixReads.set(api, pending);
+  }
+  const key = JSON.stringify([identity.federationTarget?.instanceId, identity.backend, identity.threadId]);
+  const current = pending.get(key);
+  if (current) return current;
+  const request = api.readReviewAutoFix!(identity)
+    .then((response) => response.status)
+    .catch(() => undefined)
+    .finally(() => pending.delete(key));
+  pending.set(key, request);
+  return request;
+}
+
+/**
+ * A thread's Auto-fix state, read from the thread's owner and re-read on its
+ * to-do change event: which running reviews are armed, and what each landed
+ * review's Auto-fix turn is doing. `disarm` is Don't auto-fix.
+ */
+export function useReviewAutoFix(identity: ThreadReviewIdentity | undefined) {
+  const api = useDesktopApi();
+  const instanceId = identity?.federationTarget?.instanceId ?? readRendererFederationTarget()?.instanceId;
+  const backend = identity?.backend;
+  const threadId = identity?.threadId;
+  const [status, setStatus] = useState<ReviewAutoFixStatus>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    setStatus(undefined);
+    setError(undefined);
+    if (!backend || !threadId || !api?.readReviewAutoFix) return;
+    let cancelled = false;
+    const target = instanceId ? { federationTarget: { scope: "remote" as const, instanceId } } : {};
+    const reload = () => {
+      void readAutoFix(api, { backend, threadId, ...target }).then((next) => {
+        if (!cancelled) setStatus(next);
+      });
+    };
+    reload();
+    const unsubscribe = api.onThreadTodosChanged?.((event) => {
+      if (event.federationTarget?.instanceId !== instanceId && event.backend !== undefined) return;
+      if (event.backend === undefined || (event.backend === backend && event.threadId === threadId)) reload();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [api, backend, threadId, instanceId]);
+  const disarm = useCallback(async (turnId: string) => {
+    if (!backend || !threadId || !api?.disarmReviewAutoFix) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await api.disarmReviewAutoFix({ backend, threadId, turnId,
+        ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
+      });
+      setStatus(response.status);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [api, backend, threadId, instanceId]);
+  return { status, disarm, busy, error };
 }
 
 export type ReviewUpdate = (request: Omit<UpdateThreadReviewRequest, "id">) => Promise<void>;
@@ -283,6 +361,78 @@ export function ReviewStatusRow(props: { review: ThreadReview; busy: boolean; up
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A running review that will auto-fix when it lands. Don't auto-fix turns
+ * that off for this review only.
+ */
+export function ReviewAutoFixArmedRow(props: { busy: boolean; error?: string; onDisarm: () => void }) {
+  return (
+    <>
+      <div className="review-status" data-status="armed">
+        <span className="review-status__state" data-status="armed">
+          <PendingSpinner pairing="paired" size="sm" />
+          Auto-fix armed
+        </span>
+        <span className="review-status__note">
+          This thread&apos;s agent settles the findings when the review ends.
+        </span>
+        <div className="review-status__actions">
+          <button
+            type="button"
+            className="button review-status__button review-status__button--quiet"
+            disabled={props.busy}
+            onClick={props.onDisarm}
+          >
+            Don&apos;t auto-fix
+          </button>
+        </div>
+      </div>
+      {props.error ? <p className="review-status__error" role="alert">{props.error}</p> : null}
+    </>
+  );
+}
+
+/**
+ * The review card's line for its Auto-fix turn: queued behind a running
+ * turn, running, finished with findings still open, or refused before it
+ * started. Nothing once a finished run left nothing open.
+ */
+export function ReviewAutoFixLine(props: { run: ReviewAutoFixRun | undefined; openCount: number }) {
+  const { run } = props;
+  if (!run) return null;
+  if (run.phase === "running") {
+    return (
+      <p className="review-todo__auto" data-phase="running">
+        <PendingSpinner pairing="paired" size="sm" />
+        <span><strong>Auto-fixing</strong> · started when the review finished</span>
+      </p>
+    );
+  }
+  if (run.phase === "queued") {
+    return (
+      <p className="review-todo__auto" data-phase="queued">
+        <ClockIcon size={12} />
+        <span><strong>Auto-fix queued</strong> · sends when the current turn ends</span>
+      </p>
+    );
+  }
+  if (run.phase === "failed") {
+    return (
+      <p className="review-todo__auto" data-phase="failed">
+        <BanIcon size={12} />
+        <span><strong>Auto-fix could not start:</strong> {run.reason}</span>
+      </p>
+    );
+  }
+  if (props.openCount === 0) return null;
+  return (
+    <p className="review-todo__auto" data-phase="finished">
+      <TodoIcon size={12} />
+      <span><strong>Auto-fix left {props.openCount} open</strong></span>
+    </p>
   );
 }
 

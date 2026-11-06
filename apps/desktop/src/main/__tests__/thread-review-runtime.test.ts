@@ -11,7 +11,12 @@ import {
   resetThreadTodoServiceForTests,
 } from "../thread-todos/thread-todo-runtime";
 import { claudeReviewOutput } from "../claude/claude-review-findings";
-import { getReviewAutoFixArming, resetReviewAutoFixArmingForTests } from "../thread-reviews/review-auto-fix";
+import {
+  getReviewAutoFixArming,
+  readReviewAutoFixStatus,
+  resetReviewAutoFixArmingForTests,
+} from "../thread-reviews/review-auto-fix";
+import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 let db: StateDb;
@@ -242,6 +247,58 @@ describe("review tracking runtime eligibility", () => {
       onEvent(findingsOutput("later-turn", "later-review"));
       await Promise.resolve();
       expect(submitTurn).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Rule: viewers learn a running review is armed, and Don't auto-fix
+     * keeps it from fixing when it lands. Each change reaches them on the
+     * thread's to-do change event.
+     */
+    it("lists an armed running review and disarms it", async () => {
+      install();
+      broadcast.mockClear();
+      getReviewAutoFixArming().starting(THREAD, "auto-fix").accepted("review-turn");
+      expect(broadcast).toHaveBeenCalledWith(expect.objectContaining(THREAD));
+      expect(localThreadTodoOperations.readReviewAutoFix(THREAD).status.armedTurnIds).toEqual(["review-turn"]);
+      expect(localThreadTodoOperations.disarmReviewAutoFix({ ...THREAD, turnId: "review-turn" }))
+        .toEqual({ disarmed: true, status: { armedTurnIds: [], runs: {} } });
+      onEvent(findingsOutput("review-turn", "disarmed-review"));
+      await Promise.resolve();
+      expect(submitTurn).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Rule: the card follows the Auto-fix turn by the review id its queue
+     * entry carries: queued, then running, then finished.
+     */
+    it("follows the Auto-fix turn through the queue", async () => {
+      install();
+      getReviewAutoFixArming().starting(THREAD, "auto-fix").accepted("review-turn");
+      onEvent(findingsOutput("review-turn", "queued-review"));
+      await vi.waitFor(() => expect(submitTurn).toHaveBeenCalledTimes(1));
+      const [review] = getThreadReviewService().list();
+      const queue = (status: string) => onEvent({ backend: THREAD.backend, notification: {
+        method: "thread/turnQueue/updated", params: { threadId: THREAD.threadId, queueEntryId: "entry", status,
+          messageOrigin: { kind: "pwragent", reviewAutoFix: { reviewId: review!.id, findingCount: 2 } } },
+      } } as AgentEvent);
+      broadcast.mockClear();
+      queue("queued");
+      expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("queued");
+      expect(broadcast).toHaveBeenCalledWith(expect.objectContaining(THREAD));
+      queue("started");
+      expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("running");
+      queue("terminal");
+      expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("finished");
+    });
+
+    it("tells the card why the Auto-fix send failed", async () => {
+      install();
+      submitTurn.mockRejectedValueOnce(new Error("Thread is locked."));
+      getReviewAutoFixArming().starting(THREAD, "auto-fix").accepted("review-turn");
+      onEvent(findingsOutput("review-turn", "refused-review"));
+      const [review] = getThreadReviewService().list();
+      await vi.waitFor(() => expect(readReviewAutoFixStatus(THREAD).runs[review!.id])
+        .toEqual({ phase: "failed", at: expect.any(Number), reason: "Thread is locked." }));
     });
   });
 });

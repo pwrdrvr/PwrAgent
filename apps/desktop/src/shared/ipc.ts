@@ -213,6 +213,10 @@ export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
 export const THREAD_TODOS_LIST_CHANNEL = "thread-todos:list";
 export const THREAD_REVIEWS_LIST_CHANNEL = "thread-reviews:list";
 export const THREAD_REVIEWS_UPDATE_CHANNEL = "thread-reviews:update";
+/** A thread's armed reviews and Auto-fix runs, read from its owner. */
+export const THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL = "thread-reviews:read-auto-fix";
+/** Don't auto-fix: turns Auto-fix off for one running review. */
+export const THREAD_REVIEWS_DISARM_AUTO_FIX_CHANNEL = "thread-reviews:disarm-auto-fix";
 export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
 export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
 export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
