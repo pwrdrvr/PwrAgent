@@ -66,7 +66,7 @@ export function SidebarShowMore(props: {
     >
       {props.kind === "reload" ? null : (
         <span className="sidebar-show-more__icon" aria-hidden="true">
-          <ChevronDownIcon size={14} />
+          <ChevronDownIcon size={12} />
         </span>
       )}
       {props.label}

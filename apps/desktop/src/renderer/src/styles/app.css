@@ -9764,48 +9764,45 @@ a.button {
 }
 
 /* The rail's one paging affordance: directory, pinned, lens and sub-thread
-   all reach it through `SidebarShowMore`. A button the width of the rows
-   above it, in the start actions' family (6px radius, 30px, centred label
-   and glyph), but on a filled panel with the strong border, because it has
-   to be found at the end of a list of borderless rows.
+   all reach it through `SidebarShowMore`. A pill in the PR chip family:
+   11px label, shrink-wrapped and left-aligned under the rows it pages, on a
+   filled panel with the strong border, because it has to be found at the end
+   of a list of borderless rows.
 
-   It was a transparent, borderless 12px label. Its text passed contrast in
-   every theme (6.4:1 at the lowest, Solarized dark) and its box passed
-   WCAG 2.5.8, yet operators could not find it: nothing about it said
-   "button", and in the flat lenses it also sat below the start actions'
-   hairline at the rail's bottom edge (see `lensPager` in Sidebar.tsx).
-
-   It was `directory-row__show-more`, a name that reads as private to one
-   parent — and the seven call sites that did not sit beside the rule (five
-   outside DirectoriesList, two inside it) styled nothing at all rather than
-   reach for it, so they shipped as native Chromium buttons. */
+   It was a transparent, borderless 12px label: its text passed contrast in
+   every theme and its box passed WCAG 2.5.8, yet operators could not find
+   it. The fix for that went to a 30px button the full width of the list,
+   which was found and then read as the heaviest box in a sub-thread tray,
+   taller than the 20px PR chips beside it. The fill and strong border are
+   what make it findable; the size never was. 24px is the 2.5.8 floor. */
 .sidebar-show-more {
   overflow-anchor: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  /* The row width, in every container. `.subthread-list` is a grid, and
-     `SubthreadPagination` wraps the control in the `role="listitem"` its
-     list requires; that wrapper is the grid item and this fills it. */
-  width: 100%;
+  gap: 4px;
+  /* Shrink-wrap in every container: `start` for the `.subthread-list` grid
+     (whose `role="listitem"` wrapper is a block, where inline-flex already
+     shrinks), `flex-start` for the flex columns of the scroll region and a
+     directory's details. */
+  justify-self: start;
+  align-self: flex-start;
+  max-width: 100%;
   min-width: 0;
-  margin-top: 6px;
-  /* WCAG 2.5.8 asks for 24px. 30px matches the start actions below it, so
-     the two read as one family of list-end controls. */
-  min-height: 30px;
-  padding: 0 10px;
+  margin-top: 4px;
+  min-height: 24px;
+  padding: 2px 10px 2px 7px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  /* Half the height: a full pill on one line, and a rounded box rather than
+     a lozenge when "Load more sub-threads on this machine" wraps in an
+     indented tray at the 240px minimum rail. */
+  border-radius: 12px;
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  /* Wraps rather than overflowing: the button is pinned to the row width,
-     and "Load more sub-threads on this machine" in an indented tray at the
-     240px minimum rail is wider than the box. */
-  text-align: center;
+  line-height: 1.3;
+  text-align: left;
   cursor: pointer;
   transition:
     background-color 120ms ease,
@@ -9813,18 +9810,10 @@ a.button {
     color 120ms ease;
 }
 
-/* Inset by the rule with `.sidebar-empty` when a lens shows a status line in
-   place of its list; the flex column stretches it to the inset width, which
-   `width: 100%` plus that margin would overflow. */
-.sidebar__scroll-region > .sidebar-show-more {
-  width: auto;
-}
-
 /* A directory's own pager is a sibling of its `.directory-row__threads`
    list, not a child, so it takes that list's 8px inset to line up with the
    row cards. The details column's 8px gap already spaces it from the rows. */
 .directory-row__details > .sidebar-show-more {
-  width: auto;
   margin: 0 8px;
 }
 
