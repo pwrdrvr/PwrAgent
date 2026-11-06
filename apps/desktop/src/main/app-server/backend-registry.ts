@@ -16728,14 +16728,10 @@ export class DesktopBackendRegistry {
   /** Every non-archived thread as a housekeeping candidate. Complete
    * provider reads without navigation projection or display persistence, so
    * an idle sweep makes no SQLite commits. */
-  /** Thread maintenance reviews every provider PwrAgent runs, including
-   * Claude threads from PwrAgent's own session store. The hourly sweep keeps
-   * its narrower list until Claude auto-archive is a deliberate setting. */
-  async listThreadMaintenanceCandidates(): Promise<ThreadArchiveCandidate[]> {
-    return await this.listAutoArchiveCandidates({ includeClaude: true });
-  }
-
-  async listAutoArchiveCandidates(options: { includeClaude?: boolean } = {}): Promise<ThreadArchiveCandidate[]> {
+  /** Every provider PwrAgent runs, for the hourly sweep and Thread
+   * maintenance alike. Claude threads come from PwrAgent's own session store,
+   * and one outside a PwrAgent worktree is kept by the shared keep rules. */
+  async listAutoArchiveCandidates(): Promise<ThreadArchiveCandidate[]> {
     await this.subAgentStartupReconciliation;
     if (this.closed || this.isBootstrapModeFn()) return [];
     // Use complete provider reads without navigation projection or display
@@ -16747,15 +16743,13 @@ export class DesktopBackendRegistry {
       this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
     ])).flat();
     const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
-    if (options.includeClaude) {
-      // Only sessions PwrAgent started: its store, never ~/.claude.
-      try {
-        threads.push(...await this.claudeBackend.listThreads({ archived: false }));
-      } catch (error) {
-        backendRegistryLog.warn("auto-archive Claude thread read failed; Claude threads are kept", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    // Only sessions PwrAgent started: its store, never ~/.claude.
+    try {
+      threads.push(...await this.claudeBackend.listThreads({ archived: false }));
+    } catch (error) {
+      backendRegistryLog.warn("auto-archive Claude thread read failed; Claude threads are kept", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     // One read for every thread a PR watch will wake.
     const watchedThreadKeys = new Set(
