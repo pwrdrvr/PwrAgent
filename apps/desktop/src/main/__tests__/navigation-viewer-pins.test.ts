@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import {
   buildFederatedThreadRef,
   buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   findPeerCounterpartDirectory,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
@@ -303,7 +304,7 @@ it("still files a remote thread under its checkout before a tool-managed worktre
     .toEqual(["directory:/viewer/PwrAgnt"]);
 });
 
-it.each(["complete", "checking"] as const)("mounts a remote child under its owner-qualified local parent with %s coverage without confusing another peer", (state) => {
+it.each(["complete", "checking"] as const)("keeps remote parentage global and directory counts scoped with %s coverage", (state) => {
   const parent: NavigationThreadSummary = { id: "parent", source: "codex", title: "Parent", titleSource: "explicit",
     linkedDirectories: [{ id: "repo", kind: "local", label: "repo", path: "/viewer/repo" }], inbox: { inInbox: false } };
   const remote = (id: string, owner: string): NavigationThreadSummary => ({ ...parent, id,
@@ -324,10 +325,27 @@ it.each(["complete", "checking"] as const)("mounts a remote child under its owne
     request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query } });
   const roots = project({ kind: "directory", directoryKey: "repo" });
   expect(roots.entries.map(({ row }) => [row.ref.ownerInstanceId, row.id])).toEqual([[undefined, "parent"], ["other", "parent"]]);
-  expect(roots.entries.find(({ row }) => !row.ref.ownerInstanceId)?.row.ordinaryChildCount).toBe(1);
   const children = project({ kind: "children", parent: { backend: "codex", threadId: "parent" } });
   expect(children.entries.map(({ row }) => row.id)).toEqual(["child"]);
   expect(children.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "parent" } });
+  // The mounted inventory owns project membership. This child's scratch
+  // workspace is outside repo even though its parent relationship is valid.
+  const childKey = federatedThreadIdentityKey(child.federation!.ref);
+  const childHome = viewer.directories.find((entry) => entry.threadKeys.includes(childKey));
+  expect(childHome).toBeDefined();
+  expect(childHome?.key).not.toBe(directory.key);
+  const scopedChildren = project({ kind: "children", directoryKey: directory.key,
+    parent: { backend: "codex", threadId: "parent" } });
+  const repoMembers = new Set(viewer.directories.find((entry) => entry.key === directory.key)!.threadKeys);
+  expect(scopedChildren.entries.map(({ row }) => row.id)).toEqual(children.entries.filter(({ row }) =>
+    repoMembers.has(row.federation ? federatedThreadIdentityKey(row.federation.ref) : buildThreadIdentityKey(row.source, row.id)))
+    .map(({ row }) => row.id));
+  expect(scopedChildren.entries).toEqual([]);
+  expect(roots.entries.find(({ row }) => !row.ref.ownerInstanceId)?.row.ordinaryChildCount).toBe(scopedChildren.entries.length);
+  const selectedHome = project({ kind: "exact", identities: [{ backend: "codex", threadId: "child", ownerInstanceId: "peer" }],
+    includeAncestry: true, ancestryScope: "directory" });
+  expect(selectedHome.entries.map(({ row }) => row.id)).toEqual(["child"]);
+  expect(selectedHome.selectionDirectory?.key).toBe(childHome?.key);
   expect(project({ kind: "children", parent: { backend: "codex", threadId: "parent", ownerInstanceId: "other" } })
     .entries.map(({ row }) => row.id)).toEqual(["other-child"]);
   const exact = project({ kind: "exact", identities: [{ backend: "codex", threadId: "child", ownerInstanceId: "peer" }], includeAncestry: true });
