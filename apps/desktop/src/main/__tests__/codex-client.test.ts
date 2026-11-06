@@ -13497,7 +13497,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("includes earlier user constraints and current intent in MCP approval evidence", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const item = (turnId: string, text: string) => ({ turnId, item: { type: "userMessage", id: turnId,
       content: [{ type: "text", text }] } });
     MockTransport.threadItemsListResultByRequest.set("source::", {
@@ -13517,7 +13517,7 @@ describe("CodexAppServerClient", () => {
 
   it.each(["missing-current", "oversized", "legacy", "attachment", "repeated-cursor", "page-limit"])(
     "refuses incomplete MCP approval context: %s", async (scenario) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const item = { type: "userMessage", id: "user", content: scenario === "attachment"
         ? [{ type: "image", url: "fixture.png" }] : [{ type: "text", text: scenario === "oversized" ? "x".repeat(32_001) : "Update staging." }] };
       const data = scenario === "legacy" ? [item] : [{ turnId: scenario === "missing-current" ? "old" : "current", item }];
@@ -13537,7 +13537,7 @@ describe("CodexAppServerClient", () => {
 
   it.each(["before-abort", "after-abort", "response-only"])(
     "cancels while helper turn/start is pending (identity arrives %s)", async (identityTiming) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       MockTransport.threadStartResult = { thread: { id: "approval-helper" }, instructionSources: [] };
       MockTransport.threadMcpServerStatusResult = { data: [], nextCursor: null };
       MockTransport.turnStartResult = undefined;
@@ -13576,7 +13576,7 @@ describe("CodexAppServerClient", () => {
   );
 
   it("interrupts only the cancelled structured helper turn and unsubscribes it", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = { thread: { id: "approval-helper" }, instructionSources: [] };
     MockTransport.threadMcpServerStatusResult = { data: [], nextCursor: null };
     MockTransport.turnStartResult = { turn: { id: "approval-turn" } };
