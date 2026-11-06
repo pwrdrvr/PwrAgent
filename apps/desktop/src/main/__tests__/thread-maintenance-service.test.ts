@@ -211,6 +211,20 @@ describe("sub-thread parents", () => {
     // The sub-thread is archived before its parent, so it keeps its place.
     expect(vi.mocked(deps.archiveFamily).mock.calls.map(([family]) => family[0]!.thread.id)).toEqual(["a", "parent"]);
   });
+
+  it("archives a nested family from the deepest sub-threads up", async () => {
+    const { service, deps } = harness([
+      candidate("top", { cwd: "/w/top", daysIdle: 40 }),
+      child("mid", "top"), child("x", "mid"), child("y", "mid"), child("z", "mid"),
+    ], { getPolicy: agePolicy });
+    const scan = await service.scan();
+    const run = await service.apply({ scanId: scan.scanId,
+      archive: ["top", "mid", "x", "y", "z"].map((threadId) => ({ backend: "codex", threadId })),
+      removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+    expect(run.problems).toEqual([]);
+    expect(vi.mocked(deps.archiveFamily).mock.calls.map(([family]) => family[0]!.thread.id))
+      .toEqual(["x", "y", "z", "mid", "top"]);
+  });
 });
 
 describe("ThreadMaintenanceService.apply", () => {

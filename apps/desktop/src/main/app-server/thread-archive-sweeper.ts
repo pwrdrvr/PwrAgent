@@ -214,9 +214,39 @@ export function keepSubthreadParents(selected: Set<string>, children: ReadonlyMa
   return kept;
 }
 
-/** Sub-threads before top-level threads, otherwise in the given order. */
-export function subthreadsFirst<T extends { overlay?: ThreadArchiveCandidate["overlay"] }>(items: readonly T[]): T[] {
-  return [...items.filter((item) => item.overlay?.parentThreadId), ...items.filter((item) => !item.overlay?.parentThreadId)];
+/** Deepest sub-threads first, then their parents, then top-level threads;
+ * otherwise in the given order. A sub-thread that is itself a parent must wait
+ * for its own sub-threads, or its archive promotes them. */
+export function subthreadsFirst<T>(
+  items: readonly T[],
+  candidateOf: (item: T) => Pick<ThreadArchiveCandidate, "thread" | "overlay"> | undefined =
+    (item) => item as unknown as ThreadArchiveCandidate,
+): T[] {
+  const parentOf = new Map<string, string | undefined>();
+  for (const item of items) {
+    const candidate = candidateOf(item);
+    if (!candidate) continue;
+    const parentId = candidate.overlay?.parentThreadId?.trim();
+    parentOf.set(buildThreadIdentityKey(candidate.thread.source, candidate.thread.id), parentId
+      ? buildThreadIdentityKey(candidate.overlay?.parentThreadBackend ?? candidate.thread.source, parentId)
+      : undefined);
+  }
+  // Parent links walked from the item, bounded so a parent loop cannot spin.
+  const depth = (item: T): number => {
+    const candidate = candidateOf(item);
+    if (!candidate) return 0;
+    let key = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
+    let levels = 0;
+    while (levels <= items.length) {
+      const parent = parentOf.get(key);
+      if (!parent) break;
+      levels += 1;
+      key = parent;
+    }
+    return levels;
+  };
+  const depths = new Map(items.map((item) => [item, depth(item)]));
+  return [...items].sort((a, b) => depths.get(b)! - depths.get(a)!);
 }
 
 /** Groups each root with its native sub-agent threads, which archive with it. */
@@ -428,7 +458,8 @@ export class ThreadArchiveSweeper {
     // Never scatter a parent's sub-threads: a parent stays while archiving it
     // would leave 3 or more of them behind.
     const selectedKeys = new Set([...selected].map(({ thread }) => buildThreadIdentityKey(thread.source, thread.id)));
-    const keptParents = new Set(keepSubthreadParents(selectedKeys, subthreadChildren(candidates)));
+    const subthreads = subthreadChildren(candidates);
+    const keptParents = new Set(keepSubthreadParents(selectedKeys, subthreads));
     for (const candidate of [...selected]) {
       if (!keptParents.has(buildThreadIdentityKey(candidate.thread.source, candidate.thread.id))) continue;
       selected.delete(candidate);
@@ -436,9 +467,17 @@ export class ThreadArchiveSweeper {
     }
     // Sub-threads go first, so a parent's own archive finds them archived
     // rather than promoting them.
+    const archivedKeys = new Set<string>();
     for (const candidate of subthreadsFirst(candidates)) {
       if (this.abort.signal.aborted) return;
       if (!selected.has(candidate)) continue;
+      const candidateKey = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
+      // A sub-thread kept during this run still needs its parent.
+      const left = (subthreads.get(candidateKey) ?? []).filter((child) => !archivedKeys.has(child)).length;
+      if (left > MAX_SUBTHREADS_LEFT_BY_ARCHIVE) {
+        keep(SUBTHREAD_PARENT_KEEP_REASON);
+        continue;
+      }
       const group = groupFor(candidate);
       const listed = familyKeepReason(group);
       if (listed) {
@@ -476,6 +515,7 @@ export class ThreadArchiveSweeper {
         if (await this.deps.archive(refreshed[0]!, refreshed) !== false) {
           tally.archived += 1;
           threads.archived += 1;
+          archivedKeys.add(candidateKey);
         } else keep("Archive cancelled");
       } catch (error) {
         if (!this.abort.signal.aborted) this.fail(tally, "threads", error, candidate.thread.id);

@@ -26,6 +26,7 @@ import {
   MAX_SUBTHREADS_LEFT_BY_ARCHIVE,
   SUBTHREAD_PARENT_KEEP_REASON,
   subthreadChildren,
+  subthreadsFirst,
   type ThreadArchiveCandidate,
 } from "./thread-archive-sweeper";
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
@@ -372,10 +373,7 @@ export class ThreadMaintenanceService {
     steps.push(threadStep);
     // Sub-threads first, so their parent's check below sees them archived.
     const keyOf = (item: { backend: string; threadId: string }) => buildThreadIdentityKey(item.backend as AppServerBackendKind, item.threadId);
-    const ordered = [
-      ...request.archive.filter((item) => retained.families.get(keyOf(item))?.family[0]?.overlay?.parentThreadId),
-      ...request.archive.filter((item) => !retained.families.get(keyOf(item))?.family[0]?.overlay?.parentThreadId),
-    ];
+    const ordered = subthreadsFirst(request.archive, (item) => retained.families.get(keyOf(item))?.family[0]);
     const archivedKeys = new Set<string>();
     for (const [index, item] of ordered.entries()) {
       const entry = retained.families.get(keyOf(item));

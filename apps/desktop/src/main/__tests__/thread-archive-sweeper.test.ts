@@ -45,7 +45,7 @@ function harness(candidates = [candidate()]) {
     listCandidates: vi.fn(async () => candidates),
     refreshCandidate: vi.fn(async (item: ThreadArchiveCandidate) => item),
     isBusy: vi.fn(() => false),
-    canArchive: vi.fn(async () => true),
+    canArchive: vi.fn(async (_family: ThreadArchiveCandidate[]) => true),
     archive: vi.fn<ConstructorParameters<typeof ThreadArchiveSweeper>[0]["archive"]>(async () => {}),
     workspaceIsSafe: vi.fn(async (_cwd: string, _signal: AbortSignal) => true),
     onError: vi.fn(),
@@ -568,6 +568,46 @@ describe("sub-thread parents", () => {
         for (const key of kept) expect(selected.has(key)).toBe(false);
       },
     ));
+  });
+
+  it("orders every thread after all of its sub-threads, however deep", () => {
+    fc.assert(fc.property(
+      fc.array(fc.nat({ max: 12 }), { minLength: 1, maxLength: 13 }),
+      fc.array(fc.nat({ max: 12 }), { maxLength: 13 }),
+      (parents, order) => {
+        // Node i's parent is an earlier node, so the links form a forest.
+        const nodes = parents.map((parent, index) => ({
+          thread: { ...candidate(`n${index}`).thread },
+          ...(index > 0 && parent % (index + 1) !== index
+            ? { overlay: { parentThreadId: `n${parent % index}` } as ThreadArchiveCandidate["overlay"] }
+            : {}),
+        }));
+        const shuffled = [...nodes];
+        for (const [index, swap] of order.entries()) {
+          const a = index % shuffled.length;
+          const b = swap % shuffled.length;
+          [shuffled[a], shuffled[b]] = [shuffled[b]!, shuffled[a]!];
+        }
+        const position = new Map(subthreadsFirst(shuffled).map(({ thread }, index) => [thread.id, index]));
+        for (const node of nodes) {
+          const parent = node.overlay?.parentThreadId;
+          if (parent) expect(position.get(node.thread.id)!).toBeLessThan(position.get(parent)!);
+        }
+      },
+    ));
+  });
+
+  it("keeps a parent when sub-threads kept during the sweep would leave 3 behind", async () => {
+    const parent = candidate("parent");
+    const child = (id: string): ThreadArchiveCandidate => ({
+      ...candidate(id), overlay: { parentThreadId: "parent" } as ThreadArchiveCandidate["overlay"],
+    });
+    const { deps, sweeper } = harness([parent, child("a"), child("b"), child("c"), child("d")]);
+    // Refused only when the run reaches them, after the up-front parent rule.
+    deps.canArchive.mockImplementation(async (family: ThreadArchiveCandidate[]) => !["a", "b", "c"].includes(family[0]!.thread.id));
+    await sweeper.sweep();
+    expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["d"]);
+    await sweeper.stop();
   });
 
   it("counts only local, non-archived sub-threads and orders them before parents", () => {
