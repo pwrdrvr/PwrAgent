@@ -182,6 +182,15 @@ export function getAppScheduledThreadActionStore(): ScheduledThreadActionStore {
   return scheduledThreadActionStore;
 }
 
+/**
+ * Shutdown has released the runtime: stop the heartbeat's periodic
+ * main-thread writes. The marker stays until `disposeAppState` removes it at
+ * process exit, and its last write keeps it fresh for the heartbeat TTL.
+ */
+export function stopProfileRuntimeHeartbeatRefresh(): void {
+  profileRuntimeHeartbeat?.stopRefreshing();
+}
+
 export function disposeAppState(): void {
   if (profileRuntimeHeartbeat) {
     profileRuntimeHeartbeat.stop();

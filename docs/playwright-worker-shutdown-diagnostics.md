@@ -139,6 +139,27 @@ plus explicit missing-symbol/capture status. Raw debugger output, arguments,
 memory and environment are never uploaded. At most four roots are
 sampled per lane; the owning close's deadline remains unchanged.
 
+### Symbolizing captured stacks
+
+Electron publishes Breakpad symbols with each release
+(`electron-v<version>-win32-x64-symbols.zip`, about 60 MB). Its
+`electron.exe.sym` maps the retained `electron+0x…` offsets to functions and
+source lines without the multi-gigabyte PDB. Check `electronSha256` in
+`native-stack-setup.json` against the version the run installed.
+
+Symbolized, the 67 stacks retained by the November 2026 diagnostics runs
+included 32 verified captures. 30 of those had a thread blocked in disk I/O on
+fixture storage: `CreateFile`, `WriteFile` or `FlushFileBuffers` from the
+application (the profile runtime heartbeat's `writeFileSync`, better-sqlite3's
+close at process exit) and from Chromium (`BtmDatabase`, `QuotaDatabase`,
+`ImportantFileWriter`). Failed lanes show the same thing as windows of two to
+three minutes in which every close stalls in `clearData` or native quit, then
+recovers. In those closes, the application's own appends to a diagnostics file
+on the D: workspace volume completed in a median of 61 ms. The stalled storage
+was under `os.tmpdir()`, on the OS volume (C:). The Windows Desktop E2E step
+therefore sets `TEMP` and `TMP` to `runner.temp`, and
+`scripts/windows-e2e-temp-volume-workflow.test.mjs` holds that rule.
+
 ### Controlled native debugger setup failures
 
 When that controlled probe fails, `native-stack-setup.json` also reports whether
@@ -148,6 +169,14 @@ the retained debugger text inspected for those flags; it is not a total stream
 byte count. These observations help locate startup progress within the existing
 deadline. They do not establish which operation caused a timeout, and a flag
 alone does not satisfy the positive control.
+
+Run from `C:\Program Files (x86)`, 30 of 227 hosted startups missed the
+readiness check, each stopped at a different stage: no output, inside
+Extension Gallery initialization, or after it but before the prompt. That is
+the OS-volume stall described under "Symbolizing captured stacks", not one
+hung step. Both diagnostics workflows therefore copy the Debuggers directory
+into `RUNNER_TEMP`, verify `cdb.exe` and `dbgeng.dll` there, and point
+`PWRAGENT_WINDOWS_CDB_EXE` at the copy.
 
 The artifact's `probeFailure.triageGuide` points to this section. The controller
 also emits a bounded `[windows-pipe-evidence]` record with
