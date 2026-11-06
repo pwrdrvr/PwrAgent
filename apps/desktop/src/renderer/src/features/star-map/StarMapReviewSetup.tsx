@@ -233,9 +233,11 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     }
   }, [branchEdited, branchOptions]);
 
-  // Starts at the Settings default when the card opens; a click lasts for
-  // this one review.
-  const [autoFix, setAutoFix] = useState(props.reviewAutoFixDefault ?? true);
+  // Follows the Settings default until the operator clicks, as the composer
+  // panel does, so a setting that loads after the card opens still applies.
+  // A click lasts for this one review.
+  const [autoFixChoice, setAutoFixChoice] = useState<boolean>();
+  const autoFix = autoFixChoice ?? props.reviewAutoFixDefault !== false;
   const autoFixSupported = props.backend?.capabilities.reviewAutoFix === true;
   const afterReview: ReviewAfterAction | undefined = autoFixSupported
     ? autoFix ? "auto-fix" : "wait"
@@ -525,7 +527,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
             <ReviewAutoFixSwitch
               checked={autoFix}
               disabled={props.submitting}
-              onToggle={() => setAutoFix((current) => !current)}
+              onToggle={() => setAutoFixChoice(!autoFix)}
             />
           ) : null}
           <button

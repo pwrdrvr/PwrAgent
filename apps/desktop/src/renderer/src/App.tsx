@@ -4326,7 +4326,7 @@ function DesktopAppShell(props: {
     pastedImageMaxPatches:
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
     pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
-    reviewAutoFixDefault: settings.snapshot?.general.autoFixReviews?.value ?? true,
+    reviewAutoFixDefault: settings.snapshot?.general.autoFixReviews?.value,
     tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
     monitorJobSuggestionsDefaultEnabled:
       settings.snapshot?.general.toolOutputAlerts?.monitorJobSuggestionsEnabled?.value ?? true,

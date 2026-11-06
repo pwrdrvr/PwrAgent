@@ -70,6 +70,23 @@ describe("Star Map review setup Auto-fix", () => {
     expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ afterReview: "auto-fix" }));
   });
 
+  it("follows a Settings default that arrives after the card opened, until clicked", () => {
+    const onSubmit = vi.fn();
+    const props = { busy: false, backend: backend(true), directories: [], onCancel: vi.fn(), onSubmit,
+      submitting: false, thread };
+    const { rerender } = render(<StarMapReviewSetup {...props} />);
+    const toggle = screen.getByRole("switch", { name: "Auto-fix findings" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    // The window's settings snapshot loads with the setting off.
+    rerender(<StarMapReviewSetup {...props} reviewAutoFixDefault={false} />);
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    rerender(<StarMapReviewSetup {...props} reviewAutoFixDefault={false} />);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ afterReview: "auto-fix" }));
+  });
+
   it("offers no switch and sends no choice to an owner without the capability", () => {
     const onSubmit = renderSetup(false);
     expect(screen.queryByRole("switch", { name: "Auto-fix findings" })).not.toBeInTheDocument();
