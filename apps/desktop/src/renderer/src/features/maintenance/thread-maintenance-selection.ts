@@ -1,6 +1,7 @@
 import type {
   ThreadMaintenanceApplyRequest,
   ThreadMaintenanceArchivedCheckout,
+  ThreadMaintenanceHibernateCheckout,
   ThreadMaintenanceIdleThread,
   ThreadMaintenanceOverLimitChoice,
   ThreadMaintenanceScan,
@@ -8,7 +9,12 @@ import type {
 } from "@pwragent/shared";
 
 /** Which steps a tab runs. Combined runs every step in order. */
-export type ThreadMaintenanceMode = "combined" | "threads" | "checkouts";
+export type ThreadMaintenanceMode = "combined" | "threads" | "hibernate" | "checkouts";
+
+/** Whether a tab runs a step. */
+export function modeRuns(mode: ThreadMaintenanceMode, step: Exclude<ThreadMaintenanceMode, "combined">): boolean {
+  return mode === "combined" || mode === step;
+}
 
 /** "keep" leaves an over-limit thread alone; it is never archived. */
 export type OverLimitDecision = "keep" | ThreadMaintenanceOverLimitChoice;
@@ -20,7 +26,13 @@ export type ThreadMaintenanceSelection = {
   /** Archived checkout paths chosen for removal or the Trash. */
   checkouts: Set<string>;
   emptyFolders: boolean;
+  /** Idle-thread keys (`backend:threadId`) whose checkout hibernates. */
+  hibernate: Set<string>;
 };
+
+export function hibernateItems(scan: ThreadMaintenanceScan): ThreadMaintenanceHibernateCheckout[] {
+  return scan.hibernate?.items ?? [];
+}
 
 export function idleThreadKey(row: Pick<ThreadMaintenanceIdleThread, "backend" | "threadId">): string {
   return `${row.backend}:${row.threadId}`;
@@ -42,18 +54,21 @@ export function defaultSelection(scan: ThreadMaintenanceScan): ThreadMaintenance
     overLimit: new Map(),
     checkouts: new Set(scan.checkouts.items.filter((item) => item.kind === "removable").map((item) => item.worktreePath)),
     emptyFolders: scan.checkouts.emptyFolders > 0,
+    // Every row already passed the snapshot limit and the other checks.
+    hibernate: new Set(hibernateItems(scan).map(idleThreadKey)),
   };
 }
 
-/** One apply request for both reviewed steps. A tab that runs one step
- * sends nothing for the other. */
+/** One apply request for every reviewed step. A tab that runs one step
+ * sends nothing for the others. */
 export function buildApplyRequest(
   scan: ThreadMaintenanceScan,
   selection: ThreadMaintenanceSelection,
   mode: ThreadMaintenanceMode,
 ): ThreadMaintenanceApplyRequest {
-  const runThreads = mode !== "checkouts";
-  const runCheckouts = mode !== "threads";
+  const runThreads = modeRuns(mode, "threads");
+  const runCheckouts = modeRuns(mode, "checkouts");
+  const runHibernate = modeRuns(mode, "hibernate");
   const archive = runThreads
     ? allIdleThreads(scan).flatMap((row) => {
       const key = idleThreadKey(row);
@@ -75,6 +90,10 @@ export function buildApplyRequest(
     removeUnreferenced: scan.checkouts.items.filter((item) => item.kind === "unreferenced" && chosen(item))
       .map(({ worktreePath }) => ({ worktreePath })),
     removeEmptyFolders: runCheckouts && selection.emptyFolders,
+    hibernate: runHibernate
+      ? hibernateItems(scan).filter((item) => selection.hibernate.has(idleThreadKey(item)))
+        .map(({ backend, threadId }) => ({ backend, threadId }))
+      : [],
   };
 }
 

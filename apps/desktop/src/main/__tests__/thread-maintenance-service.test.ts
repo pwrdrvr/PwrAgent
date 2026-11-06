@@ -18,6 +18,7 @@ import {
   unreferencedKeepReason,
   type ArchivedCheckoutAudit,
   type ArchivedCheckoutRemoval,
+  type CheckoutHibernationReviewDeps,
   type ThreadMaintenanceDeps,
 } from "../app-server/thread-maintenance-service";
 import { inspectMaintenanceWorkspace, rebuildableOutputFolder } from "../app-server/thread-maintenance-workspace";
@@ -286,7 +287,7 @@ describe("checkouts no thread refers to", () => {
       removeUnreferenced: ["/u/clean", "/u/claimed", "/u/later", "/u/not-scanned"].map((worktreePath) => ({ worktreePath })),
       removeEmptyFolders: false });
     expect(removeUnreferencedCheckouts).toHaveBeenCalledWith(["/u/clean", "/u/claimed"]);
-    expect(run.steps[1]).toEqual({ step: "checkouts", ran: true, done: 1, kept: 2, failed: 1 });
+    expect(run.steps.find((step) => step.step === "checkouts")).toEqual({ step: "checkouts", ran: true, done: 1, kept: 2, failed: 1 });
     expect(run.problems).toEqual(expect.arrayContaining([
       expect.objectContaining({ object: "/u/later", kind: "kept", reason: "Changed since the scan", detail: "Commits on no branch" }),
       expect.objectContaining({ object: "/u/claimed", kind: "kept", reason: "A thread uses it now" }),
@@ -407,7 +408,7 @@ describe("ThreadMaintenanceService.apply", () => {
       trashCheckouts: [{ worktreePath: selected }], removeEmptyFolders: false,
     });
     expect(deps.trashItem).toHaveBeenCalledWith(selected);
-    expect(run.steps[1]).toEqual(expect.objectContaining({ step: "checkouts", done: 1 }));
+    expect(run.steps.find((step) => step.step === "checkouts")).toEqual(expect.objectContaining({ step: "checkouts", done: 1 }));
     expect(run.problems).toEqual([expect.objectContaining({ kind: "kept", path: unselected, reason: "Repository no longer exists" })]);
   });
 
@@ -436,7 +437,7 @@ describe("ThreadMaintenanceService.apply", () => {
     });
     expect(built.deps.removeArchivedCheckouts).not.toHaveBeenCalled();
     expect(built.deps.trashItem).not.toHaveBeenCalled();
-    expect(run.steps[1]).toEqual(expect.objectContaining({ step: "checkouts", kept: 2, done: 0 }));
+    expect(run.steps.find((step) => step.step === "checkouts")).toEqual(expect.objectContaining({ step: "checkouts", kept: 2, done: 0 }));
     expect(run.problems.map((problem) => [problem.path, problem.reason])).toEqual([
       [removable, "Stopped before removing"],
       [orphan, "Stopped before removing"],
@@ -461,6 +462,106 @@ describe("ThreadMaintenanceService.apply", () => {
     release();
     await expect(first.done).resolves.toEqual(expect.objectContaining({ running: false }));
     expect(scan.scanId).toBeTruthy();
+  });
+});
+
+describe("hibernate idle checkouts", () => {
+  const off = { enabled: false, idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, restoreOn: "send" as const };
+
+  function hibernation(overrides: Partial<CheckoutHibernationReviewDeps> = {}): CheckoutHibernationReviewDeps {
+    return {
+      getPolicy: () => off,
+      keepReason: vi.fn((item: ThreadArchiveCandidate) => {
+        const target = item.thread.linkedDirectories[0]?.worktreePath;
+        return target ? { target } : {};
+      }),
+      inspect: vi.fn(async (worktreePath: string) => worktreePath === "/w/rebasing"
+        ? { keep: "Rebase in progress" }
+        : { files: 2, bytes: 900, removedOutput: ["node_modules"] }),
+      hibernate: vi.fn(async () => true),
+      ...overrides,
+    };
+  }
+
+  it("offers only threads the archive step does not, under hibernation's own rules even while it is off", async () => {
+    const items = [
+      candidate("newest", { daysIdle: 30, cwd: "/w/newest" }),
+      candidate("idle", { daysIdle: 31, cwd: "/w/idle" }),
+      candidate("pinned", { daysIdle: 40, cwd: "/w/rebasing", pinned: true }),
+      candidate("no-checkout", { daysIdle: 50, pinned: true }),
+    ];
+    const deps = hibernation();
+    const { service } = harness(items, { hibernation: deps });
+    const scan = await service.scan();
+
+    expect(scan.threads.projects.flatMap((project) => project.idle).map((row) => row.threadId)).toEqual(["idle"]);
+    expect(scan.hibernate).toEqual({
+      idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, checked: 2,
+      items: [expect.objectContaining({ threadId: "newest", worktreePath: "/w/newest", files: 2, bytes: 900, removedOutput: ["node_modules"] })],
+      kept: { "Rebase in progress": 1 },
+    });
+    // The idle thread is offered for archive, so hibernation never looks at it.
+    const looked = vi.mocked(deps.keepReason).mock.calls.map(([item]) => item.thread.id);
+    expect(looked).not.toContain("idle");
+    // The review runs the rules as if the setting were on.
+    expect(vi.mocked(deps.keepReason).mock.calls.every(([, , policy]) => policy.enabled)).toBe(true);
+  });
+
+  it("counts a thread the rules keep and lists nothing from an owner without the step", async () => {
+    const items = [candidate("newest", { daysIdle: 30, cwd: "/w/newest" })];
+    const { service } = harness(items, { hibernation: hibernation({ keepReason: () => ({ target: "/w/newest", keep: "Kept awake" }) }) });
+    expect((await service.scan()).hibernate).toEqual(expect.objectContaining({ items: [], kept: { "Kept awake": 1 }, checked: 1 }));
+    const { service: older } = harness(items);
+    const scan = await older.scan();
+    expect(scan.hibernate).toBeUndefined();
+    const run = await older.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+      hibernate: [{ backend: "codex", threadId: "newest" }] });
+    expect(run.problems).toEqual([expect.objectContaining({ step: "hibernate", kind: "failed", reason: "Not in this scan" })]);
+  });
+
+  it("hibernates after archiving, re-checks each one, and keeps going after a failure", async () => {
+    const items = [
+      candidate("newest", { daysIdle: 30, cwd: "/w/newest" }),
+      candidate("idle", { daysIdle: 31, cwd: "/w/idle" }),
+      candidate("busy", { daysIdle: 40, cwd: "/w/busy", pinned: true }),
+      candidate("touched", { daysIdle: 41, cwd: "/w/touched", pinned: true }),
+      candidate("broken", { daysIdle: 42, cwd: "/w/broken", pinned: true }),
+    ];
+    const order: string[] = [];
+    const deps = hibernation({
+      hibernate: vi.fn(async (item: ThreadArchiveCandidate) => {
+        order.push(`hibernate:${item.thread.id}`);
+        if (item.thread.id === "busy") return "Busy";
+        if (item.thread.id === "broken") throw new Error("worktree is locked");
+        return true;
+      }),
+    });
+    const { service, deps: serviceDeps } = harness(items, {
+      hibernation: deps,
+      archiveFamily: vi.fn(async (family: ThreadArchiveCandidate[]) => { order.push(`archive:${family[0]!.thread.id}`); return true; }),
+    });
+    const scan = await service.scan();
+    // Longest idle first.
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual(["broken", "touched", "busy", "newest"]);
+    vi.mocked(serviceDeps.refreshCandidate).mockImplementation(async (item) => item.thread.id === "touched"
+      ? { ...item, thread: { ...item.thread, updatedAt: NOW } }
+      : item);
+    const run = await service.apply({
+      scanId: scan.scanId,
+      archive: [{ backend: "codex", threadId: "idle" }],
+      removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+      hibernate: ["newest", "busy", "touched", "broken", "unknown"].map((threadId) => ({ backend: "codex", threadId })),
+    });
+    expect(order).toEqual(["archive:idle", "hibernate:newest", "hibernate:busy", "hibernate:broken"]);
+    expect(vi.mocked(deps.hibernate).mock.calls.every(([, policy]) => policy.enabled && policy.idleDays === 5)).toBe(true);
+    expect(run.steps.map((step) => step.step)).toEqual(["threads", "hibernate", "checkouts", "expired"]);
+    expect(run.steps.find((step) => step.step === "hibernate")).toEqual({ step: "hibernate", ran: true, done: 1, kept: 2, failed: 2 });
+    expect(run.problems.filter((problem) => problem.step === "hibernate")).toEqual([
+      expect.objectContaining({ kind: "kept", threadId: "busy", reason: "Busy", path: "/w/busy" }),
+      expect.objectContaining({ kind: "kept", threadId: "touched", reason: "New activity during the run" }),
+      expect.objectContaining({ kind: "failed", threadId: "broken", reason: "Hibernation failed", detail: "worktree is locked" }),
+      expect.objectContaining({ kind: "failed", threadId: "unknown", reason: "Not in this scan" }),
+    ]);
   });
 });
 

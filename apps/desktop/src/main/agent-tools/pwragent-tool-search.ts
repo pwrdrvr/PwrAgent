@@ -60,8 +60,8 @@ const SEARCH_ALIASES: Record<string, string> = {
   rename_current_thread: "rename name title this thread conversation self",
   mark_project_read: "bulk batch clear dismiss unread read project folder directory repository all",
   // A single-thread archive stays with mutate_thread; these cover bulk cleanup.
-  scan_thread_maintenance: "find clean cleanup old stale idle inactive unused worktrees checkouts disk space free maintenance bulk",
-  apply_thread_maintenance: "run apply selected bulk archiving cleanup remove worktrees checkouts maintenance",
+  scan_thread_maintenance: "find clean cleanup old stale idle inactive unused worktrees checkouts disk space free maintenance bulk hibernate",
+  apply_thread_maintenance: "run apply selected bulk archiving cleanup remove worktrees checkouts maintenance hibernate hibernation",
   open_thread_maintenance: "open show dialog window review cleanup maintenance",
   attach_thread_directory: "link repository project folder worktree",
   move_thread_workspace: "move project folder checkout worktree",

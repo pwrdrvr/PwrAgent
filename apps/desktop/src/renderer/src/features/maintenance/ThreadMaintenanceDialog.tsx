@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import {
   defaultThreadMaintenanceRules,
+  normalizeCheckoutHibernationPolicy,
   normalizeThreadArchivePolicy,
+  type DesktopCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type ThreadMaintenanceArchivedCheckout,
+  type ThreadMaintenanceHibernateCheckout,
   type ThreadMaintenanceIdleThread,
   type ThreadMaintenanceProblem,
   type ThreadMaintenanceProject,
@@ -23,9 +26,11 @@ import {
   defaultSelection,
   formatAge,
   formatBytes,
+  hibernateItems,
   idleThreadKey,
   keptEntries,
   keptTotal,
+  modeRuns,
   needsDecision,
   workspaceLead,
   type OverLimitDecision,
@@ -44,8 +49,27 @@ type Phase = ThreadMaintenancePhase;
 const MODE_TABS: { mode: ThreadMaintenanceMode; label: string }[] = [
   { mode: "combined", label: "Combined" },
   { mode: "threads", label: "Idle threads" },
+  { mode: "hibernate", label: "Idle checkouts" },
   { mode: "checkouts", label: "Archived checkouts" },
 ];
+
+type ReviewStep = Exclude<ThreadMaintenanceMode, "combined">;
+
+/** Review steps in run order. */
+const REVIEW_STEPS: ReviewStep[] = ["threads", "hibernate", "checkouts"];
+
+/** The review steps a tab stops at, in order. */
+function reviewSteps(mode: ThreadMaintenanceMode): ReviewStep[] {
+  return REVIEW_STEPS.filter((step) => modeRuns(mode, step));
+}
+
+/** The review after `step`, or undefined when the run comes next. */
+function nextReview(mode: ThreadMaintenanceMode, step: ReviewStep): ReviewStep | undefined {
+  const steps = reviewSteps(mode);
+  return steps[steps.indexOf(step) + 1];
+}
+
+const STOPS_TEXT = ["Stops once for you", "Stops twice for you", "Stops three times for you"];
 
 const RULE_MODE_OPTIONS = [
   { value: "count", label: "Keep a number per project" },
@@ -69,6 +93,8 @@ const ROWS_PER_PROJECT = 8;
 export function ThreadMaintenanceDialog(props: {
   desktopApi?: DesktopApi;
   policy?: DesktopThreadArchivePolicy;
+  /** Checkout hibernation's settings, for the plan's wording. */
+  hibernationPolicy?: DesktopCheckoutHibernationPolicy;
   projectKey?: string;
   /** Shows a thread from a finished run's outcome rows. The caller closes
    * the dialog; a run still in progress keeps it open. */
@@ -77,6 +103,10 @@ export function ThreadMaintenanceDialog(props: {
 }) {
   const api = props.desktopApi;
   const policy = useMemo(() => normalizeThreadArchivePolicy(props.policy), [props.policy]);
+  const hibernationPolicy = useMemo(
+    () => normalizeCheckoutHibernationPolicy(props.hibernationPolicy, policy),
+    [props.hibernationPolicy, policy],
+  );
   const [mode, setMode] = useState<ThreadMaintenanceMode>("combined");
   const [rules, setRules] = useState<ThreadMaintenanceRules>(() => defaultThreadMaintenanceRules(policy));
   const [storedPhase, setPhase] = useState<ThreadMaintenanceStoredPhase>("plan");
@@ -119,7 +149,7 @@ export function ThreadMaintenanceDialog(props: {
       const next = await api.scanThreadMaintenance({ rules, ...(props.projectKey ? { projectKey: props.projectKey } : {}) });
       setScan(next);
       setSelection(defaultSelection(next));
-      setPhase(mode === "checkouts" ? "checkouts" : "threads");
+      setPhase(reviewSteps(mode)[0] ?? "threads");
     } catch (scanError) {
       setError(scanError instanceof Error ? scanError.message : String(scanError));
       setPhase("plan");
@@ -136,13 +166,27 @@ export function ThreadMaintenanceDialog(props: {
     }
   }, [api, scan, selection, showRun]);
 
-  const finishThreads = () => {
-    if (mode === "threads") void startRun("threads");
-    else setPhase("checkouts");
+  // Pressing a review's primary button moves on, or runs after the last one.
+  const finishReview = (step: ReviewStep, chosen = selection) => {
+    const next = nextReview(mode, step);
+    if (next) setPhase(next);
+    else void startRun(mode, chosen);
+  };
+
+  // Skipping clears the step's selection. A tab that runs one step closes;
+  // the last step closes too when no earlier step chose anything.
+  const skipReview = (step: ReviewStep, cleared: ThreadMaintenanceSelection) => {
+    setSelection(cleared);
+    const next = nextReview(mode, step);
+    if (next) setPhase(next);
+    else if (!scan || isEmptyRequest(buildApplyRequest(scan, cleared, mode))) props.onClose();
+    else void startRun(mode, cleared);
   };
 
   const headChip = phase === "threads" && scan
     ? `${allIdleThreads(scan).length} found`
+    : phase === "hibernate" && scan
+      ? `${hibernateItems(scan).length} found`
     : phase === "checkouts" && scan
       ? `${scan.checkouts.items.length} found`
       : phase === "running" && run?.current
@@ -157,7 +201,7 @@ export function ThreadMaintenanceDialog(props: {
         <div className="thread-maintenance__head">
           <div>
             <h2 id="thread-maintenance-title">Thread maintenance</h2>
-            {phase === "plan" || phase === "scanning" || phase === "threads" ? (
+            {phase === "plan" || phase === "scanning" || phase === "threads" || phase === "hibernate" ? (
               <p>Find idle threads and the checkouts they keep on disk. Archive what you are done with. Changes are saved before any checkout is removed.</p>
             ) : null}
           </div>
@@ -170,11 +214,11 @@ export function ThreadMaintenanceDialog(props: {
         <div className="thread-maintenance__body">
           {phase === "plan" || phase === "scanning" ? (
             <ModeTabs mode={mode} disabled={phase === "scanning"} onChange={setMode} />
-          ) : phase === "threads" || phase === "checkouts" ? (
+          ) : phase === "threads" || phase === "hibernate" || phase === "checkouts" ? (
             <ModeTabs mode={mode} disabled onChange={setMode} />
           ) : null}
           {phase === "plan" || phase === "scanning" ? (
-            <PlanView mode={mode} rules={rules} policy={policy} onRules={setRules} />
+            <PlanView mode={mode} rules={rules} policy={policy} hibernationPolicy={hibernationPolicy} onRules={setRules} />
           ) : null}
           {phase === "scanning" ? (
             <div className="thread-maintenance__progress" role="status">
@@ -182,12 +226,14 @@ export function ThreadMaintenanceDialog(props: {
               <span>Reading threads and checkouts…</span>
             </div>
           ) : null}
-          {(phase === "threads" || phase === "checkouts") && scan && selection ? (
+          {(phase === "threads" || phase === "hibernate" || phase === "checkouts") && scan && selection ? (
             <>
               <Rail mode={mode} phase={phase} scan={scan} selection={selection} />
               {phase === "threads"
                 ? <IdleThreadsReview scan={scan} selection={selection} onSelection={setSelection} />
-                : <CheckoutsReview scan={scan} selection={selection} onSelection={setSelection} />}
+                : phase === "hibernate"
+                  ? <HibernateReview scan={scan} selection={selection} onSelection={setSelection} />
+                  : <CheckoutsReview scan={scan} selection={selection} onSelection={setSelection} />}
             </>
           ) : null}
           {(phase === "running" || phase === "finished") && run ? (
@@ -200,22 +246,15 @@ export function ThreadMaintenanceDialog(props: {
             onClose={props.onClose}
             onScan={() => { void startScan(); }}
             onRescan={() => { setScan(undefined); setSelection(undefined); setPhase("plan"); }}
-            onSkipThreads={() => {
+            onSkip={(step) => {
               if (!selection) return;
-              setSelection({ ...selection, threads: new Set() });
-              if (mode === "threads") props.onClose();
-              else setPhase("checkouts");
+              skipReview(step, step === "threads"
+                ? { ...selection, threads: new Set() }
+                : step === "hibernate"
+                  ? { ...selection, hibernate: new Set() }
+                  : { ...selection, checkouts: new Set<string>(), emptyFolders: false });
             }}
-            onFinishThreads={finishThreads}
-            onSkipCheckouts={() => {
-              if (!selection) return;
-              const next = { ...selection, checkouts: new Set<string>(), emptyFolders: false };
-              setSelection(next);
-              if (mode === "checkouts") props.onClose();
-              else if (scan && buildApplyRequest(scan, next, "threads").archive.length === 0) props.onClose();
-              else void startRun(mode, next);
-            }}
-            onFinishCheckouts={() => { void startRun(mode); }}
+            onFinish={(step) => finishReview(step)}
             onStop={() => {
               // Read main's run back as well, so a lost event cannot leave
               // the dialog showing a run that has ended.
@@ -263,11 +302,15 @@ function PlanView(props: {
   mode: ThreadMaintenanceMode;
   rules: ThreadMaintenanceRules;
   policy: DesktopThreadArchivePolicy;
+  hibernationPolicy: DesktopCheckoutHibernationPolicy;
   onRules: (rules: ThreadMaintenanceRules) => void;
 }) {
   const { rules } = props;
-  const threads = props.mode !== "checkouts";
-  const checkouts = props.mode !== "threads";
+  const steps = reviewSteps(props.mode);
+  const number = (step: ReviewStep) => steps.indexOf(step) + 1;
+  const threads = steps.includes("threads");
+  const hibernate = steps.includes("hibernate");
+  const checkouts = steps.includes("checkouts");
   return (
     <>
       <p className="thread-maintenance__lead">
@@ -278,7 +321,7 @@ function PlanView(props: {
       {threads ? (
         <section className="thread-maintenance__plan" aria-label="Archive idle threads">
           <div className="thread-maintenance__plan-top">
-            <span className="thread-maintenance__num">1</span>
+            <span className="thread-maintenance__num">{number("threads")}</span>
             <div>
               <h3>Archive idle threads</h3>
               <p>Threads past each project&apos;s keep count, or untouched for the chosen days. Their worktrees are removed after any changes are saved.</p>
@@ -316,10 +359,22 @@ function PlanView(props: {
           </div>
         </section>
       ) : null}
+      {hibernate ? (
+        <section className="thread-maintenance__plan" aria-label="Hibernate idle checkouts">
+          <div className="thread-maintenance__plan-top">
+            <span className="thread-maintenance__num">{number("hibernate")}</span>
+            <div>
+              <h3>Hibernate idle checkouts</h3>
+              <p>{`Threads idle ${props.hibernationPolicy.idleDays} ${props.hibernationPolicy.idleDays === 1 ? "day" : "days"}${threads ? " that aren't being archived" : ""}. Their checkouts are removed after any changes are saved; each comes back when you send it a message.`}</p>
+            </div>
+            <span className="settings-pathrow__chip settings-pathrow__chip--warn">Pauses for review</span>
+          </div>
+        </section>
+      ) : null}
       {checkouts ? (
         <section className="thread-maintenance__plan" aria-label="Remove archived checkouts">
           <div className="thread-maintenance__plan-top">
-            <span className="thread-maintenance__num">{threads ? 2 : 1}</span>
+            <span className="thread-maintenance__num">{number("checkouts")}</span>
             <div>
               <h3>Remove archived checkouts</h3>
               <p>Worktrees still on disk for archived threads, empty worktree folders, and checkouts whose repository is gone.</p>
@@ -331,7 +386,7 @@ function PlanView(props: {
       {props.mode === "combined" ? (
         <section className="thread-maintenance__plan is-off" aria-label="Delete expired archives">
           <div className="thread-maintenance__plan-top">
-            <span className="thread-maintenance__num">3</span>
+            <span className="thread-maintenance__num">{steps.length + 1}</span>
             <div>
               <h3>Delete expired archives</h3>
               <p>{props.policy.retentionDays > 0
@@ -355,10 +410,8 @@ function PlanView(props: {
 }
 
 function Rail(props: { mode: ThreadMaintenanceMode; phase: Phase; scan?: ThreadMaintenanceScan; selection?: ThreadMaintenanceSelection; run?: ThreadMaintenanceRun }) {
-  const steps: { step: ThreadMaintenanceStep; title: string }[] = [
-    ...(props.mode !== "checkouts" ? [{ step: "threads" as const, title: "Idle threads" }] : []),
-    ...(props.mode !== "threads" ? [{ step: "checkouts" as const, title: "Archived checkouts" }] : []),
-  ];
+  const steps: { step: ThreadMaintenanceStep; title: string }[] = reviewSteps(props.mode)
+    .map((step) => ({ step, title: STEP_TITLES[step] }));
   return (
     <ol className="thread-maintenance__rail" aria-label="Steps">
       {steps.map((item, index) => {
@@ -389,17 +442,34 @@ function Rail(props: { mode: ThreadMaintenanceMode; phase: Phase; scan?: ThreadM
   );
 }
 
-function KeptChips(props: { kept: Record<string, number> }) {
+/** Why the scan kept what it kept. `collapsible` folds the chips behind
+ * Show, for a step whose kept list is long and rarely read. */
+function KeptChips(props: { kept: Record<string, number>; collapsible?: boolean }) {
+  const [open, setOpen] = useState(!props.collapsible);
+  const chipsId = useId();
   const entries = keptEntries(props.kept);
   if (!entries.length) return null;
   return (
     <div className="thread-maintenance__kept">
-      <p className="thread-maintenance__eyebrow">Kept {keptTotal(props.kept)}</p>
-      <div className="thread-maintenance__chips">
-        {entries.map(([reason, count]) => (
-          <span key={reason} className="settings-pathrow__chip thread-maintenance__chip"><b>{count}</b> {reason}</span>
-        ))}
-      </div>
+      <p className="thread-maintenance__eyebrow">
+        Kept {keptTotal(props.kept)}
+        {props.collapsible ? (
+          <>
+            {" · "}
+            <button aria-controls={chipsId} aria-expanded={open} className="thread-maintenance__kept-toggle" type="button"
+              onClick={() => setOpen(!open)}>
+              {open ? "Hide" : "Show"}
+            </button>
+          </>
+        ) : null}
+      </p>
+      {open ? (
+        <div className="thread-maintenance__chips" id={chipsId}>
+          {entries.map(([reason, count]) => (
+            <span key={reason} className="settings-pathrow__chip thread-maintenance__chip"><b>{count}</b> {reason}</span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -684,11 +754,133 @@ function CheckoutsReview(props: {
   );
 }
 
+/** "node_modules, target": each removed output folder's name, once. */
+function outputNames(removedOutput: readonly string[] | undefined): string | undefined {
+  const names = [...new Set((removedOutput ?? []).map((folder) => folder.split("/").pop() ?? folder))];
+  return names.length ? names.join(", ") : undefined;
+}
+
+function HibernateReview(props: {
+  scan: ThreadMaintenanceScan;
+  selection: ThreadMaintenanceSelection;
+  onSelection: (selection: ThreadMaintenanceSelection) => void;
+}) {
+  const { scan, selection } = props;
+  const section = scan.hibernate;
+  const items = hibernateItems(scan);
+  const chosen = items.filter((item) => selection.hibernate.has(idleThreadKey(item))).length;
+  const toggle = (item: ThreadMaintenanceHibernateCheckout) => {
+    const hibernate = new Set(selection.hibernate);
+    const key = idleThreadKey(item);
+    if (hibernate.has(key)) hibernate.delete(key);
+    else hibernate.add(key);
+    props.onSelection({ ...selection, hibernate });
+  };
+  const selectAll = () => {
+    const all = chosen === items.length;
+    props.onSelection({ ...selection, hibernate: all ? new Set() : new Set(items.map(idleThreadKey)) });
+  };
+  if (!section) {
+    return (
+      <div className="thread-maintenance__summary">
+        <div>
+          <p className="thread-maintenance__summary-title">No idle checkouts to hibernate</p>
+          <p className="thread-maintenance__summary-sub">This machine&apos;s PwrAgent cannot hibernate checkouts.</p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <>
+      <div className="thread-maintenance__summary">
+        <div>
+          <p className="thread-maintenance__summary-title">
+            {items.length
+              ? `${items.length} idle ${items.length === 1 ? "checkout" : "checkouts"} can hibernate`
+              : "No idle checkouts to hibernate"}
+          </p>
+          <p className="thread-maintenance__summary-sub">
+            {`${section.checked} checked · ${items.length} can hibernate · ${keptTotal(section.kept)} kept`}
+            {section.skipped ? ` · ${section.skipped}` : ""}
+          </p>
+        </div>
+      </div>
+      <div className="thread-maintenance__rules-strip">
+        <span className="thread-maintenance__eyebrow">Rules</span>
+        <span>
+          {`Idle ${section.idleDays} ${section.idleDays === 1 ? "day" : "days"} · snapshots up to ${section.maxSnapshotMb} MB · `}
+          {section.removeRebuildableOutput ? "dependencies and build output are removed" : "any ignored file keeps the checkout"}
+        </span>
+        <span className="thread-maintenance__eyebrow">Never</span>
+        <span className="thread-maintenance__never-inline">kept awake · Agent · running or blocked · watching a PR · shared checkouts</span>
+      </div>
+      {items.length > 1 ? (
+        <Checkbox checked={chosen === items.length} mixed={chosen > 0 && chosen < items.length}
+          label="Select every idle checkout" onChange={selectAll}>
+          Select all {items.length}
+        </Checkbox>
+      ) : null}
+      {items.length ? (
+        <section className="thread-maintenance__group" aria-label="Can hibernate">
+          <div className="thread-maintenance__group-head">
+            <span className="thread-maintenance__eyebrow">Can hibernate · {items.length}</span>
+          </div>
+          <ul className="thread-maintenance__rows">
+            {items.map((item) => {
+              const output = outputNames(item.removedOutput);
+              return (
+                <li key={idleThreadKey(item)} className="thread-maintenance__row">
+                  <Checkbox checked={selection.hibernate.has(idleThreadKey(item))} label={`Hibernate ${item.title}`}
+                    onChange={() => toggle(item)} />
+                  <div className="thread-maintenance__row-body">
+                    <p className="thread-maintenance__row-title">
+                      {item.title}
+                      {item.branch ? <span className="thread-maintenance__branch">{item.branch}</span> : null}
+                    </p>
+                    <p className="thread-maintenance__row-meta">
+                      <span className={`thread-maintenance__lead-text is-${item.files ? "warn" : "ok"}`}>
+                        {item.files ? `${item.files} changed ${item.files === 1 ? "file" : "files"}` : "Clean"}
+                      </span>
+                      {item.files ? ` · ${formatBytes(item.bytes)} snapshot` : ""}
+                      {output ? ` · ${output}` : ""}
+                      {` · idle ${formatAge(item.lastActivityAt, scan.startedAt).replace(/ ago$/, "")}`}
+                    </p>
+                    <p className="thread-maintenance__path">{item.worktreePath}</p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          <KeptChips kept={section.kept} collapsible />
+        </section>
+      ) : <KeptChips kept={section.kept} collapsible />}
+    </>
+  );
+}
+
 const STEP_TITLES: Record<ThreadMaintenanceStep, string> = {
   threads: "Idle threads",
+  hibernate: "Idle checkouts",
   checkouts: "Archived checkouts",
   expired: "Expired archives",
 };
+
+/** Receipt numbers follow the combined run's order. */
+const STEP_NUMBERS: Record<ThreadMaintenanceStep, number> = { threads: 1, hibernate: 2, checkouts: 3, expired: 4 };
+
+const STEP_PROGRESS: Record<ThreadMaintenanceStep, string> = {
+  threads: "Archiving idle threads",
+  hibernate: "Hibernating idle checkouts",
+  checkouts: "Removing archived checkouts",
+  expired: "Deleting expired archives",
+};
+
+/** Whether a request would change nothing. */
+function isEmptyRequest(request: ReturnType<typeof buildApplyRequest>): boolean {
+  return request.archive.length + request.removeCheckouts.length + request.trashCheckouts.length
+    + (request.removeUnreferenced?.length ?? 0) + (request.hibernate?.length ?? 0) === 0
+    && !request.removeEmptyFolders;
+}
 
 type OpenThread = (thread: { backend: string; threadId: string }) => void;
 
@@ -711,14 +903,14 @@ function RunView(props: { run: ThreadMaintenanceRun; scan?: ThreadMaintenanceSca
         </div>
       )}
       {run.running ? <Rail mode={mode} phase="running" run={run} /> : null}
-      {(["threads", "checkouts"] as const).map((step) => (
+      {REVIEW_STEPS.map((step) => (
         <ProblemCards key={step} step={step} problems={run.problems.filter((problem) => problem.step === step)} run={run}
           onOpenThread={props.onOpenThread} />
       ))}
       {run.running && run.current ? (
         <div className="thread-maintenance__progress-card" role="status">
           <div className="thread-maintenance__progress-top">
-            <span>{run.current.step === "threads" ? "Archiving idle threads" : "Removing archived checkouts"}</span>
+            <span>{STEP_PROGRESS[run.current.step]}</span>
             <span className="thread-maintenance__mono">{`${run.current.processed} of ${run.current.total}`}</span>
           </div>
           <div aria-hidden="true" className="thread-maintenance__bar">
@@ -733,7 +925,7 @@ function RunView(props: { run: ThreadMaintenanceRun; scan?: ThreadMaintenanceSca
           {run.steps.filter((step) => mode === "combined" || step.step === mode).map((step) => (
             <li key={step.step}>
               <span className={`thread-maintenance__num${step.failed ? " is-failed" : step.ran ? " is-done" : ""}`}>
-                {step.ran && !step.failed ? "✓" : step.step === "threads" ? 1 : step.step === "checkouts" ? 2 : 3}
+                {step.ran && !step.failed ? "✓" : STEP_NUMBERS[step.step]}
               </span>
               <span className="thread-maintenance__rail-title">{STEP_TITLES[step.step]}</span>
               <span className="thread-maintenance__mono">
@@ -753,9 +945,11 @@ function RunView(props: { run: ThreadMaintenanceRun; scan?: ThreadMaintenanceSca
 
 function receiptLine(run: ThreadMaintenanceRun): string {
   const threads = run.steps.find((step) => step.step === "threads");
+  const hibernate = run.steps.find((step) => step.step === "hibernate");
   const checkouts = run.steps.find((step) => step.step === "checkouts");
   return [
     threads?.ran ? `${threads.done} ${threads.done === 1 ? "thread" : "threads"} archived` : undefined,
+    hibernate?.ran ? `${hibernate.done} ${hibernate.done === 1 ? "checkout" : "checkouts"} hibernated` : undefined,
     checkouts?.ran ? `${checkouts.done} ${checkouts.done === 1 ? "checkout or folder" : "checkouts and folders"} removed` : undefined,
   ].filter(Boolean).join(" · ") || "No steps ran";
 }
@@ -771,13 +965,14 @@ function ProblemCards(props: {
   const failed = props.problems.filter((problem) => problem.kind === "failed");
   const kept = props.problems.filter((problem) => problem.kind === "kept");
   const noun = props.step === "threads" ? ["thread", "threads"] : ["checkout", "checkouts"];
+  const verb = props.step === "threads" ? "archived" : props.step === "hibernate" ? "hibernated" : "removed";
   const result = props.run.steps.find((step) => step.step === props.step);
   return (
     <>
       {failed.length ? (
         <ProblemCard tone="failed" problems={failed} onOpenThread={props.onOpenThread}
-          title={`${failed.length} ${failed.length === 1 ? noun[0] : noun[1]} ${props.step === "threads" ? "weren't archived" : "weren't removed"}`.replace(/^1 (\w+) weren't/, "1 $1 wasn't")}
-          sub={`${failed.length === 1 ? "It is" : "They are"} unchanged.${result?.done ? ` The other ${result.done} ${props.step === "threads" ? "were archived" : "were removed"}.` : ""}`} />
+          title={`${failed.length} ${failed.length === 1 ? noun[0] : noun[1]} weren't ${verb}`.replace(/^1 (\w+) weren't/, "1 $1 wasn't")}
+          sub={`${failed.length === 1 ? "It is" : "They are"} unchanged.${result?.done ? ` The other ${result.done} were ${verb}.` : ""}`} />
       ) : null}
       {kept.length ? (
         <ProblemCard tone="kept" problems={kept} onOpenThread={props.onOpenThread}
@@ -825,6 +1020,12 @@ function ProblemCard(props: {
   );
 }
 
+function runFootnote(mode: ThreadMaintenanceMode): string {
+  return mode === "hibernate"
+    ? "Each checkout comes back when its thread gets a message"
+    : "Archived threads can be restored from Settings → Archived Threads";
+}
+
 function Footer(props: {
   phase: Phase;
   mode: ThreadMaintenanceMode;
@@ -834,20 +1035,17 @@ function Footer(props: {
   onClose: () => void;
   onScan: () => void;
   onRescan: () => void;
-  onSkipThreads: () => void;
-  onFinishThreads: () => void;
-  onSkipCheckouts: () => void;
-  onFinishCheckouts: () => void;
+  onSkip: (step: ReviewStep) => void;
+  onFinish: (step: ReviewStep) => void;
   onStop: () => void;
   onNewScan: () => void;
 }) {
   const { scan, selection } = props;
+  const steps = reviewSteps(props.mode);
   if (props.phase === "plan" || props.phase === "scanning") {
     return (
       <>
-        <span className="thread-maintenance__footnote">
-          {props.mode === "combined" ? "Stops twice for you" : "Stops once for you"}
-        </span>
+        <span className="thread-maintenance__footnote">{STOPS_TEXT[steps.length - 1]}</span>
         <span className="thread-maintenance__actions">
           <button className="button button--ghost thread-maintenance__button" type="button" onClick={props.onClose}>Close</button>
           <button className="button button--primary thread-maintenance__button" type="button"
@@ -859,21 +1057,30 @@ function Footer(props: {
       </>
     );
   }
-  if (props.phase === "threads" && scan && selection) {
-    const count = buildApplyRequest(scan, selection, "threads").archive.length;
-    const last = props.mode === "threads";
+  if ((props.phase === "threads" || props.phase === "hibernate") && scan && selection) {
+    const step = props.phase;
+    const request = buildApplyRequest(scan, selection, step);
+    const count = step === "threads" ? request.archive.length : request.hibernate?.length ?? 0;
+    const next = nextReview(props.mode, step);
+    const [verb, one, many, skip] = step === "threads"
+      ? ["Archive", "thread", "threads", "Skip idle threads"]
+      : ["Hibernate", "checkout", "checkouts", "Skip idle checkouts"];
     return (
       <>
-        <span className="thread-maintenance__footnote"><b>{count} selected</b>{last ? "" : " · then archived checkouts"}</span>
+        <span className="thread-maintenance__footnote">
+          <b>{count} selected</b>{next ? ` · then ${STEP_TITLES[next].toLowerCase()}` : ""}
+        </span>
         <span className="thread-maintenance__actions">
-          <button className="button button--ghost thread-maintenance__button" type="button" onClick={props.onRescan}>Re-scan</button>
-          <button className="button button--ghost thread-maintenance__button" type="button" onClick={props.onSkipThreads}>
-            {last ? "Close" : "Skip idle threads"}
+          {steps[0] === step ? (
+            <button className="button button--ghost thread-maintenance__button" type="button" onClick={props.onRescan}>Re-scan</button>
+          ) : null}
+          <button className="button button--ghost thread-maintenance__button" type="button" onClick={() => props.onSkip(step)}>
+            {steps.length === 1 ? "Close" : skip}
           </button>
           <button className="button button--primary thread-maintenance__button" type="button"
-            aria-disabled={(last && count === 0) || undefined}
-            onClick={() => { if (!last || count > 0) props.onFinishThreads(); }}>
-            {last ? `Archive ${count} ${count === 1 ? "thread" : "threads"}` : count ? `Archive ${count} and continue` : "Continue"}
+            aria-disabled={(!next && count === 0) || undefined}
+            onClick={() => { if (next || count > 0) props.onFinish(step); }}>
+            {!next ? `${verb} ${count} ${count === 1 ? one : many}` : count ? `${verb} ${count} and continue` : "Continue"}
           </button>
         </span>
       </>
@@ -882,18 +1089,20 @@ function Footer(props: {
   if (props.phase === "checkouts" && scan && selection) {
     const request = buildApplyRequest(scan, selection, props.mode);
     const checkouts = request.removeCheckouts.length + request.trashCheckouts.length + (request.removeUnreferenced?.length ?? 0);
-    const nothing = request.archive.length + checkouts === 0 && !request.removeEmptyFolders;
+    const hibernate = request.hibernate?.length ?? 0;
+    const nothing = isEmptyRequest(request);
     return (
       <>
         <span className="thread-maintenance__footnote">
           <b>{checkouts} selected</b>
           {request.archive.length ? ` · ${request.archive.length} ${request.archive.length === 1 ? "thread" : "threads"} to archive first` : ""}
+          {hibernate ? ` · ${hibernate} to hibernate first` : ""}
         </span>
         <span className="thread-maintenance__actions">
-          <button className="button button--ghost thread-maintenance__button" type="button" onClick={props.onSkipCheckouts}>Skip checkouts</button>
+          <button className="button button--ghost thread-maintenance__button" type="button" onClick={() => props.onSkip("checkouts")}>Skip checkouts</button>
           <button className="button button--primary thread-maintenance__button" type="button"
             aria-disabled={nothing || undefined}
-            onClick={() => { if (!nothing) props.onFinishCheckouts(); }}>
+            onClick={() => { if (!nothing) props.onFinish("checkouts"); }}>
             {checkouts ? `Remove ${checkouts} and finish` : "Finish"}
           </button>
         </span>
@@ -903,7 +1112,7 @@ function Footer(props: {
   if (props.phase === "running") {
     return (
       <>
-        <span className="thread-maintenance__footnote">Archived threads can be restored from Settings → Archived Threads</span>
+        <span className="thread-maintenance__footnote">{runFootnote(props.mode)}</span>
         <span className="thread-maintenance__actions">
           <button className="button button--ghost thread-maintenance__button" type="button"
             aria-disabled={props.run?.stopRequested || undefined}
@@ -916,7 +1125,7 @@ function Footer(props: {
   }
   return (
     <>
-      <span className="thread-maintenance__footnote">Archived threads can be restored from Settings → Archived Threads</span>
+      <span className="thread-maintenance__footnote">{runFootnote(props.mode)}</span>
       <span className="thread-maintenance__actions">
         <button className="button button--ghost thread-maintenance__button" type="button" onClick={props.onClose}>Close</button>
         <button className="button button--ghost thread-maintenance__button" type="button" onClick={props.onNewScan}>New scan</button>

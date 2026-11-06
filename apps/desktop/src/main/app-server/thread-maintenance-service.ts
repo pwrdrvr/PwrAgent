@@ -4,10 +4,12 @@ import {
   buildThreadIdentityKey,
   type AppServerBackendKind,
   defaultThreadMaintenanceRules,
+  type DesktopCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type ThreadMaintenanceApplyRequest,
   type ThreadMaintenanceArchivedCheckout,
   type ThreadMaintenanceFailure,
+  type ThreadMaintenanceHibernateCheckout,
   type ThreadMaintenanceIdleThread,
   type ThreadMaintenanceProblem,
   type ThreadMaintenanceProject,
@@ -30,6 +32,7 @@ import {
   type ThreadArchiveCandidate,
 } from "./thread-archive-sweeper";
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
+import { inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
 import { missingWorktreeRepository } from "./worktree-archive-service";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
@@ -91,14 +94,52 @@ export type ThreadMaintenanceDeps = {
   isManagedCheckoutPath: (worktreePath: string) => boolean;
   trashItem: (absolutePath: string) => Promise<void>;
   inspectWorkspace?: typeof inspectMaintenanceWorkspace;
+  /** Idle checkout hibernation, reviewed. Absent: the step finds nothing. */
+  hibernation?: CheckoutHibernationReviewDeps;
   now?: () => number;
   newId?: () => string;
   onRun?: (run: ThreadMaintenanceRun) => void;
   onError?: (error: unknown, context: Record<string, unknown>) => void;
 };
 
+/** The same rules and probe as the hourly hibernation sweep. */
+export type CheckoutHibernationReviewDeps = {
+  getPolicy: () => DesktopCheckoutHibernationPolicy;
+  /** The candidate's checkout, and why the rules keep it, from thread state.
+   * No target: the thread has no checkout hibernation could remove. */
+  keepReason: (candidate: ThreadArchiveCandidate, candidates: readonly ThreadArchiveCandidate[],
+    policy: DesktopCheckoutHibernationPolicy, now: number) => { target?: string; keep?: string };
+  inspect: (worktreePath: string, policy: DesktopCheckoutHibernationPolicy, signal: AbortSignal) => Promise<HibernationWorkspaceInspection>;
+  /** Re-checks everything, then hibernates. True when hibernated, false when
+   * cancelled, or the reason it was kept. */
+  hibernate: (candidate: ThreadArchiveCandidate, policy: DesktopCheckoutHibernationPolicy) => Promise<boolean | string>;
+};
+
+/** The registry hooks the hibernate step uses. */
+export type CheckoutHibernationReviewHost = {
+  getCheckoutHibernationPolicy: () => DesktopCheckoutHibernationPolicy;
+  checkoutHibernationKeepReason: CheckoutHibernationReviewDeps["keepReason"];
+  hibernateReviewedCheckout: CheckoutHibernationReviewDeps["hibernate"];
+};
+
+/** The hibernate step's deps: the registry's rules, then the sweep's own
+ * Git probe at hibernation's snapshot limit. */
+export function checkoutHibernationReviewDeps(host: () => CheckoutHibernationReviewHost): CheckoutHibernationReviewDeps {
+  return {
+    getPolicy: () => host().getCheckoutHibernationPolicy(),
+    keepReason: (candidate, candidates, policy, now) => host().checkoutHibernationKeepReason(candidate, candidates, policy, now),
+    inspect: async (worktreePath, policy, signal) => await inspectHibernationWorkspace(worktreePath, {
+      signal, limitBytes: policy.maxSnapshotMb * 1024 * 1024, removeRebuildableOutput: policy.removeRebuildableOutput,
+    }),
+    hibernate: async (candidate, policy) => await host().hibernateReviewedCheckout(candidate, policy),
+  };
+}
+
 type RetainedScan = {
   scan: ThreadMaintenanceScan;
+  /** Every thread the scan read, for the hibernation step. */
+  candidates?: ThreadArchiveCandidate[];
+  hibernate: Map<string, { candidate: ThreadArchiveCandidate; row: ThreadMaintenanceHibernateCheckout }>;
   /** Direct, non-archived sub-threads per parent key, at scan time. */
   subthreads: Map<string, string[]>;
   families: Map<string, { family: ThreadArchiveCandidate[]; row: ThreadMaintenanceIdleThread }>;
@@ -150,8 +191,11 @@ export class ThreadMaintenanceService {
       families: new Map(),
       checkouts: new Map(),
       subthreads: new Map(),
+      hibernate: new Map(),
     };
     const threads = await this.scanThreads(rules, policy, now, request.projectKey, retained, fail);
+    // After archive: a thread offered for archive is never also offered here.
+    const hibernate = await this.scanHibernation(now, request.projectKey, retained, fail);
     const checkouts = await this.scanCheckouts(rules, request.projectKey, retained, fail);
     const scan: ThreadMaintenanceScan = {
       scanId: this.newId(),
@@ -161,6 +205,7 @@ export class ThreadMaintenanceService {
       ...(request.projectKey ? { projectKey: request.projectKey } : {}),
       spaceSource: "none",
       threads,
+      ...(hibernate ? { hibernate } : {}),
       checkouts,
       expired: { enabled: policy.retentionDays > 0, retentionDays: policy.retentionDays },
       failures,
@@ -205,6 +250,7 @@ export class ThreadMaintenanceService {
       fail("threads", error);
       return { ...result, skipped: "Threads could not be listed" };
     }
+    retained.candidates = candidates;
     // The dialog is an explicit request, so it runs whether or not the hourly
     // sweep is on. Everything else about the keep rules is the same.
     const reviewPolicy: DesktopThreadArchivePolicy = { ...policy, enabled: true,
@@ -302,6 +348,78 @@ export class ThreadMaintenanceService {
       .filter((project) => project.idle.length || Object.keys(project.kept).length)
       .sort((a, b) => b.idle.length - a.idle.length || a.label.localeCompare(b.label));
     for (const project of result.projects) project.idle.sort((a, b) => a.lastActivityAt - b.lastActivityAt);
+    return result;
+  }
+
+  /** Idle threads whose checkout can hibernate. The review is an explicit
+   * request, so it runs whether or not the hourly sweep does; every other
+   * rule is the sweep's own. */
+  private async scanHibernation(
+    now: number,
+    projectFilter: string | undefined,
+    retained: RetainedScan,
+    fail: (step: ThreadMaintenanceStep, error: unknown, details?: { path?: string; threadId?: string }) => void,
+  ): Promise<ThreadMaintenanceScan["hibernate"]> {
+    const deps = this.deps.hibernation;
+    if (!deps) return undefined;
+    let settings: DesktopCheckoutHibernationPolicy;
+    try { settings = deps.getPolicy(); }
+    catch (error) {
+      fail("hibernate", error);
+      return undefined;
+    }
+    const policy = { ...settings, enabled: true };
+    const result: NonNullable<ThreadMaintenanceScan["hibernate"]> = {
+      idleDays: policy.idleDays, maxSnapshotMb: policy.maxSnapshotMb, removeRebuildableOutput: policy.removeRebuildableOutput,
+      checked: 0, items: [], kept: {},
+    };
+    const candidates = retained.candidates;
+    if (!candidates) return { ...result, skipped: "Threads could not be listed" };
+    const keep = (reason: string) => { result.kept[reason] = (result.kept[reason] ?? 0) + 1; };
+    const roots = candidates.filter((candidate) => !candidate.thread.codexNativeSubAgent
+      && !retained.families.has(buildThreadIdentityKey(candidate.thread.source, candidate.thread.id)));
+    const evaluated = await mapLimit(roots, INSPECT_CONCURRENCY, async (candidate) => {
+      if (this.abort.signal.aborted) return undefined;
+      try {
+        if (projectFilter) {
+          const project = await this.deps.resolveProject(candidate);
+          if (!project || path.resolve(project) !== path.resolve(projectFilter)) return undefined;
+        }
+        const listed = deps.keepReason(candidate, candidates, policy, now);
+        if (!listed.target) return undefined;
+        if (listed.keep) return { keep: listed.keep };
+        const inspection = await deps.inspect(listed.target, policy, this.abort.signal);
+        if (inspection.keep !== undefined) return { keep: inspection.keep };
+        const directory = candidate.thread.linkedDirectories.find((item) => item.worktreePath === listed.target);
+        const row: ThreadMaintenanceHibernateCheckout = {
+          backend: candidate.thread.source,
+          threadId: candidate.thread.id,
+          title: candidate.thread.title,
+          ...(directory?.gitBranch ? { branch: directory.gitBranch } : {}),
+          worktreePath: listed.target,
+          lastActivityAt: archiveCandidateLastActivity(candidate),
+          files: inspection.files,
+          bytes: inspection.bytes,
+          ...(inspection.removedOutput?.length ? { removedOutput: inspection.removedOutput } : {}),
+        };
+        return { row, candidate };
+      } catch (error) {
+        fail("hibernate", error, { threadId: candidate.thread.id });
+        return undefined;
+      }
+    });
+    for (const item of evaluated) {
+      if (!item) continue;
+      result.checked += 1;
+      if ("keep" in item) {
+        keep(item.keep!);
+        continue;
+      }
+      result.items.push(item.row);
+      retained.hibernate.set(buildThreadIdentityKey(item.candidate.thread.source, item.candidate.thread.id), item);
+    }
+    // Longest idle first, as the archive review lists its rows.
+    result.items.sort((a, b) => a.lastActivityAt - b.lastActivityAt);
     return result;
   }
 
@@ -459,7 +577,50 @@ export class ThreadMaintenanceService {
       }
     }
 
-    // Step 2: archived checkouts. One failure never skips the rest.
+    // Step 2: hibernate idle checkouts. After archive, so a thread is never
+    // hibernated and then archived in one run.
+    const hibernateItems = request.hibernate ?? [];
+    const hibernateStep: ThreadMaintenanceStepResult = { step: "hibernate", ran: hibernateItems.length > 0, done: 0, kept: 0, failed: 0 };
+    steps.push(hibernateStep);
+    for (const [index, item] of hibernateItems.entries()) {
+      const entry = retained.hibernate.get(keyOf(item));
+      const object = entry?.row.title ?? item.threadId;
+      const ids = { backend: item.backend, threadId: item.threadId, ...(entry ? { path: entry.row.worktreePath } : {}) };
+      const keepIt = (reason: string, detail?: string) => {
+        hibernateStep.kept += 1;
+        addProblem({ step: "hibernate", kind: "kept", object, reason, ...(detail ? { detail } : {}), ...ids });
+      };
+      update({ current: { step: "hibernate", processed: index, total: hibernateItems.length, object } });
+      if (!entry || !this.deps.hibernation) {
+        hibernateStep.failed += 1;
+        addProblem({ step: "hibernate", kind: "failed", object, reason: "Not in this scan", ...ids });
+        continue;
+      }
+      if (archivedKeys.has(keyOf(item))) {
+        keepIt("Archived in this run");
+        continue;
+      }
+      if (stopped()) {
+        keepIt("Stopped before hibernating");
+        continue;
+      }
+      try {
+        const refreshed = await this.deps.refreshCandidate(entry.candidate);
+        if (archiveCandidateLastActivity(refreshed) > entry.row.lastActivityAt) {
+          keepIt("New activity during the run");
+          continue;
+        }
+        const outcome = await this.deps.hibernation.hibernate(refreshed, { ...this.deps.hibernation.getPolicy(), enabled: true });
+        if (outcome === true) hibernateStep.done += 1;
+        else keepIt(outcome === false ? "Hibernation cancelled" : outcome);
+      } catch (error) {
+        hibernateStep.failed += 1;
+        this.deps.onError?.(error, { step: "hibernate", threadId: item.threadId });
+        addProblem({ step: "hibernate", kind: "failed", object, reason: "Hibernation failed", detail: errorMessage(error), ...ids });
+      }
+    }
+
+    // Step 3: archived checkouts. One failure never skips the rest.
     const checkoutStep: ThreadMaintenanceStepResult = { step: "checkouts",
       ran: request.removeCheckouts.length > 0 || request.trashCheckouts.length > 0
         || (request.removeUnreferenced?.length ?? 0) > 0 || request.removeEmptyFolders,
@@ -536,7 +697,7 @@ export class ThreadMaintenanceService {
       }
     }
 
-    // Step 3: expired archives are deleted by the hourly sweep under the
+    // Step 4: expired archives are deleted by the hourly sweep under the
     // Settings retention period; the reviewed run reports, never deletes.
     steps.push({ step: "expired", ran: false, done: 0, kept: 0, failed: 0 });
     const finished = { ...this.run!, running: false, finishedAt: this.now(), current: undefined,
