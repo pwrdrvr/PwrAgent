@@ -3224,6 +3224,9 @@ class DesktopAppServerService {
     threadKey: string,
     attachment: { backend: AppServerBackendKind; primaryRepoKey?: string; prs: PrSummary[] } | undefined,
   ): void {
+    const identity = parseThreadIdentityKey(threadKey);
+    // An in-flight lookup can finish after archive removed the subscription.
+    if (attachment && identity && getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true) attachment = undefined;
     this.primaryPrThreadsByKey.set(threadKey, (attachment?.prs ?? [])
       .filter((pr) => this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey))
       .map((pr) => getPrStatusKey(this.prRepositoryAliases.canonicalize(pr))));
@@ -4262,6 +4265,9 @@ class DesktopAppServerService {
 
   handleAgentEventForPrAttachments(event: AgentEvent): void {
     if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
+    if (event.notification.method === "thread/archived") {
+      this.setThreadPrAttachment(buildThreadIdentityKey(event.backend, event.notification.params.threadId), undefined);
+    }
     if (["navigation/providerThreads/refreshed", "thread/started", "thread/archived", "thread/unarchived",
       "navigation/threadDirectories/updated", "navigation/directory/removed", "thread/parent/set", "thread/parent/cleared",
       "thread/branch/updated"].includes(event.notification.method)) {
@@ -10236,12 +10242,14 @@ class DesktopAppServerService {
 
   private getPrStatusWatchCoordinator(): PrStatusWatchCoordinator {
     if (!this.prStatusWatchCoordinator) {
+      let archivedSubscriptionsRetired = false;
       this.prStatusWatchCoordinator = new PrStatusWatchCoordinator({
         store: this.getOverlayStore(),
         registry: getDesktopBackendRegistry(),
         isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
         allowsWatchDispatch: (watch) =>
-          projectAllowsPrWatches(this.threadForgeAutomation(watch)),
+          getDesktopBackendRegistry().getThreadInfo(watch)?.archived !== true
+          && projectAllowsPrWatches(this.threadForgeAutomation(watch)),
         fetchTerminalDetails: async (pr) =>
           await this.getPrFetcher().fetchPullRequestTerminalDetails(pr),
         prepareTerminalWake: async ({ watch }) => {
@@ -10258,7 +10266,14 @@ class DesktopAppServerService {
           return formatSandboxCleanupLines(report);
         },
         onWatchesChanged: async (threads) => await this.publishPrWatchesUpdated(threads),
-        prepareClaims: async () => await this.syncPrStatusWatchKeys(),
+        prepareClaims: async () => {
+          if (!archivedSubscriptionsRetired) {
+            const retired = await this.getOverlayStore().retireArchivedThreadPrAutomation(Date.now());
+            await this.publishPrWatchesUpdated(retired);
+            archivedSubscriptionsRetired = true;
+          }
+          await this.syncPrStatusWatchKeys();
+        },
       });
     }
     return this.prStatusWatchCoordinator;
@@ -10448,6 +10463,11 @@ class DesktopAppServerService {
     if (!getAppStateMode()) return;
     if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
     const notification = event.notification as AppServerNotification;
+    if (notification.method === "thread/archived") {
+      void this.prAutoDispatchCoordinator?.cancelAllPendingForThread({ backend: event.backend, threadId: notification.params.threadId })
+        .catch((error) => appServerLog.warn("archived thread repair cancellation failed", { error: String(error) }));
+      return;
+    }
     const settled = notification.method === "turn/completed"
       || notification.method === "turn/failed"
       || notification.method === "turn/cancelled"

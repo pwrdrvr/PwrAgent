@@ -22556,21 +22556,33 @@ export class DesktopBackendRegistry {
   }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", ...entry } = params;
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend: params.backend, threadId: params.threadId });
+    // The durable archive observation also covers watches restored at startup,
+    // before provider listings have populated this process's information store.
+    const isArchived = () => this.getThreadInfo(params)?.archived
+      ?? (overlay?.archiveRetentionStartedAt !== undefined || overlay?.archiveTombstonedAt !== undefined);
     if (
       // A lock reads as busy, not as a failure: the PR watch and auto-fix
       // callers wait without spending an attempt, and resume once unlocked.
-      (await this.readThreadLock(params.backend, params.threadId))
+      overlay?.lock
+      // Retired PR work can still be in flight when archive completes.
+      // Discard its admission without resuming the thread or cancelling cleanup.
+      || isArchived()
       || this.threadHasActiveTurn(params.threadId, params.backend)
       || this.threadHasBlockingWorkspaceMove(params)
     ) {
       return { status: "busy" };
     }
     try {
-      return await this.admitThreadAttachments(entry, (input, onAdmission) => this.threadTurnQueue.submitIfIdle({
-        ...entry,
-        input,
-        origin,
-      }, { onAdmission }));
+      return await this.admitThreadAttachments(entry, (input, onAdmission) => {
+        // Attachment preparation can yield to an archive notification.
+        if (isArchived()) return Promise.resolve({ status: "busy" as const });
+        return this.threadTurnQueue.submitIfIdle({
+          ...entry,
+          input,
+          origin,
+        }, { onAdmission });
+      });
     } catch (error) {
       // Turn preparation yields after the queue's idle check. If a backend
       // notification claimed the thread meanwhile, preserve the busy result

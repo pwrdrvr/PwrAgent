@@ -412,6 +412,7 @@ export class PrAutoDispatchCoordinator {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<boolean> {
+    this.clearTimer(this.threadKey(params));
     const record = await this.options.store.getThreadPrAutoDispatchPending(params);
     if (!record) return false;
     return await this.cancelPending({
@@ -594,6 +595,16 @@ export class PrAutoDispatchCoordinator {
         });
         await this.notifyPending(identity, null);
       }
+      return;
+    }
+
+    // Archive disables Auto-fix permanently for this subscription. It can
+    // land during budget reservation, then be followed by restore, so check
+    // the persisted setting before routing the reserved event.
+    const thread = await this.options.store.getThreadOverlayState(identity);
+    if (thread?.prAutoDispatchEnabled !== true || thread.archiveRetentionStartedAt !== undefined || thread.archiveTombstonedAt !== undefined) {
+      await this.restoreAfterBusy(identity, fingerprint, this.now());
+      await this.notifyPending(identity, null);
       return;
     }
 

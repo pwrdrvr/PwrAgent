@@ -216,6 +216,10 @@ export class ThreadDependencyCoordinator {
   }
 
   private async evaluate(item: ThreadDependency, signal?: { target: { backend: string; threadId: string }; turn: AppServerThreadTurnMetadata }): Promise<void> {
+    if (this.options.store.isConsumerArchived(item)) {
+      this.options.store.retireForArchivedThread(item, this.now());
+      return;
+    }
     if (item.status === "dispatching") return;
     const evidence: ThreadDependencyEvidence[] = [];
     // Conditions saved under a renamed repository's old URL move to its
@@ -299,6 +303,9 @@ export class ThreadDependencyCoordinator {
     const claim = { ...current, status: "dispatching" as const, dispatchOwnerPid: process.pid, updatedAt: this.now() };
     if (!this.options.store.replace(current, claim)) return;
     await this.options.changed(claim);
+    // Archive can revoke the claim while publication is in flight. Restore
+    // must not turn that revoked subscription into a new continuation.
+    if (JSON.stringify(this.options.store.get(claim.backend, claim.threadId, claim.id)) !== JSON.stringify(claim)) return;
     try {
       const result = await this.options.submit({
         backend: claim.backend, threadId: claim.threadId,

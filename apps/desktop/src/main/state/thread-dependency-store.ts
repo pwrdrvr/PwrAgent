@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { ThreadDependency } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared";
 
 export const THREAD_DEPENDENCY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS thread_dependencies (
@@ -81,6 +82,7 @@ export class ThreadDependencyStore {
 
   register(candidate: ThreadDependency): ThreadDependency {
     return this.db.transaction(() => {
+      if (this.isConsumerArchived(candidate)) throw new Error("Cannot register a continuation for an archived thread.");
       const active = this.active();
       const duplicate = active.find((item) => signature(item) === signature(candidate));
       if (duplicate) return duplicate;
@@ -108,6 +110,26 @@ export class ThreadDependencyStore {
       ).run(candidate.id, candidate.backend, candidate.threadId, candidate.status, candidate.createdAt, JSON.stringify(candidate));
       return candidate;
     }).immediate();
+  }
+
+  isConsumerArchived(target: Pick<ThreadDependency, "backend" | "threadId">): boolean {
+    const row = this.db.prepare(`SELECT
+      (json_type(payload, '$.archiveRetentionStartedAt') IS NOT NULL
+        OR json_type(payload, '$.archiveTombstonedAt') IS NOT NULL) AS archived
+      FROM threads WHERE thread_id = ?`).get(buildLegacyEncodedThreadIdentityKey(target.backend, target.threadId)) as
+      { archived: number } | undefined;
+    return row?.archived === 1;
+  }
+
+  /** Archive revokes the consumer's subscriptions, including an unsubmitted claim. */
+  retireForArchivedThread(target: Pick<ThreadDependency, "backend" | "threadId">, now: number): void {
+    if (!this.db.prepare(`SELECT 1 FROM thread_dependencies
+      WHERE backend = ? AND thread_id = ? AND status IN ('waiting', 'ready', 'dispatching') LIMIT 1`)
+      .get(target.backend, target.threadId)) return;
+    this.db.prepare(`UPDATE thread_dependencies SET status = 'cancelled',
+      payload = json_set(payload, '$.status', 'cancelled', '$.updatedAt', ?)
+      WHERE backend = ? AND thread_id = ? AND status IN ('waiting', 'ready', 'dispatching')`)
+      .run(now, target.backend, target.threadId);
   }
 
   /** One immediate transaction: an operator card commits with its claim. */

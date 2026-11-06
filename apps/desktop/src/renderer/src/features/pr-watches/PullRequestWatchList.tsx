@@ -308,6 +308,8 @@ function describeEnded(
       return "Stopped by the agent";
     case "detached":
       return "Ended when the PR was detached";
+    case "archived":
+      return "Ended when the thread was archived";
     case "covered_by_auto_fix":
       return "Handed to Auto-fix";
     case "pr_merged":

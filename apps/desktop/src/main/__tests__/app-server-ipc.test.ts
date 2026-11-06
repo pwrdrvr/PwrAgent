@@ -1174,6 +1174,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     listPendingThreadPrAutoDispatches,
     recoverOrphanedThreadPrAutoDispatches,
     registerThreadPrStatusWatch,
+    retireArchivedThreadPrAutomation: async () => [],
+    isThreadPrStatusWatchClaimActive: async () => true,
     claimThreadPrStatusWatches,
     releaseThreadPrStatusWatch,
     renewThreadPrStatusWatchLease,
@@ -1223,6 +1225,7 @@ vi.mock("../app-server/backend-registry", () => {
     renameThread,
     listThreads,
     getCachedThreadSummary,
+    getThreadInfo: () => undefined,
     readThread,
     getThreadTranscriptImageRoots,
     readDirectoryStatuses,
@@ -10489,6 +10492,79 @@ describe("app server ipc", () => {
     };
     return { appServerService, service, submitTurnIfIdle, restore };
   }
+
+  it("removes an archived thread from PR routing immediately and rejects late lookup results", async () => {
+    const { appServerService, service, restore } = await renamedRepositoryService();
+    const registry = backendRegistryLifecycle.get() as Record<string, unknown>;
+    const previousInfo = registry.getThreadInfo;
+    let archived = false;
+    registry.getThreadInfo = () => ({ archived });
+    service.ownerNavigationActive = false;
+    const threadKey = "codex:archived-watcher";
+    const attachment = { backend: "codex" as const, prs: [githubPr({
+      org: "fixture", repo: "project", number: 70, state: "pending", url: "https://github.com/fixture/project/pull/70",
+    })] };
+    const attachments = (service as unknown as { attachedPrsByThreadKey: Map<string, unknown> }).attachedPrsByThreadKey;
+    try {
+      service.setThreadPrAttachment(threadKey, attachment);
+      expect(attachments.has(threadKey)).toBe(true);
+      archived = true;
+      appServerService.handleAgentEventForPrAttachments({ backend: "codex",
+        notification: { method: "thread/archived", params: { threadId: "archived-watcher" } },
+      });
+      expect(attachments.has(threadKey)).toBe(false);
+      service.setThreadPrAttachment(threadKey, attachment);
+      expect(attachments.has(threadKey)).toBe(false);
+    } finally {
+      registry.getThreadInfo = previousInfo;
+      service.setThreadPrAttachment(threadKey, undefined);
+      restore();
+    }
+  });
+
+  it.each(["checks", "terminal"] as const)("retires an archived thread's %s watch without replaying it after restore", async (kind) => {
+    await withRenamedRepositoryStore("archived-pr-watch-", async ({ store }) => {
+      const { service, submitTurnIfIdle, restore } = await renamedRepositoryService();
+      const registry = backendRegistryLifecycle.get() as Record<string, unknown>;
+      const previousInfo = registry.getThreadInfo;
+      let archived = true;
+      registry.getThreadInfo = () => ({ archived });
+      const threadId = "archived-watcher";
+      const target = githubPr({
+        number: 70, org: "pwrdrvr", repo: "fixture", url: "https://github.com/pwrdrvr/fixture/pull/70",
+        headSha: "a".repeat(40), state: "passing", checkState: "passing",
+        lifecycleState: kind === "terminal" ? "merged" : "open",
+      });
+      try {
+        await store.registerThreadPrStatusWatch({
+          watch: {
+            watchId: "archived-watch", backend: "codex", threadId, kind,
+            prKey: buildPullRequestStatusKey(target), prUrl: target.url, prNumber: target.number,
+            headSha: kind === "terminal" ? "" : target.headSha!,
+            notifyOn: kind === "terminal" ? ["merged"] : ["success"],
+            createdAt: Date.now(), failureHandledByAutoFix: false,
+          },
+          now: Date.now(),
+        });
+        await store.observeArchivedThreads([{ backend: "codex", threadId }], Date.now());
+        const coordinator = service.getPrStatusWatchCoordinator();
+        await coordinator.handleStatusSnapshot(target, Date.now());
+        expect(submitTurnIfIdle).not.toHaveBeenCalled();
+        expect(fetchPullRequestTerminalDetails).not.toHaveBeenCalled();
+        expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId }))
+          .toEqual([]);
+
+        archived = false;
+        await store.setThreadArchiveTombstone({ backend: "codex", threadId, restoredAt: Date.now() });
+        await coordinator.handleStatusSnapshot(target, Date.now());
+        expect(submitTurnIfIdle).not.toHaveBeenCalled();
+        expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId })).toEqual([]);
+      } finally {
+        registry.getThreadInfo = previousInfo;
+        restore();
+      }
+    });
+  });
 
   it("claims a watch saved under a renamed repository's old name after a restart", async () => {
     // The watch was registered before the duplicate rows collapsed. Status
