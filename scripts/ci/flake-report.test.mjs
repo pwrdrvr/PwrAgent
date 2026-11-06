@@ -92,3 +92,39 @@ test("the CLI produces a consolidated report including incomplete and absent sli
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test("the job summary counts every unavailable or incomplete first report even when all slices arrived", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, resolve } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const cwd = mkdtempSync(join(tmpdir(), "flake-summary-test-"));
+  const script = resolve("scripts/ci/write-flake-report.mjs");
+  try {
+    const expected = expectedSlices();
+    const summary = join(cwd, "summary.md");
+    for (const incomplete of [1, 2, 3, 0]) {
+      const downloads = join(cwd, ".local/ci/flake-slices");
+      rmSync(downloads, { recursive: true, force: true });
+      for (const [index, dimension] of expected.entries()) {
+        const first = index >= incomplete ? (dimension.kind === "unit"
+          ? unit([item("passing", "passed")])
+          : { status: "passed", complete: true, errors: 0, tests: [{ id: "passing", name: "passing", outcome: "expected", completed: true }] })
+          : index % 2 === 0 ? null : (dimension.kind === "unit" ? unit([], false) : { status: "interrupted", complete: false, errors: 0, tests: [] });
+        const slice = createSlice({ ...dimension, first, retries: [] });
+        const artifact = join(downloads, slice.key);
+        mkdirSync(artifact, { recursive: true });
+        writeFileSync(join(artifact, "flake-slice.json"), JSON.stringify(slice));
+      }
+      writeFileSync(summary, "");
+      const result = spawnSync(process.execPath, [script, "aggregate"], { cwd, encoding: "utf8", env: { ...process.env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1", GITHUB_STEP_SUMMARY: summary } });
+      assert.equal(result.status, 0, result.stderr);
+      const content = readFileSync(summary, "utf8");
+      assert.match(content, /Slices received: 22\/22; missing: 0/);
+      assert.match(content, new RegExp(`First reports unavailable or incomplete: ${incomplete}\\.`));
+      if (incomplete > 0) assert.match(content, /failure counts may be incomplete/i);
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});

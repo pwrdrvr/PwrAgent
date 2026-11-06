@@ -39,8 +39,11 @@ if (process.argv[2] === "slice") {
   const report = aggregateSlices({ slices, samples: Number(process.env.FLAKE_SAMPLES), runId: process.env.GITHUB_RUN_ID,
     attempt: process.env.GITHUB_RUN_ATTEMPT, sha: process.env.GITHUB_SHA, headSha: process.env.FLAKE_HEAD_SHA, warnings });
   write(".local/ci/flake-report/flake-report.json", report);
+  const incomplete = report.slices.filter((slice) => !slice.first.available || !slice.first.complete).length;
   const lines = ["### Consolidated test retry report", "", `Initial failures: ${report.totals.initialFailures}; recovered: ${report.totals.recovered}; failed: ${report.totals.failed}; unknown: ${report.totals.unknown}.`,
     `Slices received: ${report.slices.length}/${report.expectedSlices}; missing: ${report.missingSlices.length}.`,
+    `First reports unavailable or incomplete: ${incomplete}.`,
+    ...((incomplete || report.missingSlices.length) ? ["Failure counts may be incomplete."] : []),
     "Download the `ci-flake-report-${report.attempt}` artifact for per-test and per-slice details."];
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
   console.log(lines.join("\n"));
