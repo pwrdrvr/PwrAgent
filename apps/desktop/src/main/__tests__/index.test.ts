@@ -1891,6 +1891,42 @@ describe("bootstrapApp", () => {
     for (const mock of Object.values(startupBackgroundMocks)) expect(mock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["selection", "cancel"], ["selection", "reject"],
+    ["providers", "cancel"], ["providers", "reject"],
+  ] as const)("startup ownership oracle: a %s result survives quit confirmation %s", async (boundary, outcome) => {
+    let releaseStartup!: () => void;
+    const dependency = new Promise<void>((resolve) => { releaseStartup = resolve; });
+    if (boundary === "selection") {
+      resolveCodexCommandMock.mockImplementation(async () => {
+        await dependency;
+        return { command: "/fixture/codex", source: "config" };
+      });
+    } else {
+      refreshProvidersAtStartupMock.mockReturnValue(dependency);
+    }
+    await import("../index");
+    await flushMicrotasks();
+
+    let finishConfirmation!: () => void;
+    requestQuitMock.mockReturnValue(new Promise<boolean>((resolve, reject) => {
+      finishConfirmation = () => outcome === "cancel"
+        ? resolve(false) : reject(new Error("fixture confirmation failed"));
+    }));
+    isQuitAllowedMock.mockReturnValue(false);
+    appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
+    releaseStartup();
+    await flushMicrotasks();
+    expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
+    finishConfirmation();
+    await flushMicrotasks();
+
+    expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
+    expect(startThreadArchiveSweeperMock).toHaveBeenCalledOnce();
+    for (const mock of Object.values(startupBackgroundMocks)) expect(mock).toHaveBeenCalledOnce();
+    expect(quitMock).not.toHaveBeenCalled();
+  });
+
   it("skips the prewarm when the Codex bootstrap is deferred for onboarding", async () => {
     startupProfilerInstance.start.mockResolvedValue();
     isCodexBootstrapDeferredMock.mockReturnValue(true);
