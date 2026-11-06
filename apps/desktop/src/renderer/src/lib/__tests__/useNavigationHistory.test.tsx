@@ -13,12 +13,18 @@ function launchpad(directoryKey: string): NavigationHistoryLocation {
   return { view: "launchpad", directoryKey };
 }
 
+function starting(creationId: string, directoryKey: string): NavigationHistoryLocation {
+  return { view: "starting", creationId, directoryKey };
+}
+
 const SEARCH: NavigationHistoryLocation = { view: "search" };
 
 type HistoryHookProps = {
   current: NavigationHistoryLocation | undefined;
   liveLaunchpadKeys?: ReadonlySet<string>;
   liveThreadKeys?: ReadonlySet<string>;
+  archivedThreadKeys?: ReadonlySet<string>;
+  startingThreads?: ReadonlyMap<string, string | undefined>;
 };
 
 /**
@@ -48,6 +54,9 @@ function renderHistory(initial: NavigationHistoryLocation | undefined) {
   const setLiveLaunchpadKeys = (keys: ReadonlySet<string> | undefined): void => {
     update({ liveLaunchpadKeys: keys });
   };
+  const setArchivedThreadKeys = (keys: ReadonlySet<string>): void => {
+    update({ archivedThreadKeys: keys });
+  };
   // Apply what restore asked for, like App's setMainView/showThread would.
   const settle = (): void => {
     const location = restore.mock.lastCall?.[0] as
@@ -61,8 +70,10 @@ function renderHistory(initial: NavigationHistoryLocation | undefined) {
     hook,
     navigate,
     restore,
+    update,
     setLiveLaunchpadKeys,
     setLiveThreadKeys,
+    setArchivedThreadKeys,
     settle,
   };
 }
@@ -358,6 +369,127 @@ describe("useNavigationHistory", () => {
     expect(hook.result.current.canGoBack).toBe(false);
   });
 
+  describe("a thread starting from a submitted launchpad", () => {
+    const LAUNCHPAD = launchpad("directory:/repo");
+    const STARTING = starting("op-1", "directory:/repo");
+
+    /** On thread A, open the repo's launchpad and submit it. */
+    function submitFromLaunchpad() {
+      const h = renderHistory(thread("codex:a"));
+      h.update({ startingThreads: new Map() });
+      h.navigate(LAUNCHPAD);
+      // The creation and the selection's move to it land in one render.
+      h.update({ current: STARTING, startingThreads: new Map([["op-1", undefined]]) });
+      return h;
+    }
+
+    it("replaces the submitted launchpad's entry instead of stacking on it", () => {
+      const h = submitFromLaunchpad();
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
+      h.settle();
+      expect(h.hook.result.current.canGoBack).toBe(false);
+      act(() => h.hook.result.current.goForward());
+      expect(h.restore).toHaveBeenLastCalledWith(STARTING);
+    });
+
+    it("goes Forward to the created thread after leaving while it started", () => {
+      const h = submitFromLaunchpad();
+      act(() => h.hook.result.current.goBack());
+      h.settle();
+
+      // The owner answers, then the creation ends, in separate renders.
+      h.update({ startingThreads: new Map([["op-1", "codex:new"]]) });
+      h.update({ startingThreads: new Map() });
+
+      expect(h.hook.result.current.canGoForward).toBe(true);
+      act(() => h.hook.result.current.goForward());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:new"));
+      h.settle();
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
+    });
+
+    it("keeps the created thread when its creation ends while another starts", () => {
+      const h = submitFromLaunchpad();
+      act(() => h.hook.result.current.goBack());
+      h.settle();
+      h.update({ startingThreads: new Map([["op-1", "codex:new"]]) });
+      h.update({ startingThreads: new Map([["op-2", undefined]]) });
+      act(() => h.hook.result.current.goForward());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:new"));
+    });
+
+    it("records no hop when the thread lands while it is showing", () => {
+      const h = submitFromLaunchpad();
+      h.update({
+        current: thread("codex:new"),
+        startingThreads: new Map([["op-1", "codex:new"]]),
+      });
+      h.update({ startingThreads: new Map() });
+      expect(h.hook.result.current.canGoForward).toBe(false);
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
+      h.settle();
+      expect(h.hook.result.current.canGoBack).toBe(false);
+    });
+
+    it("returns to the launchpad when the creation ends with no thread", () => {
+      const h = submitFromLaunchpad();
+      act(() => h.hook.result.current.goBack());
+      h.settle();
+      h.update({ startingThreads: new Map() });
+      act(() => h.hook.result.current.goForward());
+      expect(h.restore).toHaveBeenLastCalledWith(LAUNCHPAD);
+    });
+
+    it("keeps one entry for a launchpad reopened before its creation failed", () => {
+      const h = submitFromLaunchpad();
+      h.navigate(thread("codex:b"));
+      // Open the directory's new draft, then another thread.
+      h.navigate(LAUNCHPAD);
+      h.navigate(thread("codex:c"));
+      // Back stack: A, starting, B, launchpad. The creation fails.
+      h.update({ startingThreads: new Map() });
+
+      const visited: NavigationHistoryLocation[] = [];
+      while (h.hook.result.current.canGoBack) {
+        act(() => h.hook.result.current.goBack());
+        visited.push(h.restore.mock.lastCall?.[0] as NavigationHistoryLocation);
+        h.settle();
+      }
+      expect(visited).toEqual([LAUNCHPAD, thread("codex:b"), thread("codex:a")]);
+    });
+
+    it("keeps the cancelled launchpad as the current place without a hop", () => {
+      const h = submitFromLaunchpad();
+      // Cancellation ends the creation and selects the launchpad again.
+      h.update({ current: LAUNCHPAD, startingThreads: new Map() });
+      expect(h.hook.result.current.canGoForward).toBe(false);
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
+      h.settle();
+      expect(h.hook.result.current.canGoBack).toBe(false);
+    });
+
+    it("records a hop to a starting thread opened from the directory's new draft", () => {
+      const h = submitFromLaunchpad();
+      h.navigate(LAUNCHPAD);
+      h.navigate(STARTING);
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(LAUNCHPAD);
+    });
+
+    it("drops the created thread from history once it is archived", () => {
+      const h = submitFromLaunchpad();
+      act(() => h.hook.result.current.goBack());
+      h.settle();
+      h.update({ startingThreads: new Map([["op-1", "codex:new"]]) });
+      h.setArchivedThreadKeys(new Set(["codex:new"]));
+      expect(h.hook.result.current.canGoForward).toBe(false);
+    });
+  });
+
   it("prunes vanished threads from both stacks so Back never lands on a dead thread", () => {
     const { hook, navigate, restore, setLiveThreadKeys, settle } =
       renderHistory(thread("codex:a"));
@@ -412,6 +544,92 @@ describe("useNavigationHistory", () => {
     setLiveThreadKeys(new Set(["codex:a", "codex:b"]));
     setLiveThreadKeys(undefined); // e.g. transient empty snapshot
     expect(hook.result.current.canGoBack).toBe(true);
+  });
+
+  it.each(["before", "with", "after"])("skips an archived cursor when its fallback arrives %s the archive update", (timing) => {
+    const h = renderHistory(thread("codex:a"));
+    h.navigate(thread("codex:b"));
+    if (timing === "before") h.navigate(thread("codex:c"));
+    if (timing === "with") {
+      // Both updates commit in the same render in the shell.
+      act(() => h.hook.rerender({ current: thread("codex:c"), archivedThreadKeys: new Set(["codex:b"]) }));
+    } else {
+      h.setArchivedThreadKeys(new Set(["codex:b"]));
+      if (timing === "after") h.navigate(thread("codex:c"));
+    }
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
+    h.settle();
+    expect(h.hook.result.current.canGoBack).toBe(false);
+    expect(h.hook.result.current.canGoForward).toBe(true);
+    act(() => h.hook.result.current.goForward());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("codex:c"));
+  });
+
+  it.each(["back", "forward"])("skips consecutive archived entries in %s history", (direction) => {
+    const h = renderHistory(thread("codex:a"));
+    for (const key of ["b", "c", "d"]) h.navigate(thread(`codex:${key}`));
+    if (direction === "forward") {
+      for (let i = 0; i < 3; i++) {
+        act(() => h.hook.result.current.goBack());
+        h.settle();
+      }
+    }
+    h.setArchivedThreadKeys(new Set(["codex:b", "codex:c"]));
+    expect(direction === "back" ? h.hook.result.current.canGoBack : h.hook.result.current.canGoForward).toBe(true);
+    act(() => direction === "back" ? h.hook.result.current.goBack() : h.hook.result.current.goForward());
+    expect(h.restore).toHaveBeenLastCalledWith(thread(direction === "back" ? "codex:a" : "codex:d"));
+    h.settle();
+    expect(direction === "back" ? h.hook.result.current.canGoBack : h.hook.result.current.canGoForward).toBe(false);
+  });
+
+  it("disables both directions when all thread entries including the cursor are archived", () => {
+    const h = renderHistory(thread("codex:a"));
+    h.navigate(thread("codex:b"));
+    h.navigate(thread("codex:c"));
+    act(() => h.hook.result.current.goBack());
+    h.settle();
+    h.setArchivedThreadKeys(new Set(["codex:a", "codex:b", "codex:c"]));
+    h.navigate(undefined);
+    expect(h.hook.result.current.canGoBack).toBe(false);
+    expect(h.hook.result.current.canGoForward).toBe(false);
+    h.restore.mockClear();
+    act(() => { h.hook.result.current.goBack(); h.hook.result.current.goForward(); });
+    expect(h.restore).not.toHaveBeenCalled();
+  });
+
+  it("does not keep a duplicate Back target when archive falls back to the previous thread", () => {
+    const h = renderHistory(thread("codex:a"));
+    h.navigate(thread("codex:b"));
+    h.navigate(thread("codex:a"));
+    h.setArchivedThreadKeys(new Set(["codex:b"]));
+    expect(h.hook.result.current.canGoBack).toBe(false);
+  });
+
+  it("preserves search and unloaded identities on other backends and instances", () => {
+    const h = renderHistory(thread("codex:same"));
+    h.navigate(SEARCH);
+    h.navigate(thread("claude:same"));
+    h.navigate(thread("remote:peer-a:codex:same"));
+    h.navigate(thread("remote:peer-b:codex:same"));
+    h.setArchivedThreadKeys(new Set(["codex:same", "remote:peer-a:codex:same"]));
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("claude:same"));
+    h.settle();
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(SEARCH);
+  });
+
+  it("allows a restored identity to be visited and recorded again", () => {
+    const h = renderHistory(thread("codex:a"));
+    h.navigate(thread("codex:b"));
+    h.setArchivedThreadKeys(new Set(["codex:b"]));
+    h.navigate(thread("codex:c"));
+    h.setArchivedThreadKeys(new Set());
+    h.navigate(thread("codex:b"));
+    h.navigate(thread("codex:c"));
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("codex:b"));
   });
 
   it("caps the back stack at 50 entries", () => {

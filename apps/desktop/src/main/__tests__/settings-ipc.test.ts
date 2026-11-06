@@ -1274,7 +1274,7 @@ describe("settings ipc", () => {
 
   it.each(["native", "windows"])("recovers a rejected profile and refreshes its backend with %s paths", async (pathStyle) => {
     const { codexAuthState } = await import("../codex-auth-state");
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-auth-recovery-"));
     tempRoots.push(tempRoot);
     const root = pathStyle === "windows" ? String.raw`C:\Users\fixture\.codex` : tempRoot;

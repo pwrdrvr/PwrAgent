@@ -27,9 +27,13 @@ Agent forge tools**:
 | `ci` | same | `auto` | `rerun_failed_ci_jobs` |
 | `approve_merge` | same | `ask` | `merge_pull_request`, an `APPROVE` or `REQUEST_CHANGES` review |
 
-- `allow` runs without asking. `auto` asks unless the turn has Full Access,
-  the same rule as an MCP connection's Auto tool approval. `ask` always asks.
-  `off` removes the tools.
+- `allow` runs without asking. `ask` always asks. `off` removes the tools.
+- `auto` follows the thread's own approval mode:
+  - Full Access runs every group. For Claude, that is bypass permissions.
+  - A Codex or Claude Auto turn runs every group except `approve_merge`.
+  - Any other mode asks, including Claude's plan and accept-edits modes.
+  - A Claude thread's mode is read from its open Claude process, so a change
+    during the turn applies to the next call.
 - A group that is off, or the family switched off, is not advertised to new
   turns. The main process also checks the policy on every call, so a turn that
   still holds an older schema gets `tools_disabled` naming the setting.
@@ -39,6 +43,19 @@ Agent forge tools**:
   and issues also offer a conversation grant, kept in memory until PwrAgent
   restarts or that group's level changes. Opening, editing, approving and
   merging, and rerunning CI jobs are granted one call at a time.
+- This policy is the only prompt for a forge tool, whichever backend runs the
+  thread. Codex does not review PwrAgent's dynamic tools. A Claude query
+  pre-allows every forge tool through `allowedTools` when PwrAgent's own MCP
+  server is attached, so Claude does not ask through `canUseTool` first.
+  Before that, a Claude Default turn showed Claude's generic card for an
+  `ask` write and then this card, and an `allow` group still got Claude's
+  card. In Claude's Auto mode the classifier no longer reviews these calls;
+  `auto` groups run as they do in a Codex Auto turn. `approve_merge` keeps
+  this card in every mode but Full Access. The list covers the whole family,
+  not the levels in effect at launch, so a Settings change applies to the
+  next call without relaunching Claude, and `off` tools stay unadvertised.
+  Claude's `plan` mode and the operator's own Claude `ask` and `deny` rules
+  still apply. See [Claude provider](claude-provider.md).
 - Automations cannot answer a prompt. An `auto` or `ask` write in an
   automation fails with `approval_required` unless the automation runs in
   Full Access and the level is `auto`.
@@ -250,15 +267,20 @@ another retry. This tool does not poll, start a repair turn, or add persistence.
   its archive. This is the first-party alternative to the ChatGPT GitHub
   connector's `download_workflow_artifact` and `gh run download`.
   GitLab returns `unsupported_provider`. No CI operation is started or rerun.
-  Archives are streamed with a 128 MiB cap into a unique private directory under
-  `profiles/<profile>/artifacts/ci/` in the PwrAgent root. Results include
+  Archives are streamed with a 128 MiB cap to
+  `state/thread-assets/<backend>/<threadId>/ci-artifacts/<runId>-<artifactId>.zip`
+  in the owning profile, beside the thread's other assets. Both segments are
+  URL-encoded, so an ACP backend appears as `acp%3A<name>`. Permanently deleting
+  the thread deletes them; archiving keeps them. A repeat download writes a new
+  partial file and replaces the archive only when it completes. Results include
   `archivePath`, `sizeBytes`, `sha256` and `pathOwner: "thread_owner"`.
   Remote paths refer to the owning machine and are not transferred to the
   caller. Filenames from provider metadata and ZIP entries never choose output
   paths. Downloads are not extracted or executed, and their contents remain
-  untrusted and unredacted. Partial files are removed on failure or cancellation;
-  successful downloads are retained for inspection and may be removed by the
-  operator when no longer needed. Repeated calls create separate archives.
+  untrusted and unredacted. Agents extract into a temporary directory, so
+  nothing lands in the project. Partial files are removed on failure or
+  cancellation. v1.3.7 and v1.3.8 saved unowned archives under
+  `profiles/<profile>/artifacts/ci/`; startup removes that directory.
 - `read_ci_job_log`: one job's bounded tail and heuristic failure excerpts;
   every log is explicitly untrusted. Logs are defensively redacted and never
   interpreted as instructions. A failed retrieval is an error, never success.

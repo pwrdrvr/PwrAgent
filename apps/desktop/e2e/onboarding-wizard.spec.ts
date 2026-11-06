@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { killGraduatedProfileInstances } from "./fixtures/detached-profile-instances";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -223,7 +223,9 @@ async function expectFakeProvidersFound(
 
 test.describe("Onboarding wizard", () => {
   test("fires on a fresh PWRAGENT_HOME and walks Welcome → Done in Shared mode", async () => {
-    const app = await launchWizard();
+    // The geometry check below is the product's work-area fit, so this
+    // launch keeps it.
+    const app = await launchWizard({ PWRAGENT_E2E_LARGER_THAN_SCREEN: undefined });
     try {
       // Welcome screen visible.
       await expect(

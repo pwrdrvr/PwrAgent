@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
+import { deriveInboxState } from "@pwragent/shared";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { markAgentProjectRead } from "../app-server/agent-project-read";
 import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";
@@ -105,6 +106,72 @@ it("does not mark unread state when owner directory membership is incomplete", a
   });
   expect(writes.commits).toBe(0);
   expect(mocks.publish).not.toHaveBeenCalled();
+});
+
+it("identifies the event that interrupted a directory mark-read check", async () => {
+  mocks.loadIndex.mockImplementation(async () => {
+    for (const listener of mocks.listeners) listener({ backend: "codex", notification: {
+      method: "thread/archived", params: { threadId: "active-thread" },
+    } });
+    return { threads: [], directories: [directory] };
+  });
+  await expect(markLocalNavigationDirectorySeen({ directoryKey: key })).rejects.toThrow(
+    "Owner state changed during the directory check (codex, thread/archived, thread active-thread)",
+  );
+  expect(mocks.publish).not.toHaveBeenCalled();
+  expect(mocks.listeners.size).toBe(0);
+});
+
+it.each<AgentEvent>([
+  { backend: "codex", notification: { method: "thread/started", params: { thread: { id: "new-thread" } } } },
+  { backend: "codex", notification: { method: "directory/pin/removed", params: { directoryKey: key } } },
+  { backend: "codex", notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/parent/set" } } },
+])("reports nested or absent thread identity for $notification.method", async (event) => {
+  mocks.loadIndex.mockImplementation(async () => {
+    for (const listener of mocks.listeners) listener(event);
+    return { threads: [], directories: [directory] };
+  });
+  const { writes } = await measureSqliteWrites(async () => {
+    await expect(markLocalNavigationDirectorySeen({ directoryKey: key })).rejects.toThrow(
+      event.notification.method === "thread/started" ? "thread new-thread" : "no thread ID in event",
+    );
+  });
+  expect(writes.commits).toBe(0);
+  expect(mocks.listeners.size).toBe(0);
+});
+
+it.each<AgentEvent>([
+  { backend: "codex", notification: { method: "item/commandExecution/outputDelta", params: { threadId: "active", itemId: "item", delta: "output" } } },
+  { backend: "codex", notification: { method: "thread/status/changed", params: { threadId: "active", status: { type: "idle" } } } },
+  { backend: "codex", notification: { method: "turn/started", params: { threadId: "active", turn: { id: "turn" } } } },
+  { backend: "codex", notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/status/changed", threadId: "active" } } },
+])("marks captured members read during $notification.method activity", async (event) => {
+  const thread: NavigationThreadSummary = { id: "active", source: "codex", title: "Active", titleSource: "derived",
+    linkedDirectories: [], inbox: { inInbox: true }, updatedAt: 10 };
+  mocks.loadIndex.mockImplementation(async () => {
+    for (const listener of mocks.listeners) listener(event);
+    return { threads: [thread], directories: [{ ...directory, threadKeys: ["codex:active"] }] };
+  });
+  const { writes, result } = await measureSqliteWrites(() => markLocalNavigationDirectorySeen({ directoryKey: key }));
+  expect(result.changedCount).toBe(1);
+  expect(writes.commits).toBe(1);
+  expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "active" }))?.lastSeenUpdatedAt).toBe(10);
+  // An update arriving after the captured watermark still belongs in Inbox.
+  expect(deriveInboxState({ firstSnapshot: false, isNewThread: false, thread: { ...thread, updatedAt: 11 }, overlay:
+    await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "active" }) })).toMatchObject({ inInbox: true });
+});
+
+it("preserves a newer read watermark written while directory membership loads", async () => {
+  mocks.loadIndex.mockImplementation(async () => {
+    await mocks.store!.markThreadSeen({ backend: "codex", threadId: "active", seenUpdatedAt: 20 });
+    for (const listener of mocks.listeners) listener({ backend: "codex", notification: {
+      method: "navigation/thread/seen", params: { threadId: "active", seenUpdatedAt: 20 },
+    } });
+    return { threads: [{ id: "active", source: "codex", inbox: { inInbox: true }, updatedAt: 10 }],
+      directories: [{ ...directory, threadKeys: ["codex:active"] }] };
+  });
+  await markLocalNavigationDirectorySeen({ directoryKey: key });
+  expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "active" }))?.lastSeenUpdatedAt).toBe(20);
 });
 
 it("marks 140 unread project members across backends through one agent call and one commit", async () => {

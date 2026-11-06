@@ -798,11 +798,15 @@
 
   /* Status */
   --status-ok: #28631b;
-  --status-warning: #7d4c00;
+  /* Dots, strokes, and meters take Catppuccin's yellow at the 3:1 mark floor,
+     measured against the selected row (#f1e3de) as well. Warning text keeps
+     the darker amber. At text strength the PR chip's pending dot read as the
+     closed dot. */
+  --status-warning: #be6f00;
   --status-error: #b1012b;
   --status-suspended: #7c8297;
-  --status-warning-text: var(--status-warning);
-  --savings-over: var(--status-warning);
+  --status-warning-text: #7d4c00;
+  --savings-over: var(--status-warning-text);
   --usage-series-1: var(--accent);
   --usage-series-2: #1e66f5;
   --usage-series-3: #179097;
@@ -969,11 +973,14 @@
 
   /* Status */
   --status-ok: #525e00;
-  --status-warning: #6b5100;
+  /* Dots, strokes, and meters take Solarized yellow at the 3:1 mark floor.
+     Warning text keeps the darker amber. At text strength the PR chip's
+     pending dot read as the closed dot. */
+  --status-warning: #a87d00;
   --status-error: #86320f;
   --status-suspended: #768787;
-  --status-warning-text: var(--status-warning);
-  --savings-over: var(--status-warning);
+  --status-warning-text: #6b5100;
+  --savings-over: var(--status-warning-text);
   --usage-series-1: var(--accent);
   --usage-series-2: #2689cf;
   --usage-series-3: #26928a;
@@ -1131,11 +1138,14 @@
 
   /* Status */
   --status-ok: #1a5c2e;
-  --status-warning: #6c4300;
+  /* Dots, strokes, and meters take Tangerine light's amber, which already
+     clears the 3:1 mark floor here. Warning text keeps the darker amber.
+     At text strength the PR chip's pending dot read as the closed dot. */
+  --status-warning: #a86b00;
   --status-error: #75321d;
   --status-suspended: #7b7b82;
-  --status-warning-text: var(--status-warning);
-  --savings-over: var(--status-warning);
+  --status-warning-text: #6c4300;
+  --savings-over: var(--status-warning-text);
   --usage-series-1: var(--accent);
   --usage-series-2: #2f64a8;
   --usage-series-3: #11806f;
@@ -1293,11 +1303,14 @@
 
   /* Status */
   --status-ok: #1a5c2e;
-  --status-warning: #744800;
+  /* Dots, strokes, and meters take Tangerine light's amber, which already
+     clears the 3:1 mark floor here. Warning text keeps the darker amber.
+     At text strength the PR chip's pending dot read as the closed dot. */
+  --status-warning: #a86b00;
   --status-error: #7e3520;
   --status-suspended: #77859c;
-  --status-warning-text: var(--status-warning);
-  --savings-over: var(--status-warning);
+  --status-warning-text: #744800;
+  --savings-over: var(--status-warning-text);
   --usage-series-1: var(--accent);
   --usage-series-2: #2f64a8;
   --usage-series-3: #11806f;
@@ -1657,6 +1670,7 @@
   display: flex;
   width: 340px;
   max-width: calc(100vw - 16px);
+  /* 320px is POPOVER_MAX_HEIGHT in pr-rollup-popover-placement.ts. Change both. */
   max-height: min(320px, calc(100vh - 16px));
   flex-direction: column;
   border: 1px solid var(--border-strong);
@@ -2714,6 +2728,18 @@ textarea,
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.jump-palette__row-title > .thread-row__status-indicator {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* Everything after the title. It adds no box in the palette's one-line row;
+   a narrow host such as the to-do destination picker lays it out as the
+   row's second line. */
+.jump-palette__row-meta {
+  display: contents;
 }
 
 .jump-palette__row-prs {
@@ -5583,10 +5609,145 @@ textarea,
   text-overflow: ellipsis;
 }
 
+/* Local and peer turns stack, as in the Attention tab. Two 6px scanners and
+   the gap fit the 20px line box, so the row keeps its height. */
 .project-index__mark {
   display: flex;
   flex: none;
+  flex-direction: column;
   align-items: center;
+  gap: 2px;
+}
+
+.project-index__mark-remote {
+  display: flex;
+}
+
+.project-index__paused {
+  display: flex;
+  flex: none;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+/* Names drag to reorder the pins (`ProjectIndex`), with the folder drag's
+   parts: the source dims in place, a 3px accent line on the edge between two
+   names, and a tilted clone of the name. The values are the folder drag's
+   (`.directory-row.is-drop-target-*`, `.thread-row--drag-image`). */
+.project-index__list > li {
+  position: relative;
+}
+
+.project-index__list > li.is-pointer-dragging > .project-index__item {
+  opacity: 0.38;
+  cursor: grabbing;
+}
+
+.project-index__list > li.is-drop-target-before::before,
+.project-index__list > li.is-drop-target-after::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  left: 6px;
+  z-index: 6;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--row-active-tint-strong),
+    0 0 14px var(--accent-shadow);
+  pointer-events: none;
+}
+
+.project-index__list > li.is-drop-target-before::before {
+  top: -2px;
+}
+
+.project-index__list > li.is-drop-target-after::after {
+  bottom: -2px;
+}
+
+/* Where the pins end: the Directories divider without its label, which a
+   7-character column has no room for. A held pin anywhere at or below it
+   unpins, and it lights like the divider does. */
+.project-index__seam {
+  position: relative;
+  height: 9px;
+}
+
+.project-index__seam::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  left: 11px;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.project-index__seam.is-drop-target::after {
+  top: 3px;
+  right: 4px;
+  left: 6px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--row-active-tint-strong),
+    0 0 14px var(--accent-shadow);
+}
+
+/* Stuck to the top, so a scrolled index still shows its only target. */
+.project-index__list > li.project-index__pin-slot-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 2px 4px 4px 6px;
+  background: var(--bg-sidebar);
+}
+
+/* The held name. It is appended to <body>, so it carries the column's type
+   itself. Listed after the item's state rules so a selected or current
+   name's tint and rail do not ride along. */
+.project-index__item.project-index__drag-image {
+  --thread-row-drag-tilt: -1.2deg;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  box-shadow:
+    0 0 0 1px var(--surface-border-faint),
+    0 18px 44px var(--shadow-tint-strong);
+  font: 500 calc(var(--sidebar-title-size) - 1px) / 1.25 var(--font-sans);
+  pointer-events: none;
+}
+
+.project-index__item.project-index__drag-image::before {
+  content: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-index__item.project-index__drag-image {
+    --thread-row-drag-tilt: 0deg;
+  }
+}
+
+/* A dropped name keeps the list reveal's fading outline for a moment. */
+.project-index__item.is-revealed {
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  animation: directory-row-revealed 1200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-index__item.is-revealed {
+    animation: none;
+    outline-color: var(--accent);
+  }
 }
 
 /* The seam between the index and the list, drawn like the sidebar's own:
@@ -5967,11 +6128,13 @@ body.is-project-index-resizing {
 }
 
 /* One recipe for every beam that sweeps a peer's turn: the Attention
-   readout, the thread row's mark (sidebar and Star Map card), and the
-   transcript's pending line. They are the same statement — "running, but
-   not here" — so a second tint for one of them would be a second meaning. */
+   readout, the thread row's mark (sidebar and Star Map card), the project
+   index's mark, and the transcript's pending line. They are the same
+   statement — "running, but not here" — so a second tint for one of them
+   would be a second meaning. */
 .signal-count--remote-active .thinking-scanner,
 .thread-row__status-indicator--remote .thinking-scanner,
+.project-index__mark-remote .thinking-scanner,
 .transcript-list__pending--remote .thinking-scanner {
   --thinking-scanner-tint: var(--text-muted);
   --thinking-scanner-tint-bright: var(--text-secondary);
@@ -6369,6 +6532,17 @@ a.button {
 .native-subagents__agent:disabled {
   cursor: default;
   opacity: 0.62;
+}
+
+/* A Claude sub-agent row names a task in the parent's session; nothing opens. */
+.native-subagents__agent--static {
+  cursor: default;
+}
+
+.native-subagents__agent--static:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
 }
 
 .native-subagents__status {
@@ -8136,15 +8310,20 @@ a.button {
   color: var(--text-muted);
 }
 
-.pr-chip__detach:hover,
-.pr-chip__detach:focus-visible {
+/* Pointer-only: it takes no focus (see PrChip), so it has no focus ring. */
+.pr-chip__detach:hover {
   background: var(--danger-soft);
   color: var(--danger-text);
 }
 
-.pr-chip__detach:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+/* A CI watch waits to wake the thread. Muted, and not a target: the dot
+   carries status, the row keeps one accent, and the card explains it. */
+.pr-chip__watch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-left: -2px;
+  color: var(--text-muted);
 }
 
 /* Portal-rendered hover card for a PR chip (rendered by useViewportTooltip).
@@ -8366,16 +8545,149 @@ a.button {
 }
 
 .pr-status-card__row-label {
+  flex: none;
   color: var(--text-secondary);
   font-size: 12px;
 }
 
 .pr-status-card__row-value {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Auto-fix is a standing setting, not a pending wait. */
+.pr-status-card__row-value--muted {
+  color: var(--text-muted);
+}
+
+/* Prose under a wake row, such as the thread that handles Auto-fix. Two
+   lines at most, so a long title cannot grow the card. The card takes no
+   pointer events, so nothing can reveal the clipped rest; the side panel's
+   watch list shows the full title. */
+.pr-status-card__row-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* A thread chip's hover card: the PR card's container and rows, plus the
+   thread's machine and id, a running dot and a cost headline. */
+.thread-info-card__machine {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__id {
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-suspended);
+}
+
+.thread-info-card__dot--idle {
+  background: var(--status-ok);
+}
+
+.thread-info-card__dot--running {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.thread-info-card__dot--offline {
+  border: 1px dashed var(--text-muted);
+  background: transparent;
+}
+
+.thread-info-card__aside {
+  color: var(--text-muted);
+}
+
+.thread-info-card__cost {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thread-info-card__cost-total {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-info-card__cost-caption,
+.thread-info-card__note {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.thread-info-card__share {
+  display: flex;
+  height: 4px;
+  margin: 2px 0 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+
+.thread-info-card__share-self {
+  height: 100%;
+  background: var(--accent);
+}
+
+.thread-info-card__share-sub {
+  flex: 1;
+  height: 100%;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.thread-info-card__skeleton {
+  display: inline-block;
+  width: 56px;
+  height: 10px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.thread-info-card__skeleton--big {
+  width: 72px;
+  height: 16px;
 }
 
 .pr-detach-warning-modal {
@@ -8647,6 +8959,59 @@ a.button {
     0 0 14px var(--accent-shadow);
 }
 
+/* The ghost Pin slot a project drag opens while nothing is pinned, in the
+   Directories list and the project index. It is the Keep at top slot
+   (`.directory-row__keep-top-slot`) with its own label: mounted only while
+   a project is held, and only a drop inside its own box pins. It is the
+   only target while it is open, so it sticks to the top of a scrolled list
+   (above the folded headers) instead of opening out of view. */
+.directories-pin-slot,
+.project-index__pin-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-muted);
+  cursor: grabbing;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.directories-pin-slot {
+  position: sticky;
+  top: 2px;
+  z-index: 6;
+  flex: none;
+  height: 34px;
+  margin: 2px 2px 6px;
+  border-radius: 8px;
+  background: var(--bg-sidebar);
+}
+
+.project-index__pin-slot {
+  gap: 5px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.directories-pin-slot path,
+.project-index__pin-slot path {
+  fill: currentColor;
+}
+
+.directories-pin-slot.is-drop-target,
+.project-index__pin-slot.is-drop-target {
+  border-style: solid;
+  border-color: var(--accent);
+  /* The tint over the sidebar, opaque: the stuck slot covers rows. */
+  background:
+    linear-gradient(color-mix(in srgb, var(--accent) 9%, transparent) 0 0),
+    var(--bg-sidebar);
+  color: var(--text-primary);
+}
+
 .directory-row__summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -8789,6 +9154,23 @@ a.button {
 .directory-row__summary-meta .signal-count__value {
   min-width: 2ch;
   text-align: right;
+}
+
+/* Forge activity paused: one quiet mark on the project header. Neutral and
+   outlined, the Held chip's shape without its danger tone, because a pause is
+   the operator's own choice, not something waiting on them. */
+.directory-row__paused {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 /* The header count cookie inherits the base 10px size — it used to be a
@@ -8941,9 +9323,10 @@ a.button {
 /* The count block yields to the revealed cluster: fade it on header
    hover (or keyboard focus inside the cluster), exactly like the
    thread-row timestamp yields to the kebab. Scoped to
-   `--with-launchpad` headers (set in TSX for configured directories):
-   an unconfigured directory renders NO cluster, and fading its counts
-   would leave the header's right edge simply blank while hovered.
+   `--with-launchpad` headers (set in TSX when the row has a cluster):
+   an unconfigured directory with no peer to start a thread on renders
+   NO cluster, and fading its counts would leave the header's right
+   edge simply blank while hovered.
    The TSX-computed modifier classes (`--with-launchpad`, `--split`,
    `--has-draft`) replace per-hover :has() subtree scans with plain
    class matches — DirectoriesList already knows all three booleans. */
@@ -9265,7 +9648,12 @@ a.button {
   transform: rotate(90deg);
 }
 
-.directory-row__threads .thread-row--compact {
+/* The Directories lens draws rows as stacked cards: title line, then chips.
+   The starting rows waiting above the projects are the same cards. Without
+   this they kept the side-by-side compact layout, and a long title ran off
+   the sidebar unwrapped while its chips stacked up in a column past it. */
+.directory-row__threads .thread-row--compact,
+.directory-list__starting .thread-row--compact {
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
@@ -9273,7 +9661,9 @@ a.button {
 }
 
 .directory-row__threads .thread-row__header,
-.directory-row__threads .thread-row__chips {
+.directory-row__threads .thread-row__chips,
+.directory-list__starting .thread-row__header,
+.directory-list__starting .thread-row__chips {
   width: 100%;
 }
 
@@ -9626,6 +10016,25 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* Unbind from <platform> (<conversation>). The platform says what the item
+   does, so it never shrinks. The conversation name can be any length:
+   `contain: inline-size` keeps it out of the menu's intrinsic width, so the
+   menu sizes to its other rows and the name fills what is left. */
+.thread-context-menu__binding-platform {
+  flex: none;
+  white-space: nowrap;
+}
+
+.thread-context-menu__binding-name {
+  contain: inline-size;
+  flex: 1 1 0;
+  min-width: 12ch;
+  margin-left: 0.3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* macOS-native pattern: action label on the left, keyboard
    shortcut hint chip on the right (margin-left: auto). Used by
    the pin/move items in the thread + directory context menus so
@@ -9663,6 +10072,12 @@ a.button {
 .thread-context-menu button:hover:not(:disabled) .thread-context-menu__aside,
 .thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__aside {
   color: var(--accent-bright);
+}
+
+/* A run attempt, set in the PR chip's own face. */
+.thread-context-menu__aside--mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 /* Checkable items (Pinned, Keep at Top). The labels never change; the box
@@ -10036,6 +10451,171 @@ a.button {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* Forge Automation and its Resume step: the lock dialog's frame. The
+   eyebrow labels, hints and status row copy `.thread-lock-dialog`'s. */
+.forge-automation-dialog {
+  width: min(480px, 100%);
+}
+
+.forge-automation-dialog--resume {
+  width: min(560px, 100%);
+}
+
+.forge-automation-dialog__subtitle {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-automation-dialog__lede {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.forge-automation-dialog__group {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+/* Keeps `.forge-automation-dialog__group`'s top margin when both apply. */
+.forge-automation-dialog__fieldset {
+  min-width: 0;
+  margin-inline: 0;
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+}
+
+.forge-automation-dialog__fieldset > legend {
+  margin-bottom: 4px;
+}
+
+.forge-automation-dialog__group > .forge-automation-dialog__fieldset {
+  margin-top: 6px;
+}
+
+.forge-automation-dialog__label {
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.forge-automation-dialog__hint {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.forge-automation-dialog__hint--lead {
+  margin: 2px 0 2px;
+}
+
+.forge-automation-dialog__option {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 5px 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.forge-automation-dialog__option input {
+  width: 14px;
+  height: 14px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.forge-automation-dialog__option input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.forge-automation-dialog__option:has(input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.forge-automation-dialog__option-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.forge-automation-dialog__option-text small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.forge-automation-dialog__status {
+  margin: 14px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.forge-automation-dialog__held {
+  max-height: 280px;
+  margin: 12px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  list-style: none;
+}
+
+.forge-automation-dialog__held-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 8px 10px;
+}
+
+.forge-automation-dialog__held-row + .forge-automation-dialog__held-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.forge-automation-dialog__held-title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-automation-dialog__held-actions {
+  display: inline-flex;
+  grid-row: span 2;
+  gap: 6px;
+}
+
+.forge-automation-dialog__held-meta {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 /* Continue After: the rename dialog's frame, wide enough to pick threads on
@@ -11727,10 +12307,6 @@ a.button {
 }
 
 /* Overflow menu for the rarer, destructive row actions. */
-.automations-table__menu {
-  position: relative;
-}
-
 .automations-table__menu-button {
   display: inline-flex;
   align-items: center;
@@ -11739,10 +12315,9 @@ a.button {
 }
 
 .automations-table__menu-list {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 30;
+  /* Escape the table's rounded clipping and the pane's scrollport. */
+  position: fixed;
+  z-index: 150;
   display: flex;
   min-width: 132px;
   flex-direction: column;
@@ -15923,6 +16498,19 @@ a.button {
   line-height: 1.45;
 }
 
+/* Settings → Git → Updates: the build line or the progress strip, then a
+   quieter note. Uses the Grok build line and the shared strip as they are. */
+.managed-git-updates {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.managed-git-updates__note {
+  margin: 0;
+}
+
 /* ------------------------------------------------------------------
    Managed build progress strip (Codex + Grok). One layout for every phase:
    state line, track, byte meter, four-step rail. The track copies
@@ -18774,6 +19362,17 @@ a.button {
 
 .settings-archive-sweep__run {
   margin-left: auto;
+}
+
+.settings-archive-sweep__buttons {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.settings-archive-sweep__buttons .settings-archive-sweep__run {
+  margin-left: 0;
 }
 
 .settings-archive-sweep__run[aria-disabled="true"] {
@@ -24247,12 +24846,21 @@ a.button {
   opacity: 0.45;
 }
 
+/* The column's own overlays (`.thread-todo-stack`, `.thread-find`) outrank
+   `.context-rail` beside it. Isolating a locked column keeps
+   them, and the lock layer, inside it, so the lock layer can top them
+   without also covering the rail's flyout. */
+.thread-view__primary--locked {
+  isolation: isolate;
+}
+
 /* Pointer-transparent, so the transcript under the dim still scrolls and
-   selects; only the card takes the pointer. */
+   selects; only the card takes the pointer. Above every overlay in the
+   column: an open to-do card once painted over the card at 45% opacity. */
 .thread-lock-layer {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  z-index: 31;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -24660,7 +25268,7 @@ a.button {
 .thread-todo-stack {
   position: absolute;
   z-index: 29;
-  top: 10px;
+  top: calc(10px + var(--thread-merge-hold-height, 0px));
   right: 18px;
   display: flex;
   width: min(340px, calc(100% - 36px));
@@ -24675,7 +25283,7 @@ a.button {
 }
 
 .thread-todo-stack.is-below-find {
-  top: 56px;
+  top: calc(56px + var(--thread-merge-hold-height, 0px));
 }
 
 /* The shadow is on the deck, not the card, so the slivers of the cards
@@ -25031,12 +25639,13 @@ a.button {
 /* The Markdown prompt rests at three lines; its own control opens it. */
 .todo-message-destination {
   display: grid;
+  /* A track sized to content would let a nowrap row widen the card. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   font-size: 12px;
 }
 
-.todo-message-destination__heading,
-.todo-message-destination__search {
+.todo-message-destination__heading {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -25083,42 +25692,132 @@ a.button {
   overflow-wrap: anywhere;
 }
 
-.todo-message-destination input {
-  flex: 1;
+/* The jump palette's search inside the to-do card: the field, the palette's
+   rows, and a footer. The card is ~340px wide, so each row stacks: the title,
+   then its metadata on one line (`.jump-palette__row-meta`). */
+.todo-destination-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.todo-destination-picker__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 0 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--bg-input);
-  color: var(--text-primary);
-  font: inherit;
+  color: var(--text-muted);
 }
 
-.todo-message-destination input:focus-visible {
-  outline: 1px solid var(--focus-ring);
+.todo-destination-picker__field:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 1px var(--accent-border);
 }
 
-.todo-message-destination__results {
-  display: grid;
-  max-height: 160px;
-  overflow-y: auto;
-}
-
-.todo-message-destination__results button {
-  padding: 6px 8px;
+.todo-destination-picker__field input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
   border: 0;
-  border-radius: 6px;
   background: transparent;
   color: var(--text-primary);
-  text-align: left;
   font: inherit;
-  cursor: pointer;
+  outline: none;
 }
 
-.todo-message-destination__results button:hover,
-.todo-message-destination__results button:focus-visible {
-  background: var(--bg-panel-hover);
-  outline: 1px solid var(--focus-ring);
+.todo-destination-picker__results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 268px;
+  min-width: 0;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  list-style: none;
+}
+
+.todo-destination-picker .jump-palette__row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.todo-destination-picker .jump-palette__row-title {
+  font-size: 12.5px;
+}
+
+.todo-destination-picker .jump-palette__row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The PR strip keeps the palette's width (two chips, then a 126px scroller)
+   and the age never shrinks. The machine chip, branch, and project end in an
+   ellipsis instead of running past the row. The branch gives way first; it no
+   longer competes with the title, which has its own line. */
+.todo-destination-picker .jump-palette__row-branch {
+  flex: 1 2 auto;
+  max-width: none;
+  text-align: left;
+}
+
+.todo-destination-picker .jump-palette__row .chip--instance {
+  flex: 0 1 auto;
+}
+
+/* A block, not a flex box, so `text-overflow` reaches its text. */
+.todo-destination-picker .jump-palette__row-repo {
+  display: inline-block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-destination-picker .jump-palette__section-divider {
+  padding: 8px 8px 4px;
+}
+
+.todo-destination-picker__empty {
+  margin: 0;
+  padding: 14px 0;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.todo-destination-picker__foot {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.todo-destination-picker__foot-spacer {
+  flex: 1;
+}
+
+.todo-destination-picker__status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .todo-split__primary:disabled {
@@ -25693,15 +26392,63 @@ a.button {
   margin-top: 12px;
 }
 
+/* Holds the top of the list while its rows scroll past, as the sidebar's
+   project headers do, so a long All list never loses which project a row
+   is in. Bleeds over the body's 12px gutters so the opaque band and its
+   hairline span the rail. */
 .thread-todos-panel__group-title {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin: 0 0 6px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -12px 6px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  box-shadow: 0 1px 0 var(--border-subtle);
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
   line-height: 16px;
+}
+
+.thread-todos-panel__group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.thread-todos-panel__group-toggle:hover {
+  color: var(--text-secondary);
+}
+
+.thread-todos-panel__group-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* The rail's inline disclosure chevron, as on the Edits tab's groups, sized
+   down to the 11px heading it leads. */
+.thread-todos-panel__group-toggle .live-work-rail__chevron {
+  width: 6px;
+  height: 6px;
+  margin-inline: 1px 2px;
+}
+
+.thread-todos-panel__group-toggle[aria-expanded="false"] .live-work-rail__chevron {
+  transform: rotate(-45deg);
+}
+
+.thread-todos-panel__group-toggle[aria-expanded="true"] .live-work-rail__chevron {
+  transform: rotate(45deg);
 }
 
 .thread-todos-panel__group-name {
@@ -26069,6 +26816,35 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   margin-top: 10px;
 }
 
+/* The To-dos tab fills the rail as a flex column, as the Edits tab does: the
+   title and lens switch stay put over a body that owns the scroll, so the
+   group headers inside it pin to its top edge. */
+.context-panel__section.context-panel__section--todos {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.thread-todos-panel__header {
+  flex: 0 0 auto;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* No top padding: a stuck group header pins flush under the lens switch.
+   The first group's own margin gives the resting list its air and scrolls
+   away with it. */
+.thread-todos-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 12px 12px;
+}
+
 .thread-todos-panel__footnote {
   margin-top: 16px;
   padding-top: 8px;
@@ -26134,7 +26910,8 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
 }
 
 /* The rail tab's count. Sits where the actions tab's activity dot does. */
-.context-rail__activity--todos {
+.context-rail__activity--todos,
+.context-rail__activity--watches {
   display: inline-grid;
   min-width: 14px;
   height: 14px;
@@ -26152,8 +26929,10 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
 }
 
 /* Nothing unread: this thread's open count, outlined so it reads as a
-   tally rather than news. */
-.context-rail__activity--todos.context-rail__activity--quiet {
+   tally rather than news. The Pull requests tab's watch count is always a
+   tally: a watch waiting is not news. */
+.context-rail__activity--todos.context-rail__activity--quiet,
+.context-rail__activity--watches {
   border: 1px solid var(--border-strong);
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
@@ -26162,7 +26941,7 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
 .thread-find {
   position: absolute;
   z-index: 30;
-  top: 10px;
+  top: calc(10px + var(--thread-merge-hold-height, 0px));
   right: 18px;
   display: flex;
   align-items: center;
@@ -26975,6 +27754,23 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
 
 .transcript-work-phase-group__content {
   display: contents;
+}
+
+.transcript-work-phase-group__images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(100%, 760px);
+}
+
+.transcript-work-phase-group__images .transcript-message__image-button {
+  max-width: min(100%, 180px);
+  padding: 4px;
+}
+
+.transcript-work-phase-group__images .transcript-message__image-preview {
+  max-height: 120px;
 }
 
 .transcript-message__header {
@@ -32385,6 +33181,13 @@ div.composer-error-row__toggle {
   min-height: 24px;
   padding: 2px 6px;
   font-size: 11px;
+}
+
+.transcript-pr-watch__message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 /* Inside the accent-framed card the toggle must sit ON the card's text
@@ -38046,6 +38849,456 @@ div.composer-error-row__toggle {
   font-size: 11px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+/* A Pull requests card's "Wakes this thread" list: each watch, Auto-fix, and
+   the hint to ask for a CI watch. Neutral throughout; the PR's status pills
+   above carry the tone. */
+.pr-watch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pr-watch-list__eyebrow {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pr-watch-list__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pr-watch-list__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+.pr-watch-list__text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pr-watch-list__title {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.pr-watch-list__sub {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Auto-fix is on for the thread but will not wake it for this PR. */
+.pr-watch-list__row--muted .pr-watch-list__title {
+  color: var(--text-secondary);
+}
+
+.pr-watch-list__action,
+.pr-watch-list__hint-action {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pr-watch-list__action:hover:not(:disabled),
+.pr-watch-list__hint-action:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.pr-watch-list__action:focus-visible,
+.pr-watch-list__hint-action:focus-visible,
+.pr-watch-list__history-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pr-watch-list__action:disabled,
+.pr-watch-list__hint-action:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Nothing waits for CI: dashed, because it describes an absence. */
+.pr-watch-list__hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 6px 5px 8px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+}
+
+.pr-watch-list__hint-text,
+.pr-watch-list__owner {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pr-watch-list__history-toggle {
+  align-self: flex-start;
+  min-height: 20px;
+  padding: 0 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pr-watch-list__history-toggle:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.pr-watch-list__history {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pr-watch-list__history-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pr-watch-list__history-text {
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.pr-watch-list__history-time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The Waiting for tab: every pending wake on the thread, in the Pull
+   requests card's watch-list rows. Neutral throughout; a wake is not a
+   status, so nothing here carries tone. */
+.waiting-for-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.waiting-for-panel__count {
+  min-width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.waiting-for-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.waiting-for-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.waiting-for-panel__group + .waiting-for-panel__group {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.waiting-for-panel__eyebrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The PR number beside a group label reads as data, not a label. */
+.waiting-for-panel__eyebrow-aside {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Auto-fix on a merged or closed PR: still on, waiting for nothing. */
+.waiting-for-panel__row.is-idle .pr-watch-list__title {
+  color: var(--text-muted);
+}
+
+.waiting-for-panel__row.is-idle .pr-watch-list__icon {
+  opacity: 0.6;
+}
+
+.waiting-for-panel__row.is-open {
+  margin: 0 -8px;
+  padding: 7px 8px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.waiting-for-panel__title-button {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.waiting-for-panel__title-button:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+
+.waiting-for-panel__title-button:focus-visible,
+.waiting-for-panel__link:focus-visible,
+.waiting-for-panel__ended-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.waiting-for-panel__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.waiting-for-panel__when,
+.waiting-for-panel__mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.waiting-for-panel__when {
+  color: var(--accent-bright);
+}
+
+.waiting-for-panel__quote {
+  color: var(--text-secondary);
+}
+
+.waiting-for-panel__detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.waiting-for-panel__cond {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.waiting-for-panel__cond-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-suspended);
+}
+
+.waiting-for-panel__cond.is-met {
+  color: var(--text-muted);
+}
+
+.waiting-for-panel__cond.is-met .waiting-for-panel__cond-dot {
+  background: var(--status-ok);
+}
+
+.waiting-for-panel__cond.is-failed .waiting-for-panel__cond-dot {
+  background: var(--status-error);
+}
+
+.waiting-for-panel__prompt {
+  padding: 4px 8px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.waiting-for-panel__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 8px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.waiting-for-panel__facts dt {
+  color: var(--text-muted);
+}
+
+.waiting-for-panel__facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.waiting-for-panel__link {
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.waiting-for-panel__link:hover {
+  text-decoration: underline;
+}
+
+.waiting-for-panel__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+}
+
+.waiting-for-panel__empty-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.waiting-for-panel__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* What holds the thread's wakes: the lock card's accent edge, at rail size. */
+.waiting-for-panel__hold {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel-elevated));
+}
+
+.waiting-for-panel__hold-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.waiting-for-panel__hold-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.waiting-for-panel__hold-title {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.waiting-for-panel__held {
+  color: var(--text-secondary);
+}
+
+.waiting-for-panel__ended {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.waiting-for-panel__ended-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.waiting-for-panel__ended-toggle svg {
+  transition: transform 120ms ease;
+}
+
+.waiting-for-panel__ended-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.waiting-for-panel__ended-detail {
+  color: var(--text-muted);
 }
 
 .rail-card__message,
@@ -44589,6 +45842,315 @@ button.composer__subthread-source-parent:hover {
   overflow-wrap: anywhere;
 }
 
+/* The dialog takes focus itself when a send starts or settles and swaps
+   its contents, so focus never falls behind the scrim. */
+.thread-handoff-dialog:focus {
+  outline: none;
+}
+
+/* While sending: the title names the operation and the machine, and the
+   minimise button sits at its end, as PwrGit's Bulk Sync dialog does. */
+.thread-handoff-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-handoff-dialog__head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.thread-handoff-dialog__minimise {
+  display: inline-grid;
+  width: 26px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-handoff-dialog__minimise:hover,
+.thread-handoff-dialog__minimise:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-handoff-dialog__minimise:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Cancel keeps the last slot, as the update card's way out does. */
+.thread-handoff-dialog__actions {
+  justify-content: flex-end;
+}
+
+/* One row per step. Only Send has a percent, so only Send has a track: a
+   bar on a step with no extent would only stand still. */
+.thread-handoff-steps {
+  display: grid;
+  margin: 14px 0 0;
+  padding: 4px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  list-style: none;
+}
+
+.thread-handoff-steps__step {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 32px;
+  padding: 4px 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.thread-handoff-steps__step--done {
+  color: var(--text-secondary);
+}
+
+.thread-handoff-steps__step--now,
+.thread-handoff-steps__step--held {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.thread-handoff-steps__body {
+  display: grid;
+  min-width: 0;
+}
+
+.thread-handoff-steps__body .app-update-banner__track {
+  margin-top: 6px;
+}
+
+.thread-handoff-steps__mark {
+  display: inline-grid;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  place-items: center;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.thread-handoff-steps__step--done .thread-handoff-steps__mark {
+  border: 0;
+  background: color-mix(in srgb, var(--status-ok) 18%, transparent);
+  color: var(--status-ok);
+}
+
+.thread-handoff-steps__step--now .thread-handoff-steps__mark {
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: thread-handoff-step-spin 0.7s linear infinite;
+}
+
+.thread-handoff-steps__step--held .thread-handoff-steps__mark {
+  border-color: var(--status-suspended);
+}
+
+.thread-handoff-steps__value {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.thread-handoff-meter {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes thread-handoff-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Held: the link dropped and the transfer waits to resume. The fill keeps
+   the bytes the receiver confirmed, in still stripes of the suspended tone,
+   as PwrGit's halted bar does. Red is kept for a send that has ended. */
+.thread-handoff-track--held i {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--status-suspended) 0 6px,
+    color-mix(in srgb, var(--status-suspended) 60%, transparent) 6px 12px
+  );
+}
+
+/* Resumed: what the receiver already held stays a lighter accent, so a
+   resume is visibly not a restart. */
+.thread-handoff-track--resumed {
+  display: flex;
+}
+
+.thread-handoff-track--resumed i {
+  border-radius: 0;
+}
+
+.thread-handoff-track--resumed .thread-handoff-track__resumed {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* A minimised handoff in the toast stack: the update banner's card. */
+.thread-handoff-card {
+  gap: 10px;
+  padding: 12px 10px 12px 14px;
+}
+
+.thread-handoff-card--held {
+  border-color: color-mix(in srgb, var(--status-suspended) 45%, transparent);
+  background: var(--bg-panel-elevated);
+}
+
+.thread-handoff-card--held .app-update-banner__eyebrow {
+  color: var(--text-muted);
+}
+
+.thread-handoff-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.thread-handoff-card__head .app-update-banner__content {
+  flex: 1 1 auto;
+}
+
+.thread-handoff-card__icons {
+  display: flex;
+  flex: none;
+  margin: -4px 0 0;
+}
+
+/* The title expands the card back into the dialog. */
+.thread-handoff-card__title {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.thread-handoff-card__title:hover {
+  text-decoration: underline;
+}
+
+.thread-handoff-card__title:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-handoff-card__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* The composer band row of a thread being sent: why its turns are paused. */
+.thread-handoff-band {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-input));
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.thread-handoff-band__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-handoff-band__text b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.thread-handoff-band .app-update-banner__track {
+  width: 90px;
+  flex: none;
+  margin-top: 0;
+}
+
+.thread-handoff-band__value {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-handoff-band__action {
+  margin-left: auto;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.thread-handoff-band__action:hover,
+.thread-handoff-band__action:focus-visible {
+  background: var(--accent-soft);
+}
+
+.thread-handoff-band__action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The empty card that flies between a dialog and its toast (lib/fly-between). */
+.fly-ghost {
+  position: fixed;
+  z-index: 145;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-handoff-steps__step--now .thread-handoff-steps__mark {
+    animation: none;
+    border-color: var(--accent);
+  }
+}
+
 .workspace-handoff-dialog__actions {
   display: flex;
   flex-wrap: wrap;
@@ -44774,6 +46336,17 @@ button.composer__subthread-source-parent:hover {
 .composer__toggle:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/* The project's Forge Automation has Auto-fix paused or off, or every PR it
+   could repair has merged or closed: the thread keeps its own value
+   (aria-pressed) but the chip drops its accent. */
+.composer__toggle.is-project-overridden,
+.composer__toggle.is-active.is-project-overridden,
+.composer__toggle.is-active.is-idle {
+  border-color: var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-muted);
 }
 
 /* A shell remains alive behind a collapsed integrated terminal panel. */
@@ -46469,13 +48042,14 @@ button.composer__subthread-source-parent:hover {
    `.composer__action-button-spinner` so the composer, Settings, and every
    later surface share a single definition instead of copying the ring.
    The ring reads --border-subtle and the moving arc reads --accent, per
-   docs/UI-THEME.md.
+   docs/UI-THEME.md. Render it through `components/PendingSpinner`, never as a
+   raw class; `reduced-motion-contract.test.ts` fails on one.
 
-   Always decorative — `aria-hidden` it and give the busy state to something
-   a screen reader can read: adjacent text naming the work (`.settings-pending`
-   does) or `aria-busy` on the control. A bare ring is not an accessible
-   status. Whether a ring stands alone also decides its reduced-motion
-   behavior; see the media query below. */
+   Always decorative — the component renders it `aria-hidden`. Give the busy
+   state to something a screen reader can read: adjacent text naming the work
+   (`.settings-pending` does) or `aria-busy` on the control. A bare ring is not
+   an accessible status. Whether a ring stands alone also decides its
+   reduced-motion behavior; see the media query below. */
 
 .pending-spinner {
   flex: 0 0 auto;
@@ -46505,28 +48079,94 @@ button.composer__subthread-source-parent:hover {
   }
 }
 
-/* Reduced motion is scoped to the rings that sit beside text. A stopped arc
-   reads as a stalled spinner rather than a still one, so the paired ring goes
-   uniformly accent-tinted and "Saving…" carries the state on its own.
+/* Reduced motion is scoped to the rings that sit beside text naming the work.
+   A stopped arc reads as a stalled spinner rather than a still one, so the
+   paired ring goes uniformly accent-tinted and "Saving…" carries the state on
+   its own.
+
+   A ring opts in itself: `<PendingSpinner pairing="paired">` adds
+   `.pending-spinner--paired` wherever it renders beside visible text such as
+   "Saving…", "Sending…" or a provider row's current step. The rule is keyed
+   to the ring rather than to each surface, and `pairing` is a required prop,
+   so a new surface cannot miss it by not knowing to add its context here.
 
    A ring that is the only signal its surface has — the composer's Run button
-   swaps the play glyph for a bare, aria-hidden ring — keeps spinning. The
-   preference asks for non-essential motion to stop, and motion that is the
-   sole indication of progress is not that. Give a standalone ring a text or
-   `aria-busy` companion and it belongs in the selector below. */
+   swaps the play glyph for a bare, aria-hidden ring — keeps spinning, and
+   renders as `pairing="standalone"` with a `standaloneReason`. The preference asks for non-essential motion to stop, and
+   motion that is the sole indication of progress is not that. `aria-busy`
+   alone does not pair a ring: it tells a screen reader, not someone looking
+   at a still arc. */
 @media (prefers-reduced-motion: reduce) {
-  .settings-pending .pending-spinner,
-  /* A provider row's ring sits beside the step it is on ("Opening a
-     session"), which states the running state without motion. */
-  .provider-refresh .pending-spinner,
-  /* The composer's pre-send ring qualifies under the same rule: it sits
-     beside the word "Preparing…" and the form carries `aria-busy`, so the
-     state survives the ring going still. */
-  .composer__send-split-pill .pending-spinner,
-  /* A to-do's running ring sits beside "Merging…" or "Starting…". */
-  .thread-todo-card__button--busy .pending-spinner {
+  .pending-spinner--paired {
     border-color: var(--accent);
     animation: none;
+  }
+}
+
+/* Calm motion (Settings → General → Appearance) sets `data-motion="calm"` on
+   `<html>`. Each looping status animation runs twice from when it starts, then
+   rests, so it still says "this just started" without moving for as long as
+   the work lasts. A running animation wakes the compositor on every display
+   refresh, even where its output does not change; a finished one costs
+   nothing. Status dots are paced from script instead: `lib/status-pulse.ts`
+   gives each dot two dips.
+
+   Reduce Motion is a different request, for no motion at all, so every rule
+   here sits under `no-preference` and the reduce rules above keep winning.
+
+   Each rest pose is the reduced-motion one, set with a zero-length animation
+   that starts as the second run ends and holds its end state (`forwards`):
+   - the thinking beam rests centred and lit, as under Reduce Motion. Its
+     sweep animates both properties, so the pose only shows once it ends;
+   - an indeterminate progress bar rests full width at half strength;
+   - a paired spinner rests as an even accent ring, which reads as busy where
+     a stopped arc reads as stalled.
+   A standalone spinner is the only sign its control is busy, so it keeps
+   spinning, as it does under Reduce Motion. The scan line, the Star Map
+   intake pulse and the keyboard example rest as they start. */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-motion="calm"] .thinking-scanner__beam {
+    animation-iteration-count: 2;
+    opacity: 1;
+    transform: translateX(calc(var(--thinking-scanner-travel) / 2));
+  }
+
+  :root[data-motion="calm"] .app-update-banner__track--indeterminate i,
+  :root[data-motion="calm"] .managed-progress__track--indeterminate i {
+    animation:
+      app-update-banner-sweep 1.1s ease-in-out 2,
+      calm-motion-progress-rest 0s 2.2s forwards;
+  }
+
+  :root[data-motion="calm"] .pending-spinner--paired {
+    animation:
+      pending-spinner-spin 0.8s linear 2,
+      calm-motion-spinner-rest 0s 1.6s forwards;
+  }
+
+  :root[data-motion="calm"] .thread-handoff-steps__step--now .thread-handoff-steps__mark {
+    animation:
+      thread-handoff-step-spin 0.7s linear 2,
+      calm-motion-spinner-rest 0s 1.4s forwards;
+  }
+
+  :root[data-motion="calm"] .missing-worktree-card--busy::before,
+  :root[data-motion="calm"] .star-map-intake__status.is-busy,
+  :root[data-motion="calm"] .settings-keyboard__cap.is-example > span {
+    animation-iteration-count: 2;
+  }
+}
+
+@keyframes calm-motion-progress-rest {
+  to {
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+@keyframes calm-motion-spinner-rest {
+  to {
+    border-color: var(--accent);
   }
 }
 
@@ -51465,4 +53105,847 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .todo-model-picker__reset:focus-visible {
   outline: 1px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+
+/* Merge holds leave the conversation and composer available. */
+.thread-merge-holds {
+  width: min(620px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 20px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.thread-merge-holds__entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-merge-holds__entry p,
+.thread-merge-holds__status p {
+  margin: 0;
+}
+
+.thread-merge-holds__entry p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thread-merge-holds__actions,
+.thread-merge-holds__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-merge-holds__actions { flex-wrap: wrap; }
+.thread-merge-holds__status {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.thread-merge-holds__status strong { color: var(--accent); }
+.thread-merge-holds__status .button { flex-shrink: 0; }
+.thread-merge-holds form { display: grid; gap: 12px; padding: 16px 0; }
+
+.thread-merge-holds__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thread-merge-holds__entry .thread-dependencies__field { width: 100%; }
+
+.thread-merge-holds .button { font-size: 12px; }
+
+.thread-merge-holds__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.thread-merge-holds__on {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.thread-merge-holds__then {
+  display: grid;
+  gap: 4px;
+}
+
+.thread-merge-holds__then > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.thread-merge-holds__steps {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.thread-merge-holds__steps li { overflow-wrap: anywhere; }
+
+.thread-merge-holds__status-aside { color: var(--text-muted); }
+
+/* A held merge card says why in place of its merge button, at the card's
+   detail size rather than the inherited body size. */
+.thread-todo-card__hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+/* Thread maintenance dialog. Geometry follows .workspace-handoff-dialog;
+   it sits above Settings (120) and below portalled Select lists (150). */
+.thread-maintenance-modal {
+  position: fixed;
+  z-index: 130;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim-medium);
+}
+
+.thread-maintenance {
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 100%);
+  max-height: min(860px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+}
+
+.thread-maintenance:focus {
+  outline: none;
+}
+
+.thread-maintenance__head {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__head h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.thread-maintenance__head p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.thread-maintenance__head-side {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-maintenance__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+
+.thread-maintenance__foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.thread-maintenance__footnote {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.thread-maintenance__footnote b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.thread-maintenance__actions {
+  display: inline-flex;
+  flex: none;
+  gap: 8px;
+}
+
+.thread-maintenance__button {
+  height: 28px;
+  padding: 0 11px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.thread-maintenance__button[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.thread-maintenance__button:focus-visible,
+.thread-maintenance__tab:focus-visible,
+.thread-maintenance__choice:focus-visible,
+.thread-maintenance__more:focus-visible,
+.thread-maintenance__problem-rows:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-maintenance__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.thread-maintenance__tab {
+  padding: 5px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.thread-maintenance__tab.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-maintenance__tab:disabled {
+  cursor: default;
+}
+
+.thread-maintenance__tab:disabled:not(.is-active) {
+  color: var(--text-subtle);
+}
+
+.thread-maintenance__lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.thread-maintenance__plan,
+.thread-maintenance__never,
+.thread-maintenance__summary,
+.thread-maintenance__rules-strip,
+.thread-maintenance__group,
+.thread-maintenance__receipt {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.thread-maintenance__plan {
+  padding: 12px 14px;
+}
+
+.thread-maintenance__plan.is-off {
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.thread-maintenance__plan-top {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.thread-maintenance__plan h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.thread-maintenance__plan p {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.thread-maintenance__rules {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0 32px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.thread-maintenance__select {
+  width: 220px;
+}
+
+.thread-maintenance__number {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.thread-maintenance__number .settings-input {
+  width: 72px;
+  height: 28px;
+}
+
+.thread-maintenance__check {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: start;
+  column-gap: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.thread-maintenance__check-text {
+  grid-column: 2;
+  grid-row: 1;
+  line-height: 18px;
+}
+
+.thread-maintenance .settings-thread-management__checkbox.is-mixed {
+  border-color: var(--accent-border);
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.thread-maintenance .settings-thread-management__checkbox.is-mixed::after {
+  width: 8px;
+  height: 2px;
+  background: var(--bg-panel);
+  content: "";
+}
+
+.thread-maintenance__hint {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.thread-maintenance__check-text .thread-maintenance__hint {
+  display: inline;
+  margin-left: 6px;
+}
+
+.thread-maintenance__num {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.thread-maintenance__num.is-done {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.thread-maintenance__num.is-failed {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.thread-maintenance__never {
+  padding: 10px 14px;
+}
+
+.thread-maintenance__eyebrow {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.thread-maintenance__never dl {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 3px 10px;
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.thread-maintenance__never dt {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.thread-maintenance__never dd {
+  margin: 0;
+}
+
+.thread-maintenance__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.thread-maintenance__rail {
+  display: grid;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-maintenance__rail-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.thread-maintenance__rail-step.is-active {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.thread-maintenance__rail-step.is-active .thread-maintenance__num {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: var(--accent-on);
+}
+
+.thread-maintenance__rail-title {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.thread-maintenance__rail-sub,
+.thread-maintenance__mono {
+  display: block;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.thread-maintenance__rail-step.is-active .thread-maintenance__rail-sub {
+  color: var(--accent-bright);
+}
+
+.thread-maintenance__summary {
+  padding: 10px 14px;
+}
+
+.thread-maintenance__summary.is-failed {
+  border-color: var(--danger-border);
+  background: var(--danger-surface-faint);
+}
+
+.thread-maintenance__summary-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.thread-maintenance__summary-sub {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.thread-maintenance__rules-strip {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 4px 10px;
+  padding: 9px 14px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.thread-maintenance__rules-strip .thread-maintenance__eyebrow {
+  line-height: 18px;
+}
+
+.thread-maintenance__never-inline {
+  color: var(--danger-text);
+}
+
+.thread-maintenance__groups {
+  display: grid;
+  gap: 12px;
+}
+
+.thread-maintenance__group {
+  overflow: hidden;
+}
+
+.thread-maintenance__group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__group-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.thread-maintenance__group-side {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.thread-maintenance__path {
+  min-width: 0;
+  margin: 1px 0 0;
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-maintenance__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-maintenance__row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: start;
+  gap: 10px;
+  padding: 8px 12px;
+}
+
+.thread-maintenance__row + .thread-maintenance__row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__row.needs-decision {
+  background: var(--warning-surface);
+}
+
+.thread-maintenance__row > .thread-maintenance__check {
+  grid-template-columns: 16px;
+}
+
+.thread-maintenance__row-body {
+  min-width: 0;
+}
+
+.thread-maintenance__row-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.thread-maintenance__row-title.is-path {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.thread-maintenance__branch {
+  margin-left: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.thread-maintenance__row-meta {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.thread-maintenance__lead-text {
+  font-weight: 500;
+}
+
+.thread-maintenance__lead-text.is-ok {
+  color: var(--success-text);
+}
+
+.thread-maintenance__lead-text.is-warn {
+  color: var(--status-warning-text);
+}
+
+.thread-maintenance__lead-text.is-info {
+  color: var(--info-text);
+}
+
+.thread-maintenance__size {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.thread-maintenance__choices {
+  display: inline-flex;
+  margin-top: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.thread-maintenance__choice {
+  padding: 4px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.thread-maintenance__choice + .thread-maintenance__choice {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__choice.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-maintenance__more {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-maintenance__kept {
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__group-head + .thread-maintenance__kept {
+  border-top: 0;
+}
+
+.thread-maintenance__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.thread-maintenance__chip {
+  max-width: none;
+}
+
+.thread-maintenance__progress-card {
+  padding: 10px 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--bg-row-active);
+}
+
+.thread-maintenance__progress-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.thread-maintenance__bar {
+  height: 4px;
+  margin: 9px 0 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-panel-hover);
+}
+
+.thread-maintenance__bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.thread-maintenance__problem {
+  overflow: hidden;
+  border: 1px solid var(--danger-border);
+  border-radius: 6px;
+  background: var(--danger-surface-faint);
+}
+
+.thread-maintenance__problem.is-kept {
+  border-color: var(--info-border);
+  background: var(--info-soft);
+}
+
+.thread-maintenance__problem-head {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.thread-maintenance__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.thread-maintenance__problem.is-kept .thread-maintenance__mark {
+  background: var(--info-soft);
+  color: var(--info-text);
+}
+
+.thread-maintenance__problem-rows {
+  max-height: 180px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.thread-maintenance__problem-rows li {
+  padding: 8px 14px 8px 44px;
+  border-top: 1px solid var(--danger-border);
+}
+
+.thread-maintenance__problem.is-kept .thread-maintenance__problem-rows li {
+  border-top-color: var(--info-border);
+}
+
+.thread-maintenance__problem-object {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.thread-maintenance__problem-why {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.thread-maintenance__problem-why b {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+.thread-maintenance__problem.is-kept .thread-maintenance__problem-why b {
+  color: var(--info-text);
+}
+
+.thread-maintenance__receipt {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  list-style: none;
+}
+
+.thread-maintenance__receipt li {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+}
+
+.thread-maintenance__receipt li + li {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
 }

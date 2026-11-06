@@ -100,10 +100,15 @@ export class ReplayClient {
   constructor(
     private readonly controller: ReplayController,
     private readonly backend: AppServerBackendKind,
+    private readonly models: BackendModelOption[] = REPLAY_CODEX_MODELS,
   ) {}
 
   static fromFixture(fixture: ReplayFixture): ReplayClient {
-    return new ReplayClient(new ReplayController(fixture), fixture.metadata.backend);
+    return new ReplayClient(
+      new ReplayController(fixture),
+      fixture.metadata.backend,
+      fixture.metadata.models ?? REPLAY_CODEX_MODELS,
+    );
   }
 
   async close(): Promise<void> {
@@ -138,7 +143,7 @@ export class ReplayClient {
 
   async listModels(): Promise<BackendModelOption[]> {
     await this.ensureInitialized();
-    return REPLAY_CODEX_MODELS;
+    return this.models;
   }
 
   onNotification(
@@ -161,13 +166,16 @@ export class ReplayClient {
     };
   }
 
-  async readThread(_params?: {
+  async readThread(params?: {
     threadId: string;
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]> {
     await this.ensureInitialized();
-    return asThreadReplay(this.controller.consumeResponse("thread/read").result);
+    return asThreadReplay(this.controller.consumeResponse("thread/read", {
+      threadId: params?.threadId,
+      before: params?.before,
+    }).result);
   }
 
   async archiveThread(_params: {

@@ -134,6 +134,15 @@ export async function deriveReplayFixtureFromCapture(
         kind: "response",
         method: requestEntry.envelope.method,
       };
+      // A captured read answers the thread and page it asked for, not the
+      // next read.
+      if (requestEntry.envelope.method === "thread/read") {
+        const params = requestEntry.envelope.params as { threadId?: unknown; before?: unknown } | undefined;
+        for (const field of ["threadId", "before"] as const) {
+          const value = params?.[field];
+          if (typeof value === "string" && value.trim()) responseStep[field] = value;
+        }
+      }
       if (Object.hasOwn(entry.envelope, "result")) {
         responseStep.result = entry.envelope.result;
       }

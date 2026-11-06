@@ -1,5 +1,79 @@
 # Changelog
 
+## v1.3.13 - 2026-11-05
+
+- Wait Until Done - Hold a thread's merge while replies, rebases, and CI repairs continue. Record prerequisite work and follow-up steps, including work on another machine, then receive a reminder when it is marked done without automatically starting a new turn.
+- Thread Maintenance - Review idle threads and archived checkouts together, choose what to archive or keep, and save changes before removing checkouts. Continue archive sweeps past individual failures rather than stopping the whole sweep.
+- Handoff Progress - See the steps, transferred bytes, rate, and time remaining when sending a thread to another machine. Minimize the dialog to a progress toast, or cancel before the receiver starts creating the thread.
+- Remote Transfers - Transfer files and images using resumable binary transport, preserving progress across connection drops and keeping cancellation scoped to the intended transfer.
+- Claude Sub-agents - Show Claude's sub-agents in the Sub-agents panel and beneath their parent in the thread list, with their current activity and status.
+- Local MCP Connections - Connect to HTTP MCP servers over Unix sockets on macOS/Linux and local named pipes on Windows. Verify the connected OS user before sending requests, with support for server-issued session bearer tokens.
+- Archive Performance - Reduce repeated Git checks during bulk archive and cleanup, and keep navigation refreshes scoped to affected resources and directory membership.
+- Settings - Preserve full custom Codex home paths instead of displaying a misleading abbreviation, and prevent automation action menus from being clipped.
+- Git Updates - Download and verify newer PwrDrvr Git runtimes from Settings, then explicitly choose which version to use or roll back to the previous selection. Show download and verification progress, with cancellation. The bundled macOS and Linux runtime is updated to 2.56.0-dev-pwrgit.4.
+
+## v1.3.12 - 2026-11-04
+
+- Quiet Restart - Add "Quiet & Continue After Restart" when quitting with running threads. Stop their turns and continue them a few at a time after the next launch, holding other queued messages and automatic work until those continuations start. A restart notice shows progress and offers "Start everything now."
+- To-do Destinations - Search for an existing destination thread with the jump palette's search engine, including keyboard navigation and clearer thread details.
+- Model Pickers - Apply consistent model ordering across desktop and messaging, grouping superseded models under Other. Save launchpad choices under the correct provider and keep remote choices from changing local defaults.
+- Remote Threads - Keep a new thread in the project selected on its owning machine, without jumping to another project when startup finishes or referenced directories are attached. Show remote running turns in grey in the project index.
+- Pull Request Watches - Keep watches waiting until real CI checks run instead of treating missing checks as success.
+- Archive Recovery - Preserve ACP archive metadata when loading replay history, and limit single-thread cleanup's Git discovery to the relevant worktrees.
+- Navigation and Previews - Show progress badges in the jump palette, keep hover cards clear of their source chip, and shorten text without splitting Unicode characters.
+- Messaging - Request the first typing indicator before backend startup so incoming requests receive earlier feedback.
+- Bundled Git - Ship a pinned PwrDrvr Git runtime on macOS and Linux, with verified runtime inventories and a bundled Linux CA certificate store. Windows continues using bundled Dugite Git.
+
+## v1.3.11 - 2026-11-04
+
+- Thread Locks and Queues - Hold Claude's own follow-ups and wake-ups while a thread is locked. Release lock-held entries in arrival order, preserve each reason when work is held more than once, and keep the lock card visible above To-dos.
+- Scheduled Actions - Stop failed actions from automatically rerunning or returning to the composer. Hold later queued work behind a failed scheduled action until it is resolved.
+- Waiting For - List live Claude /loop wake-ups and session cron jobs alongside other pending work. Route prerequisite PR waits through Continue After and bound the panel's reads and refreshes.
+- Archive Cleanup - Show worktree cleanup progress, protected checkouts, and failures in Settings, with an explicit retry action. Fence cleanup ownership and reclaim worktrees only after their final reference is released.
+- Worktrees and Handoffs - Preserve handoff ancestry, fork handed-off threads without depending on the old source checkout, and avoid carrying Git LFS hooks into imported worktrees. Refuse peer To-do worktrees that would reuse the main checkout.
+- To-do Delivery - Find the owning machine for an existing-thread destination and show its thread information card. Start peer To-do worktrees from the repository's default branch.
+- Reviews and Models - Scope review PR choices and base branches to the selected project. Reject incompatible provider, model, effort, and speed settings instead of silently dropping them.
+- Monitor and MCP Tools - Give job monitors read-only forge tools for CI, PR, log, and artifact checks. Make MCP resource routes discoverable through tool search.
+- Navigation and Rewind - Preserve Back and Forward navigation during thread startup, keep loaded pinned threads after reopening a project, and clear stale rewind overlays and composer prompts.
+- Resource Management - Close idle ACP sessions and their MCP servers, keep Codex alive during foreground reads, and finish shared command discovery before quitting.
+- Responsiveness - Reduce Git and SSH launches for PR metadata and shorten transcript and turn-preparation waits. Keep Outpost navigation and Attention ordering aligned with desktop behavior.
+
+## v1.3.10 - 2026-11-03
+
+- Calm Motion - Add an appearance option that lets spinners, thinking indicators, and status pulses animate briefly, then hold still. The system's Reduce Motion setting still stops them entirely.
+- Waiting For - See the monitors, PR watches, scheduled actions, background tasks, and dependencies that can wake a thread in one panel. See what a thread lock or paused project is holding, with controls to stop or release supported work.
+- Project Ordering - Drag projects to pin, unpin, or reorder them directly in the project index. Back and Forward navigation skips archived threads.
+- Managed MCP Connections - Forward tool progress and cancellation, support browser-link requests with explicit consent, and provide thread directory roots to local-command servers. Codex MCP calls can report progress too.
+- Codex Resource Management - Unload unused threads and stop their MCP servers instead of leaving idle processes behind. Recycle long-lived app servers only while idle, with active work and outstanding requests protected.
+- Plan Limits - Keep quota readings in one forward-only store across providers so stale updates do not roll usage backward.
+- Usage and Cost - Price Haiku usage and retain task-monitor cost estimates instead of losing them during refreshes.
+- Claude Session Recovery - Explain when Claude Code has deleted a conversation needed for resume, fork, or rewind. Preserve the PwrAgent transcript and distinguish this from other session errors.
+- Worktree Recovery - Snapshot and restore archived Claude and ACP worktrees, and retire completed review threads before cleaning up their worktrees.
+- To-do Routing - Queue requests sent to the current thread, match remote-only projects by repository rather than name, and start peer To-do worktrees from the default branch.
+- Forge Automation - Release a locked thread's Auto-fix ownership, honor configured Claude forge-tool approvals without duplicate prompts, and show Forge Automation on peer-only project rows.
+- Thread Navigation - Keep starting-thread titles and pins stable, clear scheduled badges after startup, and allow marking a directory read while its threads are active.
+- CI Downloads - Store downloaded CI artifacts with their owning thread and replace repeat downloads safely. Older unowned CI downloads are cleared and can be downloaded again.
+- Outpost Versions and Sync - Show CLI and running-daemon versions, identify when an update requires a daemon restart, and align remote titles, read marks, and refreshes with desktop behavior.
+- Shutdown and Startup - Wait for Settings and Claude command discovery to finish before quitting, and retain terminal events that arrive while a turn is starting.
+- UI and Messaging - Keep image previews visible when work is collapsed, make busy indicators consistently respect reduced motion, avoid unnecessary messaging-settings refreshes, and order current and superseded models consistently.
+- Windows Packaging - Match the updated bundled Git layout so Git LFS verification no longer blocks Windows installer creation.
+- Minor - Security and dependency updates, more reliable automation status transitions, and test-infrastructure improvements.
+
+## v1.3.9 - 2026-11-02
+
+- Forge Tool Rules - Set project-specific permissions for each agent or model, covering PRs, comments, issues, CI reruns, and merges. Claude Auto and Full Access turns honor the configured policies.
+- Forge Automation - Pause a project's PR activity or independently disable automatic conflict repairs, CI repairs, and PR-watch wake-ups. Review held wake-ups when resuming; held work survives restarts. Manage these controls from a connected project's window too.
+- Claude Artifacts - Enable Claude Code's artifact tools in Claude threads, including design and slide workflows. Show named activity rows and links to published pages without automatically opening a browser.
+- MCP Forms and Approvals - Route supported forms from managed MCP servers to the requesting thread, preserve discovery through reconnects, and avoid duplicate Claude gateway approvals while honoring connection consent.
+- Claude Usage and History - Report usage during running turns, prevent stale readings from moving plan limits backward, and show each provider's own allowance in the Pricing rail. Page long Claude transcripts and load history when opening a thread mid-turn.
+- Task Monitors - Let Claude monitors wait through watchers, preserve their brief and last observed state during recovery, and prevent unrelated turns from entering monitor recovery.
+- Pull Requests and Auto-fix - Find and attach PRs after GitHub or GitLab repository renames, including from checkouts with old remote names or moved workspaces. Restore CI watches after reruns and give new Auto-fix problems their own repair attempts.
+- Remote Thread Families - Reorder and nest peer-owned sub-threads in local trays, including moving grandchildren in one drop. Preserve live ordering and children when archiving across machines.
+- Navigation and To-dos - Show recent activity in the thread jump palette, keep To-do group headers and lens controls visible, and offer new-thread actions on peer-only projects. Sidebar actions use the owning machine's providers and refreshed capabilities.
+- Prompt Attribution - Clearly label monitor, To-do, and other PwrAgent-originated prompts. Preserve message origins through steering and recovery without attributing them to an operator's own prompt.
+- Reviews and Messaging - Start and report agent-scheduled reviews on Claude threads, require a pushed head before offering PR creation, and expose Grok's Default and Full Access permissions in messaging.
+- Transcript and Terminal Polish - Keep a stopped turn's last work expanded when no final reply follows. Initialize terminal renderers when first shown, reuse idle terminal snapshots on reattachment, and reduce tooltip observation overhead.
+
 ## v1.3.8 - 2026-11-01
 
 - Scheduled Sends - Schedule a message for after the selected model's short-term rate limit resets, with a buffer before sending.

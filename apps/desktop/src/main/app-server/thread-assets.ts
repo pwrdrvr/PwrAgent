@@ -12,6 +12,11 @@ export function threadAssetRoot(owner?: ThreadAssetOwner): string {
   return owner ? path.join(root, assetIdentitySegment(owner.backend), assetIdentitySegment(owner.threadId)) : root;
 }
 
+/** Forge CI artifact downloads; permanent thread deletion removes them with the rest. */
+export function threadArtifactDirectory(owner: ThreadAssetOwner): string {
+  return path.join(threadAssetRoot(owner), "ci-artifacts");
+}
+
 function assetIdentitySegment(value: string): string {
   if (!value) throw new Error("Thread asset identity cannot be empty.");
   const encoded = encodeURIComponent(value).replace(/\./g, "%2E");

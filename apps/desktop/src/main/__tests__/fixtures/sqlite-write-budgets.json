@@ -1,10 +1,22 @@
 {
+  "acp-shared-worktree-archive": {"commits": 6, "note": "Archive two ACP owners, retain the active checkout until both archive, then save both recovery snapshots; boundary writes only.", "observedWalBytes": 82400, "rowsChanged": 6, "statements": 6},
+  "acp-shared-worktree-restore": {"commits": 12, "note": "Restore two ACP owners through protocol session/load, recreating a shared checkout once and preserving later edits; boundary writes only.", "observedWalBytes": 152440, "rowsChanged": 12, "statements": 12},
+  "acp-worktree-archive": {"commits": 3, "note": "One ACP checkout snapshotted and removed at an archive boundary; no idle or timer writes.", "observedWalBytes": 37080, "rowsChanged": 3, "statements": 3},
+  "acp-worktree-repair": {"commits": 1, "note": "One ACP checkout snapshotted and removed at an archive boundary; no idle or timer writes.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "acp-worktree-restore": {"commits": 6, "note": "Recreate one saved ACP checkout and load the original provider session before unarchiving; boundary writes only.", "observedWalBytes": 70040, "rowsChanged": 6, "statements": 6},
+  "native-review-retirement": {"commits": 3, "note": "One native review start and terminal completion, retaining its parent result and archiving only the review helper; no timer or idle writes.", "observedWalBytes": 78312, "rowsChanged": 3, "statements": 3},
+  "mixed-provider-worktree-archive": {"commits": 4, "note": "One checkout archived for one Claude and one Codex owner, including each owner's recovery snapshot; boundary writes only.", "observedWalBytes": 57712, "rowsChanged": 4, "statements": 4},
+  "mixed-provider-worktree-repair": {"commits": 2, "note": "One checkout archived for one Claude and one Codex owner, including each owner's recovery snapshot; boundary writes only.", "observedWalBytes": 32992, "rowsChanged": 2, "statements": 2},
+  "shared-claude-worktree-restore": {"commits": 4, "note": "Restore two Claude owners of one snapshot: recreate the checkout once, then validate and reuse it without overwriting subsequent edits.", "observedWalBytes": 37080, "rowsChanged": 4, "statements": 4},
+  "claude-worktree-archive": {"commits": 2, "note": "One explicit archive with one managed worktree: snapshot and lifecycle boundary writes only; no idle or timer writes.", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
+  "claude-worktree-repair-restore": {"commits": 2, "note": "One explicit restore recreates a saved checkout before unarchiving the Claude session; no idle or timer writes.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
+  "claude-worktree-restore": {"commits": 2, "note": "One explicit restore recreates a saved checkout before unarchiving the Claude session; no idle or timer writes.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "acp-task-monitor-lifecycle": {
-    "commits": 4,
-    "note": "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
-    "observedWalBytes": 115360,
-    "rowsChanged": 6,
-    "statements": 6
+    "commits": 5,
+    "note": "one ACP monitor start with its brief's origin, 120 transient heartbeats, completion, and final usage attribution",
+    "observedWalBytes": 160712,
+    "rowsChanged": 7,
+    "statements": 7
   },
   "agent-created-codex-thread-token-miser-override": {
     "commits": 4,
@@ -43,7 +55,7 @@
   },
   "agent-thread-named-environment-start": {"commits": 5, "note": "One agent-created thread with a named environment: thread start bookkeeping, setup hydration and runtime persistence; no per-event writes. ~74 KB per thread: ~7.4 MB/day at 100 agent-created threads/day, 0 MB/day idle.", "observedWalBytes": 74160, "rowsChanged": 5, "statements": 5},
   "all-pinned-project-thread-creation": {"commits": 4, "note": "One new thread including its automatic pin: 4 commits, ~0.054 MB/thread and ~5.4 MB/day at 100 starts/day; 0 MB/day idle.", "observedWalBytes": 53560, "rowsChanged": 4, "statements": 4},
-  "archive-cleanup-130-checkpoint-recover-drain": {"commits": 3, "note": "130 jobs: one quit checkpoint, one recovery claim, one drained checkpoint deletion; 3 commits per quit/restart cycle, no per-item or timer writes. At 10 cycles/day and 32 KiB/commit, about 0.94 MB/day; idle is 0 MB/day.", "observedWalBytes": 90640, "rowsChanged": 4, "statements": 4},
+  "archive-cleanup-130-checkpoint-recover-drain": {"commits": 3, "note": "130 jobs: one quit checkpoint writing one row per intent, one recovery claim, one drained deletion; 3 commits per quit/restart cycle, no per-item or timer writes. At 10 cycles/day and about 210 KB WAL per cycle, about 2.1 MB/day; idle is 0 MB/day.", "observedWalBytes": 210152, "rowsChanged": 520, "statements": 520},
   "archive-cleanup-read-only-inventory": {
     "commits": 0,
     "note": "One ownership projection and three ACP identity pages: zero SQLite writes; pacing and queue state add 0 MB/day.",
@@ -82,6 +94,7 @@
   "archive-retention-restore": {"commits": 1, "note": "One restore boundary clears archive markers and records the restore watermark in one commit (~0.012 MB); 10 restores/day cost ~0.12 MB/day. No recurring writes.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "archive-subthread-promotion": {"commits": 1, "note": "One archive boundary promotes 100 children in one commit (~0.033 MB); 10 such archives/day cost ~0.33 MB/day. No per-child commits or idle writes (0 MB/day).", "observedWalBytes": 32960, "rowsChanged": 103, "statements": 103},
   "archive-subthread-promotion-repeat": {"commits": 0, "note": "Repeated archive notification or resumed cleanup after promotion: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "archive-worktree-100-reference-wait-release": {"commits": 2, "note": "100 archived owners of one checkout: one queue-drain checkpoint writing one row per intent, a non-final release that only shrinks the backlog and writes nothing, and one final drain deletion; 2 commits, zero idle writes. At 10 batches/day and about 128 KB WAL per batch, about 1.3 MB/day.", "observedWalBytes": 127752, "rowsChanged": 200, "statements": 200},
   "archived-worktree-repair-once-marker": {
     "commits": 2,
     "note": "One claim and one completion for a 501-thread pass plus a completed-startup no-op: 2 commits total, no per-item or timer writes; about 0.02 MB once and 0 MB/day afterward.",
@@ -89,6 +102,7 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "archived-worktree-repair-retry-marker": {"commits": 4, "note": "Two failed passes: 4 boundary commits, no per-item or timer writes. At 2 commits/hour and about 0.010 MB/pass, persistent failures cost about 0.25 MB/day; completed idle passes cost 0 MB/day.", "observedWalBytes": 20632, "rowsChanged": 4, "statements": 4},
   "archived-worktree-repair-shared-snapshot": {
     "commits": 4,
     "note": "One-time repair of one dirty checkout shared by two archived threads, including the profile claim and completion; no timer or idle writes.",
@@ -103,6 +117,8 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "automation-run-duplicate-lifecycle": {"commits":0,"note":"100 repeated started/queued acknowledgements and conflicting terminal outcomes: zero commits, 0 MB/day.","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "automation-run-lifecycle": {"commits":4,"note":"One start, one terminal outcome and one late identity acknowledgement: 4 boundary commits, ~86.5 KB/run or ~8.7 MB/day at 100 runs/day; 0 MB/day idle.","observedWalBytes":86520,"rowsChanged":4,"statements":4},
   "automation-run-prune-retain-usage-title": {
     "commits": 2,
     "note": "Creating a run and pruning an older run retains its usage title in the existing prune transaction",
@@ -119,8 +135,8 @@
   },
   "automation-run-transcript-burst": {
     "commits": 1,
-    "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
-    "observedWalBytes": 704520,
+    "note": "250 completed tool items across 50 windows, one shutdown-boundary artifact write",
+    "observedWalBytes": 86520,
     "rowsChanged": 1,
     "statements": 1
   },
@@ -138,9 +154,12 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "claude-live-turn-usage": {"commits": 4, "note": "Three live usage reports and the result's, each in its own flush window: one commit per report. Reports run at most every 30 s and only while Claude streams, so ~120 commits per streaming hour (~6.8 MB at ~57 KB each); 0 MB/day idle", "observedWalBytes": 226632, "rowsChanged": 12, "statements": 12},
   "claude-permission-selection": {"commits": 1, "note": "one operator mode selection; 100 duplicate selections add no writes", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "claude-result-usage": {"commits": 1, "note": "100 context updates plus one result usage event and ledger flush; context does not write SQLite; 1 commit/turn, measured 65,920 bytes: ~6.6 MB/day at 100 turns/day, zero idle writes", "observedWalBytes": 65920, "rowsChanged": 3, "statements": 3},
   "claude-steer": {"commits": 1, "note": "one steer with agent origin plus one idempotent retry; 1 commit, measured 12,360 bytes (~1.24 MB/day at 100 steers/day), zero idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "claude-subagent-cards": {"commits": 2, "note": "one Claude sub-agent's start and end, then a late report: 2 commits per sub-agent, ~24.7 KB WAL each; ~1 MB/day at 20 sub-agents/day, ~10 MB/day at 200; zero idle", "observedWalBytes": 49472, "rowsChanged": 2, "statements": 2},
+  "claude-subagent-progress": {"commits": 0, "note": "20 progress reports from one running Claude sub-agent; progress stays in memory, zero commits", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "claude-thread-creation": {"commits": 3, "note": "one thread creation through the registry; SDK transcripts and resume metadata use files", "observedWalBytes": 49440, "rowsChanged": 3, "statements": 3},
   "cleanup-expired-gc-pass": {
     "commits": 1,
@@ -163,6 +182,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "codex-task-monitor-recovery": {"commits":0,"note":"A Codex monitor recovery turn with no messaging origin writes nothing.","observedWalBytes":0,"rowsChanged":0,"statements":0},
   "codex-turn-end-with-token-miser-gates": {
     "commits": 3,
     "note": "one Codex turn end on a 2,000-turn thread with 2,000 stored gate cards and 5 new gates: the final usage line, 5 keyed gate-card rows, and the gate usage lines; the overlay row is not rewritten. ~206 KB WAL, ~21 MB/day at 100 such turn ends (was ~3.6 MB and ~360 MB/day while the cards lived in the overlay row)",
@@ -329,6 +349,7 @@
   },
   "federation-archive-ancestor-promotion-repeat": {"commits": 0, "note": "Replay after a committed ancestor promotion preserves placement and newer manual ranks with zero SQLite writes; 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "federation-archive-leaf-preparation": {"commits": 0, "note": "A leaf with an uncached remote parent needs no promotion, peer access, or SQLite writes; 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "federation-archive-live-peer-view-repeat": {"commits": 0, "note": "Archive promotion repeated once the viewer's pin snapshots match the live peer view: zero commits; a pin is written only when its peer's summary changed. 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "federation-archive-subthread-promotion": {"commits": 6, "note": "100 direct children (98 unranked) across four owners: 6 boundary commits including recovery slots and viewer cache (~0.255 MB WAL); 10 such archives/day cost ~2.55 MB/day. No per-child commits; idle cost 0 MB/day.", "observedWalBytes": 255440, "rowsChanged": 306, "statements": 306},
   "federation-archive-subthread-promotion-repeat": {"commits": 0, "note": "Repeated completed archive promotion: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "federation-owner-project-pages": {
@@ -587,9 +608,12 @@
     "rowsChanged": 9,
     "statements": 11
   },
+  "messaging-causal-codex-monitor-recovery": {"commits":1,"note":"One Codex monitor recovery turn delegated from a messaging turn writes its prompt origin in one commit; at most one recovery per monitor. ~12 KB each: ~1.2 MB/day at 100 recovered messaging monitors/day, 0 MB/day idle.","observedWalBytes":12392,"rowsChanged":1,"statements":1},
   "messaging-causal-monitor-lifecycle": {"commits":5,"note":"One attributed ACP monitor origin plus lifecycle and final usage; 120 heartbeats add no commits. Provenance is one fixed reference captured at delegation.","observedWalBytes":160680,"rowsChanged":7,"statements":7},
   "messaging-causal-request-and-attachment": {"commits":3,"note":"One accepted human request (immutable source plus latest-human pointer in one transaction), one attachment claim/outcome, 100 duplicate/bot/read retries. No stream, poll or idle writes.","observedWalBytes":32960,"rowsChanged":4,"statements":4},
   "messaging-causal-steer": {"commits":2,"note":"One attributed Claude steer updates its current turn's causal reference once; one idempotent retry adds no writes. No history traversal or timer writes.","observedWalBytes":20600,"rowsChanged":2,"statements":2},
+  "messaging-first-typing-before-startup": {"commits":1,"note":"One admitted reply through its first activity delivery with startup blocked: 1 commit, 12360 WAL bytes; 0.247 MB/day at 20 turns/day, 12.36 MB/day at 1000, 0 idle/timer writes.","observedWalBytes":12360,"rowsChanged":1,"statements":1},
+  "messaging-first-typing-failed-start": {"commits":2,"note":"One preparation activity and its failed-start cleanup: 2 boundary commits; about 0.494 MB/day at 20 failures/day or 24.72 MB/day at 1000; no timer persistence.","observedWalBytes":24720,"rowsChanged":2,"statements":2},
   "messaging-outbound-file-activity": {
     "commits": 1,
     "note": "one send_messaging_file audit row; this runs per agent tool call, so the row count must not grow with attachment parts",
@@ -909,16 +933,58 @@
     "statements": 3
   },
   "pr-terminal-watch-open-polls": {
-    "commits": 10,
-    "note": "ten polls of an open PR that has a merge/close watch: 0 rows and 0 WAL; the 10 commits are the pre-existing per-poll supersede statement, which changes no row, so the watch adds 0 MB/day",
+    "commits": 0,
+    "note": "ten polls of an open PR that has a merge/close watch: 0 commits, 0 rows and 0 WAL; the per-poll head/baseline advance only reads when nothing moved, so the watch adds 0 MB/day",
     "observedWalBytes": 0,
     "rowsChanged": 0,
-    "statements": 10
+    "statements": 0
   },
   "pr-terminal-watch-register": {
     "commits": 1,
     "note": "one merge/close watch requested by an agent tool call: 1 commit/~16.5 KB WAL; ~0.8 MB/day at 50 requests/day, zero idle writes",
     "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-agent-cancel": {
+    "commits": 1,
+    "note": "an agent stops one PR watch through watch_thread_pull_request: 1 commit per call, 0 idle writes",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-autofix-hold": {
+    "commits": 1,
+    "note": "ten polls of one CI failure that Auto-fix covers, one success and failure watch: 1 commit holds the failure as its baseline, the other 9 polls only read; at most 1 commit per failure",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-baseline-clear": {
+    "commits": 1,
+    "note": "ten polls while re-run checks run, one baselined watch: 1 commit clears the baseline once, the other 9 polls only read; at most 1 commit per watch lifetime",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-follow-head": {
+    "commits": 1,
+    "note": "one poll that sees a pushed head: the CI watch's copy and the old row's end share 1 commit; only on pushes, well under 1 MB/day",
+    "observedWalBytes": 16480,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "pr-watch-operator-cancel": {
+    "commits": 1,
+    "note": "the operator stops one PR watch: 1 commit per click, 0 idle writes",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-operator-register": {
+    "commits": 1,
+    "note": "the operator arms one CI watch with Watch CI: 1 commit per click, 0 idle writes",
+    "observedWalBytes": 16512,
     "rowsChanged": 1,
     "statements": 1
   },
@@ -929,6 +995,17 @@
     "rowsChanged": 110,
     "statements": 106
   },
+  "project-forge-automation-save": {
+    "commits": 2,
+    "note": "Two operator Saves (pause, then resume) commit one overlay row each (~0.012 MB per Save); a few Saves a day cost well under 0.1 MB/day, with no per-poll, per-turn or idle writes.",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "project-held-wakeup-restart-discard": {"commits": 3, "note": "one held wake-up through a restart and Discard: one hold insert, one startup claim, one delete. ~20 KB per cycle; holds are rare, so even 20 cycles/day is ~0.4 MB/day. Idle and per-turn writes are 0.", "observedWalBytes": 20632, "rowsChanged": 3, "statements": 3},
+  "project-held-wakeup-restart-send": {"commits": 3, "note": "one held wake-up through a restart and Send: one hold insert, one startup claim, one delete when its turn starts. ~20 KB per cycle; holds are rare, so even 20 cycles/day is ~0.4 MB/day. Idle and per-turn writes are 0.", "observedWalBytes": 20632, "rowsChanged": 3, "statements": 3},
+  "restart-continuation-cycle": {"commits": 4, "note": "one quiet restart with one running thread and one queued message: one commit saves both, one startup claim, one delete as each entry starts (~29 KB). Restarts are rare: 10 a day is ~0.3 MB/day. Idle and per-turn writes are 0.", "observedWalBytes": 28872, "rowsChanged": 6, "statements": 6},
+  "restart-queued-refresh": {"commits": 2, "note": "an operator pause and a reorder of restored queued messages: one commit each, only while saved messages wait (~8 KB). Per operator action after a restart, so a few a day.", "observedWalBytes": 8240, "rowsChanged": 4, "statements": 4},
   "project-move-parent-detachment": {"commits": 1, "note": "One workspace boundary commit also clears the parent (~0.0165 MB/move, ~1.65 MB/day at 100 moves); no timer or per-turn writes.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "provider-branch-adoption": {"commits": 1, "note": "One turn-end branch change: 1 commit, ~16.5 KB WAL; ~1.65 MB/day at 100 changes/day; unchanged turns write zero.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "provider-branch-observation": {"commits": 1, "note": "One hover/timer branch change preserves the expected named branch: 1 commit, ~16.5 KB WAL; ~1.65 MB/day at 100 changes/day; idle writes zero.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
@@ -978,12 +1055,28 @@
   },
   "remote-launchpad-environment-reset": {"commits": 2, "note": "Clear one submitted viewer draft and retain its environment at the submission boundary. Two commits, approximately 1.7 MB/day at 100 threads/day, with no idle or streamed-event writes.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "remote-launchpad-legacy-adoption": {"commits": 1, "note": "First open of one peer's draft after drafts named their owner: one commit for the copy and its marker, once per peer directory, none after that.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
+  "remote-launchpad-model-seed": {"commits": 1, "note": "One owner model correction: 1 commit; ~0.83 MB/day at 100 corrections/day. Unchanged reopens write zero.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "remote-launchpad-model-unchanged": {"commits": 0, "note": "100 unchanged remote model reconciliations: zero commits and 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "registered-project-launchpad-submit": {
     "commits": 1,
     "note": "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes",
     "observedWalBytes": 8240,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "renamed-repository-pr-collapse": {
+    "commits": 3,
+    "note": "Two user refreshes of a thread holding one PR under its pre-rename and renamed URLs: the lookup's own pr_lookup_cache and pr_status_cache writes plus one threads commit that collapses the rows, once per affected thread. Aliases live in memory: 0 MB/day after the collapse.",
+    "observedWalBytes": 37080,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "renamed-repository-pr-watch-keys": {
+    "commits": 1,
+    "note": "Two undelivered watches saved under a renamed repository's old name move to the new name in one commit, once per learned rename; a second sync with no new rename reads only. 0 MB/day after the move.",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
   },
   "runtime-lease-dead-owner-takeover": {
     "commits": 7,
@@ -1128,6 +1221,20 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "thread-merge-hold-lifecycle": {
+    "commits": 2,
+    "note": "One commit per create/resolve; reads and duplicate actions write nothing. No timer, turn, or streamed-event writes. Measured 28,872 WAL bytes/lifecycle; 50 lifecycles/day project 1.44 MB/day.",
+    "observedWalBytes": 28872,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "thread-merge-hold-reminder": {
+    "commits": 1,
+    "note": "Marking a wait done and raising its reminder card share one commit; a repeat writes nothing. Only an explicit Mark Done writes, never a timer, turn, or streamed event.",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "thread-model-settings-unchanged": {
     "commits": 0,
     "note": "a turn start re-asserting the thread's model, effort and fast mode: no writes. It rewrote the whole overlay row every turn",
@@ -1135,6 +1242,8 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "thread-pending-wakes-list": {"commits": 0, "note": "50 Waiting for list reads over real dependency and scheduled-action stores; a read writes nothing: 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "thread-pending-wakes-monitor-completion": {"commits": 1, "note": "One existing monitor completion, including the ended-history index; no extra transaction for Waiting for.", "observedWalBytes": 24752, "rowsChanged": 1, "statements": 1},
   "thread-pricing-lazy-repair": {
     "commits": 1,
     "note": "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
@@ -1258,6 +1367,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "thread-todo-start-origin": {"commits": 1, "note": "One to-do Start thread click: the started thread's first prompt with its to-do origin. The origin row is the only write the card adds; 1 commit, measured 12,360 bytes (~1.2 MB/day at 100 starts/day), zero idle writes.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "thread-todo-start-with-plan": {
     "commits": 2,
     "note": "one Start thread from a card with a 3-step plan: one commit for the new thread's plan card and one for marking the start card done; only on an operator's Start click, never per turn or event; ~24 KB WAL per start, ~1.2 MB/day at 50 starts, half of it the plan card",

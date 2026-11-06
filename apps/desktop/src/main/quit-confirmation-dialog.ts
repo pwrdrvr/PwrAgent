@@ -21,7 +21,9 @@ export type QuitConfirmationDialogResult =
   | "manual-confirm"
   | "manual-cancel"
   | "countdown-expired"
-  | "work-completed";
+  | "work-completed"
+  /** The operator chose Quiet & Continue After Restart, and it ran. */
+  | "quiet-restart";
 
 /** One row in the dialog's "still running" list. */
 export type { QuitBlockerItem } from "../shared/quit-blockers";
@@ -37,6 +39,11 @@ export type QuitConfirmationDialogOptions = {
   archiveCleanupCount?: number;
   items?: QuitBlockerItem[];
   refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
+  /**
+   * Offers Quiet & Continue After Restart while thread work runs. Resolves
+   * true once the work is quiet and the quit may proceed, false to stay open.
+   */
+  quietRestart?: () => Promise<boolean>;
 };
 
 export type QuitConfirmationDialogSnapshot = QuitBlockerQueueSnapshot;
@@ -412,6 +419,7 @@ export async function showQuitConfirmationDialog(
   const height = Math.min(
     estimateQuitDialogHeight({
       ...options,
+      quietRestartAvailable: Boolean(options.quietRestart),
       automationRunCount: options.automationRunCount ?? 0,
       actionRunCount: options.actionRunCount ?? 0,
       archiveCleanupCount: options.archiveCleanupCount ?? 0,
@@ -470,6 +478,7 @@ export async function showQuitConfirmationDialog(
     let completionTimer: NodeJS.Timeout | undefined;
     let refreshInFlight = false;
     let waitForWork = false;
+    let quieting = false;
     let lastTotalCount =
       options.inProgressThreadCount
       + (options.automationRunCount ?? 0)
@@ -575,6 +584,27 @@ export async function showQuitConfirmationDialog(
       }
       event.preventDefault();
       const action = url.slice(navigationPrefix.length);
+      // Once the quiet restart runs, it alone settles the dialog.
+      if (quieting) return;
+
+      if (action === "quiet-restart" && options.quietRestart) {
+        quieting = true;
+        options.onCountdownChanged?.(null);
+        if (hardCeiling) {
+          clearTimeout(hardCeiling);
+          hardCeiling = undefined;
+        }
+        void options.quietRestart().then(
+          (proceed) => finish(proceed ? "quiet-restart" : "manual-cancel"),
+          (error: unknown) => {
+            quitDialogLog.warn("quiet restart failed; quitting", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            finish("quiet-restart");
+          },
+        );
+        return;
+      }
 
       // Any interaction with the dialog cancels the auto-quit — including the
       // main-process hard ceiling, which would otherwise quit out from under a
@@ -646,7 +676,9 @@ export async function showQuitConfirmationDialog(
         finish(action);
       }
     });
-    window.once("closed", () => finish("manual-cancel"));
+    window.once("closed", () => {
+      if (!quieting) finish("manual-cancel");
+    });
     options.onCountdownChanged?.(Date.now() + countdownSeconds * 1000);
     hardCeiling = setTimeout(
       () => finish("countdown-expired"),
@@ -663,6 +695,7 @@ export async function showQuitConfirmationDialog(
         actionRunCount: options.actionRunCount ?? 0,
         archiveCleanupCount: options.archiveCleanupCount ?? 0,
         items,
+        quietRestartAvailable: Boolean(options.quietRestart),
         navigationPrefix,
         colorScheme,
         palette,
@@ -705,6 +738,11 @@ export async function showQuitConfirmationDialog(
 }
 
 const QUIT_DIALOG_WIDTH = 460;
+
+const QUIET_RESTART_BUTTON_TITLE =
+  "Tell each running turn to stop, stop environment actions, and quit."
+  + " After the next launch, each stopped thread continues, a few at a time,"
+  + " before any other queued or automatic work starts.";
 const DIALOG_MAX_HEIGHT = 620;
 const DIALOG_MIN_HEIGHT = 360;
 /** Keep the prompt clear of the work area's edges. */
@@ -761,6 +799,8 @@ const DIALOG_CHROME_HEIGHT =
   + 37 // h1 and its margin
   + 112 // footer: hairline, countdown, buttons, padding
   + 4; // rounding slack: an underestimate would scroll the middle region
+/** The Quiet & Continue After Restart row in the footer. */
+const DIALOG_QUIET_RESTART_HEIGHT = 34 + 8;
 const DIALOG_TEXT_LINE_HEIGHT = 20;
 const DIALOG_PARAGRAPH_GAP = 12;
 /** 14px text across the 412px column. */
@@ -782,7 +822,8 @@ export function estimateQuitDialogHeight(
   let height = DIALOG_CHROME_HEIGHT
     + (copy.peerText ? estimateParagraphHeight(copy.peerText) : 0)
     + estimateParagraphHeight(copy.countText)
-    + estimateParagraphHeight(copy.impactText);
+    + estimateParagraphHeight(copy.impactText)
+    + (copy.quietRestart ? DIALOG_QUIET_RESTART_HEIGHT : 0);
   if (options.items.length > 0) {
     const groups = QUIT_ITEM_GROUPS.filter((group) =>
       options.items.some((item) => item.kind === group.kind));
@@ -911,6 +952,7 @@ type QuitDialogCopyOptions = {
   actionRunCount: number;
   archiveCleanupCount?: number;
   items: QuitBlockerItem[];
+  quietRestartAvailable?: boolean;
 };
 
 /** The prose above the list. The height estimate reads the same strings. */
@@ -919,6 +961,7 @@ function quitDialogCopy(options: QuitDialogCopyOptions): {
   peerText?: string;
   countText: string;
   impactText: string;
+  quietRestart: boolean;
 } {
   const peerOnly = Boolean(options.federationPeerCount)
     && options.inProgressThreadCount === 0
@@ -945,7 +988,11 @@ function quitDialogCopy(options: QuitDialogCopyOptions): {
     archiveCleanupCount: options.archiveCleanupCount ?? 0,
     hasItems: options.items.length > 0,
   });
-  return { peerOnly, ...(peerText ? { peerText } : {}), countText, impactText };
+  // Only thread work has anything to continue after the restart.
+  const quietRestart = Boolean(options.quietRestartAvailable)
+    && !peerOnly
+    && options.inProgressThreadCount > 0;
+  return { peerOnly, ...(peerText ? { peerText } : {}), countText, impactText, quietRestart };
 }
 
 export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
@@ -959,6 +1006,7 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
     peerText,
     countText,
     impactText: interruptionText,
+    quietRestart,
   } = quitDialogCopy(options);
   const listHtml = buildQuitItemListHtml({
     items: options.items,
@@ -1208,6 +1256,17 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         gap: 8px;
         margin-top: 12px;
       }
+      .quiet-restart {
+        display: flex;
+        margin-top: 8px;
+      }
+      .quiet-restart button {
+        flex: 1 1 auto;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: 0.55;
+      }
       /* Mirrors the .button / .button--primary / .button--secondary primitives
          in app.css. */
       button {
@@ -1293,6 +1352,9 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
           ${peerOnly ? "" : '<button id="wait" class="secondary" type="button">Wait for Work</button>'}
           <button id="quit" class="primary" type="button" autofocus>Quit Now</button>
         </div>
+        ${quietRestart ? `<div class="quiet-restart">
+          <button id="quiet-restart" class="secondary" type="button" title="${escapeHtml(QUIET_RESTART_BUTTON_TITLE)}">Quiet &amp; Continue After Restart</button>
+        </div>` : ""}
       </footer>
     </main>
     <script>
@@ -1301,8 +1363,10 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
       const countdown = document.getElementById("countdown");
       let timer;
       let waitingForWork = false;
+      let quieting = false;
 
       function send(result) {
+        if (quieting) return;
         window.location.href = navigationPrefix + result;
       }
       function render() {
@@ -1416,6 +1480,13 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         send("wait-for-work");
       });
       document.getElementById("quit").addEventListener("click", () => send("manual-confirm"));
+      document.getElementById("quiet-restart")?.addEventListener("click", () => {
+        cancelCountdown();
+        send("quiet-restart");
+        quieting = true;
+        for (const button of document.querySelectorAll("button")) button.disabled = true;
+        countdown.textContent = "Stopping turns for restart...";
+      });
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape") send("manual-cancel");
         // Enter still confirms, but not while a row link has focus — there it

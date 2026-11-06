@@ -51,9 +51,10 @@ export function SubAgentTranscriptWindow() {
   });
   const refreshInFlightRef = useRef(false);
   const refreshQueuedRef = useRef(false);
+  const refreshQueuedActivityRef = useRef(false);
   const loadedOlderRef = useRef(false);
 
-  const refresh = useCallback(async (): Promise<void> => {
+  const refresh = useCallback(async (countsAsActivity = true): Promise<void> => {
     const reader = desktopApi?.readThread;
     if (!target || !reader) {
       setState((current) => ({
@@ -67,12 +68,14 @@ export function SubAgentTranscriptWindow() {
     }
     if (refreshInFlightRef.current) {
       refreshQueuedRef.current = true;
+      refreshQueuedActivityRef.current ||= countsAsActivity;
       return;
     }
 
     refreshInFlightRef.current = true;
     do {
       refreshQueuedRef.current = false;
+      refreshQueuedActivityRef.current = false;
       try {
         const response = await reader({
           backend: target.backend,
@@ -82,6 +85,7 @@ export function SubAgentTranscriptWindow() {
           threadId: target.threadId,
           limit: THREAD_HISTORY_PAGE_LIMIT,
           viewOnly: true,
+          ...(countsAsActivity ? {} : { countsAsActivity: false }),
         });
         setState((current) => ({
           error: undefined,
@@ -100,6 +104,7 @@ export function SubAgentTranscriptWindow() {
           loading: false,
         }));
       }
+      countsAsActivity = refreshQueuedActivityRef.current;
     } while (refreshQueuedRef.current);
     refreshInFlightRef.current = false;
   }, [desktopApi?.readThread, target]);
@@ -156,7 +161,7 @@ export function SubAgentTranscriptWindow() {
       return undefined;
     }
     const interval = window.setInterval(() => {
-      void refresh();
+      void refresh(false);
     }, LIVE_TRANSCRIPT_REFRESH_MS);
     return () => {
       window.clearInterval(interval);

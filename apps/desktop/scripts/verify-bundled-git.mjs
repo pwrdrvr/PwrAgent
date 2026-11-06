@@ -1,26 +1,26 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { readRuntimeManifest, verifyRuntime } from "./stage-runtime.mjs";
 import { spawnSync } from "node:child_process";
 
 export function bundledGitFiles(root, platform, arch) {
-  const prefix = arch === "arm64" ? "clangarm64" : arch === "ia32" ? "mingw32" : "mingw64";
+  const prefix = arch === "arm64" ? "clangarm64" : arch === "ia32" ? "mingw32" : "ucrt64";
   return {
     git: join(root, platform === "win32" ? "cmd/git.exe" : "bin/git"),
     lfs: join(root, platform === "win32" ? `${prefix}/libexec/git-core/git-lfs.exe` : "libexec/git-core/git-lfs"),
   };
 }
 
-export function verifyBundledGit(resources, { platform = process.platform, arch = process.arch, macSlices = [] } = {}) {
+export function verifyBundledGit(resources, { platform = process.platform, arch = process.arch } = {}) {
   const root = join(resources, "git");
   const files = bundledGitFiles(root, platform, arch);
   for (const file of [...Object.values(files), ...["COPYING", "LICENSE.git-lfs", "SOURCES"].map((name) => join(root, name))]) {
     if (!existsSync(file)) throw new Error(`Packaged Git runtime is incomplete: ${file}`);
   }
-  if (platform === "darwin") {
-    for (const file of Object.values(files)) {
-      const result = spawnSync("lipo", [file, "-verify_arch", ...macSlices], { encoding: "utf8" });
-      if (result.status !== 0) throw new Error(`Bundled Git architecture check failed: ${file}: ${result.stderr}`);
-    }
+  if (platform !== "win32") {
+    const manifestPath = join(dirname(fileURLToPath(import.meta.url)), "..", "custom-git-runtime.json");
+    verifyRuntime(root, readRuntimeManifest(manifestPath, platform, arch));
   }
   // Verify the packaged tools themselves, never a PATH lookup. LFS supports
   // `version` directly, so this probe cannot succeed via a system fallback.

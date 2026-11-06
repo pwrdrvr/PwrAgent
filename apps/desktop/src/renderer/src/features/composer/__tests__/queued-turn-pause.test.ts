@@ -84,6 +84,24 @@ describe("getNextReleasableQueuedTurn", () => {
     expect(getNextReleasableQueuedTurn([{ id: "a", paused: true }])).toBeUndefined();
   });
 
+  it("never releases a failed scheduled action, and holds the turns behind it", () => {
+    // The projection re-adds a failed review on every refresh. Releasing it
+    // started the same review again each time the thread went idle.
+    expect(getNextReleasableQueuedTurn([
+      { id: "scheduled-projection:a", failedScheduledActionId: "a" },
+    ])).toBeUndefined();
+    // The sidebar shows the failure as held, so it holds the queue like a
+    // held row does.
+    expect(getNextReleasableQueuedTurn([
+      { id: "scheduled-projection:a", failedScheduledActionId: "a" },
+      { id: "b" },
+    ])).toBeUndefined();
+    expect(getNextReleasableQueuedTurn([
+      { id: "held", manualReleaseRequired: true },
+      { id: "b" },
+    ])).toBeUndefined();
+  });
+
   it("still waits behind an owner entry that is not paused", () => {
     expect(getNextReleasableQueuedTurn([
       { id: "a", paused: true, queueEntryId: "a" },

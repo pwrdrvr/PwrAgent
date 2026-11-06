@@ -352,6 +352,28 @@ document-timeline epoch — has to re-synchronize on that change, or the marks
 already on screen drift permanently against the ones mounted afterwards.
 `ThinkingScanner.tsx` is the worked example.
 
+### Calm motion
+
+**Calm motion** (Settings → General → Appearance, off by default) sets
+`data-motion="calm"` on `<html>`. Each looping animation then runs twice from
+when it starts and rests. The motion still says "this just started", but it
+stops waking the compositor on every display refresh for as long as the work
+lasts. It is not Reduce Motion: that preference stops the motion outright, and
+its rules keep winning, because every calm rule sits under
+`prefers-reduced-motion: no-preference`.
+
+- **CSS loops** get `animation-iteration-count: 2`. Rest in the reduced-motion
+  pose. Where the base style is not that pose, add a zero-length `forwards`
+  animation that starts as the second run ends.
+- **Script-paced pulses** count their own runs. `lib/status-pulse.ts` gives
+  each dot two dips, and a dot that starts pulsing again gets two more.
+- **Epoch-pinned animations** must not pin under Calm motion. A beam pinned to
+  the timeline's origin is two sweeps past its start the moment it mounts.
+  Re-pin when Calm motion turns off.
+
+[calm-motion-contract.test.ts](../../apps/desktop/src/renderer/src/styles/__tests__/calm-motion-contract.test.ts)
+fails until a new infinite animation has a calm rule or a written exemption.
+
 ## Copy Rules
 
 PwrAgent UI copy should sound like product UI, not demo narration.

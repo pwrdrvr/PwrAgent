@@ -2,7 +2,8 @@ import { automatedWorkStartedLabel, correspondenceNotice, incomingWorkText } fro
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import { finalTurnOutputText } from "@pwragent/shared";
 import type { ReviewRunMode } from "@pwragent/shared";
-import { formatModelOptionLabel, isThreadLockRefusal, modelOptionsForThreadProvider } from "@pwragent/shared";
+import { isThreadLockRefusal } from "@pwragent/shared";
+import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
@@ -1108,6 +1109,10 @@ export class MessagingController {
   private readonly markdownFileAttachmentSelector =
     new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
+  private readonly preparingTurnActivity = new Map<string, {
+    attempts: Set<symbol>;
+    signaled: boolean;
+  }>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
   private readonly showStreamingOptionConfig:
@@ -3193,6 +3198,7 @@ export class MessagingController {
     target?: AppServerReviewTarget;
     reviewer?: ModelSettingsRecent;
     reviewerBackends?: MessagingReviewIntent["review"]["reviewerBackends"];
+    modelMenuValue?: MessagingJsonValue;
     id?: string;
     createdAt?: number;
     targetSurface?: MessagingSurfaceRef;
@@ -3558,33 +3564,27 @@ export class MessagingController {
       ];
     } else if (params.phase === "reviewer_model") {
       const models = reviewerEntry?.models ?? [];
-      const maxActions = this.capabilityProfile.actions?.maxActions;
-      if (maxActions !== undefined && models.length + 3 > maxActions) {
-        this.logger.debug?.("messaging reviewer model list truncated", {
-          backend: reviewerBackendKind,
-          maxActions,
-          modelCount: models.length,
-        });
-      }
       title = "Review model";
       body = `Choose the model ${reviewerEntry?.label ?? reviewerBackendKind} should review with.`;
-      actions = [
-        ...models.map((model, index) => ({
-          id: `review:reviewer:model:${index}`,
-          label: model.label,
-          fallbackText: model.id,
-          priority: 10 + index,
-          value: { model: model.id },
-        })),
-        {
-          id: "review:reviewer:model:default",
-          label: "Provider Default",
-          fallbackText: "provider default",
-          priority: 3,
-        },
+      actions = buildMessagingModelMenuActions({
+        kind: reviewerBackendKind,
+        models,
+        currentModelId: reviewerModelId,
+        menuValue: params.modelMenuValue,
+        menuActionId: "review:reviewer:models",
+        selectActionId: (model) => `review:reviewer:model:${models.findIndex((candidate) => candidate.id === model.id)}`,
+        capabilityProfile: this.capabilityProfile,
         backAction,
-        cancelAction,
-      ];
+        footerActions: [
+          {
+            id: "review:reviewer:model:default",
+            label: "Provider Default",
+            fallbackText: "provider default",
+            priority: 3,
+          },
+          cancelAction,
+        ],
+      });
     } else if (params.phase === "reviewer_effort") {
       const efforts = reviewerModelEntry?.reasoningEfforts ?? [];
       title = "Review reasoning";
@@ -4570,10 +4570,12 @@ export class MessagingController {
       : currentBinding;
     let admissionState: MessagingThreadAdmissionState | undefined;
     try {
+      // Completion can drain an empty local queue while media is preparing.
+      // Read occupancy now so an earlier busy snapshot cannot strand this input.
       admissionState = await this.options.backend.getThreadAdmissionState({
-        backend: consumedSkillBinding.backend,
-        federationTarget: federationTargetForBinding(consumedSkillBinding),
-        threadId: consumedSkillBinding.threadId,
+        backend: currentBinding.backend,
+        federationTarget: federationTargetForBinding(currentBinding),
+        threadId: currentBinding.threadId,
       });
       this.markAdmissionStage(bundle.events[0], "admissionStateResolved");
     } catch (error) {
@@ -5067,6 +5069,7 @@ export class MessagingController {
     this.turnAdmission.markStarting(params.threadKey);
     let turnStarted = false;
     let startingOrigin: ActiveAgentMessagingOrigin | undefined;
+    let preparingActivity: ReturnType<MessagingController["beginTurnPreparationActivity"]> | undefined;
     const startingThreadKey = agentMessagingThreadKey(
       params.binding.backend,
       params.binding.threadId,
@@ -5178,6 +5181,12 @@ export class MessagingController {
       } else {
         this.markAdmissionStage(params.event, "policyResolved");
       }
+      // Permission and routing are settled. Backend startup may still wait on
+      // MCP discovery, runtime setup or a cold provider. Request typing now;
+      // neither those waits nor the activity API response may gate the other.
+      preparingActivity = this.beginTurnPreparationActivity(
+        startingOrigin?.deliveryBinding ?? startingOrigin?.binding ?? params.binding,
+      );
       // Diagnostic for #203-class regressions: a turn that the UI shows
       // as Default Access but routes to the Full Access codex client is
       // a silent security bug — the user thinks they're sandboxed but
@@ -5241,6 +5250,8 @@ export class MessagingController {
             startTurnAcceptedAt,
           };
       if (started.queueStatus === "queued") {
+        await preparingActivity?.finish(false);
+        preparingActivity = undefined;
         this.rememberQueuedAgentMessagingOrigin({
           binding: params.binding,
           event: params.event,
@@ -5293,9 +5304,15 @@ export class MessagingController {
         ?? startingOrigin?.binding
         ?? params.binding;
       this.setActiveTurn(deliveryBinding, activeTurn);
-      await this.signalTurnActivity(deliveryBinding, activeTurn, {
-        force: true,
-      });
+      // Preserve the accepted turn's normal signal (including a retry after a
+      // failed preparation request). This wait is after backend acceptance.
+      await preparingActivity?.settled;
+      const currentTurn = this.getActiveTurn(deliveryBinding);
+      if (currentTurn?.turnId === started.turnId && currentTurn.status === "working") {
+        await this.signalTurnActivity(deliveryBinding, currentTurn, {
+          force: true,
+        });
+      }
       await this.renderAutomaticBindingStatus(
         deliveryBinding,
         undefined,
@@ -5303,6 +5320,8 @@ export class MessagingController {
       );
       return "started";
     } catch (error) {
+      await preparingActivity?.finish(turnStarted);
+      preparingActivity = undefined;
       if (turnStarted) {
         this.logger.debug?.("messaging post-start update failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -5353,6 +5372,7 @@ export class MessagingController {
       );
       return "failed";
     } finally {
+      await preparingActivity?.finish(turnStarted);
       this.turnAdmission.clearStarting(params.threadKey);
       if (
         startingOrigin
@@ -6131,6 +6151,13 @@ export class MessagingController {
         return;
       }
       if (phase === "reviewer_model") {
+        if (action.id.startsWith("review:reviewer:models:")) {
+          await this.updateReviewPendingIntent(pendingIntent, event, {
+            phase: "reviewer_model",
+            modelMenuValue: action.value,
+          });
+          return;
+        }
         const model = typeof value?.model === "string" ? value.model : undefined;
         const next: ModelSettingsRecent = {
           backend: current.backend,
@@ -6258,6 +6285,7 @@ export class MessagingController {
       workspacePageIndex?: number;
       target?: AppServerReviewTarget;
       reviewer?: ModelSettingsRecent;
+      modelMenuValue?: MessagingJsonValue;
       clearReviewer?: boolean;
       forceBaseBranch?: boolean;
       resetRepositoryTarget?: boolean;
@@ -6328,6 +6356,7 @@ export class MessagingController {
             reviewer: review.reviewer ?? pendingIntent.intent.review.reviewer,
           }),
       reviewerBackends: await this.listReviewerBackends(),
+      modelMenuValue: review.modelMenuValue,
       id: pendingIntent.intent.id,
       createdAt: pendingIntent.intent.createdAt,
       targetSurface,
@@ -9543,7 +9572,7 @@ export class MessagingController {
       );
       return;
     }
-    if (actionId === "browse:new:model") {
+    if (actionId === "browse:new:model" || actionId.startsWith("browse:new:model:")) {
       await this.presentNewThreadModelPicker(
         nextSession,
         event,
@@ -10554,16 +10583,14 @@ export class MessagingController {
       body: "Choose the model for the new thread.",
       fallbackText: "Choose a model, or reply back.",
       targetSurface: session.surface,
-      actions: [
-        ...models.map((model, index) => ({
-          id: "browse:new:set-model",
-          label: formatModelOptionLabel(model),
-          style: "secondary" as const,
-          fallbackText: String(index + 1),
-          priority: 10 + index,
-          value: { model: model.id },
-        })),
-        {
+      actions: buildMessagingModelMenuActions({
+        kind: backend,
+        models,
+        menuValue: event.kind === "callback" ? event.value : undefined,
+        menuActionId: "browse:new:model",
+        selectActionId: "browse:new:set-model",
+        capabilityProfile: this.capabilityProfile,
+        backAction: {
           id: session.workMode === "worktree"
             ? "browse:new:workspace:worktree"
             : "browse:new:workspace:local",
@@ -10572,7 +10599,7 @@ export class MessagingController {
           fallbackText: "back",
           priority: 1,
         },
-      ],
+      }),
     });
     await this.storePendingIntent(intent, undefined, event);
     const result = await this.deliver(intent, undefined, event);
@@ -12751,7 +12778,7 @@ export class MessagingController {
       await this.executeHandoff(binding, event);
       return;
     }
-    if (actionId === "status:model") {
+    if (actionId === "status:model" || actionId.startsWith("status:model:")) {
       await this.presentModelPicker(binding, event);
       return;
     }
@@ -13585,11 +13612,8 @@ export class MessagingController {
         binding,
         createdAt: this.now(),
         currentModelId,
-        // A thread keeps its Codex model provider for life, so offer only
-        // that provider's models.
-        models: binding.backend === "codex" && thread
-          ? modelOptionsForThreadProvider(models, currentModelId)
-          : models,
+        models,
+        menuValue: event.kind === "callback" ? event.value : undefined,
       }),
       binding,
       event,
@@ -15311,6 +15335,9 @@ export class MessagingController {
           models: (candidate.launchpadOptions?.models ?? []).map((model) => ({
             id: model.id,
             label: model.label ?? model.id,
+            other: model.other,
+            providerId: model.providerId,
+            providerLabel: model.providerLabel,
             reasoningEfforts:
               model.reasoningEfforts
               ?? candidate.launchpadOptions?.reasoningEfforts
@@ -15825,13 +15852,17 @@ export class MessagingController {
       navigation ??
       (await this.readMonitorRows(binding.monitor, federationTargetForBinding(binding)));
     const now = this.now();
+    // Startup and timer renders have no inbound operator event.
+    const countsAsActivity = event !== undefined;
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
       binding.monitor,
+      countsAsActivity,
     );
     const snippetsByThreadKey = await this.resolveMonitorSnippets(
       snapshot,
       binding.monitor,
+      countsAsActivity,
     );
     const intent = buildMonitorStatusIntent({
       activeTurnsByThreadKey: activeTurns,
@@ -15877,13 +15908,16 @@ export class MessagingController {
       navigation ??
       (await this.readMonitorRows(subscription.monitor));
     const now = this.now();
+    const countsAsActivity = event !== undefined;
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
       subscription.monitor,
+      countsAsActivity,
     );
     const snippetsByThreadKey = await this.resolveMonitorSnippets(
       snapshot,
       subscription.monitor,
+      countsAsActivity,
     );
     const intent = {
       ...buildMonitorStatusIntent({
@@ -16064,6 +16098,7 @@ export class MessagingController {
   private async resolveMonitorActiveTurns(
     navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
+    countsAsActivity = true,
   ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
     const activeTurns = new Map(this.activeTurnsByThreadKey);
     if (!this.options.backend.readThreadStatus) {
@@ -16080,6 +16115,7 @@ export class MessagingController {
             backend: thread.source,
             federationTarget: federationTargetForThread(thread),
             threadId: thread.id,
+            ...(countsAsActivity ? {} : { countsAsActivity: false }),
           });
           if (status === "active") {
             activeTurns.set(threadKey, {
@@ -16113,6 +16149,7 @@ export class MessagingController {
   private async resolveMonitorSnippets(
     navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
+    countsAsActivity = true,
   ): Promise<ReadonlyMap<string, string>> {
     const snippets = new Map<string, string>();
     if (
@@ -16132,6 +16169,7 @@ export class MessagingController {
               backend: thread.source,
               federationTarget: federationTargetForThread(thread),
               threadId: thread.id,
+              ...(countsAsActivity ? {} : { countsAsActivity: false }),
             });
           const trimmed = text?.trim();
           if (trimmed) {
@@ -17123,6 +17161,65 @@ export class MessagingController {
       },
       binding,
     );
+  }
+
+  private beginTurnPreparationActivity(binding: MessagingBindingRecord): {
+    settled: Promise<void>;
+    finish: (started: boolean) => Promise<void>;
+  } {
+    let group = this.preparingTurnActivity.get(binding.id);
+    if (!group) {
+      group = { attempts: new Set(), signaled: false };
+      this.preparingTurnActivity.set(binding.id, group);
+    }
+    const attempt = Symbol();
+    group.attempts.add(attempt);
+    const current = this.getActiveTurn(binding);
+    const shouldSignal = group.attempts.size === 1
+      && current?.status !== "working"
+      && current?.status !== "waiting";
+    if (shouldSignal) group.signaled = true;
+    const delivery = shouldSignal
+      ? this.signalTurnActivity(binding, {
+          turnId: `preparing:${binding.id}`,
+          status: "working",
+          updatedAt: this.now(),
+        }, { force: true, reason: "turn_preparation" }).catch((error: unknown) => {
+          this.logger.debug?.("messaging preparation activity failed", {
+            bindingId: binding.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+      : Promise.resolve();
+    const ownedGroup = group;
+    return {
+      settled: delivery,
+      finish: async (started) => {
+        ownedGroup.attempts.delete(attempt);
+        if (ownedGroup.attempts.size === 0) {
+          this.preparingTurnActivity.delete(binding.id);
+          const active = this.getActiveTurn(binding);
+          // Another attempt or a real lifecycle event may own this surface by
+          // now. A failed/queued start cannot cancel that owner's typing.
+          if (!started && ownedGroup.signaled && active?.status !== "working") {
+            await this.signalTurnActivity(binding, active ?? {
+              turnId: `preparing:${binding.id}`,
+              status: "completed",
+              updatedAt: this.now(),
+            }, { force: true, reason: "turn_preparation_finished" }).catch((error: unknown) => {
+              this.logger.debug?.("messaging preparation activity cleanup failed", {
+                bindingId: binding.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          }
+        }
+        // A failed or queued start must report its outcome even when the
+        // earlier activity HTTP request is still pending. It already has a
+        // rejection handler; successful starts await it before their retry.
+        if (started) await delivery;
+      },
+    };
   }
 
   private async signalTurnActivity(

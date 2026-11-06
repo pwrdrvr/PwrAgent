@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GithubGraphqlPrClient,
   branchRefKey,
@@ -11,11 +11,26 @@ import {
   readGithubDotComAuthToken,
   retryDelayMs,
 } from "../pr-status/github-graphql-client";
+import { SKIPPED_ONLY_CHECKS_SETTLE_MS } from "../pr-status/pr-derivations";
+import { getPrStatusWatchOutcome } from "../pr-status/pr-status-watch";
+import {
+  clearForgeRepositoryNames,
+  forgeRepositoryName,
+  hasForgeRepositoryName,
+} from "../pr-status/forge-repository-names";
 import type {
   GithubRepositoryAccessEvent,
   GraphqlPrNode,
   PrRef,
 } from "../pr-status/github-graphql-client";
+
+type GraphqlCheckContextFixture = {
+  __typename: string;
+  conclusion?: string;
+  completedAt?: string;
+  state?: string;
+  status?: string;
+};
 
 function node(overrides: Partial<GraphqlPrNode> = {}): GraphqlPrNode {
   return {
@@ -86,6 +101,11 @@ describe("buildBatchedPrQuery", () => {
     expect(query).toContain("pageInfo { hasNextPage endCursor }");
     expect(query).toContain("conclusion detailsUrl status");
     expect(query).toContain("state targetUrl");
+    // Dates a head whose every check was skipped.
+    expect(query).toContain("conclusion detailsUrl status completedAt");
+    // Sees a workflow run that has no check runs yet (#3346).
+    expect(query).toContain("checkSuites(first: 50)");
+    expect(query).toContain("nodes { status workflowRun { id } }");
   });
 
   it("asks for the hover-card stats, which cost no rate-limit points", () => {
@@ -163,6 +183,8 @@ describe("buildBranchPrQuery", () => {
     expect(query).toContain("r1: repository(owner: $o1, name: $n1)");
     expect(query).toContain("pullRequests(headRefName: $b0");
     expect(query).toContain("pullRequests(headRefName: $b1");
+    // The forge's current name rides along, for remotes with a renamed repository's old name.
+    expect(query).toContain("r0: repository(owner: $o0, name: $n0) { nameWithOwner pullRequests(");
     // Merged/closed included, so a branch whose PR already landed still resolves.
     expect(query).toContain("states: [OPEN, MERGED, CLOSED]");
     expect(variables).toEqual({
@@ -192,7 +214,7 @@ describe("buildCommitPrQuery", () => {
     ]);
 
     expect(query).toContain("$s0: GitObjectID!");
-    expect(query).toContain("r0: repository(owner: $o0, name: $n0) { object(oid: $s0)");
+    expect(query).toContain("r0: repository(owner: $o0, name: $n0) { nameWithOwner object(oid: $s0)");
     expect(query).toContain("associatedPullRequests(first: 5");
     expect(query).not.toContain(sha);
     expect(variables).toEqual({ o0: "pwrdrvr", n0: "PwrAgent", s0: sha });
@@ -387,6 +409,246 @@ describe("mapGraphqlPrNode", () => {
 
   it("omits title when blank rather than writing an empty string", () => {
     expect(mapGraphqlPrNode(node({ title: "   " }))).not.toHaveProperty("title");
+  });
+});
+
+describe("mapGraphqlPrNode heads with nothing tested yet", () => {
+  // pwrdrvr/PwrAgent#3346 at f0672a25: three workflows skipped their only job
+  // at 12:44:24, CI was queued behind its concurrency group with no jobs, and
+  // the Claude app's suite sat QUEUED as it does on every commit. GitHub's
+  // rollup said SUCCESS, and a success watch fired at 12:45:02.
+  const skippedAt = Date.parse("2026-11-04T12:44:24Z");
+  const watchFiredAt = Date.parse("2026-11-04T12:45:02Z");
+  const skipped = (completedAt = "2026-11-04T12:44:24Z") => ({
+    __typename: "CheckRun",
+    conclusion: "SKIPPED",
+    status: "COMPLETED",
+    completedAt,
+  });
+  const claudeAppSuite = { status: "QUEUED", workflowRun: null };
+  const skippedSuite = { status: "COMPLETED", workflowRun: { id: "skipped-run" } };
+
+  function head(params: {
+    contexts: GraphqlCheckContextFixture[];
+    suites?: { status: string; workflowRun: { id: string } | null }[];
+    rollup?: string | null;
+  }): GraphqlPrNode {
+    return node({
+      commits: {
+        nodes: [{
+          commit: {
+            id: "commit-f",
+            oid: "f".repeat(40),
+            statusCheckRollup: params.rollup === null ? null : {
+              state: params.rollup ?? "SUCCESS",
+              contexts: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: params.contexts,
+              },
+            },
+            checkSuites: { nodes: params.suites ?? [] },
+          },
+        }],
+      },
+    });
+  }
+
+  it("holds a success rollup while a workflow run is still queued without jobs", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [skipped(), skipped(), skipped()],
+        suites: [
+          claudeAppSuite,
+          skippedSuite,
+          skippedSuite,
+          skippedSuite,
+          { status: "QUEUED", workflowRun: { id: "ci-run" } },
+        ],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary).toMatchObject({
+      checkState: "pending",
+      state: "pending",
+      checksStillRunning: true,
+    });
+    expect(getPrStatusWatchOutcome(summary)).toBeUndefined();
+  });
+
+  it("holds a head whose run finished its jobs but not itself", () => {
+    // Shrunk by the model in pr-status-watch.property.test.ts: on the pre-fix
+    // code a one-job run's SUCCESS woke the watch before the run completed.
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [{
+          __typename: "CheckRun",
+          conclusion: "SUCCESS",
+          status: "COMPLETED",
+          completedAt: "2026-11-04T12:44:24Z",
+        }],
+        suites: [{ status: "IN_PROGRESS", workflowRun: { id: "ci-run" } }],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary).toMatchObject({ checkState: "pending", checksStillRunning: true });
+    expect(getPrStatusWatchOutcome(summary)).toBeUndefined();
+  });
+
+  it("holds the head even after the skipped checks settle while CI is queued", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [skipped(), skipped(), skipped()],
+        suites: [claudeAppSuite, { status: "IN_PROGRESS", workflowRun: { id: "ci-run" } }],
+      }),
+      undefined,
+      skippedAt + SKIPPED_ONLY_CHECKS_SETTLE_MS + 60_000,
+    );
+
+    expect(summary).toMatchObject({ checkState: "pending", checksStillRunning: true });
+  });
+
+  it("marks a queued workflow on a head with no checks yet as pending, not unknown", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [],
+        rollup: null,
+        suites: [{ status: "QUEUED", workflowRun: { id: "ci-run" } }],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary).toMatchObject({ checkState: "pending", checksStillRunning: true });
+  });
+
+  it("passes once the workflow finishes with real results", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [
+          skipped(),
+          skipped(),
+          skipped(),
+          {
+            __typename: "CheckRun",
+            conclusion: "SUCCESS",
+            status: "COMPLETED",
+            completedAt: "2026-11-04T12:45:33Z",
+          },
+        ],
+        suites: [
+          claudeAppSuite,
+          skippedSuite,
+          { status: "COMPLETED", workflowRun: { id: "ci-run" } },
+        ],
+      }),
+      undefined,
+      Date.parse("2026-11-04T12:45:40Z"),
+    );
+
+    expect(summary.checkState).toBe("passing");
+    expect(summary).not.toHaveProperty("checksStillRunning");
+    expect(summary).not.toHaveProperty("checksAllSkipped");
+    expect(getPrStatusWatchOutcome(summary)).toBe("success");
+  });
+
+  it("ignores an app suite that never reports", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [{
+          __typename: "CheckRun",
+          conclusion: "SUCCESS",
+          status: "COMPLETED",
+          completedAt: "2026-11-04T12:40:00Z",
+        }],
+        suites: [claudeAppSuite],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary.checkState).toBe("passing");
+    expect(summary).not.toHaveProperty("checksStillRunning");
+  });
+
+  it("waits out the settle window when every check was skipped, then passes", () => {
+    const allSkipped = head({
+      contexts: [
+        skipped(),
+        { ...skipped("2026-11-04T12:44:30Z"), conclusion: "NEUTRAL" },
+      ],
+      suites: [claudeAppSuite, skippedSuite, skippedSuite],
+    });
+    const newestSkip = Date.parse("2026-11-04T12:44:30Z");
+
+    const settling = mapGraphqlPrNode(allSkipped, undefined, watchFiredAt);
+    expect(settling).toMatchObject({ checkState: "pending", checksStillRunning: true });
+    expect(getPrStatusWatchOutcome(settling)).toBeUndefined();
+
+    const justBefore = mapGraphqlPrNode(
+      allSkipped,
+      undefined,
+      newestSkip + SKIPPED_ONLY_CHECKS_SETTLE_MS - 1,
+    );
+    expect(justBefore.checkState).toBe("pending");
+
+    const settled = mapGraphqlPrNode(
+      allSkipped,
+      undefined,
+      newestSkip + SKIPPED_ONLY_CHECKS_SETTLE_MS,
+    );
+    expect(settled.checkState).toBe("passing");
+    expect(settled).not.toHaveProperty("checksStillRunning");
+    // It passes so the watch can end, and says nothing was tested.
+    expect(settled.checksAllSkipped).toBe(true);
+    expect(getPrStatusWatchOutcome(settled)).toBe("success");
+  });
+
+  it("does not hold a head whose first context page is skipped but has more pages", () => {
+    // Page 2 may hold real results, so a partial page is never skipped-only.
+    const summary = mapGraphqlPrNode(
+      node({
+        commits: {
+          nodes: [{
+            commit: {
+              id: "commit-f",
+              oid: "f".repeat(40),
+              statusCheckRollup: {
+                state: "SUCCESS",
+                contexts: {
+                  pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                  nodes: [skipped(), skipped()],
+                },
+              },
+            },
+          }],
+        },
+      }),
+      { checksStillRunning: false },
+      watchFiredAt,
+    );
+
+    expect(summary.checkState).toBe("passing");
+    expect(summary).not.toHaveProperty("checksStillRunning");
+    expect(summary).not.toHaveProperty("checksAllSkipped");
+  });
+
+  it("does not treat a commit status beside skipped checks as skipped-only", () => {
+    const summary = mapGraphqlPrNode(
+      head({
+        contexts: [
+          skipped(),
+          { __typename: "StatusContext", state: "SUCCESS" },
+        ],
+      }),
+      undefined,
+      watchFiredAt,
+    );
+
+    expect(summary.checkState).toBe("passing");
   });
 });
 
@@ -809,6 +1071,99 @@ describe("GithubGraphqlPrClient", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(result.get("pwrdrvr/pwragent#feat/a")?.map((pr) => pr.number)).toEqual([12]);
     expect(result.get("other/infra#fix/b")?.map((pr) => pr.number)).toEqual([7]);
+  });
+
+  describe("repository names", () => {
+    const oldName = { host: "github.com", owner: "pwrdrvr", repo: "PwrAgnt" };
+
+    afterEach(() => {
+      clearForgeRepositoryNames();
+    });
+
+    it("learns a renamed repository's name from the branch lookup it already makes", async () => {
+      const request = vi.fn(async () => ({
+        r0: { nameWithOwner: "pwrdrvr/PwrAgent", pullRequests: { nodes: [] } },
+      }));
+      await client(request).fetchPullRequestsForBranches([
+        { owner: "pwrdrvr", repo: "PwrAgnt", branch: "feat/a" },
+      ]);
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(forgeRepositoryName(oldName)).toEqual({ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" });
+    });
+
+    it("learns it from a commit lookup too", async () => {
+      const request = vi.fn(async (_query: string) => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent", object: null } }));
+      await client(request).fetchPullRequestsForCommits([
+        { owner: "pwrdrvr", repo: "PwrAgnt", sha: "a".repeat(40) },
+      ]);
+
+      expect(request.mock.calls[0]![0]).toContain("nameWithOwner object(oid:");
+      expect(forgeRepositoryName(oldName).repo).toBe("PwrAgent");
+    });
+
+    it("asks only for repositories GitHub has not named since launch", async () => {
+      const request = vi.fn(async (_query: string) => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent" } }));
+      const graphqlClient = client(request);
+
+      await graphqlClient.resolveRepositoryNames([
+        { owner: "pwrdrvr", repo: "PwrAgnt" },
+        { owner: "PWRDRVR", repo: "pwragnt" },
+      ]);
+      await graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(request.mock.calls[0]![0]).toContain("r0: repository(owner: $o0, name: $n0) { nameWithOwner }");
+      expect(request.mock.calls[0]![0]).not.toContain("r1:");
+      expect(forgeRepositoryName(oldName).repo).toBe("PwrAgent");
+    });
+
+    it("takes a repository GitHub does not know by name at its own name", async () => {
+      const request = vi.fn(async () => ({ r0: null }));
+      await client(request).resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+
+      expect(hasForgeRepositoryName(oldName)).toBe(true);
+      expect(forgeRepositoryName(oldName).repo).toBe("PwrAgnt");
+    });
+
+    it("shares one request between concurrent lookups of the same repository", async () => {
+      const request = vi.fn(async () => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent" } }));
+      const graphqlClient = client(request);
+
+      await Promise.all(Array.from({ length: 5 }, () =>
+        graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }])));
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(forgeRepositoryName(oldName).repo).toBe("PwrAgent");
+    });
+
+    it("waits a minute before asking gh for a token again", async () => {
+      let now = 1_000_000;
+      const getToken = vi.fn(async () => null);
+      const graphqlClient = new GithubGraphqlPrClient({
+        request: vi.fn(),
+        getToken,
+        sleep: async () => {},
+        now: () => now,
+      });
+
+      await graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+      await graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+      expect(getToken).toHaveBeenCalledOnce();
+
+      now += 60_000;
+      await graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+      expect(getToken).toHaveBeenCalledTimes(2);
+    });
+
+    it("records nothing when GitHub cannot answer, so callers stay inconclusive", async () => {
+      const request = vi.fn(async () => {
+        throw Object.assign(new Error("unauthorized"), { status: 401 });
+      });
+      await client(request).resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+
+      expect(hasForgeRepositoryName(oldName)).toBe(false);
+    });
   });
 
   it("records an authoritative empty answer for a branch with no PRs", async () => {

@@ -519,10 +519,9 @@ describe("sidebar thread row callback stability", () => {
       view.rerender(sidebar({ threads: withPr, onDetachPullRequest: second }));
     }
 
+    // The ✕ is pointer-only; its title names the PR it detaches.
     fireEvent.click(
-      within(row("Thread 7")).getByRole("button", {
-        name: "Detach pwrdrvr/PwrAgent#2119 from thread",
-      }),
+      within(row("Thread 7")).getByTitle("Detach pwrdrvr/PwrAgent#2119 from thread"),
     );
     // Detaching is confirmed once per install; go through the dialog rather
     // than pre-dismissing it, so the test does not encode its storage key.
@@ -588,6 +587,51 @@ describe("sidebar thread row callback stability", () => {
     fireEvent.contextMenu(row("Thread 9"), { clientX: 10, clientY: 20 });
     expect(within(screen.getByRole("menu")).queryByRole("menuitem", { name: /^Unbind from/ }))
       .toBeNull();
+  });
+
+  it("keeps the platform whole and elides only the conversation name in Unbind", () => {
+    const title = "PwrAgent mobile: consolidated iPhone remote and GPT Live";
+    const untitled: MessagingThreadBindingSummary = {
+      ...BINDING,
+      bindingId: "binding-dc-1",
+      platform: "discord",
+      conversationTitle: undefined,
+    };
+    const threads = THREADS.map((entry) =>
+      entry.id === "thread-8"
+        ? {
+          ...entry,
+          messagingBindings: [{ ...BINDING, conversationTitle: title }, untitled],
+        }
+        : entry,
+    );
+    render(sidebar({
+      threads,
+      onUnbindMessagingBinding: vi.fn(async () => undefined),
+    }));
+
+    fireEvent.contextMenu(row("Thread 8"), { clientX: 10, clientY: 20 });
+    const item = within(screen.getByRole("menu")).getByRole("menuitem", {
+      name: `Unbind from Telegram (${title})`,
+    });
+    // The platform is its own unshrinking span; only the name may elide, so
+    // a long conversation title cannot widen the whole menu.
+    expect(item.querySelector(".thread-context-menu__binding-platform")?.textContent)
+      .toBe("Unbind from Telegram");
+    expect(item.querySelector(".thread-context-menu__binding-name")?.textContent)
+      .toBe(`(${title})`);
+    // The full name stays readable on hover once the row elides it, through
+    // the app's portal tooltip layer rather than a native title.
+    expect(item).toHaveClass("tooltip-target");
+    expect(item).toHaveAttribute("data-tooltip", `Unbind from Telegram (${title})`);
+    expect(item).not.toHaveAttribute("title");
+
+    // A binding with no conversation name has no name span and no tooltip.
+    const bare = within(screen.getByRole("menu")).getByRole("menuitem", {
+      name: "Unbind from Discord",
+    });
+    expect(bare.querySelector(".thread-context-menu__binding-name")).toBeNull();
+    expect(bare).not.toHaveAttribute("data-tooltip");
   });
 
   it("keeps a pin drag wired to the newest onReorderThreadPins", async () => {

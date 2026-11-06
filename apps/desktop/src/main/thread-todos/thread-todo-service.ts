@@ -51,8 +51,11 @@ export type ThreadTodoActionRunners = {
     sourceThreadId: string;
     target: ThreadTodoMessageTarget;
     prompt: string;
+    todo: ThreadTodoDispatchCard;
   }) => Promise<{ summary: string }>;
   mergePullRequest: (params: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
     cwd?: string;
     pullRequest: string;
     method: ThreadTodoMergeMethod;
@@ -68,6 +71,7 @@ export type ThreadTodoActionRunners = {
     cwd?: string;
     crossProject: boolean;
     action: StartThreadAction;
+    todo: ThreadTodoDispatchCard;
     modelSettings?: ThreadTodoModelSettings;
     /** The card's plain steps, raised as the new thread's own card. */
     plan?: ThreadTodoPlan;
@@ -82,12 +86,24 @@ export type ThreadTodoActionRunners = {
     project?: ThreadTodoProject;
     crossProject: boolean;
     action: StartThreadAction;
+    todo: ThreadTodoDispatchCard;
     /** Checked against the peer's catalog; absent uses the peer's defaults. */
     modelSettings?: ThreadTodoModelSettings;
     /** Raised on the peer when it answers `threadTodos.raisePlan`. */
     plan?: ThreadTodoPlan;
-  } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread>;
+  } & ThreadTodoStartChoices) => Promise<ThreadTodoInstanceStartedThread>;
 };
+
+export type ThreadTodoInstanceStartedThread = ThreadTodoStartedThread & {
+  /** Added to the card's result, as when the peer could not honor its Where. */
+  notice?: string;
+};
+
+/**
+ * The card whose action sent a prompt, recorded on the message's origin. The
+ * card is resolved by then, so this is display text, never a link.
+ */
+export type ThreadTodoDispatchCard = { id: string; title?: string };
 
 /** What the operator chose on a handoff card besides its model. */
 export type ThreadTodoStartChoices = {
@@ -335,7 +351,9 @@ export class ThreadTodoService {
     key: string;
     title: string;
     detail?: string;
-    action?: StartThreadAction;
+    /** A dependency offers Start thread; a finished wait offers to send its steps. */
+    action?: StartThreadAction | Extract<ThreadTodoAction, { type: "send_message" }>;
+    items?: ThreadTodoItem[];
     cwd?: string;
     sourceProject?: ThreadTodoProject;
   }): { todo: ThreadTodo; created: boolean } {
@@ -352,6 +370,7 @@ export class ThreadTodoService {
       title: params.title,
       detail: params.detail,
       action: params.action,
+      ...(params.items?.length ? { items: params.items } : {}),
       cwd: params.cwd,
       sourceProject: params.sourceProject,
       dependencyId: params.dependencyId,
@@ -681,6 +700,8 @@ export class ThreadTodoService {
     // raising thread's workspace.
     const cwd = todo.targetProject ? todo.targetProject.path : todo.cwd;
     const crossProject = todo.targetProject !== undefined;
+    // The card's own title: the action's names the new thread, which shows it.
+    const dispatchCard: ThreadTodoDispatchCard = { id: todo.id, title: todo.title };
     this.running.add(id);
     try {
       if (action.type === "send_message" || options.messageTarget) {
@@ -694,6 +715,7 @@ export class ThreadTodoService {
         }
         const sent = await runners.sendMessage({
           sourceBackend: todo.backend, sourceThreadId: todo.threadId, target, prompt: action.prompt,
+          todo: dispatchCard,
         });
         return this.finish(id, { result: sent.summary });
       }
@@ -711,6 +733,7 @@ export class ThreadTodoService {
           });
         }
         const merged = await runners.mergePullRequest({
+          sourceBackend: todo.backend, sourceThreadId: todo.threadId,
           cwd,
           pullRequest: action.pullRequest,
           method,
@@ -729,7 +752,7 @@ export class ThreadTodoService {
       const plan: ThreadTodoPlan | undefined = steps.length > 0
         ? { title: action.title ?? todo.title, items: steps }
         : undefined;
-      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> = startOnInstance && options.startOnInstanceId
+      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> & Pick<ThreadTodoInstanceStartedThread, "notice"> = startOnInstance && options.startOnInstanceId
         ? await startOnInstance({
             instanceId: options.startOnInstanceId,
             sourceBackend: todo.backend,
@@ -737,6 +760,7 @@ export class ThreadTodoService {
             project,
             crossProject,
             action,
+            todo: dispatchCard,
             // The thread's remembered dispatch was checked against this
             // machine's catalog, so only an explicit pick goes to a peer.
             ...(options.modelSettings ? { modelSettings: options.modelSettings } : {}),
@@ -749,6 +773,7 @@ export class ThreadTodoService {
             cwd,
             crossProject,
             action,
+            todo: dispatchCard,
             modelSettings: options.modelSettings
               ?? this.store.getThreadModelSettings(todo.backend, todo.threadId),
             ...(plan ? { plan } : {}),
@@ -759,10 +784,11 @@ export class ThreadTodoService {
           started.dispatchSettings.settings, started.dispatchSettings.source);
       }
       const { backend, threadId, instanceId, instanceLabel } = started;
+      const result = started.instanceLabel
+        ? `Started thread on ${started.instanceLabel}`
+        : "Started thread";
       return this.finish(id, {
-        result: started.instanceLabel
-          ? `Started thread on ${started.instanceLabel}`
-          : "Started thread",
+        result: started.notice ? `${result}. ${started.notice}` : result,
         startedThread: { backend, threadId, ...(instanceId ? { instanceId } : {}), ...(instanceLabel ? { instanceLabel } : {}) },
       });
     } catch (error) {

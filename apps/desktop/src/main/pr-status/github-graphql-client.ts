@@ -12,10 +12,19 @@ import {
   deriveReviewState,
   findFailedCheckUrl,
   hasChecksStillRunning,
+  hasWorkflowRunsStillRunning,
+  isSkippedOnlyCheckSetSettling,
   normalizeCommitShas,
   parsePullRequestProvider,
+  readSkippedOnlyChecks,
+  type GhCheckRunPayload,
+  type GhCheckSuitePayload,
 } from "./pr-derivations";
 import type { GithubTerminalNode } from "./pr-terminal-details";
+import {
+  hasForgeRepositoryName,
+  recordForgeRepositoryName,
+} from "./forge-repository-names";
 
 const execFileAsync = promisify(execFile);
 const graphqlLog = getMainLogger("pwragent:pr-graphql");
@@ -44,6 +53,12 @@ const graphqlLog = getMainLogger("pwragent:pr-graphql");
 
 /** How many aliased PR lookups go into one GraphQL request. */
 const DEFAULT_BATCH_SIZE = 40;
+/**
+ * Check suites read per head commit. A commit carries one suite per workflow
+ * run plus one per installed checks app; PwrAgent's own heads carry at most 9.
+ */
+const CHECK_SUITE_PAGE_SIZE = 50;
+
 /** GitHub's maximum page size for status check contexts. */
 const STATUS_CONTEXT_PAGE_SIZE = 100;
 /** Retries per request before giving up on a batch. */
@@ -195,7 +210,9 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
  * checks still run. Failed destinations are retained for the auto-fix card;
  * names and output remain deliberately excluded.
  * Later pages are fetched only when this page cannot already prove a check is
- * running.
+ * running. `checkSuites` shows a workflow run that has no check runs yet, and
+ * `completedAt` dates a head whose every check was skipped; see
+ * `mapGraphqlPrNode`.
  *
  * The diff/commit/timestamp block feeding the chip hover card is free: GitHub
  * prices GraphQL by connection, so plain scalars add no rate-limit points, and
@@ -235,24 +252,20 @@ fragment PrStatus on PullRequest {
             pageInfo { hasNextPage endCursor }
             nodes {
               __typename
-              ... on CheckRun { conclusion detailsUrl status }
+              ... on CheckRun { conclusion detailsUrl status completedAt }
               ... on StatusContext { state targetUrl }
             }
           }
+        }
+        checkSuites(first: ${CHECK_SUITE_PAGE_SIZE}) {
+          nodes { status workflowRun { id } }
         }
       }
     }
   }
 }`;
 
-type GraphqlCheckContext = {
-  __typename?: string;
-  conclusion?: string | null;
-  detailsUrl?: string | null;
-  status?: string | null;
-  state?: string | null;
-  targetUrl?: string | null;
-};
+type GraphqlCheckContext = GhCheckRunPayload;
 
 type PrCheckResolution = {
   checksStillRunning: boolean;
@@ -273,6 +286,9 @@ type GraphqlCommit = {
   statusCheckRollup?: {
     state?: string | null;
     contexts?: GraphqlStatusContextPage | null;
+  } | null;
+  checkSuites?: {
+    nodes?: (GhCheckSuitePayload | null)[] | null;
   } | null;
 };
 
@@ -451,7 +467,7 @@ export function buildBranchPrQuery(refs: BranchRef[]): {
     );
     selections.push(
       `  r${index}: repository(owner: $${owner}, name: $${name}) {`
-      + ` pullRequests(headRefName: $${branch}, first: ${PRS_PER_BRANCH},`
+      + ` nameWithOwner pullRequests(headRefName: $${branch}, first: ${PRS_PER_BRANCH},`
       + ` orderBy: { field: CREATED_AT, direction: DESC },`
       + ` states: [OPEN, MERGED, CLOSED]) { nodes { ...PrStatus } } }`,
     );
@@ -504,7 +520,7 @@ export function buildCommitPrQuery(refs: CommitRef[]): {
     );
     selections.push(
       `  r${index}: repository(owner: $${owner}, name: $${name}) {`
-      + ` object(oid: $${sha}) { ... on Commit {`
+      + ` nameWithOwner object(oid: $${sha}) { ... on Commit {`
       + ` associatedPullRequests(first: ${PRS_PER_BRANCH},`
       + ` orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...PrStatus } } } } }`,
     );
@@ -521,30 +537,90 @@ ${PR_STATUS_FRAGMENT}`;
   return { query, variables };
 }
 
+/**
+ * Build one aliased document that asks what each repository is called now.
+ * GitHub resolves a renamed repository's old owner/name to the repository and
+ * answers with its new `nameWithOwner`.
+ */
+export function buildRepositoryNameQuery(refs: Array<Pick<BranchRef, "owner" | "repo">>): {
+  query: string;
+  variables: Record<string, string | number>;
+} {
+  const variableDecls: string[] = [];
+  const selections: string[] = [];
+  const variables: Record<string, string | number> = {};
+
+  refs.forEach((ref, index) => {
+    const owner = `o${index}`;
+    const name = `n${index}`;
+    variableDecls.push(`$${owner}: String!`, `$${name}: String!`);
+    selections.push(
+      `  r${index}: repository(owner: $${owner}, name: $${name}) { nameWithOwner }`,
+    );
+    variables[owner] = ref.owner;
+    variables[name] = ref.repo;
+  });
+
+  const query = `query ResolveRepositoryNames(${variableDecls.join(", ")}) {
+${selections.join("\n")}
+}`;
+
+  return { query, variables };
+}
+
+/** Remember the name GitHub answered for a repository it was asked about. */
+function recordAnsweredRepositoryName(
+  ref: Pick<BranchRef, "owner" | "repo">,
+  repository: object,
+): void {
+  const { nameWithOwner } = repository as { nameWithOwner?: unknown };
+  if (typeof nameWithOwner === "string") {
+    recordForgeRepositoryName(
+      { host: "github.com", owner: ref.owner, repo: ref.repo },
+      nameWithOwner,
+    );
+  }
+}
+
+/** How long a repository name lookup waits after finding no GitHub token. */
+const REPOSITORY_NAME_TOKEN_RETRY_MS = 60_000;
+
 /** Map one GraphQL PullRequest node onto our shared PrSummary. */
 export function mapGraphqlPrNode(
   node: GraphqlPrNode,
   checkResolution?: PrCheckResolution,
+  now = Date.now(),
 ): PrSummary {
   const headCommit = getHeadCommit(node);
-  const checkContexts = headCommit?.statusCheckRollup?.contexts?.nodes ?? [];
-  const checkState = deriveChipStateFromRollup(
+  const contextPage = headCommit?.statusCheckRollup?.contexts;
+  const contexts = readCheckContexts(contextPage) ?? [];
+  // GitHub's rollup only sees check runs that exist. It reports SUCCESS for a
+  // head whose every job was skipped, and for one whose real workflow is still
+  // queued with no jobs yet. Neither has tested anything.
+  const workflowsPending = hasWorkflowRunsStillRunning(
+    (headCommit?.checkSuites?.nodes ?? []).filter((suite) => suite !== null),
+  );
+  // A later page may hold real results, so only a complete page can be
+  // skipped-only.
+  const skippedOnly = contextPage?.pageInfo?.hasNextPage === true
+    ? undefined
+    : readSkippedOnlyChecks(contexts);
+  const skippedOnlySettling = isSkippedOnlyCheckSetSettling(skippedOnly, now);
+  const rollupCheckState = deriveChipStateFromRollup(
     headCommit?.statusCheckRollup?.state,
   );
+  const checkState =
+    (workflowsPending && (rollupCheckState === "passing" || rollupCheckState === "unknown"))
+    || (skippedOnlySettling && rollupCheckState === "passing")
+      ? "pending"
+      : rollupCheckState;
   const checksStillRunning =
-    checkResolution?.checksStillRunning
-    ?? hasChecksStillRunning(
-      checkContexts.filter(
-        (context): context is GraphqlCheckContext => context !== null,
-      ),
-    );
+    (checkResolution?.checksStillRunning ?? hasChecksStillRunning(contexts))
+    || workflowsPending
+    || skippedOnlySettling;
   const failedCheckUrl =
     checkResolution?.failedCheckUrl
-    ?? findFailedCheckUrl(
-      checkContexts.filter(
-        (context): context is GraphqlCheckContext => context !== null,
-      ),
-    );
+    ?? findFailedCheckUrl(contexts);
   // `mergeStateStatus` is deliberately absent: GraphQL gates it behind a preview
   // Accept header, and `mergeable` alone already answers mergeable/conflicting.
   const shaped = {
@@ -571,6 +647,7 @@ export function mapGraphqlPrNode(
     state: checkState,
     checkState,
     ...(checksStillRunning ? { checksStillRunning: true } : {}),
+    ...(skippedOnly && checkState === "passing" ? { checksAllSkipped: true as const } : {}),
     ...(failedCheckUrl ? { failedCheckUrl } : {}),
     lifecycleState: deriveLifecycleState(shaped),
     reviewState: deriveReviewState(shaped),
@@ -792,6 +869,8 @@ export class GithubGraphqlPrClient {
   private failureBackoffUntil = 0;
   private reconnectBypassAvailable = false;
   private lastNetworkReconnectAt = Number.NEGATIVE_INFINITY;
+  private readonly repositoryNameLookups = new Map<string, Promise<void>>();
+  private repositoryNameTokenRetryAt = Number.NEGATIVE_INFINITY;
 
   constructor(options: GithubGraphqlPrClientOptions = {}) {
     this.requestOverride = options.request;
@@ -947,6 +1026,71 @@ export class GithubGraphqlPrClient {
     });
   }
 
+  /**
+   * Ask GitHub what each repository is called now, for the ones it has not
+   * answered since launch. Records answers only; a repository GitHub could not
+   * answer for stays unknown, and callers must treat that as inconclusive.
+   * Concurrent callers share one request per repository, and a missing token
+   * is not retried for a minute: one refresh can repair several PR lists.
+   */
+  async resolveRepositoryNames(
+    refs: Array<Pick<BranchRef, "owner" | "repo">>,
+  ): Promise<void> {
+    const waits: Promise<void>[] = [];
+    const unknown = new Map<string, Pick<BranchRef, "owner" | "repo">>();
+    for (const ref of refs) {
+      if (hasForgeRepositoryName({ host: "github.com", ...ref })) continue;
+      const key = `${ref.owner}/${ref.repo}`.toLowerCase();
+      const pending = this.repositoryNameLookups.get(key);
+      if (pending) waits.push(pending);
+      else unknown.set(key, ref);
+    }
+    if (unknown.size > 0 && this.now() >= this.repositoryNameTokenRetryAt) {
+      const lookup = this.lookUpRepositoryNames([...unknown.values()]);
+      for (const key of unknown.keys()) this.repositoryNameLookups.set(key, lookup);
+      waits.push(lookup.finally(() => {
+        for (const key of unknown.keys()) {
+          if (this.repositoryNameLookups.get(key) === lookup) this.repositoryNameLookups.delete(key);
+        }
+      }));
+    }
+    await Promise.all(waits);
+  }
+
+  private async lookUpRepositoryNames(
+    refs: Array<Pick<BranchRef, "owner" | "repo">>,
+  ): Promise<void> {
+    if (this.deferForFailureBackoff("repository name lookup")) {
+      return;
+    }
+    const token = await this.resolveToken();
+    if (!token) {
+      this.repositoryNameTokenRetryAt = this.now() + REPOSITORY_NAME_TOKEN_RETRY_MS;
+      graphqlLog.debug("skipping repository name lookup: no GitHub token from gh");
+      return;
+    }
+    for (const batch of chunk(refs, this.batchSize)) {
+      const data = await this.runBatchQuery(
+        buildRepositoryNameQuery(batch),
+        token,
+        batch.length,
+        batch,
+      );
+      if (!data) continue;
+      batch.forEach((ref, index) => {
+        const repository = data[`r${index}`];
+        if (repository && typeof repository === "object") {
+          recordAnsweredRepositoryName(ref, repository);
+        } else if (repository === null) {
+          // GitHub answered and knows no repository by this name (deleted, or
+          // no access). It names no other repository either, so the remote's
+          // own name is all there is to match.
+          recordForgeRepositoryName({ host: "github.com", ...ref }, `${ref.owner}/${ref.repo}`);
+        }
+      });
+    }
+  }
+
   private async fetchAliasedPullRequestLists<R extends Pick<BranchRef, "owner" | "repo">>(params: {
     refs: R[];
     label: string;
@@ -999,6 +1143,7 @@ export class GithubGraphqlPrClient {
       answers.forEach(({ ref, repository }) => {
         if (repository) {
           this.notifyRepositoryAccess(ref, "available");
+          recordAnsweredRepositoryName(ref, repository);
         }
       });
       const checkResolutions = await this.resolveCheckContexts(
@@ -1013,7 +1158,9 @@ export class GithubGraphqlPrClient {
         }
         results.set(
           params.keyFor(ref),
-          nodes.map((node) => mapGraphqlPrNode(node, checkResolutions.get(node)!)),
+          nodes.map((node) =>
+            mapGraphqlPrNode(node, checkResolutions.get(node)!, this.now())
+          ),
         );
       });
     }
@@ -1290,7 +1437,7 @@ export class GithubGraphqlPrClient {
         incompleteContexts += 1;
         return;
       }
-      prs.push(mapGraphqlPrNode(node, checkResolutions.get(node)!));
+      prs.push(mapGraphqlPrNode(node, checkResolutions.get(node)!, this.now()));
     });
 
     if (dropped > 0 || incompleteContexts > 0) {

@@ -5,6 +5,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 export type ProviderCatalogRefreshController = {
   available: boolean;
@@ -136,10 +137,7 @@ export function ProviderCatalogRefreshControl(props: {
         {running ? (
           <>
             <span className="settings-pending" role="status">
-              <span
-                aria-hidden="true"
-                className="pending-spinner pending-spinner--sm"
-              />
+              <PendingSpinner pairing="paired" size="sm" />
               {`Refreshing… ${answered} of ${total} done`}
             </span>
             <button
@@ -200,7 +198,7 @@ function ProviderRefreshRow(props: {
     <li className="provider-refresh__row" data-status={provider.status}>
       <span className="provider-refresh__mark" aria-hidden="true">
         {provider.status === "running" ? (
-          <span className="pending-spinner pending-spinner--sm" />
+          <PendingSpinner pairing="paired" size="sm" />
         ) : (
           <span className={`status-dot ${STATUS_DOT_CLASS[provider.status]}`} />
         )}

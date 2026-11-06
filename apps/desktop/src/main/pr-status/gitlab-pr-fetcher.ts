@@ -97,7 +97,10 @@ export function parseGitLabMr(payload: GitLabMrPayload, pipelineSourceHeadSha?: 
   const status = pipeline?.sha && payload.sha && pipeline.sha !== payload.sha
     && pipelineSourceHeadSha !== payload.sha ? undefined : pipeline?.status;
   const running = ["created", "waiting_for_resource", "preparing", "pending", "running", "scheduled"].includes(status ?? "");
-  const checkState = status === "success" ? "passing"
+  // A skipped pipeline (`[skip ci]`) is final but tested nothing. It passes so
+  // a watch can end, and says so, matching a skipped-only GitHub head.
+  const skipped = status === "skipped";
+  const checkState = status === "success" || skipped ? "passing"
     : status === "failed" || status === "canceled" ? "failing"
     : running ? "pending" : "unknown";
   const lifecycleState = payload.state === "merged" ? "merged"
@@ -120,6 +123,7 @@ export function parseGitLabMr(payload: GitLabMrPayload, pipelineSourceHeadSha?: 
     state: checkState,
     checkState,
     checksStillRunning: running,
+    ...(skipped ? { checksAllSkipped: true as const } : {}),
     lifecycleState,
     reviewState: payload.draft ? "draft" : "ready_for_review",
     mergeState: payload.has_conflicts || merge === "conflict" ? "conflicting"
@@ -426,7 +430,11 @@ export class GitLabPrFetcher {
       }
     }
     const pr = parseGitLabMr(payload, pipelineSourceHeadSha);
-    if (pr.provider !== ref.host || pr.org !== ref.owner || pr.repo !== ref.repo || pr.number !== ref.number) {
+    // A renamed or transferred project's old path redirects to
+    // projects/<id>, and glab follows it, so the MR comes back under the
+    // project's current path. That path is the answer, not a mismatch: the
+    // caller learns the rename from it. Only the host and MR number must hold.
+    if (pr.provider !== ref.host || pr.number !== ref.number) {
       throw new Error("GitLab returned a different merge request identity.");
     }
     this.failures.delete(ref.host);

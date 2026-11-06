@@ -11,6 +11,7 @@ describe("PR auto-dispatch logging", () => {
     deferred: "debug",
     "missing-head": "debug",
     disabled: "debug",
+    "project-off": "debug",
     busy: "debug",
     pending: "debug",
     duplicate: "debug",

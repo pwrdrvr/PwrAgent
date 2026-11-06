@@ -51,7 +51,7 @@ it("rejects workspace dependency imports emitted as template literals", async ()
   expect(result.stderr).toContain("externalized workspace bundled-dependency import");
 });
 
-it.each(["agent-tools/pwragent-messaging-codex-tools", "federation/git-instance-handoff"])(
+it.each(["agent-tools/pwragent-messaging-codex-tools", "federation/git-instance-handoff", "owner-core/thread-title-prompt"])(
   "rejects externalized workspace source subpath %s", async (specifier) => {
     const result = await verify({ "out/main/index.js": `import "@pwragent/${specifier}";` });
     expect(result.status).toBe(1);

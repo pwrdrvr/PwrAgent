@@ -3,12 +3,16 @@ import path from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
 import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMessagingDynamicToolCall, resolveMessagingOutboundFile, validateMessagingFileMetadata, FILE_PUSH_MAX_BYTES } from "../dist/federation-core.js";
 import { Codex } from "./codex.js";
+import { installedVersion } from "./version.js";
 import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
 
 export class Runtime {
   constructor({ store, workspace, home, command, onFailure }) {
     this.store = store;
     this.workspace = workspace;
+    // Snapshot at startup: upgrading the package files does not change the
+    // code this process is running.
+    this.running = installedVersion();
     this.projects = new OutpostProjects(path.dirname(store.directory), workspace);
     this.messagingTools = new AgentToolRouter(buildPwrAgentMessagingToolDefinitions((request) => this.messagingRequest(request), { nativeDynamicPdfImages: true }));
     this.fileAccess = { privateStorageRoots: [home, process.env.PWRAGENT_HOME].filter(Boolean),
@@ -23,7 +27,7 @@ export class Runtime {
       command, home, workspace,
       onNotification: (message) => { this.notification(message); this.onEvent?.(message); },
       onRequest: (message) => this.serverRequest(message),
-      onFailure,
+      onFailure: (error) => { this.codexFailure = error; onFailure(error); },
     });
   }
 
@@ -41,7 +45,7 @@ export class Runtime {
   async handle(method, params = {}) {
     if (this.stopping) throw new Error("Daemon is stopping");
     switch (method) {
-      case "status": return { version: 1, ready: true, pid: process.pid, activeJob: this.active || null, workspace: this.workspace };
+      case "status": return { version: 1, ready: true, pid: process.pid, running: this.running, activeJob: this.active || null, workspace: this.workspace };
       case "project-list": return this.projects.list();
       case "project-create": case "project-clone": return this.projects.create(params);
       case "project-add": return this.projects.add(params);
@@ -53,7 +57,7 @@ export class Runtime {
       case "read": {
         const job = this.store.get(params.id);
         if (!job.threadId) throw new Error("This job has no confirmed thread ID");
-        return this.codex.request("thread/read", { threadId: job.threadId, includeTurns: true });
+        return this.codex.readThreadProtocolResult({ threadId: job.threadId, includeTurns: true });
       }
       case "interrupt": {
         const job = this.store.get(params.id);
@@ -62,7 +66,7 @@ export class Runtime {
         if (job.status === "interrupting") return job;
         this.save({ ...job, status: "interrupting" });
         try {
-          await this.codex.request("turn/interrupt", { threadId: job.threadId, turnId: job.turnId });
+          await this.codex.interruptTurn({ threadId: job.threadId, turnId: job.turnId });
         } catch (error) {
           const current = this.store.get(job.id);
           if (current.status === "interrupting" && current.turnId === job.turnId) {
@@ -111,7 +115,7 @@ export class Runtime {
     this.work = this.start(job, prompt).catch((error) => {
       const current = this.store.get(id);
       if (ACTIVE.has(current.status)) {
-        this.finish(id, this.codex.failure || this.stopping ? "unknown" : "failed", error.message);
+        this.finish(id, this.codexFailure || this.stopping ? "unknown" : "failed", error.message);
       }
     });
     // The durable acceptance precedes inference. Socket loss cannot cancel it.
@@ -122,39 +126,29 @@ export class Runtime {
     const cwd = this.projects.resolve(job.cwd || this.workspace);
     const params = { cwd, approvalPolicy: "never", sandbox: job.sandbox,
       ...(job.model ? { model: job.model } : {}) };
-    const result = job.threadId && this.loadedThreads.has(job.threadId) ? { thread: { id: job.threadId } }
-      : await this.codex.request(job.threadId ? "thread/resume" : "thread/start", {
-        ...params,
-        ...(job.threadId ? { threadId: job.threadId } : { ephemeral: false, dynamicTools: this.messagingTools.buildDynamicToolSpecs() }),
-      });
-    if (typeof result?.thread?.id !== "string" || !result.thread.id || result.thread.id.length > 256
-      || (job.threadId && result.thread.id !== job.threadId)) {
+    const result = job.threadId ? { threadId: job.threadId }
+      : await this.codex.startThread({ ...params, ephemeral: false, dynamicTools: this.messagingTools.buildDynamicToolSpecs() });
+    if (typeof result.threadId !== "string" || !result.threadId || result.threadId.length > 256) {
       throw new Error("Codex returned an invalid thread ID");
     }
-    this.loadedThreads.add(result.thread.id);
-    this.save({ ...this.store.get(job.id), threadId: result.thread.id,
+    this.loadedThreads.add(result.threadId);
+    this.save({ ...this.store.get(job.id), threadId: result.threadId,
       ...(!job.threadId ? { messagingFileTools: true } : {}) });
-    const turn = await this.codex.request("turn/start", {
-      threadId: result.thread.id,
-      input: [{ type: "text", text: prompt, text_elements: [] }],
-      cwd,
-      approvalPolicy: "never",
-      sandboxPolicy: job.sandbox === "workspace-write"
-        ? { type: "workspaceWrite", writableRoots: [cwd], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
-        : { type: "readOnly", networkAccess: false },
-      ...(job.model ? { model: job.model } : {}),
-      ...(job.reasoningEffort ? { effort: job.reasoningEffort } : {}),
+    const turn = await this.codex.startTurn({ ...params, threadId: result.threadId,
+      onTerminalResult: (params) => this.notification({ method: "turn/completed", params }),
+      input: [{ type: "text", text: prompt }],
+      ...(job.reasoningEffort ? { reasoningEffort: job.reasoningEffort } : {}),
       ...(job.serviceTier ? { serviceTier: job.serviceTier } : {}),
     });
-    if (typeof turn?.turn?.id !== "string" || !turn.turn.id || turn.turn.id.length > 256) {
+    if (typeof turn.turnId !== "string" || !turn.turnId || turn.turnId.length > 256 || turn.turnId.startsWith("pending:")) {
       this.onFailure(new Error("Codex returned an invalid turn ID; execution outcome is unknown"));
       return;
     }
-    this.save({ ...this.store.get(job.id), turnId: turn.turn.id, status: "running" });
-    if (this.earlyCompletion?.turn?.id === turn.turn.id) {
+    this.save({ ...this.store.get(job.id), turnId: turn.turnId, status: "running" });
+    // The prompt stays in memory: job records never store it.
+    this.onEvent?.({ method: "headless/turnStarted", params: { threadId: result.threadId, jobId: job.id, prompt } });
+    if (this.earlyCompletion?.turn?.id === turn.turnId) {
       this.complete(this.earlyCompletion);
-    } else if (["completed", "failed", "interrupted"].includes(turn.turn.status)) {
-      this.complete({ threadId: result.thread.id, turn: turn.turn });
     } else if (this.blockedReason) {
       await this.handle("interrupt", { id: job.id });
     }
@@ -162,7 +156,10 @@ export class Runtime {
 
   notification({ method, params }) {
     if (method === "thread/closed") this.loadedThreads.delete(params?.threadId);
-    if (method !== "turn/completed" || !this.active) return;
+    if (!["turn/completed", "turn/failed"].includes(method) || !this.active) return;
+    // A process-loss failure is synthesized by the client, not a confirmed
+    // provider result. Shutdown preserves this job as unknown.
+    if (this.codexFailure) return;
     const job = this.store.get(this.active);
     if (params?.threadId !== job.threadId) return;
     if (!job.turnId) this.earlyCompletion = params;
@@ -233,22 +230,23 @@ export class Runtime {
   serverRequest(message) {
     const call = readPwrAgentMessagingDynamicToolCall(message);
     if (call) {
-      void this.dispatchTool(call).then((result) => this.codex.send({ id: message.id, result }),
-        (error) => this.codex.send({ id: message.id, result: { success: false, contentItems: [{ type: "inputText", text: error.message }] } }));
-      return;
+      return this.dispatchTool(call).catch((error) => ({ success: false,
+        contentItems: [{ type: "inputText", text: error.message }] }));
     }
     // Never grant unattended approvals or invent answers to user questions.
     const method = message.method;
     let result;
     if (["item/commandExecution/requestApproval", "item/fileChange/requestApproval"].includes(method)) result = { decision: "decline" };
     else if (method === "item/permissions/requestApproval") result = { permissions: {}, scope: "turn" };
-    this.codex.send(result
-      ? { id: message.id, result }
-      : { id: message.id, error: { code: -32601, message: "Interactive requests are not supported by PwrAgent Headless" } });
-    if (!this.active) return;
+    if (!this.active) {
+      if (result) return result;
+      throw new Error("Interactive requests are not supported by PwrAgent Headless");
+    }
     this.blockedReason = `Interactive request requires an operator: ${method}`;
     const job = this.store.get(this.active);
     if (job.turnId) void this.handle("interrupt", { id: job.id }).catch(this.onFailure);
+    if (result) return result;
+    throw new Error("Interactive requests are not supported by PwrAgent Headless");
   }
 
   finish(id, status, reason) {

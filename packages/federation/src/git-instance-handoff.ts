@@ -1,9 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { ThreadHandoffGitReference } from "@pwragent/shared";
 import { normalizeGitOriginUrl, readStatusWithoutNestedWorktrees } from "@pwragent/shared";
 import { validateGitHandoffReference } from "./thread-handoff-package";
+
+// Git LFS resolves a relative core.hooksPath, including an empty one, against
+// the working tree, and its filter then installs its hooks there. The null
+// device is absolute on every platform and is not a directory, so neither Git
+// nor git-lfs can find or write a hook in it. Use os.devNull, not "/dev/null":
+// on Windows git-lfs treats "/dev/null" as relative to the worktree.
+const DISABLE_HOOKS = ["-c", `core.hooksPath=${os.devNull}`];
 
 export type HandoffGitRunner = (cwd: string, args: string[], options?: { maxBuffer?: number }) => Promise<{ stdout: string; stderr: string }>;
 
@@ -121,7 +129,7 @@ export function createGitHandoffService(runGitCommand: HandoffGitRunner) {
     if (!remote) throw new Error("The receiving repository has no remote matching the sender. Clone the same repository or fix its remote before handing off.");
     const ref = `refs/pwragent/handoffs/${randomUUID()}`;
     try {
-      await git(repository, ["-c", "core.hooksPath=", "fetch", "--no-tags", "--no-write-fetch-head", "--", remote, `${snapshot.ref}:${ref}`])
+      await git(repository, [...DISABLE_HOOKS, "fetch", "--no-tags", "--no-write-fetch-head", "--", remote, `${snapshot.ref}:${ref}`])
         .catch((error: unknown) => {
           throw new Error(`The receiving machine could not fetch ${snapshot.ref}. Check its Git access and push the source branch before handing off.`, { cause: error });
         });
@@ -178,11 +186,11 @@ export function createGitHandoffService(runGitCommand: HandoffGitRunner) {
         }
         // worktree add -b creates its branch before checkout, and leaves it behind
         // if a filter fails. Complete checkout before transactional switch -c.
-        await git(repository, ["-c", "core.hooksPath=", "worktree", "add", "--detach", worktree, snapshot.head]);
+        await git(repository, [...DISABLE_HOOKS, "worktree", "add", "--detach", worktree, snapshot.head]);
         created = true;
         if (switchBranch && branch) {
           try {
-            await git(worktree, ["-c", "core.hooksPath=", "switch", ...switchBranch]);
+            await git(worktree, [...DISABLE_HOOKS, "switch", ...switchBranch]);
             if (switchBranch[0] === "-c") createdBranch = branch;
           } catch (error) {
             // Git owns branch reservations. A concurrent branch creation or a

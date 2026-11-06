@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
-import { useNavigationQueryResource } from "./useNavigationQueryResource";
+import { useNavigationQueryResource, type NavigationQueryApi } from "./useNavigationQueryResource";
 
 /** A palette's owning instance can match threads outside its loaded rows. */
-export function useNavigationOwnerSearch(params: { query: string; desktopApi?: DesktopApi }) {
+export function useNavigationOwnerSearch(params: { query: string; desktopApi?: NavigationQueryApi }) {
   const query = params.query.trim();
   const [debounced, setDebounced] = useState("");
   useEffect(() => {

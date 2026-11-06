@@ -1,15 +1,34 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkTypedSuppressions, typedLintFiles, typedSuppressionLines } from "./lint-typed.mjs";
 import { syntaxLintPaths } from "./lint-syntax.mjs";
+import { oxlintBin, tsgolintExecutable } from "./oxlint.mjs";
+import workspaceConfig from "../vitest.workspace.ts";
 
-const require = createRequire(import.meta.url);
 const directories = [];
 const fixtureProbes = new Map();
+
+// The native typed backend takes ~0.2 s on Linux and ~0.3 s on Windows, but
+// 0.1-17 s on loaded macOS runners (median 2.1 s across 193 probed runs, Oct 31
+// to Nov 1 2026). That is real blocking work, not a hang. The child limit sits
+// near twice the slowest observed run, so a real hang is killed and reported.
+// The test limit adds headroom for fixture setup and the JSON assertions.
+const NATIVE_TYPED_LINT_SPAWN_TIMEOUT_MS = 30_000;
+const NATIVE_TYPED_LINT_TEST_TIMEOUT_MS = 40_000;
+
+function runOxlint(root, args) {
+  return spawnSync(process.execPath, [oxlintBin(), ...args], {
+    cwd: root,
+    encoding: "utf8",
+    // Outside the repository oxlint finds tsgolint only through a
+    // node_modules/.bin on PATH. Name the binary the prewarm already ran.
+    env: { ...process.env, OXLINT_TSGOLINT_PATH: tsgolintExecutable() },
+    timeout: NATIVE_TYPED_LINT_SPAWN_TIMEOUT_MS,
+  });
+}
 
 // Write each boundary immediately: spawnSync blocks the worker, including its
 // timers. A final test timeout alone cannot locate a slow native invocation.
@@ -109,13 +128,9 @@ describe("native typed lint correctness", () => {
       "export const unsafe = new Service().read;",
       "export const safe = new Service().safe;",
     ].join("\n"));
-    const packageFile = require.resolve("oxlint/package.json");
-    const { bin } = JSON.parse(readFileSync(packageFile, "utf8"));
     probe("fixture-setup-complete");
     probe("node-native-launch");
-    const result = spawnSync(process.execPath, [resolve(dirname(packageFile), bin.oxlint),
-      "--config", join(root, "oxlint.typed.json"), "--format=json", file,
-    ], { cwd: root, encoding: "utf8" });
+    const result = runOxlint(root, ["--config", join(root, "oxlint.typed.json"), "--format=json", file]);
     probe("node-native-complete", {
       pid: result.pid,
       status: result.status,
@@ -131,6 +146,14 @@ describe("native typed lint correctness", () => {
     expect(diagnostics[0].code).toBe("typescript(unbound-method)");
     expect(diagnostics[0].labels[0].span.line).toBe(2);
     probe("assertions-complete");
+  }, NATIVE_TYPED_LINT_TEST_TIMEOUT_MS);
+
+  // The prewarm catches everything, so these are the two ways it could stop
+  // working without failing anything: unregistered, or warming a missing file.
+  it("prewarms the native typed backend once per run", () => {
+    const project = workspaceConfig.test.projects.find((entry) => entry.test?.name === "desktop-main");
+    expect(project.test.globalSetup).toContain("scripts/native-typed-lint-prewarm.mjs");
+    expect(statSync(tsgolintExecutable()).isFile()).toBe(true);
   });
 
   it("preserves unused-binding exemptions and applies hook safety only to renderer files", () => {
@@ -149,11 +172,7 @@ describe("native typed lint correctness", () => {
       'import { useEffect } from "react";',
       "export function Bad(enabled: boolean) { if (enabled) useEffect(() => {}); return null; }",
     ].join("\n"));
-    const packageFile = require.resolve("oxlint/package.json");
-    const { bin } = JSON.parse(readFileSync(packageFile, "utf8"));
-    const result = spawnSync(process.execPath, [resolve(dirname(packageFile), bin.oxlint),
-      "--config", config, "--format=json", ...syntaxLintPaths(root),
-    ], { cwd: root, encoding: "utf8" });
+    const result = runOxlint(root, ["--config", config, "--format=json", ...syntaxLintPaths(root)]);
     expect(result.status).toBe(1);
     const diagnostics = JSON.parse(result.stdout).diagnostics;
     expect(diagnostics.filter((entry) => entry.code === "eslint(no-unused-vars)")).toHaveLength(3);

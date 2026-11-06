@@ -42,6 +42,7 @@ export type BootstrapAppearance = {
   density: DesktopAppearanceDensity;
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
+  calmMotion: boolean;
 };
 
 export const BOOTSTRAP_APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
@@ -87,6 +88,7 @@ export function readBootstrapAppearance(
       transcriptTextSize:
         config.general?.appearance?.transcriptTextSize
         ?? DESKTOP_TEXT_SIZE_DEFAULT,
+      calmMotion: config.general?.appearance?.calmMotion ?? false,
     };
   } catch {
     // Config missing / unreadable / malformed → fall back to defaults.
@@ -99,6 +101,7 @@ export function readBootstrapAppearance(
       density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
       sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
       transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
+      calmMotion: false,
     };
   }
 }
@@ -146,6 +149,7 @@ export function parseBootstrapAppearanceArg(
           && isDesktopTextSize(raw.transcriptTextSize)
           ? raw.transcriptTextSize
           : DESKTOP_TEXT_SIZE_DEFAULT;
+      const calmMotion = raw?.calmMotion === true;
       return {
         theme,
         darkTheme,
@@ -153,6 +157,7 @@ export function parseBootstrapAppearanceArg(
         density,
         sidebarTextSize,
         transcriptTextSize,
+        calmMotion,
       };
     } catch {
       return undefined;

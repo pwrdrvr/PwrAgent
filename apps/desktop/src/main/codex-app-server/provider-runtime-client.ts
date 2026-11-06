@@ -1,5 +1,5 @@
 import { parseCodexProviderModelId, type CodexModelProviderSettings } from "@pwragent/shared";
-import type { CodexAppServerClient } from "./client";
+import type { CodexAppServerClient } from "./desktop-client";
 
 type Route = "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "reportedProvider";
 // Exhaustive: adding a public client operation requires choosing its runtime ownership.
@@ -10,6 +10,13 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   onAppServerUnexpectedExit: "subscribe",
   restartAppServer: "all",
   resetAppServerRestarts: "all",
+  readAppServerProcessSample: "primary",
+  getAppServerRecycleStatus: "primary",
+  // Each runtime owns a process; each decides from its own sample.
+  maybeRecycleIdleAppServer: "all",
+  getSubscribedThreadCount: "primary",
+  // Each runtime keeps its own threads loaded and releases its own.
+  unsubscribeIdleThreads: "all",
   recoverInvalidPersistedResponseMessageIds: "thread",
   onRealtimeEvent: "subscribe",
   onRealtimeDisconnect: "subscribe",
@@ -29,6 +36,8 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   listThreadsForMigration: "primary",
   readArchiveCleanupThreadSummary: "threadId",
   listArchiveCleanupThreadsPage: "primary",
+  archiveCleanupRecencyReads: "primary",
+  enrichArchiveCleanupThreads: "primary",
   enrichThreadDirectories: "primary",
   listSkills: "primary",
   listMcpServers: "thread",
@@ -52,6 +61,7 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   listBackgroundTerminals: "threadId",
   terminateBackgroundTerminal: "threadId",
   readThread: "thread",
+  readThreadProtocolResult: "thread",
   readThreadModelSettings: "thread",
   exportThreadForHandoff: "threadId",
   prepareFreshNativeVoiceThread: "thread",
@@ -69,6 +79,7 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   setTurnApprovalReviewer: "thread",
   setThreadPermissions: "thread",
   archiveThread: "thread",
+  retireReviewThread: "thread",
   deleteThread: "thread",
   restoreThread: "thread",
   renameThread: "thread",
@@ -86,7 +97,7 @@ type Callback = (...args: unknown[]) => unknown;
 type Subscription = { method: Method; args: unknown[]; stops: Map<CodexAppServerClient, () => void> };
 const READ_ONLY = new Set<Method>([
   "readArchiveCleanupThreadSummary", "readThreadPricingSnapshot", "readThreadTurn", "readThreadActivity",
-  "readThreadName", "readThreadSummary", "readThread", "readThreadModelSettings", "exportThreadForHandoff",
+  "readThreadName", "readThreadSummary", "readThread", "readThreadProtocolResult", "readThreadModelSettings", "exportThreadForHandoff",
   "listBackgroundTerminals",
   "readThreadToolInvocation", "readTurnRoot",
 ]);
@@ -166,9 +177,15 @@ export function createProviderRuntimeClient(
     const startedAtGeneration = generation;
     const params = record(args[0]);
     const threadId = route === "threadId" ? args[0] : params?.threadId;
+    // A fork from a rollout path reads its history from that file. A thread
+    // handoff passes another machine's thread ID, which this App Server has
+    // never stored, so reading it here fails with "thread not loaded".
+    const forksFromPath = method === "forkThread"
+      && typeof params?.path === "string"
+      && params.path.trim() !== "";
     let owner: string | undefined;
     if (typeof threadId === "string") {
-      if (!owners.has(threadId)) {
+      if (!owners.has(threadId) && !forksFromPath) {
         await primary.readThreadSummary(threadId);
         owners.set(threadId, primary.modelProviderForThread(threadId));
       }

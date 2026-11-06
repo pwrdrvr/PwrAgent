@@ -16,7 +16,7 @@ import type {
   NavigationThreadSummary,
   PrSummary,
 } from "@pwragent/shared";
-import { isKeptAtTopThread } from "@pwragent/shared";
+import { graphemePrefix, isKeptAtTopThread } from "@pwragent/shared";
 import { DraftIcon, LockIcon, MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
@@ -28,9 +28,8 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
-import { PrChip } from "../pr-status/PrChip";
 import { findBranchDriftPr, type PrBranchDrift } from "../pr-status/pr-branch-drift";
-import { PrRollupChip } from "../pr-status/PrRollupChip";
+import { ThreadRowPrChip, ThreadRowPrRollupChip } from "./ThreadRowPrChips";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
@@ -271,6 +270,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // chips render instantly on app launch and stay in sync without any
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
+  // PR watches reach the chips through ThreadRowPrChips, which read their
+  // context themselves: a watch change must not re-render every row body.
   const density = useContext(ThreadRowDensityContext);
   // What this row reports back to the list that owns it, so the list can keep
   // one handler for every row instead of a closure per row. See `ThreadRowRef`.
@@ -715,7 +716,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 held, so a peek re-renders no row. It sits right of the pin
                 so the hover-only pin button never shifts it. */}
             {density === "minimal" && prs.length > 0 ? (
-              <PrRollupChip
+              <ThreadRowPrRollupChip
+                thread={props.thread}
                 prs={prs}
                 threadTitle={props.thread.title}
                 repoPrefixedUrls={repoPrefixedPrUrls}
@@ -802,8 +804,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             prChips={prs.map((pr) => (
-              <PrChip
+              <ThreadRowPrChip
                 key={pr.url}
+                thread={props.thread}
                 pr={pr}
                 showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
                 branchDrift={branchDrift?.url === pr.url ? branchDrift : undefined}
@@ -1050,10 +1053,10 @@ function BindingChip(props: {
 
 const CHIP_LEAF_MAX_CHARS = 20;
 
-function elide(value: string, max = CHIP_LEAF_MAX_CHARS): string {
+export function elide(value: string, max = CHIP_LEAF_MAX_CHARS): string {
   const trimmed = value.trim();
   if (trimmed.length <= max) return trimmed;
-  return `${trimmed.slice(0, max - 1)}…`;
+  return `${graphemePrefix(trimmed, max - 1).trimEnd()}…`;
 }
 
 /**
@@ -1260,7 +1263,7 @@ function needsRepoPrefix(
     return false;
   }
 
-  const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
+  const primaryRepository = threadPrimaryRepository(thread);
   if (primaryRepository) {
     return repositoryIdentityKey(primaryRepository) !== repositoryIdentityKey(pr);
   }
@@ -1273,8 +1276,23 @@ function needsRepoPrefix(
 }
 
 function primaryRepositoryKey(thread: NavigationThreadSummary): string | undefined {
-  const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
+  const primaryRepository = threadPrimaryRepository(thread);
   return primaryRepository ? repositoryIdentityKey(primaryRepository) : undefined;
+}
+
+/**
+ * The owner resolves `primaryGitRepository` from the thread's primary
+ * workspace. Prefer it to the provider's origin, which still names the
+ * project the session started in after a move to another project.
+ */
+function threadPrimaryRepository(
+  thread: NavigationThreadSummary,
+): RepositoryIdentity | undefined {
+  const primaryGitRepository = thread.primaryGitRepository?.trim();
+  return (primaryGitRepository
+    ? parseRepositoryIdentity(`https://${primaryGitRepository}`)
+    : undefined)
+    ?? parseRepositoryIdentity(thread.gitOriginUrl);
 }
 
 /**

@@ -31,7 +31,7 @@ import type {
   ThreadUsageLineRecord,
   ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
-import { operatorTodoItemKey } from "@pwragent/shared";
+import { isThreadPendingWakeLive, operatorTodoItemKey } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
@@ -39,6 +39,7 @@ import {
   EditsIcon,
   InfoIcon,
   HistoryIcon,
+  HourglassIcon,
   PricingIcon,
   ProjectsIcon,
   PullRequestIcon,
@@ -67,6 +68,10 @@ import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
 import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
 import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
+import { useThreadPrWatches } from "../pr-watches/useThreadPrWatchIndicators";
+import { useThreadPendingWakes } from "../thread-pending-wakes/useThreadPendingWakes";
+import { useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
+import { WaitingForPanel } from "./context-panels/WaitingForPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
@@ -99,6 +104,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "connections", label: "Connections", Icon: ConnectionsIcon },
   { id: "info", label: "Thread info", Icon: InfoIcon },
   { id: "todos", label: "To-dos", Icon: TodoIcon },
+  { id: "waiting", label: "Waiting for", Icon: HourglassIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
   { id: "tool-calls", label: "Tool calls", Icon: ToolCallsIcon },
@@ -143,10 +149,16 @@ type ThreadContextPanelProps = {
   activeTurnId?: string;
   backendError?: string;
   backends: BackendSummary[];
+  /** The owning peer's providers, for a thread that runs on another instance. */
+  ownerBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
   initialLoadDurationMs?: number;
   onOpenAutomations?: () => void;
   onRefreshNavigation?: () => Promise<void>;
+  /** Backs Turn Off on the Pull requests tab's Auto-fix row. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** Unlocks the selected thread, as its lock card does. */
+  onUnlockThread?: () => Promise<void>;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
   /**
@@ -242,6 +254,17 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     [props.editedFileGroups],
   );
   const actionRuns = useMemo(() => props.actionRuns ?? [], [props.actionRuns]);
+  // The Pull requests tab counts what wakes this thread: this instance's own
+  // list for a local thread, the owner's projection for a peer's.
+  const localPrWatches = useThreadPrWatches(props.thread);
+  const prWatchCount = props.thread
+    ? props.thread.federation || readRendererFederationTarget()
+      ? props.thread.activePrWatches?.length ?? 0
+      : localPrWatches?.watches.length ?? 0
+    : 0;
+  // The Waiting for tab counts every pending wake, so a waiting thread says
+  // so before the tab opens. Unknown (an older owner) draws no badge.
+  const dependencyContext = useThreadDependencyIndicatorsContext();
   const toolCallsFederationTarget = props.thread?.federation?.ref.target
     ?? readRendererFederationTarget();
   const toolCallsInstanceId = toolCallsFederationTarget?.scope === "remote"
@@ -318,6 +341,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       : props.activeTab === "todos" && !props.todos
         ? "info"
       : props.activeTab;
+  const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi, { includeEnded: open && activeTab === "waiting" });
+  const pendingWakeCount = pendingWakes.state.status === "ready"
+    ? pendingWakes.state.wakes.filter(isThreadPendingWakeLive).length
+    : 0;
   const [subAgentLens, setSubAgentLens] = useState<SubAgentLens>();
   const displayResource = useThreadDisplayResource({
     subAgentLens,
@@ -734,9 +761,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     const todoBadge = tab.id === "todos" && props.todos
       ? readTodoTabBadge(props.todos.view, props.todos.threadKey)
       : undefined;
+    const watchCount = tab.id === "prs" ? prWatchCount : tab.id === "waiting" ? pendingWakeCount : 0;
     const label = commandCount
       ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
-      : todoBadge?.unread
+      : watchCount && tab.id === "waiting"
+        ? `${tab.label} · ${watchCount} pending wake${watchCount === 1 ? "" : "s"}`
+      : watchCount
+        ? `${tab.label} · ${watchCount} watch${watchCount === 1 ? "" : "es"} waking this thread`
+        : todoBadge?.unread
         ? `${tab.label} · ${todoBadge.count} unread`
         : todoBadge
           ? `${tab.label} · ${todoBadge.count} open for this thread`
@@ -769,6 +801,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             aria-hidden="true"
           >
             {todoBadge.count > 9 ? "9+" : todoBadge.count}
+          </span>
+        ) : null}
+        {watchCount > 0 ? (
+          <span
+            className="context-rail__activity context-rail__activity--watches"
+            aria-hidden="true"
+          >
+            {watchCount > 9 ? "9+" : watchCount}
           </span>
         ) : null}
       </button>
@@ -882,6 +922,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <PricingPanel
             desktopApi={props.desktopApi}
             backends={props.backends}
+            ownerBackends={props.ownerBackends}
             thread={{ id: props.thread.id, source: props.thread.source, federation: props.thread.federation, updatedAt: props.thread.updatedAt }}
             subThreadCount={props.thread.ordinaryChildCount}
             activeTurnId={props.activeTurnId}
@@ -974,9 +1015,50 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <PullRequestsPanel
             desktopApi={props.desktopApi}
             onRefreshNavigation={props.onRefreshNavigation}
+            onSetThreadPrAutoDispatch={props.onSetThreadPrAutoDispatch}
             thread={props.thread}
           />
         );
+      case "waiting": {
+        if (!props.thread) return null;
+        const thread = props.thread;
+        const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
+        const ownerLabel = thread.federation
+          ? thread.federation.instanceLabel
+          : readRendererFederationTarget() ? "the thread's own machine" : undefined;
+        const sendNow = props.desktopApi?.sendScheduledThreadActionNow;
+        const resolveHeld = props.desktopApi?.resolveProjectHeldWakeups;
+        const turnOffAutoFix = props.onSetThreadPrAutoDispatch;
+        const openContinueAfter = dependencyContext?.open;
+        return (
+          <WaitingForPanel
+            key={JSON.stringify([thread.source, thread.id, federationTarget])}
+            thread={thread}
+            controller={pendingWakes}
+            ownerLabel={ownerLabel}
+            onTurnOffAutoFix={turnOffAutoFix ? async () => await turnOffAutoFix(false) : undefined}
+            onSendScheduledNow={sendNow ? async (id) => {
+              await sendNow({ id, ...(federationTarget ? { federationTarget } : {}) });
+            } : undefined}
+            onSendHeldNow={resolveHeld ? async (wake) => {
+              if (wake.held?.kind !== "project_paused") return;
+              // The project's own release, as its Resume dialog sends one.
+              const { results } = await resolveHeld({
+                directoryKey: wake.held.directoryKey,
+                resolutions: [{ entryId: wake.entryId, backend: thread.source, threadId: thread.id, action: "send" }],
+                ...(federationTarget ? { federationTarget } : {}),
+              });
+              const result = results.find((candidate) => candidate.entryId === wake.entryId);
+              if (result?.status !== "sent") {
+                throw new Error(result?.error ?? "That wake-up is no longer held.");
+              }
+            } : undefined}
+            onUnlockThread={props.onUnlockThread}
+            onShowTab={selectTab}
+            onOpenContinueAfter={openContinueAfter && !ownerLabel ? () => openContinueAfter(thread) : undefined}
+          />
+        );
+      }
       case "projects":
         if (!props.thread) return null;
         return (

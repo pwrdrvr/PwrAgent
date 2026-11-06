@@ -24,14 +24,16 @@ export function isSubthreadLaunchpadDraft(
 }
 
 /**
- * The title a pending row shows: the first line of what was typed. The draft
+ * The title a pending row shows: the first meaningful line of what was typed. The draft
  * row and the starting row that replaces it both use it, so sending does not
  * rename the row.
  */
 export function pendingThreadTitleLine(text: string | undefined): string {
   for (const line of text?.split("\n") ?? []) {
     const trimmed = line.trim();
-    if (trimmed) return trimmed;
+    // Rich-text pastes can put list markers or Markdown separators on their
+    // own line. They carry no title; continue to the actual prompt text.
+    if (trimmed && !/^(?:[-*+]|#{1,6}|\d+[.)]|(?:[-*_]\s*){3,})$/.test(trimmed)) return trimmed;
   }
   return "";
 }

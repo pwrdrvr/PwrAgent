@@ -70,7 +70,10 @@ describe("DesktopBackendRegistry replay integration", () => {
       metadata: { backend: "codex", scenario: "correspondence-pagination" },
       steps: [
         { id: "initialize", kind: "response", method: "initialize", result: { methods: ["thread/read"] } },
-        ...pages.map((result, index) => ({ id: `read-${index}`, kind: "response" as const, method: "thread/read", result })),
+        ...pages.map((result, index) => ({
+          id: `read-${index}`, kind: "response" as const, method: "thread/read",
+          ...(index === 1 ? { before: "older-page" } : {}), result,
+        })),
       ],
     });
     const overlayStore = {
@@ -212,6 +215,7 @@ describe("DesktopBackendRegistry replay integration", () => {
           id: "read-analysis-oldest",
           kind: "response",
           method: "thread/read",
+          before: "older-page",
           result: {
             entries: [],
             messages: [],

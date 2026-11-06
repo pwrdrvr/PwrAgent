@@ -114,7 +114,7 @@ describe("CodexAppServerClient recording", () => {
       rootDir
     });
 
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       connectionObserver: createProtocolCaptureObserver({
         backend: "codex",

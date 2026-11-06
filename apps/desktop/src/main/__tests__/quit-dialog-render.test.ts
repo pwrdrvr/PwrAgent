@@ -275,6 +275,42 @@ describe("quit dialog HTML", () => {
   });
 });
 
+describe("quit dialog Quiet & Continue After Restart", () => {
+  const base = {
+    countdownSeconds: 10,
+    terminalSessionCount: 0,
+    actionRunCount: 0,
+    items: items.slice(0, 3),
+    navigationPrefix: "pwragent-quit-confirmation://tok/",
+    colorScheme: "dark" as const,
+    palette: QUIT_DIALOG_PALETTES.dark,
+  };
+
+  it("offers it while thread work runs and a handler is wired", () => {
+    const html = buildQuitConfirmationHtml({ ...base, inProgressThreadCount: 1, quietRestartAvailable: true });
+    expect(html).toContain('id="quiet-restart"');
+    expect(html).toContain("Quiet &amp; Continue After Restart");
+    expect(html).toContain('send("quiet-restart")');
+    // Inside the pinned footer, after the main actions.
+    const body = html.slice(html.indexOf("<body>"));
+    expect(body.indexOf('id="quiet-restart"')).toBeGreaterThan(body.indexOf('id="quit"'));
+    expect(body.indexOf('id="quiet-restart"')).toBeLessThan(body.indexOf("</footer>"));
+  });
+
+  it("is absent with no thread work or no handler", () => {
+    expect(buildQuitConfirmationHtml({ ...base, inProgressThreadCount: 0, quietRestartAvailable: true }))
+      .not.toContain('id="quiet-restart"');
+    expect(buildQuitConfirmationHtml({ ...base, inProgressThreadCount: 1 }))
+      .not.toContain('id="quiet-restart"');
+  });
+
+  it("makes room for its row", () => {
+    const counts = { inProgressThreadCount: 2, terminalSessionCount: 0, actionRunCount: 0, items: items.slice(0, 3) };
+    expect(estimateQuitDialogHeight({ ...counts, quietRestartAvailable: true })
+      - estimateQuitDialogHeight(counts)).toBe(42);
+  });
+});
+
 describe("quit dialog color theme palettes", () => {
   it("matches every color theme to its app.css block", () => {
     // The dialog is a `data:` window with no app.css, so these literals are

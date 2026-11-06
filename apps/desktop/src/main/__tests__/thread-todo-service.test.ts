@@ -94,7 +94,10 @@ describe("ThreadTodoService", () => {
     expect(todo.kind).toBe("handoff");
     const { writes, result } = await measureSqliteWrites(() => service.runAction(todo.id));
     expect(result).toMatchObject({ status: "done", result: "Sent to PR owner" });
-    expect(sendMessage).toHaveBeenCalledWith({ sourceBackend: THREAD.backend, sourceThreadId: THREAD.threadId, target, prompt });
+    expect(sendMessage).toHaveBeenCalledWith({
+      sourceBackend: THREAD.backend, sourceThreadId: THREAD.threadId, target, prompt,
+      todo: { id: todo.id, title: "Refresh the PR" },
+    });
     expect(startThread).not.toHaveBeenCalled();
     expectSqliteWriteBudget({ scenario: "thread-todo-send-message", writes,
       note: "One operator Send click: one card-completion commit, no idle or per-event writes; ~8 KB/send, ~0.4 MB/day at 50 sends. Existing correspondence and queue budgets cover delivery." });
@@ -106,13 +109,17 @@ describe("ThreadTodoService", () => {
     const startThread = vi.fn();
     const service = createService({ mergePullRequest: vi.fn(), startThread, sendMessage });
     const { todo } = service.add({ ...THREAD, input: {
-      title: "Refresh the PR", action: { type: "start_thread", prompt: "Refresh #42" },
+      title: "Refresh the PR", action: { type: "start_thread", prompt: "Refresh #42", title: "PR refresh" },
     } });
     const messageTarget = { backend: "codex" as const, threadId: "owner", instanceId: "peer" };
     expect(await service.runAction(todo.id, { messageTarget })).toMatchObject({ status: "open", error: "Owner is offline" });
     expect(await service.runAction(todo.id, { messageTarget })).toMatchObject({ status: "done" });
     expect(startThread).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(2);
+    // The card's title, not the action's, which would name a new thread.
+    expect(sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      target: messageTarget, todo: { id: todo.id, title: "Refresh the PR" },
+    }));
   });
 
   it("keeps prerequisites blocking and rejects sending to the raising thread", async () => {
@@ -235,6 +242,7 @@ describe("ThreadTodoService", () => {
 
     await service.runAction(add("First").id, { mergeMethod: "merge", rememberMergeMethod: true });
     expect(mergePullRequest).toHaveBeenLastCalledWith({
+      sourceBackend: "codex", sourceThreadId: THREAD.threadId,
       cwd: "/src/pwrsnap",
       pullRequest: "3",
       method: "merge",
@@ -268,7 +276,7 @@ describe("ThreadTodoService", () => {
       ...THREAD,
       sourceProject: AGENT,
       targetProject: SNAP,
-      input: { title: "Build", action: { type: "start_thread", prompt: "Build it" } },
+      input: { title: "Build", action: { type: "start_thread", prompt: "Build it", title: "Build thread" } },
     }).todo;
 
     const ended = await service.runAction(todo.id, { startOnInstanceId: "peer-1" });
@@ -277,10 +285,32 @@ describe("ThreadTodoService", () => {
       instanceId: "peer-1",
       project: SNAP,
       crossProject: true,
+      todo: { id: todo.id, title: "Build" },
     }));
     expect(ended).toMatchObject({
       status: "done",
       result: "Started thread on Studio Mac",
+      startedThread: { threadId: "remote-1", instanceId: "peer-1" },
+    });
+  });
+
+  it("puts a peer's start notice in the result", async () => {
+    const startThreadOnInstance = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-1",
+      instanceId: "peer-1",
+      instanceLabel: "Studio Mac",
+      notice: "Studio Mac could not create a worktree. The thread runs in its project checkout.",
+    }));
+    const service = createService({ mergePullRequest: vi.fn(), startThread: vi.fn(), startThreadOnInstance });
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Build", action: { type: "start_thread", prompt: "Build it", workMode: "worktree" } },
+    }).todo;
+
+    await expect(service.runAction(todo.id, { startOnInstanceId: "peer-1" })).resolves.toMatchObject({
+      status: "done",
+      result: "Started thread on Studio Mac. Studio Mac could not create a worktree. The thread runs in its project checkout.",
       startedThread: { threadId: "remote-1", instanceId: "peer-1" },
     });
   });
@@ -480,6 +510,7 @@ describe("ThreadTodoService", () => {
       result: "Squash-merged #42",
     });
     expect(runners.mergePullRequest).toHaveBeenCalledWith({
+      sourceBackend: "codex", sourceThreadId: THREAD.threadId,
       cwd: "/repo",
       pullRequest: "42",
       method: "squash",
@@ -916,7 +947,11 @@ describe("ThreadTodoService", () => {
     const startThreadOnInstance = vi.fn(async (_request: unknown) => ({ backend: "codex" as const, threadId: "peer-child" }));
     const service = createService({ startThread, startThreadOnInstance, mergePullRequest: vi.fn() });
     const add = () => service.add({ ...THREAD, input: { title: "Build it", action: { type: "start_thread", prompt: "Build it" } } }).todo;
-    await service.runAction(add().id, { modelSettings: remembered });
+    const first = add();
+    await service.runAction(first.id, { modelSettings: remembered });
+    expect(startThread).toHaveBeenLastCalledWith(expect.objectContaining({
+      todo: { id: first.id, title: "Build it" },
+    }));
     const choices = { workMode: "worktree" as const, environment: "ci", speed: "fast" as const };
     await service.runAction(add().id, choices);
     expect(startThread).toHaveBeenLastCalledWith(expect.objectContaining({ ...choices, modelSettings: remembered }));

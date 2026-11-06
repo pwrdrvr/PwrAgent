@@ -41,6 +41,7 @@ export const FEDERATION_CAPABILITIES = [
   "file_pull",
   "event_subscriptions",
   "turn_input_blobs",
+  "resumable_blobs",
   "transport_brotli",
   "shutdown_notice",
   /**
@@ -101,6 +102,20 @@ export const FEDERATION_CAPABILITIES = [
    * reads a transcript page at every bound turn end.
    */
   "turn_assistant_reply",
+  /**
+   * The owner answers `backend.manageThreadPrWatchesV1`: a viewer reads a
+   * thread's watch history, stops a watch, and arms Watch CI there. Its
+   * navigation rows also carry `prCiWatches`. A viewer shows an older
+   * owner's watches read-only.
+   */
+  "thread_pr_watch_control_v1",
+  /**
+   * The owner sends each of its Directories projects' Forge Automation on
+   * its rows and answers `backend.setProjectForgeAutomation`,
+   * `backend.listProjectHeldWakeups` and `backend.resolveProjectHeldWakeups`.
+   * A viewer offers no Forge Automation menu items without it.
+   */
+  "project_forge_automation",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";
@@ -916,6 +931,8 @@ export type FederationNotificationEnvelope<
  */
 export type FederationBlobChunkEnvelope = FederationEnvelopeBase & {
   kind: "blob_chunk";
+  /** Durable file push; absent for the original turn-input blob protocol. */
+  purpose?: "file_push";
   transferId: string;
   chunkIndex: number;
   chunkCount: number;

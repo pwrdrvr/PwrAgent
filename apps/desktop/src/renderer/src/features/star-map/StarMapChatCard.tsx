@@ -1,4 +1,4 @@
-import { codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared";
+import { buildModelMenu, codexSpeedOptions, modelMenuOtherLabel, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared";
 import {
   memo,
   useCallback,
@@ -1717,6 +1717,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     };
     const launchpadOptions = backendSummary?.launchpadOptions;
     const models = launchpadOptions?.models;
+    // The card changes this thread, so it lists what the full composer's
+    // model chip lists for it.
+    const modelMenu = buildModelMenu({
+      kind: threadSource,
+      models: models ?? [],
+      thread: { model: threadModel },
+    });
     const currentModelOption = models?.find(
       (option) => option.id === threadModel,
     );
@@ -1747,10 +1754,15 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       loadFailed: Boolean(backendSummaries.error),
       onOpen: onSettingsMenuOpen,
       executionModes: setExecutionMode ? availableExecutionModes : undefined,
-      models: models?.map((option) => ({
+      models: modelMenu.primary.map((option) => ({
         id: option.id,
         label: option.label,
       })),
+      otherModels: modelMenu.other.map((option) => ({
+        id: option.id,
+        label: option.label,
+      })),
+      otherModelsLabel: modelMenuOtherLabel(threadSource),
       reasoningEfforts: supportsReasoning ? reasoningEfforts : [],
       supportsFastMode: supportsFast,
       speeds: threadSource === "codex"
@@ -2235,6 +2247,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           mentionSources={mentionSources}
           model={threadModel}
           normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
+          preserveImageBytes={federationTarget?.scope === "remote"}
           onAttachmentError={onAttachmentError}
           onDraftRestoreApplied={onDraftRestoreApplied}
           onInterrupt={onInterrupt}

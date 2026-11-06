@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import type { AcpBackendId } from "@pwragent/shared";
 import { AcpAgentStore } from "../src/main/acp/acp-agent-store";
 import { AcpSessionStore } from "../src/main/acp/acp-session-store";

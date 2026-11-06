@@ -18,6 +18,7 @@ export type ForgePrToolContext = {
   /** Storage no attachment may come from, such as the Codex home. */
   privateRoots: readonly string[];
   defaultMergeMethod: () => "merge" | "squash" | "rebase";
+  assertCanMerge?: (repository: ForgeRepository, number: number) => void;
   signal?: AbortSignal;
 };
 

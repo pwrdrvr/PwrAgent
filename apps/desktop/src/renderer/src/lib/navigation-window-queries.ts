@@ -1,6 +1,6 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationInvalidationMayChangeMembership, navigationWorkingStatePath } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope } from "@pwragent/shared";
 import type { AgentEvent, FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
@@ -49,12 +49,24 @@ type Resource = {
   pending?: Promise<void>;
   refreshAfterPending: boolean;
   invalidated: boolean;
+  /** Row metadata can be stale while complete membership still excludes unrelated events. */
+  membershipUncertain?: boolean;
   released: boolean;
   anchor?: NavigationQueryAnchor;
   /** Explicit continuation demand survives a short final page and later growth. */
   expandedRows?: number;
   resumeExpansion?: boolean;
+  resumeBudget?: ResumeBudget;
+  /** `navigationResumeQueryKey` of the request, computed once per resource. */
+  resumeKey?: string;
 };
+/** One opening restores saved depth within one Load more click's bounds. Lists
+ * opened together share it; the clock starts at the first read. */
+type ResumeBudget = { reads: number; until?: number };
+
+function loadedRows(page: NavigationQueryPage | undefined): number {
+  return page?.modelGroups?.length || page?.directories?.length || page?.entries.length || 0;
+}
 
 /** Semantic demand ignores object insertion order and identity-set ordering. */
 export function navigationDemandKey(request: NavigationQueryRequest): string {
@@ -100,9 +112,8 @@ export class NavigationWindowQueries {
   private visible = true;
   private disposed = false;
   private activeReads = 0;
-  // Saved expansion shares one startup budget across every demanded list.
-  private resumeReadsRemaining = MAX_LOAD_MORE_READS;
-  private readonly resumeUntil = Date.now() + MAX_LOAD_MORE_MS;
+  private activePageBytes = 0;
+  private readonly pageSizes = new WeakMap<NavigationQueryPage, number>();
   private readonly readWaiters = new Set<() => void>();
   private snapshot: NavigationWindowQueriesState = { resources: new Map() };
 
@@ -150,6 +161,25 @@ export class NavigationWindowQueries {
     return JSON.stringify([id, requestKey]);
   }
 
+  /** Pages enter through IPC or immutable range merges; measure each owned value exactly once. */
+  private pageBytes(page: NavigationQueryPage | undefined): number {
+    if (!page) return 0;
+    let bytes = this.pageSizes.get(page);
+    if (bytes === undefined) {
+      bytes = new TextEncoder().encode(JSON.stringify(page)).byteLength;
+      this.pageSizes.set(page, bytes);
+    }
+    return bytes;
+  }
+
+  private acceptState(resource: Resource, state: NavigationPageState): void {
+    const bytes = this.activePageBytes + this.pageBytes(state.page) - this.pageBytes(resource.value.state.page);
+    this.trimRetained(bytes);
+    if (bytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
+    this.activePageBytes = bytes;
+    resource.value = { ...resource.value, state, restoredFromCache: false };
+  }
+
   private trimRetained(activeBytes: number): void {
     let bytes = activeBytes + [...this.retained.values()].reduce((total, entry) => total + entry.bytes, 0);
     for (const [key, entry] of this.retained) {
@@ -176,35 +206,39 @@ export class NavigationWindowQueries {
           const key = this.retainedKey(id, resource.requestKey);
           this.retained.delete(key);
           this.retained.set(key, { state: resource.value.state, anchor: resource.anchor, expandedRows: resource.expandedRows,
-            bytes: new TextEncoder().encode(JSON.stringify(resource.value.state.page)).byteLength });
+            bytes: this.pageBytes(resource.value.state.page) });
         }
+        this.activePageBytes -= this.pageBytes(resource.value.state.page);
         this.release(resource);
         this.resources.delete(id);
         changed = true;
       }
     }
     const added: Resource[] = [];
+    let budget: ResumeBudget | undefined;
     for (const [id, { request, requestKey }] of admitted) {
       if (this.resources.has(id)) continue;
       const retainedKey = this.retainedKey(id, requestKey);
       const retained = this.retained.get(retainedKey);
       this.retained.delete(retainedKey);
-      const savedRows = retained || !this.resume.loadedRowsByQuery ? undefined
-        : this.resume.loadedRowsByQuery[navigationResumeQueryKey(request)];
       const resource: Resource = {
         requestKey, token: `${this.prefix}:${++this.nextResource}`,
         value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request),
           loading: false, restoredFromCache: Boolean(retained) },
         refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: retained?.anchor ?? request.anchor,
-        expandedRows: retained ? retained.expandedRows : savedRows,
-        resumeExpansion: savedRows !== undefined,
+        expandedRows: retained?.expandedRows,
+        membershipUncertain: Boolean(retained),
       };
+      // Saved depth is the operator's demand whenever the list opens, not
+      // only at startup: an evicted cache, a list first opened later, or an
+      // interrupted restore must not fall back to the first page.
+      budget = this.armResume(resource, budget);
       this.resources.set(id, resource);
+      this.activePageBytes += this.pageBytes(resource.value.state.page);
       added.push(resource);
       changed = true;
     }
-    if (changed) this.trimRetained([...this.resources.values()].reduce((bytes, resource) => bytes
-      + (resource.value.state.page ? new TextEncoder().encode(JSON.stringify(resource.value.state.page)).byteLength : 0), 0));
+    if (changed) this.trimRetained(this.activePageBytes);
     if (changed) navigationListingDiagnostics.record({ ...this.diagnostic, phase: "demand", count: added.length });
     if (changed || admissionError !== this.snapshot.admissionError) {
       this.snapshot = { ...this.snapshot, admissionError };
@@ -216,6 +250,7 @@ export class NavigationWindowQueries {
   setVisible(visible: boolean): void {
     if (this.disposed || this.visible === visible) return;
     this.visible = visible;
+    let budget: ResumeBudget | undefined;
     for (const resource of this.resources.values()) {
       if (!visible) {
         this.release(resource);
@@ -223,7 +258,9 @@ export class NavigationWindowQueries {
       } else {
         // Replace the lifetime rather than revive a released token or pending read.
         const next: Resource = { ...resource, token: `${this.prefix}:${++this.nextResource}`,
-          released: false, pending: undefined, refreshAfterPending: false, invalidated: false };
+          released: false, pending: undefined, refreshAfterPending: false, invalidated: false, membershipUncertain: true };
+        // Hiding the window ends a restore early. Showing it is a new opening.
+        if (!next.resumeExpansion) budget = this.armResume(next, budget);
         this.resources.set(resource.value.id, next);
         next.diagnosticCause = "visibility";
         void this.read(next, false);
@@ -239,6 +276,10 @@ export class NavigationWindowQueries {
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget)))).map(async (resource) => {
       if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
       resource.diagnosticTrigger ??= trigger;
+      // An unscoped refresh can discover membership missed while hidden or
+      // between provider observations. A scoped row refresh already knows
+      // exactly why its baseline is stale.
+      if (!invalidatedOnly && !resource.invalidated) resource.membershipUncertain = true;
       if (resource.pending) resource.refreshAfterPending = true;
       await this.read(resource, false);
       // A caller awaiting refresh owns the coalesced replacement too, not
@@ -250,10 +291,16 @@ export class NavigationWindowQueries {
   /** Invalidate transport baselines before canonical owner events can race a late page. */
   invalidate(id?: string, owners?: readonly FederationTarget[], event?: AgentEvent): void {
     let changed = false;
+    const directoryScope = event ? readNavigationDirectoryScope(event.navigationDirectoryScope) : undefined;
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
       if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
-      if (event && !this.eventAffectsResource(resource, event)) continue;
+      if (event && !this.eventAffectsResource(resource, event, directoryScope)) continue;
+      const method = event?.notification.method === "navigation/invalidated"
+        ? (event.notification.params as { sourceMethod?: unknown })?.sourceMethod : event?.notification.method;
+      const childPin = resource.value.state.request.query.kind === "children"
+        && (method === "thread/pin/added" || method === "thread/pin/removed" || method === "navigation/remoteThreadPins/changed");
+      if (!childPin && navigationInvalidationMayChangeMembership(method)) resource.membershipUncertain = true;
       // Pinning moves a root between two independent directory queries. Its
       // old section must stop using it as an anchor before the next read,
       // including when another event has already invalidated that section.
@@ -305,41 +352,65 @@ export class NavigationWindowQueries {
     return true;
   }
 
-  private eventAffectsResource(resource: Resource, event: AgentEvent): boolean {
+  private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[]): boolean {
     const request = resource.value.state.request;
     const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
-    if (request.query.kind === "children" && !resource.value.loading && !resource.value.state.stale
+    if (request.query.kind === "directory" && directoryScope && !resource.membershipUncertain
+      && (!request.backend || request.backend === "all")
+      && !navigationInvalidationMayChangeMembership(method)
+      && method !== "navigation/directoryGitStatus/updated"
+      && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
+      // The owner's all-provider membership includes off-page descendants.
+      // Provider-filtered indexes can group the same thread under another key.
+      // Directory Git updates also affect rows through secondary links, which
+      // membership-only v1 scopes from earlier peers do not cover.
+      // Loaded roots and linked paths cannot supply a negative membership proof.
+      // A pending membership read retains its broad fence until accepted.
+      return directoryScope.includes(request.query.directoryKey);
+    }
+    if (request.query.kind === "children" && !resource.membershipUncertain
       && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
-      && typeof params?.threadId === "string"
       && (!navigationInvalidationMayChangeMembership(method)
         || method === "thread/pin/added" || method === "thread/pin/removed" || method === "navigation/remoteThreadPins/changed")) {
       // Pins move roots between directory sections, but do not reparent children.
-      // Only a current, settled disclosure can exclude an off-page row safely.
+      // Metadata refreshes preserve this membership proof. Membership changes
+      // withdraw it until their replacement is accepted, even while queued.
       // A pending membership refresh may discover rows absent from its baseline;
       // their subsequent events must fence that read and request a replacement.
       // Unknown membership events still discover newly created/reparented children.
       const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId
         : method === "navigation/remoteThreadPins/changed" ? params.instanceId : undefined;
-      const ref = { backend: event.backend, threadId: params.threadId, ownerInstanceId };
-      return navigationIdentitiesEqual(request.query.parent, ref)
-        || page.entries.some(({ row }) => navigationIdentitiesEqual(row.ref, ref));
+      if (typeof params?.threadId === "string") {
+        const ref = { backend: event.backend, threadId: params.threadId, ownerInstanceId };
+        return navigationIdentitiesEqual(request.query.parent, ref)
+          || page.entries.some(({ row }) => navigationIdentitiesEqual(row.ref, ref));
+      }
+      if (method === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string") {
+        return page.entries.some(({ row }) => (row.ref.ownerInstanceId ?? undefined) === ownerInstanceId
+          && navigationWorkingStatePath(row) === params.worktreePath);
+      }
     }
-    // A remote row event cannot change membership of an exact identity query.
-    // Other collections retain conservative invalidation for counts/order.
+    // Viewer exact pages also carry directory-wide selection descriptors.
+    // A sibling's activity can change those counts without changing any exact
+    // row, so their invalidation dependencies are wider than their identities.
+    // Keep owner exact row scoping and conservative viewer count refreshes.
     if (request.federationTarget?.scope !== "remote" || request.query.kind !== "exact") return true;
-    if (navigationInvalidationMayChangeMembership(method)) return true;
+    if (resource.membershipUncertain || navigationInvalidationMayChangeMembership(method)) return true;
     if (method === "navigation/directoryGitStatus/updated" && typeof params?.directoryKey === "string"
       && page?.coverage.state === "complete" && page.complete) {
       return page.selectionDirectory?.key === params.directoryKey || Boolean(page.directories?.some((directory) => directory.key === params.directoryKey));
     }
     const refs = [...request.query.identities, ...(page?.entries.map(({ row }) => row.ref) ?? [])];
-    if (typeof params?.threadId === "string") return refs.some((ref) => ref.backend === event.backend && ref.threadId === params.threadId);
+    const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
+    if (typeof params?.threadId === "string") return refs.some((ref) => ref.backend === event.backend
+      && ref.threadId === params.threadId && (ref.ownerInstanceId ?? undefined) === ownerInstanceId);
     if (method === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string"
       && page?.coverage.state === "complete" && page.complete
       && request.query.identities.every((ref) => page.entries.some(({ row }) => row.ref.backend === ref.backend && row.ref.threadId === ref.threadId))) {
-      return page.entries.some(({ row }) => navigationWorkingStatePath(row) === params.worktreePath);
+      return page.entries.some(({ row }) => (row.ref.ownerInstanceId ?? undefined) === ownerInstanceId
+        && navigationWorkingStatePath(row) === params.worktreePath);
     }
     return true;
   }
@@ -377,9 +448,12 @@ export class NavigationWindowQueries {
     while (this.isCurrent(resource) && resource.pending) await resource.pending;
     await this.read(resource, true);
     if (this.isCurrent(resource) && resource.value.state.page && resource.expandedRows) {
-      const key = navigationResumeQueryKey(resource.value.state.request);
-      this.resume.loadedRowsByQuery = { ...this.resume.loadedRowsByQuery, [key]: resource.expandedRows };
-      this.resume.onLoadMore?.(key, resource.expandedRows);
+      const key = this.resumeKey(resource);
+      // Asking for more never lowers the saved depth, even when a restore
+      // stopped short of it and this click shows fewer rows.
+      const rows = Math.max(resource.expandedRows, this.resume.loadedRowsByQuery?.[key] ?? 0);
+      this.resume.loadedRowsByQuery = { ...this.resume.loadedRowsByQuery, [key]: rows };
+      this.resume.onLoadMore?.(key, rows);
     }
   }
 
@@ -393,23 +467,37 @@ export class NavigationWindowQueries {
     this.readWaiters.clear();
   }
 
-  private canResumeExpansion(): boolean {
-    return this.resumeReadsRemaining > 0 && Date.now() < this.resumeUntil;
+  private canResumeExpansion(budget: ResumeBudget | undefined): boolean {
+    return Boolean(budget && budget.reads > 0 && Date.now() < (budget.until ?? Infinity));
+  }
+
+  private resumeKey(resource: Resource): string {
+    return resource.resumeKey ??= navigationResumeQueryKey(resource.value.state.request);
+  }
+
+  /** Restore the saved Load more depth when it exceeds what this list holds. A page
+   * awaiting the operator's Reload reads nothing until then, so it never
+   * starts a restore. */
+  private armResume(resource: Resource, budget: ResumeBudget | undefined): ResumeBudget | undefined {
+    if (!this.resume.loadedRowsByQuery || resource.value.state.rebaselineRequired) return budget;
+    const rows = this.resume.loadedRowsByQuery[this.resumeKey(resource)];
+    if (rows === undefined || rows <= Math.max(resource.expandedRows ?? 0, loadedRows(resource.value.state.page))) return budget;
+    budget ??= { reads: MAX_LOAD_MORE_READS };
+    resource.expandedRows = rows;
+    resource.resumeExpansion = true;
+    resource.resumeBudget = budget;
+    return budget;
   }
 
   private finishResume(resource: Resource): void {
     if (!resource.resumeExpansion) return;
-    // Startup is a single attempt. Refresh only the range it actually
-    // delivered, rather than chasing saved demand on every later event.
-    const page = resource.value.state.page;
-    const rows = page?.modelGroups?.length || page?.directories?.length || page?.entries.length || 0;
+    // Each opening is a single attempt. Refresh only the range it actually
+    // delivered, rather than chasing saved demand on every later event. The
+    // saved depth itself stays: only the operator's Load more or reset
+    // changes it, so the next opening restores it again.
     resource.resumeExpansion = false;
-    resource.expandedRows = rows || undefined;
-    const key = navigationResumeQueryKey(resource.value.state.request);
-    const loadedRows = { ...this.resume.loadedRowsByQuery };
-    if (rows) loadedRows[key] = rows;
-    else delete loadedRows[key];
-    this.resume.loadedRowsByQuery = loadedRows;
+    resource.resumeBudget = undefined;
+    resource.expandedRows = loadedRows(resource.value.state.page) || undefined;
   }
 
   private async acquireReadSlot(resource: Resource): Promise<boolean> {
@@ -433,18 +521,12 @@ export class NavigationWindowQueries {
     // A remembered anchor is not new recovery demand. Retrying it on every
     // background event clears and re-adds the same error, moving the sidebar.
     if (resource.value.state.rebaselineRequired && !explicitAnchor && !fromStart) return Promise.resolve();
-    const cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
+    let cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
     const resuming = resource.resumeExpansion === true;
-    const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
-      cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",
-      invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger };
-    resource.diagnosticLogical = diagnostic.logical;
-    resource.diagnosticTrigger = undefined;
-    resource.diagnosticCause = undefined;
-    resource.diagnosticInvalidations = 0;
-    const started = beginNavigationPageRead(resource.value.state);
-    resource.invalidated = false;
+    const budget = resuming ? resource.resumeBudget : undefined;
+    if (budget) budget.until ??= Date.now() + MAX_LOAD_MORE_MS;
+    let started = beginNavigationPageRead(resource.value.state);
     resource.value = { ...resource.value, state: started, loading: true };
     this.publish();
     const promise = Promise.resolve().then(async () => {
@@ -452,18 +534,37 @@ export class NavigationWindowQueries {
       try {
         acquired = await this.acquireReadSlot(resource);
         if (!acquired) return;
+        // A queued read has made no observation yet. Consume invalidations at
+        // dispatch; only events after this point require a replacement read.
+        if (resource.invalidated) {
+          if (continuation) {
+            // A queued Load more still owns its block, but cannot extend a
+            // cursor whose snapshot an event invalidated before dispatch.
+            resource.expandedRows = loadedRows(started.page) + LOAD_MORE_ROWS;
+            continuation = false;
+            cursor = undefined;
+          }
+          anchor = fromStart ? undefined : explicitAnchor ?? resource.anchor;
+          started = beginNavigationPageRead(resource.value.state);
+          resource.value = { ...resource.value, state: started };
+        }
+        resource.invalidated = false;
+        resource.refreshAfterPending = false;
+        const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
+          cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",
+          invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger };
+        resource.diagnosticLogical = diagnostic.logical;
+        resource.diagnosticTrigger = undefined;
+        resource.diagnosticCause = undefined;
+        resource.diagnosticInvalidations = 0;
         if (!this.api.getNavigationQueryPage) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
-        const size = (page?: NavigationQueryPage) => page?.modelGroups?.length
-          || page?.directories?.length || page?.entries.length || 0;
         const assertRetained = (next: NavigationPageState) => {
-          const retainedBytes = [...this.resources.values()].reduce((bytes, candidate) => {
-            const candidatePage = candidate === resource ? next.page : candidate.value.state.page;
-            return bytes + (candidatePage ? new TextEncoder().encode(JSON.stringify(candidatePage)).byteLength : 0);
-          }, 0);
+          const retainedBytes = this.activePageBytes - this.pageBytes(resource.value.state.page) + this.pageBytes(next.page);
           this.trimRetained(retainedBytes);
           if (retainedBytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
         };
-        const readPage = async (request: NavigationQueryRequest) => {
+        // Rows already on screen are restored outside the saved-depth budget.
+        const readPage = async (request: NavigationQueryRequest, restoringDisplayed = false) => {
           // An owner fills a page up to its own copy of this budget, and a
           // remote one is then stamped with federation metadata on every row
           // it served. A page of fat rows can therefore arrive here over a
@@ -473,17 +574,18 @@ export class NavigationWindowQueries {
           // operator a button that fails identically on every press.
           let rows = request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS;
           for (;;) {
-            if (resuming && request.cursor) {
-              if (!this.canResumeExpansion()) throw RESUME_BUDGET_REACHED;
-              this.resumeReadsRemaining -= 1;
+            const charged = resuming && Boolean(request.cursor) && !restoringDisplayed;
+            if (charged) {
+              if (!budget || !this.canResumeExpansion(budget)) throw RESUME_BUDGET_REACHED;
+              budget.reads -= 1;
             }
             diagnostic.attempt += 1;
             navigationListingDiagnostics.record({ ...this.diagnostic, phase: "dispatch", logical: diagnostic.logical, attempt: diagnostic.attempt, cause: diagnostic.cause });
             const page = await this.api.getNavigationQueryPage!({ ...request, pageSize: rows, diagnostic: { ...diagnostic },
-              ...(resuming && request.cursor ? { deadlineAt: Math.min(request.deadlineAt ?? Infinity, this.resumeUntil) } : {}),
+              ...(charged && budget?.until !== undefined ? { deadlineAt: Math.min(request.deadlineAt ?? Infinity, budget.until) } : {}),
               readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
             }, resource.token);
-            if (new TextEncoder().encode(JSON.stringify(page)).byteLength <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return page;
+            if (this.pageBytes(page) <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return page;
             // One row over the budget is the owner's own error to raise.
             if (rows <= 1) throw new Error("Navigation page exceeds the bounded response size.");
             navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "page-budget" });
@@ -518,7 +620,7 @@ export class NavigationWindowQueries {
         let pageCursor = cursor;
         // Only displayed rows bypass continuation limits. A persisted target
         // is expansion demand, and may exceed what the previous owner served.
-        const restoring = explicitAnchor || fromStart ? 0 : size(started.page);
+        const restoring = explicitAnchor || fromStart ? 0 : loadedRows(started.page);
         if (explicitAnchor || fromStart) {
           resource.expandedRows = undefined;
           const key = navigationResumeQueryKey(started.request);
@@ -545,7 +647,7 @@ export class NavigationWindowQueries {
         const extendUntil = Date.now() + MAX_LOAD_MORE_MS;
         try {
           page = await readAround({ ...started.request, cursor, anchor,
-            ...(cursor ? { pageSize: cursorPageSize(size(started.page)) } : {}),
+            ...(cursor ? { pageSize: cursorPageSize(loadedRows(started.page)) } : {}),
             completeBaselineRevision: !fromStart && !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
             retainedRange: !fromStart && !explicitAnchor && !cursor
               && (anchor || !started.page?.complete || (started.page.rangeStart ?? 0) !== 0)
@@ -569,25 +671,27 @@ export class NavigationWindowQueries {
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
         let next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor });
         assertRetained(next);
-        if (resuming) {
-          // Saved expansion must not withhold the ordinary first page.
-          resource.value = { ...resource.value, state: next, restoredFromCache: false };
+        if (resuming && next.page?.nextCursor && loadedRows(next.page) >= restoring
+          && loadedRows(next.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {
+          // Saved expansion must not withhold the ordinary first page, nor
+          // replace a longer cached range with it.
+          this.acceptState(resource, next);
           this.publish();
         }
         let extensions = 0;
         // Restore displayed rows before applying continuation budgets. Spare
         // capacity from an earlier Load more admits new rows under those same
         // budgets; a short final page does not revoke the operator's demand.
-        while (next.page?.nextCursor && size(next.page) < wanted
-          && (!resuming || this.canResumeExpansion())
-          && (size(next.page) < restoring || (extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
+        while (next.page?.nextCursor && loadedRows(next.page) < wanted
+          && (loadedRows(next.page) < restoring || ((!resuming || this.canResumeExpansion(budget))
+            && extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
           const nextCursor = next.page.nextCursor;
-          const before = size(next.page);
+          const before = loadedRows(next.page);
           try {
-            const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) });
+            const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) }, before < restoring);
             if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
             const extended = applyNavigationPage({ state: next, sequence: started.pendingSequence, page: continuationPage, cursor: nextCursor });
-            if (size(extended.page) <= before) throw new Error("Navigation range refresh did not advance.");
+            if (loadedRows(extended.page) <= before) throw new Error("Navigation range refresh did not advance.");
             assertRetained(extended);
             next = extended;
           } catch (error) {
@@ -597,13 +701,14 @@ export class NavigationWindowQueries {
             // Once restored, commit refreshed membership and metadata plus
             // any growth delivered before the failure. Continuations also
             // retain their progress; both paths still report the error.
-            if (!pageCursor && size(next.page) < restoring) throw error;
-            resource.value = { ...resource.value, state: next, restoredFromCache: false };
+            if (!pageCursor && loadedRows(next.page) < restoring) throw error;
+            this.acceptState(resource, next);
             throw error;
           }
           extensions += 1;
         }
-        resource.value = { ...resource.value, state: next, restoredFromCache: false };
+        this.acceptState(resource, next);
+        resource.membershipUncertain = false;
       } catch (error) {
         if (this.isCurrent(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };
@@ -617,11 +722,13 @@ export class NavigationWindowQueries {
         }
         if (resource.pending === promise) resource.pending = undefined;
         if (this.isCurrent(resource)) {
-          resource.value = { ...resource.value, loading: false };
-          this.publish();
-          if (resource.refreshAfterPending) {
-            resource.refreshAfterPending = false;
+          const repeat = resource.refreshAfterPending;
+          resource.refreshAfterPending = false;
+          if (repeat && !resource.value.state.rebaselineRequired) {
             void this.read(resource, false);
+          } else {
+            resource.value = { ...resource.value, loading: false };
+            this.publish();
           }
         }
       }
@@ -636,6 +743,7 @@ export class NavigationWindowQueries {
     this.disposed = true;
     for (const resource of this.resources.values()) this.release(resource);
     this.resources.clear();
+    this.activePageBytes = 0;
     this.retained.clear();
     this.publish();
     this.listeners.clear();

@@ -1,4 +1,6 @@
+import type { ThreadMergeHold } from "./thread-merge-holds";
 import type { ForgeCli } from "../forge-product";
+import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
   AcpBackendId,
@@ -37,6 +39,7 @@ import type {
   FederationCapability,
   FederationInstanceId,
   FederationPeerSummary,
+  FederationRemoteTarget,
   FederationTarget,
 } from "./federation";
 import type {
@@ -115,6 +118,8 @@ export type NavigationLaunchpadAgent = Pick<
 export type NavigationThreadSummary = AppServerThreadSummary & {
   /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
   gitWorkingStateFetchedAt?: number;
+  /** See `NavigationRow.homeProject`. */
+  homeProject?: NavigationRowHomeProject;
   /** Present when this row describes a thread owned by another PwrAgent instance. */
   federation?: {
     ref: FederatedThreadRef;
@@ -268,6 +273,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   reactions?: string[];
   /** Present while the thread is locked against new turns. */
   lock?: ThreadLock;
+  mergeHolds?: ThreadMergeHold[];
   /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
   /** Codex environments discovered from the active thread workspace. */
@@ -293,6 +299,25 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   subAgents?: ThreadSubAgentSummary[];
   /** Owner-projected composer rows, independent of lazily loaded sub-agent history. */
   activeSubAgents?: ThreadActiveSubAgent[];
+  /**
+   * Owner-projected active PR watches, on selected detail only, like
+   * `activeSubAgents`. Never written to the navigation store.
+   */
+  activePrWatches?: import("./thread-tools").ThreadPullRequestWatchSummary[];
+  /**
+   * The owner's active CI watches on the thread, set on navigation rows from
+   * one read per index build. A viewer draws a peer row's eye from it. Never
+   * written to the navigation store.
+   */
+  prCiWatches?: import("./thread-pr-watches").ThreadPrCiWatchMark[];
+  /**
+   * Owner-projected pending wakes, on selected detail only, like
+   * `activePrWatches`. Absent from an owner that predates them. Never written
+   * to the navigation store.
+   */
+  pendingWakes?: import("./thread-pending-wakes").ThreadPendingWake[];
+  /** The owner could not read every wake source, so `pendingWakes` may miss one. */
+  pendingWakesIncomplete?: true;
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /**
@@ -541,6 +566,12 @@ export type PrSummary = {
    * have a failed check while other checks are still running.
    */
   checksStillRunning?: boolean;
+  /**
+   * Every check on the head was skipped or neutral, so a `passing` state
+   * means nothing was tested. Absent from older builds and federated peers;
+   * treat absence as "checks ran".
+   */
+  checksAllSkipped?: true;
   lifecycleState?: PrLifecycleState;
   reviewState?: PrReviewState;
   mergeState?: PrMergeState;
@@ -722,6 +753,14 @@ export function normalizeNavigationBrowseMode(
     : DEFAULT_NAVIGATION_BROWSE_MODE;
 }
 export type LaunchpadWorkMode = "local" | "worktree";
+
+/**
+ * What a new worktree starts from when no base branch is named.
+ * `current_branch` follows the project checkout, as the launchpad picker
+ * does. `default_branch` skips it: that checkout's branch can hold another
+ * thread's unpublished work.
+ */
+export type LaunchpadWorktreeBase = "current_branch" | "default_branch";
 
 export type CodexEnvironmentOption = {
   id: string;
@@ -1006,6 +1045,27 @@ export function applyNavigationLaunchpadProviderSettingsPatch<
           providerSettings,
         };
   return projectNavigationLaunchpadProviderSettings(base as T);
+}
+
+/**
+ * Apply a defaults patch whose provider settings belong to `provider`. They
+ * are filed under that provider while the defaults keep their own, unless
+ * the patch names a backend. Without this, a patch with no backend lands
+ * under whichever provider the defaults hold.
+ */
+export function applyNavigationLaunchpadDefaultsPatch<
+  T extends NavigationLaunchpadDefaults,
+>(defaults: T, patch: Partial<T>, provider: AppServerBackendKind): T {
+  if (patch.backend !== undefined || provider === defaults.backend) {
+    return applyNavigationLaunchpadProviderSettingsPatch(defaults, patch);
+  }
+  const filed = applyNavigationLaunchpadProviderSettingsPatch(defaults, {
+    ...patch,
+    backend: provider,
+  });
+  return applyNavigationLaunchpadProviderSettingsPatch(filed, {
+    backend: defaults.backend,
+  } as Partial<T>);
 }
 
 export function changedProviderModelDefaultBackends(
@@ -1331,6 +1391,13 @@ export type NavigationDirectorySummary = {
    * the next snapshot.
    */
   localAvailability?: "unconfigured";
+  /**
+   * Placeholder rows only: the repository of the peer checkout the row
+   * stands for, from the remote thread's linked directory. A local checkout
+   * reports its own through `gitStatus` instead.
+   */
+  repositoryKey?: string;
+  repositoryKeys?: string[];
   threadKeys: string[];
   needsAttentionCount: number;
   latestUpdatedAt?: number;
@@ -1351,6 +1418,33 @@ export type NavigationDirectorySummary = {
    * "Directory threads" section while keeping pinned threads visible.
    */
   directoryThreadsCollapsed?: boolean;
+  /**
+   * The owner's Forge Automation for this project. Absent means the
+   * defaults. A peer window's rows carry what the peer stored, and so does a
+   * placeholder row with a `peerProject`. Other placeholder rows never
+   * carry it.
+   */
+  forgeAutomation?: ProjectForgeAutomation;
+  /** See `NavigationDirectoryRow.peerProject`. */
+  peerProject?: NavigationPeerProject;
+};
+
+/**
+ * The one peer project a placeholder row stands for: every thread under the
+ * row lives in that project on that peer. Forge Automation changes for the
+ * row go to `target`, naming the project by the owner's own `directoryKey`.
+ */
+export type NavigationPeerProject = {
+  target: FederationRemoteTarget;
+  directoryKey: string;
+};
+
+/** The owner's Directories project a thread row is filed under. */
+export type NavigationRowHomeProject = {
+  /** The owner's `directory:<path>` key. */
+  directoryKey: string;
+  /** The project's Forge Automation. Absent means the defaults. */
+  forgeAutomation?: ProjectForgeAutomation;
 };
 
 export type NavigationDirectoryGitStatusUpdatedNotification = {
@@ -2067,6 +2161,7 @@ export type NavigationRow = {
   reactions?: string[];
   reactionsTruncated?: boolean;
   lock?: ThreadLock;
+  mergeHolds?: ThreadMergeHold[];
   prs?: PrSummary[];
   prsTruncated?: boolean;
   messagingBindings?: MessagingThreadBindingSummary[];
@@ -2088,7 +2183,17 @@ export type NavigationRow = {
   queueState: "unknown" | "ready";
   queuedExecutionMode?: ThreadExecutionMode;
   prAutoDispatchEnabled?: boolean;
+  /** The owner's active CI watches; absent from an owner that predates them. */
+  prCiWatches?: import("./thread-pr-watches").ThreadPrCiWatchMark[];
   scheduledStart?: ThreadScheduledStart;
+  /**
+   * `group-members` pages only: the owner's Directories project for a thread
+   * it owns. A viewer reads pinned rows through these pages, and a project
+   * it has no checkout of shows as a placeholder row, which takes the
+   * project's Forge Automation from here. Absent from older owners, other
+   * pages, and threads outside a configured project.
+   */
+  homeProject?: NavigationRowHomeProject;
 };
 
 export type NavigationDirectoryRow = {
@@ -2117,6 +2222,17 @@ export type NavigationDirectoryRow = {
   latestUpdatedAt?: number;
   pinnedRank?: string;
   directoryThreadsCollapsed?: boolean;
+  /**
+   * The owner's Forge Automation. Absent means defaults. A placeholder row
+   * carries it only with a `peerProject`, as that peer stored it.
+   */
+  forgeAutomation?: ProjectForgeAutomation;
+  /**
+   * Placeholder rows only, when all their threads live in one peer project.
+   * Absent when the threads come from several projects or peers, or from an
+   * owner that does not report a thread's project.
+   */
+  peerProject?: NavigationPeerProject;
   gitStatus?: {
     currentBranch?: string;
     defaultBranch?: string;
@@ -2438,7 +2554,19 @@ export type MarkThreadSeenRequest = {
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
+  /** When the thread was seen. The owner's clock when omitted. */
   seenAt?: number;
+  /**
+   * The seen watermark: the thread's `updatedAt` as the caller saw it. The
+   * thread is unread while its `updatedAt` is newer. Build it with
+   * `threadSeenWatermark`.
+   *
+   * When omitted, every owner keeps the watermark it already stores and
+   * records only `seenAt`, so the thread's unread state does not change.
+   * Omission never means "read up to now". A caller that cannot know the
+   * thread's `updatedAt` must not move the watermark; marking such a thread
+   * unread would otherwise mark it read.
+   */
   seenUpdatedAt?: number;
 };
 
@@ -3064,6 +3192,11 @@ export type DirectoryOverlayState = {
   pinnedRank?: string;
   /** Hide unpinned directory threads while leaving pinned threads visible. */
   directoryThreadsCollapsed?: boolean;
+  /**
+   * Per-project Forge Automation. Absent means the defaults. Owner-scoped:
+   * only the instance that owns the project's threads stores or enforces it.
+   */
+  forgeAutomation?: ProjectForgeAutomation;
 };
 
 export type ThreadOverlayState = {
@@ -3179,6 +3312,7 @@ export type ThreadOverlayState = {
   reactions?: string[];
   /** Present while the thread is locked against new turns. See {@link ThreadLock}. */
   lock?: ThreadLock;
+  mergeHolds?: ThreadMergeHold[];
   /**
    * Consolidated tool-output incident state for this thread: when it first
    * warned, what the operator dismissed, and what they muted. Persisted so an
@@ -3316,8 +3450,8 @@ export type ThreadOverlayState = {
    */
   questionnaireActivityLog?: ThreadQuestionnaireActivity[];
   /**
-   * Per-thread rewind log. Persisted to the overlay store, capped at
-   * `MAX_REWIND_LOG_ENTRIES` (oldest-first eviction).
+   * Latest rewind marker. Recording a rewind clears the thread's previous
+   * supplemental transcript history, including older rewind markers.
    */
   rewindLog?: ThreadRewindRecord[];
 };
@@ -3467,9 +3601,6 @@ export type ThreadTurnFailure = {
  * user-input turns does not evict permission or messaging history.
  */
 export const MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES = 100;
-
-/** Maximum number of rewinds retained per thread in its rewind log. */
-export const MAX_REWIND_LOG_ENTRIES = 50;
 
 /**
  * A rewind, as the transcript's marker row shows it. The provider's own

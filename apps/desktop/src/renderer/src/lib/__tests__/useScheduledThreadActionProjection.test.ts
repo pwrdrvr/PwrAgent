@@ -219,6 +219,54 @@ describe("scheduled thread action projections", () => {
     ).toBeUndefined();
   });
 
+  it("keeps a failed action ahead of a turn queued after it", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    const failed = scheduledAction({
+      status: "failed",
+      errorMessage: "backend offline",
+    });
+    applyScheduledActionProjection(store, failed);
+    store.setQueuedTurns(scopeKey, [
+      ...store.getQueuedTurns(scopeKey),
+      {
+        id: "queued-follow-up",
+        text: "Follow up after it",
+        imageAttachments: [],
+        fileAttachments: [],
+      },
+    ]);
+
+    // The failed row holds the queue, so neither a refresh nor a repeated
+    // failure event may move it behind the turn it holds.
+    syncScheduledActionProjections(store, [failed]);
+    applyScheduledActionProjection(store, failed);
+
+    expect(store.getQueuedTurns(scopeKey).map((entry) => entry.id)).toEqual([
+      "scheduled-projection:scheduled-1",
+      "queued-follow-up",
+    ]);
+  });
+
+  it("drops a dismissed failure and does not place it again on a fresh sync", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    applyScheduledActionProjection(store, scheduledAction({
+      status: "failed",
+      errorMessage: "backend offline",
+    }));
+
+    // The owner publishes the dismissal as a cancelled action.
+    applyScheduledActionProjection(store, scheduledAction({ status: "cancelled" }));
+    expect(store.getQueuedTurns(scopeKey)).toEqual([]);
+
+    // A new projection (reload, restart) reads the owner's list again.
+    syncScheduledActionProjections(store, [scheduledAction({ status: "cancelled" })]);
+    expect(store.getQueuedTurns(scopeKey)).toEqual([]);
+  });
+
   it("reconciles compact invalidations without idle full-list polling", async () => {
     let listener!: (event: AgentEvent) => void;
     vi.useFakeTimers();

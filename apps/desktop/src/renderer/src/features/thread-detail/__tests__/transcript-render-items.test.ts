@@ -1391,6 +1391,89 @@ describe("buildTranscriptRenderItems", () => {
     expect(items).toContainEqual({ type: "entry", entry: asked });
     expect(groupedEntries(items)).not.toContain(asked);
   });
+
+  it("keeps the work of a turn stopped before it answered open", () => {
+    for (const status of ["cancelled", "interrupted"] as const) {
+      const turn = { id: `stopped-${status}`, status, durationMs: 430_000 };
+      const entries = [
+        tool("t1", turn),
+        reply("r1", "Measuring the record first.", turn),
+        tool("t2", turn),
+        tool("t3", turn),
+      ];
+
+      const items = buildTranscriptRenderItems({ entries });
+
+      expect(items).toEqual([
+        expect.objectContaining({
+          type: "workPhaseGroup",
+          collapsible: true,
+          defaultExpanded: true,
+          entries,
+          label: "Worked for 7m 10s · 3 tool updates",
+        }),
+      ]);
+    }
+  });
+
+  it("keeps a stopped turn's work open above its usage row", () => {
+    const turn = { id: "stopped-usage", status: "cancelled" as const, durationMs: 90_000 };
+    const work = [tool("t1", turn), tool("t2", turn)];
+    const usage: AppServerThreadActivityEntry = {
+      type: "activity", id: "usage", summary: "Turn usage: 1,000 tokens", details: [], turn,
+    };
+
+    const items = buildTranscriptRenderItems({ entries: [...work, usage] });
+
+    expect(items).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", defaultExpanded: true, entries: work }),
+      { type: "entry", entry: usage },
+    ]);
+  });
+
+  it("folds the work of a stopped turn that replied after it", () => {
+    const turn = { id: "stopped-replied", status: "cancelled" as const, durationMs: 90_000 };
+    const work = [tool("t1", turn), tool("t2", turn)];
+    const answer = reply("r1", "Here is where I got to.", turn);
+
+    const items = buildTranscriptRenderItems({ entries: [...work, answer] });
+
+    expect(items).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: work }),
+      { type: "entry", entry: answer },
+    ]);
+    expect(items[0]).not.toHaveProperty("defaultExpanded");
+  });
+
+  it("opens only the last work group of a stopped turn", () => {
+    const turn = { id: "stopped-split", status: "cancelled" as const, durationMs: 90_000 };
+    const asked = question("q1", "Which runner should I use?", turn);
+    const before = [tool("t1", turn), tool("t2", turn)];
+    const after = [tool("t3", turn), tool("t4", turn)];
+
+    const items = buildTranscriptRenderItems({ entries: [...before, asked, ...after] });
+
+    expect(items).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: before }),
+      { type: "entry", entry: asked },
+      expect.objectContaining({
+        type: "workPhaseGroup",
+        defaultExpanded: true,
+        entries: after,
+      }),
+    ]);
+    expect(items[0]).not.toHaveProperty("defaultExpanded");
+  });
+
+  it("folds the work of a completed turn that never replied", () => {
+    const turn = completedTurn("completed-silent", 90_000);
+    const work = [tool("t1", turn), tool("t2", turn)];
+
+    const [group] = buildTranscriptRenderItems({ entries: work });
+
+    expect(group).toMatchObject({ type: "workPhaseGroup", entries: work });
+    expect(group).not.toHaveProperty("defaultExpanded");
+  });
 });
 
 function groupedEntries(items: ReturnType<typeof buildTranscriptRenderItems>): AppServerThreadEntry[] {

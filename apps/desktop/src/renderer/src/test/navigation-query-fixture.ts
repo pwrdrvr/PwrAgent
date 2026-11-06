@@ -11,7 +11,7 @@ import {
   type NavigationRow,
 } from "@pwragent/shared";
 
-type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability"> & {
+type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability" | "forgeAutomation" | "peerProject"> & {
   threadKeys?: string[];
   repositoryKey?: string;
   repositoryKeys?: string[];
@@ -140,6 +140,8 @@ export function navigationQueryFixture(
         ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
         ...(directory.repositoryKeys ? { repositoryKeys: directory.repositoryKeys } : {}),
         pinnedRank: directory.pinnedRank, directoryThreadsCollapsed: directory.directoryThreadsCollapsed, localAvailability: directory.localAvailability,
+        ...(directory.forgeAutomation ? { forgeAutomation: directory.forgeAutomation } : {}),
+        ...(directory.peerProject ? { peerProject: directory.peerProject } : {}),
         gitStatus: directory.gitStatus, latestUpdatedAt: directory.latestUpdatedAt, counts: counts(members),
         pinnedRootCount: roots.filter((thread) => thread.pinnedRank).length,
         unpinnedRootCount: roots.filter((thread) => !thread.pinnedRank).length,
@@ -175,6 +177,7 @@ export function navigationQueryFixture(
         subthreadsCollapsed: thread.subthreadsCollapsed, reactions: thread.reactions, model: thread.model,
         executionMode: thread.executionMode, serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort,
         primaryGitRepository: thread.primaryGitRepository, prAutoDispatchEnabled: thread.prAutoDispatchEnabled,
+        scheduledStart: thread.scheduledStart,
         fastMode: thread.fastMode, ordinaryChildCount: childCounts.get(key(thread)) ?? 0,
         nativeSubAgentGroupPresent: Boolean(thread.codexNativeSubAgents?.length), nativeSubAgentCount: thread.codexNativeSubAgents?.length,
         queueCount: 0, queueState: "unknown",

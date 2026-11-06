@@ -166,6 +166,7 @@ describe("fixture derivation", () => {
           id: "thread-read-1",
           kind: "response",
           method: "thread/read",
+          threadId: "thread-1",
           result: {
             thread: {
               id: "thread-1",

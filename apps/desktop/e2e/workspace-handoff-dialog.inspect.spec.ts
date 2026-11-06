@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { createLocalHandoffFixture } from "./fixtures/workspace-handoff-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
 

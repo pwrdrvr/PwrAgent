@@ -32,7 +32,7 @@ describe("federation thread read projection", () => {
     router.registerConnection({ peerId: "viewer_one", capabilities: ["thread_detail"], sendEnvelope: (envelope) => rpc.receiveEnvelope(wire(envelope)) });
     registerFederationBackendHandlers({ router, backend: { readThread } as unknown as FederationBackendOperations });
     const client = new FederationRemoteBackendClient(rpc);
-    const request = { backend: "codex" as const, threadId: "thread-1", viewOnly: true, display: {
+    const request = { backend: "codex" as const, threadId: "thread-1", viewOnly: true, countsAsActivity: false, display: {
       resource: "activity" as const, activity: { turnId: "old-turn", entryId: "activity-middle", invocationItemId: "middle" },
     } };
     expect(await client.readThread(request)).toEqual(response);

@@ -1,15 +1,20 @@
 ---
 name: sandboxer-verification
 description: >-
-  Run PwrAgent's unit tests, lint, typecheck, and Linux desktop E2E in a
-  Sandboxer cloud sandbox instead of on the local machine.
-  Use when the thread has the Sandboxer MCP (create_sandbox and exec tools)
-  and a change needs `pnpm test`, `pnpm lint`, `pnpm typecheck`, or
-  `pnpm test:desktop-e2e`. Sandboxer is Ubuntu only: it does not verify
-  macOS or Windows behavior.
+  Dormant Sandboxer verification procedure, retained for explicit reference
+  while a replacement provider is evaluated. Do not automatically invoke
+  or route development checks to this workflow; use local or CI verification.
 ---
 
-# Verify on Sandboxer
+# Verify on Sandboxer (dormant)
+
+> **Status: dormant pending a replacement provider.** The process, helper and
+> measurements below are preserved for reference; they are not active
+> development instructions. Do not automatically provision or invoke Sandboxer
+> for repository checks. Use local `pnpm test`, `pnpm lint`, `pnpm typecheck`
+> and `pnpm test:desktop-e2e`, or repository CI. Platform-specific verification
+> still uses the corresponding native CI or PwrSuiteLab routes in `AGENTS.md`.
+> This status does not change the product integration or installed MCP settings.
 
 Sandboxer gives this thread an Ubuntu 24.04 x64 VM with root, Git, Docker,
 Node, and Python. The checks here mirror the CI `Lint`, `Test`, and

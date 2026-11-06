@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readdir, realpath, rm, stat, unlink } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -29,6 +29,8 @@ type ArchiveWorktreeParams = {
   worktreePath: string;
   repositoryPath?: string;
   now?: number;
+  /** One reviewed approval to snapshot past the service limit. Never lower. */
+  maxSnapshotBytes?: number;
   /** Returns a synchronous admission check for the actual removal dispatch. */
   beforeRemove?: () => Promise<() => void>;
 };
@@ -42,6 +44,8 @@ type RestoreWorktreeParams = {
   snapshotCommit: string;
   snapshot?: WorktreeSnapshotSummary;
   allowDetachedFallback?: boolean;
+  /** Reattach the unchanged source branch and restore edits outside its HEAD. */
+  restoreSourceCheckout?: boolean;
   now?: number;
 };
 
@@ -56,12 +60,51 @@ type RestoreDetachedWorktreeParams = {
 
 type WorktreeArchiveServiceOptions = {
   gitEnv?: NodeJS.ProcessEnv;
+  maxSnapshotBytes?: number;
 };
+
+export const MAX_WORKTREE_SNAPSHOT_BYTES = 100 * 1024 * 1024;
+const MAX_WORKTREE_SNAPSHOT_FILES = 10_000;
 
 export class MissingArchiveWorktreeError extends Error {
   constructor(worktreePath: string) {
     super(`Worktree directory no longer exists: ${worktreePath}`);
     this.name = "MissingArchiveWorktreeError";
+  }
+}
+
+/** The checkout exists but its repository does not, so it cannot be
+ * snapshotted. Archive cleanup keeps it; this is a skip, not a failure. */
+export class MissingArchiveRepositoryError extends Error {
+  constructor(readonly worktreePath: string, readonly repositoryPath: string) {
+    super(`Repository no longer exists for worktree ${worktreePath}: ${repositoryPath}`);
+    this.name = "MissingArchiveRepositoryError";
+  }
+}
+
+/** The repository a linked worktree's `.git` file points at, when that
+ * repository is gone. A main checkout (a `.git` directory) is never orphaned. */
+export async function missingWorktreeRepository(worktreePath: string): Promise<string | undefined> {
+  let pointer: string;
+  try {
+    pointer = await readFile(path.join(worktreePath, ".git"), "utf8");
+  } catch {
+    return undefined;
+  }
+  const match = /^gitdir:\s*(.+)$/m.exec(pointer);
+  if (!match) return undefined;
+  const gitDirectory = path.resolve(worktreePath, match[1]!.trim());
+  // A linked worktree's gitdir is <common git dir>/worktrees/<name>. A pruned
+  // entry under a live repository is not this case and still fails loudly.
+  const commonDirectory = path.basename(path.dirname(gitDirectory)) === "worktrees"
+    ? path.dirname(path.dirname(gitDirectory))
+    : gitDirectory;
+  try {
+    await stat(commonDirectory);
+    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return path.basename(commonDirectory) === ".git" ? path.dirname(commonDirectory) : commonDirectory;
   }
 }
 
@@ -160,6 +203,46 @@ function findWorktree(
   return worktrees.find((worktree) => path.resolve(worktree.path) === resolvedPath);
 }
 
+async function checkArchiveRegistration(params: {
+  worktreePath: string;
+  gitDirectory: string;
+  commonDirectory: string;
+  removing?: boolean;
+}): Promise<void> {
+  const { worktreePath, gitDirectory, commonDirectory } = params;
+  const unregistered = () => new Error(`Worktree is ${params.removing ? "no longer" : "not"} registered with Git: ${worktreePath}`);
+  try {
+    // A linked checkout and its one admin entry must point at each other in
+    // the expected repository. Never enumerate sibling admin entries here.
+    const gitFile = path.join(worktreePath, ".git");
+    const contents = await readFile(gitFile, "utf8");
+    const target = /^gitdir: (.+?)[\r\n]*$/.exec(contents)?.[1];
+    if (!target || path.dirname(gitDirectory) !== await realpath(path.join(commonDirectory, "worktrees"))) throw unregistered();
+    const registeredFile = (await readFile(path.join(gitDirectory, "gitdir"), "utf8")).trim();
+    const registeredCommon = (await readFile(path.join(gitDirectory, "commondir"), "utf8")).trim();
+    const backlink = path.resolve(gitDirectory, registeredFile);
+    if (await realpath(path.resolve(worktreePath, target)) !== gitDirectory
+      // Resolve the owning checkout, preserving a valid final .git symlink.
+      // Resolving that symlink would also hide a backlink to another checkout.
+      || path.basename(backlink) !== ".git"
+      || await realpath(path.dirname(backlink)) !== worktreePath
+      || await realpath(path.resolve(gitDirectory, registeredCommon)) !== commonDirectory) {
+      throw unregistered();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT"
+      || (error as NodeJS.ErrnoException).code === "ENOTDIR") throw unregistered();
+    throw error;
+  }
+  try {
+    await lstat(path.join(gitDirectory, "locked"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
+}
+
 async function unlinkWindowsWorktreeLinks(worktreePath: string, assertRemoval?: () => void): Promise<void> {
   const directories = [worktreePath];
   for (let index = 0; index < directories.length; index++) {
@@ -182,9 +265,11 @@ async function unlinkWindowsWorktreeLinks(worktreePath: string, assertRemoval?: 
 
 export class WorktreeArchiveService {
   private readonly gitEnv?: NodeJS.ProcessEnv;
+  private readonly maxSnapshotBytes: number;
 
   constructor(options: WorktreeArchiveServiceOptions = {}) {
     this.gitEnv = options.gitEnv;
+    this.maxSnapshotBytes = options.maxSnapshotBytes ?? MAX_WORKTREE_SNAPSHOT_BYTES;
   }
 
   async archive(params: ArchiveWorktreeParams): Promise<WorktreeSnapshotSummary> {
@@ -192,38 +277,58 @@ export class WorktreeArchiveService {
     try {
       worktreePath = await realpath(path.resolve(params.worktreePath));
     } catch (error) {
-      // Only a missing target before snapshot preparation is a routine skip.
-      // Missing repository paths and later filesystem failures remain errors.
+      // A missing target or repository before snapshot preparation is a
+      // routine skip. Later filesystem failures remain errors.
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         throw new MissingArchiveWorktreeError(params.worktreePath);
       }
       throw error;
     }
-    const worktreeListPath = params.repositoryPath
-      ? await realpath(path.resolve(params.repositoryPath))
-      : worktreePath;
-    const worktrees = await this.listWorktrees(worktreeListPath);
-    const repositoryPath = await this.resolvePrimaryRepositoryPath({
-      worktreeListPath,
-      worktrees,
-    });
-    const worktree = findWorktree(worktrees, worktreePath);
-
-    if (!worktree) {
-      throw new Error(`Worktree is not registered with Git: ${worktreePath}`);
+    // A checkout whose repository is gone cannot be snapshotted or removed
+    // through Git. Report it as kept, never as a failure.
+    const missingRepository = await missingWorktreeRepository(worktreePath);
+    if (missingRepository) throw new MissingArchiveRepositoryError(params.worktreePath, missingRepository);
+    let repositoryAnchor = worktreePath;
+    if (params.repositoryPath) {
+      try {
+        repositoryAnchor = await realpath(path.resolve(params.repositoryPath));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new MissingArchiveRepositoryError(params.worktreePath, params.repositoryPath);
+        }
+        throw error;
+      }
     }
-    if (worktree.locked) {
-      throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
-    }
-    if (path.resolve(repositoryPath) === worktreePath) {
+    const commonDirectory = await realpath(trimGitOutput((await this.runGit(repositoryAnchor, [
+      "rev-parse", "--path-format=absolute", "--git-common-dir",
+    ])).stdout));
+    const gitDirectory = await realpath(trimGitOutput((await this.runGit(worktreePath, [
+      "rev-parse", "--absolute-git-dir",
+    ])).stdout));
+    if (gitDirectory === commonDirectory) {
       throw new Error("Refusing to archive the primary checkout as a worktree.");
     }
+    await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory });
+    // Git's primary worktree is the common directory with a trailing /.git
+    // removed, or the common directory itself for a bare/separate Git dir.
+    const repositoryPath = path.basename(commonDirectory) === ".git" ? path.dirname(commonDirectory) : commonDirectory;
+    const head = trimGitOutput((await this.runGit(worktreePath, ["rev-parse", "--verify", "HEAD"])).stdout);
+    let branch: string | undefined;
+    try {
+      branch = trimGitOutput((await this.runGit(worktreePath, ["symbolic-ref", "--quiet", "HEAD"])).stdout).replace(/^refs\/heads\//, "");
+    } catch (error) {
+      // symbolic-ref exits 1 for a detached HEAD. Other Git failures must keep
+      // the checkout rather than silently changing its saved source identity.
+      if ((error as { code?: number }).code !== 1) throw error;
+    }
+    const worktree: WorktreeInfo = { path: worktreePath, head, branch, detached: !branch };
 
     const snapshotCommit = await this.createSnapshotCommit({
       backend: params.backend,
       threadId: params.threadId,
       worktree,
       worktreePath,
+      maxSnapshotBytes: params.maxSnapshotBytes,
     });
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
@@ -232,13 +337,7 @@ export class WorktreeArchiveService {
     await withWorktreeTerminalsClosed(worktreePath, async () => {
       // Removal admission and terminal teardown can await other work. Recheck
       // Git's lock protection before modifying even ignored link entries.
-      const currentWorktree = findWorktree(await this.listWorktrees(repositoryPath), worktreePath);
-      if (!currentWorktree) {
-        throw new Error(`Worktree is no longer registered with Git: ${worktreePath}`);
-      }
-      if (currentWorktree.locked) {
-        throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
-      }
+      await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory, removing: true });
       assertRemoval?.();
       if (process.platform === "win32") {
         await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);
@@ -301,13 +400,31 @@ export class WorktreeArchiveService {
       await this.resolveRestoreCommit(params);
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
-    await this.runGit(repositoryPath, [
-      "worktree",
-      "add",
-      "--detach",
-      worktreePath,
-      restoreCommit,
-    ]);
+    let sourceBranch: string | undefined;
+    const sourceHead = params.restoreSourceCheckout ? params.snapshot?.sourceHead : undefined;
+    let branchReason: string | undefined;
+    if (sourceHead && params.snapshot?.sourceBranch) {
+      const branch = params.snapshot.sourceBranch;
+      const worktrees = await this.listWorktrees(repositoryPath);
+      try {
+        const branchHead = trimGitOutput((await this.runGit(repositoryPath, ["rev-parse", `refs/heads/${branch}^{commit}`])).stdout);
+        if (branchHead === sourceHead && !worktrees.some((worktree) => worktree.branch === branch)) sourceBranch = branch;
+        else branchReason = "The original branch moved or is in use; restored its saved HEAD detached.";
+      } catch {
+        branchReason = "The original branch is unavailable; restored its saved HEAD detached.";
+      }
+    }
+    await this.runGit(repositoryPath, sourceBranch
+      ? ["worktree", "add", worktreePath, sourceBranch]
+      : ["worktree", "add", "--detach", worktreePath, sourceHead ?? restoreCommit],
+    { ownProcessTree: params.restoreSourceCheckout });
+    if (sourceHead && sourceHead !== restoreCommit) {
+      // Populate the saved file tree, then return the index to the original
+      // HEAD. Dirty and non-ignored untracked files remain working-tree edits;
+      // the source branch and its unpublished commits are never advanced.
+      await this.runGit(worktreePath, ["read-tree", "--reset", "-u", restoreCommit], { ownProcessTree: true });
+      await this.runGit(worktreePath, ["read-tree", sourceHead], { ownProcessTree: true });
+    }
 
     const restoredAt = params.now ?? Date.now();
     return {
@@ -330,8 +447,29 @@ export class WorktreeArchiveService {
       snapshotCommit: restoreCommit,
       restoredAt,
       state: "restored",
-      unavailableReason: fallbackReason,
+      restoredCheckoutIdentity: await this.readRestoredCheckoutIdentity(worktreePath),
+      unavailableReason: [fallbackReason, branchReason].filter(Boolean).join(" ") || undefined,
     };
+  }
+
+  private async readRestoredCheckoutIdentity(worktreePath: string): Promise<NonNullable<WorktreeSnapshotSummary["restoredCheckoutIdentity"]>> {
+    const directory = await stat(worktreePath, { bigint: true });
+    if (!directory.isDirectory()) throw new Error("Restored worktree path is not a directory.");
+    const gitDirectory = await realpath(trimGitOutput((await this.runGit(worktreePath, ["rev-parse", "--absolute-git-dir"])).stdout));
+    return { device: String(directory.dev), inode: String(directory.ino), birthtimeNs: String(directory.birthtimeNs), gitDirectory };
+  }
+
+  /** A durable successful restore is reusable only while its physical checkout
+   * and Git registration still match. Do not overwrite subsequent shared edits. */
+  async isRestoredCheckout(snapshot: WorktreeSnapshotSummary): Promise<boolean> {
+    const saved = snapshot.restoredCheckoutIdentity;
+    if (!saved || saved.inode === "0") return false;
+    try {
+      const actual = await this.readRestoredCheckoutIdentity(snapshot.worktreePath);
+      if (actual.device !== saved.device || actual.inode !== saved.inode
+        || actual.birthtimeNs !== saved.birthtimeNs || actual.gitDirectory !== saved.gitDirectory) return false;
+      return Boolean(findWorktree(await this.listWorktrees(snapshot.repositoryPath), await realpath(snapshot.worktreePath)));
+    } catch { return false; }
   }
 
   async restoreDetached(
@@ -447,6 +585,7 @@ export class WorktreeArchiveService {
   }
 
   private async createSnapshotCommit(params: {
+    maxSnapshotBytes?: number;
     backend: AppServerBackendKind;
     threadId: string;
     worktree: WorktreeInfo;
@@ -458,6 +597,29 @@ export class WorktreeArchiveService {
     try {
       const env = { GIT_INDEX_FILE: indexPath };
       await this.runGit(params.worktreePath, ["read-tree", "HEAD"], { env });
+      // Measure exactly what this fresh index will stage, before git add writes
+      // blobs. The live index can hide edits with assume-unchanged or skip-worktree
+      // flags that are absent here. Committed and ignored content is excluded.
+      const changed = await this.runGit(params.worktreePath, ["diff", "--name-only", "-z", "HEAD", "--", "."], { env });
+      const untracked = await this.runGit(params.worktreePath, ["ls-files", "--others", "--exclude-standard", "-z"], { env });
+      const files = new Set(`${changed.stdout}${untracked.stdout}`.split("\0").filter(Boolean));
+      if (files.size > MAX_WORKTREE_SNAPSHOT_FILES) {
+        throw new Error(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
+      }
+      const limit = Math.max(this.maxSnapshotBytes, params.maxSnapshotBytes ?? 0);
+      let bytes = 0;
+      for (const file of files) {
+        try {
+          const info = await lstat(path.join(params.worktreePath, file));
+          // Do not follow links into dependencies or unrelated directories.
+          if (info.isFile() || info.isSymbolicLink()) bytes += info.size;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        if (bytes > limit) {
+          throw new Error(`Snapshot size limit exceeded (${limit} bytes); the worktree was kept.`);
+        }
+      }
       await this.runGit(params.worktreePath, ["add", "-A", "--", "."], { env });
       const tree = trimGitOutput(
         (await this.runGit(params.worktreePath, ["write-tree"], { env })).stdout,
@@ -488,18 +650,6 @@ export class WorktreeArchiveService {
     } finally {
       await rm(tempDir, { force: true, recursive: true });
     }
-  }
-
-  private async resolvePrimaryRepositoryPath(params: {
-    worktreeListPath: string;
-    worktrees: WorktreeInfo[];
-  }): Promise<string> {
-    const primary = params.worktrees[0]?.path;
-    if (!primary) {
-      throw new Error(`Unable to resolve repository root for ${params.worktreeListPath}.`);
-    }
-
-    return await realpath(path.resolve(primary));
   }
 
   private async listWorktrees(repositoryPath: string): Promise<WorktreeInfo[]> {

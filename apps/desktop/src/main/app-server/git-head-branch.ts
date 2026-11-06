@@ -1,7 +1,13 @@
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 export type GitHeadBranchProbe = { branch?: string };
+
+/**
+ * Discovery reached the filesystem root and found no repository. Git's own
+ * discovery would fail too, so the caller need not launch it.
+ */
+export const NOT_A_GIT_REPOSITORY = "not-a-repository";
 
 type SmallFile = { kind: "missing" } | { kind: "text"; text: string };
 
@@ -36,9 +42,18 @@ async function readSmallFile(
 }
 
 async function hasGitAdministrativeBoundary(directory: string, signal?: AbortSignal): Promise<boolean> {
-  const head = await readSmallFile(path.join(directory, "HEAD"), 4096, signal);
-  if (!head) return true;
-  if (head.kind === "missing") return false;
+  signal?.throwIfAborted();
+  let head: Awaited<ReturnType<typeof lstat>>;
+  try {
+    head = await lstat(path.join(directory, "HEAD"));
+  } catch (error) {
+    signal?.throwIfAborted();
+    return !isMissing(error);
+  }
+  signal?.throwIfAborted();
+  // Git accepts a symbolic-link HEAD by its link text, so even a dangling
+  // link can mark a bare repository. stat would report it missing.
+  if (!head.isFile()) return true;
   // Bare repositories own objects here; linked-worktree administrative
   // directories point at their common repository. Neither may be skipped
   // while discovering an enclosing checkout.
@@ -55,10 +70,12 @@ async function hasGitAdministrativeBoundary(directory: string, signal?: AbortSig
   return false;
 }
 
+const NEUTRAL_ENVIRONMENT_CONFIG_KEYS = new Set(["safe.directory", "core.autocrlf"]);
+
 function hasGitEnvironmentOverride(): boolean {
   const env = new Map(Object.entries(process.env).map(([key, value]) => [key.toUpperCase(), value]));
   if ([...env.keys()].some((key) =>
-    /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM))$/.test(key)
+    /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM))$/.test(key)
   )) return true;
 
   const configKeys = [...env.keys()].filter((key) => key.startsWith("GIT_CONFIG"));
@@ -69,8 +86,10 @@ function hasGitEnvironmentOverride(): boolean {
   for (let index = 0; index < count; index++) {
     const key = "GIT_CONFIG_KEY_" + index;
     const value = "GIT_CONFIG_VALUE_" + index;
-    // safe.directory changes trust checks, not the ref backend or HEAD.
-    if (env.get(key)?.toLowerCase() !== "safe.directory" || !env.has(value)) return true;
+    // safe.directory changes trust checks and core.autocrlf changes content
+    // line endings. Neither changes discovery, the ref backend or HEAD.
+    // Playwright sets core.autocrlf for every E2E launch.
+    if (!NEUTRAL_ENVIRONMENT_CONFIG_KEYS.has(env.get(key)?.toLowerCase() ?? "") || !env.has(value)) return true;
     allowed.add(key);
     allowed.add(value);
   }
@@ -127,13 +146,15 @@ function hasOrdinaryFilesConfig(text: string): boolean {
 /**
  * Read only ordinary files-backend branch metadata. An undefined result means
  * the layout is unproven and the caller must use its owned Git subprocess.
- * A result with no branch proves an unborn local HEAD, even when remote refs
- * exist in the common repository.
+ * A branch is what `git rev-parse --abbrev-ref HEAD` prints, so a detached
+ * HEAD reports `HEAD`. A result with no branch proves an unborn local HEAD,
+ * even when remote refs exist in the common repository. NOT_A_GIT_REPOSITORY
+ * proves that Git's discovery finds no repository from this directory.
  */
 export async function probeCurrentGitBranch(
   cwd: string,
   signal?: AbortSignal,
-): Promise<GitHeadBranchProbe | undefined> {
+): Promise<GitHeadBranchProbe | typeof NOT_A_GIT_REPOSITORY | undefined> {
   signal?.throwIfAborted();
   if (hasGitEnvironmentOverride()) return undefined;
   let current: string;
@@ -161,7 +182,12 @@ export async function probeCurrentGitBranch(
       if (!isMissing(error)) return undefined;
       if (await hasGitAdministrativeBoundary(current, signal)) return undefined;
       const parent = path.dirname(current);
-      if (parent === current) return undefined;
+      // Git checks the same two places at each level: a .git entry, then the
+      // directory itself as a bare repository. With no environment override
+      // this walk is a superset of Git's: a ceiling or a filesystem boundary
+      // only stops Git earlier. safe.directory and safe.bareRepository only
+      // reject a repository that discovery already found.
+      if (parent === current) return NOT_A_GIT_REPOSITORY;
       current = parent;
     }
   }
@@ -207,14 +233,18 @@ export async function probeCurrentGitBranch(
 
   const head = await readSmallFile(path.join(gitDir, "HEAD"), 4096, signal);
   if (head?.kind !== "text") return undefined;
+  // Format version 0 with no extensions is SHA-1. Git abbreviates a detached
+  // HEAD to `HEAD` without reading its object, unless another `HEAD` ref makes
+  // the name ambiguous, which the scan below defers to Git.
+  const detached = /^[0-9a-fA-F]{40}\r?\n?$/.test(head.text);
   const headRef = /^ref: refs\/heads\/([^\r\n]+)\r?\n?$/.exec(head.text);
-  // Detached HEAD and unusual symrefs retain Git's own validation of their
-  // target object and abbreviation semantics.
-  if (!headRef || !safeBranchName(headRef[1])) return undefined;
-  const branch = headRef[1];
-  const ref = "refs/heads/" + branch;
+  // Unusual symrefs retain Git's own abbreviation semantics.
+  if (!detached && (!headRef || !safeBranchName(headRef[1]))) return undefined;
+  const branch = headRef ? headRef[1] : "HEAD";
+  const ref = detached ? undefined : "refs/heads/" + branch;
   const ambiguousRefs = [
     "refs/" + branch,
+    ...(detached ? ["refs/heads/HEAD"] : []),
     "refs/remotes/" + branch,
     "refs/remotes/" + branch + "/HEAD",
   ];
@@ -236,7 +266,11 @@ export async function probeCurrentGitBranch(
 
   // Packing publishes packed-refs before pruning loose refs. Read the loose
   // ref first so concurrent packing cannot make a committed HEAD look unborn.
-  const loose = await readSmallFile(path.join(commonDir, ...ref.split("/")), 4096, signal);
+  // A detached HEAD has no branch ref, only names packed-refs could make
+  // ambiguous.
+  const loose: SmallFile | undefined = ref
+    ? await readSmallFile(path.join(commonDir, ...ref.split("/")), 4096, signal)
+    : { kind: "missing" };
   if (!loose) return undefined;
   const packed = await readSmallFile(path.join(commonDir, "packed-refs"), 1024 * 1024, signal);
   if (!packed) return undefined;
@@ -266,5 +300,5 @@ export async function probeCurrentGitBranch(
       ? { branch }
       : undefined;
   }
-  return found ? { branch } : {};
+  return found || detached ? { branch } : {};
 }

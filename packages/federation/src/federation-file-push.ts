@@ -2,9 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { FederationCapability } from "@pwragent/shared";
+import type { FederationBlobChunkEnvelope, FederationCapability } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
+import { FederationResumableBlobReceiver } from "./federation-resumable-blob";
 import { receivingFolderError } from "./receiving-folder-error";
 
 export const FILE_PUSH_CHUNK_BYTES = 256 * 1024;
@@ -16,6 +17,7 @@ export const FILE_PUSH_METHODS = {
   chunk: "file.push.chunk",
   finish: "file.push.finish",
   cancel: "file.push.cancel",
+  checkpoint: "file.push.checkpoint",
 } as const;
 export const FILE_PUSH_METHOD_CAPABILITIES: Record<string, FederationCapability> =
   Object.fromEntries(Object.values(FILE_PUSH_METHODS).map((method) => [method, "file_push"]));
@@ -50,13 +52,21 @@ export class FederationFilePushReceiver {
   private tail: Promise<unknown> = Promise.resolve();
   private pending = 0;
   private disposed = false;
+  private readonly blobs: FederationResumableBlobReceiver;
 
   constructor(private readonly options: {
     allowed: () => boolean;
     directory: () => string;
     onCompleted?: (peerId: string, result: FilePushResult) => void;
     formatError?: typeof receivingFolderError;
-  }) {}
+  }) {
+    this.blobs = new FederationResumableBlobReceiver({ ...options,
+      schedule: (work) => {
+        if (!this.disposed) this.tail = this.tail.then(work).catch(() => undefined);
+      },
+    });
+    this.tail = this.blobs.initialize().catch(() => undefined);
+  }
 
   private receivingError(error: unknown, directory: string, operation: string): Error {
     return (this.options.formatError ?? receivingFolderError)(error, directory, operation);
@@ -72,10 +82,23 @@ export class FederationFilePushReceiver {
     return work.finally(() => { this.pending--; });
   }
 
+  disconnect(peerId: string): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    const work = this.tail.then(() => this.blobs.disconnect(peerId));
+    this.tail = work.catch(() => undefined);
+    return work;
+  }
+
+  async receiveBlob(envelope: FederationBlobChunkEnvelope): Promise<void> {
+    await this.handle(envelope.sourceInstanceId, FILE_PUSH_METHODS.chunk, envelope);
+  }
+
   async dispose(): Promise<void> {
     this.disposed = true;
     await this.tail;
-    await Promise.all([...this.transfers.keys()].map((id) => this.remove(id)));
+    try { await this.blobs.dispose(); } finally {
+      await Promise.all([...this.transfers.keys()].map((id) => this.remove(id)));
+    }
   }
 
   private async receive(peerId: string, method: string, input: unknown): Promise<unknown> {
@@ -85,8 +108,19 @@ export class FederationFilePushReceiver {
     if (!this.options.allowed() && method !== FILE_PUSH_METHODS.cancel) {
       throw new Error("This machine does not allow incoming files.");
     }
+    if (method === FILE_PUSH_METHODS.cancel && args.sha256 !== undefined) {
+      await this.blobs.cancel(peerId, args as { sha256: string; sizeBytes: number });
+      return { cancelled: true };
+    }
+    if (typeof args.transferId === "string" && args.transferId.startsWith("blob:")) {
+      if (method === FILE_PUSH_METHODS.chunk) return await this.blobs.chunk(peerId, args as FederationBlobChunkEnvelope);
+      if (method === FILE_PUSH_METHODS.checkpoint) return this.blobs.checkpoint(peerId, args.transferId);
+      if (method === FILE_PUSH_METHODS.finish) return await this.blobs.finish(peerId, args.transferId);
+      throw new Error("Invalid binary blob method.");
+    }
     if (method === FILE_PUSH_METHODS.begin) {
       const name = filename(args.name);
+      if (args.binary === true) return await this.blobs.begin(peerId, { ...args, name } as { name: string; sha256: string; sizeBytes: number });
       const size = args.sizeBytes;
       if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0 || size > FILE_PUSH_MAX_BYTES) {
         throw new Error("Files must be at most 512 MiB.");
@@ -241,6 +275,10 @@ export type PushFederationFileOptions = {
   signal?: AbortSignal;
   /** Called after each acknowledged chunk with bytes the receiver holds. */
   onProgress?: (sentBytes: number, totalBytes: number) => void;
+  onTransferProgress?: (progress: {
+    bytesCommitted: number; bytesSent: number; bytesTotal: number; resumedFromBytes?: number;
+    link: "connected" | "waiting"; disconnectedAt?: string; transport: "resumable" | "single_shot";
+  }) => void;
 };
 
 export async function pushFederationFile(
@@ -261,7 +299,7 @@ export async function pushFederationFile(
   try {
     const stat = file ? await file.stat() : { size: bytes!.byteLength, mtimeMs: 0, isFile: () => true };
     if (!stat.isFile() || stat.size > FILE_PUSH_MAX_BYTES) throw new Error("Select a regular file of at most 512 MiB.");
-    const begin = await rpc.request<{ transferId: string }>({ method: FILE_PUSH_METHODS.begin, params: { name: filename(name ?? (typeof sourcePath === "string" ? path.basename(sourcePath) : "file")), sizeBytes: stat.size } });
+    const begin = await rpc.request<{ transferId: string }>({ method: FILE_PUSH_METHODS.begin, params: { name: filename(name ?? (typeof sourcePath === "string" ? path.basename(sourcePath) : "file")), sizeBytes: stat.size }, timeoutMs: null, signal });
     transferId = begin.transferId;
     onProgress?.(0, stat.size);
     const hash = createHash("sha256");
@@ -273,7 +311,7 @@ export async function pushFederationFile(
       if (!bytesRead) throw new Error("Source file changed during transfer.");
       const chunk = bytes ? bytes.subarray(offset, offset + bytesRead) : buffer!.subarray(0, bytesRead);
       hash.update(chunk);
-      await rpc.request({ method: FILE_PUSH_METHODS.chunk, params: { transferId, offset, dataBase64: chunk.toString("base64") } });
+      await rpc.request({ method: FILE_PUSH_METHODS.chunk, params: { transferId, offset, dataBase64: chunk.toString("base64") }, timeoutMs: null, signal });
       offset += bytesRead;
       onProgress?.(offset, stat.size);
       signal?.throwIfAborted();
@@ -283,7 +321,7 @@ export async function pushFederationFile(
     signal?.throwIfAborted();
     // Finalization can copy the whole file on volumes that deny hard links.
     // Wait for the result or peer disconnect rather than timing out mid-copy.
-    return await rpc.request<FilePushResult>({ method: FILE_PUSH_METHODS.finish, params: { transferId, sha256: hash.digest("hex") }, timeoutMs: null });
+    return await rpc.request<FilePushResult>({ method: FILE_PUSH_METHODS.finish, params: { transferId, sha256: hash.digest("hex") }, timeoutMs: null, signal });
   } catch (error) {
     if (transferId) {
       await rpc.request({ method: FILE_PUSH_METHODS.cancel, params: { transferId }, timeoutMs: 5_000 }).catch(() => undefined);

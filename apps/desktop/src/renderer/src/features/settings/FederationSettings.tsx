@@ -1890,6 +1890,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   file_pull: "File pull",
   event_subscriptions: "stream explicitly subscribed events",
   turn_input_blobs: "transfer turn attachments",
+  resumable_blobs: "resume binary file transfers",
   // Transport negotiation is informational, not a remote action.
   transport_brotli: "",
   shutdown_notice: "receive shutdown notices",
@@ -1909,6 +1910,8 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   // Display read sizes are negotiation, not a remote action.
   thread_display_bulk_reads: "",
   turn_assistant_reply: "read a turn's reply images",
+  thread_pr_watch_control_v1: "stop and start PR watches",
+  project_forge_automation: "pause project forge activity",
 };
 
 function formatFederationCapabilities(

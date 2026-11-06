@@ -110,6 +110,31 @@ transcript. Thinking blocks are not shown, matching the Codex transcript.
 The SDK may reject a mode that the installed CLI or selected model does not
 support. PwrAgent reports that error and retains the previous mode.
 
+PwrAgent's own approval cards for MCP gateway calls and forge tools read the
+mode from the thread's open Claude process. Full Access skips a gateway card
+and runs `auto` forge groups without one, as it does for Codex. A forge group
+set to `ask` still asks. See [MCP gateway tools](mcp-gateway-tools.md) and
+[forge agent tools](forge-agent-tools.md).
+
+A gateway call has one prompt, the gateway's own, and so does a forge tool.
+When PwrAgent's own MCP server is attached, the query's `allowedTools` lists
+`mcp__pwragent__call_mcp_tool` and every forge tool (`CLAUDE_FORGE_TOOLS`:
+the CI reads, the pull request and issue reads, and every write, merging
+included), so Default and Auto do not reach `canUseTool` for them. Without
+the rules, Claude showed a generic card that named only the tool. Accepting
+it led to the gateway card for the same call, or to the forge card for an
+`ask` write, and an `allow` forge group still asked. The gateway card names
+the upstream tool and follows the connection's Tool approval setting,
+conversation approvals and automation allowlists. The forge card follows
+`[git.agent_tools]`, its project rules and the turn's mode, and keeps
+`approve_merge` asking in every mode but Full Access. Claude still decides
+these tools in `plan` mode and applies the operator's own `ask` and `deny`
+rules for them. The rules are fixed when the process starts and do not
+depend on the forge levels, so a Settings change never relaunches Claude.
+A live session that lacks them relaunches for them, or keeps asking until
+its next launch while a task runs. Other PwrAgent tools still ask through
+`canUseTool`.
+
 The composer's **Plan** toggle runs one turn in Claude's `plan` permission
 mode, which keeps Claude read-only while it investigates; the next turn
 returns to the thread's mode. Claude ends a plan by calling `ExitPlanMode`
@@ -304,6 +329,109 @@ and closes every session and its tasks. A relaunch hands the old session's
 MCP grants to the new one, because the relaunching turn registered the same
 per-thread grants again.
 
+## Scheduled wake-ups
+
+Claude Code can start a turn on its own later: `ScheduleWakeup` sets the next
+tick of a dynamic `/loop`, and `CronCreate` schedules a prompt once or on a
+cron schedule. Unless the CLI saves a `CronCreate` job as durable, both live
+in the CLI process's memory and end with it. The SDK has no control request that
+lists or cancels them; only the model's `CronDelete`, or `ScheduleWakeup` with
+`stop: true`, cancels one.
+
+PwrAgent tracks them in `claude-session-wakes.ts` from two hooks. A
+`PostToolUse` hook on the three tools records each new wake, its fire time and
+its reason, and each delete. The `Stop` hook's `session_crons` is the CLI's
+whole set at each turn's end, and replaces what the hooks recorded. A wake keeps
+the session open the way a running task does, so a `/loop` keeps running after
+its turn ends. When a wake fires, Claude starts a native turn, which PwrAgent
+shows as it shows a task follow-up. A relaunch for new settings waits while a
+wake is pending, and Stop on a turn interrupts it instead of closing the query.
+
+A one-shot wake more than an hour past its fire time stops holding the
+session. A one-shot's time comes from its tool result, or else from its pinned
+cron fields. A recurring job, or a one-shot with no readable time, stops seven
+days after PwrAgent first saw it (the CLI's default expiry for recurring jobs).
+That bounds a missed `Stop` hook. Archiving waits while a fired wake's turn
+runs, as it does for any turn.
+
+The set is published as `thread/sessionWakes/updated` and listed in Waiting
+for under Scheduled. The row has no Stop and tells the operator to ask Claude to
+cancel it. Quitting PwrAgent, archiving the thread, a rewind, or a folder move
+ends the session and its wakes. Archiving is
+allowed while only wakes keep the session.
+
+### Durable cron jobs
+
+PwrAgent does not list a durable `CronCreate` job. The findings below were
+measured with the bundled CLI 2.1.310 in SDK mode on 2026-11-03.
+
+- **The account can turn them off.** Durable jobs depend on a Claude Code
+  feature flag. When it is off, `CronCreate` ignores `durable: true`, keeps the
+  job in the session, and answers `durable: false`. PwrAgent lists that job
+  like any session cron. The flag was off for the account that ran these
+  tests.
+- **The job is stored in the folder, not in a thread.** A durable job is
+  saved in `.claude/scheduled_tasks.json` in the session's working folder.
+  Each entry records the session that created it. Every Claude session in
+  that folder reads the file, even when the flag is off.
+- **The creator runs it first.** The creating session runs its own jobs while
+  it is open. A resumed session keeps its session id, so a PwrAgent thread
+  runs its own jobs again on its next turn.
+- **Another session can run it.** While the creating session is not running,
+  the session that holds `.claude/scheduled_tasks.lock` in that folder runs
+  the job instead. That session can be another PwrAgent thread or a Claude
+  Code terminal. In the test, a second session started first, took the lock,
+  and ran the job every minute. When the creator started, the creator took
+  over. When the creator stopped, the second session resumed.
+- **Few PwrAgent turns are open to run it.** A durable job does not keep a
+  process open. PwrAgent ends a thread's Claude process after its turn
+  settles, so the job runs only if a Claude session in that folder is open
+  and idle when it is due. A one-shot that was missed is offered at the start
+  of a later session that can run it. Claude asks before it runs that job.
+
+A Waiting for row in the creating thread would be wrong whenever another
+session runs the job. A row in every thread in the folder would claim work
+that most of those threads never do. Listing them would also make PwrAgent
+depend on the format of a file that Claude Code owns and does not document.
+Ask Claude to run `CronList` to see the durable jobs in a folder, or
+`CronDelete` to remove one.
+
+## Locked threads
+
+A lock keeps every turn source from starting a turn, including the turns
+Claude starts in its own process: its answer to a finished task, a `/loop`
+wake-up, and a session cron's fire. PwrAgent's turn queue never sees those
+turns, so the registry's lock check at turn admission cannot refuse them.
+`claude-self-started-turns.ts` holds them with a `UserPromptSubmit` hook
+instead. The hook runs before Claude starts any prompt. Its `source` field
+names the author: `loop_wakeup`, `schedule_wakeup` (a cron), or `system` (a
+task notification, among others). A prompt counts as Claude's own only when
+no desktop turn is open, because a task notification can also fold into a
+running turn. A CLI that omits `source` is judged by that rule alone, since
+every desktop message opens its turn before its prompt is written. Its held
+prompt leaves the tracked wakes only when it matches a wake's prompt.
+
+When the thread is locked, the registry's `holdBackendSelfStartedTurn` keeps
+the prompt in a held queue entry (`self-started:<threadId>`), and the hook
+answers `decision: "block"`. The CLI then drops the prompt without running
+the model. The `init`, banner and `result` it still emits open no desktop
+turn. Unlocking releases the entry with the lock's other held entries, and
+the prompt runs as a normal turn, resuming the session if its process has
+ended. Every prompt held while locked rides that one entry, in order, so
+they run as one turn, the way Claude batches what queues while it is busy.
+A recurring cron that fires again while locked is kept once.
+
+- The CLI drops a one-shot job as it fires, and a held fire is followed by
+  no `Stop` hook, so the held wake leaves the tracked set. A recurring job
+  stays listed and fires again later.
+- The held entry lives in memory, like the lock's other held entries, so
+  quitting PwrAgent ends it.
+- The background task itself keeps running under a lock; only Claude's
+  answer waits. Waiting for marks Claude's tasks and wakes with that.
+- If holding fails, the hook lets the turn run, so a prompt is never lost.
+- A paused project does not hold these turns. Its notice names what it
+  holds: PR checks and monitor and Continue After results.
+
 ## Usage, context, and MCP
 
 The Pricing rail uses the SDK's per-model result totals, including cache
@@ -339,7 +467,9 @@ a turn runs, inventory comes from `Query.mcpServerStatus()`. An idle thread
 reports that inventory is unavailable instead of querying Codex. The CLI's own
 MCP configuration remains enabled. Auto is Claude's native `auto` mode on both
 query creation and live permission changes; a callback that reaches PwrAgent
-still requires explicit approval. Host gateway connection policies also apply.
+still requires explicit approval. Host gateway connection policies also apply,
+and the gateway's `call_mcp_tool` and the forge tools are pre-allowed so
+PwrAgent's own card is the only one.
 
 The additional SQLite budget is one commit for a result usage observation and
 ledger flush, independent of 100 context updates: measured 65,920 WAL bytes.

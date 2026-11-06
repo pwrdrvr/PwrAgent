@@ -1,10 +1,11 @@
 // What a PwrAgent-managed runtime download reports while it works.
 //
-// Codex and Grok install the same way (fetch a signed archive, verify it,
-// unpack it, activate the version directory), so one event shape describes both
-// and one strip in Settings renders either.
+// Codex, Grok and PwrDrvr Git install the same way (fetch a signed archive,
+// verify it, unpack it, move the version directory into place), so one event
+// shape describes all three and one strip in Settings renders any of them.
+// Git's last step installs without switching: Use is a separate action.
 
-export type ManagedRuntimeId = "codex" | "grok";
+export type ManagedRuntimeId = "codex" | "grok" | "git";
 
 /**
  * `idle` clears the strip: a check that found nothing new, or an abort. It is

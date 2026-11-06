@@ -3219,6 +3219,7 @@ describe("useThreadSessionState", () => {
     { transition: "active", interaction: true, expectedTurn: "turn-1" },
     { transition: "idle", interaction: true, expectedTurn: undefined },
     { transition: "completed then active", interaction: true, expectedTurn: undefined },
+    { transition: "completed twice then active", interaction: true, expectedTurn: undefined },
     { transition: "new turn then active", interaction: true, expectedTurn: "turn-2" },
   ])("hydrates compatible mid-turn state after $transition (interaction: $interaction)", async ({
     transition, interaction, expectedTurn,
@@ -3262,11 +3263,17 @@ describe("useThreadSessionState", () => {
     await waitFor(() => expect(readThread).toHaveBeenCalledTimes(1));
 
     act(() => {
-      if (transition === "completed then active") {
+      if (transition === "completed then active" || transition === "completed twice then active") {
         emit({ backend: "codex", notification: { method: "turn/completed", params: {
           threadId: "thread-1", turnId: "turn-1",
           turn: { id: "turn-1", status: "completed", output: [{ type: "text", text: "Done." }] },
         } } });
+        if (transition === "completed twice then active") {
+          emit({ backend: "codex", notification: { method: "turn/completed", params: {
+            threadId: "thread-1", turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: [{ type: "text", text: "Done." }] },
+          } } });
+        }
       } else if (transition === "new turn then active") {
         emit({ backend: "codex", notification: { method: "turn/started", params: {
           threadId: "thread-1", turn: { id: "turn-2", status: "inProgress" },
@@ -3281,6 +3288,7 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.activeTurnId).toBe(expectedTurn);
     expect(result.current.threadBusy).toBe(transition !== "idle");
+    expect(result.current.response?.replay.entries.some((entry) => entry.id === "commentary-1")).toBe(true);
     if (transition === "active" && interaction) {
       expect(result.current.pendingUserInput?.requestId).toBe("request-1");
       expect(result.current.pendingStatusText).toBe("Waiting for input");
@@ -4073,6 +4081,109 @@ describe("useThreadSessionState", () => {
         },
       }),
     );
+  });
+
+  it("keeps a live to-do marker through a stale read and drops a malformed one", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    let resolveReadThread:
+      | ((response: AppServerReadThreadResponse) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async () =>
+        await new Promise<AppServerReadThreadResponse>((resolve) => {
+          resolveReadThread = resolve;
+        })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+      expect(agentEventHandler).toBeDefined();
+    });
+
+    const sourceThread = {
+      backend: "codex" as const,
+      threadId: "source-thread",
+      title: "Source thread",
+    };
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "todo-message",
+              type: "userMessage",
+              origin: {
+                kind: "agent",
+                sourceThread,
+                threadTodo: { id: "todo-1", title: "Fix flaky sync test" },
+              },
+              content: [{ type: "text", text: "Stabilize the sync test." }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "forged-message",
+              type: "userMessage",
+              origin: { kind: "agent", sourceThread, threadTodo: { id: 7 } as never },
+              content: [{ type: "text", text: "Ship it anyway." }],
+            },
+          },
+        },
+      });
+    });
+
+    await act(async () => {
+      resolveReadThread?.(
+        readThreadResponse({
+          entries: [
+            { type: "message", id: "todo-message", role: "user", text: "Stabilize the sync test." },
+            { type: "message", id: "forged-message", role: "user", text: "Ship it anyway." },
+          ],
+          hasPreviousPage: false,
+        })
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.response?.threadStatus).toBe("idle");
+    });
+    const originOf = (id: string) => result.current.response?.replay.messages
+      .find((message) => message.id === id)?.origin;
+    expect(originOf("todo-message")).toEqual({
+      kind: "agent",
+      sourceThread,
+      threadTodo: { id: "todo-1", title: "Fix flaky sync test" },
+    });
+    expect(originOf("forged-message")).toEqual({ kind: "agent", sourceThread });
   });
 
   it("keeps a live sub-agent message attributed to its source thread", async () => {

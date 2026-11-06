@@ -83,6 +83,7 @@ export class ScheduledThreadActionService {
   private lastHistoryCleanupAt = 0;
   private projectionObservationError?: string;
   private unsubscribeRegistryEvents?: () => void;
+  private unsubscribeRestartGate?: () => void;
 
   constructor(private readonly options: ScheduledThreadActionServiceOptions) {
     this.ownerId = options.ownerId ?? `scheduler:${process.pid}:${randomUUID()}`;
@@ -98,6 +99,10 @@ export class ScheduledThreadActionService {
     this.unsubscribeRegistryEvents = this.options.registry.onEvent((event) =>
       this.handleRegistryEvent(event),
     );
+    // Due actions wait while a quiet restart's continuations go first.
+    this.unsubscribeRestartGate = this.options.registry.onRestartGateChanged?.((closed) => {
+      if (!closed && this.running) void this.evaluateDueActions();
+    });
     this.startLeaseHeartbeat();
     this.scheduleNextTimer();
     void this.evaluateDueActions();
@@ -116,6 +121,8 @@ export class ScheduledThreadActionService {
     }
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
+    this.unsubscribeRestartGate?.();
+    this.unsubscribeRestartGate = undefined;
     // Claims intentionally expire through their lease. Releasing a queued
     // claim here is unsafe unless the registry is already quiescent, because
     // its in-memory FIFO may still start the same action during shutdown.
@@ -232,6 +239,19 @@ export class ScheduledThreadActionService {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
     const current = this.requireAction(request.id);
+    // A repeated cancel, such as a second window deleting the same failed
+    // row, changes nothing. The first cancel already settled everything.
+    if (current.status === "cancelled") return { action: current };
+    if (current.status === "failed") {
+      // Dismissing a failure only takes its row out of the queue. A thread
+      // born from this action keeps its failed scheduled start.
+      const dismissed = this.options.store.dismissFailed(current.id, this.now());
+      if (!dismissed) {
+        throw new Error("The scheduled action can no longer be cancelled.");
+      }
+      await this.publish(dismissed);
+      return { action: dismissed };
+    }
     let cancelled: ScheduledThreadAction | undefined;
     if (current.status === "held" && current.queueEntryId) {
       const cancelledInRegistry = this.options.registry.cancelQueuedTurn(
@@ -290,6 +310,8 @@ export class ScheduledThreadActionService {
 
   async evaluateDueActions(): Promise<void> {
     if (this.evaluating) return;
+    // The gate opening evaluates again.
+    if (this.options.registry.isRestartGateClosed?.()) return;
     this.evaluating = true;
     try {
       while (true) {

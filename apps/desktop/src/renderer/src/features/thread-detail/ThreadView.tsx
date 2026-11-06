@@ -1,3 +1,4 @@
+import { ThreadMergeHoldStatus } from "../thread-merge-holds/ThreadMergeHoldStatus";
 import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
 import { StartupTiming } from "../composer/StartupTiming";
 import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
@@ -1029,6 +1030,9 @@ export type ThreadViewProps = {
   /** Focus the composer once it shows this thread (a mouse click on its sidebar row). */
   composerFocusRequest?: ComposerProps["focusRequest"];
   onComposerFocusRequestHandled?: ComposerProps["onFocusRequestHandled"];
+  /** Append a drafted request to this thread's composer ("Ask Agent to Watch CI"). */
+  composerInsertRequest?: ComposerProps["composerInsertRequest"];
+  onComposerInsertRequestHandled?: ComposerProps["onComposerInsertRequestHandled"];
   onDetachLaunchpadParent?: (directoryKey: string) => void;
   onSelectLaunchpadParent?: (launchpad: NavigationLaunchpadDraft) => void;
   onPendingStatusChange?: (status?: string) => void;
@@ -1294,6 +1298,7 @@ export function ThreadView(props: ThreadViewProps) {
     backend: NavigationThreadSummary["source"];
     federationTarget?: FederationRemoteTarget;
     text: string;
+    busyBehavior?: "queue";
   }>();
   // Dismissing Codex's async questions only hides their controls, so it is
   // this window's choice for the session, as skipping is in Codex's own UI.
@@ -1395,6 +1400,9 @@ export function ThreadView(props: ThreadViewProps) {
     imageAttachments: RewoundPrompt["imageAttachments"];
     kind: "rewound-prompt" | "rewound-prompt-undone";
   }>();
+  const handleDraftRestoreHandled = useCallback((id: number): void => {
+    setRewoundPromptRestore((current) => current?.id === id ? undefined : current);
+  }, []);
   const [rewindUndoBusyId, setRewindUndoBusyId] = useState<string>();
   const [workflowBudgetDialog, setWorkflowBudgetDialog] =
     useState<WorkflowBudgetDialogState>();
@@ -2807,7 +2815,7 @@ export function ThreadView(props: ThreadViewProps) {
       setAsyncQuestionReply(undefined);
     };
   }, [asyncQuestionThreadKey]);
-  const handleAnswerAsyncQuestions = useEventCallback((text: string): Promise<boolean> => {
+  const handleAnswerAsyncQuestions = useEventCallback((text: string, busyBehavior?: "queue"): Promise<boolean> => {
     // One answer at a time: the composer applies only the newest submission.
     if (
       props.composerDisabled
@@ -2831,6 +2839,7 @@ export function ThreadView(props: ThreadViewProps) {
         backend: thread.source,
         federationTarget: questionFederationTarget,
         text,
+        busyBehavior,
       });
     });
   });
@@ -2872,8 +2881,8 @@ export function ThreadView(props: ThreadViewProps) {
       (error: unknown) => setPendingRequestError(String(error)),
     );
   });
-  // "Do it here" sends a handoff's prompt through the same reply path an
-  // answered question takes: start, steer or queue, as a typed reply would.
+  // "Do it here" starts a handoff's prompt when idle, or queues it behind
+  // the active turn so the new task does not steer work already in progress.
   // The card resolves only once the composer has taken it.
   // Resolves false when the composer would not take it (disabled, or
   // another answer still sending), so the card can say so.
@@ -2888,7 +2897,7 @@ export function ThreadView(props: ThreadViewProps) {
     const text = prompt ?? handoff;
     if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
     try {
-      const accepted = await handleAnswerAsyncQuestions(text);
+      const accepted = await handleAnswerAsyncQuestions(text, "queue");
       if (accepted && prompt === undefined) {
         await props.threadTodos?.resolve(todo, "done", "sent_here", resolveOptions);
       }
@@ -4124,10 +4133,13 @@ export function ThreadView(props: ThreadViewProps) {
           mcpConnectionCount: threadMcpConnectionCount,
           replySubmission: asyncQuestionReply,
           draftRestore: rewoundPromptRestore,
+          onDraftRestoreHandled: handleDraftRestoreHandled,
           onReplySubmissionSettled: handleReplySubmissionSettled,
           reviewRequest: todoReviewRequest,
           focusRequest: props.composerFocusRequest,
           onFocusRequestHandled: props.onComposerFocusRequestHandled,
+          composerInsertRequest: props.composerInsertRequest,
+          onComposerInsertRequestHandled: props.onComposerInsertRequestHandled,
           onReviewStarted: handleReviewStarted,
           workspaceActionsBlocked: props.workspaceActionsBlocked,
           onEditEnvironments: props.onEditEnvironments,
@@ -4852,6 +4864,10 @@ export function ThreadView(props: ThreadViewProps) {
           onDismissEnvActionRun: dismissEnvActionRun,
           onStopEnvActionRun: stopEnvActionRun,
           onRefreshNavigation: props.onRefreshNavigation,
+          onSetThreadPrAutoDispatch: props.onSetThreadPrAutoDispatch,
+          onUnlockThread: props.onSetThreadLock
+            ? async () => await props.onSetThreadLock?.(false)
+            : undefined,
           platform: props.platform,
           thread: selectedThread,
           pricing: props.pricing,
@@ -4944,6 +4960,7 @@ export function ThreadView(props: ThreadViewProps) {
               ownerLabel={props.activeFederationOwnerLabel}
               onOpenFederationSettings={props.starMap?.onOpenFederationSettings}
             /> : null}
+            {selectedThread ? <ThreadMergeHoldStatus thread={selectedThread} api={props.desktopApi} /> : null}
             {primaryContent}
             {composerSlotElement}
             {threadLock ? (
@@ -4984,6 +5001,7 @@ export function ThreadView(props: ThreadViewProps) {
             activeTab={activeContextTab}
             backendError={props.backendError}
             backends={props.backends}
+            ownerBackends={peerOwnerTarget ? peerOwnerSummaries.backends : undefined}
             desktopApi={props.desktopApi}
             onOpenAutomations={props.onOpenAutomations}
             onActiveTabChange={onActiveContextTabChange}

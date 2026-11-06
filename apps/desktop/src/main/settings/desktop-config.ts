@@ -156,6 +156,7 @@ export type DesktopSettingsConfig = {
       lightTheme?: DesktopLightTheme;
       themedDockIcon?: boolean;
       terminalMinimumContrast?: boolean;
+      calmMotion?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -346,6 +347,17 @@ export type DesktopSettingsConfig = {
       configOverrides?: string[];
       localModelIds?: string[];
       providers?: CodexModelProviderSettings[];
+      /**
+       * `[models.codex.app_server_recycle]`: when an idle Codex app server is
+       * replaced. Unset fields keep their defaults. Read only; no UI writes it.
+       */
+      appServerRecycle?: {
+        enabled?: boolean;
+        idleMinutes?: number;
+        maxUptimeHours?: number;
+        maxChildProcesses?: number;
+        maxOpenFds?: number;
+      };
     };
   };
   acpAgents?: {
@@ -402,6 +414,12 @@ export type DesktopSettingsConfig = {
     };
     git?: {
       path?: string;
+      /** Downloaded PwrDrvr Git release chosen with Use (generation id). */
+      managed?: string;
+      /** What Roll back returns to: `bundled`, `managed:<id>` or `path:<path>`. */
+      managedPrevious?: string;
+      /** Build track Settings → Git → Updates offers releases from. */
+      managedBuildChannel?: DesktopUpdateChannel;
     };
   };
   worktrees?: {
@@ -995,6 +1013,17 @@ export function desktopSettingsPatchToEdits(
       edits.push({
         op: "delete",
         path: ["general", "appearance", "terminal_minimum_contrast"],
+      });
+    }
+  }
+  if (patch.general?.appearance?.calmMotion !== undefined) {
+    // Off by default, so only the opt-in is written.
+    if (patch.general.appearance.calmMotion) {
+      set(["general", "appearance", "calm_motion"], true);
+    } else {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "calm_motion"],
       });
     }
   }
@@ -2118,6 +2147,15 @@ export function desktopSettingsPatchToEdits(
   if (patch.applications?.git?.path !== undefined) {
     set(["applications", "git", "path"], patch.applications.git.path);
   }
+  if (patch.applications?.git?.managed !== undefined) {
+    set(["applications", "git", "managed"], patch.applications.git.managed);
+  }
+  if (patch.applications?.git?.managedPrevious !== undefined) {
+    set(["applications", "git", "managed_previous"], patch.applications.git.managedPrevious);
+  }
+  if (patch.applications?.git?.managedBuildChannel !== undefined) {
+    set(["applications", "git", "managed_build_channel"], patch.applications.git.managedBuildChannel);
+  }
 
   if (patch.worktrees?.archive) {
     const archive = patch.worktrees.archive;
@@ -2173,6 +2211,7 @@ function normalizeDesktopConfig(
   const line = tables["messaging.line"];
   const models = tables["models"];
   const codex = tables["models.codex"];
+  const codexAppServerRecycle = tables["models.codex.app_server_recycle"];
   const decision = tables["models.decision"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
@@ -2267,6 +2306,7 @@ function normalizeDesktopConfig(
         terminalMinimumContrast: readBoolean(
           generalAppearance?.terminal_minimum_contrast,
         ),
+        calmMotion: readBoolean(generalAppearance?.calm_motion),
         density: readAppearanceDensity(generalAppearance?.density),
         sidebarTextSize: readTextSize(
           generalAppearance?.sidebar_text_size,
@@ -2580,6 +2620,19 @@ function normalizeDesktopConfig(
         configOverrides: codex?.config_overrides === undefined
           ? undefined
           : validateCodexConfigOverrides(codex.config_overrides),
+        ...(codexAppServerRecycle
+          ? {
+              appServerRecycle: {
+                enabled: readBoolean(codexAppServerRecycle.enabled),
+                idleMinutes: readPositiveNumber(codexAppServerRecycle.idle_minutes),
+                maxUptimeHours: readPositiveNumber(codexAppServerRecycle.max_uptime_hours),
+                maxChildProcesses: readPositiveNumber(
+                  codexAppServerRecycle.max_child_processes,
+                ),
+                maxOpenFds: readPositiveNumber(codexAppServerRecycle.max_open_fds),
+              },
+            }
+          : {}),
       },
     },
     acpAgents: {
@@ -2646,6 +2699,9 @@ function normalizeDesktopConfig(
       },
       git: {
         path: readString(gitApplication?.path),
+        managed: readString(gitApplication?.managed),
+        managedPrevious: readString(gitApplication?.managed_previous),
+        managedBuildChannel: readUpdateChannel(gitApplication?.managed_build_channel),
       },
     },
     worktrees: {
@@ -4029,6 +4085,11 @@ function legacyTokenMiserGeneralComment(): string {
 
 function readNumber(value: TomlScalar | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readPositiveNumber(value: TomlScalar | undefined): number | undefined {
+  const number = readNumber(value);
+  return number !== undefined && number > 0 ? number : undefined;
 }
 
 /** A remembered pane width: a positive whole number of px, or nothing. */

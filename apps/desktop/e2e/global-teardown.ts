@@ -1,6 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
+import { checkSourceCheckoutHooks } from "./fixtures/source-checkout-hooks-guard";
+
+export default function globalTeardown(): void {
+  reportSqliteWrites();
+  checkSourceCheckoutHooks();
+}
 
 /**
  * Print the sqlite write-volume ranking for the run.
@@ -11,7 +17,7 @@ import path from "node:path";
  * Output goes to stdout so it lands in the lab's `e2e.log` alongside the
  * Playwright results.
  */
-export default function globalTeardown(): void {
+function reportSqliteWrites(): void {
   const metricsFile = process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE;
   if (!metricsFile || !existsSync(metricsFile)) {
     return;

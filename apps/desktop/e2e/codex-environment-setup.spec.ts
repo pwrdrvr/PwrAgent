@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const POSIX_SETUP_COMMAND = "printf setup-output && sleep 2";
@@ -202,6 +202,9 @@ command = ${JSON.stringify(captureCwdCommand)}
             id: "thread-list-2",
             kind: "response",
             method: "thread/list",
+            // A startup refresh must not list the new thread before the launchpad
+            // creates it.
+            afterResponseId: "thread-start-1",
             result: [
               ...initialThreads,
               ...(params?.includeCreatedThread === false ? [] : [{
@@ -226,6 +229,8 @@ command = ${JSON.stringify(captureCwdCommand)}
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            // The second read belongs to the new thread, not to a startup reread.
+            afterResponseId: "thread-start-1",
             result: {
               entries: [
                 {

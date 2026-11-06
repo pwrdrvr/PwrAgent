@@ -124,6 +124,92 @@ does not spend the user allowance.
 - Thread history archival and worktree snapshot archival use distinct APIs and
   provider-specific restore paths.
 
+### Archived worktree removal admission
+
+Each cleanup queue batch builds one fleet index
+(`apps/desktop/src/main/app-server/archive-cleanup-fleet-index.ts`) from one
+complete read of active and archived identities and overlays across Codex,
+Claude and ACP, without Git enrichment. Within the batch, every writer and
+notification that already fences removal marks the identity it changed, and
+only that identity is read again: Codex `thread/read`, the ACP session, the
+Claude store and its overlay. A change that names no identity, or more changed
+identities than a quarter of the fleet, requests another complete read. Marks
+carry epochs, so a read that began before a newer change cannot settle it.
+
+The index maps canonical paths to identities. Discovery and admission for a
+checkout see only identities whose workspace is the checkout, inside it or
+above it, plus every identity whose workspace or external marker cannot be
+resolved, and only the paths of each that relate. Within a batch, preliminary
+discovery for one checkout is shared until a row it covers changes or a row is
+written near it. Otherwise scoped Git observations stay job-local. Broad repair
+discovers candidates across all archived workspaces with one complete,
+uncached read, then processes that candidate list through queued removals.
+Adapters without paged archive discovery keep their aggregate read contract.
+The fleet index is the only inventory shared within a batch.
+
+Removal admission never uses preliminary evidence. Before each removal it
+reads the Codex rows changed since the index's watermark, newest `updated_at`
+first, five rows a page for at most twenty pages. It rereads the overlay of
+every related identity. It compares two change tokens for writers outside this
+process: SQLite `PRAGMA data_version` for the overlay store, and the Claude
+session directory's inode and timestamps. It reads the complete fleet again
+when a token moved, when the provider cannot order by `updated_at`, when the
+changed rows exceed the pages, or when a path-scoped workspace write touched
+the checkout. Archived siblings that share the checkout are resolved here,
+while it exists; after removal a symlink to it dangles. The reservation, the
+lifecycle fences and the assertions before `git worktree remove` are unchanged.
+
+What the reservation serializes, and what it cannot:
+
+- PwrAgent's own writers (`withArchiveWorkspaceWrite`,
+  `withThreadWorkspaceMutation`, `withThreadLifecycleMutation`) register before
+  their first await. A reserved removal refuses an intersecting controlled
+  write; an observed change revokes the admission, and the final assertion
+  keeps the checkout.
+- A provider notification revokes an admission for its identity, but one that
+  arrives after the final assertion cannot stop `git worktree remove`.
+- A Codex thread another client starts in, or moves into, the checkout without
+  notifying this process is seen only if it advanced `updated_at` before the
+  admission's recency read. External `thread/unarchive` also advances it:
+  protocol-only captures on 2026-11-05 with Codex 0.160.0 and 0.163.0 confirmed
+  visibility from another App Server's `thread/list` with
+  `sortKey: "updated_at"` and `useStateDbOnly: true`, both before and after
+  restarting the restoring client. `thread/resume` by ID or archived path and
+  `thread/fork` reject archived threads instead of reactivating them. Another
+  process's overlay or Claude-session write is seen only if it committed
+  before the token comparison.
+- Not seen within a batch: a symlink retargeted after the batch's complete
+  read, and direct filesystem or Git use of the checkout by something that is not a
+  thread. The archive service still rechecks Git's lock immediately before
+  removal. An unreported provider removal keeps the checkout protected until
+  the next batch reads the fleet.
+
+Archive snapshot preparation and the final lock recheck resolve only the
+target's Git admin directory. The checkout's `.git` file, the admin entry's
+`gitdir` backlink and `commondir` must agree with the supplied repository;
+the common directory itself is refused as a primary checkout. Neither check
+lists sibling worktrees. The final check stays inside terminal teardown and
+before Windows link cleanup. `worktree-archive-git.property.test.ts` measures
+the real Git boundary while archiving 201 checkouts and uses Git as the
+registration, branch and snapshot oracle across layouts and late mutations.
+
+Only one physical cleanup runs at a time. A bulk archive beyond the queue's 256
+slots waits as an intent and is admitted as slots free; quit checkpoints it.
+Waiting references are indexed by blocker, checkout and supplied path, so a
+release or a freed slot touches only its rows. The checkpoint stores one SQLite
+row per intent and writes only rows that changed. A reference boundary writes
+only when references were added, since recovery rereads every recovered row.
+Quit always writes. These checks add no timer and no idle SQLite write. Exact
+read and write budgets for archive-all of 1,000, 50 of 1,500, multiple
+worktrees per thread, shared canonical checkouts and 300 released checkouts live
+in `archive-cleanup-scaling.test.ts` and `archive-cleanup-scaling-budgets.json`.
+The generated ownership, reference, restart and snapshot model lives in
+`archive-cleanup-fleet.property.test.ts`; the index's oracle in
+`archive-cleanup-fleet-index.property.test.ts`; adversarial interleavings in
+`archive-cleanup-fleet.test.ts`. Earlier provider, pipeline and discovery suites
+(`archive-cleanup-provider.test.ts`, `archive-cleanup-pipeline.test.ts`,
+`archive-cleanup-discovery.property.test.ts`) still apply.
+
 ### Display reads and federation
 
 - Desktop transcripts use `readThread` with `display.resource = "transcript"`.
@@ -327,6 +413,10 @@ bottom to top — leaves at the bottom import nothing else internal.
 ```mermaid
 graph TB
     DesktopApp["apps/desktop"]
+    Outpost["packages/pwragent · src/federation-core.ts"]
+    OwnerCore["packages/owner-core"]
+    Federation["packages/federation"]
+    AgentTools["packages/agent-tools"]
     MsgProviders["packages/messaging/providers/*"]
     MsgInterface["packages/messaging/interface"]
     Shared["packages/shared"]
@@ -334,7 +424,18 @@ graph TB
     DesktopApp --> MsgProviders
     DesktopApp --> MsgInterface
     DesktopApp --> Shared
+    DesktopApp --> Federation
+    DesktopApp --> AgentTools
+    DesktopApp --> OwnerCore
     DesktopApp --> CodexProto["@pwrdrvr/codex-app-server-protocol"]
+    Outpost --> Federation
+    Outpost --> AgentTools
+    Outpost --> Shared
+    Outpost --> MsgInterface
+    Outpost -.-> OwnerCore
+    OwnerCore --> Shared
+    Federation --> Shared
+    AgentTools --> Shared
     MsgProviders --> MsgInterface
     MsgInterface --> Shared
 ```
@@ -351,17 +452,30 @@ other package access crosses the IPC bridge through the main process.
 Run `pnpm lint:boundaries` locally before pushing; CI fails the build on
 any violation.
 
+Federation, agent-tools, and the messaging interface are independent siblings
+above shared. The owner-core package imports only shared and holds navigation
+projection, Attention ordering, and thread-title policy. The Outpost may use the
+reusable libraries and owner-core through its bundle entry; its JavaScript
+consumes the bundle.
+Every package under `packages/` is forbidden from importing `apps/`.
+
 ## Workspace map
 
 | Path | What's there |
 |---|---|
 | `apps/desktop` | Electron app — main process, renderer, IPC bridge |
 | `packages/shared` | Cross-package types: app-server enums, navigation snapshots, thread identifiers |
+| `packages/federation` | Owner contract, federation transport, enrollment, routing and RPC |
+| `packages/agent-tools` | Agent tool definitions, routing and messaging tool contracts |
+| `packages/owner-core` | Shared navigation projection, Attention ordering, and thread-title policy (`@pwragent/owner-core`) |
+| `packages/pwragent` | Headless Outpost daemon and CLI, with reusable libraries bundled through `src/federation-core.ts` |
 | `packages/messaging/interface` | Generic messaging types, capability profile, layout helpers |
 | `packages/messaging/providers/telegram` | Telegram adapter (`grammy`) |
 | `packages/messaging/providers/discord` | Discord adapter (`discord.js`) |
 | `packages/messaging/providers/mattermost` | Mattermost adapter (`@mattermost/client` + HTTP callback listener) |
 | `packages/messaging/providers/slack` | Slack adapter (`@slack/web-api` + Socket Mode) |
+| `packages/messaging/providers/feishu` | Feishu/Lark adapter |
+| `packages/messaging/providers/line` | LINE adapter |
 
 Codex App Server protocol bindings are consumed from
 `@pwrdrvr/codex-app-server-protocol` on npm instead of checked into this

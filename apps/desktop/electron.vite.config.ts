@@ -145,6 +145,7 @@ export default defineConfig(({ command }) => {
           exclude: [
             "@pwragent/shared",
             "@pwragent/federation",
+            "@pwragent/owner-core",
             "@pwragent/agent-tools",
             "@pwrdrvr/codex-app-server-protocol",
             "@pwragent/messaging-interface",

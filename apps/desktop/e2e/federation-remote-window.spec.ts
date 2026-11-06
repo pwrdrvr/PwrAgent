@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/electron-test";
 import type { AppServerNotification, ThreadPrAutoDispatchPending, ThreadSubAgentSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { generateFederationIdentityKeyPair } from "../src/main/federation/federation-identity";
@@ -2538,6 +2538,7 @@ test.describe("federation remote window", () => {
       await childProvider.click();
       await remote.getByRole("option", { name: "OpenAI", exact: true }).click();
       await expect(childProvider).toContainText("OpenAI");
+      await expect(childSettings.getByRole("button", { name: /^Model:/ })).toHaveAttribute("data-value", "gpt-5.5");
 
       const childAccessMode = childSettings.getByLabel(/^Access mode(?::|$)/);
       if (await childAccessMode.getAttribute("data-value") !== "full-access") {
@@ -2659,8 +2660,8 @@ test.describe("federation remote window", () => {
       expect(reviewStart).toBeTruthy();
       expect(initialize!.at).toBeLessThanOrEqual(threadStart!.at);
       expect(threadStart!.at).toBeLessThanOrEqual(reviewStart!.at);
-      // The viewer composed the child against its own Codex catalog. The
-      // owner runs it, so the owner's catalog chooses the model.
+      // The remote composer selects and submits the owner's model before
+      // admission, even when this viewer has a different local catalog.
       expect(threadStart!.params).toMatchObject({ model: "gpt-5.5" });
       expect(
         findAllFakeCodexRequests(

@@ -211,8 +211,12 @@ export function buildMonitorDelegationPrompt(params: {
   preferredReasoningEffort?: string;
   task: string;
   mcpConnectionIds?: string[];
-  /** Claude Code defers MCP tools until ToolSearch loads them. */
-  deferredMcpTools?: boolean;
+  /**
+   * The monitor runs in Claude Code. It defers MCP tools until ToolSearch
+   * loads them, and it blocks a long foreground sleep, so the monitor waits
+   * in a background watcher whose output wakes it.
+   */
+  claudeCode?: boolean;
 }): string {
   const pollInterval =
     normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
@@ -242,7 +246,7 @@ export function buildMonitorDelegationPrompt(params: {
     "- This monitor is already running with the returned preferredModel and preferredReasoningEffort values.",
     "- Do not launch or hand off to a different provider runtime.",
     "</model_guidance>",
-    ...(params.deferredMcpTools
+    ...(params.claudeCode
       ? [
           "",
           `Before the first call, load the PwrAgent tools with ToolSearch: select:${claudeMcpToolName("inject_progress")},${claudeMcpToolName("complete_monitoring")},${claudeMcpToolName("search_mcp_tools")},${claudeMcpToolName("call_mcp_tool")}.`,
@@ -257,6 +261,7 @@ export function buildMonitorDelegationPrompt(params: {
       : "",
     "",
     "<delegated_monitoring_procedure>",
+    "- For GitHub or GitLab status checks, use the built-in PwrAgent forge tools directly: list_ci_runs, get_ci_run, get_ci_job, read_ci_job_log, get_commit_checks, list_ci_artifacts, download_ci_artifact and the read-only pull request tools. They use the parent thread's linked repositories and attached pull request by default, including when its turn has ended. These tools do not require an MCP connection selection or gateway discovery. The operator's forge tool settings still apply. Monitors cannot rerun jobs, comment, edit or merge.",
     `- Parent-selected MCP connections available through the gateway: ${JSON.stringify(params.mcpConnectionIds ?? [])}.`,
     "- For cloud or MCP status checks, first call pwragent.search_mcp_tools with the connectionId and needed tool names, then invoke the exact returned connectionId, toolName, schemaRevision and arguments through pwragent.call_mcp_tool. Upstream tool names need not be registered as native tools. Search before reporting that tools are absent. Only tools explicitly marked readOnlyHint true and not marked destructive are available to Job Monitors. Full Access, automation grants and parent approval cannot override this restriction. For Sandboxer use command_status or read_file; never exec, write_file or lifecycle tools. A required tool approval appears in the parent thread; wait for its decision and respect a denial. Selection, source authorization, tool approvals and schemas are rechecked for every call.",
     "- Use the task and monitor_context as the complete procedure for checking status.",
@@ -266,6 +271,14 @@ export function buildMonitorDelegationPrompt(params: {
     "- For an already-started local process: monitor it only when the context gives a durable OS-level process id, pidfile, log file, status file, or wait API that this thread can access. If only a parent tool session id was provided, call inject_progress with status \"blocked\", then complete_monitoring with outcome \"failure\" explaining that the parent session is not accessible to the monitor.",
     "- For a remote or external operation: use the provided target identifiers, URLs, APIs, or status commands to poll until all required status checks are terminal.",
     `- Repeat the delegated status check about every ${pollInterval} seconds until the task is terminal.`,
+    ...(params.claudeCode
+      ? [
+          `- Claude Code blocks a long foreground sleep, so wait between checks with one Monitor watcher (load it with ToolSearch select:Monitor). Its command loops: run the status check, print one line with the observed state, stop when the state is terminal, otherwise sleep ${pollInterval} seconds. For a command you start yourself, run it with run_in_background instead.`,
+          "- Each printed line, and the end of a background command, wakes you: send that poll's progress injection, and call complete_monitoring once a line shows a terminal state. If the watcher stops or expires first, start another.",
+          "- After you start the watcher, end your turn. PwrAgent keeps this monitor open while the watcher runs. Ending a turn with no watcher running, before complete_monitoring, ends monitoring without a result.",
+          "- PwrAgent guidance against waiting in sleep loops, background shells, or Monitor is for parent agents. It does not apply to this monitor.",
+        ]
+      : []),
     "- If the task or monitor_context does not include enough information to perform the same polling the parent was about to do, call inject_progress with status \"blocked\" explaining the missing input, then call complete_monitoring with outcome \"failure\" and triggerParentTurn true.",
     "</delegated_monitoring_procedure>",
     "",

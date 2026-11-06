@@ -1,11 +1,12 @@
 import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, launcherParentMatches, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
+import { localSymbolDirectories, nativeDebuggerStatus, nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -14,6 +15,134 @@ const names = [1, 2, 3, 4].map((n) => "\\Device\\NamedPipe\\uv\\" + n + "-123");
 const inventory = () => ({ verified: true, liveAfter: true, pipes: names.map((name) => ({ name })) });
 
 describe("Windows natural pipe evidence", () => {
+  it("binds a launcher through native parent creation when the JavaScript clock lags", () => {
+    const event = { pid: 77, workerPid: 7, at: 1000 };
+    const source = { pid: 77, created: "116444736010042220", verified: true, liveAfter: true };
+    const child = { pid: 77, created: source.created, ppid: 7,
+      parentCreated: "116444736009000000", name: "electron.exe" };
+    const parent = { pid: 7, created: child.parentCreated };
+    expect(BigInt(source.created) > (BigInt(event.at) + 1n) * 10000n + 116444736000000000n).toBe(true);
+    expect(launcherParentMatches(event, source, child, parent)).toBe(true);
+    for (const changed of [{ verified: false }, { liveAfter: false }, { pid: 78 }, { created: "116444736010042221" }]) {
+      expect(launcherParentMatches(event, { ...source, ...changed }, child, parent)).toBe(false);
+    }
+    for (const changed of [{ ppid: 8 }, { parentCreated: "116444736009000001" }, { name: "node.exe" }]) {
+      expect(launcherParentMatches(event, source, { ...child, ...changed }, parent)).toBe(false);
+    }
+    expect(launcherParentMatches(event, source, child, { ...parent, created: source.created + "0" })).toBe(false);
+    expect(launcherParentMatches(event, source, { ...child, parentCreated: source.created + "0" },
+      { ...parent, created: source.created + "0" })).toBe(false);
+    expect(launcherParentMatches(event, source, child, undefined)).toBe(false);
+  });
+
+  it("samples with a non-suspending attach and local symbols, then rejects changed process identities", () => {
+    const cache = path.resolve("private-symbol-cache");
+    expect(nativeStackArguments(77, cache)).toEqual([
+      "-pvr", "-noinh", "-noshell", "-sins", "-netsyms:no",
+      "-y", cache, "-p", "77", "-c", "~* kn 40;q",
+    ]);
+    expect(() => nativeStackArguments(0, cache)).toThrow();
+    for (const symbols of ["relative-cache", [], cache + ";srv*https://example.invalid", "\\\\server\\symbols", "//server/symbols"]) {
+      expect(() => nativeStackArguments(77, symbols)).toThrow();
+    }
+    const before = { pid: 77, created: "134381166159731584", verified: true, liveAfter: true };
+    const stack = { threads: [{ pid: "4d", frames: [] }] };
+    expect(verifiedNativeStack(before, { ...before }, before.created, stack)).toBe(true);
+    for (const changed of [
+      { created: "134381166159731585" }, { pid: 78 }, { verified: false }, { liveAfter: false },
+    ]) {
+      expect(verifiedNativeStack(before, { ...before, ...changed }, before.created, stack)).toBe(false);
+    }
+    expect(verifiedNativeStack(before, before, "134381166159731585", stack)).toBe(false);
+    expect(verifiedNativeStack(before, before, before.created, { threads: [{ pid: "4e" }] })).toBe(false);
+    expect(verifiedNativeStack(before, before, before.created, { threads: [] })).toBe(false);
+  });
+
+  it("finds preloaded PDBs in the symbol-store layout without enabling a symbol server", () => {
+    const cache = root();
+    const identity = "A".repeat(32) + "1";
+    const directory = path.join(cache, "electron.pdb", identity);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path.join(directory, "electron.pdb"), "controlled PDB placeholder");
+    mkdirSync(path.join(cache, "electron.pdb", "B".repeat(32) + "2")); // Incomplete preload.
+    mkdirSync(path.join(cache, "unrelated", identity), { recursive: true });
+    symlinkSync(path.join(cache, "electron.pdb"), path.join(cache, "linked.pdb"), "junction");
+    const symbols = localSymbolDirectories(cache);
+    expect(symbols).toEqual([cache, directory]);
+    const args = nativeStackArguments(77, symbols);
+    expect(args[args.indexOf("-y") + 1]).toBe(cache + ";" + directory);
+    expect(args).not.toContain("-pd");
+    expect(args.join(" ")).not.toContain("srv*");
+  });
+
+  it("retains known preflight failure reasons without exception text or debugger output", () => {
+    const output = "cdb: The system does not support detach on exit\nWARNING: Network path disallowed\nC:\\private\\secret.pdb token";
+    const error = new Error("Noninvasive debugger exited before readiness");
+    error.nativeDebugger = { ...nativeDebuggerStatus(output), exitCode: 0, rawOutput: output };
+    const failure = nativeProbeFailure(error);
+    expect(failure).toEqual({ reason: "debugger-exited-before-readiness",
+      debugger: { exitCode: 0, detachUnsupported: true, networkPathDisallowed: true } });
+    expect(JSON.stringify(failure)).not.toMatch(/private|secret|token|rawOutput/);
+    expect(nativeDebuggerStatus("native frames")).toEqual({ detachUnsupported: false, networkPathDisallowed: false });
+    expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed" });
+    expect(nativeProbeFailure({ nativeDebugger: { exitCode: output, detachUnsupported: output } })).toEqual({
+      reason: "controlled-probe-failed", debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false },
+    });
+  });
+
+  it("retains native stack symbols without debugger paths, arguments or memory", () => {
+    const parsed = parseNativeStacks([
+      "CommandLine: C:\\private\\secret-command.exe secret-token",
+      "*** ERROR: Symbol file could not be found. C:\\private\\secret.pdb",
+      ".  0  Id: 1abc.2def Suspend: 0 Teb: 0000000011111111 Unfrozen",
+      " # Child-SP          RetAddr           Call Site",
+      "00 00000000`11111111 00000000`22222222 ntdll!NtWaitForSingleObject+0x14",
+      "01 00000000`11111111 00000000`22222222 electron!base::Thread::Stop+0x73 [C:\\private\\secret.cc @ 15]",
+      "02 00000000`11111111 00000000`22222222 electron+0x1234 secret-token",
+      "03 00000000`11111111 00000000`22222222 C:\\private\\secret.cc",
+      "04 00000000`11111111 00000000`22222222 00000000`33333333",
+      "   1  Id: 1abc.3fed Suspend: 0 Teb: 0000000011111111 Unfrozen",
+      "00 00000000`11111111 00000000`22222222 KERNELBASE!WaitForMultipleObjectsEx+0xf0",
+      "rax=0000000011111111 rbx=secret-token",
+    ].join("\n"));
+    expect(parsed).toMatchObject({ frameCount: 4, omittedFrames: 2, symbolWarnings: 1, threads: [
+      { index: 0, pid: "1abc", tid: "2def", frames: [
+        { index: 0, symbol: "ntdll!NtWaitForSingleObject+0x14" },
+        { index: 1, symbol: "electron!base::Thread::Stop+0x73" },
+        { index: 2, symbol: "electron+0x1234" },
+      ] },
+      { index: 1, tid: "3fed", frames: [{ index: 0, symbol: "KERNELBASE!WaitForMultipleObjectsEx+0xf0" }] },
+    ] });
+    expect(JSON.stringify(parsed)).not.toMatch(/private|secret|11111111|22222222|33333333/);
+    const bounded = parseNativeStacks(Array.from({ length: 130 }, (_, index) =>
+      `   ${index} Id: 1abc.2def Suspend: 0\n` + "00 11111111 22222222 ntdll!Wait+0x1\n".repeat(45)).join("\n"));
+    expect(bounded).toMatchObject({ omittedThreads: 2, frameCount: 128 * 40, omittedFrames: 128 * 5 });
+    expect(parseNativeStacks("unknown debugger format secret-token").frameCount).toBe(0);
+  });
+
+  it("retains exact code offsets for later symbolization without exposing virtual addresses", () => {
+    const parsed = parseNativeStacks([
+      "start             end                 module name",
+      "00000001`00000000 00000001`10000000 electron (export symbols)",
+      "00000002`00000000 00000002`01000000 ntdll (export symbols)",
+      ". 0 Id: 1abc.2def Suspend: 0 Teb: 00000000`12345678 Unfrozen",
+      "00 00000000`12345678 00000001`00000180 ntdll!NtWait+0x14",
+      "01 00000000`12345690 00000001`00000240 electron!AmbiguousExport+0x9999",
+      "02 00000000`123456a0 00000000`deadbeef electron!AnotherExport+0x8888",
+      // A missing row must not associate the preceding return with this row.
+      "04 00000000`123456b0 00000001`00000300 ntdll!Wait+0x2",
+      "1 Id: 1abc.3fed Suspend: 0",
+      "00 00000000`123456c0 00000000`deadbeef ntdll!Wait+0x3",
+      "01 00000000`123456d0 00000000`deadbeef 00000000`feedface",
+    ].join("\n"), { moduleOffsets: true });
+    expect(parsed.threads.map((thread) => thread.frames.map((frame) => frame.symbol))).toEqual([
+      ["ntdll!NtWait+0x14", "electron+0x180", "electron+0x240", "ntdll!Wait+0x2"],
+      ["ntdll!Wait+0x3"],
+    ]);
+    expect(JSON.stringify(parsed)).not.toMatch(/123456|deadbeef|feedface|00000001|AmbiguousExport|AnotherExport/);
+    expect(parsed.omittedFrames).toBe(1);
+  });
+
   it("launches pnpm native executables directly and JavaScript entries through Node", () => {
     const args = ["--filter", "@pwragent/desktop", "test:e2e", "--shard=4/4"];
     const native = path.resolve("pnpm-native.exe");
@@ -171,6 +300,8 @@ describe("Windows natural pipe evidence", () => {
     const result = await promisify(execFile)(process.execPath, [path.join(import.meta.dirname, "windows-pipe-diagnostics-probe.mjs")], {
       windowsHide: true, timeout: 35000,
     });
-    expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({ creationIdentityVerified: true, nativeExitTimeVerified: true }));
+    expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({
+      creationIdentityVerified: true, nativeExitTimeVerified: true,
+    }));
   }, 40000);
 });

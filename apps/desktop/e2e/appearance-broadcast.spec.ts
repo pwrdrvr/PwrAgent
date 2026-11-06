@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
@@ -21,7 +21,7 @@ const specDir = path.dirname(fileURLToPath(import.meta.url));
  * IPC channel + per-window subscription + DOM apply work end-to-end
  * across two BrowserWindow processes.
  */
-test("broadcasts theme + density changes to a secondary window", async () => {
+test("broadcasts theme, density and motion changes to a secondary window", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
   });
@@ -58,7 +58,9 @@ test("broadcasts theme + density changes to a secondary window", async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (window as any).pwragent.writeSettingsConfig({
         patch: {
-          general: { appearance: { theme: "light", density: "compact" } },
+          general: {
+            appearance: { theme: "light", density: "compact", calmMotion: true },
+          },
         },
       });
     });
@@ -75,6 +77,8 @@ test("broadcasts theme + density changes to a secondary window", async () => {
     await expect
       .poll(() => readDensityAttribute(changelogWindow))
       .toBe("compact");
+    await expect.poll(() => readMotionAttribute(app.window)).toBe("calm");
+    await expect.poll(() => readMotionAttribute(changelogWindow)).toBe("calm");
 
     // Flip back to dark explicitly — verifies the broadcast handles
     // both directions (not just one-way light-on). Using `"dark"`
@@ -87,7 +91,11 @@ test("broadcasts theme + density changes to a secondary window", async () => {
       await (window as any).pwragent.writeSettingsConfig({
         patch: {
           general: {
-            appearance: { theme: "dark", density: "mission-control" },
+            appearance: {
+              theme: "dark",
+              density: "mission-control",
+              calmMotion: false,
+            },
           },
         },
       });
@@ -99,6 +107,9 @@ test("broadcasts theme + density changes to a secondary window", async () => {
     await expect.poll(() => readDensityAttribute(app.window)).toBe(null);
     await expect.poll(() => readThemeAttribute(changelogWindow)).toBe(null);
     await expect.poll(() => readDensityAttribute(changelogWindow)).toBe(null);
+    // Full motion is the attribute's absence, not a value.
+    await expect.poll(() => readMotionAttribute(app.window)).toBe(null);
+    await expect.poll(() => readMotionAttribute(changelogWindow)).toBe(null);
   } finally {
     await app.close();
   }
@@ -113,6 +124,12 @@ async function readThemeAttribute(page: Page): Promise<string | null> {
 async function readDensityAttribute(page: Page): Promise<string | null> {
   return await page.evaluate(() =>
     document.documentElement.getAttribute("data-density"),
+  );
+}
+
+async function readMotionAttribute(page: Page): Promise<string | null> {
+  return await page.evaluate(() =>
+    document.documentElement.getAttribute("data-motion"),
   );
 }
 

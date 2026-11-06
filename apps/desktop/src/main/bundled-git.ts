@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { access } from "node:fs/promises";
+import { managedGitRoot } from "./managed-git-paths";
 import { resolvePwragentRoot } from "./profile";
 
 let packagedResourcesPath: string | undefined;
@@ -54,20 +55,33 @@ export async function validateBundledGit(): Promise<string> {
  * another Pwr app or a shell with Git-specific environment overrides. */
 export function bundledGitEnvironment(
   source: NodeJS.ProcessEnv,
-  options: { platform?: NodeJS.Platform } = {},
+  options: {
+    platform?: NodeJS.Platform;
+    /** A downloaded PwrDrvr Git release's payload, in place of the bundle. */
+    root?: string;
+  } = {},
 ): NodeJS.ProcessEnv {
+  const platform = options.platform ?? process.platform;
   const clean = { ...source };
+  const root = options.root ?? bundledGitDirectory();
   let inheritedPath = "";
   for (const key of Object.keys(clean)) {
     const upper = key.toUpperCase();
     if (upper === "PATH") {
       inheritedPath = clean[key] ?? "";
       delete clean[key];
-    } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "GIT_CONFIG_SYSTEM", "PWRAGENT_GIT_PATH"].includes(upper)) {
+    } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "PWRAGENT_GIT_PATH"].includes(upper)) {
       delete clean[key];
+    } else if (["PREFIX", "GIT_SSL_CAINFO"].includes(upper) && clean[key] && isPwrAgentGitPath(clean[key]!)) {
+      // Inherited from a shell that ran another PwrAgent Git: set again below
+      // for this runtime, never left pointing at a release that can go away.
+      delete clean[key];
+    } else if (upper === "GIT_CONFIG_SYSTEM") {
+      const operatorConfig = operatorSystemConfig(root, clean[key]);
+      if (operatorConfig) clean[key] = operatorConfig;
+      else delete clean[key];
     }
   }
-  const root = bundledGitDirectory();
   // An omitted helper override makes Dugite read process.env.GIT_EXEC_PATH
   // again. An explicit empty override resolves the bundled platform layout.
   const helperDirectory = dugite.resolveGitExecPath(root, "");
@@ -75,20 +89,37 @@ export function bundledGitEnvironment(
     { LOCAL_GIT_DIRECTORY: root, GIT_EXEC_PATH: helperDirectory },
     { ...clean, PATH: inheritedPath },
   );
-  const executableDirectory = path.dirname(bundledGitExecutable());
+  // Dugite points Linux Git at the bundle's ssl/cacert.pem only without
+  // LOCAL_GIT_DIRECTORY, which is passed above, so restore its fixed path. A
+  // set GIT_SSL_CAINFO wins, as in Dugite. A bundle without the file keeps
+  // the libcurl default rather than pointing Git at a missing one.
+  const caBundle = path.join(root, "ssl", "cacert.pem");
+  if (platform === "linux" && !env.GIT_SSL_CAINFO && existsSync(caBundle)) {
+    env.GIT_SSL_CAINFO = caBundle;
+  }
+  const executableDirectory = path.dirname(dugite.resolveGitBinary(root));
   // Git puts its exec path first for subcommands; shells and hooks also need
   // the bundled git/git-lfs before any installed versions in PATH.
   const pathEntries = [executableDirectory, helperDirectory, ...(env.PATH ?? "").split(path.delimiter)];
-  const keychainHelper = (options.platform ?? process.platform) === "darwin"
+  const keychainHelper = platform === "darwin"
     ? installedKeychainHelper({
       PATH: operatorSearchPath(inheritedPath, { home: clean.HOME }),
       DEVELOPER_DIR: clean.DEVELOPER_DIR,
     })
     : undefined;
-  // Dugite points POSIX Git at its own etc/gitconfig. On Windows, MinGit reads
+  // An operator's own GIT_CONFIG_SYSTEM survived the loop above and Dugite
+  // keeps it, so it is included in place of the bundle's. Otherwise Dugite
+  // points POSIX Git at the bundle's etc/gitconfig. On Windows, MinGit reads
   // the one inside the bundle that Dugite's build configured.
   const bundleConfig = env.GIT_CONFIG_SYSTEM ?? mingitSystemConfig(root, helperDirectory);
-  const systemConfig = bundleConfig ? bundledSystemConfig(bundleConfig, keychainHelper) : undefined;
+  const systemConfig = bundleConfig
+    ? bundledSystemConfig(bundleConfig, {
+      keychainHelper,
+      // The macOS and Linux bundle is the custom runtime; Windows keeps
+      // Dugite's MinGit, which has no checkout.reflink.
+      reflink: platform !== "win32",
+    })
+    : undefined;
   if (systemConfig) env.GIT_CONFIG_SYSTEM = systemConfig;
   if (keychainHelper) {
     // Last, so it only answers names nothing earlier provides: a user-level
@@ -107,6 +138,12 @@ function mingitSystemConfig(root: string, helperDirectory: string): string | und
     path.join(root, "etc", "gitconfig"),
     path.join(path.dirname(path.dirname(helperDirectory)), "etc", "gitconfig"),
   ].find((candidate) => existsSync(candidate));
+}
+
+/** Inside the bundle or a downloaded PwrDrvr Git release. */
+export function isPwrAgentGitPath(value: string): boolean {
+  return isInsideDirectory(path.resolve(bundledGitDirectory()), path.resolve(value))
+    || isInsideDirectory(path.resolve(managedGitRoot()), path.resolve(value));
 }
 
 /** Whether `value` is `directory` itself or something beneath it. */
@@ -183,19 +220,19 @@ const installedLfsBySearch = new Map<string, string | undefined>();
  * The operator's own git-lfs, found by following their PATH exactly as the
  * `command -v git-lfs` test at the top of every Git LFS hook does.
  *
- * PwrAgent's own bundle is skipped: it joins PATH only inside the processes
- * PwrAgent launches, so finding git-lfs there says nothing about whether the
+ * PwrAgent's own bundle and downloaded releases are skipped: they join PATH
+ * only inside the processes PwrAgent launches, so finding git-lfs there says
+ * nothing about whether the
  * operator's own shell can push a repository the bundle set Git LFS up in.
  */
 export function installedGitLfs(env: NodeJS.ProcessEnv): string | undefined {
   const searchPath = operatorSearchPath(searchPathOf(env), { home: env.HOME });
   const cached = installedLfsBySearch.get(searchPath);
   if (cached ? existsSync(cached) : installedLfsBySearch.has(searchPath)) return cached;
-  const bundle = path.resolve(bundledGitDirectory());
   const executable = process.platform === "win32" ? "git-lfs.exe" : "git-lfs";
   let found: string | undefined;
   for (const entry of searchPath.split(path.delimiter)) {
-    if (!path.isAbsolute(entry) || isInsideDirectory(bundle, entry)) continue;
+    if (!path.isAbsolute(entry) || isPwrAgentGitPath(entry)) continue;
     const candidate = path.join(entry, executable);
     if (existsSync(candidate)) {
       found = candidate;
@@ -282,6 +319,69 @@ export function bundledGitConfigDirectory(): string {
   return path.join(resolvePwragentRoot(), "git");
 }
 
+/** First line of every system config PwrAgent generates. */
+const GENERATED_CONFIG_MARKER = "# Written by PwrAgent:";
+
+/** The same first line from any Pwr app: PwrGit writes `# Written by PwrGit:`. */
+const PWR_GENERATED_CONFIG = /^# Written by Pwr[A-Za-z]+:/;
+
+/**
+ * The operator's own system config that an inherited GIT_CONFIG_SYSTEM stands
+ * for, or undefined when it names none.
+ *
+ * Apps set the variable too. Dugite points it at a bundled Git's own
+ * etc/gitconfig, and PwrAgent and PwrGit point it at a config they generated
+ * (by directory, or by its first line), which includes the system config
+ * underneath. A shell in PwrAgent's terminal, a dev profile started from it,
+ * and PwrGit all pass theirs on, and PwrAgent applies its own environment to
+ * one it already built. A generated config is followed to the file it
+ * includes, so the operator's config stays visible however many times it was
+ * wrapped. A bundled Git's own config means the operator set none. Neither is
+ * included as is, so app defaults and another bundle's config are not
+ * stacked beneath ours.
+ */
+export function operatorSystemConfig(bundleRoot: string, value: string | undefined): string | undefined {
+  let file = value ? path.resolve(value) : undefined;
+  for (let depth = 0; file && depth < 8; depth += 1) {
+    if (isBundledGitSystemConfig(bundleRoot, file)) return undefined;
+    const included = generatedConfigInclude(file);
+    if (included === null) return file;
+    file = included;
+  }
+  return undefined;
+}
+
+/** Our bundle's files, or another Dugite layout's `git/etc/gitconfig`. */
+function isBundledGitSystemConfig(bundleRoot: string, file: string): boolean {
+  if (isInsideDirectory(path.resolve(bundleRoot), file)) return true;
+  // A downloaded release's own config, from an environment built for it.
+  if (isInsideDirectory(path.resolve(managedGitRoot()), file)) return true;
+  const gitDirectory = path.dirname(path.dirname(file));
+  return path.basename(file) === "gitconfig"
+    && path.basename(path.dirname(file)) === "etc"
+    && path.basename(gitDirectory) === "git"
+    && existsSync(path.join(gitDirectory, "libexec", "git-core"));
+}
+
+/**
+ * For a config a Pwr app generated, the system config it includes, or
+ * undefined when it includes none. Null for any other file.
+ */
+function generatedConfigInclude(file: string): string | undefined | null {
+  const ours = isInsideDirectory(path.resolve(bundledGitConfigDirectory()), file);
+  let content: string;
+  try {
+    content = readFileSync(file, "utf8");
+  } catch {
+    return ours ? undefined : null;
+  }
+  if (!ours && !PWR_GENERATED_CONFIG.test(content)) return null;
+  const include = content.lastIndexOf("[include]");
+  if (include < 0) return undefined;
+  const value = /^\s*path\s*=\s*(.*?)\s*$/m.exec(content.slice(include))?.[1];
+  return value ? path.resolve(path.dirname(file), unquoteConfigValue(value)) : undefined;
+}
+
 /**
  * The bundle's system config with the defaults an installed Git and Git LFS
  * would have set at system scope:
@@ -292,11 +392,16 @@ export function bundledGitConfigDirectory(): string {
  *   `git lfs install` against their global config. The filter also has
  *   git-lfs install its pre-push hook on first use, so pushes upload objects.
  * - On macOS, the installed keychain credential helper.
+ * - On macOS and Linux, `checkout.reflink`, which the custom runtime reads to
+ *   share file contents between checkouts. The app enables it here; the
+ *   runtime itself sets no default.
  *
  * System scope, like the installed Git's, so global and repository config
  * still override every default: `lfs install --skip-smudge` keeps pointers,
- * and resetting `credential.helper` opts out. The bundle's config is
- * included after the defaults so its own settings win too.
+ * resetting `credential.helper` opts out, and `checkout.reflink = false`
+ * turns sharing off. The system config (the bundle's, or the one the
+ * operator named in GIT_CONFIG_SYSTEM) is included after the defaults so its
+ * own settings win too.
  *
  * Named by content: instances running different app copies write different
  * files instead of rewriting one another's. Returns undefined when the file
@@ -304,12 +409,13 @@ export function bundledGitConfigDirectory(): string {
  */
 function bundledSystemConfig(
   bundleConfig: string,
-  keychainHelper: string | undefined,
+  defaults: { keychainHelper?: string; reflink: boolean },
 ): string | undefined {
+  const { keychainHelper, reflink } = defaults;
   const content = [
-    "# Written by PwrAgent: defaults for its bundled Git, then the bundle's own",
-    "# system config. PwrAgent rewrites this file, so edit your global config",
-    "# (git config --global) instead; it overrides everything here.",
+    `${GENERATED_CONFIG_MARKER} defaults for its bundled Git, then the system`,
+    "# config it would otherwise read. PwrAgent rewrites this file, so edit your",
+    "# global config (git config --global) instead; it overrides everything here.",
     "[filter \"lfs\"]",
     "\tclean = git-lfs clean -- %f",
     "\tsmudge = git-lfs smudge -- %f",
@@ -323,6 +429,7 @@ function bundledSystemConfig(
         `\thelper = ${quoteConfigValue(`!'${keychainHelper.replaceAll("'", "'\\''")}'`)}`,
       ]
       : []),
+    ...(reflink ? ["[checkout]", "\treflink = true"] : []),
     "[include]",
     `\tpath = ${quoteConfigValue(bundleConfig)}`,
     "",
@@ -347,4 +454,9 @@ function bundledSystemConfig(
 
 function quoteConfigValue(value: string): string {
   return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
+}
+
+function unquoteConfigValue(value: string): string {
+  if (!value.startsWith("\"") || !value.endsWith("\"") || value.length < 2) return value;
+  return value.slice(1, -1).replace(/\\(["\\])/g, "$1");
 }

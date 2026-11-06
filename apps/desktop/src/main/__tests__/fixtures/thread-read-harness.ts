@@ -80,6 +80,10 @@ export class CountingBackendClient {
     return () => {};
   }
 
+  async emitNotification(notification: AppServerNotification): Promise<void> {
+    await Promise.all([...this.notificationListeners].map(async (listener) => { await listener(notification); }));
+  }
+
   async listThreads(
     params?: Record<string, unknown>,
     diagnostics?: { callerReason?: string },

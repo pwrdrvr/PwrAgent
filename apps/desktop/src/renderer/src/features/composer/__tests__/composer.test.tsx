@@ -12,7 +12,9 @@ import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "re
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
   type BackendSummary,
+  type ProjectForgeAutomation,
   type AgentEvent,
   type CompactThreadRequest,
   type ComposerDraftRecoveryCandidate,
@@ -20,6 +22,7 @@ import {
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
+  type PrSummary,
   type StartReviewRequest,
   type ModelSettingsRecent,
   type FederationCapability,
@@ -50,6 +53,12 @@ import { Composer as ProductionComposer } from "../Composer";
 import { ImageGalleryLayer } from "../../thread-detail/ImageGalleryLayer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import {
+  CURRENT_CODEX_MODEL_LABELS,
+  SUPERSEDED_CODEX_MODEL_LABELS,
+  codexCatalogModels,
+  composerDropdownOptionLabels,
+} from "../../../test/model-catalog";
 import { settleFakeTimers } from "../../../test/settle-fake-timers";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
@@ -1324,8 +1333,166 @@ describe("Composer", () => {
 
     expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
       "data-tooltip",
-      "Auto-fix PR — handle new CI failures or merge conflicts",
+      "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
+  });
+
+  it("mutes Auto-fix PR once every linked PR merged or closed, and keeps it on", () => {
+    const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const pr = (number: number, lifecycleState: "open" | "merged" | "closed") => ({
+      provider: "github.com",
+      number,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing" as const,
+      lifecycleState,
+      url: `https://github.com/pwrdrvr/PwrAgent/pull/${number}`,
+    });
+    const thread = (prs: NavigationThreadSummary["prs"]): NavigationThreadSummary => ({
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+      linkedDirectories: [{ id: "directory-1", kind: "local", label: "PwrAgent", path: "/repo/PwrAgent" }],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+      prs,
+    });
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread([pr(3100, "closed"), pr(3204, "merged")])}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    expect(toggle).toHaveClass("is-active", "is-idle");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const idle = "Auto-fix PR is on, but #3204 merged. It starts again when an open PR is linked.";
+    expect(toggle).toHaveAttribute("data-tooltip", idle);
+    expect(toggle).toHaveAttribute("aria-description", idle);
+    fireEvent.click(toggle);
+    expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+
+    // One open PR is enough for Auto-fix to have work.
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread([pr(3204, "merged"), pr(3210, "open")])}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-idle");
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
+  });
+
+  it("mutes Auto-fix PR while its project pauses forge activity, without changing the thread's value", () => {
+    const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      gitOriginUrl: "git@github.com:openclaw/openclaw.git",
+      linkedDirectories: [
+        {
+          id: "directory-1",
+          kind: "local",
+          label: "openclaw",
+          path: "/repo/openclaw",
+        },
+      ],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+    };
+    const project = (forgeAutomation?: ProjectForgeAutomation): NavigationDirectorySummary => ({
+      key: "directory:/repo/openclaw",
+      kind: "directory",
+      label: "openclaw",
+      path: "/repo/openclaw",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      ...(forgeAutomation ? { forgeAutomation } : {}),
+    });
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 })]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    expect(toggle).toHaveClass("is-project-overridden");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix is paused for openclaw. This thread's own setting returns on resume. Change it from the project menu: Forge Automation…",
+    );
+    expect(toggle).toHaveAttribute(
+      "aria-description",
+      "Auto-fix is paused for openclaw. This thread's own setting returns on resume. Change it from the project menu: Forge Automation…",
+    );
+    expect(onSetThreadPrAutoDispatch).not.toHaveBeenCalled();
+
+    // A tool-managed worktree files under the project with its name, as the
+    // sidebar files it.
+    const worktreePath = "/Users/fixture/.pwragent/worktrees/mabc123/openclaw";
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 })]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={{
+          ...thread,
+          linkedDirectories: [{ id: worktreePath, kind: "local", label: "openclaw", path: worktreePath }],
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveClass("is-project-overridden");
+
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, autoFixMergeConflicts: false })]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-project-overridden");
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix skips merge conflicts in openclaw.",
+    );
+
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project()]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — starts when a PR for this workspace is linked",
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
   });
 
   it("shows Auto-fix PR when main resolved the primary repository for a worktree", () => {
@@ -1366,7 +1533,7 @@ describe("Composer", () => {
 
     expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
       "data-tooltip",
-      "Auto-fix PR — handle new CI failures or merge conflicts",
+      "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
   });
 
@@ -4388,6 +4555,64 @@ describe("Composer", () => {
     ).toBeInTheDocument();
   });
 
+  it("appends an insert request to the draft on a new line, focuses, and never sends", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-watch",
+      title: "Watch thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const otherThread: NavigationThreadSummary = { ...thread, id: "thread-other", title: "Other thread" };
+    const startTurn = vi.fn();
+    const onComposerInsertRequestHandled = vi.fn();
+    const props = {
+      desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+      disabled: false,
+      skills: [],
+      threads: [thread, otherThread],
+      onComposerInsertRequestHandled,
+    };
+    const request = {
+      id: 1,
+      threadKey: "codex:thread-watch",
+      text: "Watch CI on #3174 and wake this thread when it finishes, pass or fail.",
+    };
+    // Another thread's composer leaves the request for the composer it names.
+    const { rerender } = render(
+      <Composer {...props} thread={otherThread} composerInsertRequest={request} />,
+    );
+    expect(onComposerInsertRequestHandled).not.toHaveBeenCalled();
+
+    rerender(<Composer {...props} thread={thread} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "The flaky test is fixed." },
+    });
+    rerender(<Composer {...props} thread={thread} composerInsertRequest={request} />);
+
+    await waitFor(() => {
+      expect(onComposerInsertRequestHandled).toHaveBeenCalledWith(1);
+    });
+    const reply = screen.getByRole("textbox", { name: "Reply" }) as HTMLElement & { value?: string };
+    // The request starts a line of its own after the operator's text.
+    await waitFor(() => {
+      expect(reply.value).toBe(
+        "The flaky test is fixed.\nWatch CI on #3174 and wake this thread when it finishes, pass or fail.",
+      );
+    });
+    expect(reply).toHaveTextContent("Watch CI on #3174 and wake this thread when it finishes, pass or fail.");
+    await waitFor(() => expect(reply).toHaveFocus());
+    expect(startTurn).not.toHaveBeenCalled();
+
+    // The same request does not apply twice.
+    rerender(<Composer {...props} thread={thread} composerInsertRequest={{ ...request }} />);
+    expect(onComposerInsertRequestHandled).toHaveBeenCalledTimes(1);
+    expect(reply.value).toBe(
+      "The flaky test is fixed.\nWatch CI on #3174 and wake this thread when it finishes, pass or fail.",
+    );
+  });
+
   it("marks a rewound prompt with a chip until the composer is cleared", async () => {
     const thread: NavigationThreadSummary = {
       id: "thread-rewound",
@@ -6034,6 +6259,49 @@ describe("Composer", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("shows the stored model when it is absent from the provider catalog", () => {
+    render(<Composer backends={[backendSummary("claude", { models: [{ id: "opus", label: "Opus 5.5", current: true }] })]}
+      thread={{ id: "invalid-model", source: "claude", title: "Fixture", titleSource: "explicit", model: "gpt-6.1-terra",
+        linkedDirectories: [], inbox: { inInbox: false } }} skills={[]} />);
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-6.1-terra");
+    expect(screen.getByRole("button", { name: "Model: gpt-6.1-terra" })).toBeVisible();
+    openDropdown("Model");
+    expect(screen.getByRole("option", { name: "Opus 5.5" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it.each([false, true])("selects an owner model when switching a remote draft's provider (remembered=%s)", async (remembered) => {
+    const onUpdateLaunchpad = vi.fn();
+    function RemoteDraft() {
+      const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>({
+        directoryKey: "directory:/owner/repo", directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo",
+        federationTarget: { scope: "remote", instanceId: "owner" }, backend: "acp:kimi", executionMode: "default",
+        model: "kimi-owner", prompt: "Review this", workMode: "local", createdAt: 1, updatedAt: 1,
+        providerSettings: { codex: { model: remembered ? "owner-saved" : "viewer-only" } },
+      });
+      return <Composer backends={[
+        backendSummary("acp:kimi", { models: [{ id: "kimi-owner" }] }),
+        { ...backendSummary("codex", { models: [
+          { id: "owner-default", label: "Owner default", current: true, supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+          { id: "owner-saved", label: "Owner saved", supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+          { id: "owner-plain", label: "Owner plain", supportsReasoning: false, supportsFast: false },
+        ] }), label: "OpenAI", modelDefaults: { model: "owner-default", reasoningEffortsByModel: { "owner-default": "high" } } },
+      ]} launchpad={launchpad} providerModelDefaults={{ codex: { model: "viewer-only", reasoningEffortsByModel: {} } }}
+        onUpdateLaunchpad={async (_key, patch) => {
+          onUpdateLaunchpad(patch);
+          setLaunchpad((current) => applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(current, patch));
+        }} skills={[]} />;
+    }
+    render(<RemoteDraft />);
+    chooseDropdownOption("Provider", "OpenAI");
+    const model = remembered ? "owner-saved" : "owner-default";
+    await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue(model));
+    expect(onUpdateLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", model }));
+    if (!remembered) expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
+    chooseDropdownOption("Model", "Owner plain");
+    await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("owner-plain"));
+    expect(onUpdateLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ model: "owner-plain", reasoningEffort: undefined, serviceTier: undefined }));
+  });
+
   it("shows OpenAI model and reasoning defaults without a Default option", () => {
     render(
       <Composer
@@ -6084,7 +6352,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "Other" })).not.toBeInTheDocument();
   });
 
-  it("keeps GPT-6 choices visible and puts GPT-5.6 and GPT-5.5 under Other", async () => {
+  it("shows Astra, Sol, Terra, Luna and puts superseded models under Other", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
     render(
       <Composer
@@ -6094,6 +6362,7 @@ describe("Composer", () => {
               { id: "gpt-6-astra", label: "GPT-6-Astra" },
               { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", current: true },
               { id: "gpt-6-sol", label: "GPT-6-Sol" },
+              { id: "gpt-6.1-terra", label: "GPT-6.1-Terra" },
               { id: "gpt-6-luna", label: "GPT-6-Luna" },
               { id: "gpt-5.6-sol", label: "GPT-5.6-Sol" },
               { id: "gpt-5.5", label: "GPT-5.5" },
@@ -6123,9 +6392,11 @@ describe("Composer", () => {
     fireEvent.click(modelButton);
     expect(screen.getAllByRole("option").map((option) =>
       option.querySelector(".composer-dropdown__option-label")?.textContent,
-    )).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6-Sol", "GPT-6-Luna", "Other"]);
+    )).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "Other"]);
+    expect(screen.queryByRole("option", { name: "GPT-6-Sol" })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "GPT-5.6-Sol" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: "Other" }));
+    expect(screen.getByRole("option", { name: "GPT-6-Sol" })).toBeVisible();
     fireEvent.click(screen.getByRole("option", { name: "GPT-5.6-Sol" }));
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
@@ -7734,15 +8005,17 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     const picker = screen.getByLabelText("Attached pull request");
-    expect(within(picker).getByRole("option", { name: /^project#1 Stack 1/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: /^#1 Stack 1/ })).toBeInTheDocument();
     expect(within(picker).getByRole("option", { name: /#2/ })).toBeInTheDocument();
-    expect(within(picker).getByRole("option", { name: /^other#1 Other change/ })).toBeInTheDocument();
+    expect(within(picker).queryByRole("option", { name: /Other change/ })).not.toBeInTheDocument();
     expect(within(picker).queryByRole("option", { name: /unattached/ })).not.toBeInTheDocument();
     fireEvent.change(picker, { target: { value: prs[0].url } });
     expect(screen.getByText(/stack-1 . main/)).toHaveTextContent("at 1111111");
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/other" } });
-    expect(screen.getByLabelText("Attached pull request")).toHaveValue("");
-    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
+    // The project's sole PR is picked, as it is when the target is chosen.
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue(secondaryPr.url);
+    expect(within(picker).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Choose pull request", "#1 Other change — stack-1"]);
     fireEvent.change(picker, { target: { value: secondaryPr.url } });
     expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/other");
     expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("PwrAgent Sub Agent");
@@ -7751,6 +8024,8 @@ describe("Composer", () => {
       "Reviews in Other. PwrAgent Sub Agent is required because the selected project is not this thread's primary workspace.",
     )).toBeInTheDocument();
     if (project === "primary") {
+      fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
+      expect(picker).toHaveValue("");
       fireEvent.change(picker, { target: { value: prs[0].url } });
       expect(screen.getByLabelText("Review project")).toHaveValue("/repo/project");
       expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("Codex Sub Agent");
@@ -7815,7 +8090,7 @@ describe("Composer", () => {
       ],
       prs,
     });
-    const { rerender } = render(<Composer
+    const { unmount } = render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("alpha", "tool", 2, "/repo/tool")])}
@@ -7829,15 +8104,185 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/tool-fix" } });
     expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/alpha/tool/pull/2");
 
-    rerender(<Composer
+    unmount();
+    render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("beta", "tool", 2, "/repo/fork")])}
     />);
+    // No project is chosen yet, so the list spans both repositories.
+    await openReviewComposer();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     const options = within(screen.getByLabelText("Attached pull request")).getAllByRole("option");
     expect(options.map((option) => option.textContent)).toEqual([
       "Choose pull request", "alpha/tool#1 Change 1", "beta/tool#2 Change 2",
     ]);
+  });
+
+  const reviewProjectBackend = (): BackendSummary => {
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexSubAgent: true };
+    return backend;
+  };
+  const reviewProjectPr = (repo: string, number: number, extra: Partial<PrSummary>): PrSummary => ({
+    provider: "github.com", org: "fixture", repo, number, title: `${repo} change ${number}`,
+    url: `https://github.com/fixture/${repo}/pull/${number}`, state: "passing",
+    lifecycleState: "open", headSha: String(number % 10).repeat(40), ...extra,
+  });
+  const reviewProjectDirectory = (
+    name: string,
+    branch: string,
+  ): NavigationDirectorySummary => ({
+    key: `directory:/repo/${name}`, kind: "directory", label: name, path: `/repo/${name}`,
+    threadKeys: [], needsAttentionCount: 0,
+    gitStatus: {
+      originRepository: `github.com/fixture/${name}`, currentBranch: branch,
+      defaultBranch: branch, branches: [branch], baseBranches: [`origin/${branch}`, branch],
+      syncState: "untracked",
+    },
+  });
+  // A primary checkout of a fork whose PRs target `pwrgit`, plus a linked
+  // worktree of another repository that has no directory row of its own.
+  const gitRuntimePrs = [
+    reviewProjectPr("git", 4, { headRefName: "feat/portable-runtime", baseRefName: "pwrgit", linkedDirectoryPaths: ["/worktrees/git"] }),
+    reviewProjectPr("git", 8, { headRefName: "feat/runtime-reshare", baseRefName: "pwrgit", linkedDirectoryPaths: ["/worktrees/git"] }),
+    reviewProjectPr("PwrGit", 546, { headRefName: "feat/runtime-pin", baseRefName: "main", explicitlyAttached: true }),
+  ];
+
+  it("lists the chosen project's PRs and infers that project's base branch", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend, threadId: request.threadId, reviewThreadId: request.threadId, turnId: "review",
+    }));
+    const gitDirectory = reviewProjectDirectory("git", "pwrgit");
+    render(<Composer
+      backends={[reviewProjectBackend()]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      directory={gitDirectory}
+      directories={[gitDirectory]}
+      disabled={false} skills={[]}
+      thread={{
+        id: "thread-1", title: "Ship runtime", titleSource: "explicit", source: "codex",
+        executionMode: "default", inbox: { inInbox: false }, projectKey: "/worktrees/git",
+        gitBranch: "feat/runtime-reshare",
+        gitWorkingState: {
+          baseBranch: "origin/pwrgit", baseAheadCommitCount: 2, dirtyFiles: 0, untrackedFiles: 0,
+          unpushedCommits: 0, dirtyAdditions: 0, dirtyDeletions: 0,
+        },
+        linkedDirectories: [
+          { id: "git", kind: "worktree", label: "git", path: "/repo/git", worktreePath: "/worktrees/git" },
+          {
+            id: "pwrgit", kind: "local", label: "PwrGit", path: "/worktrees/PwrGit",
+            gitBranch: "feat/runtime-pin", repositoryKey: "github.com/fixture/PwrGit",
+          },
+        ],
+        prs: gitRuntimePrs,
+      }}
+    />);
+    await openReviewComposer();
+    expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/git");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/pwrgit");
+
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/PwrGit" } });
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
+
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    const picker = screen.getByLabelText("Attached pull request");
+    expect(within(picker).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Choose pull request", "#546 PwrGit change 546 — feat/runtime-pin"]);
+    expect(picker).toHaveValue(gitRuntimePrs[2].url);
+
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/git" } });
+    expect(picker).toHaveValue("");
+    expect(within(picker).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Choose pull request",
+      "#4 git change 4 — feat/portable-runtime",
+      "#8 git change 8 — feat/runtime-reshare",
+    ]);
+
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/PwrGit" } });
+    expect(picker).toHaveValue(gitRuntimePrs[2].url);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: "/worktrees/PwrGit",
+      target: { type: "pullRequest", url: gitRuntimePrs[2].url },
+      runMode: "pwragent-sub-agent",
+    }));
+  });
+
+  it("offers a local checkout for an attached PR whose project is not linked", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend, threadId: request.threadId, reviewThreadId: request.threadId, turnId: "review",
+    }));
+    const gitDirectory = reviewProjectDirectory("git", "pwrgit");
+    const thread: NavigationThreadSummary = {
+      id: "thread-1", title: "Ship runtime", titleSource: "explicit", source: "codex",
+      executionMode: "default", inbox: { inInbox: false }, projectKey: "/worktrees/git",
+      gitBranch: "feat/runtime-reshare",
+      linkedDirectories: [
+        { id: "git", kind: "worktree", label: "git", path: "/repo/git", worktreePath: "/worktrees/git" },
+      ],
+      prs: gitRuntimePrs,
+    };
+    const { unmount } = render(<Composer
+      backends={[reviewProjectBackend()]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      directory={gitDirectory}
+      directories={[gitDirectory, reviewProjectDirectory("PwrGit", "main"), reviewProjectDirectory("unrelated", "main")]}
+      disabled={false} skills={[]}
+      thread={thread}
+    />);
+    await openReviewComposer();
+    const project = screen.getByLabelText("Review project");
+    expect(project).toHaveValue("/worktrees/git");
+    expect(within(project).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Choose project", "git - /worktrees/git", "PwrGit - /repo/PwrGit",
+    ]);
+
+    fireEvent.change(project, { target: { value: "/repo/PwrGit" } });
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue(gitRuntimePrs[2].url);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: "/repo/PwrGit",
+      target: { type: "pullRequest", url: gitRuntimePrs[2].url },
+      runMode: "pwragent-sub-agent",
+    }));
+    unmount();
+
+    // A pinned peer thread's checkouts live on the peer; local rows are not them.
+    render(<Composer
+      backends={[reviewProjectBackend()]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      directory={gitDirectory}
+      directories={[gitDirectory, reviewProjectDirectory("PwrGit", "main")]}
+      disabled={false} skills={[]}
+      thread={{
+        ...thread,
+        federation: {
+          instanceLabel: "Peer",
+          ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "peer-1" } },
+        },
+      }}
+    />);
+    await openReviewComposer();
+    expect(screen.queryByLabelText("Review project")).not.toBeInTheDocument();
+    cleanup();
+
+    // A remote execution workspace reviews on its host, not in a local checkout.
+    render(<Composer
+      backends={[reviewProjectBackend()]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      directory={gitDirectory}
+      directories={[gitDirectory, reviewProjectDirectory("PwrGit", "main")]}
+      disabled={false} skills={[]}
+      thread={{
+        ...thread,
+        codexEnvironmentRuntime: { environmentId: "remote-env", executionTarget: "remote" },
+      } as NavigationThreadSummary}
+    />);
+    await openReviewComposer();
+    expect(screen.queryByLabelText("Review project")).not.toBeInTheDocument();
   });
 
   const reviewTargetThread = (params: {
@@ -8634,6 +9079,63 @@ describe("Composer", () => {
       expect(screen.getByLabelText("Queued message")).not.toHaveTextContent("send_user_message");
     });
 
+    it.each([false, true])("honors a to-do's queue choice on a steerable thread (busy: %s)", async (busy) => {
+      const text = "Implement the follow-up task";
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: busy ? "queue-entry-1" : "turn-todo",
+        ...(busy ? { queueStatus: "queued" as const, queueEntryId: "queue-entry-1" } : {}),
+      }));
+      const steerTurn = vi.fn();
+      const onReplySubmissionSettled = vi.fn();
+      const backend = backendSummary("codex");
+      const props = {
+        activeTurnId: busy ? "turn-active" : undefined,
+        threadBusy: busy,
+        backends: [{ ...backend, capabilities: { ...backend.capabilities, steerTurn: true } }],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn, steerTurn },
+        onReplySubmissionSettled,
+        skills: [],
+        thread,
+      };
+      const view = render(<Composer {...props} />);
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "An unrelated draft" } });
+      const submission = { id: 1, threadId: thread.id, backend: "codex" as const, text, busyBehavior: "queue" as const };
+      view.rerender(<Composer {...props} replySubmission={submission} />);
+
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      expect(steerTurn).not.toHaveBeenCalled();
+      expect(startTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        threadId: thread.id, input: [{ type: "text", text }],
+      }));
+      expect(textarea).toHaveValue("An unrelated draft");
+      if (busy) expect(screen.getByLabelText("Queued message")).toHaveTextContent(text);
+      view.rerender(<Composer {...props} replySubmission={submission} />);
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("still steers question replies during an active turn", async () => {
+      const startTurn = vi.fn();
+      const steerTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: thread.id, turnId: "turn-active" }));
+      const onReplySubmissionSettled = vi.fn();
+      const backend = backendSummary("codex");
+      render(<Composer
+        activeTurnId="turn-active"
+        threadBusy
+        backends={[{ ...backend, capabilities: { ...backend.capabilities, steerTurn: true } }]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn, steerTurn }}
+        onReplySubmissionSettled={onReplySubmissionSettled}
+        replySubmission={{ id: 1, threadId: thread.id, backend: "codex", text: reply }}
+        skills={[]}
+        thread={thread}
+      />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledOnce());
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
     it("refuses a reply addressed to another thread", async () => {
       const startTurn = vi.fn();
       const onReplySubmissionSettled = vi.fn();
@@ -8918,6 +9420,82 @@ describe("Composer", () => {
     );
     // A default is not a pick, so it must not push real picks off the list.
     expect(recordModelSettingsRecent).not.toHaveBeenCalled();
+  });
+
+  it("lists reviewer models the way the model chip does: current first, superseded under Other", async () => {
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "codex-thread",
+      reviewThreadId: "review-1",
+      turnId: "turn-1",
+    }));
+    const codex = backendSummary("codex", { models: codexCatalogModels() });
+    codex.capabilities = {
+      ...codex.capabilities,
+      startReview: true,
+      reviewRunner: true,
+      reviewRunMode: true,
+      reviewCodexSubAgent: true,
+    };
+
+    render(
+      <Composer
+        backends={[codex]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          listModelSettingsRecents: async () => ({ recents: [] }),
+          recordModelSettingsRecent: vi.fn(async () => undefined),
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "codex-thread",
+          title: "Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          model: "gpt-6.1-sol",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    fireEvent.click(
+      within(reviewTarget).getByRole("button", { name: /^Review model(?::|$)/ })
+    );
+    const list = screen.getByRole("listbox", { name: /^Review model/ });
+    expect(composerDropdownOptionLabels(list)).toEqual([
+      ...CURRENT_CODEX_MODEL_LABELS,
+      "Other",
+      "Ternary-Bonsai-27B",
+    ]);
+    expect(within(list).getByRole("group", { name: "PrismML Bonsai (local)" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(within(list).getByRole("option", { name: "Other" }));
+    const other = screen.getByRole("listbox", { name: "Review model: Other" });
+    expect(composerDropdownOptionLabels(other)).toEqual(SUPERSEDED_CODEX_MODEL_LABELS);
+    fireEvent.click(within(other).getByRole("option", { name: "GPT-5.6-Terra" }));
+    expect(
+      within(reviewTarget).getByRole("button", { name: /^Review model(?::|$)/ })
+    ).toHaveAttribute("data-value", "gpt-5.6-terra");
+
+    await act(async () => {
+      fireEvent.click(
+        within(reviewTarget).getByRole("button", { name: "Start review" })
+      );
+    });
+    expect(startReview).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewBackend: "codex", model: "gpt-5.6-terra" })
+    );
   });
 
   it("does not reuse one instance's reviewer recents on another's thread", async () => {
@@ -11298,6 +11876,132 @@ describe("Composer", () => {
     expect(draftStore.get(buildThreadComposerScopeKey("codex", "thread-1"))).toMatchObject({
       draft: "Recover for thread A",
     });
+  });
+
+  it.each(["Delete", "Edit"])(
+    "dismisses a failed scheduled row on its owner when the operator chooses %s",
+    async (buttonName) => {
+      const draftStore = createComposerDraftStore();
+      const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+      // The row the scheduled-action projection gives a failed action.
+      draftStore.setQueuedTurn(scopeKey, {
+        id: "scheduled-projection:scheduled-action-1",
+        failedScheduledActionId: "scheduled-action-1",
+        errorMessage: "Thread already has an active turn in progress",
+        text: "Follow up",
+        imageAttachments: [],
+        fileAttachments: [],
+        input: [{ type: "text", text: "Follow up" }],
+      });
+      const cancelScheduledThreadAction = vi.fn(async () => {
+        throw new Error("owner refused");
+      });
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{
+            cancelScheduledThreadAction,
+            onAgentEvent: () => () => undefined,
+          }}
+          disabled={false}
+          draftStore={draftStore}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Idle thread",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: buttonName }));
+      });
+
+      expect(cancelScheduledThreadAction).toHaveBeenCalledWith({
+        federationTarget: undefined,
+        id: "scheduled-action-1",
+      });
+      // An owner that refuses (one that predates dismissal) still lets the
+      // row leave this window.
+      expect(draftStore.getQueuedTurns(scopeKey)).toEqual([]);
+    },
+  );
+
+  it("dismisses a failed scheduled row on its owner when the operator steers it", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
+      id: "scheduled-projection:scheduled-action-1",
+      failedScheduledActionId: "scheduled-action-1",
+      errorMessage: "Thread already has an active turn in progress",
+      text: "Steer the running turn",
+      imageAttachments: [],
+      fileAttachments: [],
+      input: [{ type: "text", text: "Steer the running turn" }],
+    });
+    const cancelScheduledThreadAction = vi.fn(async () => {
+      throw new Error("owner refused");
+    });
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          cancelScheduledThreadAction,
+          onAgentEvent: () => () => undefined,
+          steerTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    });
+
+    expect(cancelScheduledThreadAction).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      id: "scheduled-action-1",
+    });
+    await waitFor(() => expect(steerTurn).toHaveBeenCalled());
   });
 
   it("preserves a cancelled queued item when its steer target changes", async () => {

@@ -13,6 +13,7 @@ import {
   THREAD_AUTO_ARCHIVE_AGE_MS,
   THREAD_ARCHIVE_SWEEP_INTERVAL_MS,
   THREAD_ARCHIVE_SWEEP_START_DELAY_MS,
+  workspaceArchiveBlocker,
   workspaceIsSafeForAutoArchive,
   type ThreadArchiveCandidate,
 } from "../app-server/thread-archive-sweeper";
@@ -49,6 +50,30 @@ function harness(candidates = [candidate()]) {
 }
 
 describe("ThreadArchiveSweeper", () => {
+  it("reports worktree cleanup independently of conversation policies and joins concurrent sweeps", async () => {
+    const { deps } = harness([]);
+    let release!: () => void;
+    const cleanupWorktrees = vi.fn<NonNullable<ConstructorParameters<typeof ThreadArchiveSweeper>[0]["cleanupWorktrees"]>>(async ({ manual, onProgress, onFailure }) => {
+      expect(manual).toBe(true);
+      onProgress({ candidates: 501, protected: 3, processed: 0, removed: 0 });
+      await new Promise<void>((resolve) => { release = resolve; });
+      onProgress({ candidates: 501, protected: 3, processed: 501, removed: 500 });
+      onFailure(new Error("Snapshot size limit exceeded"));
+    });
+    const sweeper = new ThreadArchiveSweeper({ ...deps, cleanupWorktrees,
+      getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false }) });
+    const run = sweeper.sweep({ manual: true });
+    expect(sweeper.getStatus()).toMatchObject({ running: true, worktrees: { candidates: 501, processed: 0 } });
+    expect(sweeper.sweep({ manual: true })).toBe(run);
+    release();
+    await run;
+    expect(cleanupWorktrees).toHaveBeenCalledOnce();
+    expect(deps.listCandidates).not.toHaveBeenCalled();
+    expect(sweeper.getStatus()).toMatchObject({ running: false, archived: 0, failed: 1,
+      worktrees: { candidates: 501, protected: 3, processed: 501, removed: 500 }, error: "Snapshot size limit exceeded" });
+    await sweeper.stop();
+  });
+
   it("starts after a delay, runs hourly, and stops scheduling on shutdown", async () => {
     vi.useFakeTimers();
     const { deps, sweeper } = harness([]);
@@ -107,6 +132,11 @@ describe("ThreadArchiveSweeper", () => {
       {
         running: false, startedAt: expect.any(Number), finishedAt: expect.any(Number),
         archived: 1, deleted: 2, failed: 2, error: "snapshot ref is locked",
+        failures: [
+          { phase: "retention", message: "snapshot ref is locked" },
+          { phase: "threads", message: "provider unavailable", threadId: "failed" },
+        ],
+        threads: { checked: 3, eligible: 3, archived: 1, kept: { "Archive cancelled": 1 } },
       },
     ]);
     // Retention logs its own failures; only the archive failure is logged here.
@@ -123,6 +153,84 @@ describe("ThreadArchiveSweeper", () => {
     await sweeper.sweep();
     expect(sweeper.getStatus()).toMatchObject({ archived: 1, failed: 0 });
     expect(sweeper.getStatus().error).toBeUndefined();
+    await sweeper.stop();
+  });
+
+  it("records a failed thread listing and still reports worktree and retention results", async () => {
+    const { deps } = harness();
+    deps.listCandidates.mockRejectedValueOnce(new Error("Codex is restarting"));
+    const sweeper = new ThreadArchiveSweeper({ ...deps,
+      cleanupWorktrees: async ({ onProgress }) => { onProgress({ candidates: 2, protected: 0, processed: 2, removed: 2 }); },
+      cleanupRetention: async () => 1,
+    });
+    await sweeper.sweep();
+    expect(sweeper.getStatus()).toMatchObject({
+      deleted: 1, failed: 1, worktrees: { removed: 2 },
+      threads: { checked: 0, archived: 0, skipped: "Threads could not be listed" },
+      failures: [{ phase: "threads", message: "Codex is restarting" }],
+    });
+    await sweeper.stop();
+  });
+
+  it("reports every failure with its path or thread, up to the cap", async () => {
+    const { deps } = harness([candidate("failed"), candidate("next")]);
+    deps.archive.mockImplementation(async (item: ThreadArchiveCandidate) => {
+      if (item.thread.id === "failed") throw new Error("provider unavailable");
+    });
+    const sweeper = new ThreadArchiveSweeper({ ...deps,
+      cleanupWorktrees: async ({ onFailure }) => {
+        onFailure(new Error("ENOENT: realpath '/gone'"), { path: "/worktrees/one" });
+        onFailure(new Error("EACCES"), { path: "/worktrees/two" });
+      },
+    });
+    await sweeper.sweep();
+    expect(sweeper.getStatus()).toMatchObject({ archived: 1, failed: 3, error: "ENOENT: realpath '/gone'" });
+    expect(sweeper.getStatus().failures).toEqual([
+      { phase: "worktrees", message: "ENOENT: realpath '/gone'", path: "/worktrees/one" },
+      { phase: "worktrees", message: "EACCES", path: "/worktrees/two" },
+      { phase: "threads", message: "provider unavailable", threadId: "failed" },
+    ]);
+    const capped = new ThreadArchiveSweeper({ ...harness([]).deps,
+      cleanupWorktrees: async ({ onFailure }) => {
+        for (let index = 0; index < 25; index++) onFailure(new Error(`failure ${index}`), { path: `/w/${index}` });
+      },
+    });
+    await capped.sweep();
+    expect(capped.getStatus().failed).toBe(25);
+    expect(capped.getStatus().failures).toHaveLength(20);
+    await sweeper.stop();
+    await capped.stop();
+  });
+
+  it("counts why each thread was kept", async () => {
+    const recent = candidate("recent");
+    recent.thread.updatedAt = Date.now();
+    const pinned = candidate("pinned");
+    pinned.thread.isPinned = true;
+    const dirty = candidate("dirty");
+    dirty.thread.linkedDirectories = [{ id: "dirty", label: "dirty", kind: "local", path: "/dirty" }];
+    const ignored = candidate("ignored");
+    ignored.thread.linkedDirectories = [{ id: "ignored", label: "ignored", kind: "local", path: "/ignored" }];
+    const unreadable = candidate("unreadable");
+    unreadable.unreadable = true;
+    const { deps } = harness([candidate(), recent, pinned, dirty, ignored, unreadable]);
+    const sweeper = new ThreadArchiveSweeper({ ...deps,
+      workspaceArchiveBlocker: async (cwd) => cwd === "/dirty" ? "Uncommitted changes" : cwd === "/ignored" ? "Ignored files only" : undefined,
+    });
+    await sweeper.sweep();
+    expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["old"]);
+    expect(sweeper.getStatus().threads).toEqual({
+      checked: 6, eligible: 3, archived: 1,
+      kept: { "Recently active": 1, "Pinned thread": 1, "Uncommitted changes": 1, "Ignored files only": 1, "Thread state unreadable": 1 },
+    });
+    await sweeper.stop();
+  });
+
+  it("says the thread pass was skipped when automatic archiving is off", async () => {
+    const { deps } = harness();
+    const sweeper = new ThreadArchiveSweeper({ ...deps, getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false }) });
+    await sweeper.sweep();
+    expect(sweeper.getStatus().threads).toMatchObject({ checked: 0, skipped: "Automatic archiving is off" });
     await sweeper.stop();
   });
 
@@ -168,6 +276,16 @@ describe("ThreadArchiveSweeper", () => {
       expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["lookalike"]);
       await sweeper.stop();
     }
+  });
+
+  it("never archives a thread that an active PR watch will wake", async () => {
+    const watched = { ...candidate("watched"), activePrWatch: true };
+    expect(archiveCandidateProtectionReason(watched)).toBe("Watching a PR");
+    expect(isStaleArchiveCandidate(watched, Date.now())).toBe(false);
+    const { deps, sweeper } = harness([watched, candidate()]);
+    await sweeper.sweep();
+    expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["old"]);
+    await sweeper.stop();
   });
 
   it("uses the 30-day boundary and protects recent views and restores", () => {
@@ -311,7 +429,29 @@ describe("workspaceIsSafeForAutoArchive", () => {
     const broken = path.join(root, "broken-worktree");
     await mkdir(broken);
     await writeFile(path.join(broken, ".git"), `gitdir: ${path.join(root, "missing", ".git", "worktrees", "x")}\n`);
-    await expect(workspaceIsSafeForAutoArchive(broken, signal)).rejects.toThrow(/not a git repository/);
+    await expect(workspaceIsSafeForAutoArchive(broken, signal)).rejects.toThrow(
+      /not a git repository|gitfile does not point to a valid repository/,
+    );
+  });
+
+  it("names ignored-only checkouts separately from uncommitted changes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-"));
+    tempDirs.push(root);
+    const signal = new AbortController().signal;
+    const git = (...args: string[]) => execFileAsync("git", ["-C", root, ...args]);
+    await git("init", "-q", "-b", "main");
+    await git("config", "user.email", "test@example.com");
+    await git("config", "user.name", "Test");
+    await writeFile(path.join(root, ".gitignore"), "node_modules/\n");
+    await git("add", ".gitignore");
+    await git("commit", "-q", "-m", "init");
+    expect(await workspaceArchiveBlocker(root, signal)).toBeUndefined();
+    await mkdir(path.join(root, "node_modules"));
+    await writeFile(path.join(root, "node_modules", "dep.js"), "x\n");
+    expect(await workspaceArchiveBlocker(root, signal)).toBe("Ignored files only");
+    expect(await workspaceIsSafeForAutoArchive(root, signal)).toBe(false);
+    await writeFile(path.join(root, "notes.txt"), "work\n");
+    expect(await workspaceArchiveBlocker(root, signal)).toBe("Uncommitted changes");
   });
 });
 
@@ -335,6 +475,27 @@ describe("archive policy selection", () => {
     const { deps } = harness(candidates);
     await new ThreadArchiveSweeper({ ...deps, getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY }) }).sweep();
     expect(deps.archive.mock.calls.map(([item]) => item.thread.id).sort()).toEqual(["one-20", "one-21", "one-22", "two-20"]);
+  });
+
+  it("isolates a project lookup failure to its own thread", async () => {
+    const a1 = candidate("a1"); a1.thread.projectKey = "a";
+    const a2 = candidate("a2"); a2.thread.projectKey = "a"; a2.thread.updatedAt! -= 1000;
+    const b1 = candidate("b1"); b1.thread.projectKey = "b";
+    const { deps } = harness([a1, a2, b1]);
+    const sweeper = new ThreadArchiveSweeper({ ...deps,
+      getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, keepPerProject: 1 }),
+      resolveProject: async (item) => {
+        if (item.thread.id === "b1") throw new Error("git timed out");
+        return item.thread.projectKey;
+      },
+    });
+    await sweeper.sweep();
+    expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["a2"]);
+    expect(sweeper.getStatus()).toMatchObject({
+      archived: 1, failed: 1, failures: [{ phase: "threads", message: "git timed out", threadId: "b1" }],
+      threads: { checked: 3, eligible: 3, archived: 1, kept: { "Within the per-project limit": 1 } },
+    });
+    await sweeper.stop();
   });
 
   it("keeps dirty workspaces in addition to the eligible project limit", async () => {

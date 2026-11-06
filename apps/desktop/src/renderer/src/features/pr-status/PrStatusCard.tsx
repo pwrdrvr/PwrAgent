@@ -2,7 +2,9 @@ import type { PrSummary } from "@pwragent/shared";
 import { BranchIcon } from "../../icons";
 import { DiffStat } from "../../lib/DiffStat";
 import { formatRunningDurationMs } from "../../lib/format-duration";
+import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
 import { readPrBranchDrift, type PrBranchDrift } from "./pr-branch-drift";
+import { splitPrBranch } from "./pr-branch-split";
 import {
   prPhaseLabel,
   prStatusLabel,
@@ -42,6 +44,10 @@ export function PrStatusCard(props: {
    * card draws no Local branch section.
    */
   branchDrift?: PrBranchDrift;
+  /** What wakes the chip's thread for this PR: CI, merge or close, Auto-fix. */
+  watch?: PrChipWatch;
+  /** The chip's context menu can stop its watches, so the card says how. */
+  watchStopHint?: boolean;
   /** Injected by tests so age rows are deterministic. */
   now?: number;
 }) {
@@ -52,8 +58,10 @@ export function PrStatusCard(props: {
   const dotState = resolveDotState(pr, props.withStatusPills === true);
   const changes = readPrChanges(pr);
   const timeline = readPrTimeline(pr, now);
-  const branch = readPrBranch(pr);
+  const branch = splitPrBranch(pr.headRefName);
   const drift = readBranchDriftRows(props.branchDrift);
+  const wakes = readWatchRows(props.watch);
+  const stoppable = Boolean(props.watch?.ci || props.watch?.terminal);
 
   return (
     <>
@@ -123,6 +131,35 @@ export function PrStatusCard(props: {
           ) : null}
         </div>
       ) : null}
+      {wakes.length > 0 ? (
+        <div className="pr-status-card__section">
+          <span className="pr-status-card__section-title">Wakes this thread</span>
+          {wakes.map((row) => (
+            <div className="pr-status-card__wake" key={row.label}>
+              <div className="pr-status-card__row">
+                <span className="pr-status-card__row-label">{row.label}</span>
+                <span
+                  className={`pr-status-card__row-value${
+                    row.muted ? " pr-status-card__row-value--muted" : ""
+                  }`}
+                >
+                  {row.value}
+                </span>
+              </div>
+              {row.detail ? (
+                <span className="pr-status-card__row-detail">
+                  {row.detail}
+                </span>
+              ) : null}
+            </div>
+          ))}
+          {props.watchStopHint && stoppable ? (
+            <div className="pr-status-card__caption">
+              Right-click the chip to stop a watch.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {drift.length > 0 ? (
         <div className="pr-status-card__section">
           <span className="pr-status-card__section-title">Local branch</span>
@@ -156,70 +193,6 @@ function resolveDotState(pr: PrSummary, withStatusPills: boolean): string {
     return "conflicting";
   }
   return chipState;
-}
-
-/**
- * How many trailing characters the branch row keeps when the name is too long
- * for one line. Twelve is enough to carry a trailing `-1.0` / short-sha style
- * discriminator plus the word before it, and — at the card's 11px mono — short
- * enough that the fixed tail can never outgrow the 244px content column.
- */
-const BRANCH_TAIL_CHARS = 12;
-
-/** `full` is the name as one string; `head`/`tail` are the visual split only. */
-type PrBranch = { full: string; head: string; tail: string };
-
-/**
- * Split the head branch for the CSS middle-truncation trick: only the `head`
- * span flexes, so the browser drops its ellipsis where the two halves meet
- * instead of at one end.
- *
- * Middle rather than either end is the whole point. Branch names on a thread
- * share BOTH a prefix (`claude/`, `agent/`) and, often, a suffix convention —
- * so start- or end-truncation can render two different branches identically,
- * which is exactly the confusion this row exists to remove.
- */
-function readPrBranch(pr: PrSummary): PrBranch | undefined {
-  const branch = pr.headRefName?.trim();
-  if (!branch) {
-    return undefined;
-  }
-  const clusters = splitGraphemes(branch);
-  // The tail never truncates, so never hand it more than half the name — on a
-  // short branch a fixed 12 would swallow the whole string.
-  const tailLength = Math.min(BRANCH_TAIL_CHARS, Math.floor(clusters.length / 2));
-  if (tailLength <= 0) {
-    return { full: branch, head: branch, tail: "" };
-  }
-  return {
-    full: branch,
-    head: clusters.slice(0, clusters.length - tailLength).join(""),
-    tail: clusters.slice(clusters.length - tailLength).join(""),
-  };
-}
-
-/**
- * Split into grapheme clusters — what a reader calls a character — rather than
- * code points.
- *
- * Code points are not a safe cut: macOS normalizes filenames to NFD and a loose
- * git ref IS a file, so `chore/déjà-vu-dedupe` really does reach us with `a`
- * followed by a separate U+0300. Cutting between them drops the accent from the
- * head (`déja`) and starts the tail with a bare combining mark, which renders as
- * a dotted circle or lands on the ellipsis. ZWJ emoji tear the same way.
- *
- * Clusters also bound the tail's WIDTH, which the fixed `flex: 0 0 auto` tail
- * depends on: an arbitrarily long ZWJ sequence is still one glyph, so 12
- * clusters can never exceed roughly 12em.
- */
-function splitGraphemes(value: string): string[] {
-  if (typeof Intl.Segmenter !== "function") {
-    return [...value];
-  }
-  // Fixed locale: cluster boundaries are effectively locale-invariant, and
-  // pinning it keeps the split identical on every operator's machine.
-  const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
-  return [...segmenter.segment(value)].map((segment) => segment.segment);
 }
 
 type PrChanges = {
@@ -276,6 +249,54 @@ function readPrChanges(pr: PrSummary): PrChanges | undefined {
 }
 
 type PrTimelineRow = { label: string; value: string };
+
+/**
+ * `detail` is prose, such as a thread title, that goes on its own line under
+ * the row. A row's value never wraps, so prose there ran out of the card.
+ */
+type PrWatchRow = PrTimelineRow & { muted?: boolean; detail?: string };
+
+/**
+ * One row per thing that wakes the thread. The attempt is the useful number
+ * after a re-run: it says which run's result the watch is waiting for.
+ */
+function readWatchRows(watch: PrChipWatch | undefined): PrWatchRow[] {
+  if (!watch) {
+    return [];
+  }
+  const rows: PrWatchRow[] = [];
+  if (watch.ci) {
+    rows.push({
+      label: "Waiting for CI",
+      value: watch.ci.runAttempt !== undefined
+        ? `attempt ${watch.ci.runAttempt}`
+        : describeCiOutcomes(watch.ci.notifyOn),
+    });
+  }
+  if (watch.terminal) {
+    rows.push({ label: "Merge or close", value: "watching" });
+  }
+  if (watch.autoFix) {
+    rows.push({ label: "Auto-fix", value: "on", muted: true });
+  } else if (watch.autoFixBlocked?.reason === "paused") {
+    rows.push({ label: "Auto-fix", value: "paused", muted: true });
+  } else if (watch.autoFixBlocked) {
+    const threadTitle = watch.autoFixBlocked.threadTitle?.trim();
+    rows.push({
+      label: "Auto-fix",
+      value: "handled elsewhere",
+      muted: true,
+      ...(threadTitle ? { detail: `By ${threadTitle}` } : {}),
+    });
+  }
+  return rows;
+}
+
+export function describeCiOutcomes(notifyOn: readonly string[]): string {
+  const success = notifyOn.includes("success");
+  const failure = notifyOn.includes("failure");
+  return success && failure ? "pass or fail" : success ? "pass" : "fail";
+}
 
 /**
  * The branch chip's "Behind base" and "Ahead of base" counts, named after the

@@ -1,3 +1,4 @@
+import { useThreadMergeHoldsOpener } from "../thread-merge-holds/useThreadMergeHolds";
 import {
   getSubthreadProjectIdentity,
   getThreadNamedBranch,
@@ -37,6 +38,10 @@ import type {
   NavigationThreadSummary,
   NavigationRelativeChildMove,
   PrSummary,
+  ProjectForgeAutomation,
+  ProjectHeldWakeup,
+  ResolveProjectHeldWakeupsRequest,
+  ResolveProjectHeldWakeupsResponse,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
@@ -53,6 +58,7 @@ import {
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
+  isFederationViewerWindow,
   readRendererFederationLabel,
   readRendererFederationTarget,
 } from "../../lib/federation-window";
@@ -115,6 +121,7 @@ import {
   DetachPullRequestWarning,
   shouldShowDetachPullRequestWarning,
 } from "../pr-status/DetachPullRequestWarning";
+import { PullRequestWatchMenuItems } from "../pr-watches/PullRequestWatchMenuItems";
 import { SidebarSearchPopup } from "./SidebarSearchPopup";
 import {
   formatRateLimitLine,
@@ -123,9 +130,19 @@ import {
 import {
   buildLaunchpadSelectionKey,
   DirectoriesList,
+  isPinnableDirectoryKind,
   type ProjectRevealRequest,
 } from "./DirectoriesList";
+import { applyDirectoryDrop, type DirectoryDrop } from "./directory-pin-drop";
 import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
+import { projectTurnMarks } from "./project-index";
+import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog";
+import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
+import {
+  canEditProjectForgeAutomation,
+  isProjectForgeActivityPaused,
+  withProjectForgePause,
+} from "../forge-automation/forge-automation-view";
 import { ProjectIndexToggle } from "./ProjectIndexToggle";
 import type { ThreadRowRef } from "./ThreadRow";
 import {
@@ -418,6 +435,10 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
   ) => Promise<ArchivedThreadRef[] | void>;
+  onArchiveThreads?: (
+    threads: NavigationThreadSummary[],
+    options?: ArchiveThreadOptions,
+  ) => Promise<ArchivedThreadRef[]>;
   /**
    * Threads left the list through Archive. `reopenKey` is the thread that
    * was open, so an Undo can bring the operator back to it.
@@ -453,6 +474,8 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     parentThreadId?: string,
     parentThreadBackend?: NavigationThreadSummary["source"],
+    /** The parent is this machine's own thread, and the thread may be a peer's. */
+    parentOnThisMachine?: boolean,
   ) => Promise<boolean | void>;
   onUnlinkThreads?: (
     threads: NavigationThreadSummary[],
@@ -481,6 +504,36 @@ type SidebarProps = {
     directory: NavigationDirectorySummary,
     collapsed: boolean,
   ) => Promise<void>;
+  /**
+   * Per-project Forge Automation, saved on the instance that owns the
+   * project. Without it the project menu offers neither Pause Forge
+   * Activity nor Forge Automation….
+   */
+  onSetProjectForgeAutomation?: (
+    directory: NavigationDirectorySummary,
+    automation: ProjectForgeAutomation,
+    options?: { reportError?: boolean },
+  ) => Promise<void>;
+  onListProjectHeldWakeups?: (
+    directory: NavigationDirectorySummary,
+  ) => Promise<ProjectHeldWakeup[]>;
+  onResolveProjectHeldWakeups?: (
+    directory: NavigationDirectorySummary,
+    resolutions: ResolveProjectHeldWakeupsRequest["resolutions"],
+  ) => Promise<ResolveProjectHeldWakeupsResponse>;
+  /**
+   * In a peer's window, whether that peer advertises
+   * `project_forge_automation`. Its projects offer no Forge Automation
+   * items without it. Ignored in this instance's own windows.
+   */
+  federationOwnerForgeAutomation?: boolean;
+  /**
+   * In this instance's own windows, the connected peers that advertise
+   * `project_forge_automation` and let this machine control their turns. A
+   * placeholder row standing for one of their projects offers its Forge
+   * Automation items.
+   */
+  peerForgeAutomationInstanceIds?: ReadonlySet<string>;
   /**
    * Remove an empty directory (no linked threads) from the Directories list.
    * Offered in the directory context menu only when the directory has no
@@ -642,6 +695,7 @@ export function Sidebar(props: SidebarProps) {
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
   const dependencyIndicators = useThreadDependencyIndicatorsContext();
+  const openMergeHolds = useThreadMergeHoldsOpener();
   const contextMenuRef = useRef<HTMLDivElement>(null);
   // What had focus when the thread context menu opened: the row's ⋮ button,
   // or wherever focus was for a right-click. Escape, Tab and a finished
@@ -712,6 +766,27 @@ export function Sidebar(props: SidebarProps) {
         position?: { x: number; y: number };
         directory: NavigationDirectorySummary;
         directories: NavigationDirectorySummary[];
+      }
+    | undefined
+  >();
+  /** The project whose Forge Automation dialog is open. */
+  const [forgeAutomationDialog, setForgeAutomationDialog] = useState<
+    { directory: NavigationDirectorySummary } | undefined
+  >();
+  /** Projects whose menu pause toggle is still saving or reading held wake-ups. */
+  const forgePauseInFlightRef = useRef(new Set<string>());
+  /** The project the directory menu is open on, read after an await. */
+  const directoryMenuKeyRef = useRef<string | undefined>(undefined);
+  directoryMenuKeyRef.current = directoryContextMenu?.directory.key;
+  /**
+   * Resuming a project that holds wake-ups: what to save once the operator
+   * has gone through them.
+   */
+  const [resumeForgeDialog, setResumeForgeDialog] = useState<
+    | {
+        directory: NavigationDirectorySummary;
+        automation: ProjectForgeAutomation;
+        wakeups: ProjectHeldWakeup[];
       }
     | undefined
   >();
@@ -854,6 +929,18 @@ export function Sidebar(props: SidebarProps) {
       order: readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map()),
     },
   });
+  const creationRevision = JSON.stringify((props.pendingLaunchpadCreations ?? [])
+    .map((creation) => [creation.operationId, creation.threadKey]));
+  const revealedCreationRevisionRef = useRef(creationRevision);
+  const revealCreation = hoverStableSnapshot.reveal;
+  useLayoutEffect(() => {
+    if (revealedCreationRevisionRef.current === creationRevision) return;
+    revealedCreationRevisionRef.current = creationRevision;
+    // Submitting from the composer bypasses the sidebar's command wrappers.
+    // Reveal each creation/handoff before paint, then let the existing read
+    // fence freeze its landed position. Background arrivals still append.
+    revealCreation(() => undefined);
+  }, [creationRevision, revealCreation]);
   const renderedDirectories = hoverStableSnapshot.value.directories;
   const presentedThreads = hoverStableSnapshot.value.threads;
   const presentedByKey = new Map(presentedThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
@@ -966,14 +1053,18 @@ export function Sidebar(props: SidebarProps) {
     );
     const pinned = projects.filter(isPinnedDirectory).sort(comparePinnedDirectories);
     const unpinned = projects.filter((directory) => !isPinnedDirectory(directory));
+    const federationViewer = isFederationViewerWindow();
     return [...pinned, ...unpinned].map((directory) => ({
       key: directory.key,
       label: directory.label,
       containsSelection:
         indexSelectedItemKey === buildLaunchpadSelectionKey(directory.key)
         || (selectedThreadDirectoryKeys?.includes(directory.key) ?? false),
-      active: (directory.counts?.active ?? 0) > 0,
+      ...projectTurnMarks(directory.counts, federationViewer),
       review: (directory.counts?.review ?? 0) > 0,
+      ...(isProjectForgeActivityPaused(directory) ? { forgeActivityPaused: true } : {}),
+      ...(isPinnedDirectory(directory) ? { pinned: true } : {}),
+      ...(isPinnableDirectoryKind(directory) ? { movable: true } : {}),
     }));
   }, [indexSelectedItemKey, projectIndexEnabled, renderedDirectories, selectedThreadDirectoryKeys]);
   // One project needs no map.
@@ -1064,17 +1155,18 @@ export function Sidebar(props: SidebarProps) {
   );
   // A drop on a row. The tray the thread lands in opens, so the drop shows
   // where the thread went rather than making it vanish. A refused drop
-  // closes it again.
+  // closes it again. Resolves the owner's answer, so a drop can follow up.
   const nestThread = useRevealListChange(
     revealHoverStableSnapshot,
     props.onSetThreadParent
-      ? (thread: NavigationThreadSummary, parent: NavigationThreadSummary): void => {
+      ? (thread: NavigationThreadSummary, parent: NavigationThreadSummary): Promise<boolean | void> => {
           const setCollapsed = parent.subthreadsCollapsed === true
             ? props.onSetSubthreadsCollapsed
             : undefined;
           void setCollapsed?.(parent, false);
-          void props.onSetThreadParent!(thread, parent.id, parent.source).then((saved) => {
+          return props.onSetThreadParent!(thread, parent.id, parent.source, !parent.federation).then((saved) => {
             if (saved === false) void setCollapsed?.(parent, true);
+            return saved;
           });
         }
       : undefined,
@@ -1852,9 +1944,11 @@ export function Sidebar(props: SidebarProps) {
         );
     const archiveOptions: ArchiveThreadOptions | undefined =
       nextSelectionKey === undefined ? options : { ...options, nextSelectionKey };
-    const results = await Promise.all(threads.map((thread) =>
-      archiveOptions ? onArchiveThread(thread, archiveOptions) : onArchiveThread(thread)));
-    const archived = results.flatMap((result) => result ?? []);
+    const archived = props.onArchiveThreads
+      ? await props.onArchiveThreads(threads, archiveOptions)
+      : (await Promise.all(threads.map((thread) =>
+          archiveOptions ? onArchiveThread(thread, archiveOptions) : onArchiveThread(thread))))
+        .flatMap((result) => result ?? []);
     if (archived.length > 0) {
       props.onThreadsArchived?.(archived, {
         title: threads.length === 1 ? threads[0]!.title : undefined,
@@ -1949,9 +2043,53 @@ export function Sidebar(props: SidebarProps) {
     setDirectoryContextMenu({
       requestedPosition: position,
       directory,
-      directories: resolveDirectoryContextMenuDirectories(directory),
+      // A placeholder's menu holds its peer project's Forge Automation
+      // only, so it never acts on a selection.
+      directories: directory.localAvailability === "unconfigured"
+        ? [directory]
+        : resolveDirectoryContextMenuDirectories(directory),
     });
   };
+
+  const peerForgeAutomationInstanceIds = props.peerForgeAutomationInstanceIds;
+  const peerAdvertisesForgeAutomation = useCallback(
+    (instanceId: string): boolean => peerForgeAutomationInstanceIds?.has(instanceId) === true,
+    [peerForgeAutomationInstanceIds],
+  );
+  // A placeholder row opens the project menu only for its peer project's
+  // Forge Automation items. DirectoriesList asks during render, so this is
+  // a real dependency-tracked callback, never an event callback.
+  const canSetProjectForgeAutomation = Boolean(props.onSetProjectForgeAutomation);
+  const federationWindow = federationTarget !== undefined;
+  const placeholderOffersProjectMenu = useCallback(
+    (directory: NavigationDirectorySummary): boolean =>
+      directory.localAvailability === "unconfigured"
+      && canSetProjectForgeAutomation
+      && canEditProjectForgeAutomation(
+        directory,
+        federationWindow,
+        false,
+        peerAdvertisesForgeAutomation,
+      ),
+    [canSetProjectForgeAutomation, federationWindow, peerAdvertisesForgeAutomation],
+  );
+
+  // The project index's items open the project header's own menu, for the
+  // same rows the header offers it on.
+  const openProjectIndexContextMenu = useEventCallback((
+    key: string,
+    position: ThreadContextMenuPosition,
+  ): void => {
+    const directory = props.directories.find((candidate) => candidate.key === key);
+    if (
+      !directory
+      || (directory.localAvailability === "unconfigured" && !placeholderOffersProjectMenu(directory))
+      || (directory.kind !== "directory" && directory.kind !== "workspace")
+    ) {
+      return;
+    }
+    openDirectoryContextMenu(directory, position);
+  });
 
   const openSubthreadDraftMenu = (
     draft: SubthreadLaunchpadDraft,
@@ -1999,6 +2137,65 @@ export function Sidebar(props: SidebarProps) {
       directory,
       !directory.pinnedRank,
     );
+  };
+
+  /**
+   * Saves `next` as active, or first opens the Resume dialog when the paused
+   * project holds wake-ups. A failed read resumes anyway: anything held stays
+   * held in its thread. Resolves true once saved, false once the dialog took
+   * over, or when wake-ups are held but `stillWanted` says the operator moved
+   * on; rejects when the save fails.
+   */
+  const resumeForgeActivity = async (
+    directory: NavigationDirectorySummary,
+    next: ProjectForgeAutomation,
+    options?: { reportError?: boolean; stillWanted?: () => boolean },
+  ): Promise<boolean> => {
+    const wakeups = props.onListProjectHeldWakeups
+      ? await props.onListProjectHeldWakeups(directory).catch((): ProjectHeldWakeup[] => [])
+      : [];
+    if (wakeups.length > 0) {
+      if (options?.stillWanted && !options.stillWanted()) return false;
+      setDirectoryContextMenu(undefined);
+      setResumeForgeDialog({ directory, automation: next, wakeups });
+      return false;
+    }
+    await props.onSetProjectForgeAutomation?.(directory, next, options);
+    return true;
+  };
+
+  // Pause Forge Activity is a checkable item, like Pinned: it toggles in
+  // place and the menu stays open. Pausing keeps the per-kind switches and
+  // the while-paused choices.
+  const toggleForgePauseFromContextMenu = (
+    directory: NavigationDirectorySummary,
+  ): void => {
+    // Saves are not optimistic, so a second press before the owner answers
+    // would send the same change again.
+    const inFlight = forgePauseInFlightRef.current;
+    if (inFlight.has(directory.key)) return;
+    const paused = isProjectForgeActivityPaused(directory);
+    const next = withProjectForgePause(directory.forgeAutomation, !paused, Date.now());
+    const request = paused
+      ? resumeForgeActivity(directory, next, {
+          // Dismissing the menu while held wake-ups load abandons a resume
+          // that would need the dialog, so none opens unasked.
+          stillWanted: () => directoryMenuKeyRef.current === directory.key,
+        }).then(() => undefined)
+      : props.onSetProjectForgeAutomation?.(directory, next);
+    if (!request) return;
+    inFlight.add(directory.key);
+    // The hook raises a failure as a toast.
+    void request
+      .catch(() => undefined)
+      .finally(() => inFlight.delete(directory.key));
+  };
+
+  const openForgeAutomationFromContextMenu = (
+    directory: NavigationDirectorySummary,
+  ): void => {
+    setDirectoryContextMenu(undefined);
+    setForgeAutomationDialog({ directory });
   };
 
   const removeDirectoryFromContextMenu = (
@@ -2100,6 +2297,25 @@ export function Sidebar(props: SidebarProps) {
     // still dismiss the menu.
     void hoverReleasedListHandlers.reorderThreadPins?.(nextKeys, { key: threadKey, direction });
   };
+
+  // A name dropped in the project index, applied as a folder drop in the
+  // Directories list is, so the two can never order projects differently.
+  const dropProjectFromIndex = useEventCallback((key: string, drop: DirectoryDrop): void => {
+    const directory = renderedDirectories.find((candidate) => candidate.key === key);
+    if (!directory) return;
+    void applyDirectoryDrop({
+      directory,
+      drop,
+      pinnedKeys: pinnedDirectoryKeysInOrder,
+      setPin: hoverReleasedListHandlers.setDirectoryPin,
+      reorderPins: hoverReleasedListHandlers.reorderDirectoryPins,
+    });
+  });
+  const moveProjectFromIndex = useEventCallback((key: string, direction: "up" | "down"): void => {
+    const directory = renderedDirectories.find((candidate) => candidate.key === key);
+    if (directory) moveDirectoryFromContextMenu(directory, direction);
+  });
+  const projectIndexReorders = Boolean(props.onSetDirectoryPin && props.onReorderDirectoryPins);
 
   const moveDirectoryFromContextMenu = (
     directory: NavigationDirectorySummary,
@@ -2522,6 +2738,11 @@ export function Sidebar(props: SidebarProps) {
     event.preventDefault();
     setContextMenu(undefined);
   };
+  const closeDirectoryContextMenuOnEnter = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    setDirectoryContextMenu(undefined);
+  };
   // The row whose ⋮ button owns the open menu, for its `aria-expanded`. A PR
   // chip's right-click menu is a different menu, so it leaves ⋮ collapsed.
   const actionsMenuThreadKey = contextMenu?.pullRequest
@@ -2895,16 +3116,23 @@ export function Sidebar(props: SidebarProps) {
     directoryContextMenu?.directories ?? [];
   const directoryContextMenuIsBulk =
     directoryContextMenuDirectories.length > 1;
-  const directoryMenuCanMarkRead = Boolean(props.onMarkDirectoriesSeen);
+  // A placeholder stands for a peer's project: its menu offers that
+  // project's Forge Automation and nothing that needs a local checkout.
+  const directoryMenuIsPlaceholder =
+    directoryContextMenu?.directory.localAvailability === "unconfigured";
+  const directoryMenuCanMarkRead = Boolean(props.onMarkDirectoriesSeen && !directoryMenuIsPlaceholder);
   const directoryMenuCanArchive = Boolean(props.onArchiveDirectories
+    && !directoryMenuIsPlaceholder
     && directoryContextMenuDirectories.some((directory) => directory.kind === "directory" || directory.kind === "workspace"));
   const directoryMenuCanPin = Boolean(
     !directoryContextMenuIsBulk
+      && !directoryMenuIsPlaceholder
       && directoryContextMenu
       && props.onSetDirectoryPin,
   );
   const directoryMenuCanRemove = Boolean(
     !directoryContextMenuIsBulk
+      && !directoryMenuIsPlaceholder
       && props.onRemoveDirectory
       && directoryContextMenu?.directory.kind === "directory"
       && directoryContextMenu.directory.counts?.total === 0,
@@ -2930,10 +3158,29 @@ export function Sidebar(props: SidebarProps) {
   const directoryMenuHasPinActions =
     directoryMenuCanPin || directoryMenuShowMoveItems;
   const directoryMenuForgeRepository =
-    !directoryContextMenuIsBulk && props.onOpenForgePermissions
+    !directoryContextMenuIsBulk && !directoryMenuIsPlaceholder && props.onOpenForgePermissions
       ? directoryContextMenu?.directory.repositoryKey
         ?? directoryContextMenu?.directory.gitStatus?.originRepository
       : undefined;
+  // The live row, so Pause Forge Activity reads what the owner stored after
+  // a toggle while the menu stays open.
+  const directoryMenuDirectory = directoryContextMenu
+    ? props.directories.find((directory) => directory.key === directoryContextMenu.directory.key)
+      ?? directoryContextMenu.directory
+    : undefined;
+  const directoryMenuCanForgeAutomation = Boolean(
+    !directoryContextMenuIsBulk
+      && directoryMenuDirectory
+      && props.onSetProjectForgeAutomation
+      && canEditProjectForgeAutomation(
+        directoryMenuDirectory,
+        federationTarget !== undefined,
+        props.federationOwnerForgeAutomation === true,
+        peerAdvertisesForgeAutomation,
+      ),
+  );
+  const directoryMenuHasForgeSection =
+    directoryMenuCanForgeAutomation || directoryMenuForgeRepository !== undefined;
 
   return (
     <aside
@@ -2949,6 +3196,7 @@ export function Sidebar(props: SidebarProps) {
       {props.threadJumpOpen ? (
         <SidebarSearchPopup
           threads={props.threads}
+          thinkingThreadKeys={props.thinkingThreadKeys}
           projects={props.directories}
           onJumpToProject={(directory) => {
             props.onBrowseModeChange("directories");
@@ -3231,6 +3479,9 @@ export function Sidebar(props: SidebarProps) {
             width={props.projectIndexWidth ?? null}
             onWidthChange={onProjectIndexWidthChange}
             onJump={jumpToProject}
+            onOpenContextMenu={openProjectIndexContextMenu}
+            onDropProject={projectIndexReorders ? dropProjectFromIndex : undefined}
+            onMoveProject={projectIndexReorders ? moveProjectFromIndex : undefined}
           />
         ) : null}
         <div
@@ -3326,6 +3577,7 @@ export function Sidebar(props: SidebarProps) {
                   ? openDirectoryContextMenu
                   : undefined
               }
+              placeholderOffersDirectoryContextMenu={placeholderOffersProjectMenu}
               onOpenPullRequestContextMenu={openPullRequestContextMenu}
               onSelectDirectory={selectDirectoryFromList}
               onSelectThread={selectThreadFromList}
@@ -3756,6 +4008,12 @@ export function Sidebar(props: SidebarProps) {
                       {menuShortcut("threads.lock")}
                     </button>
                   ) : null}
+                  {openMergeHolds && !contextMenuIsBulk ? (
+                    <button role="menuitem" type="button" onClick={() => { const target = contextMenu.thread; setContextMenu(undefined); openMergeHolds(target); }}>
+                      <span>Wait Until Done…</span>
+                      {contextMenu.thread.mergeHolds?.length ? <span className="thread-context-menu__aside">{contextMenu.thread.mergeHolds.length} waiting</span> : null}
+                    </button>
+                  ) : null}
                   {contextMenuCanContinueAfter ? (
                     <button
                       aria-label={contextMenuDependencyCount > 0
@@ -3869,23 +4127,38 @@ export function Sidebar(props: SidebarProps) {
               ) : null}
               {contextMenuHasBindings ? (
                 <div className="thread-context-menu__section">
-                  {(contextMenu.thread.messagingBindings ?? []).map((binding) => (
-                    <button
-                      key={binding.bindingId}
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        const target = contextMenu.thread;
-                        setContextMenu(undefined);
-                        void props.onUnbindMessagingBinding!(target, binding);
-                      }}
-                    >
-                      Unbind from {formatPlatformLabel(binding.platform)}
-                      {binding.conversationTitle
-                        ? ` (${binding.conversationTitle})`
-                        : ""}
-                    </button>
-                  ))}
+                  {(contextMenu.thread.messagingBindings ?? []).map((binding) => {
+                    const action = `Unbind from ${formatPlatformLabel(binding.platform)}`;
+                    const name = binding.conversationTitle
+                      ? `(${binding.conversationTitle})`
+                      : undefined;
+                    return (
+                      <button
+                        key={binding.bindingId}
+                        role="menuitem"
+                        type="button"
+                        className={name ? "tooltip-target" : undefined}
+                        data-tooltip={name ? `${action} ${name}` : undefined}
+                        onClick={() => {
+                          const target = contextMenu.thread;
+                          setContextMenu(undefined);
+                          void props.onUnbindMessagingBinding!(target, binding);
+                        }}
+                      >
+                        <span className="thread-context-menu__binding-platform">
+                          {action}
+                        </span>
+                        {name ? (
+                          <>
+                            {" "}
+                            <span className="thread-context-menu__binding-name">
+                              {name}
+                            </span>
+                          </>
+                        ) : null}
+                      </button>
+                    );
+                  })}
                 </div>
               ) : null}
               {contextMenuHasTopActions || contextMenuHasBindings ? (
@@ -3901,6 +4174,11 @@ export function Sidebar(props: SidebarProps) {
                     >
                       Copy Pull Request URL
                     </button>
+                    <PullRequestWatchMenuItems
+                      thread={contextMenu.thread}
+                      pr={contextMenuPullRequest}
+                      onClose={() => setContextMenu(undefined)}
+                    />
                     {props.onDetachPullRequest ? (
                       <button
                         role="menuitem"
@@ -4080,7 +4358,9 @@ export function Sidebar(props: SidebarProps) {
       {directoryContextMenu ? (
         <div
           ref={directoryContextMenuRef}
-          className="thread-context-menu"
+          className={`thread-context-menu${
+            directoryMenuCanForgeAutomation ? " thread-context-menu--check-column" : ""
+          }`}
           role="menu"
           aria-label={
             directoryContextMenuIsBulk
@@ -4165,12 +4445,36 @@ export function Sidebar(props: SidebarProps) {
               ) : null}
             </div>
           ) : null}
-          {directoryMenuForgeRepository ? (
-            <>
-              {directoryMenuCanMarkRead || directoryMenuHasPinActions ? (
-                <div className="thread-context-menu__separator" role="separator" />
+          {directoryMenuHasForgeSection
+            && (directoryMenuCanMarkRead || directoryMenuHasPinActions) ? (
+            <div className="thread-context-menu__separator" role="separator" />
+          ) : null}
+          {directoryMenuHasForgeSection ? (
+            <div className="thread-context-menu__section">
+              {directoryMenuCanForgeAutomation ? (
+                <>
+                  <button
+                    role="menuitemcheckbox"
+                    aria-checked={isProjectForgeActivityPaused(directoryMenuDirectory!)}
+                    type="button"
+                    onClick={() => toggleForgePauseFromContextMenu(directoryMenuDirectory!)}
+                    onKeyDown={closeDirectoryContextMenuOnEnter}
+                  >
+                    <span className="thread-context-menu__check" aria-hidden="true">
+                      <CheckIcon size={12} strokeWidth={3} />
+                    </span>
+                    <span>Pause Forge Activity</span>
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => openForgeAutomationFromContextMenu(directoryMenuDirectory!)}
+                  >
+                    Forge Automation…
+                  </button>
+                </>
               ) : null}
-              <div className="thread-context-menu__section">
+              {directoryMenuForgeRepository ? (
                 <button
                   role="menuitem"
                   type="button"
@@ -4181,8 +4485,11 @@ export function Sidebar(props: SidebarProps) {
                 >
                   Forge Permissions…
                 </button>
-              </div>
-            </>
+              ) : null}
+            </div>
+          ) : null}
+          {directoryMenuHasForgeSection && directoryMenuCanArchive ? (
+            <div className="thread-context-menu__separator" role="separator" />
           ) : null}
           {directoryMenuCanArchive ? (
             <div className="thread-context-menu__section">
@@ -4233,6 +4540,55 @@ export function Sidebar(props: SidebarProps) {
           onSubmit={async (note) => {
             await props.onSetThreadLock?.(lockDialog.thread, true, note);
             setLockDialog(undefined);
+          }}
+        />
+      ) : null}
+
+      {forgeAutomationDialog ? (() => {
+        const directory = props.directories.find((candidate) =>
+          candidate.key === forgeAutomationDialog.directory.key) ?? forgeAutomationDialog.directory;
+        return (
+          <ForgeAutomationDialog
+            automation={directory.forgeAutomation}
+            listHeldWakeups={props.onListProjectHeldWakeups
+              ? () => props.onListProjectHeldWakeups!(directory)
+              : undefined}
+            projectDetail={directory.repositoryKey ?? directory.path}
+            projectLabel={directory.label}
+            returnFocus={directoryContextMenuOpenerRef}
+            onCancel={() => setForgeAutomationDialog(undefined)}
+            onSubmit={async (automation) => {
+              if (directory.forgeAutomation?.paused && !automation.paused) {
+                // Saved, or handed to the Resume dialog: either way this one closes.
+                await resumeForgeActivity(directory, automation, { reportError: false });
+              } else {
+                await props.onSetProjectForgeAutomation?.(directory, automation, { reportError: false });
+              }
+              setForgeAutomationDialog(undefined);
+            }}
+          />
+        );
+      })() : null}
+
+      {resumeForgeDialog ? (
+        <ResumeForgeAutomationDialog
+          projectLabel={resumeForgeDialog.directory.label}
+          returnFocus={directoryContextMenuOpenerRef}
+          wakeups={resumeForgeDialog.wakeups}
+          onCancel={() => setResumeForgeDialog(undefined)}
+          onResolve={async (resolutions) => {
+            if (!props.onResolveProjectHeldWakeups) {
+              throw new Error("Held wake-ups cannot be resolved in this window.");
+            }
+            return await props.onResolveProjectHeldWakeups(resumeForgeDialog.directory, resolutions);
+          }}
+          onResume={async () => {
+            await props.onSetProjectForgeAutomation?.(
+              resumeForgeDialog.directory,
+              resumeForgeDialog.automation,
+              { reportError: false },
+            );
+            setResumeForgeDialog(undefined);
           }}
         />
       ) : null}

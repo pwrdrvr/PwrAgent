@@ -8,6 +8,7 @@ import type {
   ArchiveThreadCleanupResult,
   DesktopWorktreeStorageLocation,
   LaunchpadWorkMode,
+  LaunchpadWorktreeBase,
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
   NavigationGitBranchDetail,
@@ -23,6 +24,7 @@ import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { runGitCommand } from "./git-executable";
+import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 
 type GitCommandRunner = (
   cwd: string,
@@ -78,7 +80,7 @@ async function defaultRunGit(
   args: string[],
   env?: NodeJS.ProcessEnv,
 ): Promise<string> {
-  return (await runGitCommand(cwd, args, { env })).stdout.trim();
+  return (await runGitCommand(cwd, args, { env, purpose: "directory-status" })).stdout.trim();
 }
 
 function errorText(error: unknown): string {
@@ -623,7 +625,7 @@ function isProtectedBranch(branch?: string): boolean {
  * `default_branch` skips it: a source worktree's branch can hold another
  * thread's unpublished work, which a standalone follow-up must not inherit.
  */
-export type WorktreeBaseSource = "current_branch" | "default_branch";
+export type WorktreeBaseSource = LaunchpadWorktreeBase;
 
 async function resolveVerifiedWorktreeBaseBranch(params: {
   repoRoot: string;
@@ -875,6 +877,7 @@ export class GitDirectoryService {
     }
 
     this.statusCache.invalidate(normalizedPath);
+    gitSubprocessDiagnostics.observeRepository(normalizedPath);
     const commonGitDir = this.commonGitDirByCwd.get(normalizedPath);
     if (commonGitDir) {
       this.branchInventoryCache.delete(commonGitDir);
@@ -899,6 +902,8 @@ export class GitDirectoryService {
       env: gitEnv,
     });
     this.commonGitDirByCwd.set(cwd, commonGitDir);
+    gitSubprocessDiagnostics.observeRepository(cwd, commonGitDir);
+    gitSubprocessDiagnostics.observeRepository(repoRoot, commonGitDir);
 
     const [
       rawCurrentBranch,

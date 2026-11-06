@@ -1,3 +1,5 @@
+import type { ManageThreadMergeHoldsRequest, ThreadMergeHold } from "@pwragent/shared";
+import { validateMergeHoldRequest, updateMergeHolds } from "../thread-merge-holds/thread-merge-holds";
 import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
@@ -6,6 +8,11 @@ import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
 import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
+import {
+  isDefaultProjectForgeAutomation,
+  resolveProjectForgeAutomation,
+  type ProjectForgeAutomation,
+} from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
@@ -59,6 +66,7 @@ import type {
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   ThreadPullRequestWatchSummary,
+  ThreadPrWatchHistoryEntry,
   RemoteThreadPin,
   StarMapArrangementEntry,
   StarMapWorkspaceSnapshot,
@@ -87,7 +95,6 @@ import {
   MAX_MANAGED_REVIEW_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES,
-  MAX_REWIND_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   buildPullRequestStatusKey,
@@ -100,6 +107,7 @@ import {
   buildDirectorySummaries,
   materializeNavigationThreads,
   serializeNavigationSnapshotForHash,
+  applyNavigationLaunchpadDefaultsPatch,
   applyNavigationLaunchpadProviderSettingsPatch,
   applyNavigationLaunchpadProviderExecutionModeDefaults,
   applyNavigationLaunchpadProviderModelDefaults,
@@ -265,6 +273,18 @@ export type PrAutoDispatchCandidate = {
   threadId: string;
 };
 
+/**
+ * Whether a thread can win the Auto-fix election. A locked thread cannot: the
+ * lock hands its PRs to another agent. The candidate rows already leave a
+ * locked thread out; this also covers a row written before the lock landed.
+ */
+function isPrAutoDispatchCandidateEligible(thread: ThreadOverlayState | undefined): boolean {
+  return thread?.prAutoDispatchEnabled === true && !thread.lock;
+}
+
+/** A thread's Auto-fix candidacy for one PR that a sync added or removed. */
+export type PrAutoDispatchCandidateChange = Omit<PrAutoDispatchCandidate, "eligibleSince">;
+
 export type PrStatusWatchClaim = {
   attemptCount: number;
   watch: ThreadPullRequestWatchSummary;
@@ -272,7 +292,34 @@ export type PrStatusWatchClaim = {
 
 export type PrStatusWatchRegistrationResult = {
   status: "watching" | "duplicate";
+  /** An active watch already covered this thread, PR and head. */
+  existed: boolean;
   watch: ThreadPullRequestWatchSummary;
+};
+
+/** A thread whose PR watches changed, for `thread/prWatches/updated`. */
+export type PrStatusWatchThreadRef = {
+  backend: ThreadOverlayState["backend"];
+  threadId: string;
+  prKey: string;
+};
+
+export type PrStatusWatchAdvanceResult = {
+  /** CI watches copied to the new head; the old rows end as `moved`. */
+  moved: number;
+  /** CI watches ended because the thread already watched the new head. */
+  superseded: number;
+  baselinesCleared: number;
+  threads: PrStatusWatchThreadRef[];
+};
+
+export type PrStatusWatchClaimResult = {
+  claims: PrStatusWatchClaim[];
+  /**
+   * Threads whose watches the claim changed without claiming: a covered
+   * failure became a held watch's baseline, or ended a failure-only watch.
+   */
+  threads: PrStatusWatchThreadRef[];
 };
 
 type ThreadCompactionRow = {
@@ -343,6 +390,36 @@ const TERMINAL_WATCH_HEAD_SHA = "";
 
 function prStatusWatchColumnHeadSha(watch: ThreadPullRequestWatchSummary): string {
   return watch.kind === "terminal" ? TERMINAL_WATCH_HEAD_SHA : watch.headSha;
+}
+
+function uniquePrStatusWatchThreads(
+  rows: Array<{ backend: string; thread_id: string; pr_key: string }>,
+): PrStatusWatchThreadRef[] {
+  const threads = new Map<string, PrStatusWatchThreadRef>();
+  for (const row of rows) {
+    threads.set(JSON.stringify([row.backend, row.thread_id, row.pr_key]), {
+      backend: row.backend as ThreadOverlayState["backend"],
+      threadId: row.thread_id,
+      prKey: row.pr_key,
+    });
+  }
+  return [...threads.values()];
+}
+
+/** A watch whose thread's failure something else handles, such as Auto-fix. */
+function isCoveredPrStatusWatch(
+  row: { backend: string; thread_id: string },
+  skipThreadKeys: ReadonlySet<string> | undefined,
+): boolean {
+  return skipThreadKeys?.has(`${row.backend}:${row.thread_id}`) === true;
+}
+
+/** A covered watch that waits on past the failure, for success. */
+function isHeldPrStatusWatch(
+  row: { backend: string; thread_id: string; notify_on_success: number },
+  skipThreadKeys: ReadonlySet<string> | undefined,
+): boolean {
+  return row.notify_on_success === 1 && isCoveredPrStatusWatch(row, skipThreadKeys);
 }
 
 function parsePrStatusWatchSummary(
@@ -477,6 +554,41 @@ function normalizeDetachedPrKeys(keys: string[] | undefined): string[] {
         .filter(Boolean),
     ),
   ].sort((left, right) => left.localeCompare(right));
+}
+
+/**
+ * Detached PR status keys under the forge's current repository names.
+ *
+ * A renamed repository showed one PR as two chips, one per name, and
+ * detaching either chip removed a duplicate, not the PR. So a detached key is
+ * released while the thread still holds a row for the same PR under another
+ * stored key: that is the copy the operator kept, or one attached again under
+ * the new name. Every other key moves to the new name, which keeps a PR
+ * detached once the forge reports it under that name.
+ */
+export function canonicalizeDetachedPrKeys(params: {
+  detachedPrKeys: string[] | undefined;
+  attachedPrKeys: Iterable<string>;
+  canonicalizePrKey: (key: string) => string;
+}): { detachedPrKeys: string[]; releasedPrKeys: Set<string> } {
+  const attachedByCanonical = new Map<string, Set<string>>();
+  for (const key of normalizeDetachedPrKeys([...params.attachedPrKeys])) {
+    const canonical = params.canonicalizePrKey(key);
+    attachedByCanonical.set(canonical, (attachedByCanonical.get(canonical) ?? new Set()).add(key));
+  }
+  const releasedPrKeys = new Set<string>();
+  const detachedPrKeys = normalizeDetachedPrKeys(
+    normalizeDetachedPrKeys(params.detachedPrKeys).flatMap((key) => {
+      const canonical = params.canonicalizePrKey(key);
+      const attached = attachedByCanonical.get(canonical);
+      if (attached && [...attached].some((attachedKey) => attachedKey !== key)) {
+        releasedPrKeys.add(key);
+        return [];
+      }
+      return [canonical];
+    }),
+  );
+  return { detachedPrKeys, releasedPrKeys };
 }
 
 function filterDetachedPrs(prs: PrSummary[], detachedPrKeys: string[]): PrSummary[] {
@@ -1122,7 +1234,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (missing.length > 0) {
       for (const key of missing) values.set(key, null);
       const rows = this.stateDb.raw.prepare(`
-        SELECT thread_id, json_object(
+        SELECT thread_id, json_patch(json_object(
             'backend', json_extract(payload, '$.backend'),
             'threadId', json_extract(payload, '$.threadId'),
             'executionMode', json_extract(payload, '$.executionMode'),
@@ -1167,7 +1279,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
               'createdAt', json_extract(payload, '$.agent.createdAt'),
               'updatedAt', json_extract(payload, '$.agent.updatedAt')
             ) END
-        ) AS compact FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
+        ), CASE WHEN EXISTS (SELECT 1 FROM json_each(payload, '$.mergeHolds') h WHERE json_extract(h.value, '$.status') = 'waiting')
+          THEN json_object('mergeHolds', (SELECT json_group_array(json(h.value)) FROM json_each(payload, '$.mergeHolds') h WHERE json_extract(h.value, '$.status') = 'waiting'))
+          ELSE '{}' END) AS compact FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
       `).iterate(LEGACY_HANDOFF_AGENT_INSTRUCTIONS, JSON.stringify(missing)) as Iterable<{ thread_id: string; compact: string }>;
       for (const row of rows) admit(row.thread_id, row.compact);
       if (cache) {
@@ -1512,7 +1626,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (!threads.length) return 0;
     const seenAt = Date.now();
     return this.stateDb.raw.transaction(() => {
-      for (const thread of threads) this.putThreadSeen({ ...thread, seenAt });
+      for (const thread of threads) {
+        const current = this.getThread(buildThreadIdentityKey(thread.backend, thread.threadId));
+        // A snapshot can predate another reader. Bulk Mark Read must never
+        // move that reader's watermark backward; explicit Mark Unread still can.
+        const seenUpdatedAt = thread.seenUpdatedAt === undefined ? current?.lastSeenUpdatedAt
+          : Math.max(thread.seenUpdatedAt, current?.lastSeenUpdatedAt ?? 0);
+        this.putThreadSeen({ ...thread, seenAt, seenUpdatedAt });
+      }
       return threads.length;
     })();
   }
@@ -4210,6 +4331,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return this.subAgentTable.page({ ...params, storageKey: this.subAgentStorageKey(params) });
   }
 
+  async listEndedThreadTaskMonitors(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    limit: number;
+  }): Promise<ThreadSubAgentSummary[]> {
+    return this.subAgentTable.endedMonitors(this.subAgentStorageKey(params), params.limit);
+  }
+
   /** Sums over every Token Miser gate card, kept on write; reads no card. */
   async readThreadTokenMiserGateTotals(params: {
     backend: ThreadOverlayState["backend"];
@@ -4352,6 +4481,59 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const nextState: ThreadOverlayState = params.lock ? { ...rest, lock: params.lock } : rest;
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  /**
+   * Only explicit hold changes write. The read/modify/write is profile-atomic.
+   * `remind` runs inside the same transaction when a wait is marked done, so
+   * the hold and its reminder card commit together or not at all.
+   */
+  manageThreadMergeHolds(
+    request: ManageThreadMergeHoldsRequest & { backend: ThreadOverlayState["backend"]; threadId: string },
+    actor: string,
+    now = Date.now(),
+    remind?: (hold: ThreadMergeHold, stillWaiting: number) => string | undefined,
+  ): ThreadMergeHold[] {
+    validateMergeHoldRequest(request);
+    const initial = this.getThread(buildThreadIdentityKey(request.backend, request.threadId));
+    const previous = initial?.mergeHolds ?? [];
+    if (request.action === "list") return previous;
+    // Do not BEGIN/COMMIT a transaction for a repeated action. Re-read under
+    // the write lock below when there is an actual transition to make.
+    if (updateMergeHolds(previous, request, actor, now, []) === previous) return previous;
+    return this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
+      const current = this.getThread(threadKey) ?? {
+        backend: request.backend, threadId: request.threadId,
+        executionMode: "default" as const, extraLinkedDirectories: [],
+      };
+      const previous = current.mergeHolds ?? [];
+      let holds = updateMergeHolds(previous, request, actor, now, (current.prs ?? []).flatMap((pr) => pr.url ? [pr.url] : []));
+      if (holds !== previous && request.action === "resolve" && remind) {
+        const resolved = holds.find((hold) => hold.id === request.holdId)!;
+        const reminderTodoId = remind(resolved, holds.filter((hold) => hold.status === "waiting").length);
+        if (reminderTodoId) holds = holds.map((hold) => hold === resolved ? { ...hold, reminderTodoId } : hold);
+      }
+      if (holds !== previous) {
+        if (request.action === "create" && this.listActiveThreadMergeHolds().length >= 512) throw new Error("There are already 512 active merge holds. Resolve or cancel one first.");
+        this.putThread(threadKey, { ...current, mergeHolds: holds });
+      }
+      return holds;
+    }).immediate();
+  }
+
+  /** Read across the profile, including threads outside the loaded sidebar page. */
+  listActiveThreadMergeHolds(): ThreadMergeHold[] {
+    const rows = this.stateDb.raw.prepare(`
+      SELECT h.value AS hold, json_extract(t.payload, '$.prs') AS prs
+      FROM threads t, json_each(t.payload, '$.mergeHolds') h
+      WHERE json_extract(h.value, '$.status') = 'waiting'
+    `).all() as Array<{ hold: string; prs: string | null }>;
+    return rows.map((row) => {
+      const hold = JSON.parse(row.hold) as ThreadMergeHold;
+      const prs = row.prs ? JSON.parse(row.prs) as PrSummary[] : [];
+      return { ...hold, pullRequestUrls: [...new Set([...hold.pullRequestUrls, ...prs.flatMap((pr) => pr.url ? [pr.url] : [])])] };
+    });
   }
 
   /**
@@ -5498,9 +5680,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     /**
      * The owner's live children. Each carries its own provider: a child can
      * run on another provider than its parent. Absent `backend` means the
-     * parent's.
+     * parent's. `ownerInstanceId` marks a peer's thread, whose link lives on
+     * that peer: the caller listed it from this machine's pin, so it has no
+     * overlay row here to check.
      */
-    children?: { backend?: ThreadOverlayState["backend"]; id: string; createdAt?: number }[];
+    children?: {
+      backend?: ThreadOverlayState["backend"];
+      id: string;
+      createdAt?: number;
+      ownerInstanceId?: string;
+    }[];
   }): Promise<string[]> {
     return this.stateDb.raw.transaction(() => {
       const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
@@ -5508,10 +5697,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       // per provider only, so an id two providers share is refused rather
       // than guessed. An unlisted id (a just-created child the owner's index
       // has not read yet) falls back to the parent's provider.
+      const ownersOf = (id: string) => params.children?.filter((entry) => entry.id === id) ?? [];
       const childKey = (id: string, listed: boolean): string | undefined => {
-        const owners = params.children?.filter((entry) => entry.id === id) ?? [];
+        const owners = ownersOf(id);
         if (owners.length > 1 || (listed && owners.length === 0)) return undefined;
         return buildThreadIdentityKey(owners[0]?.backend ?? params.backend, id);
+      };
+      const isPeerChild = (id: string): boolean => {
+        const owners = ownersOf(id);
+        return owners.length === 1 && Boolean(owners[0]!.ownerInstanceId);
       };
       const parent = this.getThread(parentKey) ?? {
         backend: params.backend,
@@ -5528,6 +5722,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           throw new Error("A relative child move requires distinct live children and an owner order.");
         }
         for (const id of [threadId, anchorThreadId]) {
+          if (isPeerChild(id)) continue;
           const key = childKey(id, true);
           const child = key ? this.getThread(key) : undefined;
           if (!child || child.archiveTombstonedAt !== undefined || child.parentThreadId !== params.parentThreadId
@@ -5549,7 +5744,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         }
         const { threadId, sourceThreadId } = params.insertAfter;
         for (const id of [threadId, sourceThreadId]) {
-          if (id === params.parentThreadId && id === sourceThreadId) continue;
+          if ((id === params.parentThreadId && id === sourceThreadId) || isPeerChild(id)) continue;
           const key = childKey(id, false);
           // A just-created child is often missing from the owner's listing,
           // and it may run on another provider than its parent. Its own link
@@ -5766,6 +5961,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     };
     this.putDirectoryOverlay(params.directoryKey, nextState);
     return nextState;
+  }
+
+  /**
+   * Save a project's Forge Automation in one commit. A value equal to the
+   * defaults removes the field. `pausedAt` comes from `now` when the project
+   * goes from active to paused, survives saves that keep it paused, and is
+   * dropped on resume; a caller-supplied `pausedAt` is ignored.
+   */
+  async setDirectoryForgeAutomation(params: {
+    directoryKey: string;
+    automation: ProjectForgeAutomation;
+    now: number;
+  }): Promise<DirectoryOverlayState> {
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getDirectoryOverlay(params.directoryKey);
+      const previous = current?.forgeAutomation
+        ? resolveProjectForgeAutomation(current.forgeAutomation)
+        : undefined;
+      const { pausedAt: _requested, ...requested } = resolveProjectForgeAutomation(params.automation);
+      const automation: ProjectForgeAutomation = requested.paused
+        ? { ...requested, pausedAt: previous?.paused && previous.pausedAt ? previous.pausedAt : params.now }
+        : requested;
+      const { forgeAutomation: _previous, ...rest } = current ?? { directoryKey: params.directoryKey };
+      const nextState: DirectoryOverlayState = {
+        ...rest,
+        directoryKey: params.directoryKey,
+        ...(isDefaultProjectForgeAutomation(automation) ? {} : { forgeAutomation: automation }),
+      };
+      this.putDirectoryOverlay(params.directoryKey, nextState);
+      return nextState;
+    })();
   }
 
   /**
@@ -6017,6 +6243,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     prs: PrSummary[];
     fetchedAt?: number;
     refreshKey?: string;
+    /**
+     * Maps a stored status key to the key its repository has now. A forge
+     * that renamed a repository answers its PRs under the new name, so a
+     * detachment recorded under the old one must keep filtering them.
+     */
+    canonicalizePrKey?: (key: string) => string;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const stored = this.getThread(threadKey);
@@ -6036,14 +6268,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     ) {
       return observed;
     }
-    const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys);
-    const detachedPrs = mergePrSummariesByStatusKey(
-      current.detachedPrs,
-      collectDetachedPrs(params.prs, detachedPrKeys),
-    );
+    const canonicalizePrKey = params.canonicalizePrKey ?? ((key: string) => key);
     const explicitKeys = new Set((current.prs ?? [])
       .filter((pr) => pr.explicitlyAttached)
-      .map(buildPullRequestStatusKey));
+      .map((pr) => canonicalizePrKey(buildPullRequestStatusKey(pr))));
+    const { detachedPrKeys, releasedPrKeys } = canonicalizeDetachedPrKeys({
+      detachedPrKeys: current.detachedPrKeys,
+      attachedPrKeys: (current.prs ?? []).map(buildPullRequestStatusKey),
+      canonicalizePrKey,
+    });
+    const detachedPrs = mergePrSummariesByStatusKey(
+      // A released duplicate would come back as its own chip after a restart,
+      // before the forge names its repository again.
+      current.detachedPrs?.filter((pr) => !releasedPrKeys.has(buildPullRequestStatusKey(pr))),
+      collectDetachedPrs(params.prs, detachedPrKeys),
+    );
     const nextState: ThreadOverlayState = {
       ...current,
       detachedPrKeys,
@@ -6055,6 +6294,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       prsFetchedAt: fetchedAt,
       prsRefreshKey: params.refreshKey,
     };
+    if (current.mergeHolds?.some((hold) => hold.status === "waiting")) {
+      const urls = nextState.prs?.flatMap((pr) => pr.url ? [pr.url] : []) ?? [];
+      nextState.mergeHolds = current.mergeHolds.map((hold) => hold.status === "waiting"
+        ? { ...hold, pullRequestUrls: [...new Set([...hold.pullRequestUrls, ...urls])] } : hold);
+    }
     // A lookup that found what is stored refreshes only its stamp, at most
     // once per stamp interval. Until then this process keeps the exact time in
     // memory; the stored stamp only seeds the lookup registry after a restart.
@@ -6065,6 +6309,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       && sameJson(stored.prs, nextState.prs)
       && sameJson(stored.detachedPrKeys, nextState.detachedPrKeys)
       && sameJson(stored.detachedPrs, nextState.detachedPrs)
+      && sameJson(stored.mergeHolds, nextState.mergeHolds)
     ) {
       this.unwrittenPrsFetchedAt.set(threadKey, fetchedAt);
       return nextState;
@@ -6288,6 +6533,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         entry.fetchedAt,
         JSON.stringify(entry.prs.map(normalizePrSummary)),
       );
+  }
+
+  /**
+   * Changes whenever another connection commits to this database, such as a
+   * second PwrAgent instance on the same profile. Commits on this connection
+   * do not move it; archive cleanup fences those through its own writers.
+   */
+  readArchiveCleanupChangeToken(): string {
+    return String(this.stateDb.raw.pragma("data_version", { simple: true }));
   }
 
   /** Cleanup needs ownership/grouping only, never histories or PR claims. */
@@ -6651,12 +6905,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
-    const nextLog = [...(current.rewindLog ?? []), params.rewind];
+    // These entries supplement the provider's old transcript. A rewind
+    // invalidates that history; clear it together with recording the marker.
     const nextState: ThreadOverlayState = {
       ...current,
-      rewindLog: nextLog.length > MAX_REWIND_LOG_ENTRIES
-        ? nextLog.slice(nextLog.length - MAX_REWIND_LOG_ENTRIES)
-        : nextLog,
+      permissionTransitionLog: undefined,
+      messagingBindingTransitionLog: undefined,
+      turnFailureLog: undefined,
+      questionnaireActivityLog: undefined,
+      managedReviewEntries: undefined,
+      pendingManagedReviewContextEntryIds: undefined,
+      rewindLog: [params.rewind],
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -6758,14 +7017,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
     prKeys: string[];
     now: number;
-  }): Promise<void> {
-    await this.syncThreadPrAutoDispatchCandidatesBatch({ threads: [params], now: params.now });
+  }): Promise<PrAutoDispatchCandidateChange[]> {
+    return await this.syncThreadPrAutoDispatchCandidatesBatch({ threads: [params], now: params.now });
   }
 
+  /** Returns the candidate rows it added or removed. */
   async syncThreadPrAutoDispatchCandidatesBatch(params: {
     threads: Array<{ backend: ThreadOverlayState["backend"]; threadId: string; prKeys: string[] }>;
     now: number;
-  }): Promise<void> {
+  }): Promise<PrAutoDispatchCandidateChange[]> {
     const readChanges = () => {
       const changes: Array<{ thread: typeof params.threads[number]; add: string[]; remove: string[] }> = [];
       for (let offset = 0; offset < params.threads.length; offset += 500) {
@@ -6774,9 +7034,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.backend, thread.threadId)) }));
         // Only eligibility and election membership are inputs. Never parse a
         // full history or pending dispatch prompt to read this one boolean.
+        // A locked thread has handed its PRs to another agent, so it stands
+        // out of the election as if they were not attached.
         const rows = this.stateDb.raw.prepare(`
           SELECT json_extract(requested.value, '$.index') AS ordinal,
-            json_type(threads.payload, '$.prAutoDispatchEnabled') = 'true' AS enabled,
+            (json_type(threads.payload, '$.prAutoDispatchEnabled') = 'true'
+              AND json_type(threads.payload, '$.lock') IS NULL) AS enabled,
             candidates.pr_key
           FROM json_each(?) AS requested
           LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
@@ -6800,7 +7063,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       return changes;
     };
     // Do not create even an empty transaction for an unchanged owner index.
-    if (!readChanges().some((changes) => changes.add.length > 0 || changes.remove.length > 0)) return;
+    if (!readChanges().some((changes) => changes.add.length > 0 || changes.remove.length > 0)) return [];
+    const changed: PrAutoDispatchCandidateChange[] = [];
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare(
         `DELETE FROM pr_auto_dispatch_candidates WHERE pr_key = ? AND backend = ? AND thread_id = ?`,
@@ -6815,12 +7079,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         const { thread } = changes;
         for (const key of changes.remove) remove.run(key, thread.backend, thread.threadId);
         for (const key of changes.add) insert.run(key, thread.backend, thread.threadId, params.now, params.now);
+        for (const prKey of [...changes.remove, ...changes.add]) {
+          changed.push({ backend: thread.backend, threadId: thread.threadId, prKey });
+        }
       }
     })();
+    return changed;
   }
 
   async getPrAutoDispatchCandidateWinner(params: {
     prKey: string;
+    /** Passes over an eligible thread the caller rules out, such as one whose project narrows Auto-fix. */
+    accepts?: (candidate: { backend: ThreadOverlayState["backend"]; threadId: string }) => boolean;
   }): Promise<PrAutoDispatchCandidate | undefined> {
     const rows = this.stateDb.raw
       .prepare(
@@ -6836,8 +7106,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         thread_id: string;
       }>;
     for (const row of rows) {
-      const threadKey = buildThreadIdentityKey(row.backend, row.thread_id);
-      if (this.getThread(threadKey)?.prAutoDispatchEnabled === true) {
+      if (
+        isPrAutoDispatchCandidateEligible(this.getThread(buildThreadIdentityKey(row.backend, row.thread_id)))
+        && (params.accepts?.({ backend: row.backend, threadId: row.thread_id }) ?? true)
+      ) {
         return {
           backend: row.backend,
           eligibleSince: row.eligible_since,
@@ -6847,6 +7119,58 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
     }
     return undefined;
+  }
+
+  /**
+   * Every opted-in thread's Auto-fix candidacy, in election order within
+   * each PR: the first row for a PR is the thread Auto-fix wakes. Read-only.
+   * For selected-thread reads, return only that thread and its PR winners.
+   */
+  async listPrAutoDispatchCandidates(thread?: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<PrAutoDispatchCandidate[]> {
+    type CandidateRow = { backend: ThreadOverlayState["backend"]; eligible_since: number; pr_key: string; thread_id: string };
+    const eligibility = new Map<string, boolean>();
+    const eligible = (row: CandidateRow): boolean => {
+      const key = buildThreadIdentityKey(row.backend, row.thread_id);
+      if (!eligibility.has(key)) eligibility.set(key, isPrAutoDispatchCandidateEligible(this.getThread(key)));
+      return eligibility.get(key)!;
+    };
+    const candidate = (row: CandidateRow): PrAutoDispatchCandidate => ({
+      backend: row.backend, eligibleSince: row.eligible_since, prKey: row.pr_key, threadId: row.thread_id,
+    });
+    if (thread) {
+      const own = this.stateDb.raw.prepare(
+        `SELECT pr_key, backend, thread_id, eligible_since FROM pr_auto_dispatch_candidates
+         WHERE backend = ? AND thread_id = ? ORDER BY pr_key`,
+      ).all(thread.backend, thread.threadId) as CandidateRow[];
+      const election = this.stateDb.raw.prepare(
+        `SELECT pr_key, backend, thread_id, eligible_since FROM pr_auto_dispatch_candidates
+         WHERE pr_key = ? ORDER BY eligible_since, backend, thread_id`,
+      );
+      const candidates: PrAutoDispatchCandidate[] = [];
+      for (const row of own) {
+        let winner: CandidateRow | undefined;
+        for (const competitor of election.iterate(row.pr_key) as Iterable<CandidateRow>) {
+          if (!eligible(competitor)) continue;
+          winner = competitor;
+          candidates.push(candidate(competitor));
+          break;
+        }
+        if (eligible(row) && (winner?.backend !== row.backend || winner.thread_id !== row.thread_id)) {
+          candidates.push(candidate(row));
+        }
+      }
+      return candidates;
+    }
+    const rows = this.stateDb.raw.prepare(
+      `SELECT pr_key, backend, thread_id, eligible_since FROM pr_auto_dispatch_candidates
+       ORDER BY pr_key, eligible_since, backend, thread_id`,
+    ).iterate() as Iterable<CandidateRow>;
+    const candidates: PrAutoDispatchCandidate[] = [];
+    for (const row of rows) if (eligible(row)) candidates.push(candidate(row));
+    return candidates;
   }
 
   async resetThreadPrAutoDispatchForOperator(params: {
@@ -6963,10 +7287,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           return { status: "pending" };
         }
       }
+      // A kind the spent attempts never targeted is a new problem. The usual
+      // case is main moving under a PR whose CI repairs ran out: the merge
+      // conflict gets its own attempts instead of inheriting the exhausted
+      // count. Kinds leave the incident only when they definitively resolve.
+      const incidentKinds = parsePrAutoDispatchKinds(incident?.active_kinds ?? "[]");
+      const addsKind = params.pending.eventKinds.some(
+        (kind) => !incidentKinds.includes(kind),
+      );
+      const attemptCount = addsKind ? 0 : (incident?.attempt_count ?? 0);
       // A dispatching claim reserves an attempt until submission returns.
       // Observe its ownership before reporting a limit that a busy or failed
       // submission may still refund.
-      if ((incident?.attempt_count ?? 0) >= params.maxAttempts) {
+      if (attemptCount >= params.maxAttempts) {
         return { status: "attempt-limit" };
       }
       if (activeClaim) {
@@ -7010,7 +7343,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
       const activeKinds = [
         ...new Set([
-          ...parsePrAutoDispatchKinds(incident?.active_kinds ?? "[]"),
+          ...incidentKinds,
           ...params.pending.eventKinds,
         ]),
       ];
@@ -7020,6 +7353,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
              backend, thread_id, pr_key, attempt_count, active_kinds, updated_at
            ) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(backend, thread_id, pr_key) DO UPDATE SET
+             attempt_count = excluded.attempt_count,
              active_kinds = excluded.active_kinds,
              updated_at = excluded.updated_at`,
         )
@@ -7027,7 +7361,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           params.backend,
           params.threadId,
           params.pending.prKey,
-          incident?.attempt_count ?? 0,
+          attemptCount,
           JSON.stringify(activeKinds),
           params.pending.createdAt,
         );
@@ -7817,7 +8151,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           JSON.stringify(params.watch),
         );
       if (inserted.changes > 0) {
-        return { status: "watching", watch: params.watch } as const;
+        return { status: "watching", existed: false, watch: params.watch } as const;
       }
       const duplicate = this.stateDb.raw
         .prepare(
@@ -7840,12 +8174,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         const notifyOn = [
           ...new Set([...existing.notifyOn, ...params.watch.notifyOn]),
         ];
+        // A newer baseline replaces an older or missing one, so a call made
+        // after a re-run cannot be woken by the outcome the re-run replaced.
+        const baseline = params.watch.baseline
+          && (
+            !existing.baseline
+            || params.watch.baseline.observedAt > existing.baseline.observedAt
+          )
+          ? params.watch.baseline
+          : existing.baseline;
         const merged: ThreadPullRequestWatchSummary = {
           ...existing,
           notifyOn,
           failureHandledByAutoFix:
             existing.failureHandledByAutoFix
             && params.watch.failureHandledByAutoFix,
+          // A later re-run's attempt replaces the one the watch waited for.
+          ...(params.watch.runAttempt !== undefined
+            ? { runAttempt: params.watch.runAttempt }
+            : {}),
+          ...(params.watch.runId !== undefined ? { runId: params.watch.runId } : {}),
+          ...(baseline ? { baseline } : {}),
         };
         this.stateDb.raw
           .prepare(
@@ -7864,10 +8213,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             JSON.stringify(merged),
             existing.watchId,
           );
-        return { status: "duplicate", watch: merged } as const;
+        return { status: "duplicate", existed: true, watch: merged } as const;
       }
       return {
         status: "duplicate",
+        existed: true,
         watch: params.watch,
       } as const;
     });
@@ -7887,8 +8237,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
      * terminal watch gets one terminal wake instead of a CI wake as well.
      */
     skipThreadsWithTerminalWatch?: boolean;
-  }): Promise<PrStatusWatchClaim[]> {
-    const claim = this.stateDb.raw.transaction(() => {
+    /**
+     * The failing check's link. A watch whose baseline failure has another
+     * link is past it: a re-run creates new job ids, so attempt 2's failure
+     * fires even when no poll saw the checks running in between.
+     */
+    failedCheckUrl?: string;
+    /**
+     * `backend:threadId` keys whose failure something else handles, such as
+     * Auto-fix. Their watches are never claimed. One that also waits for
+     * success takes the failure as its baseline and keeps waiting for success
+     * or another failure. A failure-only watch ends as `covered_by_auto_fix`.
+     * Neither ends another thread's watch: the oldest uncovered watch is
+     * claimed in the same pass.
+     */
+    skipThreadKeys?: ReadonlySet<string>;
+  }): Promise<PrStatusWatchClaimResult> {
+    const claim = this.stateDb.raw.transaction((): PrStatusWatchClaimResult => {
       const activeDispatch = this.stateDb.raw
         .prepare(
           `SELECT 1
@@ -7899,11 +8264,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
            LIMIT 1`,
         )
         .get(params.prKey, params.headSha, params.now);
-      if (activeDispatch) return [];
+      if (activeDispatch) return { claims: [], threads: [] };
 
-      const rows = this.stateDb.raw
+      const failedCheckUrl = params.failedCheckUrl ?? null;
+      const candidates = this.stateDb.raw
         .prepare(
-          `SELECT watch_id, attempt_count, payload
+          `SELECT watch_id, backend, thread_id, pr_key, notify_on_success, attempt_count, payload
            FROM pr_status_watches AS w
            WHERE pr_key = ? AND head_sha = ? AND head_sha <> ''
              AND (
@@ -7919,6 +8285,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                )
              )
              AND (
+               json_extract(payload, '$.baseline') IS NULL
+               OR json_extract(payload, '$.baseline.outcome') <> ?
+               OR (
+                 ? IS NOT NULL
+                 AND COALESCE(json_extract(payload, '$.baseline.failedCheckUrl'), '') <> ?
+               )
+             )
+             AND (
                ? = 0
                OR NOT EXISTS (
                  SELECT 1 FROM pr_status_watches AS t
@@ -7927,8 +8301,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                    AND t.status IN ('watching', 'dispatching')
                )
              )
-           ORDER BY created_at ASC, watch_id ASC
-           LIMIT 1`,
+           ORDER BY created_at ASC, watch_id ASC`,
         )
         .all(
           params.prKey,
@@ -7937,8 +8310,70 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           params.outcome,
           params.maxAttempts,
           params.now,
+          params.outcome,
+          failedCheckUrl,
+          failedCheckUrl,
           params.skipThreadsWithTerminalWatch ? 1 : 0,
-        ) as Array<PrStatusWatchRow & { watch_id: string }>;
+        ) as Array<PrStatusWatchRow & {
+          watch_id: string;
+          backend: string;
+          thread_id: string;
+          pr_key: string;
+          notify_on_success: number;
+        }>;
+      // The oldest uncovered watch receives the result. Covered watches are
+      // settled here rather than filtered in SQL. A held watch's baseline is
+      // set once: later polls of the same failure no longer select it.
+      const changed: typeof candidates = [];
+      const held = candidates.filter((row) =>
+        isHeldPrStatusWatch(row, params.skipThreadKeys)
+      );
+      if (held.length > 0) {
+        const baseline = JSON.stringify({
+          outcome: params.outcome,
+          observedAt: params.now,
+          ...(params.failedCheckUrl ? { failedCheckUrl: params.failedCheckUrl } : {}),
+        });
+        const hold = this.stateDb.raw.prepare(
+          `UPDATE pr_status_watches
+           SET payload = json_set(payload, '$.baseline', json(?)), updated_at = ?
+           WHERE watch_id = ? AND status = 'watching'`,
+        );
+        for (const row of held) {
+          if (hold.run(baseline, params.now, row.watch_id).changes > 0) changed.push(row);
+        }
+      }
+      // A failure-only watch has nothing left to wait for once its thread's
+      // Auto-fix takes the failure.
+      const handedOff = candidates.filter((row) =>
+        isCoveredPrStatusWatch(row, params.skipThreadKeys)
+        && !isHeldPrStatusWatch(row, params.skipThreadKeys)
+      );
+      if (handedOff.length > 0) {
+        const handOff = this.stateDb.raw.prepare(
+          `UPDATE pr_status_watches
+           SET status = 'dispatched', lease_owner = NULL,
+               lease_expires_at = NULL, updated_at = ?,
+               payload = json_set(
+                 payload, '$.endedReason', 'covered_by_auto_fix', '$.wokeOn', ?
+               )
+           WHERE watch_id = ?
+             AND (
+               status = 'watching'
+               OR (
+                 status = 'dispatching'
+                 AND COALESCE(lease_expires_at, 0) <= ?
+               )
+             )`,
+        );
+        for (const row of handedOff) {
+          const ended = handOff.run(params.now, params.outcome, row.watch_id, params.now);
+          if (ended.changes > 0) changed.push(row);
+        }
+      }
+      const rows = candidates
+        .filter((row) => !isCoveredPrStatusWatch(row, params.skipThreadKeys))
+        .slice(0, 1);
       const claimed: PrStatusWatchClaim[] = [];
       for (const row of rows) {
         const updated = this.stateDb.raw
@@ -7971,7 +8406,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           });
         }
       }
-      return claimed;
+      return { claims: claimed, threads: uniquePrStatusWatchThreads(changed) };
     });
     return claim();
   }
@@ -7982,7 +8417,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     now: number;
     spendAttempt: boolean;
     maxAttempts: number;
-  }): Promise<void> {
+  }): Promise<"watching" | "failed" | undefined> {
     const release = this.stateDb.raw.transaction(() => {
       const row = this.stateDb.raw
         .prepare(
@@ -7993,7 +8428,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         .get(params.watchId, params.ownerId) as
         | { attempt_count: number }
         | undefined;
-      if (!row) return;
+      if (!row) return undefined;
       const attemptCount = params.spendAttempt
         ? row.attempt_count
         : Math.max(0, row.attempt_count - 1);
@@ -8002,18 +8437,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         .prepare(
           `UPDATE pr_status_watches
            SET status = ?, attempt_count = ?, lease_owner = NULL,
-               lease_expires_at = NULL, updated_at = ?
+               lease_expires_at = NULL, updated_at = ?,
+               payload = CASE
+                 WHEN ? = 'failed' THEN json_set(payload, '$.endedReason', 'failed')
+                 ELSE payload
+               END
            WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
         )
         .run(
           status,
           attemptCount,
           params.now,
+          status,
           params.watchId,
           params.ownerId,
         );
+      return status;
     });
-    release();
+    return release();
   }
 
   async renewThreadPrStatusWatchLease(params: {
@@ -8037,6 +8478,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return result.changes > 0;
   }
 
+  /**
+   * Finish a delivered CI watch. Other threads' watches at the head that the
+   * same outcome would fire end with it as `another_thread_woke`: the oldest
+   * watch receives the result. Watches held back by a baseline or
+   * `skipThreadKeys` keep waiting.
+   */
   async finishThreadPrStatusWatch(params: {
     watchId: string;
     ownerId: string;
@@ -8044,7 +8491,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     headSha: string;
     outcome: "success" | "failure";
     now: number;
-  }): Promise<void> {
+    failedCheckUrl?: string;
+    skipThreadKeys?: ReadonlySet<string>;
+  }): Promise<PrStatusWatchThreadRef[]> {
     const finish = this.stateDb.raw.transaction(() => {
       const claimed = this.stateDb.raw
         .prepare(
@@ -8053,46 +8502,143 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
            WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
         )
         .get(params.watchId, params.ownerId);
-      if (!claimed) return;
-      this.stateDb.raw
+      if (!claimed) return [];
+      const failedCheckUrl = params.failedCheckUrl ?? null;
+      const candidates = this.stateDb.raw
         .prepare(
-          `UPDATE pr_status_watches
-           SET status = 'dispatched', lease_owner = NULL,
-               lease_expires_at = NULL, updated_at = ?
+          `SELECT watch_id, backend, thread_id, pr_key, notify_on_success
+           FROM pr_status_watches
            WHERE pr_key = ? AND head_sha = ?
              AND (
                (? = 'success' AND notify_on_success = 1)
                OR (? = 'failure' AND notify_on_failure = 1)
              )
              AND (
-               status = 'watching'
+               (
+                 status = 'watching'
+                 AND (
+                   json_extract(payload, '$.baseline') IS NULL
+                   OR json_extract(payload, '$.baseline.outcome') <> ?
+                   OR (
+                     ? IS NOT NULL
+                     AND COALESCE(json_extract(payload, '$.baseline.failedCheckUrl'), '') <> ?
+                   )
+                 )
+               )
                OR (watch_id = ? AND status = 'dispatching' AND lease_owner = ?)
              )`,
         )
-        .run(
-          params.now,
+        .all(
           params.prKey,
           params.headSha,
           params.outcome,
           params.outcome,
+          params.outcome,
+          failedCheckUrl,
+          failedCheckUrl,
           params.watchId,
           params.ownerId,
+        ) as Array<{
+          watch_id: string;
+          backend: string;
+          thread_id: string;
+          pr_key: string;
+          notify_on_success: number;
+        }>;
+      const ended = candidates.filter((row) =>
+        row.watch_id === params.watchId
+        || !isHeldPrStatusWatch(row, params.skipThreadKeys)
+      );
+      const update = this.stateDb.raw.prepare(
+        `UPDATE pr_status_watches
+         SET status = 'dispatched', lease_owner = NULL,
+             lease_expires_at = NULL, updated_at = ?,
+             payload = json_set(payload, '$.endedReason', ?, '$.wokeOn', ?)
+         WHERE watch_id = ?
+           AND (
+             status = 'watching'
+             OR (status = 'dispatching' AND lease_owner = ?)
+           )`,
+      );
+      for (const row of ended) {
+        // Only the claimed watch's thread got the turn.
+        update.run(
+          params.now,
+          row.watch_id === params.watchId ? "woke" : "another_thread_woke",
+          params.outcome,
+          row.watch_id,
+          params.ownerId,
         );
+      }
+      return uniquePrStatusWatchThreads(ended);
     });
-    finish();
+    return finish();
   }
 
-  async supersedeThreadPrStatusWatches(params: {
+  /**
+   * Bring a PR's CI watches up to date with one poll, in one transaction:
+   * a CI watch on an older head moves to the new head (or ends, when its
+   * thread already watches the new head), and while checks run at the head a
+   * baseline stops mattering, so it is cleared. An idle poll only reads.
+   */
+  async advanceThreadPrStatusWatches(params: {
     prKey: string;
     headSha: string;
+    /** No CI outcome yet at this head. */
+    checksRunning: boolean;
     now: number;
-  }): Promise<number> {
-    const result = this.stateDb.raw
-      .prepare(
+  }): Promise<PrStatusWatchAdvanceResult> {
+    const advance = this.stateDb.raw.transaction(() => {
+      const stale = this.stateDb.raw
+        .prepare(
+          `SELECT watch_id, backend, thread_id, pr_key, head_sha,
+                  notify_on_success, notify_on_failure, created_at, payload
+           FROM pr_status_watches AS w
+           WHERE pr_key = ? AND head_sha <> ? AND head_sha <> ''
+             AND (
+               status = 'watching'
+               OR (
+                 status = 'dispatching'
+                 AND COALESCE(lease_expires_at, 0) <= ?
+               )
+             )
+           ORDER BY created_at ASC, watch_id ASC`,
+        )
+        .all(params.prKey, params.headSha, params.now) as Array<{
+          watch_id: string;
+          backend: string;
+          thread_id: string;
+          pr_key: string;
+          head_sha: string;
+          notify_on_success: number;
+          notify_on_failure: number;
+          created_at: number;
+          payload: string;
+        }>;
+      const activeAtHead = this.stateDb.raw.prepare(
+        `SELECT 1
+         FROM pr_status_watches
+         WHERE backend = ? AND thread_id = ? AND pr_key = ? AND head_sha = ?
+           AND status IN ('watching', 'dispatching')
+         LIMIT 1`,
+      );
+      const insertFollower = this.stateDb.raw.prepare(
+        `INSERT OR IGNORE INTO pr_status_watches(
+           watch_id, backend, thread_id, pr_key, head_sha,
+           notify_on_success, notify_on_failure,
+           notify_on_merged, notify_on_closed, status, attempt_count,
+           lease_owner, lease_expires_at, created_at, updated_at, payload
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'watching', 0, NULL, NULL, ?, ?, ?)`,
+      );
+      const endOld = this.stateDb.raw.prepare(
         `UPDATE pr_status_watches
          SET status = 'superseded', lease_owner = NULL,
-             lease_expires_at = NULL, updated_at = ?
-         WHERE pr_key = ? AND head_sha <> ? AND head_sha <> ''
+             lease_expires_at = NULL, updated_at = ?,
+             payload = CASE
+               WHEN ? IS NULL THEN json_set(payload, '$.endedReason', 'head_changed')
+               ELSE json_set(payload, '$.endedReason', 'moved', '$.movedTo', ?)
+             END
+         WHERE watch_id = ?
            AND (
              status = 'watching'
              OR (
@@ -8100,9 +8646,87 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                AND COALESCE(lease_expires_at, 0) <= ?
              )
            )`,
-      )
-      .run(params.now, params.prKey, params.headSha, params.now);
-    return result.changes;
+      );
+      let moved = 0;
+      let superseded = 0;
+      const changedRows: Array<{ backend: string; thread_id: string; pr_key: string }> = [];
+      for (const row of stale) {
+        const watch = parsePrStatusWatchSummary(row.payload);
+        let movedTo: string | null = null;
+        if (
+          watch
+          && !activeAtHead.get(row.backend, row.thread_id, row.pr_key, params.headSha)
+        ) {
+          // A run belongs to its head: the new head starts from attempt 1.
+          const {
+            baseline: _baseline,
+            runAttempt: _runAttempt,
+            runId: _runId,
+            ...rest
+          } = watch;
+          const follower: ThreadPullRequestWatchSummary = {
+            ...rest,
+            watchId: randomUUID(),
+            headSha: params.headSha,
+            followedFrom: row.head_sha,
+          };
+          const inserted = insertFollower.run(
+            follower.watchId,
+            row.backend,
+            row.thread_id,
+            row.pr_key,
+            params.headSha,
+            row.notify_on_success,
+            row.notify_on_failure,
+            row.created_at,
+            params.now,
+            JSON.stringify(follower),
+          );
+          if (inserted.changes > 0) movedTo = follower.watchId;
+        }
+        const ended = endOld.run(params.now, movedTo, movedTo, row.watch_id, params.now);
+        if (ended.changes > 0) {
+          if (movedTo) moved += 1;
+          else superseded += 1;
+          changedRows.push(row);
+        }
+      }
+
+      let baselinesCleared = 0;
+      if (params.checksRunning) {
+        const baselined = this.stateDb.raw
+          .prepare(
+            `SELECT watch_id, backend, thread_id, pr_key
+             FROM pr_status_watches
+             WHERE pr_key = ? AND head_sha = ? AND status = 'watching'
+               AND json_extract(payload, '$.baseline') IS NOT NULL`,
+          )
+          .all(params.prKey, params.headSha) as Array<{
+            watch_id: string;
+            backend: string;
+            thread_id: string;
+            pr_key: string;
+          }>;
+        if (baselined.length > 0) {
+          baselinesCleared = this.stateDb.raw
+            .prepare(
+              `UPDATE pr_status_watches
+               SET payload = json_remove(payload, '$.baseline'), updated_at = ?
+               WHERE pr_key = ? AND head_sha = ? AND status = 'watching'
+                 AND json_extract(payload, '$.baseline') IS NOT NULL`,
+            )
+            .run(params.now, params.prKey, params.headSha).changes;
+          changedRows.push(...baselined);
+        }
+      }
+      return {
+        moved,
+        superseded,
+        baselinesCleared,
+        threads: uniquePrStatusWatchThreads(changedRows),
+      };
+    });
+    return advance();
   }
 
   /**
@@ -8186,6 +8810,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   async finishThreadPrTerminalWatch(params: {
     watchId: string;
     ownerId: string;
+    outcome: "merged" | "closed";
     now: number;
   }): Promise<void> {
     const finish = this.stateDb.raw.transaction(() => {
@@ -8203,19 +8828,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         .prepare(
           `UPDATE pr_status_watches
            SET status = 'dispatched', lease_owner = NULL,
-               lease_expires_at = NULL, updated_at = ?
+               lease_expires_at = NULL, updated_at = ?,
+               payload = json_set(payload, '$.endedReason', 'woke', '$.wokeOn', ?)
            WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
         )
-        .run(params.now, params.watchId, params.ownerId);
+        .run(params.now, params.outcome, params.watchId, params.ownerId);
       this.stateDb.raw
         .prepare(
           `UPDATE pr_status_watches
            SET status = 'superseded', lease_owner = NULL,
-               lease_expires_at = NULL, updated_at = ?
+               lease_expires_at = NULL, updated_at = ?,
+               payload = json_set(payload, '$.endedReason', ?)
            WHERE backend = ? AND thread_id = ? AND pr_key = ?
              AND head_sha <> '' AND status = 'watching'`,
         )
-        .run(params.now, claimed.backend, claimed.thread_id, claimed.pr_key);
+        .run(
+          params.now,
+          params.outcome === "merged" ? "pr_merged" : "pr_closed",
+          claimed.backend,
+          claimed.thread_id,
+          claimed.pr_key,
+        );
     });
     finish();
   }
@@ -8248,6 +8881,120 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return rows.map((row) => row.pr_key);
   }
 
+  /** Every undelivered watch, across threads. */
+  async listAllActiveThreadPrStatusWatches(): Promise<ThreadPullRequestWatchSummary[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT payload
+         FROM pr_status_watches
+         WHERE status IN ('watching', 'dispatching')
+         ORDER BY created_at ASC`,
+      )
+      .all() as Array<{ payload: string }>;
+    return rows.flatMap((row) => {
+      const watch = parsePrStatusWatchSummary(row.payload);
+      return watch ? [watch] : [];
+    });
+  }
+
+  /**
+   * Move undelivered watches stored under a renamed repository's old name to
+   * the name the forge reports now. Status snapshots carry the new name, and
+   * every claim matches `pr_key` exactly, so an old-name watch would never
+   * fire. A watch whose thread already watches the new name for the same head
+   * merges into that watch. A watch held by a live dispatch lease is left
+   * alone: its owner finishes it by its current key.
+   *
+   * Reads only until a row needs moving, then commits once.
+   */
+  async canonicalizeThreadPrStatusWatchKeys(params: {
+    canonicalizePrKey: (key: string) => string;
+    canonicalizePrUrl: (url: string) => string;
+    now: number;
+  }): Promise<number> {
+    const select = `SELECT watch_id, backend, thread_id, pr_key, head_sha, status, payload
+       FROM pr_status_watches
+       WHERE status = 'watching'
+         OR (status = 'dispatching' AND COALESCE(lease_expires_at, 0) <= ?)
+       ORDER BY created_at ASC, watch_id ASC`;
+    type Row = {
+      watch_id: string;
+      backend: string;
+      thread_id: string;
+      pr_key: string;
+      head_sha: string;
+      status: string;
+      payload: string;
+    };
+    const needsMove = (row: Row) => params.canonicalizePrKey(row.pr_key) !== row.pr_key;
+    const candidates = this.stateDb.raw.prepare(select).all(params.now) as Row[];
+    if (!candidates.some(needsMove)) return 0;
+    const move = this.stateDb.raw.transaction(() => {
+      // Read again inside the write lock; another instance may have moved them.
+      const rows = (this.stateDb.raw.prepare(select).all(params.now) as Row[]).filter(needsMove);
+      const findTarget = this.stateDb.raw.prepare(
+        `SELECT watch_id, payload
+         FROM pr_status_watches
+         WHERE backend = ? AND thread_id = ? AND pr_key = ? AND head_sha = ?
+           AND status IN ('watching', 'dispatching')
+         LIMIT 1`,
+      );
+      const writeNotify = (watchId: string, watch: ThreadPullRequestWatchSummary, prKey: string) =>
+        this.stateDb.raw
+          .prepare(
+            `UPDATE pr_status_watches
+             SET pr_key = ?, notify_on_success = ?, notify_on_failure = ?,
+                 notify_on_merged = ?, notify_on_closed = ?,
+                 updated_at = ?, payload = ?
+             WHERE watch_id = ?`,
+          )
+          .run(
+            prKey,
+            watch.notifyOn.includes("success") ? 1 : 0,
+            watch.notifyOn.includes("failure") ? 1 : 0,
+            watch.notifyOn.includes("merged") ? 1 : 0,
+            watch.notifyOn.includes("closed") ? 1 : 0,
+            params.now,
+            JSON.stringify(watch),
+            watchId,
+          );
+      let moved = 0;
+      for (const row of rows) {
+        const watch = parsePrStatusWatchSummary(row.payload);
+        if (!watch) continue;
+        const prKey = params.canonicalizePrKey(row.pr_key);
+        const target = findTarget.get(row.backend, row.thread_id, prKey, row.head_sha) as
+          | { watch_id: string; payload: string }
+          | undefined;
+        const existing = target ? parsePrStatusWatchSummary(target.payload) : undefined;
+        if (target && existing) {
+          writeNotify(target.watch_id, {
+            ...existing,
+            notifyOn: [...new Set([...existing.notifyOn, ...watch.notifyOn])],
+            failureHandledByAutoFix: existing.failureHandledByAutoFix && watch.failureHandledByAutoFix,
+          }, prKey);
+          this.stateDb.raw
+            .prepare(
+              `UPDATE pr_status_watches
+               SET status = 'superseded', lease_owner = NULL,
+                   lease_expires_at = NULL, updated_at = ?
+               WHERE watch_id = ?`,
+            )
+            .run(params.now, row.watch_id);
+        } else {
+          writeNotify(row.watch_id, {
+            ...watch,
+            prKey,
+            prUrl: params.canonicalizePrUrl(watch.prUrl),
+          }, prKey);
+        }
+        moved += 1;
+      }
+      return moved;
+    });
+    return move.immediate();
+  }
+
   async listActiveThreadPrStatusWatches(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -8267,6 +9014,104 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     });
   }
 
+  /** Every active watch on this instance, for the operator's indicators. */
+  async listAllActivePrStatusWatches(): Promise<ThreadPullRequestWatchSummary[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT payload
+         FROM pr_status_watches
+         WHERE status IN ('watching', 'dispatching')
+         ORDER BY created_at ASC, watch_id ASC`,
+      )
+      .all() as Array<{ payload: string }>;
+    return rows.flatMap((row) => {
+      const watch = parsePrStatusWatchSummary(row.payload);
+      return watch ? [watch] : [];
+    });
+  }
+
+  /** A thread's ended watches, newest first, from the retained rows. */
+  async listThreadPrStatusWatchHistory(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    limit: number;
+  }): Promise<ThreadPrWatchHistoryEntry[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT payload, status, updated_at
+         FROM pr_status_watches
+         WHERE backend = ? AND thread_id = ?
+           AND status IN ('dispatched', 'superseded', 'cancelled', 'failed')
+         ORDER BY updated_at DESC, watch_id DESC
+         LIMIT ?`,
+      )
+      .all(
+        params.backend,
+        params.threadId,
+        Math.max(1, Math.floor(params.limit)),
+      ) as Array<{ payload: string; status: string; updated_at: number }>;
+    return rows.flatMap((row) => {
+      const watch = parsePrStatusWatchSummary(row.payload) as
+        | (ThreadPullRequestWatchSummary & Partial<ThreadPrWatchHistoryEntry>)
+        | undefined;
+      if (!watch) return [];
+      return [{
+        ...watch,
+        status: row.status as ThreadPrWatchHistoryEntry["status"],
+        updatedAt: row.updated_at,
+      }];
+    });
+  }
+
+  /**
+   * Stop one watch for the operator, or for the agent when `endedReason`
+   * says so. A watch being delivered under a live lease is left alone: its
+   * wake is already on the way.
+   */
+  async cancelThreadPrStatusWatch(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    watchId: string;
+    now: number;
+    endedReason?: "cancelled_by_operator" | "cancelled_by_agent";
+  }): Promise<PrStatusWatchThreadRef | undefined> {
+    const cancel = this.stateDb.raw.transaction(() => {
+      const row = this.stateDb.raw
+        .prepare(
+          `SELECT backend, thread_id, pr_key
+           FROM pr_status_watches
+           WHERE watch_id = ? AND backend = ? AND thread_id = ?`,
+        )
+        .get(params.watchId, params.backend, params.threadId) as
+        | { backend: string; thread_id: string; pr_key: string }
+        | undefined;
+      if (!row) return undefined;
+      const updated = this.stateDb.raw
+        .prepare(
+          `UPDATE pr_status_watches
+           SET status = 'cancelled', lease_owner = NULL,
+               lease_expires_at = NULL, updated_at = ?,
+               payload = json_set(payload, '$.endedReason', ?)
+           WHERE watch_id = ?
+             AND (
+               status = 'watching'
+               OR (
+                 status = 'dispatching'
+                 AND COALESCE(lease_expires_at, 0) <= ?
+               )
+             )`,
+        )
+        .run(
+          params.now,
+          params.endedReason ?? "cancelled_by_operator",
+          params.watchId,
+          params.now,
+        );
+      return updated.changes > 0 ? uniquePrStatusWatchThreads([row])[0] : undefined;
+    });
+    return cancel();
+  }
+
   async cancelThreadPrStatusWatchesForPr(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -8277,7 +9122,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .prepare(
         `UPDATE pr_status_watches
          SET status = 'cancelled', lease_owner = NULL,
-             lease_expires_at = NULL, updated_at = ?
+             lease_expires_at = NULL, updated_at = ?,
+             payload = json_set(payload, '$.endedReason', 'detached')
          WHERE backend = ? AND thread_id = ? AND pr_key = ?
            AND (
              status = 'watching'
@@ -8596,12 +9442,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return this.readLaunchpadDefaults();
   }
 
+  /** `provider` names whose settings the patch holds; it defaults to the defaults' own. */
   async setLaunchpadDefaults(
     patch: Partial<NavigationLaunchpadDefaults>,
+    options?: { provider?: AppServerBackendKind },
   ): Promise<NavigationLaunchpadDefaults> {
     const current = this.readLaunchpadDefaults();
     const next = normalizeLaunchpadDefaults(
-      applyNavigationLaunchpadProviderSettingsPatch(current, patch),
+      applyNavigationLaunchpadDefaultsPatch(
+        current,
+        patch,
+        options?.provider ?? current.backend,
+      ),
     );
     this.writeLaunchpadDefaults(next);
     return next;
@@ -9763,10 +10615,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   async forgetThreadArchiveStates(records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>): Promise<void> {
+    const hasHold = this.stateDb.raw.prepare(`
+      SELECT 1 FROM threads t, json_each(CASE WHEN json_valid(t.payload) THEN t.payload ELSE '{}' END, '$.mergeHolds') h
+      WHERE t.thread_id = ? AND json_extract(h.value, '$.status') = 'waiting' LIMIT 1
+    `);
+    const storageKey = (record: { backend: ThreadOverlayState["backend"]; threadId: string }) =>
+      encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId));
+    records = records.filter((record) => !hasHold.get(storageKey(record)));
     if (!records.length) return;
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare("DELETE FROM threads WHERE thread_id = ?");
-      const storageKeys = records.map((record) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId)));
+      // Archive cleanup must not silently release a landing prerequisite.
+      // Keep its owner record until the hold is explicitly cleared.
+      const storageKeys = records.map(storageKey).filter((key) => !hasHold.get(key));
       for (const storageKey of storageKeys) remove.run(storageKey);
       // Explicit, not a trigger: with recursive_triggers on, INSERT OR REPLACE
       // fires delete triggers, which would erase a live thread's cards.
@@ -10883,6 +11744,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
     line.provider !== "openai"
     && line.provider !== "qwen"
     && line.provider !== "xai"
+    && line.provider !== "anthropic"
   ) {
     return line;
   }
@@ -11487,6 +12349,7 @@ export type OverlayStoreLike = Pick<
   | "readThreadSubAgentLensCounts"
   | "listThreadSubAgentLensPage"
   | "listThreadSubAgentPage"
+  | "listEndedThreadTaskMonitors"
   | "readThreadTokenMiserGateTotals"
   | "setThreadReaction"
   | "setThreadLock"
@@ -11507,6 +12370,7 @@ export type OverlayStoreLike = Pick<
   | "setDirectoryPin"
   | "reorderDirectoryPins"
   | "setDirectoryThreadsCollapsed"
+  | "setDirectoryForgeAutomation"
   | "setRemoteDirectoryThreadsCollapsed"
   | "readRemoteDirectoryOverlays"
   | "getDirectoryOverlayState"
@@ -11527,6 +12391,7 @@ export type OverlayStoreLike = Pick<
   | "syncThreadPrAutoDispatchCandidates"
   | "syncThreadPrAutoDispatchCandidatesBatch"
   | "getPrAutoDispatchCandidateWinner"
+  | "listPrAutoDispatchCandidates"
   | "resetThreadPrAutoDispatchForOperator"
   | "scheduleThreadPrAutoDispatch"
   | "beginThreadPrAutoDispatch"
@@ -11550,12 +12415,17 @@ export type OverlayStoreLike = Pick<
   | "releaseThreadPrStatusWatch"
   | "renewThreadPrStatusWatchLease"
   | "finishThreadPrStatusWatch"
-  | "supersedeThreadPrStatusWatches"
+  | "advanceThreadPrStatusWatches"
   | "listActiveThreadPrStatusWatches"
+  | "listAllActivePrStatusWatches"
+  | "listThreadPrStatusWatchHistory"
+  | "cancelThreadPrStatusWatch"
   | "cancelThreadPrStatusWatchesForPr"
   | "claimThreadPrTerminalWatches"
   | "finishThreadPrTerminalWatch"
   | "listPendingPrTerminalWatchPrKeys"
+  | "listAllActiveThreadPrStatusWatches"
+  | "canonicalizeThreadPrStatusWatchKeys"
   | "turnOffCodexFastEverywhere"
   | "setThreadExpectedBranch"
   | "setThreadObservedBranch"

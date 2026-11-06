@@ -46,6 +46,7 @@ export type PrAutoDispatchOutcome = {
     | "deferred"
     | "missing-head"
     | "disabled"
+    | "project-off"
     | "busy"
     | "pending"
     | "duplicate"
@@ -204,6 +205,16 @@ export class PrAutoDispatchCoordinator {
         prKey: string;
       }) => boolean;
       getCurrentPr?: (prKey: string) => PrSummary | undefined;
+      /**
+       * Whether the thread's project lets Auto-fix act on this kind of
+       * incident (Forge Automation). Absent means every kind is allowed.
+       * Read at scheduling and again at dispatch, so a repair scheduled
+       * before the project changed is cancelled rather than sent.
+       */
+      allowsEventKind?: (
+        identity: { backend: AppServerBackendKind; threadId: string },
+        kind: ThreadPrAutoDispatchEventKind,
+      ) => boolean;
       refreshPendingPrs?: (
         pending: ThreadPrAutoDispatchPending[],
       ) => Promise<ReadonlySet<string>>;
@@ -235,7 +246,7 @@ export class PrAutoDispatchCoordinator {
     }
 
     const eventKinds = getPrAutoDispatchEventKinds(params.pr);
-    const event = buildPrAutoDispatchEvent(params.pr);
+    const unfilteredEvent = buildPrAutoDispatchEvent(params.pr);
     const prKey = buildPullRequestStatusKey(params.pr);
     const resolvedKinds = getDefinitivelyResolvedEventKinds(params.pr);
     const outcomes: PrAutoDispatchOutcome[] = [];
@@ -253,6 +264,21 @@ export class PrAutoDispatchCoordinator {
         resolvedKinds,
         now: params.observedAt,
       });
+
+      // The project's Forge Automation narrows the incident to the kinds it
+      // allows; the fingerprint follows, so dispatch can tell a change.
+      const event = unfilteredEvent
+        ? buildPrAutoDispatchEvent(params.pr, this.kindFilter(identity))
+        : undefined;
+      if (unfilteredEvent && !event) {
+        const record = await this.options.store
+          .getThreadPrAutoDispatchPending(identity);
+        if (record?.pending.prKey === prKey) {
+          await this.cancelForProject(identity, record.pending, params.observedAt);
+        }
+        outcomes.push({ threadKey, status: "project-off" });
+        continue;
+      }
 
       if (!event) {
         const record = await this.options.store
@@ -366,6 +392,22 @@ export class PrAutoDispatchCoordinator {
     return true;
   }
 
+  /**
+   * Cancel the thread's pending repair when its project no longer allows
+   * every kind it would fix. Cancelled as deferred, so the next observation
+   * after the project allows it again can schedule a fresh repair.
+   */
+  async cancelPendingDisallowedByProject(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean> {
+    const record = await this.options.store.getThreadPrAutoDispatchPending(params);
+    if (!record || !this.projectDisallows(params, record.pending.eventKinds)) {
+      return false;
+    }
+    return await this.cancelForProject(params, record.pending, this.now());
+  }
+
   async cancelAllPendingForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -439,6 +481,10 @@ export class PrAutoDispatchCoordinator {
     if (this.options.isBackgroundPollingEnabled?.() === false) return;
     const record = await this.options.store.getThreadPrAutoDispatchPending(identity);
     if (!record || record.pending.fingerprint !== fingerprint) return;
+    if (this.projectDisallows(identity, record.pending.eventKinds)) {
+      await this.cancelForProject(identity, record.pending, this.now());
+      return;
+    }
 
     const activity = (
       message: string,
@@ -454,7 +500,7 @@ export class PrAutoDispatchCoordinator {
     };
     const currentPr = this.options.getCurrentPr?.(record.pending.prKey);
     const currentEvent = currentPr
-      ? buildPrAutoDispatchEvent(currentPr)
+      ? buildPrAutoDispatchEvent(currentPr, this.kindFilter(identity))
       : undefined;
     const attached = this.options.isPrAttached?.({
       ...identity,
@@ -722,6 +768,46 @@ export class PrAutoDispatchCoordinator {
     return () => clearInterval(timer);
   }
 
+  private kindFilter(
+    identity: { backend: AppServerBackendKind; threadId: string },
+  ): ((kind: ThreadPrAutoDispatchEventKind) => boolean) | undefined {
+    const allows = this.options.allowsEventKind;
+    return allows ? (kind) => allows(identity, kind) : undefined;
+  }
+
+  private projectDisallows(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    eventKinds: readonly ThreadPrAutoDispatchEventKind[],
+  ): boolean {
+    const allows = this.kindFilter(identity);
+    return Boolean(allows && eventKinds.some((kind) => !allows(kind)));
+  }
+
+  private async cancelForProject(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    pending: Pick<ThreadPrAutoDispatchPending, "fingerprint" | "prKey">,
+    now: number,
+  ): Promise<boolean> {
+    const cancelled = await this.options.store.cancelThreadPrAutoDispatch({
+      ...identity,
+      fingerprint: pending.fingerprint,
+      now,
+      status: "deferred",
+    });
+    this.clearTimer(this.threadKey(identity));
+    if (!cancelled) return false;
+    this.options.onActivity?.({
+      category: "repair",
+      source: "Auto-fix",
+      threadKeys: [this.threadKey(identity)],
+      prKeys: [pending.prKey],
+      tone: "warning",
+      message: "Cancelled: off in this project's Forge Automation",
+    });
+    await this.notifyPending(identity, null);
+    return true;
+  }
+
   private async notifyPending(
     identity: { backend: AppServerBackendKind; threadId: string },
     pending: ThreadPrAutoDispatchPending | null,
@@ -787,8 +873,10 @@ export { pullRequestMatchesRepositoryKey } from "@pwragent/shared";
 
 export function buildPrAutoDispatchEvent(
   pr: PrSummary,
+  allowsKind?: (kind: ThreadPrAutoDispatchEventKind) => boolean,
 ): PrAutoDispatchEvent | undefined {
-  const eventKinds = getPrAutoDispatchEventKinds(pr);
+  const eventKinds = getPrAutoDispatchEventKinds(pr)
+    .filter((kind) => !allowsKind || allowsKind(kind));
   if (eventKinds.length === 0 || !pr.headSha) return undefined;
   const prKey = buildPullRequestStatusKey(pr);
   const fingerprintPayload = {

@@ -3,6 +3,7 @@ import { findPreferredReviewWorkspaceCwd } from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerThreadSummary,
+  AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadReplay,
   CreateScheduledThreadActionRequest,
@@ -11,6 +12,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
+import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
 import {
   DesktopMessagingBackendBridge,
   type DesktopMessagingFederationBridge,
@@ -947,6 +949,44 @@ describe("DesktopMessagingBackendBridge", () => {
       messageOrigin,
       origin: "messaging",
     });
+  });
+
+  it.each([false, true])("preserves monitor read activity classification at the owner (remote=%s)", async (remote) => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex", threadId: "thread-1", fetchedAt: 1_000, threadStatus: "idle",
+      replay: {
+        entries: [], messages: [], lastAssistantMessage: "Fixture reply",
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    };
+    const readThread = vi.fn(async (_request: AppServerReadThreadRequest) => response);
+    const registry = {
+      readThread,
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+    } as unknown as DesktopBackendRegistry;
+    const remoteReadThread = vi.fn(async (request: AppServerReadThreadRequest) =>
+      await readThreadForPeer(registry, request));
+    const bridge = new DesktopMessagingBackendBridge(registry, {
+      connectedPeerTargets: () => [{
+        target: { scope: "remote", instanceId: "peer-a" }, label: "peer-a", capabilities: ["messaging_route"],
+      }],
+      remoteBackend: () => ({ readThread: remoteReadThread } as unknown as FederationBackendOperations),
+    } as unknown as DesktopMessagingFederationBridge);
+    const thread = {
+      backend: "codex" as const, threadId: "thread-1",
+      ...(remote ? { federationTarget: { scope: "remote" as const, instanceId: "peer-a" } } : {}),
+    };
+
+    expect(await bridge.readThreadStatus({ ...thread, countsAsActivity: false })).toBe("idle");
+    expect(await bridge.readThreadLastAssistantMessage({ ...thread, countsAsActivity: false })).toBe("Fixture reply");
+    await bridge.readThreadStatus(thread);
+
+    expect(readThread).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      countsAsActivity: false, includeTurns: false, limit: 0,
+    }));
+    expect(readThread).toHaveBeenNthCalledWith(2, expect.objectContaining({ countsAsActivity: false, limit: 20 }));
+    expect(readThread.mock.calls[2]?.[0]).not.toHaveProperty("countsAsActivity");
+    expect(remoteReadThread).toHaveBeenCalledTimes(remote ? 3 : 0);
   });
 
   it("reads active turns from the registry", async () => {

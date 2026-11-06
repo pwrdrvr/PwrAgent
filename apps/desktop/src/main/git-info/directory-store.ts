@@ -8,6 +8,7 @@ import {
   directoryEnrichmentDiagnostics, type DirectoryEnrichmentCaller, type DirectoryEnrichmentContext,
 } from "../diagnostics/directory-enrichment-diagnostics";
 import { GitReadCache, type GitReadRequest } from "./read-cache";
+import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 
 export type { ThreadDirectoryEnrichment } from "./private/directory-probe";
 
@@ -78,6 +79,7 @@ export function createThreadDirectoryEnricher(options: { now?: () => number } = 
       observationErrors += 1;
       return undefined;
     });
+    gitSubprocessDiagnostics.observeRepository(key, before?.commonDirectory);
     const cached = cache.get(key);
     const sameRelationship = before
       && cached?.observation.relationship === before.relationship;

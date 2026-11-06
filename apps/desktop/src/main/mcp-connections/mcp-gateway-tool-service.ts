@@ -1,8 +1,14 @@
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ElicitRequestParams, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { McpConnectionGatewayService } from "./mcp-connection-gateway-service";
 import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource, type McpGatewayIdentity } from "./mcp-gateway-catalog";
-import { MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS, MCP_DISCOVERY_RESPONSE_GRACE_MS } from "./mcp-connection-timeouts";
+import {
+  MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
+  MCP_CONNECTION_TOOL_TIMEOUT_MS,
+  MCP_DISCOVERY_RESPONSE_GRACE_MS,
+  MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
+  progressExtendedTimeout,
+} from "./mcp-connection-timeouts";
 
 export type McpGatewayCallArgs = Omit<McpGatewayInvocation, "serverName">;
 export type McpGatewaySearch = { query: string; connectionId?: string; limit?: number };
@@ -12,7 +18,17 @@ export type McpGatewayApproval = boolean | {
 };
 export type McpGatewaySearchResult = {
   tools: Array<Omit<McpGatewayTool, "serverInstructions" | "serverIdentity"> & { invocation: { name: "call_mcp_tool"; codeModeName: "pwragent__call_mcp_tool" } }>;
-  servers?: Array<McpGatewayIdentity & { connectionId: string; serverName: string }>;
+  servers?: Array<McpGatewayIdentity & {
+    connectionId: string;
+    serverName: string;
+    /** Host-resolved alias in this thread's native MCP configuration. */
+    serverNameInAgent?: string;
+    resourceDiscovery?: {
+      server: string;
+      listTool: "list_mcp_resources" | "ListMcpResourcesTool";
+      readTool: "read_mcp_resource" | "ReadMcpResourceTool";
+    };
+  }>;
   unavailable: Array<{ connectionId: string; message: string }>;
   /** Each returned tool's server guidance, once per server. */
   serverInstructions?: Array<{ connectionId: string; serverName: string; instructions: string }>;
@@ -24,10 +40,19 @@ export type McpGatewayToolServiceOptions = {
   selectedConnections: (context: AgentToolCallContext) => Promise<string[]>;
   /** Trusted host identity, never supplied by tool arguments. */
   scopeKey?: (context: AgentToolCallContext) => string;
+  /** Current native bridge alias, never an upstream name or gateway worker alias. */
+  serverNameInAgent?: (connectionId: string, context: AgentToolCallContext) => string | undefined;
   /** A host policy can narrow discovery and invocation independently of approval. */
   toolAllowed?: (tool: McpGatewayTool, context: AgentToolCallContext) => boolean;
   /** `annotations` are the listed tool's own hints, under its exact schema revision. */
   approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"], catalogRevision: string, consentRevision?: string) => Promise<McpGatewayApproval>;
+  /**
+   * Shows a form or link the upstream server sends while an approved call
+   * runs, and resolves with the person's answer. Separate from `approve`:
+   * approving the invocation never answers the server's own form. Absent,
+   * forms and links fail closed.
+   */
+  elicit?: (request: ElicitRequestParams, invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal) => Promise<unknown>;
 };
 
 /** No disk catalog. Every invocation revalidates
@@ -99,11 +124,23 @@ export class McpGatewayToolService {
       }).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score
         || a.tool.connectionId.localeCompare(b.tool.connectionId) || a.tool.toolName.localeCompare(b.tool.toolName));
       const result: McpGatewaySearchResult = { tools: [], unavailable };
+      const resourceTools = context.backend === "codex"
+        ? { listTool: "list_mcp_resources" as const, readTool: "read_mcp_resource" as const }
+        : context.backend === "claude"
+          ? { listTool: "ListMcpResourcesTool" as const, readTool: "ReadMcpResourceTool" as const }
+          : undefined;
       for (const { tool } of ranked.slice(0, args.limit ?? 3)) {
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
         const identity = identities.get(tool.connectionId);
-        const servers = identity && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
-          ? [...(result.servers ?? []), { connectionId: tool.connectionId, serverName: tool.serverName, ...identity }]
+        const serverNameInAgent = this.options.serverNameInAgent?.(tool.connectionId, context);
+        const servers = (identity || serverNameInAgent) && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
+          ? [...(result.servers ?? []), {
+              ...identity, connectionId: tool.connectionId, serverName: tool.serverName,
+              ...(serverNameInAgent ? {
+                serverNameInAgent,
+                ...(resourceTools ? { resourceDiscovery: { server: serverNameInAgent, ...resourceTools } } : {}),
+              } : {}),
+            }]
           : result.servers;
         const guidance = instructions.get(tool.connectionId);
         const serverInstructions = guidance && !result.serverInstructions?.some((entry) => entry.connectionId === tool.connectionId)
@@ -124,7 +161,9 @@ export class McpGatewayToolService {
 
   async call(args: McpGatewayCallArgs, context: AgentToolCallContext): Promise<{ source: McpGatewaySource; result: CallToolResult }> {
     if (Buffer.byteLength(JSON.stringify(args)) > 16_000) throw new Error("The MCP invocation exceeds the approval size limit. Use native MCP invocation for larger arguments.");
-    return await this.run(context, MCP_CONNECTION_TOOL_TIMEOUT_MS, async (signal) => {
+    // The call's own cap starts after approval, which can take up to one
+    // idle timeout, so the outer cap allows for it.
+    return await this.run(context, MCP_CONNECTION_TOOL_TIMEOUT_MS, async (signal, _deadlineAt, extend) => {
       await this.requireSelected(args.connectionId, context, signal);
       const tools = await this.options.connections.requestGatewayToolOperation({
         connectionId: args.connectionId, scopeKey: this.scopeKey(context), operation: "gateway/tools/list", signal,
@@ -147,13 +186,17 @@ export class McpGatewayToolService {
       if (this.options.toolAllowed?.(tool, context) === false) throw new Error("This MCP tool is no longer permitted for the calling thread.");
       // The owner lists and validates again, preventing schema/auth changes while
       // approval was pending from executing a different operation under that grant.
+      const elicit = this.options.elicit;
       const result = await this.options.connections.requestGatewayToolOperation({
         connectionId: args.connectionId, scopeKey: this.scopeKey(context),
-        operation: "gateway/tools/call", invocation, signal,
+        operation: "gateway/tools/call", invocation, signal, onProgress: extend,
+        // The thread's card shows forms and links alike.
+        ...(elicit ? { elicitUrl: true, elicit: async (request: ElicitRequestParams, formSignal: AbortSignal) =>
+          await elicit(request, invocation, context, AbortSignal.any([signal, formSignal])) } : {}),
       }) as CallToolResult;
       if (typeof approval === "object") await approval.onInvoked();
       return { source, result };
-    });
+    }, MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS + MCP_CONNECTION_TOOL_TIMEOUT_MS + MCP_DISCOVERY_RESPONSE_GRACE_MS);
   }
 
   private scopeKey(context: AgentToolCallContext): string {
@@ -166,15 +209,32 @@ export class McpGatewayToolService {
     signal.throwIfAborted();
   }
 
-  private async run<T>(context: AgentToolCallContext, timeout: number, operation: (signal: AbortSignal, deadlineAt: number) => Promise<T>): Promise<T> {
+  /**
+   * Runs one operation under `timeout`. With `maxTotalTimeout`, `extend`
+   * restarts that timeout, as the upstream server's progress reports do,
+   * but never past the total.
+   */
+  private async run<T>(
+    context: AgentToolCallContext,
+    timeout: number,
+    operation: (signal: AbortSignal, deadlineAt: number, extend: () => void) => Promise<T>,
+    maxTotalTimeout?: number,
+  ): Promise<T> {
     const deadlineAt = Date.now() + timeout;
     const entry = { context, controller: new AbortController() };
-    const signal = AbortSignal.any([entry.controller.signal, AbortSignal.timeout(timeout + (timeout === MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS ? MCP_DISCOVERY_RESPONSE_GRACE_MS : 0)), ...(context.signal ? [context.signal] : [])]);
+    const idleMs = timeout + (timeout === MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS ? MCP_DISCOVERY_RESPONSE_GRACE_MS : 0);
+    const deadline = maxTotalTimeout === undefined ? undefined : progressExtendedTimeout(idleMs, maxTotalTimeout);
+    const signal = AbortSignal.any([
+      entry.controller.signal,
+      deadline?.signal ?? AbortSignal.timeout(idleMs),
+      ...(context.signal ? [context.signal] : []),
+    ]);
     this.running.add(entry);
     try {
       signal.throwIfAborted();
-      return await operation(signal, deadlineAt);
+      return await operation(signal, deadlineAt, deadline?.extend ?? (() => undefined));
     } finally {
+      deadline?.clear();
       this.running.delete(entry);
     }
   }

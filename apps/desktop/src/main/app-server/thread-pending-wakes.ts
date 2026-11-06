@@ -1,0 +1,588 @@
+import {
+  THREAD_DEPENDENCY_CONDITION_PHRASES,
+  THREAD_PENDING_WAKE_TEXT_MAX_CHARS,
+  THREAD_PENDING_WAKES_ENDED_MAX_LIMIT,
+  buildThreadPendingWakeKey,
+  isThreadLockRefusal,
+  parseThreadPendingWakeKey,
+  type AppServerBackendKind,
+  type AppServerBackendWake,
+  type AppServerBackgroundTask,
+  type PendingWakeScheduledAction,
+  type PendingWakeScheduledActions,
+  type ThreadDependency,
+  type ProjectHeldWakeupSource,
+  type ThreadPendingHeldMessageSource,
+  type ThreadPendingWake,
+  type ThreadPendingWakeEnded,
+  type ThreadPendingWakeHold,
+  type ThreadPendingWakesErrorCode,
+  type ThreadPendingWakesList,
+  type ThreadPendingWakesResponse,
+  type ThreadPrAutoFixState,
+  type ThreadPrWatchHistoryEntry,
+  type ThreadPullRequestWatchSummary,
+  type ThreadSubAgentSummary,
+} from "@pwragent/shared";
+
+export type PendingWakeThread = { backend: AppServerBackendKind; threadId: string };
+
+export type PendingTaskMonitorWake = {
+  monitorId: string;
+  task: string;
+  backend: AppServerBackendKind;
+  monitorThreadId?: string;
+  model?: string;
+  createdAt: number;
+  lastActivityAt: number;
+  pollIntervalSeconds: number;
+};
+
+/** A queue entry that waits for a release, as the owner's queue holds it. */
+export type PendingHeldQueueEntry = {
+  entryId: string;
+  /** The queue's origin: manual, automation, messaging or scheduled. */
+  origin: string;
+  createdAt: number;
+  holdReason?: string;
+  projectHold?: { directoryKey: string; projectLabel: string; source: ProjectHeldWakeupSource; summary: string };
+  text: string;
+};
+
+/**
+ * Each source's own read. All are reads: building the list writes nothing.
+ * A reader that throws leaves its source out and marks the list incomplete.
+ */
+export type ThreadPendingWakeReaders = {
+  prWatches: (thread: PendingWakeThread) => Promise<ThreadPullRequestWatchSummary[]>;
+  prWatchHistory: (thread: PendingWakeThread, limit: number) => Promise<ThreadPrWatchHistoryEntry[]>;
+  /** Auto-fix states for this thread's PRs. */
+  autoFix: (thread: PendingWakeThread) => Promise<ThreadPrAutoFixState[]>;
+  /** Every registration this thread waits on, active and ended. */
+  dependencies: (thread: PendingWakeThread, endedLimit: number) => Promise<ThreadDependency[]>;
+  /** The thread's active scheduled actions, plus recently ended ones when asked. */
+  scheduledActions: (
+    thread: PendingWakeThread,
+    endedLimit: number,
+  ) => PendingWakeScheduledActions | Promise<PendingWakeScheduledActions>;
+  monitors: (thread: PendingWakeThread) => PendingTaskMonitorWake[];
+  /** Ended monitor summaries, newest completion first. */
+  recentSubAgents: (thread: PendingWakeThread, limit: number) => Promise<ThreadSubAgentSummary[]>;
+  /** Tasks the backend runs for the thread; only background ones wake it. */
+  backendTasks: (thread: PendingWakeThread) => Promise<AppServerBackgroundTask[]>;
+  /** Turns the backend scheduled in its own live process, such as Claude's /loop. */
+  backendWakes: (thread: PendingWakeThread) => AppServerBackendWake[];
+  /** What holds the thread's wakes now: its lock, else its paused project. */
+  hold: (thread: PendingWakeThread) => Promise<ThreadPendingWakeHold | undefined>;
+  /** Queue entries that wait for a release rather than for a free thread. */
+  heldEntries: (thread: PendingWakeThread) => PendingHeldQueueEntry[];
+};
+
+export const DEFAULT_PENDING_WAKES_ENDED_LIMIT = 8;
+/**
+ * The id of the queue entry that holds the turns a backend started on its
+ * own, such as Claude's task follow-ups and wakes, while the thread is locked.
+ */
+export const SELF_STARTED_TURN_ENTRY_PREFIX = "self-started:";
+const MONITOR_ID_PREFIX = "monitor-";
+const DETAIL_MAX_CHARS = 80;
+
+/**
+ * The thread's pending wakes, soonest first, and the most recent ended ones.
+ * `onReadError` hears about each source that could not be read.
+ */
+export async function buildThreadPendingWakes(
+  readers: ThreadPendingWakeReaders,
+  thread: PendingWakeThread,
+  options: {
+    endedLimit?: number;
+    /** Selected detail already read the owner's watches. Reuse even an empty list. */
+    activePrWatches?: readonly ThreadPullRequestWatchSummary[];
+    onReadError?: (source: string, error: unknown) => void;
+  } = {},
+): Promise<ThreadPendingWakesList> {
+  const endedLimit = clampEndedLimit(options.endedLimit);
+  let incomplete = false;
+  const read = async <T>(source: string, fallback: T, load: () => T | Promise<T>): Promise<T> => {
+    try {
+      return await load();
+    } catch (error) {
+      incomplete = true;
+      options.onReadError?.(source, error);
+      return fallback;
+    }
+  };
+  const [
+    prWatches, prHistory, autoFix, dependencies, scheduled, monitors, subAgents, tasks, backendWakes, hold, heldEntries,
+  ] = await Promise.all([
+    options.activePrWatches ?? read("prWatches", [] as ThreadPullRequestWatchSummary[], () => readers.prWatches(thread)),
+    endedLimit === 0 ? [] : read("prWatchHistory", [] as ThreadPrWatchHistoryEntry[], () => readers.prWatchHistory(thread, endedLimit)),
+    read("autoFix", [] as ThreadPrAutoFixState[], () => readers.autoFix(thread)),
+    read("dependencies", [] as ThreadDependency[], () => readers.dependencies(thread, endedLimit)),
+    read("scheduledActions", { actions: [] } as PendingWakeScheduledActions, () => readers.scheduledActions(thread, endedLimit)),
+    read("monitors", [] as PendingTaskMonitorWake[], () => readers.monitors(thread)),
+    endedLimit === 0 ? [] : read("recentSubAgents", [] as ThreadSubAgentSummary[], () => readers.recentSubAgents(thread, endedLimit)),
+    read("backendTasks", [] as AppServerBackgroundTask[], () => readers.backendTasks(thread)),
+    read("backendWakes", [] as AppServerBackendWake[], () => readers.backendWakes(thread)),
+    read("hold", undefined as ThreadPendingWakeHold | undefined, () => readers.hold(thread)),
+    read("heldEntries", [] as PendingHeldQueueEntry[], () => readers.heldEntries(thread)),
+  ]);
+  // A held scheduled action is listed as itself, not as its queue entry.
+  const scheduledEntryIds = new Set(scheduled.actions.flatMap((action) =>
+    action.status === "held" && action.queueEntryId ? [action.queueEntryId] : []));
+  const wakes = [
+    ...heldEntries
+      .filter((entry) => !scheduledEntryIds.has(entry.entryId))
+      .sort((left, right) => left.createdAt - right.createdAt)
+      .map((entry) => heldMessageWake(entry, hold)),
+    // A known time first; a held action or an untimed schedule after.
+    ...withHold([...scheduledWakes(scheduled.actions), ...backendWakes.map(backendWake)]
+      .sort((left, right) => (left.wakesAt ?? Infinity) - (right.wakesAt ?? Infinity)), hold),
+    ...withHold(pullRequestWakes(prWatches, autoFix.filter((state) =>
+      state.backend === thread.backend && state.threadId === thread.threadId)), hold),
+    ...withHold(dependencyWakes(dependencies), hold),
+    ...withHold(monitors.map(monitorWake).sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)), hold),
+    ...withHold(tasks.filter((task) => task.background).map(backendTaskWake), hold),
+  ];
+  const ended = [
+    ...prHistory.flatMap(endedPrWatch),
+    ...dependencies.flatMap(endedDependency),
+    ...scheduled.actions.flatMap(endedScheduledAction),
+    ...subAgents.flatMap(endedMonitor),
+  ].sort((left, right) => right.endedAt - left.endedAt).slice(0, endedLimit);
+  return boundThreadPendingWakes({ wakes, ended, ...(incomplete || scheduled.incomplete ? { incomplete: true as const } : {}) });
+}
+
+/** A compact projection must never grow with command text or an unbounded source. */
+export function boundThreadPendingWakes<T extends Pick<ThreadPendingWakesList, "wakes" | "incomplete">>(
+  list: T,
+  maxBytes = 64 * 1024,
+): T & { incomplete?: true } {
+  let bytes = 2;
+  const wakes: ThreadPendingWake[] = [];
+  for (const wake of list.wakes) {
+    const size = Buffer.byteLength(JSON.stringify(wake), "utf8") + 1;
+    if (bytes + size > maxBytes || wakes.length >= 128) break;
+    bytes += size;
+    wakes.push(wake);
+  }
+  return { ...list, wakes, ...(wakes.length < list.wakes.length ? { incomplete: true as const } : {}) };
+}
+
+function clampEndedLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_PENDING_WAKES_ENDED_LIMIT;
+  return Math.min(THREAD_PENDING_WAKES_ENDED_MAX_LIMIT, Math.max(0, Math.floor(limit)));
+}
+
+/** Timed actions by time; held ones, which wait for the operator, after. */
+function scheduledWakes(actions: readonly PendingWakeScheduledAction[]): ThreadPendingWake[] {
+  return actions
+    .filter((action) => action.status === "scheduled" || action.status === "held")
+    .sort((left, right) => (left.status === right.status ? 0 : left.status === "scheduled" ? -1 : 1)
+      || left.scheduledFor - right.scheduledFor)
+    .map((action): ThreadPendingWake => ({
+      kind: "scheduled_action",
+      key: buildThreadPendingWakeKey("scheduled_action", action.id),
+      actionId: action.id,
+      actionKind: action.kind,
+      status: action.status === "held" ? "held" : "scheduled",
+      displayText: clip(action.displayText, THREAD_PENDING_WAKE_TEXT_MAX_CHARS),
+      createdAt: action.createdAt,
+      ...(action.status === "scheduled" ? { wakesAt: action.scheduledFor } : {}),
+      createdBy: action.origin === "messaging" ? "messaging" : action.origin === "agent" ? "agent" : "operator",
+      durable: true,
+      stop: "cancel",
+    }));
+}
+
+/** Per PR: CI watches, then merge/close watches, then Auto-fix. */
+function pullRequestWakes(
+  watches: readonly ThreadPullRequestWatchSummary[],
+  autoFix: readonly ThreadPrAutoFixState[],
+): ThreadPendingWake[] {
+  const groups = new Map<string, { watches: ThreadPullRequestWatchSummary[]; states: ThreadPrAutoFixState[] }>();
+  for (const watch of watches) {
+    if (!groups.has(watch.prKey)) groups.set(watch.prKey, { watches: [], states: [] });
+    groups.get(watch.prKey)!.watches.push(watch);
+  }
+  for (const state of autoFix) {
+    if (!groups.has(state.prKey)) groups.set(state.prKey, { watches: [], states: [] });
+    groups.get(state.prKey)!.states.push(state);
+  }
+  return [...groups].flatMap(([prKey, group]) => {
+    const forPr = group.watches
+      .sort((left, right) => watchRank(left) - watchRank(right) || left.createdAt - right.createdAt);
+    const prNumber = forPr[0]?.prNumber;
+    const rows: ThreadPendingWake[] = forPr.map((watch) => ({
+      kind: "pr_watch",
+      key: buildThreadPendingWakeKey("pr_watch", watch.watchId),
+      watch,
+      createdAt: watch.createdAt,
+      createdBy: watch.createdBy === "operator" ? "operator" : "agent",
+      durable: true,
+      stop: "stop",
+    }));
+    for (const state of group.states) {
+      rows.push({
+        kind: "pr_auto_fix",
+        key: buildThreadPendingWakeKey("pr_auto_fix", prKey),
+        prKey,
+        ...(prNumber !== undefined ? { prNumber } : {}),
+        state: state.state,
+        ...(state.handledBy ? { handledBy: state.handledBy } : {}),
+        ...(state.prEnded ? { prEnded: state.prEnded } : {}),
+        durable: true,
+        // Another thread owns the PR's repairs; turning this one off changes nothing.
+        ...(state.state !== "handled_by_other_thread" ? { stop: "turn_off" as const } : {}),
+      });
+    }
+    return rows;
+  });
+}
+
+/**
+ * Marks the wakes the thread's hold keeps from starting. A lock holds every
+ * turn source, including the turns a backend starts in its own process:
+ * Claude's answer to a finished task and its own wakes are held as they
+ * fire. A paused project fetches no PR status, so PR watches wait, and it
+ * holds or drops what a dependency or a monitor sends; it leaves scheduled
+ * actions and the backend's own turns alone. Auto-fix is off under either hold.
+ */
+function withHold(wakes: ThreadPendingWake[], hold: ThreadPendingWakeHold | undefined): ThreadPendingWake[] {
+  if (!hold || hold.kind === "queue_held") return wakes;
+  return wakes.map((wake) => {
+    const holds = hold.kind === "thread_locked"
+      ? wake.kind !== "pr_auto_fix"
+      : wake.kind === "pr_watch" || wake.kind === "dependency" || wake.kind === "monitor";
+    return holds ? { ...wake, held: hold } : wake;
+  });
+}
+
+const HELD_ENTRY_ID_SOURCES: Array<[prefix: string, source: ThreadPendingHeldMessageSource]> = [
+  ["task-monitor:", "monitor"],
+  ["dependency:", "dependency"],
+  // The backend's agent started it; its title says what it is.
+  [SELF_STARTED_TURN_ENTRY_PREFIX, "other"],
+];
+
+/**
+ * A queue entry a hold keeps from starting. Only a project hold is written
+ * to disk; any other queued entry ends if the owner quits.
+ */
+function heldMessageWake(entry: PendingHeldQueueEntry, threadHold: ThreadPendingWakeHold | undefined): ThreadPendingWake {
+  const held: ThreadPendingWakeHold = entry.projectHold
+    ? {
+        kind: "project_paused",
+        projectLabel: entry.projectHold.projectLabel,
+        directoryKey: entry.projectHold.directoryKey,
+      }
+    // Unlocking releases only a lock's own refusal, not a failed turn.
+    : threadHold?.kind === "thread_locked" && (!entry.holdReason || isThreadLockRefusal(entry.holdReason))
+      ? threadHold
+      : { kind: "queue_held", reason: clip(entry.holdReason ?? "It waits for you to send it.", DETAIL_MAX_CHARS * 3) };
+  const projectSource = entry.projectHold?.source;
+  const source: ThreadPendingHeldMessageSource = projectSource === "monitor" || projectSource === "dependency"
+    ? projectSource
+    : HELD_ENTRY_ID_SOURCES.find(([prefix]) => entry.entryId.startsWith(prefix))?.[1]
+      ?? (entry.origin === "manual" ? "operator"
+        : entry.origin === "automation" ? "automation"
+        : entry.origin === "messaging" ? "messaging"
+        : "other");
+  return {
+    kind: "held_message",
+    key: buildThreadPendingWakeKey("held_message", entry.entryId),
+    entryId: entry.entryId,
+    source,
+    displayText: clip(entry.projectHold?.summary ?? entry.text, THREAD_PENDING_WAKE_TEXT_MAX_CHARS),
+    createdAt: entry.createdAt,
+    ...(source === "operator" ? { createdBy: "operator" as const }
+      : source === "messaging" ? { createdBy: "messaging" as const }
+      : source === "monitor" || source === "dependency" ? { createdBy: "agent" as const }
+      : {}),
+    durable: entry.projectHold !== undefined,
+    stop: "discard",
+    held,
+  };
+}
+
+function watchRank(watch: ThreadPullRequestWatchSummary): number {
+  return watch.kind === "terminal" ? 1 : 0;
+}
+
+/** Waiting and met-but-not-yet-delivered registrations, oldest first. */
+function dependencyWakes(dependencies: readonly ThreadDependency[]): ThreadPendingWake[] {
+  return dependencies
+    .filter((dependency) => dependency.status === "waiting" || dependency.status === "ready")
+    .sort((left, right) => left.createdAt - right.createdAt)
+    .map((dependency): ThreadPendingWake => ({
+      kind: "dependency",
+      key: buildThreadPendingWakeKey("dependency", dependency.id),
+      dependency: {
+        id: dependency.id,
+        conditions: dependency.conditions,
+        mode: dependency.mode,
+        onFailure: dependency.onFailure,
+        ...(dependency.continuation
+          ? { continuation: clip(dependency.continuation, THREAD_PENDING_WAKE_TEXT_MAX_CHARS) }
+          : {}),
+        ...(dependency.deliver ? { deliver: dependency.deliver } : {}),
+        status: dependency.status,
+        evidence: dependency.evidence,
+      },
+      createdAt: dependency.createdAt,
+      durable: true,
+      stop: "cancel",
+    }));
+}
+
+function monitorWake(monitor: PendingTaskMonitorWake): ThreadPendingWake {
+  return {
+    kind: "monitor",
+    key: buildThreadPendingWakeKey("monitor", monitor.monitorId),
+    monitorId: monitor.monitorId,
+    task: clip(monitor.task, THREAD_PENDING_WAKE_TEXT_MAX_CHARS),
+    monitorBackend: monitor.backend,
+    ...(monitor.monitorThreadId ? { monitorThreadId: monitor.monitorThreadId } : {}),
+    ...(monitor.model ? { model: monitor.model } : {}),
+    pollIntervalSeconds: monitor.pollIntervalSeconds,
+    lastActivityAt: monitor.lastActivityAt,
+    createdAt: monitor.createdAt,
+    createdBy: "agent",
+    // A live delegation is process memory; launch marks its card failed.
+    durable: false,
+    stop: "stop",
+  };
+}
+
+function backendTaskWake(task: AppServerBackgroundTask): ThreadPendingWake {
+  return {
+    kind: "backend_task",
+    key: buildThreadPendingWakeKey("backend_task", task.processId),
+    task: { ...task, command: clip(task.command, THREAD_PENDING_WAKE_TEXT_MAX_CHARS),
+      ...(task.progress ? { progress: clip(task.progress, THREAD_PENDING_WAKE_TEXT_MAX_CHARS) } : {}) },
+    ...(task.startedAt !== undefined ? { createdAt: task.startedAt } : {}),
+    createdBy: "agent",
+    durable: false,
+    stop: "stop",
+  };
+}
+
+/**
+ * The backend's agent scheduled it and only that agent can cancel it, so the
+ * row has no stop. It lives in the backend's process.
+ */
+function backendWake(wake: AppServerBackendWake): ThreadPendingWake {
+  return {
+    kind: "backend_wake",
+    key: buildThreadPendingWakeKey("backend_wake", wake.id),
+    wake: {
+      ...wake,
+      prompt: clip(wake.prompt, THREAD_PENDING_WAKE_TEXT_MAX_CHARS),
+      ...(wake.reason ? { reason: clip(wake.reason, DETAIL_MAX_CHARS * 3) } : {}),
+      ...(wake.humanSchedule ? { humanSchedule: clip(wake.humanSchedule, DETAIL_MAX_CHARS) } : {}),
+    },
+    ...(wake.createdAt !== undefined ? { createdAt: wake.createdAt } : {}),
+    ...(wake.nextFireAt !== undefined ? { wakesAt: wake.nextFireAt } : {}),
+    createdBy: "agent",
+    durable: false,
+  };
+}
+
+const WOKE_ON: Record<string, string> = {
+  success: "CI passed",
+  failure: "CI failed",
+  merged: "merged",
+  closed: "closed",
+};
+
+function endedPrWatch(entry: ThreadPrWatchHistoryEntry): ThreadPendingWakeEnded[] {
+  // A move hands the watch to its copy at the new head; nothing ended.
+  if (entry.endedReason === "moved") return [];
+  const wokeOn = entry.wokeOn ? WOKE_ON[entry.wokeOn] ?? entry.wokeOn : undefined;
+  const summary = (() => {
+    switch (entry.endedReason) {
+      case "woke": return "PR watch woke the thread";
+      case "another_thread_woke": return "Another thread was woken";
+      case "head_changed": return "PR watch ended by a new push";
+      case "cancelled_by_operator": return "PR watch stopped by you";
+      case "cancelled_by_agent": return "PR watch stopped by the agent";
+      case "detached": return "PR watch ended when the PR was detached";
+      case "covered_by_auto_fix": return "PR watch handed to Auto-fix";
+      case "pr_merged": return "PR watch ended when the PR merged";
+      case "pr_closed": return "PR watch ended when the PR closed";
+      case "failed": return "PR watch could not wake the thread";
+      default:
+        return entry.status === "dispatched" ? "PR watch woke the thread"
+          : entry.status === "superseded" ? "PR watch ended by a new push"
+          : entry.status === "cancelled" ? "PR watch stopped"
+          : "PR watch could not wake the thread";
+    }
+  })();
+  return [{
+    key: buildThreadPendingWakeKey("pr_watch", entry.watchId),
+    kind: "pr_watch",
+    endedAt: entry.updatedAt,
+    summary,
+    detail: wokeOn ? `#${entry.prNumber} ${wokeOn}` : `#${entry.prNumber}`,
+  }];
+}
+
+function endedDependency(dependency: ThreadDependency): ThreadPendingWakeEnded[] {
+  if (dependency.status !== "delivered" && dependency.status !== "cancelled" && dependency.status !== "dismissed") {
+    return [];
+  }
+  const summary = dependency.status === "delivered"
+    ? dependency.deliver === "operator" ? "Continue after reminded you" : "Continue after woke the thread"
+    : dependency.status === "cancelled" ? "Continue after cancelled" : "Continue after dismissed";
+  const condition = dependency.conditions[0];
+  const detail = dependency.conditions.length > 1
+    ? `${dependency.conditions.length} threads`
+    : condition ? (condition.title ? `${condition.title} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}` : THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when])
+    : undefined;
+  return [{
+    key: buildThreadPendingWakeKey("dependency", dependency.id),
+    kind: "dependency",
+    endedAt: dependency.updatedAt,
+    summary,
+    ...(detail ? { detail: clip(detail, DETAIL_MAX_CHARS) } : {}),
+  }];
+}
+
+function endedScheduledAction(action: PendingWakeScheduledAction): ThreadPendingWakeEnded[] {
+  if (action.status !== "started" && action.status !== "cancelled" && action.status !== "failed") return [];
+  const noun = action.kind === "review" ? "Scheduled review" : "Scheduled message";
+  const summary = action.status === "started"
+    ? action.kind === "review" ? `${noun} started` : `${noun} sent`
+    : action.status === "cancelled" ? `${noun} cancelled` : `${noun} failed`;
+  return [{
+    key: buildThreadPendingWakeKey("scheduled_action", action.id),
+    kind: "scheduled_action",
+    endedAt: action.updatedAt,
+    summary,
+    ...(action.displayText.trim() ? { detail: clip(action.displayText, DETAIL_MAX_CHARS) } : {}),
+  }];
+}
+
+function endedMonitor(card: ThreadSubAgentSummary): ThreadPendingWakeEnded[] {
+  if (!card.monitorId.startsWith(MONITOR_ID_PREFIX) || card.completedAt === undefined) return [];
+  const summary = card.outcome === "success" ? "Monitor finished"
+    : card.outcome === "cancelled" ? "Monitor stopped" : "Monitor failed";
+  return [{
+    key: buildThreadPendingWakeKey("monitor", card.monitorId),
+    kind: "monitor",
+    endedAt: card.completedAt,
+    summary,
+    detail: clip(card.task, DETAIL_MAX_CHARS),
+  }];
+}
+
+function clip(text: string, max: number): string {
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1).trimEnd()}…` : trimmed;
+}
+
+/** Each source's own stop, on the instance that owns the thread. */
+export type ThreadPendingWakeStoppers = {
+  cancelPrWatch: (thread: PendingWakeThread, watchId: string) => Promise<StopResult>;
+  cancelDependency: (thread: PendingWakeThread, dependencyId: string) => Promise<void>;
+  stopMonitor: (thread: PendingWakeThread, monitorId: string) => Promise<void>;
+  cancelScheduledAction: (thread: PendingWakeThread, actionId: string) => Promise<void>;
+  stopBackendTask: (thread: PendingWakeThread, processId: string) => Promise<void>;
+  discardHeldMessage: (thread: PendingWakeThread, entryId: string) => Promise<void>;
+};
+
+type StopResult = { ok: true } | { ok: false; code: ThreadPendingWakesErrorCode; message: string };
+
+/**
+ * Stops one wake through the cancel path its source already has. Auto-fix
+ * is turned off through the thread's own setting, not here.
+ */
+export async function stopThreadPendingWake(
+  stoppers: ThreadPendingWakeStoppers,
+  thread: PendingWakeThread,
+  key: string,
+): Promise<ThreadPendingWakesResponse> {
+  const parsed = parseThreadPendingWakeKey(key);
+  if (!parsed) return failure("invalid_arguments", "That is not a pending wake.");
+  try {
+    switch (parsed.kind) {
+      case "pr_watch": {
+        const result = await stoppers.cancelPrWatch(thread, parsed.sourceId);
+        return result.ok ? { ok: true, stopped: true } : failure(result.code, result.message);
+      }
+      case "dependency":
+        await stoppers.cancelDependency(thread, parsed.sourceId);
+        return { ok: true, stopped: true };
+      case "monitor":
+        await stoppers.stopMonitor(thread, parsed.sourceId);
+        return { ok: true, stopped: true };
+      case "scheduled_action":
+        await stoppers.cancelScheduledAction(thread, parsed.sourceId);
+        return { ok: true, stopped: true };
+      case "backend_task":
+        await stoppers.stopBackendTask(thread, parsed.sourceId);
+        return { ok: true, stopped: true };
+      case "held_message":
+        await stoppers.discardHeldMessage(thread, parsed.sourceId);
+        return { ok: true, stopped: true };
+      case "pr_auto_fix":
+        return failure("invalid_arguments", "Turn Auto-fix off from the thread's own setting.");
+      case "backend_wake":
+        return failure("invalid_arguments", BACKEND_WAKE_STOP_MESSAGE);
+    }
+  } catch (error) {
+    return failure("failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * A viewer's stop for a peer's thread, through the owner methods each source
+ * already exposes. Dependencies stay on their own instance.
+ */
+export async function stopRemoteThreadPendingWake(
+  remote: {
+    cancelPrWatch: (watchId: string) => Promise<StopResult>;
+    cancelScheduledAction: (actionId: string) => Promise<void>;
+    stopMonitor: (monitorId: string) => Promise<void>;
+    stopBackendTask: (processId: string) => Promise<void>;
+    discardHeldMessage: (entryId: string) => Promise<void>;
+  },
+  key: string,
+  ownerLabel = "the thread's own machine",
+): Promise<ThreadPendingWakesResponse> {
+  const parsed = parseThreadPendingWakeKey(key);
+  if (!parsed) return failure("invalid_arguments", "That is not a pending wake.");
+  try {
+    switch (parsed.kind) {
+      case "pr_watch": {
+        const result = await remote.cancelPrWatch(parsed.sourceId);
+        return result.ok ? { ok: true, stopped: true } : failure(result.code, result.message);
+      }
+      case "scheduled_action":
+        await remote.cancelScheduledAction(parsed.sourceId);
+        return { ok: true, stopped: true };
+      case "monitor":
+        await remote.stopMonitor(parsed.sourceId);
+        return { ok: true, stopped: true };
+      case "backend_task":
+        await remote.stopBackendTask(parsed.sourceId);
+        return { ok: true, stopped: true };
+      case "held_message":
+        await remote.discardHeldMessage(parsed.sourceId);
+        return { ok: true, stopped: true };
+      case "dependency":
+      case "pr_auto_fix":
+        return failure("federation_unsupported", `This runs on ${ownerLabel}. Stop it there.`);
+      case "backend_wake":
+        return failure("invalid_arguments", BACKEND_WAKE_STOP_MESSAGE);
+    }
+  } catch (error) {
+    return failure("failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+const BACKEND_WAKE_STOP_MESSAGE = "Only the agent can cancel its own schedule. Ask it to stop.";
+
+function failure(code: ThreadPendingWakesErrorCode, message: string): ThreadPendingWakesResponse {
+  return { ok: false, error: { code, message } };
+}

@@ -58,8 +58,12 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "watch_thread_pull_request",
   "rename_current_thread",
   "manage_thread_dependencies",
+  "manage_thread_merge_holds",
   "mutate_thread",
   "mark_project_read",
+  "scan_thread_maintenance",
+  "apply_thread_maintenance",
+  "open_thread_maintenance",
 ] as const;
 
 export type PwrAgentThreadInspectionOperationName =
@@ -76,6 +80,7 @@ export const PWRAGENT_THREAD_INSPECTION_ERROR_CODES = [
   "peer_unavailable",
   "forbidden",
   "unsupported_operation",
+  "project_paused",
   "internal_error",
 ] as const;
 
@@ -88,6 +93,8 @@ export type PwrAgentThreadInspectionContext = {
   now?: number;
   /** Trusted invoking turn, used when owner resolution reaches a peer. */
   turnId?: string;
+  /** Trusted tool call id, used to anchor an operator confirmation card. */
+  callId?: string;
 };
 
 export type SearchThreadsToolArgs = {
@@ -146,8 +153,8 @@ export type ReadThreadToolArgs = {
    */
   before?: string;
   /**
-   * Maximum transcript entries to return. Implementations clamp this to a
-   * bounded product limit.
+   * Maximum transcript entries to return. The newest entries of the page are
+   * kept. Implementations clamp this to a bounded product limit.
    */
   limit?: number;
   /**
@@ -187,6 +194,93 @@ export type MarkProjectReadResult = {
   instanceId: FederationInstanceId;
   isLocal: boolean;
   changedCount: number;
+};
+
+export type ScanThreadMaintenanceToolArgs = {
+  /** Limit the scan to one project: its main checkout path. */
+  projectKey?: string;
+  rules?: Partial<import("../thread-maintenance").ThreadMaintenanceRules>;
+};
+
+export type ApplyThreadMaintenanceToolArgs = {
+  scanId: string;
+  archive?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["archive"];
+  removeCheckouts?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["removeCheckouts"];
+  trashCheckouts?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["trashCheckouts"];
+  removeEmptyFolders?: boolean;
+  /** Return what would run without asking the operator or changing anything. */
+  dryRun?: boolean;
+};
+
+export type OpenThreadMaintenanceToolArgs = {
+  projectKey?: string;
+};
+
+/** A bounded, agent-sized view of one maintenance scan. */
+export type ThreadMaintenanceScanToolResult = {
+  scanId: string;
+  finishedAt: number;
+  rules: import("../thread-maintenance").ThreadMaintenanceRules;
+  projectKey?: string;
+  threads: {
+    checked: number;
+    idleCount: number;
+    kept: Record<string, number>;
+    skipped?: string;
+    projects: Array<{
+      key: string;
+      label: string;
+      idleCount: number;
+      kept: Record<string, number>;
+      idle: Array<{
+        backend: string;
+        threadId: ThreadIdentifier;
+        title: string;
+        lastActivityAt: number;
+        workspace: import("../thread-maintenance").ThreadMaintenanceWorkspace["kind"];
+        changedFiles?: number;
+        changedBytes?: number;
+        worktreePath?: string;
+        subThreads: number;
+      }>;
+    }>;
+    /** True when idle rows were cut to fit. idleCount stays exact. */
+    truncated: boolean;
+  };
+  checkouts: {
+    removable: Array<{ backend: string; threadId: ThreadIdentifier; worktreePath: string; workspace?: string }>;
+    repositoryGone: Array<{ worktreePath: string; missingRepositoryPath?: string }>;
+    kept: Record<string, number>;
+    emptyFolders: number;
+    skipped?: string;
+    truncated: boolean;
+  };
+  expired: { enabled: boolean; retentionDays: number };
+  failureCount: number;
+  failures: import("../thread-maintenance").ThreadMaintenanceFailure[];
+  /** The latest run, when one exists. */
+  run?: ThreadMaintenanceRunToolResult;
+  guidance: string;
+};
+
+export type ThreadMaintenanceRunToolResult = {
+  runId: string;
+  scanId: string;
+  running: boolean;
+  startedAt: number;
+  finishedAt?: number;
+  steps: import("../thread-maintenance").ThreadMaintenanceStepResult[];
+  problems: import("../thread-maintenance").ThreadMaintenanceProblem[];
+  guidance?: string;
+};
+
+export type ThreadMaintenancePlanToolResult = {
+  scanId: string;
+  archive: number;
+  removeCheckouts: number;
+  trashCheckouts: number;
+  removeEmptyFolders: boolean;
+  snapshotApprovals: Array<{ threadId: ThreadIdentifier; title: string; bytes: number }>;
 };
 
 export type MutateThreadToolArgs = {
@@ -397,7 +491,17 @@ export type PullRequestTerminalDetails = {
   detailsUnavailableReason?: string;
 };
 
+/**
+ * `watch` (the default) arms watches. `list` returns the thread's waiting
+ * watches, and `cancel` stops one of them by `watchId`.
+ */
+type WatchThreadPullRequestAction = "watch" | "list" | "cancel";
+
 export type WatchThreadPullRequestToolArgs = {
+  /** Absent means `watch`, the only action before list and cancel existed. */
+  action?: WatchThreadPullRequestAction;
+  /** The watch `cancel` stops, from `list` or an earlier `watch` result. */
+  watchId?: string;
   /** Defaults to the invoking PwrAgent thread's backend when omitted. */
   backend?: AppServerBackendKind;
   /** Defaults to the invoking PwrAgent thread id when omitted. */
@@ -409,6 +513,25 @@ export type WatchThreadPullRequestToolArgs = {
    * Add merged and/or closed to also wake when the PR reaches a terminal state.
    */
   notifyOn?: ThreadPullRequestWatchEvent[];
+  /**
+   * Arm the CI watch for the next result even when a final outcome is already
+   * known at this head, for a re-run PwrAgent did not request. The known
+   * outcome becomes the watch's baseline and cannot fire it.
+   */
+  waitForNextResult?: boolean;
+};
+
+/**
+ * The CI outcome a watch saw when it was armed. It cannot fire the watch: the
+ * watch waits for checks to run again, or for a failure on another check.
+ */
+export type ThreadPullRequestWatchBaseline = {
+  outcome: "success" | "failure";
+  observedAt: number;
+  failedCheckUrl?: string;
+  /** Set when PwrAgent requested the re-run that made the outcome stale. */
+  rerunRequestedAt?: number;
+  runAttempt?: number;
 };
 
 export type ThreadPullRequestWatchSummary = {
@@ -426,7 +549,33 @@ export type ThreadPullRequestWatchSummary = {
   failureHandledByAutoFix: boolean;
   /** Absent on rows written before terminal watches existed: those are `checks`. */
   kind?: ThreadPullRequestWatchKind;
+  baseline?: ThreadPullRequestWatchBaseline;
+  /**
+   * The CI run attempt this watch waits for, when PwrAgent requested the
+   * re-run. Unlike the baseline's copy, it stays while checks run, and a
+   * push drops it. Rows written before it existed carry only the baseline's.
+   */
+  runAttempt?: number;
+  /** The re-run's workflow run or GitLab pipeline, beside `runAttempt`. */
+  runId?: number;
+  /**
+   * Who armed the watch: an agent through `watch_thread_pull_request`, or the
+   * operator through Watch CI. Absent means an agent: older rows predate it.
+   */
+  createdBy?: "agent" | "operator";
+  /** The head this CI watch was armed at before a push moved it. */
+  followedFrom?: string;
 };
+
+/**
+ * Why `watch_thread_pull_request` did or did not arm a watch. `already_armed`
+ * means an identical active watch existed and is returned instead.
+ */
+export type WatchThreadPullRequestReason =
+  | "armed"
+  | "already_armed"
+  | "outcome_already_final"
+  | "pr_terminal";
 
 export type WatchThreadPullRequestResult = {
   /** The CI watch, when success or failure was requested. */
@@ -438,6 +587,26 @@ export type WatchThreadPullRequestResult = {
   terminal?: PullRequestTerminalDetails;
   coveredByAutoFix: ThreadPullRequestWatchEvent[];
   prAutomation: ThreadPullRequestAutomationStatus;
+  /**
+   * True when every requested event has a watch waiting after this call, new
+   * or already armed. A CI result that already finished leaves it false even
+   * when a merge/close watch was armed beside it.
+   */
+  armed: boolean;
+  reason: WatchThreadPullRequestReason;
+  /** One plain sentence saying what will, or will not, wake the thread. */
+  message: string;
+};
+
+/** What `watch_thread_pull_request` returns for `list` and `cancel`. */
+export type ThreadPullRequestWatchListResult = {
+  action: "list" | "cancel";
+  /** The thread's waiting watches after this call, oldest first. */
+  watches: ThreadPullRequestWatchSummary[];
+  /** The watch `cancel` stopped. */
+  cancelled?: ThreadPullRequestWatchSummary;
+  /** One plain sentence saying what is, or is no longer, waiting. */
+  message: string;
 };
 
 export type ThreadMutationField =
@@ -496,6 +665,7 @@ export type ThreadInspectionSummary = {
   linkedRepositories?: ThreadLinkedRepositorySummary[];
   pullRequests?: PrSummary[];
   prAutomation?: ThreadPullRequestAutomationStatus;
+  mergeHolds?: import("./thread-merge-holds").ThreadMergeHold[];
   score?: number;
   confidence?: ThreadSearchConfidenceBand;
   matchReasons?: ThreadSearchMatchReason[];
@@ -676,6 +846,14 @@ export type ThreadReadResult = {
   maxCharsPerEntry: number;
   entries?: ThreadReadEntrySummary[];
   messages?: ThreadReadMessageSummary[];
+  /**
+   * Earlier entries of this page left out to honor `limit`. The pagination
+   * cursor still starts before them, so read again with a larger `limit` to
+   * see them.
+   */
+  omittedEntries?: number;
+  /** Earlier messages of this page left out to honor `limit`. */
+  omittedMessages?: number;
   lastUserMessage?: string;
   lastAssistantMessage?: string;
   pagination: AppServerThreadReplayPagination;
@@ -739,6 +917,7 @@ export type ThreadReadEvaluationTokenMiser = {
 };
 
 export type PwrAgentThreadInspectionToolArgsByOperation = {
+  manage_thread_merge_holds: import("./thread-merge-holds").ManageThreadMergeHoldsRequest;
   manage_thread_dependencies: import("./thread-dependencies").ManageThreadDependenciesRequest;
   search_threads: SearchThreadsToolArgs;
   read_thread: ReadThreadToolArgs;
@@ -749,6 +928,9 @@ export type PwrAgentThreadInspectionToolArgsByOperation = {
   rename_current_thread: RenameCurrentThreadToolArgs;
   mutate_thread: MutateThreadToolArgs;
   mark_project_read: MarkProjectReadToolArgs;
+  scan_thread_maintenance: ScanThreadMaintenanceToolArgs;
+  apply_thread_maintenance: ApplyThreadMaintenanceToolArgs;
+  open_thread_maintenance: OpenThreadMaintenanceToolArgs;
 };
 
 export type PwrAgentThreadInspectionToolArgs<
@@ -771,8 +953,11 @@ export type PwrAgentThreadInspectionResponse =
   | {
       ok: true;
       data:
+        | { threadMergeHolds: import("./thread-merge-holds").ManageThreadMergeHoldsResponse }
         | {
             threadDependencies: import("./thread-dependencies").ManageThreadDependenciesResponse;
+            /** Why the stored PR conditions wait, when the project holds PR watches. */
+            projectNotice?: string;
           }
         | {
             threads: ThreadInspectionSummary[];
@@ -805,10 +990,26 @@ export type PwrAgentThreadInspectionResponse =
             pullRequestWatch: WatchThreadPullRequestResult;
           }
         | {
+            pullRequestWatches: ThreadPullRequestWatchListResult;
+          }
+        | {
             mutation: ThreadMutationResult;
           }
         | {
             projectRead: MarkProjectReadResult;
+          }
+        | {
+            maintenanceScan: ThreadMaintenanceScanToolResult;
+          }
+        | {
+            maintenanceRun: ThreadMaintenanceRunToolResult;
+          }
+        | {
+            maintenancePlan: ThreadMaintenancePlanToolResult;
+            dryRun: true;
+          }
+        | {
+            maintenanceDialog: { opened: boolean };
           };
     }
   | {

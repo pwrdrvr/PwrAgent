@@ -84,6 +84,26 @@ describe("archive cleanup scheduling budgets", () => {
     await queue.close();
   });
 
+  it("reports released capacity after success, failure, and queued cancellation, without waking after close", async () => {
+    vi.useFakeTimers();
+    const released: number[] = [];
+    const queue = new ArchiveCleanupQueue<void>(ARCHIVE_CLEANUP_PAUSE_MS, () => { released.push(queue.availableSlots); });
+    const results = Array.from({ length: ARCHIVE_CLEANUP_QUEUE_LIMIT }, (_, index) => queue.enqueue(String(index), async () => {
+      if (index === 0) throw new Error("Provider unavailable");
+    }).catch(() => {}));
+    expect(queue.availableSlots).toBe(0);
+    await queue.cancelAndWait(String(ARCHIVE_CLEANUP_QUEUE_LIMIT - 1));
+    expect(released).toEqual([1]);
+    await vi.runAllTimersAsync();
+    await Promise.all(results);
+    expect(released).toHaveLength(ARCHIVE_CLEANUP_QUEUE_LIMIT);
+    expect(released.at(-1)).toBe(ARCHIVE_CLEANUP_QUEUE_LIMIT);
+    await queue.close();
+    expect(queue.availableSlots).toBe(0);
+    expect(released).toHaveLength(ARCHIVE_CLEANUP_QUEUE_LIMIT);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("drains post-removal persistence before releasing lifecycle cancellation", async () => {
     vi.useFakeTimers();
     const queue = new ArchiveCleanupQueue<number>();

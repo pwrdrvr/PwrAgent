@@ -11,7 +11,8 @@ export function readRenderingSnapshot() {
   const names = new Set([
     "pwragent-thinking-scanner-sweep", "status-blink", "pending-spinner-spin",
     "app-update-banner-sweep", "settings-keyboard-example", "star-map-intake-pulse",
-    "missing-worktree-card-scan", "usage-pace-ping",
+    "missing-worktree-card-scan", "usage-pace-ping", "calm-motion-progress-rest",
+    "calm-motion-spinner-rest",
   ]);
   const sources = [
     ".thinking-scanner", ".pending-spinner", ".status-dot", ".rail-chip", ".pr-chip", ".star-map-card",

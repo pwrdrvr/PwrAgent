@@ -53,6 +53,7 @@ export type NormalizedGeneralConfig = Readonly<{
     darkTheme: DesktopDarkTheme;
     lightTheme: DesktopLightTheme;
     themedDockIcon: boolean;
+    calmMotion: boolean;
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
@@ -278,6 +279,7 @@ export function normalizeConfigDomains(params: {
           config.general?.appearance?.lightTheme
           ?? DESKTOP_LIGHT_THEME_DEFAULT,
         themedDockIcon: config.general?.appearance?.themedDockIcon ?? true,
+        calmMotion: config.general?.appearance?.calmMotion ?? false,
         density:
           config.general?.appearance?.density
           ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,

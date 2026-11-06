@@ -1,3 +1,5 @@
+import fc from "fast-check";
+import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -65,6 +67,7 @@ import { replacementPages } from "../federation/federation-replacement-pages";
 import { FEDERATION_EVENT_STREAM_METHOD } from "../federation/federation-event-stream";
 import * as appState from "../state/app-state";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
+import * as directoryRegistration from "../app-server/directory-registration-service";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 
 // `getDesktopBackendRegistry()` is the one construction that opts into real
@@ -302,6 +305,26 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("identifies local and disconnected navigation owners and falls back to the exact peer ID", () => {
+    const settings = vi.spyOn(desktopSettingsSingleton, "getDesktopSettingsService").mockReturnValue({
+      readFederationConfig: () => ({ instanceLabel: "Fixture Desktop" }),
+    } as unknown as ReturnType<typeof desktopSettingsSingleton.getDesktopSettingsService>);
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    harness.localInstanceId = "pwr_local";
+    const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(false);
+    harness.remotePeerDirectory.set("pwr_remote", { id: "pwr_remote", label: "Fixture Laptop", status: "disconnected" });
+    try {
+      expect(runtime.navigationActionOwnerLabel()).toBe("Fixture Desktop (pwr_local, local)");
+      expect(runtime.navigationActionOwnerLabel({ scope: "remote", instanceId: "pwr_remote" }))
+        .toBe("Fixture Laptop (pwr_remote)");
+      expect(runtime.navigationActionOwnerLabel({ scope: "remote", instanceId: "pwr_missing" })).toBe("pwr_missing");
+    } finally {
+      initialized.mockRestore();
+      settings.mockRestore();
+    }
+  });
+
   it("advertises owner permission separately from support and enforces the disabled default", async () => {
     const config: { allowPortForwarding?: boolean } = {};
     const settings = vi.spyOn(desktopSettingsSingleton, "getDesktopSettingsService").mockReturnValue({
@@ -430,6 +453,45 @@ describe("DesktopFederationRuntime", () => {
       expect(DEFAULT_CAPABILITIES).toContain("thread_parent_mutation_v1");
     } finally {
       registry.mockRestore();
+    }
+  });
+
+  it("fences owner directory attachment before registration or overlay I/O", async () => {
+    const stateDb = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(stateDb);
+    setDesktopOverlayStoreForTests(overlayStore);
+    let fenced = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const withThreadWorkspaceMutation = vi.fn(async (_identity: unknown, work: () => Promise<unknown>) => {
+      fenced = true;
+      try { return await work(); } finally { fenced = false; }
+    });
+    let fencedAtRegistration = false;
+    const registration = vi.spyOn(directoryRegistration, "registerDirectoryFromDisk").mockImplementation(async () => {
+      fencedAtRegistration = fenced;
+      await held;
+      return { ok: true, directoryKey: "directory:/owner/extra", directoryLabel: "extra", directoryPath: "/owner/extra",
+        launchpad: { directoryKey: "directory:/owner/extra", directoryKind: "directory", directoryLabel: "extra", directoryPath: "/owner/extra",
+          backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+        defaults: { backend: "codex", executionMode: "default" } };
+    });
+    const publishLocalEvent = vi.fn(async () => undefined);
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({ withThreadWorkspaceMutation, publishLocalEvent, withArchiveWorkspaceWrite: async (_paths: string[], work: () => Promise<unknown>) => await work() } as never);
+    try {
+      const attaching = new DesktopFederationRuntime().localBackend().attachDirectoryToThread({ threadId: "owner", path: "/owner/extra" });
+      expect(fencedAtRegistration).toBe(true);
+      release();
+      await expect(attaching).resolves.toMatchObject({ ok: true });
+      expect(withThreadWorkspaceMutation).toHaveBeenCalledWith({ backend: "codex", threadId: "owner" }, expect.any(Function), ["/owner/extra"]);
+      expect(fenced).toBe(false);
+    } finally {
+      release();
+      registry.mockRestore();
+      registration.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      stateDb.close();
     }
   });
 
@@ -834,6 +896,7 @@ describe("DesktopFederationRuntime", () => {
       vi.spyOn(runtime, "health").mockResolvedValue({
         instanceId: "parent-peer",
       } as never);
+      vi.spyOn(runtime, "connectedPeerTargets").mockReturnValue([]);
       vi.spyOn(runtime, "remoteBackend").mockReturnValue({
         updateSubthreadOrder,
       } as never);
@@ -860,6 +923,63 @@ describe("DesktopFederationRuntime", () => {
     } finally {
       resetDesktopOverlayStoreForTests();
       stateDb.close();
+    }
+  });
+
+  it("mounts a viewer's parent when the viewer moves one of this instance's threads under it", async () => {
+    await disposeDesktopFederationRuntime();
+    const stateDb = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(stateDb);
+    setDesktopOverlayStoreForTests(overlayStore);
+    const runtime = getDesktopFederationRuntime();
+    const parentRow = {
+      ref: { backend: "codex" as const, threadId: "root", ownerInstanceId: "viewer" },
+      rowRevision: "root-revision",
+      ordinaryChildCount: 1,
+      nativeSubAgentGroupPresent: false,
+      queueCount: 0,
+      queueState: "ready" as const,
+      source: "codex" as const,
+      id: "root",
+      title: "Viewer parent",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    vi.spyOn(runtime, "health").mockResolvedValue({ instanceId: "windows-peer" } as never);
+    const parentQuery = vi.spyOn(runtime, "remoteNavigationQueryPage").mockResolvedValue({
+      protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
+      counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+      entries: [{ row: parentRow, orderKey: "0", placement: { kind: "root" } }],
+    });
+    const publish = vi.spyOn(getDesktopBackendRegistry(), "publishLocalEvent").mockResolvedValue(undefined);
+    try {
+      const response = await runtime.localBackend().setThreadParent({
+        backend: "codex",
+        threadId: "windows-e2e",
+        parentThreadId: "root",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "viewer",
+      });
+
+      expect(response).toMatchObject({ parentThreadId: "root", parentThreadInstanceId: "viewer" });
+      expect(parentQuery).toHaveBeenCalledWith({ scope: "remote", instanceId: "viewer" }, expect.objectContaining({
+        query: { kind: "exact", identities: [{ backend: "codex", threadId: "root", ownerInstanceId: "viewer" }],
+          includeAncestry: false },
+      }), expect.anything());
+      expect(await overlayStore.listRemoteThreadPins()).toEqual([expect.objectContaining({
+        ref: { backend: "codex", target: { scope: "remote", instanceId: "viewer" }, threadId: "root" },
+        pinnedVia: "companion",
+      })]);
+      expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+        notification: expect.objectContaining({ method: "thread/parent/set" }),
+      }));
+    } finally {
+      parentQuery.mockRestore();
+      publish.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      stateDb.close();
+      await disposeDesktopFederationRuntime();
     }
   });
 
@@ -1797,6 +1917,44 @@ describe("DesktopFederationRuntime", () => {
     });
   });
 
+  it("tells a navigation viewer to re-read a project when its Forge Automation changes", () => {
+    const forwarded: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "owner_one" });
+    router.registerConnection(createConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+      sendEnvelope: (envelope) => forwarded.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.router = router;
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "owner_one",
+      subscriberInstanceId: "viewer_one",
+      eventClasses: ["navigation"],
+      threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "thread-1" }] },
+    });
+
+    runtime.forwardLocalBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/forgeAutomation/updated",
+        params: { directoryKey: "directory:/repo", automation: null },
+      },
+    } as AgentEvent);
+
+    // The viewer re-reads the owner's rows, which carry the stored settings.
+    // The project's key lets it skip the read when no held row is in it.
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]).toMatchObject({
+      params: { notification: {
+        method: "navigation/invalidated",
+        params: { sourceMethod: "directory/forgeAutomation/updated", directoryKey: "directory:/repo" },
+      } },
+    });
+  });
+
   it("replaces viewer subscriptions when retargeted and unsubscribes on close", () => {
     const sentToOne: FederationProtocolEnvelope[] = [];
     const sentToTwo: FederationProtocolEnvelope[] = [];
@@ -2277,16 +2435,26 @@ describe("DesktopFederationRuntime", () => {
       },
     });
     expect(JSON.stringify(ownerFrames.at(-1))).not.toContain("private-entry");
+    // A watch change tells viewers to re-read that row's CI watch marks.
+    owner.forwardLocalBackendEvent({ backend: "codex", notification: {
+      method: "thread/prWatches/updated", params: { backend: "codex", threadId: "A", prKey: "github.com/a/b#1" },
+    } } as AgentEvent);
+    expect(ownerFrames).toHaveLength(beforeLarge + 3);
+    expect(published.at(-1)?.notification).toEqual({
+      method: "navigation/invalidated", params: {
+        sourceMethod: "thread/prWatches/updated", threadId: "A", automationId: undefined, runId: undefined,
+      },
+    });
     owner.forwardLocalBackendEvent({ backend: "codex", notification: {
       method: "turn/completed", params: { threadId: "B", turnId: "completed-turn", turn: { id: "completed-turn", status: "completed", output: [{ type: "text", text: hugeOutput }] } },
     } } as AgentEvent);
-    expect(ownerFrames).toHaveLength(beforeLarge + 4);
+    expect(ownerFrames).toHaveLength(beforeLarge + 5);
     expect(published.at(-1)?.notification).toMatchObject({
       method: "turn/completed", params: { threadId: "B", turnId: "completed-turn", turn: { id: "completed-turn", status: "completed", output: [{ type: "text", text: hugeOutput }] } },
     });
     viewer.setEventSubscriptions("chat", []);
     emit("item/agentMessage/delta", "B");
-    expect(ownerFrames).toHaveLength(beforeLarge + 4);
+    expect(ownerFrames).toHaveLength(beforeLarge + 5);
   });
 
   it("fails closed for missing or malformed per-class selectors", () => {
@@ -4679,6 +4847,14 @@ describe("advertised capabilities", () => {
   it("advertises turn reply reads, which messaging gateways need before they skip the page", () => {
     expect(DEFAULT_CAPABILITIES).toContain("turn_assistant_reply");
   });
+
+  it("advertises PR watch control, which viewers need before they offer Stop or Watch CI", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("thread_pr_watch_control_v1");
+  });
+
+  it("advertises project Forge Automation, which viewers need before they offer its menu", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("project_forge_automation");
+  });
 });
 
 describe("Cloudflare listener reachability", () => {
@@ -4796,4 +4972,80 @@ describe("federation short names", () => {
     expect(result).toEqual({ status: "handled" });
     expect(replies).toEqual([]);
   });
+});
+
+// The authenticated peer-directory event owns route liveness, including a
+// sibling disappearing while our connection to its gateway remains healthy.
+it("rejects no-deadline requests when their relayed owner disconnects", async () => {
+  await fc.assert(fc.asyncProperty(fc.uuid(), async (peerId) => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      rpcByPeer: Map<string, FederationRpcEndpoint>;
+    };
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: peerId, sendEnvelope: () => undefined });
+    runtime.rpcByPeer.set(peerId, rpc);
+    let rejected = false;
+    const pending = rpc.request({ method: "file.push.checkpoint", params: {}, timeoutMs: null })
+      .catch(() => { rejected = true; });
+    try {
+      runtime.publishPeerStatus(peerId, "disconnected");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(rejected).toBe(true);
+      expect(runtime.rpcByPeer.has(peerId)).toBe(false);
+    } finally {
+      rpc.rejectAll(new Error("fixture cleanup"));
+      await pending;
+    }
+  }), { numRuns: 10 });
+});
+
+it("an upstream disconnect preserves requests on an independent live direct connection", async () => {
+  await fc.assert(fc.asyncProperty(fc.uuid(), async (peerId) => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      rpcByPeer: Map<string, FederationRpcEndpoint>;
+      disconnectAdvertisedPeers: (reason: string) => void;
+    };
+    runtime.router = new FederationRouter({ localInstanceId: "viewer" });
+    runtime.router.registerConnection({ peerId, capabilities: [], sendEnvelope: () => undefined });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: peerId, sendEnvelope: () => undefined });
+    runtime.rpcByPeer.set(peerId, rpc);
+    let rejected = false;
+    const pending = rpc.request({ method: "file.push.checkpoint", params: {}, timeoutMs: null })
+      .catch(() => { rejected = true; });
+    try {
+      runtime.disconnectAdvertisedPeers("The upstream gateway dropped.");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(rejected).toBe(false);
+      expect(runtime.rpcByPeer.get(peerId)).toBe(rpc);
+    } finally {
+      rpc.rejectAll(new Error("fixture cleanup"));
+      await pending;
+    }
+  }), { numRuns: 10 });
+});
+
+it("Retry Now wakes a target's upstream route without waking an unrelated link", () => {
+  fc.assert(fc.property(fc.boolean(), (usesUpstream) => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+      stopping: boolean;
+      reconnectTimer?: ReturnType<typeof setTimeout>;
+      remotePeerDirectory: Map<string, unknown>;
+      connectToGateway: () => Promise<void>;
+      retryHandoffNow: (targetInstanceId: string) => void;
+    };
+    runtime.stopping = false;
+    runtime.gatewayInstanceId = "upstream-gateway";
+    runtime.remotePeerDirectory.set("upstream-owner", { id: "upstream-owner" });
+    const connect = vi.fn(async () => undefined);
+    runtime.connectToGateway = connect;
+    const timer = setTimeout(() => undefined, 0);
+    runtime.reconnectTimer = timer;
+    try {
+      runtime.retryHandoffNow(usesUpstream ? "upstream-owner" : "independent-peer");
+      expect(connect).toHaveBeenCalledTimes(usesUpstream ? 1 : 0);
+    } finally {
+      clearTimeout(timer);
+    }
+  }));
 });

@@ -1,12 +1,9 @@
-import { execFile as execFileCallback } from "node:child_process";
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { probeCurrentGitBranch } from "../app-server/git-head-branch";
-
-const execFile = promisify(execFileCallback);
+import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "../app-server/git-head-branch";
+import { isolateProcessGitEnvironment, runIsolatedGit } from "./helpers/isolated-git";
 
 const readObservation = vi.hoisted(() => ({
   afterRead: undefined as ((filePath: unknown) => Promise<void>) | undefined,
@@ -23,44 +20,77 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-const isolatedGitKeys = /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|INDEX_FILE|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG.*))$/i;
-let savedGitEnv: Map<string, string>;
+let restoreGitEnv: () => void;
 
 beforeEach(() => {
-  savedGitEnv = new Map();
-  for (const [key, value] of Object.entries(process.env)) {
-    if (isolatedGitKeys.test(key) && value !== undefined) {
-      savedGitEnv.set(key, value);
-      delete process.env[key];
-    }
-  }
+  restoreGitEnv = isolateProcessGitEnvironment();
 });
 
 afterEach(() => {
   readObservation.afterRead = undefined;
-  for (const [key, value] of savedGitEnv) process.env[key] = value;
+  restoreGitEnv();
 });
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (isolatedGitKeys.test(key)) delete env[key];
-  }
-  const { stdout } = await execFile("git", ["-C", cwd, ...args], {
-    env: {
-      ...env,
-      GIT_CONFIG_GLOBAL: path.join(cwd, "missing-global-config"),
-      GIT_CONFIG_SYSTEM: path.join(cwd, "missing-system-config"),
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    },
-    encoding: "utf8",
-    windowsHide: true,
-  });
+  const { stdout } = await runIsolatedGit(cwd, args);
   return stdout.trim();
 }
 
 describe("probeCurrentGitBranch", () => {
+  it("proves no repository up to the filesystem root, and defers at every marker Git would honor", async (context) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-no-repo-head-"));
+    const parent = path.join(root, "parent");
+    const nested = path.join(parent, "nested");
+    try {
+      await mkdir(nested, { recursive: true });
+      // The walk reaches the filesystem root, so a repository that encloses
+      // this machine's temp directory makes the case unreachable here.
+      if (await git(nested, ["rev-parse", "--git-dir"]).then(() => true, () => false)) context.skip();
+      await expect(git(nested, ["rev-parse", "--abbrev-ref", "HEAD"])).rejects.toThrow(/not a git repository/);
+      expect(await probeCurrentGitBranch(nested)).toBe(NOT_A_GIT_REPOSITORY);
+
+      // A HEAD file without objects is not a bare repository to Git.
+      await writeFile(path.join(parent, "HEAD"), "ref: refs/heads/main\n");
+      await expect(git(nested, ["rev-parse", "--git-dir"])).rejects.toThrow(/not a git repository/);
+      expect(await probeCurrentGitBranch(nested)).toBe(NOT_A_GIT_REPOSITORY);
+
+      // With objects and refs beside it, Git discovers a bare repository.
+      await mkdir(path.join(parent, "objects"));
+      await mkdir(path.join(parent, "refs"));
+      await expect(git(nested, ["rev-parse", "--git-dir"])).resolves.toBeTruthy();
+      expect(await probeCurrentGitBranch(nested)).toBeUndefined();
+
+      if (process.platform !== "win32") {
+        // Git accepts a symbolic-link HEAD by its link text, even dangling.
+        await rm(path.join(parent, "HEAD"));
+        await symlink("refs/heads/unborn", path.join(parent, "HEAD"));
+        await expect(git(nested, ["rev-parse", "--git-dir"])).resolves.toBeTruthy();
+        expect(await probeCurrentGitBranch(nested)).toBeUndefined();
+      }
+
+      await rm(parent, { recursive: true, force: true });
+      await mkdir(nested, { recursive: true });
+      expect(await probeCurrentGitBranch(nested)).toBe(NOT_A_GIT_REPOSITORY);
+      // Any .git entry ends the walk, even one Git would reject.
+      await writeFile(path.join(parent, ".git"), "gitdir: missing\n");
+      expect(await probeCurrentGitBranch(nested)).toBeUndefined();
+      await rm(path.join(parent, ".git"));
+
+      // These can change what Git discovers. Leave the answer to Git.
+      for (const key of ["GIT_CEILING_DIRECTORIES", "GIT_OBJECT_DIRECTORY", "GIT_DIR"]) {
+        process.env[key] = root;
+        try {
+          expect(await probeCurrentGitBranch(nested)).toBeUndefined();
+        } finally {
+          delete process.env[key];
+        }
+      }
+      expect(await probeCurrentGitBranch(nested)).toBe(NOT_A_GIT_REPOSITORY);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a committed HEAD when Git packs its loose ref during the probe", async () => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-packing-head-")));
     try {
@@ -207,7 +237,67 @@ describe("probeCurrentGitBranch", () => {
       expect(await probeCurrentGitBranch(linked)).toEqual({ branch: "feature/probe" });
       await git(linked, ["switch", "--detach", "HEAD"]);
       expect(await git(linked, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
-      expect(await probeCurrentGitBranch(linked)).toBeUndefined();
+      expect(await probeCurrentGitBranch(linked)).toEqual({ branch: "HEAD" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a detached HEAD as Git abbreviates it, and defers when another HEAD ref is ambiguous", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-detached-head-"));
+    try {
+      await git(root, ["init", "-b", "main"]);
+      await git(root, ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "seed"]);
+      const oid = await git(root, ["rev-parse", "HEAD"]);
+      await git(root, ["switch", "--detach", "HEAD"]);
+      const gitDir = path.join(root, ".git");
+      const head = path.join(gitDir, "HEAD");
+      const abbreviated = async () => await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+
+      // Git reads no object to abbreviate a detached HEAD, so neither may the probe.
+      for (const text of [
+        oid + "\n",
+        oid.toUpperCase(),
+        oid + "\r\n",
+        "1234567890".repeat(4) + "\n",
+      ]) {
+        await writeFile(head, text);
+        expect(await abbreviated()).toBe("HEAD");
+        expect(await probeCurrentGitBranch(root)).toEqual({ branch: "HEAD" });
+      }
+
+      // A SHA-256 length object ID is not a SHA-1 repository's HEAD.
+      await writeFile(head, oid + "0".repeat(24) + "\n");
+      await expect(abbreviated()).rejects.toThrow();
+      expect(await probeCurrentGitBranch(root)).toBeUndefined();
+      await writeFile(head, oid + "\n");
+
+      // Any other ref Git would also expand `HEAD` to leaves its stdout empty.
+      for (const ref of [
+        "refs/HEAD",
+        "refs/heads/HEAD",
+        "refs/tags/HEAD",
+        "refs/remotes/HEAD",
+        "refs/remotes/HEAD/HEAD",
+      ]) {
+        const refPath = path.join(gitDir, ...ref.split("/"));
+        await mkdir(path.dirname(refPath), { recursive: true });
+        await writeFile(refPath, oid + "\n");
+        expect(await abbreviated()).toBe("");
+        expect(await probeCurrentGitBranch(root)).toBeUndefined();
+        await rm(refPath);
+        // An empty refs/remotes/HEAD directory would defer the packed case
+        // below on its own.
+        await rm(path.join(gitDir, "refs", "remotes"), { recursive: true, force: true });
+        expect(await probeCurrentGitBranch(root)).toEqual({ branch: "HEAD" });
+
+        await writeFile(path.join(gitDir, "packed-refs"), oid + " " + ref + "\n");
+        expect(await abbreviated()).toBe("");
+        expect(await probeCurrentGitBranch(root)).toBeUndefined();
+        await rm(path.join(gitDir, "packed-refs"));
+      }
+      expect(await abbreviated()).toBe("HEAD");
+      expect(await probeCurrentGitBranch(root)).toEqual({ branch: "HEAD" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

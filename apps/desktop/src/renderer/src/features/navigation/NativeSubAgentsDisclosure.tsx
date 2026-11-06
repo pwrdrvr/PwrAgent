@@ -57,6 +57,10 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
     return null;
   }
 
+  // A Claude sub-agent is a task in its parent's session, not a thread, so
+  // there is no transcript window to open for it.
+  const harnessLabel = props.thread.source === "claude" ? "Claude" : "native Codex";
+  const opensTranscript = props.thread.source === "codex";
   const activeCount = nativeSubAgents.filter(
     (subAgent) => subAgent.threadStatus === "active",
   ).length;
@@ -79,7 +83,7 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
         /* A tray can hold several of these groups — the parent's and one per
            child that spawned workers — so the owning thread has to be in the
            name for the buttons to be tellable apart. */
-        aria-label={`${expanded ? "Collapse" : "Expand"} ${count} native Codex sub-agents for ${props.thread.title}`}
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${count} ${harnessLabel} sub-agents for ${props.thread.title}`}
         className={`native-subagents__toggle${expanded ? " is-open" : ""}`}
         /* Expanding changes the tray's height, so let the frozen snapshot go,
            the way the sibling sub-thread toggle does. */
@@ -113,10 +117,36 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
         <div
           className="native-subagents__list"
           role="list"
-          aria-label={`Native Codex sub-agents for ${props.thread.title}`}
+          aria-label={`${props.thread.source === "claude" ? "Claude" : "Native Codex"} sub-agents for ${props.thread.title}`}
         >
           {nativeSubAgents.map((subAgent) => {
             const label = subAgent.agentNickname ?? subAgent.title;
+            const content = (
+              <>
+                {subAgent.threadStatus === "active" ? (
+                  <span
+                    aria-label="Working"
+                    className="native-subagents__status"
+                    role="img"
+                  />
+                ) : null}
+                <span className="native-subagents__agent-label">{label}</span>
+                {subAgent.agentRole ? (
+                  <span className="native-subagents__agent-role">
+                    {subAgent.agentRole}
+                  </span>
+                ) : null}
+              </>
+            );
+            if (!opensTranscript) {
+              return (
+                <div key={subAgent.threadId} role="listitem">
+                  <span className="native-subagents__agent native-subagents__agent--static" title={subAgent.title}>
+                    {content}
+                  </span>
+                </div>
+              );
+            }
             return (
               <div key={subAgent.threadId} role="listitem">
                 <button
@@ -139,19 +169,7 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
                     });
                   }}
                 >
-                  {subAgent.threadStatus === "active" ? (
-                    <span
-                      aria-label="Working"
-                      className="native-subagents__status"
-                      role="img"
-                    />
-                  ) : null}
-                  <span className="native-subagents__agent-label">{label}</span>
-                  {subAgent.agentRole ? (
-                    <span className="native-subagents__agent-role">
-                      {subAgent.agentRole}
-                    </span>
-                  ) : null}
+                  {content}
                 </button>
               </div>
             );

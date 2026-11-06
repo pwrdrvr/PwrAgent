@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { extractThreadReplayFromReadResult } from "../codex-app-server/client";
+import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 
 // Synthetic protocol snapshots only. Count operations, never elapsed time.
 function measureSnapshot(size: number, tools: boolean) {
@@ -76,14 +76,15 @@ const connection = vi.hoisted(() => ({
 vi.mock("@pwrdrvr/agent-transport", async (importOriginal) => ({
   ...await importOriginal<typeof import("@pwrdrvr/agent-transport")>(),
   JsonRpcConnection: class {
-    request() { throw new Error("Unexpected RPC request in notification-only fixture."); }
     setNotificationHandler(handler: typeof connection.notify) { connection.notify = handler; }
     setRequestHandler() {}
+    // The client wraps request at construction; this test sends none.
+    request() { return Promise.reject(new Error("no Codex requests in this test")); }
   },
 }));
 
 it("normalizes live chunks and late tool progress without revisiting earlier notification payloads", async () => {
-  const { CodexAppServerClient } = await import("../codex-app-server/client");
+  const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
   for (const historySize of [128, 256]) {
     const client = new CodexAppServerClient({ directoryResolver: async () => [] });
     const delivered: Array<{ method: string; params: unknown }> = [];

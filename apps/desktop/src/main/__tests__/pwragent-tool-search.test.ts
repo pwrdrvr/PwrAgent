@@ -27,6 +27,21 @@ describe("PwrAgent tool discovery", () => {
       .toMatchObject({ description: expect.stringContaining(PWRAGENT_IMAGE_REPLY_GUIDANCE) });
     expect(buildPwrAgentMcpInstructions([])).toContain(PWRAGENT_IMAGE_REPLY_GUIDANCE);
   });
+
+  it("advertises each available wait workflow independently in Claude MCP instructions", () => {
+    const workflows = ["watch_thread_pull_request", "manage_thread_dependencies", "create_monitor_delegation"];
+    for (const workflow of workflows) {
+      const instructions = buildPwrAgentMcpInstructions([workflow]);
+      expect(instructions).toContain(workflow);
+      for (const unavailable of workflows.filter((name) => name !== workflow)) {
+        expect(instructions).not.toContain(unavailable);
+      }
+    }
+    const instructions = buildPwrAgentMcpInstructions(workflows);
+    expect(instructions).toContain("Continue After");
+    expect(instructions).toContain("mode all");
+    expect(instructions).not.toContain("Other waits: create_monitor_delegation");
+  });
   it("leaves the default catalog untouched and keeps only search eager when enabled", () => {
     const before = JSON.stringify(catalog);
     expect(withPwrAgentToolDiscovery(catalog, false)).toBe(catalog);
@@ -103,6 +118,11 @@ describe("PwrAgent tool discovery", () => {
     ["mark project read", "mark_project_read"],
     ["clear all unread items in repository", "mark_project_read"],
     ["bulk dismiss unread folder", "mark_project_read"],
+    ["clean up old stale threads", "scan_thread_maintenance"],
+    ["free disk space worktrees", "scan_thread_maintenance"],
+    ["apply selected bulk archiving", "apply_thread_maintenance"],
+    ["open maintenance dialog", "open_thread_maintenance"],
+    ["archive thread", "mutate_thread"],
     ["job monitor", "create_monitor_delegation"],
     ["run another machine", "create_instance_thread"],
     ["move project folder", "move_thread_workspace"],
@@ -110,6 +130,8 @@ describe("PwrAgent tool discovery", () => {
     ["feishu send file", "send_messaging_file"],
     ["read star map", "read_star_map_view"],
     ["watch pull request", "watch_thread_pull_request"],
+    ["cancel pr watch", "watch_thread_pull_request"],
+    ["list my watches", "watch_thread_pull_request"],
     ["manage mcp connections", "manage_mcp_connections"],
   ])("finds %s in its bounded results", (query, name) => {
     const results = searchPwrAgentTools(catalog, query);

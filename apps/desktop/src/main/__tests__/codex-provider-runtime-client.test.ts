@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerNotification, AppServerPendingRequestNotification, CodexModelProviderSettings } from "@pwragent/shared";
-import type { CodexAppServerClient } from "../codex-app-server/client";
+import type { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 import type { NativeVoiceNotification } from "../codex-app-server/native-voice-protocol";
 
@@ -23,6 +23,7 @@ function fixture() {
     interruptTurn: vi.fn(async () => undefined),
     steerTurn: vi.fn(async () => ({ threadId: "new-thread", turnId: "turn" })),
     terminateBackgroundTerminal: vi.fn(async () => true),
+    retireReviewThread: vi.fn(async () => true),
     startRealtime: vi.fn(async () => undefined),
     readThreadSummary: vi.fn(async () => ({ id: "persisted" })),
     readThread: vi.fn(async () => ({ entries: [] })),
@@ -80,6 +81,15 @@ describe("provider-specific Codex runtimes", () => {
     expect(create).toHaveBeenCalledExactlyOnceWith(bonsai);
   });
 
+  it("retires a review through its owning provider runtime", async () => {
+    const { primary, local, client } = setup();
+    primary.providers.set("review-child", "bonsai");
+    const params = { threadId: "review-child", parentThreadId: "review-parent" };
+    expect(await client.retireReviewThread(params)).toBe(true);
+    expect(local.raw.retireReviewThread).toHaveBeenCalledExactlyOnceWith(params);
+    expect(primary.raw.retireReviewThread).not.toHaveBeenCalled();
+  });
+
   it("resolves persisted thread ownership through App Server before a turn, including plain model IDs", async () => {
     const { primary, local, client } = setup();
     primary.providers.set("persisted", "bonsai");
@@ -87,6 +97,21 @@ describe("provider-specific Codex runtimes", () => {
     expect(primary.raw.readThreadSummary).toHaveBeenCalledWith("persisted");
     expect(local.raw.startTurn).toHaveBeenCalledOnce();
     await expect(client.startTurn({ threadId: "persisted", model: "@another/model", input: [] })).rejects.toThrow("Hand it off");
+  });
+
+  it("forks a handed-off rollout without reading its source thread, which only the sending machine has", async () => {
+    const { primary, local, client } = setup();
+    // What Codex answers thread/read for an ID it never stored.
+    primary.raw.readThreadSummary.mockRejectedValue(new Error("json-rpc error (-32600): thread not loaded: remote-source"));
+    const params = { threadId: "remote-source", path: "/state/thread-handoffs/incoming-1/thread.jsonl", cwd: "/worktrees/a" };
+    await expect(client.forkThread({ ...params, model: "gpt-5.5" })).resolves.toEqual({ threadId: "forked-thread" });
+    expect(primary.raw.forkThread).toHaveBeenCalledExactlyOnceWith({ ...params, model: "gpt-5.5" });
+    // A requested provider still picks the runtime.
+    await client.forkThread({ ...params, model: "@bonsai/Bonsai.gguf" });
+    expect(local.raw.forkThread).toHaveBeenCalledOnce();
+    expect(primary.raw.readThreadSummary).not.toHaveBeenCalled();
+    // A fork of a local thread still resolves its owner first.
+    await expect(client.forkThread({ threadId: "remote-source", cwd: "/worktrees/a" })).rejects.toThrow("thread not loaded");
   });
 
   it("reports a runtime thread's provider, and any other thread's as Codex named it", async () => {

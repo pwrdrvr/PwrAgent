@@ -1,9 +1,38 @@
 # Durable thread dependencies
 
+For work that is done only when someone says so, use
+[Wait Until Done](thread-merge-holds.md). It holds merging while work
+continues and reminds the operator when the work is marked done. A completed
+turn is a scheduling event; it does not establish that another thread has
+finished its work.
+
 `manage_thread_dependencies` registers one-shot prerequisites for a local
 thread. The thread ends its turn after registration; PwrAgent evaluates
 prerequisites from provider turn boundaries and its existing PR status bus.
 There is no Job Monitor, model-driven polling, or new timer.
+
+## Choosing a wait
+
+Use `watch_thread_pull_request` for CI or merge notifications on this thread's
+attached PR. Follow `prAutomation.guidance` for Auto-fix PR coordination.
+Use `manage_thread_dependencies` (**Continue After…**) when work should resume
+after another local thread finishes, its CI passes, or its PR merges. Several
+prerequisite PRs belong in one registration with `mode: "all"`. Find their
+owning threads with `search_threads` and confirm their PRs with
+`get_thread_status`; they do not need to be attached to the waiting thread.
+
+For example, "after #9, #10, and #11 merge, rebase #12 and update its tests"
+is a dependency on three owning threads with `when: "pr_merged"`, plus that
+follow-up as `continuation`. Do not replace it with a Job Monitor running
+`gh pr view` every fifteen minutes. Dependencies reuse PR status updates and
+spend no model turns while waiting, even if merging takes days. They schedule
+the follow-up, but do not merge the PRs or enforce their merge order.
+
+Reserve `create_monitor_delegation` for long jobs that PR watches and local
+thread dependencies cannot cover. Confirm a wait was registered, finish any
+unrelated work, and end the turn.
+
+## Registering a dependency
 
 ```json
 {

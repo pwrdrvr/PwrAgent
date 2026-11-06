@@ -11,6 +11,7 @@ import {
   within,
 } from "../../../test/phase-probes";
 import { useState } from "react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AcpAgentSettingsEntry,
@@ -31,6 +32,15 @@ import type {
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
+import {
+  CURRENT_CODEX_MODEL_LABELS,
+  PROVIDER_MODEL,
+  SUPERSEDED_CODEX_MODEL_LABELS,
+  codexCatalogArbitrary,
+  codexCatalogModels,
+  expectedModelSelectSections,
+  selectSections,
+} from "../../../test/model-catalog";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { AppearanceController } from "../../../lib/useAppearance";
 import { SettingsScreen } from "../SettingsScreen";
@@ -64,6 +74,7 @@ afterEach(() => {
     value: undefined,
   });
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 /**
@@ -175,6 +186,7 @@ function createSnapshot(
         lightTheme: { value: "tangerine-light", source: "default" },
         themedDockIcon: { value: true, source: "default" },
         terminalMinimumContrast: { value: false, source: "default" },
+        calmMotion: { value: false, source: "default" },
         density: { value: "mission-control", source: "default" },
         sidebarTextSize: { value: "md", source: "default" },
         transcriptTextSize: { value: "md", source: "default" },
@@ -712,6 +724,7 @@ describe("SettingsScreen color themes", () => {
         density: "mission-control",
         sidebarTextSize: "md",
         transcriptTextSize: "md",
+        calmMotion: false,
         resolvedTheme: "dark",
       },
       setTheme: vi.fn(),
@@ -720,6 +733,7 @@ describe("SettingsScreen color themes", () => {
       setDensity: vi.fn(),
       setSidebarTextSize: vi.fn(),
       setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
       setAppearance: vi.fn(),
     };
     render(
@@ -768,6 +782,7 @@ describe("SettingsScreen color themes", () => {
         density: "mission-control",
         sidebarTextSize: "md",
         transcriptTextSize: "md",
+        calmMotion: false,
         resolvedTheme: "dark",
       },
       setTheme: vi.fn(),
@@ -776,6 +791,7 @@ describe("SettingsScreen color themes", () => {
       setDensity: vi.fn(),
       setSidebarTextSize: vi.fn(),
       setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
       setAppearance: vi.fn(),
     };
     render(
@@ -1004,6 +1020,136 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
   });
 
+  it("lists default models the way the composer does: current first, superseded under Other models", async () => {
+    const cachedBackends = [{
+      kind: "codex",
+      label: "OpenAI",
+      available: true,
+      methods: [],
+      capabilities: { createThread: true },
+      executionModes: [],
+      launchpadOptions: { models: codexCatalogModels() },
+    }] as unknown as BackendSummary[];
+    const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+      async () => ({ fetchedAt: 1, entries: [] }),
+    );
+    render(
+      <SettingsScreen
+        cachedBackends={cachedBackends}
+        desktopApi={{
+          listAcpAgents,
+          listBackends: async () => await new Promise<never>(() => undefined),
+        }}
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(selectSections(screen.getByLabelText("OpenAI default model"))).toEqual([
+      { labels: ["Provider advertised default", ...CURRENT_CODEX_MODEL_LABELS] },
+      { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
+      { group: PROVIDER_MODEL.providerLabel, labels: [PROVIDER_MODEL.label] },
+    ]);
+    // Let the mount's agent read land inside act.
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+    await act(async () => undefined);
+  });
+
+  it("lists any Codex catalog as a default model by the shared model menu rule", async () => {
+    await fc.assert(fc.asyncProperty(codexCatalogArbitrary, async (models) => {
+      const cachedBackends = [{
+        kind: "codex",
+        label: "OpenAI",
+        available: true,
+        methods: [],
+        capabilities: { createThread: true },
+        executionModes: [],
+        launchpadOptions: { models },
+      }] as unknown as BackendSummary[];
+      const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+        async () => ({ fetchedAt: 1, entries: [] }),
+      );
+      try {
+        render(
+          <SettingsScreen
+            cachedBackends={cachedBackends}
+            desktopApi={{
+              listAcpAgents,
+              listBackends: async () => await new Promise<never>(() => undefined),
+            }}
+            initialSection="models"
+            settings={createSettingsState()}
+            onClose={() => undefined}
+          />,
+        );
+        expect(
+          selectSections(screen.getByLabelText("OpenAI default model")),
+        ).toEqual(expectedModelSelectSections({
+          kind: "codex",
+          models,
+          leading: ["Provider advertised default"],
+        }));
+        await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+        await act(async () => undefined);
+      } finally {
+        cleanup();
+      }
+    }), { numRuns: 10 });
+  });
+
+  it("saves a chosen default model with that model's default reasoning", async () => {
+    const cachedBackends = [{
+      kind: "codex",
+      label: "OpenAI",
+      available: true,
+      methods: [],
+      capabilities: { createThread: true },
+      executionModes: [],
+      launchpadOptions: {
+        models: [{
+          id: "gpt-6-astra",
+          label: "GPT-6-Astra",
+          supportsReasoning: true,
+          reasoningEfforts: ["low", "medium", "high"],
+          defaultReasoningEffort: "medium",
+        }],
+      },
+    }] as unknown as BackendSummary[];
+    const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+      async () => ({ fetchedAt: 1, entries: [] }),
+    );
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        cachedBackends={cachedBackends}
+        desktopApi={{
+          listAcpAgents,
+          listBackends: async () => await new Promise<never>(() => undefined),
+        }}
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    chooseSelectOption(screen.getByLabelText("OpenAI default model"), "GPT-6-Astra");
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "gpt-6-astra",
+              reasoningEffortsByModel: { "gpt-6-astra": "medium" },
+            },
+          },
+        },
+      });
+    });
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+    await act(async () => undefined);
+  });
+
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
     const cachedBackends: BackendSummary[] = [
       {
@@ -1081,10 +1227,8 @@ describe("SettingsScreen", () => {
 
     expect(screen.getByText("1 discovered model")).toBeInTheDocument();
     expect(
-      within(screen.getByLabelText("OpenAI default model")).getByRole("option", {
-        name: "GPT-5.6-Sol",
-      }),
-    ).toBeInTheDocument();
+      selectOptionLabels(screen.getByLabelText("OpenAI default model")),
+    ).toContain("GPT-5.6-Sol");
     expect(screen.queryByText("No provider has reported a model catalog yet."))
       .not.toBeInTheDocument();
     await waitFor(() => {
@@ -1558,6 +1702,7 @@ describe("SettingsScreen", () => {
         density: "mission-control",
         sidebarTextSize: "md",
         transcriptTextSize: "md",
+        calmMotion: false,
         resolvedTheme: "dark",
       },
       setTheme: vi.fn(),
@@ -1566,6 +1711,7 @@ describe("SettingsScreen", () => {
       setDensity: vi.fn(),
       setSidebarTextSize: vi.fn(),
       setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
       setAppearance: vi.fn(),
     };
     const settings = createSettingsState();
@@ -1588,6 +1734,46 @@ describe("SettingsScreen", () => {
         general: { appearance: { terminalMinimumContrast: true } },
       });
     });
+  });
+
+  it("leaves calm motion off by default and switches it through the appearance controller", async () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        calmMotion: false,
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        initialSection="general"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const toggle = screen.getByRole("switch", { name: "Calm motion" });
+    expect(toggle).not.toBeChecked();
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    // The controller owns the write and the live `<html data-motion>`
+    // flip, like every other appearance axis.
+    expect(controller.setCalmMotion).toHaveBeenCalledWith(true);
   });
 
   it("saves the HTML preview scripts setting", async () => {
@@ -4192,7 +4378,7 @@ describe("SettingsScreen", () => {
     );
 
     const reasoning = await screen.findByLabelText("Codex default reasoning");
-    fireEvent.change(reasoning, { target: { value: "xhigh" } });
+    chooseSelectOption(reasoning, "xhigh");
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {
@@ -10362,6 +10548,33 @@ describe("SettingsScreen", () => {
     ).toBeEnabled();
   });
 
+  it("saves an IPC native-approval ticket without probing with it or automatically consuming a session", async () => {
+    const connection: McpConnectionStatus = {
+      id: "native-app", displayName: "Native app", serverUrl: "unix:///tmp/private/server.sock#/mcp",
+      authMode: "none", kind: "remote", enabled: true, createdAt: 1, updatedAt: 1, configured: true, state: "ready",
+    };
+    let connections: McpConnectionStatus[] = [];
+    const createMcpConnection = vi.fn(async () => { connections = [connection]; return { connection }; });
+    const probeMcpConnection = vi.fn(async () => ({ ok: true as const, serverUrl: connection.serverUrl, authMode: "none" as const, needsIpcBearer: true }));
+    const listMcpConnectionTools = vi.fn(async () => ({ connectionId: connection.id, tools: [], fetchedAt: 1 }));
+    const authorizeMcpConnection = vi.fn();
+    render(<SettingsScreen
+      desktopApi={{ createMcpConnection, probeMcpConnection, listMcpConnectionTools, authorizeMcpConnection,
+        listMcpConnections: vi.fn(async () => ({ connections })),
+        listCodexMcpServers: vi.fn(async () => ({ codexHome: "/fixture", detail: "toolsAndAuthOnly" as const, servers: [] })),
+      }} initialSection="plugins" settings={createSettingsState()} onClose={() => undefined} />);
+    fireEvent.change(await screen.findByPlaceholderText("https://mcp.example.com/mcp"), { target: { value: connection.serverUrl } });
+    fireEvent.change(screen.getByPlaceholderText("Datadog"), { target: { value: "Native app" } });
+    fireEvent.change(screen.getByLabelText("Session bearer token (optional)"), { target: { value: "approved-session-ticket" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add connection" }));
+    await waitFor(() => expect(createMcpConnection).toHaveBeenCalledWith({ displayName: "Native app", serverUrl: connection.serverUrl, ipcBearerToken: "approved-session-ticket" }));
+    expect(probeMcpConnection).toHaveBeenCalledWith({ serverUrl: connection.serverUrl });
+    expect(authorizeMcpConnection).not.toHaveBeenCalled();
+    await screen.findByText("Native app", { exact: true });
+    expect(listMcpConnectionTools).not.toHaveBeenCalled();
+  });
+
   it("creates and authorizes a PwrAgent-managed MCP connection", async () => {
     const managedConnection = {
       id: "datadog",
@@ -10420,7 +10633,7 @@ describe("SettingsScreen", () => {
     fireEvent.change(await screen.findByLabelText("Name"), {
       target: { value: "Datadog" },
     });
-    fireEvent.change(screen.getByLabelText("Remote MCP URL"), {
+    fireEvent.change(screen.getByLabelText("MCP server URL"), {
       target: { value: "https://mcp.example.com/mcp" },
     });
     // Nothing is written until the endpoint has been checked: the button is a
@@ -10497,7 +10710,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    fireEvent.change(await screen.findByLabelText("Remote MCP URL"), {
+    fireEvent.change(await screen.findByLabelText("MCP server URL"), {
       target: { value: "npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
@@ -10706,7 +10919,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
     const dialog = screen.getByRole("dialog", { name: "Edit connection" });
-    expect(within(dialog).queryByLabelText("Remote MCP URL")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("MCP server URL")).not.toBeInTheDocument();
     const secret = within(dialog).getByLabelText("FIXTURE_TOKEN value");
     expect(secret).toHaveValue("");
     expect(secret).toHaveAttribute("placeholder", "Stored encrypted");
@@ -10739,6 +10952,8 @@ describe("SettingsScreen", () => {
   });
 
   it("disables MCP mutations when the selected Codex profile changed after startup", async () => {
+    // Match the OS home that preload supplies for this fixture's Codex paths.
+    vi.stubGlobal("__pwragentHomeDir", "/home/example");
     const base = createSnapshot();
     const workCodexHome = "/home/example/.codex/profiles/work";
     const snapshot = createSnapshot({

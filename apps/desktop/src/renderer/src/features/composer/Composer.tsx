@@ -1,5 +1,7 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
-import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
+import { codexProviderIdOfModel, type BackendModelOption } from "@pwragent/shared";
+import { ModelDropdown } from "./ModelDropdown";
+import { ThreadHandoffComposerBand } from "../federation/ThreadHandoffProgress";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
@@ -11,9 +13,11 @@ import {
 import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
-  attachedPullRequestsForWorkspace,
   describeAttachedPullRequestLocalSync,
   findCheckedOutPullRequest,
+  pullRequestRepositoryKey,
+  reviewThreadForWorkspace,
+  reviewWorkspacePullRequests,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
 import {
@@ -24,6 +28,10 @@ import {
 } from "./rate-limit-schedule";
 import { useLaunchpadComposerFocusHandoff } from "./useLaunchpadComposerFocusHandoff";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
+import {
+  describeProjectAutoFixOverride,
+  findThreadProjectDirectory,
+} from "../forge-automation/forge-automation-view";
 import {
   beginLaunchpadComposition,
   getLaunchpadComposerDestination,
@@ -156,6 +164,7 @@ import {
 import { AppIcon } from "../../components/AppIcon";
 import { InstanceChip, InstanceGlyph } from "../federation/InstanceGlyph";
 import { isOutdatedOwnerError } from "../workspace-recovery/MissingWorktreeCard";
+import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import { filterAtReferenceCandidates } from "../../lib/instance-references";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
@@ -286,8 +295,6 @@ import {
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import {
   ComposerDropdown,
-  type ComposerDropdownGroup,
-  type ComposerDropdownOption,
   useDismissableMenu,
 } from "./ComposerDropdown";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
@@ -334,6 +341,7 @@ import {
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 import { useComposerTip } from "./useComposerTip";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 export type ComposerProps = {
   activeTurnId?: string;
@@ -385,6 +393,8 @@ export type ComposerProps = {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     text: string;
+    /** Queue behind an active turn even when the backend supports steering. */
+    busyBehavior?: "queue";
   };
   onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
   /**
@@ -419,6 +429,8 @@ export type ComposerProps = {
      */
     kind?: "rewound-prompt" | "rewound-prompt-undone";
   };
+  /** Retire the restore request so a later composer mount cannot replay it. */
+  onDraftRestoreHandled?: (id: number) => void;
   /**
    * Focus the input once this composer shows the named thread and can take
    * input. Sent for a mouse click on the thread's sidebar row only; each id
@@ -426,6 +438,14 @@ export type ComposerProps = {
    */
   focusRequest?: { threadKey: string; id: number; origin: HTMLElement };
   onFocusRequestHandled?: (id: number) => void;
+  /**
+   * Appends text to the named thread's draft, on a new line when the draft
+   * is not empty, and focuses the input. It never sends: the operator reads
+   * and sends the request. Each id applies once, when this composer shows
+   * that thread and can take input.
+   */
+  composerInsertRequest?: { threadKey: string; id: number; text: string };
+  onComposerInsertRequestHandled?: (id: number) => void;
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
@@ -1085,29 +1105,6 @@ const REVIEW_TARGET_OPTIONS: Array<{
   },
 ];
 
-function toModelDropdownOption(model: ModelOption): ComposerDropdownOption {
-  return {
-    label: model.label ?? model.id,
-    ...(model.providerLabel ? { selectedLabel: formatModelOptionLabel(model) } : {}),
-    value: model.id,
-  };
-}
-
-function groupModelOptionsByProvider(models: readonly ModelOption[]): ComposerDropdownGroup[] {
-  const groups = new Map<string, ComposerDropdownGroup>();
-  for (const model of models) {
-    const providerId = model.providerId;
-    if (!providerId) continue;
-    let group = groups.get(providerId);
-    if (!group) {
-      group = { label: model.providerLabel ?? providerId, options: [] };
-      groups.set(providerId, group);
-    }
-    group.options.push(toModelDropdownOption(model));
-  }
-  return [...groups.values()];
-}
-
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
   return (
@@ -1261,6 +1258,51 @@ function buildReviewCommitOptions(
 }
 
 /**
+ * Projects outside the thread's linked directories that hold a checkout of
+ * an attached PR's repository. An agent can attach a PR from another
+ * repository without linking a checkout of it; the PR is still reviewable in
+ * any local checkout of that repository.
+ */
+function buildUnlinkedReviewWorkspaceOptions(params: {
+  coveredPullRequestUrls: Set<string>;
+  directories?: NavigationDirectorySummary[];
+  seen: Set<string>;
+  thread?: NavigationThreadSummary;
+}): ReviewWorkspaceOption[] {
+  const wanted = new Set(
+    (params.thread?.prs ?? [])
+      .filter((pr) =>
+        !params.coveredPullRequestUrls.has(pr.url)
+        && EXPLICIT_REVIEW_PULL_REQUEST_URL.test(pr.url)
+      )
+      .map(pullRequestRepositoryKey),
+  );
+  const options: ReviewWorkspaceOption[] = [];
+  for (const directory of params.directories ?? []) {
+    const cwd = directory.path?.trim();
+    const repository = directory.gitStatus?.originRepository?.trim().toLowerCase();
+    if (
+      directory.kind !== "directory"
+      || directory.localAvailability
+      || !cwd
+      || !repository
+      || !wanted.has(repository)
+      || [...params.seen].some((seenCwd) => reviewWorkspacePathMatches(seenCwd, cwd))
+    ) {
+      continue;
+    }
+    params.seen.add(cwd);
+    options.push({
+      cwd,
+      key: `${directory.key}:${cwd}`,
+      label: directory.label.trim() || cwd,
+      path: cwd,
+    });
+  }
+  return options;
+}
+
+/**
  * Attached pull requests the selected workspace can review, plus the one the
  * workspace already has checked out clean. Both the default target and the
  * composer's explanation of how local differs read from this single answer.
@@ -1276,14 +1318,8 @@ function reviewPullRequestsFor(params: {
 } {
   // A target the owner would refuse is not a choice worth drawing, so the
   // candidate list carries only the URL shape it accepts.
-  const attached = attachedPullRequestsForWorkspace({
-    cwd: params.cwd,
-    prs: params.thread?.prs ?? [],
-    repository: params.directory?.gitStatus?.originRepository,
-    repositoryPath: params.thread?.linkedDirectories.find((directory) =>
-      reviewWorkspacePathMatches(directory.worktreePath ?? directory.path, params.cwd)
-    )?.path,
-  }).filter((pr) => EXPLICIT_REVIEW_PULL_REQUEST_URL.test(pr.url));
+  const attached = reviewWorkspacePullRequests(params)
+    .filter((pr) => EXPLICIT_REVIEW_PULL_REQUEST_URL.test(pr.url));
   if (params.thread?.codexEnvironmentRuntime?.executionTarget === "remote") {
     // Resolving a pull request target fetches its commits into a checkout,
     // which a remote execution workspace does not have. Say so rather than
@@ -3127,6 +3163,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   );
   const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
   const savedInitialDraft = draftStore.get(composerScopeKey);
+  // The one-shot restore request can be retired while the draft's origin
+  // survives in its snapshot, including across composer remounts.
+  const [rewoundPromptScope, setRewoundPromptScope] = useState<string | undefined>(
+    savedInitialDraft?.rewoundPrompt ? composerScopeKey : undefined,
+  );
+  const rewoundPromptShownRef = useRef(Boolean(savedInitialDraft?.rewoundPrompt));
   const savedInitialQueuedTurns = props.thread || props.launchpad
     ? draftStore.getQueuedTurns(composerScopeKey)
     : undefined;
@@ -4097,6 +4139,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       imageAttachments,
       fileAttachments,
       skillTokens,
+      ...(rewoundPromptScope === composerScopeKey ? { rewoundPrompt: true } : {}),
     },
   };
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
@@ -4117,6 +4160,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setEditorDocument(undefined);
     setDraft("");
     setSkillTokens([]);
+    setRewoundPromptScope(undefined);
+    rewoundPromptShownRef.current = false;
   };
   const createEmptyComposerDraftSnapshot = (): ComposerDraftSnapshot => ({
     draft: "",
@@ -4266,7 +4311,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // that gate opens instead of consuming its id and rejecting it silently.
     if (props.disabled) return;
     appliedReplySubmissionId.current = submission.id;
-    void submitReplyText(submission.text)
+    void submitReplyText(submission.text, submission.busyBehavior)
       .catch(() => false)
       .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
     // submitReplyText is recreated each render; the id guard sends once.
@@ -4297,6 +4342,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     props.onFocusRequestHandled?.(request.id);
   }, [props.focusRequest, props.onFocusRequestHandled, props.thread, props.disabled, editorScope.scopeKey, composerScopeKey]);
+  const handledInsertRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.composerInsertRequest;
+    if (
+      !request
+      || handledInsertRequestIdRef.current === request.id
+      || !props.thread
+      || threadSummaryIdentityKey(props.thread) !== request.threadKey
+      || props.disabled
+      || editorScope.scopeKey !== composerScopeKey
+    ) {
+      return;
+    }
+    handledInsertRequestIdRef.current = request.id;
+    const current = canonicalDraft.replace(/\s+$/, "");
+    const nextDraft = current ? `${current}\n${request.text}` : request.text;
+    const hydrated = hydrateComposerDraft(
+      nextDraft,
+      props.skills,
+      threadLinks,
+      pullRequestLinks,
+    );
+    // The editor replays its current content once before it takes the new
+    // value; the guard drops that stale replay, as for a draft restore.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: hydrated.draft,
+      expectedSkillTokensSignature: getComposerSkillTokensSignature(hydrated.skillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    setComposerDraftFromCanonical(nextDraft);
+    props.onComposerInsertRequestHandled?.(request.id);
+    requestAnimationFrame(() => inputRef.current?.focus());
+    // The helpers are recreated each render; the id guard applies once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.composerInsertRequest, props.thread, props.disabled, editorScope.scopeKey, composerScopeKey]);
   const appliedReviewRequestId = useRef<number | undefined>(undefined);
   useEffect(() => {
     const request = props.reviewRequest;
@@ -4332,10 +4413,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const appliedDraftRestoreId = useRef<number | undefined>(undefined);
-  // The scope a rewound prompt was put back in. The chip goes once the
-  // composer is cleared, after the prompt showed, or moves to another thread.
-  const [rewoundPromptScope, setRewoundPromptScope] = useState<string>();
-  const rewoundPromptShownRef = useRef(false);
   const composerHasContent = draft.trim().length > 0 || imageAttachments.length > 0;
   useEffect(() => {
     if (rewoundPromptScope === undefined) return;
@@ -4362,6 +4439,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (props.disabled) return;
     appliedDraftRestoreId.current = restore.id;
+    props.onDraftRestoreHandled?.(restore.id);
     if (restore.kind === "rewound-prompt-undone") {
       // The prompt is back in the transcript; sending this copy would send
       // it twice. Only a composer still marked with the chip holds it.
@@ -4400,7 +4478,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     requestAnimationFrame(() => inputRef.current?.focus());
     // The helpers are recreated each render; the id guard applies once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.draftRestore, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
+  }, [props.draftRestore, props.onDraftRestoreHandled, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
@@ -4489,6 +4567,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setImageAttachments(snapshot.imageAttachments);
       setFileAttachments(snapshot.fileAttachments ?? []);
       setSkillTokens(snapshot.skillTokens);
+      setRewoundPromptScope(snapshot.rewoundPrompt ? composerScopeKey : undefined);
+      rewoundPromptShownRef.current = Boolean(snapshot.rewoundPrompt);
       setComposerSelectionRequest({
         id: `recovery:${++composerSelectionRequestSequenceRef.current}`,
         index: 0,
@@ -4979,6 +5059,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     return { queueEntryId: queued.id, contentHash: "", input: payload.input };
   };
 
+  // A failed row is a local copy of a failed scheduled action. Removing it
+  // here alone lasts until the next projection reads the owner's failures,
+  // so the operator's delete, edit, or send also dismisses it on the owner.
+  const dismissFailedScheduledAction = async (
+    queued: QueuedTurnDraft,
+  ): Promise<void> => {
+    if (!queued.failedScheduledActionId || !props.desktopApi?.cancelScheduledThreadAction) {
+      return;
+    }
+    try {
+      await props.desktopApi.cancelScheduledThreadAction({
+        federationTarget: props.thread?.federation?.ref.target
+          ?? rendererFederationTarget,
+        id: queued.failedScheduledActionId,
+      });
+    } catch {
+      // An owner that predates dismissal refuses a failed action. The row
+      // still leaves this window, as it always did.
+    }
+  };
+
   const cancelServerManagedQueuedTurn = async (
     queued: QueuedTurnDraft,
     scopeKey = composerScopeKey,
@@ -5005,6 +5106,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         reportError(error instanceof Error ? error.message : String(error));
         return "failed";
       }
+    }
+    if (queued.failedScheduledActionId) {
+      // Steering a failed row delivers it, so its failure is settled too.
+      await dismissFailedScheduledAction(queued);
+      return "cancelled";
     }
     if (!queued.queueEntryId) {
       return "cancelled";
@@ -5573,30 +5679,84 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       reviewConfig?.workspaceCwd,
     ],
   );
+  const reviewBranchThread = useMemo(
+    () =>
+      reviewThreadForWorkspace({
+        cwd: reviewConfig?.workspaceCwd,
+        directory: reviewDirectory,
+        thread: props.thread,
+      }),
+    [reviewConfig?.workspaceCwd, reviewDirectory, props.thread],
+  );
   const reviewBranchPickerOptions = useMemo(
     () =>
       buildReviewBranchPickerOptions({
         directory: reviewDirectory,
-        thread: props.thread,
+        thread: reviewBranchThread,
       }),
-    [reviewDirectory, props.thread],
+    [reviewDirectory, reviewBranchThread],
   );
   const defaultReviewBranch = useMemo(
     () =>
       buildReviewBranchOptions({
         directory: reviewDirectory,
-        thread: props.thread,
+        thread: reviewBranchThread,
       })[0] ?? "main",
-    [reviewDirectory, props.thread],
+    [reviewDirectory, reviewBranchThread],
   );
   const reviewCommitOptions = useMemo(
     () => buildReviewCommitOptions(reviewDirectory),
     [reviewDirectory],
   );
-  const reviewWorkspaceOptions = useMemo(
-    () => buildReviewWorkspaceOptions(props.thread),
-    [props.thread],
-  );
+  // Directory rows describe this window's instance. A pinned peer thread's
+  // checkouts live on the peer, so local rows cannot stand in for them.
+  const reviewThreadFederationTarget = props.thread?.federation?.ref.target;
+  const reviewDirectoriesShareThreadAuthority =
+    reviewThreadFederationTarget?.scope === "remote"
+      ? rendererFederationTarget?.scope === "remote"
+        && rendererFederationTarget.instanceId === reviewThreadFederationTarget.instanceId
+      : rendererFederationTarget?.scope !== "remote";
+  const reviewWorkspaceOptions = useMemo(() => {
+    const linked = buildReviewWorkspaceOptions(props.thread);
+    // A remote execution workspace reviews on its host, so no local checkout
+    // can stand in for one of its projects either.
+    if (
+      linked.length === 0
+      || !reviewDirectoriesShareThreadAuthority
+      || props.thread?.codexEnvironmentRuntime?.executionTarget === "remote"
+    ) {
+      return linked;
+    }
+    const coveredPullRequestUrls = new Set<string>();
+    for (const workspace of linked) {
+      for (const pr of reviewWorkspacePullRequests({
+        cwd: workspace.cwd,
+        directory: findReviewDirectoryForWorkspace({
+          directories: props.directories,
+          directory: props.directory,
+          thread: props.thread,
+          workspaceCwd: workspace.cwd,
+        }),
+        thread: props.thread,
+      })) {
+        coveredPullRequestUrls.add(pr.url);
+      }
+    }
+    return [
+      ...linked,
+      ...buildUnlinkedReviewWorkspaceOptions({
+        coveredPullRequestUrls,
+        directories: props.directories,
+        seen: new Set(linked.map((option) => option.cwd)),
+        thread: props.thread,
+      }),
+    ];
+  }, [
+    props.directories,
+    props.directory,
+    props.thread,
+    reviewDirectoriesShareThreadAuthority,
+  ]);
   const reviewWorkspaceSelectionRequired = reviewWorkspaceOptions.length > 1;
   const reviewPullRequestState = useMemo(
     () =>
@@ -5636,7 +5796,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     return [...options.values()];
   }, [reviewWorkspaceOptions, props.directories, props.directory, props.thread]);
-  const reviewPullRequests = reviewPullRequestOptions.map((option) => option.pr);
+  // The list follows the chosen project. Before one is chosen it spans every
+  // project, and choosing a PR chooses its project.
+  const reviewPullRequestOptionsForWorkspace = (
+    workspaceCwd: string | undefined,
+  ): typeof reviewPullRequestOptions =>
+    workspaceCwd
+      ? reviewPullRequestOptions.filter((option) =>
+          option.workspaces.includes(workspaceCwd)
+        )
+      : reviewPullRequestOptions;
+  const reviewPullRequests = reviewPullRequestOptionsForWorkspace(
+    reviewConfig?.workspaceCwd,
+  ).map((option) => option.pr);
   // A repository prefix only earns its width when the choices span more than
   // one repository. Two worktrees of one repository list the same PRs, and a
   // shared owner repeated on every row pushes the branch out of a narrow
@@ -5673,7 +5845,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   // navigation has to walk the same list the operator can see.
   const reviewTargetOptions = REVIEW_TARGET_OPTIONS.filter(
     (option) =>
-      option.target !== "pullRequest" || reviewPullRequests.length > 0,
+      option.target !== "pullRequest" || reviewPullRequestOptions.length > 0,
   );
   const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
@@ -5813,6 +5985,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       imageAttachments,
       fileAttachments,
       skillTokens,
+      ...(rewoundPromptScope === previousScopeKey ? { rewoundPrompt: true } : {}),
     };
     if (retargetingDraft) {
       pendingDraftRetargetRef.current = undefined;
@@ -5903,6 +6076,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setImageAttachments(previousSnapshot.imageAttachments);
       setFileAttachments(previousSnapshot.fileAttachments ?? []);
       setSkillTokens(previousSnapshot.skillTokens);
+      setRewoundPromptScope(previousSnapshot.rewoundPrompt ? composerScopeKey : undefined);
+      rewoundPromptShownRef.current = Boolean(previousSnapshot.rewoundPrompt);
       setPendingSteerState(undefined);
       setQueuedTurnsState([]);
     } else if (props.thread) {
@@ -5914,6 +6089,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setImageAttachments(saved?.imageAttachments ?? []);
       setFileAttachments(saved?.fileAttachments ?? []);
       setSkillTokens(saved?.skillTokens ?? []);
+      setRewoundPromptScope(saved?.rewoundPrompt ? composerScopeKey : undefined);
+      rewoundPromptShownRef.current = Boolean(saved?.rewoundPrompt);
       setPendingSteerState(
         savedPendingSteer ? { ...savedPendingSteer, status: "pending" } : undefined
       );
@@ -5932,7 +6109,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-  }, [composerScopeKey, draft, editorDocument, imageAttachments, fileAttachments, skillTokens]);
+  }, [composerScopeKey, draft, editorDocument, imageAttachments, fileAttachments, skillTokens, rewoundPromptScope]);
 
   useEffect(() => {
     const saved = draftStore.get(composerScopeKey);
@@ -5957,6 +6134,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setImageAttachments(saved.imageAttachments);
     setFileAttachments(saved.fileAttachments ?? []);
     setSkillTokens(saved.skillTokens);
+    setRewoundPromptScope(saved.rewoundPrompt ? composerScopeKey : undefined);
+    rewoundPromptShownRef.current = Boolean(saved.rewoundPrompt);
   }, [composerScopeKey, draftStore, draftStoreHydrationVersion]);
 
   useEffect(() => {
@@ -6265,7 +6444,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         const manualReleaseRequired =
           turnQueueRecord.manualReleaseRequired === true
           || turnQueueRecord.status === "held";
-        const holdReason = manualReleaseRequired
+        // A paused entry with a reason is held by its owner, such as a
+        // wake-up its paused project keeps; the reason says why.
+        const holdReason = (manualReleaseRequired || turnQueueRecord.paused === true)
           && typeof turnQueueRecord.errorMessage === "string"
             ? turnQueueRecord.errorMessage
             : undefined;
@@ -7212,14 +7393,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     });
   };
 
-  const selectReviewPullRequest = (
+  const withReviewWorkspace = (
     config: ReviewConfigState,
-    pullRequestUrl: string | undefined,
+    workspaceCwd: string | undefined,
   ): ReviewConfigState => {
-    const option = reviewPullRequestOptions.find((candidate) => candidate.pr.url === pullRequestUrl);
-    const workspaceCwd = option?.workspaces.includes(config.workspaceCwd ?? "")
-      ? config.workspaceCwd : option?.workspaces[0] ?? config.workspaceCwd;
-    if (workspaceCwd === config.workspaceCwd) return { ...config, pullRequestUrl };
+    if (workspaceCwd === config.workspaceCwd) return config;
     const directory = findReviewDirectoryForWorkspace({
       directories: props.directories,
       directory: props.directory,
@@ -7228,11 +7406,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     });
     return {
       ...config,
-      pullRequestUrl,
       workspaceCwd,
-      branch: buildReviewBranchOptions({ directory })[0] ?? "main",
+      branch: buildReviewBranchOptions({
+        directory,
+        thread: reviewThreadForWorkspace({
+          cwd: workspaceCwd,
+          directory,
+          thread: props.thread,
+        }),
+      })[0] ?? "main",
       branchSource: "auto",
     };
+  };
+
+  const selectReviewPullRequest = (
+    config: ReviewConfigState,
+    pullRequestUrl: string | undefined,
+  ): ReviewConfigState => {
+    const option = reviewPullRequestOptions.find((candidate) => candidate.pr.url === pullRequestUrl);
+    const workspaceCwd = option?.workspaces.includes(config.workspaceCwd ?? "")
+      ? config.workspaceCwd : option?.workspaces[0] ?? config.workspaceCwd;
+    return { ...withReviewWorkspace(config, workspaceCwd), pullRequestUrl };
   };
 
   const getReviewConfigWithTarget = (
@@ -7246,18 +7440,34 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         directory: props.directory,
         thread: props.thread,
       });
+    if (target !== "pullRequest") {
+      return { ...current, target };
+    }
+    if (current.pullRequestUrl) {
+      return selectReviewPullRequest({ ...current, target }, current.pullRequestUrl);
+    }
     // Reaching the PR target with nothing picked lands on the obvious
-    // candidate rather than a disabled Start button.
+    // candidate rather than a disabled Start button. A project with no PR of
+    // its own hands the target to the first project that has one.
+    const workspaceOptions = reviewPullRequestOptionsForWorkspace(current.workspaceCwd);
+    const candidates = workspaceOptions.length > 0
+      ? workspaceOptions
+      : reviewPullRequestOptions;
+    const checkedOutUrl = reviewPullRequestState.checkedOut?.url;
     const pullRequestUrl =
-      target === "pullRequest" && !current.pullRequestUrl
-        ? reviewPullRequestState.checkedOut?.url
-          ?? (reviewPullRequests.length === 1
-            ? reviewPullRequests[0]?.url
-            : undefined)
-        : current.pullRequestUrl;
-    return target === "pullRequest"
-      ? selectReviewPullRequest({ ...current, target }, pullRequestUrl)
-      : { ...current, target };
+      (checkedOutUrl && workspaceOptions.some((option) => option.pr.url === checkedOutUrl)
+        ? checkedOutUrl
+        : undefined)
+      ?? (candidates.length === 1 ? candidates[0]?.pr.url : undefined);
+    if (pullRequestUrl) {
+      return selectReviewPullRequest({ ...current, target }, pullRequestUrl);
+    }
+    return withReviewWorkspace(
+      { ...current, target },
+      workspaceOptions.length > 0
+        ? current.workspaceCwd
+        : candidates[0]?.workspaces[0] ?? current.workspaceCwd,
+    );
   };
 
   const selectReviewTarget = (
@@ -8806,7 +9016,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
    * as its own queued draft, so a failure never restores it into the
    * operator's reply and a success never clears what they were typing.
    */
-  const submitReplyText = async (text: string): Promise<boolean> => {
+  const submitReplyText = async (text: string, busyBehavior?: "queue"): Promise<boolean> => {
     if (
       !props.thread
       || props.launchpad
@@ -8829,7 +9039,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     if (shouldQueueThreadSubmit()) {
       const turnId = activeTurnIdRef.current;
-      if (turnId && supportsSteering && !pendingSteer) {
+      if (busyBehavior !== "queue" && turnId && supportsSteering && !pendingSteer) {
         const created = createPendingSteer(reply, turnId, composerScopeKey);
         const pending = isPromiseLike(created) ? await created : created;
         if (pending) {
@@ -10231,6 +10441,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           }
 
           const normalized = await normalizeImageFile(file, {
+            preserveOriginalIfLarger: filesystemFederationTarget?.scope === "remote",
             fallback: props.desktopApi?.normalizeImageForUpload,
             maxPatchCount: props.pastedImageMaxPatches,
             sourceMimeType: type,
@@ -10782,36 +10993,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const threadModelProvider = backend?.kind === "codex" && props.thread && !props.launchpad
     ? codexProviderIdOfModel(props.thread.model)
     : undefined;
-  const ownModelOptions = threadModelProvider
-    ? modelOptions.filter((model) => model.providerId === threadModelProvider)
-    : modelOptions.filter((model) => !model.providerId);
-  const providerModelOptions = modelOptions.filter((model) => model.providerId);
-  const providerModelGroups = props.launchpad
-    ? groupModelOptionsByProvider(providerModelOptions)
-    : [];
   const threadProviderLabel = threadModelProvider
-    ? ownModelOptions[0]?.providerLabel ?? threadModelProvider
+    ? modelOptions.find((model) => model.providerId === threadModelProvider)?.providerLabel
+      ?? threadModelProvider
     : "Codex";
   const modelMenuFootnote = backend?.kind === "codex"
     && props.thread
     && !props.launchpad
-    && (threadModelProvider || providerModelOptions.length > 0)
+    && (threadModelProvider || modelOptions.some((model) => model.providerId))
     ? `This thread runs on ${threadProviderLabel}. To use another provider, hand it off to a new thread.`
     : undefined;
-  const showOlderCodexModelsUnderOther = backend?.kind === "codex"
-    && !threadModelProvider
-    && ownModelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
-  const otherModelOptions = backend?.kind === "claude"
-    ? ownModelOptions.filter((model) => model.other)
-    : showOlderCodexModelsUnderOther
-    ? ownModelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
-    : [];
-  const visibleModelOptions = otherModelOptions.length
-    ? ownModelOptions.filter((model) => !otherModelOptions.includes(model))
-    : ownModelOptions;
-  const selectedModelOption =
+  const selectedModelOption: BackendModelOption | undefined =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
-    getDefaultModelOption(backend);
+    (currentSettings?.model
+      ? { id: currentSettings.model, label: currentSettings.model }
+      : getDefaultModelOption(backend));
   // Image attachments are allowed unless the active model explicitly reports
   // no image support (Codex Spark) or the ACP agent advertises
   // `prompt.image: false`. `undefined` on either signal means "assume
@@ -11354,13 +11550,39 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const hasAttachedPullRequest = props.thread
     ? hasPrimaryWorkspacePullRequest(props.thread)
     : false;
+  // A project's Forge Automation can only narrow Auto-fix. It mutes the
+  // control and explains itself; the thread's own value is left alone. A
+  // peer's thread is governed by its owner's projects, which this window
+  // does not hold, so a local project of the same path must not claim it.
+  const prAutoDispatchProject = props.thread && showPrAutoDispatchToggle && !props.thread.federation
+    ? findThreadProjectDirectory(props.thread, props.directories)
+    : undefined;
+  const prAutoDispatchProjectOverride = prAutoDispatchProject
+    ? describeProjectAutoFixOverride(prAutoDispatchProject.forgeAutomation, prAutoDispatchProject.label)
+    : undefined;
+  // On, but every PR it could repair has merged or closed.
+  const prAutoDispatchIdleTooltip = props.thread?.prAutoDispatchEnabled
+    ? describeEndedPullRequestAutoFix(props.thread)
+    : undefined;
   const prAutoDispatchTooltip = !backgroundPrPollingEnabled
     ? "Auto-fix PR paused — turn on background PR polling in Settings"
     : !prAutoDispatchAllowed
       ? "Auto-fix PR disabled globally — allow it in Git settings"
-      : hasAttachedPullRequest
-        ? "Auto-fix PR — handle new CI failures or merge conflicts"
-        : "Auto-fix PR — starts when a PR for this workspace is linked";
+      : prAutoDispatchProjectOverride?.muted
+        ? prAutoDispatchProjectOverride.tooltip
+        : prAutoDispatchIdleTooltip
+          ? prAutoDispatchIdleTooltip
+          : prAutoDispatchProjectOverride
+            ? prAutoDispatchProjectOverride.tooltip
+            : hasAttachedPullRequest
+          ? "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI."
+          : "Auto-fix PR — starts when a PR for this workspace is linked";
+  const prAutoDispatchProjectMuted = Boolean(
+    prAutoDispatchAvailable && prAutoDispatchProjectOverride?.muted,
+  );
+  const prAutoDispatchIdle = Boolean(
+    prAutoDispatchAvailable && !prAutoDispatchProjectMuted && prAutoDispatchIdleTooltip,
+  );
   // Environments are edited on the machine that runs them, so a peer's
   // thread or a remote execution workspace gets no editor here.
   const environmentEditPath =
@@ -11925,6 +12147,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       imageAttachments,
       fileAttachments,
       skillTokens: storedSkillTokens,
+      ...(rewoundPromptScope === composerScopeKey ? { rewoundPrompt: true } : {}),
     });
     if (deletedSkillTokenHistoryEntry) {
       deletedSkillTokenHistoryRef.current.push(deletedSkillTokenHistoryEntry);
@@ -12547,7 +12770,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           push the input or its toolbar off the window. See
           `composer-band-bounds.test.ts`. */}
       <div className="composer__band">
-      {/* Topmost in the band: ambient agent work the operator did not just
+      {/* A send to another machine holds this thread; say so above all else,
+          since the input below cannot start a turn until it finishes. */}
+      <ThreadHandoffComposerBand
+        threadKey={props.thread ? threadSummaryIdentityKey(props.thread) : undefined}
+      />
+      {/* Topmost in the band after that: ambient agent work the operator did not just
           launch. Env action rows sit below it, nearer the input, because they
           carry the Stop the operator is most likely to reach for. */}
       <ActiveSubAgentsStrip
@@ -12749,6 +12977,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ? "Steer when ready"
           : queued.manualReleaseRequired
           ? "Held for retry"
+          : queued.paused && queued.holdReason
+          ? "Held"
           : queued.errorMessage
           ? "Failed to send"
           : scheduledSendAt
@@ -12779,7 +13009,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onKeyDown={(event) => queuedReorder.onKeyDown(event, queued.id)}
             onPointerDown={(event) => queuedReorder.onPointerDown(event, queued.id)}
             aria-label={
-              queued.paused
+              queued.paused && queued.holdReason
+                ? index === 0
+                  ? "Held queued message"
+                  : `Held queued message ${index + 1}`
+                : queued.paused
                 ? index === 0
                   ? "Paused queued message"
                   : `Paused queued message ${index + 1}`
@@ -12898,6 +13132,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   disabled={props.disabled || sending}
                   type="button"
                   onClick={() => {
+                    void dismissFailedScheduledAction(queued);
                     sendQueuedTurnNow(queued);
                   }}
                 >
@@ -12950,6 +13185,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     requestAnimationFrame(() => inputRef.current?.focus());
                   };
                   if (!backendOwned) {
+                    void dismissFailedScheduledAction(queued);
                     editQueuedTurn();
                     return;
                   }
@@ -12984,6 +13220,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 disabled={queued.backendQueuePending}
                 onClick={() => {
                   if (!backendOwned) {
+                    void dismissFailedScheduledAction(queued);
                     acknowledgeQueuedFailure(queued);
                     removeQueuedTurnAt(index);
                     return;
@@ -13159,10 +13396,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       role="status"
                     >
                       {previewState?.status === "loading" ? (
-                        <span
-                          aria-hidden="true"
-                          className="pending-spinner pending-spinner--lg"
-                        />
+                        <PendingSpinner pairing="paired" size="lg" />
                       ) : (
                         <FileCodeIcon size={22} aria-hidden="true" />
                       )}
@@ -13314,33 +13548,31 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   value={reviewConfig?.workspaceCwd ?? ""}
                   onChange={(event) => {
                     const workspaceCwd = event.target.value;
-                    const directory = findReviewDirectoryForWorkspace({
-                      directories: props.directories,
-                      directory: props.directory,
-                      thread: props.thread,
-                      workspaceCwd,
+                    setReviewConfig((current) => {
+                      const next = withReviewWorkspace(
+                        current
+                          ?? createReviewConfig({
+                            directory: props.directory,
+                            thread: props.thread,
+                          }),
+                        workspaceCwd,
+                      );
+                      // The PR list follows the project, so only a PR this
+                      // project can also review stays chosen. On the PR
+                      // target, a project's sole PR is the obvious choice,
+                      // as it is when the target is chosen.
+                      const projectOptions = reviewPullRequestOptionsForWorkspace(workspaceCwd);
+                      const keptUrl = projectOptions.some((option) =>
+                        option.pr.url === next.pullRequestUrl
+                      ) ? next.pullRequestUrl : undefined;
+                      return {
+                        ...next,
+                        pullRequestUrl: keptUrl
+                          ?? (next.target === "pullRequest" && projectOptions.length === 1
+                            ? projectOptions[0]?.pr.url
+                            : undefined),
+                      };
                     });
-                    const branch =
-                      buildReviewBranchOptions({
-                        directory,
-                        thread: props.thread,
-                      })[0] ?? "main";
-                    setReviewConfig((current) => ({
-                      ...(current ??
-                        createReviewConfig({
-                          directory,
-                          thread: props.thread,
-                        })),
-                      branch,
-                      branchSource: "auto",
-                      workspaceCwd,
-                      // Choosing a PR picks its project, so the reverse keeps
-                      // a PR that this project can also review.
-                      pullRequestUrl: reviewPullRequestOptions.some((option) =>
-                        option.pr.url === current?.pullRequestUrl
-                        && option.workspaces.includes(workspaceCwd)
-                      ) ? current?.pullRequestUrl : undefined,
-                    }));
                     setSendError(undefined);
                   }}
                 >
@@ -13423,8 +13655,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       : ""}
                     {". Refreshed and pinned to the published head when you start the review."}
                   </small>
-                ) : (
+                ) : reviewPullRequests.length > 0 ? (
                   <small>Choose which attached pull request to review.</small>
+                ) : (
+                  <small>No attached pull request belongs to this project.</small>
                 )}
                 {selectedReviewPullRequestSync?.differences.length ? (
                   <small className="composer__review-divergence">
@@ -13534,13 +13768,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         }}
                       />
                       {reviewerModelOptions.length > 0 ? (
-                        <ComposerDropdown
+                        <ModelDropdown
                           ariaLabel="Review model"
                           id="composer-review-model"
-                          options={reviewerModelOptions.map((option) => ({
-                            label: option.label ?? option.id,
-                            value: option.id,
-                          }))}
+                          kind={reviewerSelection.backend}
+                          models={reviewerModelOptions}
                           value={reviewerSelection.model?.id ?? ""}
                           onChange={(value) => {
                             patchReviewer((current) => {
@@ -14177,8 +14409,30 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     filesystemFederationTarget,
                   );
                 }
+                const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
+                const remembered = props.launchpad.providerSettings?.[nextBackend];
+                const ownerModels = nextSummary?.launchpadOptions?.models ?? [];
+                const ownerModel = ownerModels.find((candidate) => candidate.id === remembered?.model)
+                  ?? ownerModels.find((candidate) => candidate.id === nextSummary?.modelDefaults?.model)
+                  ?? getDefaultModelOption(nextSummary);
+                const ownerEffort = ownerModel
+                  ? remembered?.reasoningEffortsByModel?.[ownerModel.id]
+                    ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
+                    ?? nextSummary?.modelDefaults?.reasoningEffortsByModel[ownerModel.id]
+                  : undefined;
                 handleLaunchpadPatch({
                   backend: nextBackend,
+                  ...(filesystemFederationTarget?.scope === "remote" ? {
+                    model: ownerModel?.id,
+                    reasoningEffort: ownerModel?.supportsReasoning
+                      ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)
+                      : undefined,
+                    fastMode: ownerModel?.supportsFast ? remembered?.fastMode : undefined,
+                    serviceTier: ownerModel?.serviceTiers?.includes(remembered?.serviceTier ?? "")
+                      || (ownerModel?.supportsFast && ["fast", "priority"].includes(remembered?.serviceTier ?? ""))
+                      ? remembered?.serviceTier
+                      : undefined,
+                  } : {}),
                 });
               }}
             />
@@ -14488,17 +14742,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ) : null}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.models?.length ? (
-            <ComposerDropdown
+            <ModelDropdown
               id="composer-model"
               ariaLabel="Model"
               disabled={launchpadSubmitting}
               value={selectedModelOption?.id ?? ""}
-              options={visibleModelOptions.map(toModelDropdownOption)}
-              optionsLabel={formatBackendLabel(backend.kind)}
-              groups={providerModelGroups}
+              kind={backend.kind}
+              models={modelOptions}
+              thread={props.launchpad ? undefined : props.thread}
+              leadingOptions={selectedModelOption && !modelOptions.some((option) => option.id === selectedModelOption.id)
+                ? [{ value: selectedModelOption.id, label: selectedModelOption.id, disabled: true,
+                    description: "This model is absent from this provider's catalog. Choose an available model." }]
+                : []}
               footnote={modelMenuFootnote}
-              otherOptions={otherModelOptions.map(toModelDropdownOption)}
-              otherLabel={backend.kind === "claude" ? "Other Models" : undefined}
               onChange={(value) => {
                 const model = value;
                 const nextModelOption = backend.launchpadOptions?.models?.find(
@@ -14517,6 +14773,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   handleLaunchpadPatch({
                     model,
                     ...(nextSupportsFast ? {} : { fastMode: undefined }),
+                    ...(filesystemFederationTarget?.scope === "remote" ? {
+                      reasoningEffort: nextSupportsReasoning
+                        ? getReasoningEffortValue(backend, nextModelOption,
+                            props.launchpad.providerSettings?.[backend.kind]?.reasoningEffortsByModel?.[model]
+                              ?? props.launchpad.reasoningEffort)
+                        : undefined,
+                      serviceTier: nextModelOption?.serviceTiers?.includes(props.launchpad.serviceTier ?? "")
+                        || (nextSupportsFast && ["fast", "priority"].includes(props.launchpad.serviceTier ?? ""))
+                        ? props.launchpad.serviceTier
+                        : undefined,
+                    } : {}),
                   });
                   return;
                 }
@@ -14679,9 +14946,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               type="button"
               className={`composer__toggle tooltip-target${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""
+              }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}${
+                prAutoDispatchIdle ? " is-idle" : ""
               }`}
               aria-label="Auto-fix PR"
               aria-pressed={Boolean(props.thread.prAutoDispatchEnabled)}
+              // aria-pressed keeps the thread's own value; this says what the
+              // project, or an ended PR, does to it, which the tooltip only
+              // shows on hover.
+              aria-description={!prAutoDispatchAvailable
+                ? undefined
+                : prAutoDispatchIdle
+                  ? prAutoDispatchIdleTooltip
+                  : prAutoDispatchProjectOverride?.tooltip}
               data-tooltip={prAutoDispatchTooltip}
               disabled={!prAutoDispatchAvailable}
               onClick={() => {
@@ -14979,9 +15256,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   }}
                 >
                   {currentThreadEnvActionStarting ? (
-                    <span
-                      aria-hidden="true"
-                      className="pending-spinner"
+                    <PendingSpinner
+                      pairing="standalone"
+                      standaloneReason="The Run button swaps its play glyph for a bare ring; its only text is the aria-label."
                     />
                   ) : (
                     <PlayIcon size={13} aria-hidden="true" />
@@ -15195,10 +15472,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 type="submit"
               >
                 {preparingSend ? (
-                  <span
-                    aria-hidden="true"
-                    className="pending-spinner pending-spinner--sm"
-                  />
+                  <PendingSpinner pairing="paired" size="sm" />
                 ) : null}
                 {submitButtonLabel}
               </button>
@@ -15492,9 +15766,10 @@ function RemoteFileUploadPill({
       {failed ? (
         <FileCodeIcon size={13} aria-hidden="true" />
       ) : percent === undefined ? (
-        <span
-          aria-hidden="true"
-          className="pending-spinner pending-spinner--sm"
+        <PendingSpinner
+          pairing="standalone"
+          size="sm"
+          standaloneReason="With no percent yet, the ring sits beside the file name; the copy state is only in the tooltip."
         />
       ) : (
         <svg
@@ -16214,12 +16489,39 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
 function hasPrimaryWorkspacePullRequest(
   thread: NavigationThreadSummary,
 ): boolean {
+  return primaryWorkspacePullRequests(thread).length > 0;
+}
+
+function primaryWorkspacePullRequests(
+  thread: NavigationThreadSummary,
+): NonNullable<NavigationThreadSummary["prs"]> {
   const primaryRepository = getPrimaryWorkspaceRepository(thread);
-  if (!primaryRepository) return false;
-  return (thread.prs ?? []).some((pr) =>
+  if (!primaryRepository) return [];
+  return (thread.prs ?? []).filter((pr) =>
     normalizeGitOriginUrl(`${pr.provider}/${pr.org}/${pr.repo}`)
       === primaryRepository,
   );
+}
+
+/**
+ * What an Auto-fix chip says when every PR on the primary workspace has
+ * merged or closed: it stays on, with nothing to repair. Undefined while any
+ * of them is open, or when none is attached.
+ */
+function describeEndedPullRequestAutoFix(
+  thread: NavigationThreadSummary,
+): string | undefined {
+  const prs = primaryWorkspacePullRequests(thread);
+  if (prs.length === 0) return undefined;
+  let latest: { number: number; state: "merged" | "closed" } | undefined;
+  for (const pr of prs) {
+    const state = resolveLifecycleState(pr);
+    if (state !== "merged" && state !== "closed") return undefined;
+    if (!latest || pr.number > latest.number) latest = { number: pr.number, state };
+  }
+  return latest
+    ? `Auto-fix PR is on, but #${latest.number} ${latest.state}. It starts again when an open PR is linked.`
+    : undefined;
 }
 
 function getPrimaryWorkspaceRepository(

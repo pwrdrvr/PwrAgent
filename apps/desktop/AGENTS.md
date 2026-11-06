@@ -412,6 +412,15 @@ them, since this process never reads them; the point is the `console.error`
 line, so an operator who exports one and then launches a packaged build is
 told it did nothing instead of wondering why the Profiler never connects.
 
+## E2E Failure Timing
+
+Import `test` from `e2e/fixtures/electron-test` in desktop specs. Its automatic
+fixture attaches the main process's existing listing and Git timing snapshots
+only for failed attempts, including timeouts. `launchElectronApp` captures them
+before explicit close calls, while the app is still reachable. Passing attempts
+discard those in-memory copies. The bridge requires `PWRAGENT_E2E=1`, a replay
+fixture, and an unpackaged app.
+
 ## E2E Locator Hygiene Around Global Chrome
 
 The thread/search title bars always render the history Back/Forward
@@ -738,6 +747,15 @@ Grok 1.0.44 findings those flags established, which a helper must respect:
 Grok MCP servers; read-only tools run without a permission request in every
 mode; and a closed session stays listed until `_x.ai/session/delete`. See
 `src/main/acp/minimal-helper-session.ts`.
+
+An open ACP session keeps its MCP servers running until `session/close`.
+On Grok 1.0.45-pwragent.2, `session/new` started a session's stdio MCP
+server, `session/close` stopped it, and `session/load` started it again.
+`AcpAgentClient.closeIdleSessions` therefore closes a session after 10
+minutes without a request, update or permission request, and every session
+request reloads a closed session first. A helper session created with an
+agent profile in `_meta` or with no MCP servers stays open, because
+`session/load` cannot recreate either.
 
 Reach for this whenever a question about an agent's wire behavior would
 otherwise be answered by reading its source or guessing. **The committed

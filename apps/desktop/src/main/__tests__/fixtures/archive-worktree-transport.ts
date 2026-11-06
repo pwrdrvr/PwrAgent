@@ -8,6 +8,7 @@ export type ArchiveWorktreeThread = {
   source: string;
   wireSource?: Thread["source"];
   threadSource?: Thread["threadSource"];
+  parentThreadId?: Thread["parentThreadId"];
   status?: Thread["status"];
   originator?: string;
   name?: string;
@@ -22,6 +23,8 @@ export class ArchiveWorktreeTransport implements JsonRpcTransport {
   static requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   static onList?: (params: Record<string, unknown>, transport: ArchiveWorktreeTransport) => void;
   static rejectSafetySources = false;
+  static emitArchiveNotifications = false;
+  static onReviewStart?: (params: Record<string, unknown>, transport: ArchiveWorktreeTransport) => unknown;
   private handler: (message: string) => void = () => {};
 
   async connect(): Promise<void> {}
@@ -53,6 +56,8 @@ export class ArchiveWorktreeTransport implements JsonRpcTransport {
       const thread = { id: "old-target", cwd: String(params.cwd), source: "cli", originator: "pwragent-desktop" };
       ArchiveWorktreeTransport.threads.push(thread);
       result = { thread: wireThread(thread) };
+    } else if (request.method === "review/start") {
+      result = ArchiveWorktreeTransport.onReviewStart?.(params, this) ?? {};
     } else if (request.method === "thread/archive") {
       const thread = ArchiveWorktreeTransport.threads.find((row) => row.id === params.threadId);
       if (thread) thread.archived = true;
@@ -78,6 +83,13 @@ export class ArchiveWorktreeTransport implements JsonRpcTransport {
     } else if (request.method === "model/list") {
       result = { data: [], nextCursor: null };
     }
+    if (result instanceof Promise) {
+      void result.then((value) => this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: value })));
+      return;
+    }
     this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    if (request.method === "thread/archive" && ArchiveWorktreeTransport.emitArchiveNotifications) {
+      this.emitNotification({ method: "thread/archived", params: { threadId: String(params.threadId) } });
+    }
   }
 }

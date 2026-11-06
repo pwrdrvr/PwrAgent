@@ -4,6 +4,7 @@ import { resolveForgeReposForDirectory, type GitHubRepoRef } from "./git-remote"
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { runGitCommand } from "../app-server/git-executable";
 import { prMatchesSourceRepository } from "./pr-source-repository";
+import { hasForgeRepositoryName } from "./forge-repository-names";
 
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
 const FALLBACK_DEFAULT_BRANCHES = [
@@ -237,32 +238,72 @@ async function readUnmergedBranchTip(params: {
  * of the checkout's branch or remotes; legacy references without discovery
  * paths also have no automatic association to invalidate.
  * Missing checkouts are inconclusive: preserve their history.
+ *
+ * This runs before any lookup, so after a restart nothing has yet said what a
+ * renamed repository's remote is called now. A PR whose source no remote
+ * names asks the forge once per remote through `resolveRepositoryNames`. When
+ * the forge cannot answer, a rename is as likely as a stranger's fork, so the
+ * PR is kept until it can.
  */
-export async function filterStoredDiscoveredPullRequests(prs: PrSummary[]): Promise<PrSummary[]> {
+export async function filterStoredDiscoveredPullRequests(
+  prs: PrSummary[],
+  options: { resolveRepositoryNames?: (repos: GitHubRepoRef[]) => Promise<void> } = {},
+): Promise<PrSummary[]> {
   const directories = uniqueNonEmpty(prs.flatMap((pr) => pr.explicitlyAttached ? [] : pr.linkedDirectoryPaths ?? []));
   if (directories.length === 0) return prs;
   const contexts = new Map(await Promise.all(directories.map(async (cwd) =>
     [cwd, await readStoredDiscoveryContext(cwd)] as const,
   )));
+  // The repositories that decide each automatic PR, one list per linked
+  // checkout; null where the checkout cannot say (missing, failed probe).
+  const repairContexts = (pr: PrSummary): Array<GitHubRepoRef[] | null> =>
+    uniqueNonEmpty(pr.linkedDirectoryPaths ?? []).map((cwd) => {
+      const context = contexts.get(cwd)!;
+      if (context.repos.length === 0 || context.defaults.remotes.size === 0) return null;
+      return context.defaults.names.has(pr.headRefName ?? "") ? [] : context.repos;
+    });
+  const unnamed = new Map(prs
+    .filter((pr) => !pr.explicitlyAttached && isGitHubSource(pr))
+    .flatMap((pr) => repairContexts(pr)
+      .filter((repos): repos is GitHubRepoRef[] => Boolean(repos?.length) && !prMatchesSourceRepository(pr, repos!)))
+    .flatMap(unnamedGitHubRepositories)
+    .map((repo) => [`${repo.owner}/${repo.repo}`.toLowerCase(), repo] as const));
+  const resolveRepositoryNames = options.resolveRepositoryNames;
+  if (resolveRepositoryNames && unnamed.size > 0) {
+    await resolveRepositoryNames([...unnamed.values()]).catch(() => undefined);
+  }
   return prs.filter((pr) => {
     if (pr.explicitlyAttached) return true;
-    const paths = uniqueNonEmpty(pr.linkedDirectoryPaths ?? []);
-    return paths.length === 0 || paths.some((cwd) => {
-      const context = contexts.get(cwd)!;
-      if (context.repos.length === 0 || context.defaults.remotes.size === 0) return true;
-      return !context.defaults.names.has(pr.headRefName ?? "")
-        && prMatchesSourceRepository(pr, context.repos);
+    const decisions = repairContexts(pr);
+    return decisions.length === 0 || decisions.some((repos) => {
+      if (repos === null) return true;
+      if (repos.length === 0) return false;
+      return prMatchesSourceRepository(pr, repos)
+        || (Boolean(resolveRepositoryNames)
+          && isGitHubSource(pr)
+          && unnamedGitHubRepositories(repos).length > 0);
     });
   });
+}
+
+function isGitHubSource(pr: PrSummary): boolean {
+  return (pr.sourceRepository?.provider ?? pr.provider ?? "github.com").toLowerCase() === "github.com";
+}
+
+function unnamedGitHubRepositories(repos: GitHubRepoRef[]): GitHubRepoRef[] {
+  return repos.filter((repo) => repo.host === "github.com" && !hasForgeRepositoryName(repo));
 }
 
 function readStoredDiscoveryContext(cwd: string): Promise<StoredDiscoveryContext> {
   const cached = storedDiscoveryContexts.get(cwd);
   if (cached && cached.expiresAt > Date.now()) return cached.pending;
-  const pending = Promise.all([
-    resolveForgeReposForDirectory(cwd),
-    readDefaultBranchInfo(cwd),
-  ]).then(([repos, defaults]) => {
+  const pending = resolveForgeReposForDirectory(cwd).then(async (repos) => {
+    // An inconclusive repository identity keeps the attachment. Reading its
+    // default branch cannot change that decision, and missing/local-only
+    // paths would otherwise repeat Git probes on every navigation read.
+    const defaults = repos.length > 0
+      ? await readDefaultBranchInfo(cwd)
+      : { defaultsByRemote: new Map<string, string>(), names: new Set<string>(), remotes: new Set<string>() };
     // Failed metadata probes are inconclusive, and must be retried rather
     // than extend the lifetime of a known-invalid attachment.
     if ((repos.length === 0 || defaults.remotes.size === 0)
@@ -294,6 +335,7 @@ async function readTrackedRemoteBranch(params: {
         `refs/heads/${params.localBranch}`,
       ],
       {
+        purpose: "pr-discovery",
         env: buildPwrAgentChildProcessEnv(process.env),
         maxBuffer: 64 * 1024,
         timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
@@ -347,6 +389,7 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
   remotes: Set<string>;
 }> {
   const { stdout } = await runGitCommand(cwd, ["remote"], {
+    purpose: "pr-discovery",
     env: buildPwrAgentChildProcessEnv(process.env),
     maxBuffer: 64 * 1024,
     timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
@@ -379,17 +422,13 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
 async function readFallbackDefaultBranchName(
   cwd: string,
 ): Promise<string | undefined> {
-  for (const branch of FALLBACK_DEFAULT_BRANCHES) {
-    const localBranch = await readGitLine(cwd, [
-      "for-each-ref",
-      "--format=%(refname:short)",
-      `refs/heads/${branch}`,
-    ]);
-    if (localBranch === branch) {
-      return branch;
-    }
-  }
-  return undefined;
+  const refs = await readGitLine(cwd, [
+    "for-each-ref",
+    "--format=%(refname)",
+    ...FALLBACK_DEFAULT_BRANCHES.map((branch) => `refs/heads/${branch}`),
+  ]);
+  const names = new Set(refs?.split(/\r?\n/));
+  return FALLBACK_DEFAULT_BRANCHES.find((branch) => names.has(`refs/heads/${branch}`));
 }
 
 async function readGitLine(
@@ -398,6 +437,7 @@ async function readGitLine(
 ): Promise<string | undefined> {
   try {
     const { stdout } = await runGitCommand(cwd, args, {
+      purpose: "pr-discovery",
       env: buildPwrAgentChildProcessEnv(process.env),
       maxBuffer: 64 * 1024,
       timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,

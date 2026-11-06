@@ -30,7 +30,7 @@ type AppServerThreadSummaryWithEnvironmentOptions = AppServerThreadSummary & {
 };
 
 /** Check whether a linked directory was created by the handoff service. */
-function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
+export function isWorkspaceHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   return (
     directory.id.startsWith("pwragent-handoff:") ||
     directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
@@ -44,7 +44,7 @@ export function mergeThreadLinkedDirectories(
   const normalizedDirectories = directories.map(normalizeLinkedDirectoryKind);
   let overlayWorkspace: LinkedDirectorySummary | undefined;
   for (const directory of normalizedDirectories) {
-    if (isHandoffDirectory(directory)) {
+    if (isWorkspaceHandoffDirectory(directory)) {
       overlayWorkspace = directory;
     }
   }
@@ -97,7 +97,7 @@ function normalizeLinkedDirectoryKind(
 }
 
 function hasHandoffWorkspace(directories: LinkedDirectorySummary[]): boolean {
-  return directories.map(normalizeLinkedDirectoryKind).some(isHandoffDirectory);
+  return directories.map(normalizeLinkedDirectoryKind).some(isWorkspaceHandoffDirectory);
 }
 
 function resolveNavigationGitBranch(params: {
@@ -188,17 +188,29 @@ function resolveNavigationParentThread(params: {
   const directParentThreadInstanceId = params.overlay?.parentThreadInstanceId;
   let parentThreadBackend = directParentThreadBackend ?? params.source;
   const seen = new Set([buildThreadIdentityKey(params.source, params.threadId)]);
+  // Overlays are keyed locally. A peer's parent has none here, and a local
+  // row that shares its id is a different thread.
+  if (directParentThreadInstanceId) {
+    return {
+      ...(directParentThreadBackend ? { parentThreadBackend: directParentThreadBackend } : {}),
+      parentThreadInstanceId: directParentThreadInstanceId,
+      parentThreadId: directParentThreadId,
+    };
+  }
   let parentKey = buildThreadIdentityKey(parentThreadBackend, parentThreadId);
   while (!seen.has(parentKey)) {
     seen.add(parentKey);
     const parentOverlay =
       params.overlayByThreadKey[parentKey];
     const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
-    if (!nextParentThreadId) {
+    // Stop at the last local ancestor. Walking on to its peer parent would
+    // drop that parent's owner and name a local thread that does not exist.
+    if (!nextParentThreadId || parentOverlay?.parentThreadInstanceId) {
+      // A legacy overlay without a backend still names the ancestor's
+      // backend once the walk has crossed onto another provider.
       return {
-        ...(directParentThreadBackend ? { parentThreadBackend } : {}),
-        ...(directParentThreadInstanceId
-          ? { parentThreadInstanceId: directParentThreadInstanceId }
+        ...(directParentThreadBackend || parentThreadBackend !== params.source
+          ? { parentThreadBackend }
           : {}),
         parentThreadId,
       };
@@ -291,6 +303,7 @@ export function materializeNavigationThreads(params: {
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
       lock: overlay?.lock,
+      mergeHolds: overlay?.mergeHolds?.filter((hold) => hold.status === "waiting"),
       scheduledStart: overlay?.scheduledStart,
       pinnedRank: overlay?.pinnedRank,
       ...parentThread,
@@ -640,6 +653,7 @@ export function serializeNavigationSnapshotForHash(params: {
       },
       reactions: thread.reactions ?? [],
       lock: thread.lock ?? null,
+      mergeHolds: thread.mergeHolds ?? [],
       pinnedRank: thread.pinnedRank ?? null,
       parentThreadId: thread.parentThreadId ?? null,
       parentThreadBackend: thread.parentThreadBackend ?? null,
@@ -730,6 +744,9 @@ export function serializeNavigationSnapshotForHash(params: {
       // the same overlay and must invalidate the snapshot cache too.
       directoryThreadsCollapsed:
         directory.directoryThreadsCollapsed ?? null,
+      // Forge Automation lives in the same overlay; a Save must get past
+      // the unchanged-snapshot short-circuit too.
+      forgeAutomation: directory.forgeAutomation ?? null,
       launchpad: directory.launchpad
         ? {
             backend: directory.launchpad.backend,

@@ -1,3 +1,4 @@
+import { useThreadMergeHolds } from "../thread-merge-holds/useThreadMergeHolds";
 import { TodoDispatchFacts, useTodoDispatchTarget } from "./TodoDispatchFacts";
 import { TodoPullRequestChip } from "./TodoPullRequestChip";
 import { todoDispatchPickKey, useTodoDispatchContext, type TodoDispatchChoices } from "./TodoDispatchProvider";
@@ -77,6 +78,7 @@ import {
   threadTodoStepsMarkdown,
   threadTodosMarkdown,
 } from "./thread-todo-copy";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
   reminder: undefined,
@@ -323,7 +325,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         onClick={() => fix(toSend)}
       >
         {sending || working
-          ? <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+          ? <PendingSpinner pairing="paired" size="sm" />
           : <ArrowUpIcon size={12} />}
         {sending ? "Sending…" : working ? "Working…"
           : selectedItems.length > 0 ? `Fix ${selectedItems.length} selected` : "Fix all"}
@@ -619,8 +621,16 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const action = todo.action;
   const sendingMessage = action?.type === "send_message" || messageChoices.dispatchMode === "message";
   const messageTarget = messageChoices.messageTarget ?? (action?.type === "send_message" ? action.target : undefined);
+  // An agent can address a request to the thread that raised it. That card's
+  // only useful action is Do it here, so it leads instead of a refused Send.
+  const targetsOwnThread = sendingMessage && messageTarget !== undefined
+    && messageTarget.backend === todo.backend && messageTarget.threadId === todo.threadId
+    && (!messageTarget.instanceId || messageTarget.instanceId === todo.federationTarget?.instanceId);
   const canSendMessage = !todo.federationTarget
     || props.instances?.some((instance) => instance.instanceId === todo.federationTarget?.instanceId && instance.messageTarget);
+  const mergeHolds = useThreadMergeHolds(todo.backend, todo.threadId, todo.federationTarget, undefined, action?.type === "merge_pull_request" && todo.status === "open", action?.type === "merge_pull_request" ? action.pullRequest : undefined);
+  const blockingMergeHolds = mergeHolds.data?.blockingHolds ?? mergeHolds.data?.holds;
+  const mergeHeld = blockingMergeHolds?.some((hold) => hold.status === "waiting");
   const titleId = `thread-todo-title-${todo.id}`;
   const prompt = action?.type === "start_thread" || action?.type === "send_message" ? action.prompt : undefined;
   const hasFacts = action?.type === "merge_pull_request";
@@ -739,7 +749,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     if (props.running) {
       return (
         <span className="thread-todo-card__button thread-todo-card__button--busy" role="status">
-          <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+          <PendingSpinner pairing="paired" size="sm" />
           {runningLabel}
         </span>
       );
@@ -783,6 +793,9 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           </>
         );
       case "merge_pull_request": {
+        if (mergeHeld || !mergeHolds.ready || mergeHolds.error) return <span role="status" className="thread-todo-card__hint">{mergeHeld
+          ? `Merge waits for ${blockingMergeHolds?.filter((hold) => hold.status === "waiting").map((hold) => hold.reason).join("; ")}`
+          : mergeHolds.error ? "Could not check what merging waits for. Reopen this card to try again." : "Checking what merging waits for…"}</span>;
         if (confirmingMerge) {
           return (
             <>
@@ -837,7 +850,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       case "start_thread":
       case "send_message": {
         const entries: TodoSplitMenuEntry[] = [];
-        if (canSendMessage && dispatch.api?.searchThreads) {
+        if (canSendMessage && dispatch.api?.getNavigationQueryPage) {
           entries.push({
             kind: "item", id: "message", label: "Send to thread…", checked: sendingMessage,
             onSelect: () => chooseMessage({ dispatchMode: "message" }),
@@ -849,17 +862,13 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             onSelect: () => chooseMessage({ dispatchMode: "new_thread" }),
           });
         }
-        if (props.onDoHere) {
-          const doHere = props.onDoHere;
-          entries.push({
-            kind: "item",
-            id: "here",
-            label: "Do it here",
-            onSelect: () => completeCard(
-              { question: "Send it here anyway?", label: "Do it here" },
-              (allowOpenItems) => void doHere(todo, resolveOptions(allowOpenItems)),
-            ),
-          });
+        const doHere = props.onDoHere;
+        const runHere = doHere ? () => completeCard(
+          { question: "Send it here anyway?", label: "Do it here" },
+          (allowOpenItems) => void doHere(todo, resolveOptions(allowOpenItems)),
+        ) : undefined;
+        if (runHere && !targetsOwnThread) {
+          entries.push({ kind: "item", id: "here", label: "Do it here", onSelect: runHere });
         }
         if (entries.length > 0) {
           entries.push({ kind: "separator", id: "separator" });
@@ -871,14 +880,25 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           onSelect: () => markDone("handled_elsewhere"),
         });
         return (
-          <TodoSplitButton
-            label={sendingMessage ? "Send request" : todo.error ? "Retry" : "Start thread"}
-            disabled={sendingMessage && (!messageTarget || !canSendMessage)}
-            Icon={HandoffIcon}
-            menuLabel="Handoff options"
-            onClick={() => runAction()}
-            entries={entries}
-          />
+          runHere && targetsOwnThread ? (
+            <TodoSplitButton
+              label="Do it here"
+              Icon={HandoffIcon}
+              menuLabel="Handoff options"
+              onClick={runHere}
+              entries={entries}
+            />
+          ) : (
+            <TodoSplitButton
+              label={sendingMessage ? "Send request" : todo.error ? "Retry" : "Start thread"}
+              // Without Do it here, a send to the card's own thread is refused.
+              disabled={sendingMessage && (!messageTarget || !canSendMessage || targetsOwnThread)}
+              Icon={HandoffIcon}
+              menuLabel="Handoff options"
+              onClick={() => runAction()}
+              entries={entries}
+            />
+          )
         );
       }
     }
@@ -1046,8 +1066,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               </button>
             </div>
           ) : null}
-          {todo.error ? (
-            <p className="thread-todo-card__error" role="alert">{todo.error}</p>
+          {todo.error && !(mergeHeld && todo.error.startsWith("Merge held:")) ? (
+            <p className="thread-todo-card__error" role="alert">{todo.error.startsWith("Merge held:")
+              ? "The previous merge attempt was held. You can retry once the wait is marked done."
+              : todo.error}</p>
           ) : null}
         </div>
       ) : null}

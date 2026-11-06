@@ -202,6 +202,14 @@ describe("GitLab MR routing and status", () => {
     expect(parseGitLabMr({ ...mr, head_pipeline: { status: "success", sha: "old-head" } }).checkState).toBe("unknown");
   });
 
+  it("passes a skipped pipeline so a watch can end, and flags that nothing was tested", () => {
+    // `[skip ci]` leaves a final pipeline with no jobs run. As `unknown` it held
+    // a success watch forever.
+    const skipped = parseGitLabMr({ ...mr, head_pipeline: { status: "skipped", sha: "new-head" } });
+    expect(skipped).toMatchObject({ checkState: "passing", checksStillRunning: false, checksAllSkipped: true });
+    expect(parseGitLabMr(mr)).not.toHaveProperty("checksAllSkipped");
+  });
+
   it("coalesces concurrent reads and does not leak CLI diagnostics", async () => {
     const { fetcher, run } = fixture(() => mr);
     await Promise.all([fetcher.fetchByRef(ref), fetcher.fetchByRef(ref)]);
@@ -280,6 +288,29 @@ describe("review regressions", () => {
       expect(await fetcher.fetchByRef(ref)).toMatchObject({ headSha: "new-head", checkState: expected });
       expect(run).toHaveBeenLastCalledWith("/fixture/glab", ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/123/repository/commits/synthetic"]);
     }
+  });
+
+  it("returns a renamed or transferred project's MR under its current path", async () => {
+    // GitLab answers an old project path with a redirect to projects/<id>,
+    // which glab follows (gitlab-org/gitlab-ce -> gitlab-org/gitlab-foss).
+    const moved = { ...mr, web_url: "https://gitlab.com/platform/project-renamed/-/merge_requests/17" };
+    const { fetcher, run } = fixture(() => moved);
+    expect(await fetcher.fetchByRef(ref)).toMatchObject({
+      provider: "gitlab.com",
+      org: "platform",
+      repo: "project-renamed",
+      number: 17,
+      url: moved.web_url,
+    });
+    expect(run).toHaveBeenCalledWith("/fixture/glab", [
+      "api", "--hostname", "gitlab.com", "--method", "GET",
+      "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17",
+    ]);
+
+    const other = fixture(() => ({ ...moved, iid: 18, web_url: "https://gitlab.com/platform/project-renamed/-/merge_requests/18" }));
+    await expect(other.fetcher.fetchByRef(ref)).rejects.toThrow("different merge request identity");
+    const otherHost = fixture(() => ({ ...moved, web_url: "https://gitlab.example.com/platform/project-renamed/-/merge_requests/17" }));
+    await expect(otherHost.fetcher.fetchByRef(ref)).rejects.toThrow("different merge request identity");
   });
 
   it("does not apply a synthetic pipeline for an older source head", async () => {

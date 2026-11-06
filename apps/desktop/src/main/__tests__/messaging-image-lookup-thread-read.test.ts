@@ -20,7 +20,7 @@ import {
   resetDesktopOverlayStoreForTests,
   setDesktopOverlayStoreForTests,
 } from "../app-server/desktop-overlay-store";
-import { extractThreadReplayFromReadResult } from "../codex-app-server/client";
+import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FederationRemoteBackendClient,

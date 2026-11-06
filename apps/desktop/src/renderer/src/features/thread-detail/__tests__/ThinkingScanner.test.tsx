@@ -97,4 +97,33 @@ describe("ThinkingScanner", () => {
     expect(requestAnimationFrameSpy).not.toHaveBeenCalled();
     expect(setTimeoutSpy).not.toHaveBeenCalled();
   });
+
+  it("keeps each beam's own start under Calm motion, and re-pins when it turns off", async () => {
+    const animations = [{ startTime: 975 }, { startTime: 2275 }];
+    let animationIndex = 0;
+    const getAnimations = vi.fn(() => [animations[animationIndex++ % animations.length]]);
+    Object.defineProperty(HTMLElement.prototype, "getAnimations", {
+      configurable: true,
+      value: getAnimations,
+    });
+    document.documentElement.dataset.motion = "calm";
+    try {
+      render(
+        <>
+          <ThinkingScanner />
+          <ThinkingScanner compact />
+        </>
+      );
+      // Pinned to the timeline's origin, a two-sweep animation would already
+      // be over: each calm beam sweeps twice from its own mount instead.
+      expect(animations.map((animation) => animation.startTime)).toEqual([975, 2275]);
+
+      delete document.documentElement.dataset.motion;
+      // MutationObserver records are delivered as a microtask.
+      await Promise.resolve();
+      expect(animations.map((animation) => animation.startTime)).toEqual([0, 0]);
+    } finally {
+      delete document.documentElement.dataset.motion;
+    }
+  });
 });

@@ -20,6 +20,7 @@ import type {
 import type {
   DirectorySummaryKind,
   LaunchpadWorkMode,
+  LaunchpadWorktreeBase,
   NavigationDirectoryGitStatus,
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadAgent,
@@ -510,7 +511,8 @@ export type ControlActiveTurnErrorCode =
   | "no_active_turn"
   | "stale_target"
   | "unsupported_backend"
-  | "unsupported_capability";
+  | "unsupported_capability"
+  | "project_paused";
 
 export type ControlActiveTurnResponse =
   | {
@@ -1181,6 +1183,18 @@ export type MaterializeDirectoryLaunchpadRequest = {
    * predate this field ignore it and match the draft's id.
    */
   codexEnvironmentSelector?: string;
+  /**
+   * Base for a new worktree when the draft names no `branchName`. Owners
+   * that predate this field ignore it and follow the checkout's current
+   * branch.
+   */
+  worktreeBase?: LaunchpadWorktreeBase;
+  /**
+   * Refuse, before any thread exists, when the prepared workspace is not this
+   * mode: a worktree request otherwise falls back to the project checkout.
+   * Owners that predate this field ignore it and fall back.
+   */
+  requiredWorkMode?: LaunchpadWorkMode;
 };
 
 export type MaterializedDirectoryLaunchpadThread = {
@@ -1497,6 +1511,13 @@ export type AgentEvent = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   notification: AppServerNotification;
+  /**
+   * Complete all-provider owner-local directory dependencies for this row-only event,
+   * including off-page descendants. Absence (or an unknown version) grants
+   * no exclusion authority. Never applies to another owner's viewer mounts
+   * or to membership changes. Owners omit the field when it exceeds bounds.
+   */
+  navigationDirectoryScope?: { version: 1; directoryKeys: string[] };
   /** Navigable owner of a failure, captured before a private helper is finalized. */
   errorNoticeContext?: {
     backend: AppServerBackendKind;

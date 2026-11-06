@@ -49,6 +49,18 @@
   - Claude Code's `skipped` outcome is recorded as `declined` with no reason. Defer a skipped finding that is still worth doing.
   - [docs/thread-reviews.md](docs/thread-reviews.md#finding-outcomes) defines the outcomes.
 
+### Property, model and oracle tests
+
+- A bug fix states the rule it broke as a property, model or oracle test,
+  and confirms that test fails on the pre-fix code.
+- Do the same for new rule-heavy logic, state machines, concurrency, and code
+  that re-derives state that git, a provider's event stream, or a thread's
+  owning instance owns.
+- Example tests alone check only what their author expected. Here they have
+  asserted the bug as correct.
+- [docs/property-model-oracle-testing.md](docs/property-model-oracle-testing.md)
+  says what each kind is and how to write one.
+
 ### Command output
 
 - Keep model-visible command output bounded.
@@ -104,28 +116,17 @@
   imports to donor source and make installs/native staging mutate shared files.
   A symlink to a repaired helper inherits permissions but is not a complete fix.
 
-### Verification on Sandboxer
+### Verification
 
-- When the thread has the Sandboxer MCP (`create_sandbox` and `exec` tools),
-  do not run these checks on the local machine:
-  - Unit tests: `pnpm test`, focused or full.
-  - Lint: `pnpm lint` or any of its parts, such as `pnpm lint:oxlint`.
-  - Type check: `pnpm typecheck`.
-  - Desktop E2E: `pnpm test:desktop-e2e` or Playwright directly.
-- Run them in a sandbox with the
-  [Sandboxer verification skill](.agents/skills/sandboxer-verification/SKILL.md).
-  This rule applies wherever repository guidance says to run one of them.
-- Sandboxer is Ubuntu x64. It verifies Linux behavior only.
-  macOS-specific and Windows-specific changes still need CI or the PwrSuiteLab
-  skills below.
-- Verify a commit, not a dirty tree. Use one sandbox per thread, started from
-  the `pwragent-base-us-east` snapshot in the `us-east` region. Stop it after
-  each run.
-- Attach the thread's PR and watch it with `notifyOn: ["merged", "closed"]`.
-  PwrAgent releases the thread's sandboxes when its PRs merge or close.
-- Use only the Sandboxer MCP tools. Do not run the `sbx` CLI.
-- Report the sandbox ID, the commit, and each check's exit status.
-- Without the Sandboxer MCP, run the checks locally as this file describes.
+- Run unit tests, lint and typecheck locally using the commands below or in repository CI.
+- Desktop E2E uses the existing local and CI routes. Linux checks do not verify
+  macOS or Windows behavior; use the corresponding native CI or PwrSuiteLab skills.
+- The [Sandboxer verification process](.agents/skills/sandboxer-verification/SKILL.md)
+  is **dormant** while a replacement provider is evaluated. Preserve its
+  procedure, helper and historical measurements; do not automatically invoke
+  it or route repository checks to Sandboxer.
+- Use the native/local and CI alternatives above while the process is dormant.
+- Keep product/remote-compute integrations and installed MCP settings intact.
 
 ### Desktop test operations
 
@@ -142,6 +143,9 @@
 - For PwrSuiteLab Windows probes or headed E2E, read
   `.agents/skills/use-windows-vm-lab/SKILL.md` in the attached lab checkout.
   Do not use the macOS VM skill for Windows work.
+- PwrSuiteLab also manages access to reusable Windows EC2 instances when
+  available. Consult that project's current Windows EC2 skill and documentation
+  for availability and operations.
 - Review the current ownership and readiness constraints before you change:
   - Windows Git or Bash process launch and shutdown.
   - Vitest process isolation.
@@ -152,10 +156,11 @@
 - Optimistic renderer synchronization has caused expensive Windows-only failures.
 - Do not substitute retries, longer timeouts, fewer workers, or serial lanes for an ownership fix.
 - Do not substitute those workarounds for an evidence-based readiness fix.
-- The macOS CI lane uses the selected-repository **PwrDrvr macOS** runner group.
-- Only PwrAgent and PwrSnap share this group.
-- Do not add a repository-scoped runner.
-- Do not give the full organization access to this group.
+- macOS CI and release jobs run on free GitHub-hosted `macos-26` runners.
+  - Use `macos-26`: actool 26 compiles the app icon and needs a macOS 26 host.
+  - Do not use a paid larger size or `macos-26-intel`.
+  - Do not move a CI job onto self-hosted machines. This repository is public,
+    and fork pull requests run every macOS job.
 - For branch-drift dialog screenshots, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`.
 - This command opens a replay-backed Electron fixture.
 - Close the application to end the command.
@@ -804,8 +809,18 @@ Use this dependency order from lowest to highest:
 
 - `packages/shared` imports no internal package.
 - `packages/messaging/interface` imports only `packages/shared`.
-- `packages/messaging/providers/*` imports only `packages/messaging/interface`.
+- `packages/federation` imports only `packages/shared`.
+- `packages/agent-tools` imports only `packages/shared`.
+- The three packages above are independent siblings; none imports another.
+- `packages/owner-core` (`@pwragent/owner-core`) holds shared navigation,
+  Attention ordering, and title policies. It may import only `shared`.
+- `packages/messaging/providers/{discord,feishu,line,mattermost,slack,telegram}`
+  each imports only `packages/messaging/interface`, never another provider.
+- `packages/pwragent` (the Outpost) may import `shared`, `federation`,
+  `agent-tools`, `messaging/interface`, and `owner-core`, only through
+  `src/federation-core.ts`. Its JavaScript consumes the resulting bundle.
 - `apps/desktop` can import any package.
+- No package under `packages/` may import an application under `apps/`.
 
 The renderer has an additional boundary.
 

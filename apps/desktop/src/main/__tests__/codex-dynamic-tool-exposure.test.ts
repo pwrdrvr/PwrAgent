@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
-import { FLAT_PWRAGENT_CORE_TOOLS, flattenPwrAgentDynamicTools, usesFlatPwrAgentTools } from "../codex-app-server/dynamic-tool-exposure";
+import { FLAT_PWRAGENT_CORE_TOOLS, flattenPwrAgentDynamicTools, usesFlatPwrAgentTools } from "@pwragent/owner-core/codex-app-server/dynamic-tool-exposure";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { withPwrAgentToolDiscovery } from "../agent-tools/pwragent-tool-search";
 import { AgentToolRouter, readAgentDynamicToolCall } from "../agent-tools/agent-tool-router";

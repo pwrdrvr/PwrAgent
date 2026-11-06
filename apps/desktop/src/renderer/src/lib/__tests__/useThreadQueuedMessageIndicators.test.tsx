@@ -144,17 +144,41 @@ describe("useThreadQueuedMessageIndicators", () => {
     expect(result.current.indicators).toEqual({ "codex:a": "scheduled" });
   });
 
-  it("does not chip an unborn thread whose scheduled start was cancelled", () => {
+  it.each(["cancelled", "failed"] as const)("does not chip an unborn thread whose scheduled start was %s", (state) => {
     const thread = {
       ...makeThread("a"),
       scheduledStart: {
         actionId: "scheduled-action:1",
         scheduledFor: Date.now() + 30_000,
-        state: "cancelled" as const,
+        state,
       },
     };
     const { result } = renderIndicators([thread]);
     expect(result.current.indicators).toEqual({});
+  });
+
+  it("clears a finished scheduled start and still reports other pending messages", () => {
+    const thread = makeThread("a");
+    const { result, rerender } = renderIndicators([{
+      ...thread,
+      scheduledStart: {
+        actionId: "scheduled-action:1",
+        scheduledFor: Date.now() + 30_000,
+        state: "scheduled",
+      },
+    }]);
+    expect(result.current.indicators).toEqual({ "codex:a": "scheduled" });
+
+    rerender({ threads: [thread] });
+    expect(result.current.indicators).toEqual({});
+
+    setQueued(result.current.store, thread, [
+      makeQueuedTurn({ scheduledSendAt: Date.now() + 60_000 }),
+    ]);
+    expect(result.current.indicators).toEqual({ "codex:a": "scheduled" });
+
+    setQueued(result.current.store, thread, [makeQueuedTurn()]);
+    expect(result.current.indicators).toEqual({ "codex:a": "queued" });
   });
 
   it("prefers 'scheduled' when a thread has both a scheduled and a plain queued turn", () => {
@@ -193,6 +217,21 @@ describe("useThreadQueuedMessageIndicators", () => {
       }),
     ]);
     expect(result.current.indicators).toEqual({ "codex:a": "held" });
+  });
+
+  it("classifies a wake-up its paused project holds as 'held', but not an operator pause", () => {
+    const thread = makeThread("a");
+    const other = makeThread("b");
+    const { result } = renderIndicators([thread, other]);
+    setQueued(result.current.store, thread, [
+      makeQueuedTurn({
+        queueEntryId: "task-monitor:monitor-1",
+        paused: true,
+        holdReason: "Held because forge activity in openclaw is paused.",
+      }),
+    ]);
+    setQueued(result.current.store, other, [makeQueuedTurn({ queueEntryId: "entry-2", paused: true })]);
+    expect(result.current.indicators).toEqual({ "codex:a": "held", "codex:b": "queued" });
   });
 
   it("prefers 'held' over a durable scheduled start", () => {

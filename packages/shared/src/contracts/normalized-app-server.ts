@@ -1,4 +1,5 @@
 import type { SubAgentLens } from "../subagent-kind";
+import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { ToolAccountingTotals } from "../thread-tool-display";
 import type { ThreadIncidentSummary } from "../thread-incident-summary";
 import type { ThreadPricingDisplay } from "../thread-pricing-display";
@@ -333,6 +334,17 @@ export type LinkedDirectorySummary = {
   /** Best-effort branch observed for this linked directory/worktree. */
   gitBranch?: string;
   kind: "local" | "worktree";
+  /**
+   * The checkout's origin as `host/owner/repo`, stamped by the owning
+   * instance's navigation projection from its directory Git status. Paths
+   * name a checkout on one machine only; this is how a viewer with no
+   * checkout of its own still knows which repository a peer's thread is in.
+   * Absent when the owner has no cached status for the path, or is too old
+   * to send one.
+   */
+  repositoryKey?: string;
+  /** The checkout's configured fetch remotes, in the same form. */
+  repositoryKeys?: string[];
 };
 
 export type WorktreeSnapshotState =
@@ -354,6 +366,8 @@ export type WorktreeSnapshotSummary = {
   createdAt: number;
   archivedAt?: number;
   restoredAt?: number;
+  /** Physical checkout successfully recreated by restore, for shared-owner reuse. */
+  restoredCheckoutIdentity?: { device: string; inode: string; birthtimeNs: string; gitDirectory: string };
   state: WorktreeSnapshotState;
   ignoredFilesExcluded: boolean;
   unavailableReason?: string;
@@ -545,6 +559,38 @@ export type AppServerBackgroundTask = {
   agentType?: string;
   /** The task's latest progress line, as its backend reported it. */
   progress?: string;
+  /**
+   * Claude only: the task runs after the call that started it, and Claude
+   * continues the thread when it ends. A foreground task ends with its turn.
+   */
+  background?: boolean;
+  /** When this process first saw the task. */
+  startedAt?: number;
+};
+
+/**
+ * A turn a backend scheduled in its own session and will start by itself:
+ * Claude Code's dynamic /loop wake-up (`ScheduleWakeup`) or a session cron
+ * (`CronCreate`). It lives in the backend's process and ends with it, and
+ * only the backend's agent can cancel it.
+ */
+export type AppServerBackendWake = {
+  /** The backend's own id for the wake. */
+  id: string;
+  origin: "loop_wakeup" | "cron";
+  /** 5-field cron in the owner's local time. Empty until the backend reports it. */
+  schedule: string;
+  /** The backend's own wording for a recurring schedule, such as `every 5 minutes`. */
+  humanSchedule?: string;
+  recurring: boolean;
+  /** What the backend sends itself when the wake fires. */
+  prompt: string;
+  /** Why the agent chose this delay. */
+  reason?: string;
+  /** The next fire time, when the backend reported one that is still ahead. */
+  nextFireAt?: number;
+  /** When this process first saw the wake. */
+  createdAt?: number;
 };
 
 /** Provider provenance carried by a native Codex `spawn_agent` thread. */
@@ -695,7 +741,12 @@ export type AppServerThreadMessageOrigin = {
   causalMessagingAmbiguous?: boolean;
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
-  systemReason?: "monitor-job-suggestion" | "thread-correspondence";
+  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart";
+  /**
+   * The operator sent this agent-routed message by acting on a to-do card,
+   * so a paused project's refusal of messages from other threads skips it.
+   */
+  operatorApproved?: boolean;
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
     messageId?: string;
@@ -712,6 +763,11 @@ export type AppServerThreadMessageOrigin = {
     threadId: ThreadIdentifier;
     title?: string;
   };
+  /**
+   * The operator ran a to-do card's action, and the card's agent-written prompt
+   * is this message. Display and lookup text only: peer-asserted, never a link.
+   */
+  threadTodo?: { id: string; title?: string };
   messaging?: {
     platform: MessagingChannelKind;
     sourceUrl?: string;
@@ -1409,6 +1465,8 @@ export type ThreadDisplayData = {
 
 export type AppServerReadThreadRequest = {
   display?: ThreadDisplayRead;
+  /** Timer-driven reads opt out of the Codex idle-recycle activity clock. */
+  countsAsActivity?: boolean;
   /** Bounded diagnostic attribution; never transcript content. */
   readReason?: "thread-view" | "star-map-card";
   /** Opt into conditional page revalidation. Empty string requests a first revision. */
@@ -1931,6 +1989,15 @@ export type AppServerNotification =
   | {
       method: "thread/dependencies/updated";
       params: { threadId: string; dependencyId: string };
+    }
+  | {
+      /**
+       * A thread's PR watches changed: one was armed, stopped, woke the
+       * thread, gave up, moved to a new head, or lost its baseline. Readers
+       * re-list watches; the event carries no watch rows.
+       */
+      method: "thread/prWatches/updated";
+      params: { backend: AppServerBackendKind; threadId: string; prKey?: string };
     }
   | NavigationThreadGitWorkingStateUpdatedNotification
   | {
@@ -2585,6 +2652,17 @@ export type AppServerNotification =
       };
     }
   | {
+      /**
+       * The set of turns a backend scheduled in its own session changed.
+       * Claude reports it at each turn's end and after each wake tool.
+       */
+      method: "thread/sessionWakes/updated";
+      params: {
+        threadId: string;
+        wakes: AppServerBackendWake[];
+      };
+    }
+  | {
       method: "thread/subAgents/updated";
       params: {
         threadId: string;
@@ -2696,6 +2774,10 @@ export type AppServerNotification =
         /** Complete reaction set, ordered by insertion. */
         reactions: string[];
       };
+    }
+  | {
+      method: "thread/mergeHolds/updated";
+      params: { threadId: string; mergeHolds: import("./thread-merge-holds").ThreadMergeHold[] };
     }
   | {
       method: "thread/lock/updated";
@@ -2831,6 +2913,14 @@ export type AppServerNotification =
       params: {
         directoryKey: string;
         collapsed: boolean;
+      };
+    }
+  | {
+      method: "directory/forgeAutomation/updated";
+      params: {
+        directoryKey: string;
+        /** Null when the project is back to the defaults. */
+        automation: ProjectForgeAutomation | null;
       };
     }
   | { method: "federation/shutdown/changed"; params: { notices: FederationPeerShutdown[] } }

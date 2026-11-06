@@ -4,11 +4,13 @@ import type {
   AppServerCollaborationModeRequest,
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
+  ProjectHeldWakeupSource,
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
+import { transitionQueueAdmission, type QueueAdmission, type QueueAdmissionEvent } from "./queue-admission";
 
 export type ThreadTurnQueueOrigin =
   | "manual"
@@ -49,11 +51,31 @@ export type ThreadTurnQueueEntry = {
    */
   pauseRevision?: number;
   /**
+   * A wake-up held because forge activity in its project is paused. The
+   * entry is also `paused`, so the operator's own sends pass it; resuming it
+   * sends it and clears this marker.
+   */
+  projectHold?: ThreadTurnQueueProjectHold;
+  /**
+   * A quiet restart stopped this thread's turn, and this entry continues it.
+   * It sits at the top of the FIFO, and the restart gate decides when it
+   * starts and what waits behind it.
+   */
+  restartContinuation?: true;
+  /**
    * Display-only label from `queued-message-title.ts`, set after admission
    * for messages too long to show as typed. Never sent with the turn.
    */
   title?: string;
   createdAt: number;
+};
+
+export type ThreadTurnQueueProjectHold = {
+  /** `directory:<path>` key of the paused project. */
+  directoryKey: string;
+  source: ProjectHeldWakeupSource;
+  /** One line for the resume list. */
+  summary: string;
 };
 
 type QueuedAgentMessage = {
@@ -183,13 +205,35 @@ export type ThreadTurnQueueOptions = {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
   }) => boolean;
+  /**
+   * Whether a gate outside the queue keeps this entry from starting or
+   * steering now (the quiet-restart gate). A held entry keeps its place and
+   * starts on a later drain; `drainAll` follows the gate opening.
+   */
+  isDispatchHeld?: (entry: ThreadTurnQueueDispatchCandidate) => boolean;
   onLifecycle?: (event: ThreadTurnQueueLifecycleEvent) => void | Promise<void>;
   now?: () => number;
+};
+
+/** An entry about to start, or a thread a new entry would start on. */
+export type ThreadTurnQueueDispatchCandidate = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  id?: string;
+  restartContinuation?: true;
 };
 
 type RunningEntry = {
   entry: ThreadTurnQueueEntry;
   turnId?: string;
+};
+
+type ThreadTurnQueueReleaseParams = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+  status?: string;
+  errorMessage?: string;
 };
 
 type AdmittedEntry = {
@@ -200,6 +244,7 @@ type AdmittedEntry = {
 type StartNextResult = "none" | "started" | "blocked";
 
 const RECENT_ADMITTED_ENTRY_LIMIT = 1_000;
+const RECENT_TERMINAL_TURN_LIMIT = 1_000;
 
 function groupedAgentInput(messages: QueuedAgentMessage[]): AppServerTurnInputItem[] {
   if (messages.length === 1) return structuredClone(messages[0]!.input);
@@ -248,12 +293,20 @@ function restoreAfter(
 
 export class ThreadTurnQueue {
   private readonly queuedEntries = new Map<string, ThreadTurnQueueEntry[]>();
-  private readonly startingKeys = new Set<string>();
+  private readonly admissions = new Map<string, QueueAdmission>();
   private readonly runningEntries = new Map<string, RunningEntry>();
   private readonly recentlyAdmittedEntries = new Map<string, AdmittedEntry>();
+  private readonly recentlyProcessedTerminals = new Set<string>();
   private readonly releasingKeys = new Set<string>();
   private readonly pendingReleaseKeys = new Set<string>();
-  private readonly heldQueues = new Map<string, string>();
+  /**
+   * Why each held FIFO is held, oldest first. Kinds of hold release
+   * differently: unlocking drops only a lock's refusal, and Retry drops
+   * them all. Each held entry keeps the reason it was held for. `revision`
+   * changes with each hold, so a start in flight can tell one arrived.
+   */
+  private readonly heldQueues = new Map<string, { reasons: string[]; revision: number }>();
+  private holdRevision = 0;
   private readonly dispatchSuspensions = new Map<string, number>();
   private readonly mutationTails = new Map<string, Promise<void>>();
   private readonly drainTimers = new Map<string, ReturnType<typeof setImmediate>>();
@@ -306,9 +359,13 @@ export class ThreadTurnQueue {
       );
       const current = index >= 0 ? queue[index] : undefined;
       const messages = [...(current?.agentMessages ?? []), message];
-      const holdReason = this.heldQueues.get(key);
+      const holdReason = this.holdReasonFor(key);
       // A title named the batch before this message joined it.
       const { title: _staleTitle, ...base } = current ?? input;
+      // A to-do marker labels one message. A batch keeps each message's own
+      // origin in agentMessages, so the batch origin must not claim it.
+      const { threadTodo: _threadTodo, ...batchOrigin }: Partial<AppServerThreadMessageOrigin> =
+        input.messageOrigin ?? {};
       const entry: ThreadTurnQueueEntry = {
         ...base,
         id: current?.id ?? input.id ?? `thread-turn:${randomUUID()}`,
@@ -320,7 +377,7 @@ export class ThreadTurnQueue {
           ...(message.origin ? [message.origin] : []),
         ],
         input: groupedAgentInput(messages),
-        messageOrigin: { ...input.messageOrigin, kind: "agent",
+        messageOrigin: { ...(messages.length > 1 ? batchOrigin : input.messageOrigin), kind: "agent",
           ...mergeCausalMessagingContext(current ? [current.messageOrigin, message.origin] : [message.origin]) },
         ...(holdReason ? { manualReleaseRequired: true, holdReason } : {}),
       };
@@ -329,10 +386,11 @@ export class ThreadTurnQueue {
         && !current
         && !hasWaitingEntry(queue)
         && this.dispatchSuspensions.get(key) === 1
-        && !this.startingKeys.has(key)
+        && !this.admissions.has(key)
         && !this.runningEntries.has(key)
         && !this.heldQueues.has(key)
         && !(this.options.isThreadActive?.(entry) ?? false)
+        && !this.isDispatchHeld(entry)
       ) {
         const starting = this.startEntry(entry);
         options?.onAdmission?.();
@@ -361,7 +419,7 @@ export class ThreadTurnQueue {
     return await this.withDispatchSuspended(input, async () => {
       const key = this.keyFor(input);
       const queue = this.queueFor(key);
-      const holdReason = this.heldQueues.get(key);
+      const holdReason = this.holdReasonFor(key);
       const entry: ThreadTurnQueueEntry = {
         ...input,
         id: input.id ?? `thread-turn:${randomUUID()}`,
@@ -372,10 +430,11 @@ export class ThreadTurnQueue {
       if (
         !hasWaitingEntry(queue)
         && this.dispatchSuspensions.get(key) === 1
-        && !this.startingKeys.has(key)
+        && !this.admissions.has(key)
         && !this.runningEntries.has(key)
         && !holdReason
         && !(this.options.isThreadActive?.(entry) ?? false)
+        && !this.isDispatchHeld(entry)
       ) {
         const starting = this.startEntry(entry);
         options?.onAdmission?.();
@@ -411,7 +470,7 @@ export class ThreadTurnQueue {
 
     if (!this.canStartImmediately({ backend: entry.backend, threadId: entry.threadId })) {
       const queue = this.queueFor(key);
-      const holdReason = this.heldQueues.get(key);
+      const holdReason = this.holdReasonFor(key);
       const queuedEntry = holdReason
         ? {
             ...entry,
@@ -467,22 +526,88 @@ export class ThreadTurnQueue {
     }
 
     const key = this.keyFor(entry);
-    this.heldQueues.set(key, reason);
     const queue = this.queueFor(key);
-    queue.unshift(entry);
+    // On a held FIFO a held entry joins the back, so held entries go in the
+    // order they arrived. Otherwise it goes ahead of the turns waiting, and
+    // its hold then covers them, though never ahead of a restart continuation.
+    const leadingContinuations = queue.findIndex((queued) => !queued.restartContinuation);
+    const index = this.heldQueues.has(key)
+      ? queue.length
+      : leadingContinuations < 0 ? queue.length : leadingContinuations;
+    this.addHoldReason(key, reason);
+    queue.splice(index, 0, entry);
     options?.onAdmission?.();
-    await this.emit({ type: "queued", entry, position: 1 });
-    await this.holdQueue(key, reason);
+    await this.emit({ type: "queued", entry, position: index + 1 });
+    // Entries already held keep their own reason, so each still releases
+    // the way it was held.
+    await this.holdQueue(key, reason, { keepHeld: true });
+    const held = this.findQueuedEntry(entry.id);
     return {
       status: "queued",
-      entry: this.queueFor(key)[0] ?? entry,
-      position: 1,
+      entry: held?.entry ?? entry,
+      position: held?.position ?? index + 1,
     };
   }
 
   /**
+   * Queue a wake-up that its paused project holds. Unlike `submitHeld`, this
+   * holds only the entry: it waits paused at the back of the FIFO, so turns
+   * the operator sends start or queue as usual. Reusing an id that is still
+   * queued returns that entry.
+   */
+  async submitProjectHeld(
+    input: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "paused" | "pauseRevision" | "holdReason" | "projectHold"> &
+      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    hold: { reason: string; projectHold: ThreadTurnQueueProjectHold },
+    options?: { onAdmission?: () => void },
+  ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    const entry: ThreadTurnQueueEntry = {
+      ...input,
+      id: input.id ?? `thread-turn:${randomUUID()}`,
+      createdAt: input.createdAt ?? this.now(),
+      paused: true,
+      pauseRevision: 1,
+      holdReason: hold.reason,
+      projectHold: hold.projectHold,
+    };
+    const existing = this.findQueuedEntry(entry.id);
+    if (existing) {
+      options?.onAdmission?.();
+      return { status: "queued", entry: existing.entry, position: existing.position };
+    }
+    const queue = this.queueFor(this.keyFor(entry));
+    queue.push(entry);
+    options?.onAdmission?.();
+    const position = queue.length;
+    await this.emit({ type: "queued", entry, position });
+    return { status: "queued", entry, position };
+  }
+
+  /**
+   * Puts back project-held wake-ups that an earlier process held, at
+   * startup and before any window reads the queue, so it emits nothing.
+   * They wait paused at the back of their FIFOs in hold order. An id that
+   * is already queued is skipped.
+   */
+  restoreProjectHeld(
+    entries: ReadonlyArray<Omit<ThreadTurnQueueEntry, "paused" | "pauseRevision"> & {
+      holdReason: string;
+      projectHold: ThreadTurnQueueProjectHold;
+    }>,
+  ): ThreadTurnQueueEntry[] {
+    const restored: ThreadTurnQueueEntry[] = [];
+    for (const input of [...entries].sort((left, right) => left.createdAt - right.createdAt)) {
+      if (this.findQueuedEntry(input.id)) continue;
+      const entry: ThreadTurnQueueEntry = { ...input, paused: true, pauseRevision: 1 };
+      this.queueFor(this.keyFor(entry)).push(entry);
+      restored.push(entry);
+    }
+    return restored;
+  }
+
+  /**
    * Atomically reject instead of queueing when the thread is busy. The
-   * availability check and `startingKeys` claim happen in the same JS turn,
+   * availability check and admission attempt claim happen in the same JS turn,
    * so another submit cannot slip between them and push this entry on deck.
    */
   async submitIfIdle(
@@ -518,13 +643,60 @@ export class ThreadTurnQueue {
   }): boolean {
     const key = this.keyFor(params);
     return (
-      !this.startingKeys.has(key) &&
+      !this.admissions.has(key) &&
       !this.dispatchSuspensions.has(key) &&
       !this.runningEntries.has(key) &&
       !this.heldQueues.has(key) &&
       !hasWaitingEntry(this.queueFor(key)) &&
-      !(this.options.isThreadActive?.(params) ?? false)
+      !(this.options.isThreadActive?.(params) ?? false) &&
+      !this.isDispatchHeld({ backend: params.backend, threadId: params.threadId })
     );
+  }
+
+  /**
+   * Puts back the continuations of turns a quiet restart stopped, at
+   * startup and before any window reads the queue, so it emits nothing.
+   * Each goes to the top of its thread's FIFO, ahead of anything queued
+   * there. An id that is already queued is skipped.
+   */
+  restoreRestartContinuations(
+    entries: ReadonlyArray<Omit<ThreadTurnQueueEntry, "restartContinuation" | "paused" | "pauseRevision">>,
+  ): ThreadTurnQueueEntry[] {
+    const restored: ThreadTurnQueueEntry[] = [];
+    for (const input of [...entries].sort((left, right) => right.createdAt - left.createdAt)) {
+      if (this.findQueuedEntry(input.id)) continue;
+      const entry: ThreadTurnQueueEntry = { ...input, restartContinuation: true };
+      this.queueFor(this.keyFor(entry)).unshift(entry);
+      restored.unshift(entry);
+    }
+    return restored;
+  }
+
+  /**
+   * Puts back messages that waited in thread queues when a quiet restart
+   * stopped the app, at startup and before any window reads the queue, so
+   * it emits nothing. Each joins the back of its FIFO in the order given,
+   * which is the order they waited, behind the thread's continuation. An id
+   * that is already queued is skipped.
+   */
+  restoreQueued(
+    entries: ReadonlyArray<Omit<ThreadTurnQueueEntry, "restartContinuation" | "pauseRevision">>,
+  ): ThreadTurnQueueEntry[] {
+    const restored: ThreadTurnQueueEntry[] = [];
+    for (const input of entries) {
+      if (this.findQueuedEntry(input.id)) continue;
+      const entry: ThreadTurnQueueEntry = input.paused
+        ? { ...input, paused: true, pauseRevision: 1 }
+        : input;
+      this.queueFor(this.keyFor(entry)).push(entry);
+      restored.push(entry);
+    }
+    return restored;
+  }
+
+  /** Recheck every FIFO, after a gate outside the queue opens. */
+  drainAll(): void {
+    for (const key of this.queuedEntries.keys()) this.scheduleDrain(key);
   }
 
   getQueuedEntries(params: {
@@ -551,10 +723,8 @@ export class ThreadTurnQueue {
       const index = queue.findIndex((entry) => entry.id === entryId);
       if (index === -1) continue;
       const [entry] = queue.splice(index, 1);
-      if (queue.length === 0) {
-        this.queuedEntries.delete(key);
-        this.heldQueues.delete(key);
-      }
+      if (queue.length === 0) this.queuedEntries.delete(key);
+      this.dropSpentHold(key);
       if (entry) {
         void this.emit({ type: "cancelled", entry, reason });
       }
@@ -596,7 +766,9 @@ export class ThreadTurnQueue {
       const from = queue.findIndex((entry) => entry.id === entryId);
       const entry = queue[from];
       if (!entry) return { disposition: "not_found", entryId };
-      if (entry.manualReleaseRequired) return result("held");
+      // A restart continuation stays on top until it starts: the restart
+      // gate holds everything behind it, so nothing may pass it.
+      if (entry.manualReleaseRequired || entry.restartContinuation) return result("held");
       if (beforeEntryId === entryId) return result("unchanged");
       const anchor = beforeEntryId === undefined
         ? queue.length
@@ -605,7 +777,7 @@ export class ThreadTurnQueue {
       const passed = anchor > from
         ? queue.slice(from + 1, anchor)
         : queue.slice(anchor, from);
-      if (passed.some((candidate) => candidate.manualReleaseRequired)) {
+      if (passed.some((candidate) => candidate.manualReleaseRequired || candidate.restartContinuation)) {
         return result("held");
       }
       const to = anchor > from ? anchor - 1 : anchor;
@@ -644,9 +816,16 @@ export class ThreadTurnQueue {
       }
       const { paused: _previous, ...rest } = entry;
       const pauseRevision = (entry.pauseRevision ?? 0) + 1;
+      // Resuming a project-held wake-up is the operator sending it, so it
+      // stops reading as held.
+      const { projectHold: _projectHold, holdReason: _holdReason, ...released } = rest;
+      // A held FIFO still holds it. A project hold put it there without
+      // the queue's hold, which it takes up now.
       const updated: ThreadTurnQueueEntry = paused
         ? { ...rest, paused: true, pauseRevision }
-        : { ...rest, pauseRevision };
+        : entry.projectHold
+          ? this.heldByQueue(found.key, { ...released, pauseRevision })
+          : { ...rest, pauseRevision };
       queue[index] = updated;
       return { disposition: "updated", entryId, entry: updated };
     });
@@ -755,17 +934,42 @@ export class ThreadTurnQueue {
   }
 
   /**
-   * Clears a thread's hold when its reason passes `shouldRelease`, and drains
-   * the queue once the thread is idle. Returns whether a hold was cleared.
+   * Drops a thread's hold reasons that pass `shouldRelease`, and drains the
+   * queue once the thread is idle. Other reasons keep holding: an entry held
+   * for a dropped reason takes the reason of the nearest entry ahead that is
+   * still held, and is released when none is. Returns whether a reason was
+   * dropped.
    */
   async releaseHold(
     params: { backend: AppServerBackendKind; threadId: string },
     shouldRelease: (reason: string) => boolean,
   ): Promise<boolean> {
     const key = this.keyFor(params);
-    const reason = this.heldQueues.get(key);
-    if (!reason || !shouldRelease(reason)) return false;
-    await this.clearQueueHold(key);
+    const hold = this.heldQueues.get(key);
+    if (!hold?.reasons.some(shouldRelease)) return false;
+    const queue = this.queuedEntries.get(key) ?? [];
+    const kept = new Set<string>();
+    let ahead: string | undefined;
+    for (let index = 0; index < queue.length; index += 1) {
+      const current = queue[index];
+      if (!current?.manualReleaseRequired) continue;
+      if (current.holdReason !== undefined && !shouldRelease(current.holdReason)) {
+        ahead = current.holdReason;
+        kept.add(ahead);
+        continue;
+      }
+      const updated: ThreadTurnQueueEntry = ahead
+        ? { ...current, holdReason: ahead }
+        : { ...current, manualReleaseRequired: undefined, holdReason: undefined };
+      queue[index] = updated;
+      await this.emit(ahead
+        ? { type: "held", entry: updated, position: index + 1, reason: ahead }
+        : { type: "queued", entry: updated, position: index + 1 });
+    }
+    // A reason no held entry carries any more has nothing left to hold.
+    const reasons = hold.reasons.filter((reason) => kept.has(reason));
+    if (reasons.length > 0) this.heldQueues.set(key, { ...hold, reasons });
+    else this.heldQueues.delete(key);
     this.scheduleDrain(key);
     return true;
   }
@@ -783,11 +987,13 @@ export class ThreadTurnQueue {
     if (queue[nextWaitingIndex(queue)]?.id !== entryId) {
       return { disposition: "not_head", entryId };
     }
-    if (!this.heldQueues.has(found.key)) {
+    // An entry an unlock already released is not held, though entries
+    // behind it may be, and its Retry must not release theirs.
+    if (!this.heldQueues.has(found.key) || !found.entry.manualReleaseRequired) {
       return { disposition: "not_held", entryId };
     }
     if (
-      this.startingKeys.has(found.key)
+      this.admissions.has(found.key)
       || this.dispatchSuspensions.has(found.key)
       || this.runningEntries.has(found.key)
       || (this.options.isThreadActive?.(found.entry) ?? false)
@@ -798,12 +1004,12 @@ export class ThreadTurnQueue {
     await this.withDispatchSuspended(found.entry, async () => await this.clearQueueHold(found.key));
     const result = await this.startNext(found.key);
     if (result === "started") {
-      const running = this.runningEntries.get(found.key);
-      if (running?.entry.id === entryId && running.turnId) {
+      const admitted = this.recentlyAdmittedEntries.get(entryId);
+      if (admitted?.turnId) {
         return {
           disposition: "started",
           entryId,
-          turnId: running.turnId,
+          turnId: admitted.turnId,
         };
       }
     }
@@ -827,14 +1033,25 @@ export class ThreadTurnQueue {
     this.scheduleDrain(this.keyFor(params));
   }
 
-  async releaseThread(params: {
-    backend: AppServerBackendKind;
-    threadId: ThreadIdentifier;
-    turnId?: string;
-    status?: string;
-    errorMessage?: string;
-  }): Promise<void> {
+  async releaseThread(params: ThreadTurnQueueReleaseParams): Promise<void> {
     const key = this.keyFor(params);
+    // Only processed outcomes prove a turn has ended. An admission or
+    // an unidentified idle release says nothing about its final outcome.
+    if (params.turnId !== undefined
+      && this.recentlyProcessedTerminals.has(JSON.stringify([key, params.turnId]))) return;
+    const admission = this.admissions.get(key);
+    // Buffer identified outcomes through the started callback as well as the
+    // backend handoff. Only the acknowledgement proves which turn they end.
+    if (params.turnId !== undefined && admission && admission.phase !== "idle" && admission.kind === "start") {
+      this.applyAdmission(key, {
+        type: "terminal",
+        terminal: { turnId: params.turnId, status: params.status, errorMessage: params.errorMessage },
+      });
+      return;
+    }
+    const running = this.runningEntries.get(key);
+    if (params.turnId !== undefined && running?.turnId !== undefined
+      && running.turnId !== params.turnId) return;
     if (this.releasingKeys.has(key)) {
       // Codex commonly follows a terminal event with a status→idle event.
       // Keep only that no-turn-id release if it lands while we are awaiting a
@@ -850,31 +1067,8 @@ export class ThreadTurnQueue {
     this.releasingKeys.add(key);
     let startResult: StartNextResult = "none";
     try {
-      const running = this.runningEntries.get(key);
-      if (
-        running &&
-        (params.turnId === undefined ||
-          running.turnId === undefined ||
-          running.turnId === params.turnId)
-      ) {
-        this.runningEntries.delete(key);
-        await this.emit({
-          type: "terminal",
-          entry: running.entry,
-          turnId: params.turnId,
-          status: params.status,
-        });
-      }
-      if (params.status === "turn/failed") {
-        await this.holdQueue(
-          key,
-          params.errorMessage
-            ?? "The previous turn failed. Review the error before retrying queued messages.",
-        );
-      }
-      if (!this.heldQueues.has(key)) {
-        startResult = await this.startNext(key);
-      }
+      await this.settleRelease(key, params);
+      startResult = await this.startNext(key);
     } finally {
       this.releasingKeys.delete(key);
       if (
@@ -889,43 +1083,78 @@ export class ThreadTurnQueue {
     }
   }
 
+  private async settleRelease(key: string, params: ThreadTurnQueueReleaseParams): Promise<void> {
+    if (params.turnId !== undefined && params.status !== "idle") {
+      this.rememberTerminal(key, params.turnId);
+    }
+    const running = this.runningEntries.get(key);
+    if (
+      running &&
+      (params.turnId === undefined ||
+        running.turnId === undefined ||
+        running.turnId === params.turnId)
+    ) {
+      this.runningEntries.delete(key);
+      await this.emit({
+        type: "terminal",
+        entry: running.entry,
+        turnId: params.turnId,
+        status: params.status,
+      });
+    }
+    if (params.status === "turn/failed") {
+      await this.holdAfterTurnFailure(key, params.errorMessage);
+    }
+  }
+
   private async startNext(key: string): Promise<StartNextResult> {
-    if (this.startingKeys.has(key) || this.dispatchSuspensions.has(key)
-      || this.heldQueues.has(key)) return "none";
+    if (this.admissions.has(key) || this.dispatchSuspensions.has(key)) return "none";
     const queue = this.queueFor(key);
     const index = nextWaitingIndex(queue);
     const head = queue[index];
-    if (!head) return "none";
+    // A held head waits for its release. Entries ahead of every hold, which
+    // an unlock released, still start.
+    if (!head || head.manualReleaseRequired) return "none";
+    if (this.isDispatchHeld(head)) return "none";
     const steer = head.delivery === "queued-steer" && this.options.canSteerThread?.(head);
     if (!steer && (this.runningEntries.has(key)
       || (this.options.isThreadActive?.(head) ?? false))) return "none";
     const previousId = queue[index - 1]?.id;
     const [next] = queue.splice(index, 1);
     if (!next) return "none";
-    if (queue.length === 0) {
-      this.queuedEntries.delete(key);
-    }
+    if (queue.length === 0) this.queuedEntries.delete(key);
+    this.dropSpentHold(key);
+    const holdRevision = this.heldQueues.get(key)?.revision;
     try {
       if (steer && this.options.steerTurn) {
         // Shift and claim synchronously. The backend now owns this immutable
         // batch; new senders can only append to the next queued steer.
-        this.startingKeys.add(key);
+        const attempt = Symbol("queue admission");
+        this.applyAdmission(key, { type: "begin", attempt, kind: "steer" });
         this.rememberAdmittedEntry({ entryId: next.id });
         let delivered = false;
         try {
           const result = await this.options.steerTurn(next);
+          const admission = this.admissions.get(key);
+          if (admission?.phase !== "starting" || admission.attempt !== attempt) return "none";
           if (!result || result === "retry") {
             this.recentlyAdmittedEntries.delete(next.id);
             restoreAfter(this.queueFor(key), next, previousId);
+            // A hold that arrived while it was out covers it too.
+            const reason = this.holdReasonFor(key);
+            if (reason && this.heldQueues.get(key)?.revision !== holdRevision) {
+              await this.holdQueue(key, reason, { keepHeld: true });
+            }
             if (result === "retry") this.scheduleDrain(key);
             return "none";
           }
+          this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
           this.rememberAdmittedEntry({ entryId: next.id, turnId: result.turnId });
           delivered = true;
           await this.emit({ type: "started", entry: next, turnId: result.turnId });
           return "started";
         } finally {
-          this.startingKeys.delete(key);
+          this.applyAdmission(key, { type: "settle", attempt });
           if (delivered || !(this.options.isThreadActive?.(next) ?? false)) this.scheduleDrain(key);
         }
       }
@@ -938,15 +1167,22 @@ export class ThreadTurnQueue {
       // and require an explicit retry instead of looping on idle signals.
       restoreAfter(this.queueFor(key), next, previousId);
       const normalized = error instanceof Error ? error : new Error(String(error));
-      this.heldQueues.set(key, normalized.message);
+      this.addHoldReason(key, normalized.message);
       await this.emit({
         type: "blocked",
         entry: next,
         error: normalized,
       });
-      await this.holdQueue(key, normalized.message);
+      // It holds the entry it could not start and anything not yet held.
+      // Entries behind it keep their own reasons: a lock's refusal must not
+      // turn a stale steer's hold into one that unlocking releases.
+      await this.holdQueue(key, normalized.message, { keepHeld: true });
       return "blocked";
     }
+  }
+
+  private isDispatchHeld(entry: ThreadTurnQueueDispatchCandidate): boolean {
+    return this.options.isDispatchHeld?.(entry) ?? false;
   }
 
   private scheduleDrain(key: string): void {
@@ -966,32 +1202,65 @@ export class ThreadTurnQueue {
     options?: { deferFailureEvent?: boolean },
   ): Promise<ThreadTurnQueueStartResult> {
     const key = this.keyFor(entry);
-    this.startingKeys.add(key);
+    const attempt = Symbol("queue admission");
+    this.applyAdmission(key, { type: "begin", attempt });
     this.rememberAdmittedEntry({ entryId: entry.id });
     try {
       const result = await this.options.startTurn(entry);
-      const running = {
-        entry,
-        turnId: result.turnId,
-      };
-      this.runningEntries.set(key, running);
+      const admission = this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
+      if (admission.phase !== "acknowledged" || admission.attempt !== attempt) return result;
+      // Completion may precede the acknowledgement. Publish start then terminal,
+      // without resurrecting a running entry for the already completed turn.
+      if (!admission.terminal) this.runningEntries.set(key, { entry, turnId: result.turnId });
       this.rememberAdmittedEntry({
         entryId: entry.id,
         turnId: result.turnId,
       });
       await this.emit({ type: "started", entry, turnId: result.turnId });
+      const completedAdmission = this.admissions.get(key);
+      const terminal = completedAdmission?.phase === "acknowledged" && completedAdmission.attempt === attempt
+        ? completedAdmission.terminal : undefined;
+      if (terminal) {
+        if (admission.terminal) {
+          this.rememberTerminal(key, terminal.turnId);
+          await this.emit({ type: "terminal", entry, turnId: terminal.turnId, status: terminal.status });
+          if (terminal.status === "turn/failed") {
+            await this.holdAfterTurnFailure(key, terminal.errorMessage);
+          }
+        } else {
+          await this.settleRelease(key, { backend: entry.backend, threadId: entry.threadId, ...terminal });
+        }
+      }
       return result;
     } catch (error) {
       this.recentlyAdmittedEntries.delete(entry.id);
       const normalized = error instanceof Error ? error : new Error(String(error));
       if (!options?.deferFailureEvent) {
+        // A rejected direct admission has no acknowledgement to match. Keep
+        // its terminal failure holds; startNext owns holds for queued starts.
+        const admission = this.admissions.get(key);
+        if (admission && admission.phase !== "idle" && admission.attempt === attempt) {
+          for (const terminal of admission.terminals.values()) {
+            if (terminal.status === "turn/failed") {
+              this.rememberTerminal(key, terminal.turnId);
+              await this.holdAfterTurnFailure(key, terminal.errorMessage);
+            }
+          }
+        }
         await this.emit({ type: "failed", entry, error: normalized });
       }
       throw normalized;
     } finally {
-      this.startingKeys.delete(key);
+      this.applyAdmission(key, { type: "settle", attempt });
       this.scheduleDrain(key);
     }
+  }
+
+  private applyAdmission(key: string, event: QueueAdmissionEvent): QueueAdmission {
+    const next = transitionQueueAdmission(this.admissions.get(key) ?? { phase: "idle" }, event);
+    if (next.phase === "idle") this.admissions.delete(key);
+    else this.admissions.set(key, next);
+    return next;
   }
 
   private queueFor(key: string): ThreadTurnQueueEntry[] {
@@ -1017,13 +1286,37 @@ export class ThreadTurnQueue {
     return undefined;
   }
 
-  private async holdQueue(key: string, reason: string): Promise<void> {
+  private async holdAfterTurnFailure(
+    key: string,
+    errorMessage?: string,
+  ): Promise<void> {
+    const reason = errorMessage
+      ?? "The previous turn failed. Review the error before retrying queued messages.";
+    // An immediate start's release may already have applied this hold.
+    if (this.holdReasonFor(key) === reason
+      && this.queueFor(key).every((entry) =>
+        entry.manualReleaseRequired && entry.holdReason === reason)) return;
+    await this.holdQueue(key, reason);
+  }
+
+  /**
+   * Holds the whole FIFO for `reason`. A failed or refused start holds every
+   * entry for review, whatever else held it. With `keepHeld`, an entry that
+   * is already held keeps its reason, so a lock's own hold still releases on
+   * unlock and a failure's still waits for Retry.
+   */
+  private async holdQueue(
+    key: string,
+    reason: string,
+    options: { keepHeld?: boolean } = {},
+  ): Promise<void> {
     const queue = this.queuedEntries.get(key);
     if (!queue?.length) return;
-    this.heldQueues.set(key, reason);
+    this.addHoldReason(key, reason);
     for (let index = 0; index < queue.length; index += 1) {
       const current = queue[index];
       if (!current) continue;
+      if (options.keepHeld && current.manualReleaseRequired) continue;
       const held = {
         ...current,
         manualReleaseRequired: true,
@@ -1056,8 +1349,45 @@ export class ThreadTurnQueue {
   }
 
   private lastHoldError(key: string): Error | undefined {
-    const reason = this.heldQueues.get(key);
+    const reason = this.holdReasonFor(key);
     return reason ? new Error(reason) : undefined;
+  }
+
+  /** The newest reason a FIFO is held for: what an entry joining it waits on. */
+  private holdReasonFor(key: string): string | undefined {
+    return this.heldQueues.get(key)?.reasons.at(-1);
+  }
+
+  private addHoldReason(key: string, reason: string): void {
+    const reasons = (this.heldQueues.get(key)?.reasons ?? []).filter((current) => current !== reason);
+    this.holdRevision += 1;
+    this.heldQueues.set(key, { reasons: [...reasons, reason], revision: this.holdRevision });
+  }
+
+  /**
+   * Ends a FIFO's hold once no entry in it is held: after an unlock released
+   * the front, the held ones behind can start, finish or be cancelled.
+   */
+  private dropSpentHold(key: string): void {
+    if (!this.heldQueues.has(key)) return;
+    const queue = this.queuedEntries.get(key) ?? [];
+    if (!queue.some((entry) => entry.manualReleaseRequired)) this.heldQueues.delete(key);
+  }
+
+  /** Holds an entry joining a held FIFO, keeping a reason it already has. */
+  private heldByQueue(key: string, entry: ThreadTurnQueueEntry): ThreadTurnQueueEntry {
+    const reason = this.holdReasonFor(key);
+    if (!reason) return entry;
+    return { ...entry, manualReleaseRequired: true, holdReason: entry.holdReason ?? reason };
+  }
+
+  private rememberTerminal(key: string, turnId: string): void {
+    this.recentlyProcessedTerminals.add(JSON.stringify([key, turnId]));
+    while (this.recentlyProcessedTerminals.size > RECENT_TERMINAL_TURN_LIMIT) {
+      const oldest = this.recentlyProcessedTerminals.values().next().value;
+      if (oldest === undefined) break;
+      this.recentlyProcessedTerminals.delete(oldest);
+    }
   }
 
   private rememberAdmittedEntry(entry: AdmittedEntry): void {

@@ -3,6 +3,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
+  ElicitResultSchema,
   GetPromptRequestSchema,
   ListPromptsRequestSchema,
   ListResourceTemplatesRequestSchema,
@@ -16,9 +17,15 @@ import {
   type Notification,
   type ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
-import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS } from "./mcp-connection-timeouts.js";
+import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts.js";
 import { McpInitializationTransport } from "./mcp-initialization-transport.js";
-import { ConnectionRpcClient, type McpBridgeEvent } from "./mcp-connection-rpc-client.js";
+import { ConnectionRpcClient, type McpBridgeEvent, type McpBridgeProgress } from "./mcp-connection-rpc-client.js";
+import {
+  clientSupportsFormElicitation,
+  clientSupportsUrlElicitation,
+  elicitationUnavailable,
+  type ElicitationRoute,
+} from "./mcp-elicitation-relay.js";
 
 type BridgeDescription = {
   name?: string;
@@ -45,6 +52,16 @@ async function main(): Promise<void> {
     logStderr("missing bridge socket or token; refusing to start");
     process.exit(1);
   }
+  // A bridge lives exactly as long as its MCP client. The stdio transport
+  // does not end the process when the client closes stdin, and an open
+  // request socket to the app would keep Node running, so a bridge whose
+  // client is gone exits here instead of holding its pipes indefinitely.
+  const exitWhenClientCloses = (): void => {
+    logStderr("MCP client closed stdin; exiting");
+    process.exit(0);
+  };
+  process.stdin.once("end", exitWhenClientCloses);
+  process.stdin.once("close", exitWhenClientCloses);
   const rpc = new ConnectionRpcClient(socketPath, token);
   // Before anything can start a server for this grant, so no window exists
   // in which a local command runs with no live bridge to own it.
@@ -57,6 +74,9 @@ async function main(): Promise<void> {
       closed = true;
       logStderr("upstream ended; start the desktop yourself and reconnect MCP. Rediscover tools and reread skills/resources. Never replay writes or approvals.");
       void server?.close();
+    } else if (event.method === "notifications/elicitation/complete"
+      && !(server && initialized && clientSupportsUrlElicitation(server.getClientCapabilities()))) {
+      // Only a host that declared links can know the id this names.
     } else if (server && initialized) {
       void server.notification(event as Notification).catch((error: unknown) => logStderr("notification failed", String(error)));
     } else if (pending.length < 128) pending.push(event);
@@ -107,9 +127,42 @@ async function main(): Promise<void> {
       }
       return result as never;
     });
-    server.setRequestHandler(CallToolRequestSchema, async (request, extra) =>
-      await rpc.request("tools/call", request.params, extra.signal) as never,
-    );
+    server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+      // The upstream server's form or link goes to the agent's own MCP
+      // client, tied to this call, exactly as the server sent it. A client
+      // that never declared the mode is not asked; the owner then refuses it.
+      const hostCapabilities = server.getClientCapabilities();
+      const forms = clientSupportsFormElicitation(hostCapabilities);
+      const links = clientSupportsUrlElicitation(hostCapabilities);
+      const onElicit: ElicitationRoute | undefined = forms || links
+        ? async (params, signal) => {
+          if (params.mode === "url" ? !links : !forms) {
+            throw elicitationUnavailable("The agent's MCP client cannot show this kind of MCP request.");
+          }
+          return await extra.sendRequest(
+            { method: "elicitation/create", params },
+            ElicitResultSchema,
+            // A person is answering; wait as long as the call itself may run.
+            { signal, timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS },
+          );
+        }
+        : undefined;
+      // The owner always asks the server for progress, which keeps a long
+      // call alive. Reports reach the agent only under the token it sent,
+      // tied to this call.
+      const progressToken = request.params._meta?.progressToken;
+      const onProgress = (progress: McpBridgeProgress): void => {
+        if (progressToken === undefined) return;
+        void extra.sendNotification({
+          method: "notifications/progress",
+          params: { ...progress, progressToken },
+        }).catch((error: unknown) => logStderr("progress notification failed", String(error)));
+      };
+      return await rpc.request(
+        "tools/call", request.params, extra.signal, undefined, undefined, undefined, onElicit, onProgress,
+        { urlElicitation: links },
+      ) as never;
+    });
   }
   if (description.resources) {
     server.setRequestHandler(ListResourcesRequestSchema, async (request, extra) =>

@@ -1,4 +1,3 @@
-import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -243,6 +242,8 @@ class MockTransport implements JsonRpcTransport {
   readonly options?: unknown;
   closeCount = 0;
   connectCount = 0;
+  processInfo: { pid: number; startedAt: number } | undefined = { pid: 4242, startedAt: 0 };
+  stopReport: { descendants: number; orphansReaped: number } | undefined;
   readonly loadedThreads = new Set<string>();
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
@@ -264,6 +265,16 @@ class MockTransport implements JsonRpcTransport {
     this.closeCount += 1;
     this.loadedThreads.clear();
     this.closeHandler();
+  }
+
+  getProcessInfo(): { pid: number; startedAt: number } | undefined {
+    return this.processInfo;
+  }
+
+  takeLastStopReport(): { descendants: number; orphansReaped: number } | undefined {
+    const report = this.stopReport;
+    this.stopReport = undefined;
+    return report;
   }
 
   /** What the stdio transport does when the process ends without close(). */
@@ -1296,6 +1307,8 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/unsubscribe") {
+      // Codex unloads an idle thread once its last subscriber leaves.
+      this.loadedThreads.delete(String(payload.params?.threadId));
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1502,7 +1515,7 @@ describe("CodexAppServerClient", () => {
     { version: "0.163.0", parentTurnId: "parent", rootTurnId: "root", expected: {} },
     { version: "unknown", parentTurnId: "parent", rootTurnId: "root", expected: {} },
   ])("serializes delegation attribution for $version: $expected", async ({ version, parentTurnId, rootTurnId, expected }) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.serverVersion = version;
     const client = new CodexAppServerClient({ command: "codex" });
     try {
@@ -1515,7 +1528,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each(["root", null, undefined])("reads the exact parent root from metadata pages: %s", async (rootTurnId) => {
-    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
     MockTransport.threadTurnsListResultByRequest.set("source:", {
       data: [{ id: "unrelated", rootTurnId: "wrong-root" }], nextCursor: "older",
     });
@@ -1537,7 +1550,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps exact ancestry from live turns without a history lookup", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     try {
       await client.getInitializeResult();
@@ -1556,7 +1569,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not read ancestry from older servers", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.serverVersion = "0.163.0";
     const client = new CodexAppServerClient({ command: "codex" });
     try {
@@ -1567,7 +1580,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([false, true])("applies the compaction model before compacting (already loaded: %s)", async (alreadyLoaded) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();
     try {
       if (alreadyLoaded) {
@@ -1594,7 +1607,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("reverts a thread to before a turn after rejoining it", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();
     try {
       await client.revertThread({ threadId: "thread-2", beforeTurnId: "turn-7" });
@@ -1610,7 +1623,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("refuses to revert on Codex releases without thread/revert", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.serverVersion = "0.144.0";
     const client = new CodexAppServerClient();
     try {
@@ -1626,7 +1639,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("carries partial-answer phases from item start to phase-less deltas until turn completion", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();
     const notifications: AppServerNotification[] = [];
     client.onNotification((notification) => { notifications.push(notification); });
@@ -1668,7 +1681,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("reports a Codex thread/reverted as a provider-neutral rewind", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();
     const notifications: AppServerNotification[] = [];
     client.onNotification((notification) => { notifications.push(notification); });
@@ -1688,7 +1701,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each(["resume", "settings"])("does not compact with stale settings when %s fails", async (failure) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();
     if (failure === "resume") MockTransport.threadResumeError = { message: "model resume rejected" };
     else MockTransport.threadSettingsUpdateError = "model settings rejected";
@@ -1703,7 +1716,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("lists and terminates background terminals through Codex session handles", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();
     MockTransport.backgroundTerminalPages.set("", {
       data: [{ itemId: "command-1", processId: "session-27", command: "pnpm dev", cwd: "/fixture/project",
@@ -1731,7 +1744,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("reports unsupported terminal listing without hiding other protocol errors", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();
     MockTransport.backgroundTerminalError = { code: -32601, message: "Method not found" };
     expect(await client.listBackgroundTerminals("thread-1")).toEqual({ supported: false, terminals: [] });
@@ -1745,7 +1758,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("reads a worker's model settings without its turns", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       MockTransport.readThreadResultByThreadId.set("worker-settings", {
@@ -1770,7 +1783,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("exports handoff bytes through the protocol-provided path without opening private storage", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     MockTransport.readThreadResultByThreadId.set("handoff-source", {
       thread: { id: "handoff-source", path: "/private/codex/history.jsonl", cwd: "/fixture/workspace", name: "Source title", status: { type: "idle" }, turns: [] },
@@ -1783,7 +1796,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("rejects handoff of an active provider thread before reading its file", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     MockTransport.readThreadResultByThreadId.set("handoff-active", {
       thread: { id: "handoff-active", path: "/private/codex/history.jsonl", status: { type: "active", activeFlags: [] }, turns: [] },
@@ -1795,7 +1808,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("forwards Auto through create, resume, fork, turn start, and live updates", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.serverVersion = "0.153.4";
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     const permissions = { approvalPolicy: "on-request", sandbox: "workspace-write", approvalsReviewer: "auto_review" as const };
@@ -1813,7 +1826,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("selects Auto before a new thread has a rollout", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     const thread = await client.startThread({ approvalsReviewer: "user", approvalPolicy: "on-request", sandbox: "workspace-write" });
     MockTransport.threadResumeError = { code: -32000, message: "No rollout yet" };
@@ -1827,7 +1840,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("rejects Auto on older servers instead of stripping the reviewer", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.serverVersion = "0.152.0";
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     await expect(client.startThread({ approvalsReviewer: "auto_review", approvalPolicy: "on-request", sandbox: "workspace-write" })).rejects.toThrow("0.153.0");
@@ -1839,14 +1852,14 @@ describe("CodexAppServerClient", () => {
     { approvalPolicy: "never", sandbox: "workspace-write" },
     { approvalPolicy: "on-request", sandbox: "danger-full-access" },
   ])("rejects Auto with incompatible overrides: %j", async (permissions) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     await expect(client.startThread({ ...permissions, approvalsReviewer: "auto_review" })).rejects.toThrow("requires on-request");
     await client.close();
   });
 
   it("fails the turns an app server was running when it exits on its own", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();
     const notifications: AppServerNotification[] = [];
     client.onNotification((notification) => { notifications.push(notification); });
@@ -1887,7 +1900,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("restarts the app server after an unexpected exit once the backoff passes", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
     const unexpectedExit = vi.fn();
     const stopWatchingUnexpectedExit = client.onAppServerUnexpectedExit(unexpectedExit);
@@ -1940,7 +1953,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("resumes the thread on a restarted app server before starting a turn", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.requireLoadedThreads = true;
     const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
     const turn = { threadId: "thread-2", input: [{ type: "text" as const, text: "Continue" }] };
@@ -1966,7 +1979,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("stops restarting a crash-looping app server until the operator asks", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
     const statuses: unknown[] = [];
     client.onAppServerRestartStatusChanged((status) => { statuses.push(status); });
@@ -2018,7 +2031,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("clears an open breaker for a new Codex version without starting it", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       appServerRestartPolicy: { random: () => 0, breakerExitCount: 1 },
     });
@@ -2041,7 +2054,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("starts a waiting restart at once when the operator asks", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
     await client.readRateLimits();
     const transport = MockTransport.instances.at(-1)!;
@@ -2060,7 +2073,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("gives up a pending restart when the client is closed", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
     await client.readRateLimits();
     const transport = MockTransport.instances.at(-1)!;
@@ -2081,7 +2094,7 @@ describe("CodexAppServerClient", () => {
 
   it("fails active turns and blocks probes until the rejected profile is verified", async () => {
     const { codexAuthState } = await import("../codex-auth-state");
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const home = "/fixture/client-auth";
     const client = new CodexAppServerClient();
     const notifications: AppServerNotification[] = [];
@@ -2224,7 +2237,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("retains the provider workspace ID independently of email and rate limits", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.accountResult = {
       account: { type: "chatgpt", email: null, planType: "team" },
       workspaceRouting: { chatgptAccountId: "fixture-workspace", backendOrigin: "https://example.test" },
@@ -2246,7 +2259,7 @@ describe("CodexAppServerClient", () => {
       `shell_environment_policy.set.PATH=${JSON.stringify(env.PATH)}`,
     ]);
 
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     new CodexAppServerClient({
       args: [
         "-c",
@@ -2276,7 +2289,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("negotiates the exact managed Token Miser initialize capability", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const nonce = "A".repeat(43);
     const client = new CodexAppServerClient({
       clientVersion: "1.2.3",
@@ -2306,7 +2319,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("retains Token Miser negotiation until close without re-reading its setting", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     let enabled = true;
     const resolveNonce = vi.fn(() => enabled ? "A".repeat(43) : undefined);
     const client = new CodexAppServerClient({
@@ -2384,7 +2397,7 @@ describe("CodexAppServerClient", () => {
         reducerRequestField: "parent_intent",
       },
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.readServerCapabilities()).resolves.toEqual({
@@ -2561,7 +2574,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("reads only effective MCP server names for connection setup", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const observedMessages: string[] = [];
     const client = new CodexAppServerClient({
       command: "codex",
@@ -2597,7 +2610,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("initializes once and normalizes thread/list results", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -2681,7 +2694,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("can list cheap thread summaries without directory enrichment", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadDirectoryEnricher = vi.fn(async () => ({
       linkedDirectories: [
         {
@@ -2730,7 +2743,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps a bounded startup list on the summary protocol surface", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -2827,7 +2840,7 @@ describe("CodexAppServerClient", () => {
         cwd: "/repo/app",
       },
     ]);
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -2889,7 +2902,7 @@ describe("CodexAppServerClient", () => {
   it("fails closed on incomplete descendant discovery for archive housekeeping", async () => {
     MockTransport.threadListNextCursor = "repeated-native-cursor";
     MockTransport.threadListResultBySearchTerm.set("incomplete-archive", []);
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       await expect(client.listNativeSubAgentThreads({ all: true, filter: "incomplete-archive" })).rejects.toThrow("archive eligibility is incomplete");
@@ -2921,7 +2934,7 @@ describe("CodexAppServerClient", () => {
         path: "/Users/fixture-user/.codex/sessions/never-read-pwragent.jsonl",
       },
     ]);
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => ({
       linkedDirectories: projectKey
         ? [
@@ -2969,7 +2982,7 @@ describe("CodexAppServerClient", () => {
         cwd: "/Users/fixture-user/github/PwrAgent",
       },
     ]);
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -3028,7 +3041,7 @@ describe("CodexAppServerClient", () => {
         source: "vscode",
       },
     ]);
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => ({
       linkedDirectories: projectKey
         ? [
@@ -3065,7 +3078,7 @@ describe("CodexAppServerClient", () => {
   ])("reuses unchanged text for %i fresh provider rows with preview multiplier %i while updating metadata", async (count, previewMultiplier) => {
     const shared = await import("@pwragent/shared");
     const normalize = vi.spyOn(shared, "shortenDerivedThreadTitle");
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const rows = Array.from({ length: count }, (_, index) => ({
       id: `text-${index}`, name: `Title ${index}`, preview: `Please investigate fixture ${index}`.repeat(previewMultiplier),
       summary: `Summary ${index}`, source: "vscode", updatedAt: 100,
@@ -3097,7 +3110,10 @@ describe("CodexAppServerClient", () => {
   });
 
   it("shares provider scans and enrichment across concurrent listing consumers", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    // Other fixtures reset the module registry. Observe the same singleton
+    // generation as this client rather than retaining the file's first import.
+    const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
     const diagnosticStart = listingDiagnostics.snapshot().recorded;
     MockTransport.threadListResultBySearchTerm.set("shared-list", Array.from(
       { length: 500 }, (_, index) => ({
@@ -3113,20 +3129,27 @@ describe("CodexAppServerClient", () => {
     const countLists = () => MockTransport.instances.at(-1)!.sentMessages
       .map((message) => JSON.parse(message)).filter((message) => message.method === "thread/list").length;
     try {
-      const reads = Array.from({ length: 8 }, (_, index) => client.listThreads(params, {
-        callerReason: `consumer-${index}`,
-      }));
+      let listingScopeId!: number;
+      const reads = listingDiagnostics.trace("workflow", {}, () => {
+        // trace records the scope synchronously before invoking its operation.
+        listingScopeId = listingDiagnostics.snapshot().events.at(-1)!.id;
+        return Promise.all(Array.from({ length: 8 }, (_, index) => client.listThreads(params, {
+          callerReason: `consumer-${index}`,
+        })));
+      });
       await vi.waitFor(() => expect(enrich).toHaveBeenCalled());
       expect(countLists()).toBe(1);
       release();
-      const results = await Promise.all(reads);
+      const results = await reads;
       expect(results.every((rows) => rows.length === 500)).toBe(true);
       expect(enrich).toHaveBeenCalledTimes(25);
       const snapshot = listingDiagnostics.snapshot();
       const captured = snapshot.events.slice(-(snapshot.recorded - diagnosticStart));
-      const physical = captured.find((event) => event.stage === "provider" && event.phase === "start")!;
       // Earlier fixtures can still settle background archive work. Select the
-      // causal tree, not all events sharing this wall-clock interval.
+      // provider owned by these consumers, not the first scan in this interval.
+      const physical = captured.find((event) => event.stage === "provider" && event.phase === "start"
+        && event.parentId === listingScopeId)!;
+      expect(physical).toBeDefined();
       const rpcIds = new Set(captured.filter((event) => event.parentId === physical.id).map((event) => event.id));
       const events = captured.filter((event) => event.id === physical.id || event.targetId === physical.id || rpcIds.has(event.id));
       expect(events.filter((event) => event.stage === "provider" && event.phase === "coalesced")).toHaveLength(7);
@@ -3147,7 +3170,7 @@ describe("CodexAppServerClient", () => {
 
   it("budgets registry listing overlay rows, history parses and targeted metadata RPCs", async () => {
     const budget = navigationListingBudgets["codex-registry-listing-projection"];
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
     const { openInMemoryStateDb } = await import("./sqlite-test-utils");
     const db = openInMemoryStateDb();
@@ -3228,7 +3251,7 @@ describe("CodexAppServerClient", () => {
 
   it("budgets physical pages across a create, pin, name and turn burst with mixed enrichment", async () => {
     const budget = navigationListingBudgets["codex-create-pin-name-turn-burst"];
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true, maxPages: 1 });
     MockTransport.threadListResultBySearchTerm.set("burst-budget", Array.from({ length: 200 }, (_, index) => ({
@@ -3289,7 +3312,7 @@ describe("CodexAppServerClient", () => {
     ["thread/archived", 2], ["thread/unarchived", 2], ["thread/name/updated", 2],
   ] as const)(
     "budgets archived scans across %s at %i generations", async (method, generations) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       MockTransport.threadListResultBySearchTerm.set("archive-generation-budget", []);
 
       const client = new CodexAppServerClient({ command: "codex" });
@@ -3336,7 +3359,7 @@ describe("CodexAppServerClient", () => {
   );
 
   it("schedules one archived metadata page sequence for concurrent active listings", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const budget = navigationListingBudgets["archived-metadata-per-filter"];
     MockTransport.threadListResultBySearchTerm.set("archive-schedule", [{
       id: "active-thread", name: "Active", source: "vscode",
@@ -3388,7 +3411,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("starts a new listing after a row event without losing the newer pending owner", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadListResultBySearchTerm.set("changed-list", [{
       id: "changed-thread", name: "Thread", source: "vscode", cwd: "/repo/changed",
     }]);
@@ -3426,7 +3449,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("validates each directory once per listing even across mapper batches", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadDirectoryEnricher = vi.fn(async () => ({ linkedDirectories: [] }));
     const client = new CodexAppServerClient({ command: "codex", threadDirectoryEnricher });
     const threads: AppServerThreadSummary[] = Array.from(
@@ -3457,7 +3480,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves thread order while enriching directories concurrently", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => {
       if (projectKey?.includes("slow")) {
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -3509,7 +3532,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("contains a directory enrichment failure to the affected thread", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const managedWorktree = "/Users/example/.codex/worktrees/tree-zeta/catalog-service";
     const localDirectory = "/Users/vitaliy/projects/healthy";
     const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => {
@@ -3586,7 +3609,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps cheap thread summaries from rendering managed worktrees as local", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadDirectoryEnricher = vi.fn(async () => ({
       linkedDirectories: [],
     }));
@@ -3622,7 +3645,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("derives a title from preview when Codex returns the placeholder name", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -3643,7 +3666,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("treats Codex prompt titles as derived placeholders", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -3740,7 +3763,7 @@ describe("CodexAppServerClient", () => {
       ],
     };
 
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -3838,7 +3861,7 @@ describe("CodexAppServerClient", () => {
       }),
       createCodexModel({ id: "hidden-local-model", hidden: true }),
     ]);
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.listModels()).resolves.toEqual([{
@@ -3867,7 +3890,7 @@ describe("CodexAppServerClient", () => {
       },
       { id: "hidden-model", hidden: true },
     ] };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.listModels()).resolves.toEqual([expect.objectContaining({
@@ -3892,7 +3915,7 @@ describe("CodexAppServerClient", () => {
       ],
     };
 
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     const models = await client.listModels();
@@ -3913,13 +3936,14 @@ describe("CodexAppServerClient", () => {
       MockTransport.modelListResult = createModelListResponse([
         createCodexModel({ id: "gpt-6-astra" }),
       ]);
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex" });
       expect((await client.listModels()).map((model) => model.id)).toEqual(["gpt-6-astra"]);
 
       MockTransport.modelListResult = createModelListResponse([
         createCodexModel({ id: "future-model", isDefault: true }),
         createCodexModel({ id: "gpt-6-luna", additionalSpeedTiers: ["fast"] }),
+        createCodexModel({ id: "gpt-6.1-terra", additionalSpeedTiers: ["fast"] }),
         createCodexModel({ id: "hidden-model", hidden: true }),
         createCodexModel({ id: "gpt-6-sol", additionalSpeedTiers: ["fast"] }),
         createCodexModel({ id: "gpt-6.1-sol", additionalSpeedTiers: ["fast"] }),
@@ -3927,13 +3951,16 @@ describe("CodexAppServerClient", () => {
       ]);
       const refreshed = await client.listModels();
       expect(refreshed.map((model) => model.id)).toEqual([
-        "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "future-model",
+        "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6.1-terra", "gpt-6-luna", "future-model",
       ]);
       expect(refreshed.find((model) => model.id === "gpt-6.1-sol")).toMatchObject({
         label: "GPT-6.1-Sol", supportsFast: true,
       });
       expect(refreshed.find((model) => model.id === "gpt-6-sol")).toMatchObject({
         label: "GPT-6-Sol", supportsFast: true,
+      });
+      expect(refreshed.find((model) => model.id === "gpt-6.1-terra")).toMatchObject({
+        label: "GPT-6.1-Terra", supportsFast: true,
       });
       expect(refreshed.find((model) => model.id === "gpt-6-luna")).toMatchObject({
         label: "GPT-6-Luna", supportsFast: true,
@@ -3951,7 +3978,7 @@ describe("CodexAppServerClient", () => {
       }),
       createCodexModel({ id: "gpt-5.6-sol", serviceTiers: [] }),
     ]);
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     const models = await client.listModels();
     expect(models.find((model) => model.id === "gpt-6-astra")).toMatchObject({
@@ -4019,7 +4046,7 @@ describe("CodexAppServerClient", () => {
       createCodexModel({ id: "gpt-5.2" }),
     ]);
 
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     const models = await client.listModels();
@@ -4051,7 +4078,7 @@ describe("CodexAppServerClient", () => {
       nextCursor: null,
     };
 
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.listModels()).rejects.toThrow(
@@ -4072,7 +4099,7 @@ describe("CodexAppServerClient", () => {
       ],
     };
 
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.listModels()).resolves.toEqual([
@@ -4103,7 +4130,7 @@ describe("CodexAppServerClient", () => {
         },
       },
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -4139,7 +4166,7 @@ describe("CodexAppServerClient", () => {
         },
       },
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.readRateLimits()).resolves.toEqual([
@@ -4185,7 +4212,7 @@ describe("CodexAppServerClient", () => {
         ],
       },
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.readRateLimits()).resolves.toEqual([
@@ -4221,7 +4248,7 @@ describe("CodexAppServerClient", () => {
       summary: { lifetimeTokens: 1234 },
       dailyUsageBuckets: [{ startDate: "2026-08-01", tokens: 1234 }],
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.readAccountUsage()).resolves.toEqual(
@@ -4237,7 +4264,7 @@ describe("CodexAppServerClient", () => {
       { model: "gpt-6-astra", inputTokens: 1_000, cachedInputTokens: 800, netNewInputTokens: 200, outputTokens: 100, totalTokens: 1_100 },
       { model: "gpt-6.1-sol", inputTokens: 500, cachedInputTokens: 100, netNewInputTokens: 400, outputTokens: 50, totalTokens: 550 },
     ] } };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     const observer = vi.fn();
     client.onNotification(observer);
@@ -4262,7 +4289,7 @@ describe("CodexAppServerClient", () => {
     "keeps unavailable or unrelated historical totals unknown: %j", async (threadUsage) => {
       MockTransport.readThreadResultByThreadId.set("external-thread", { thread: { id: "external-thread", model: "gpt-6.1-sol" } });
       MockTransport.accountUsageResult = { summary: { lifetimeTokens: 999_999 }, threadUsage };
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex" });
       try {
         expect(await client.readThreadPricingSnapshot("external-thread")).toEqual({ model: "gpt-6.1-sol" });
@@ -4278,7 +4305,7 @@ describe("CodexAppServerClient", () => {
       { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: Number.MAX_SAFE_INTEGER },
       { inputTokens: 0, cachedInputTokens: null, outputTokens: -1, totalTokens: 1 },
     ] } };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     try {
       expect(await client.readThreadPricingSnapshot("history")).toEqual({ model: undefined, pricingSource: "provider", tokens: {
@@ -4290,7 +4317,7 @@ describe("CodexAppServerClient", () => {
   it("does not resume as a fallback when the read-only usage API is unsupported", async () => {
     MockTransport.readThreadResultByThreadId.set("history", { thread: { id: "history", model: "gpt-6.1-sol" } });
     MockTransport.accountUsageError = { code: -32601, message: "Method not found" };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     try {
       expect(await client.readThreadPricingSnapshot("history")).toEqual({ model: "gpt-6.1-sol" });
@@ -4303,7 +4330,7 @@ describe("CodexAppServerClient", () => {
     const total = { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
     const last = { inputTokens: 100, cachedInputTokens: 80, outputTokens: 10, totalTokens: 110 };
     MockTransport.readThreadResultByThreadId.set("owned", { thread: { id: "owned", model: "gpt-6.1-sol", turns: [] } });
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     try {
       await client.getInitializeResult();
@@ -4321,7 +4348,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses query payloads when filtering the codex thread list", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -4400,7 +4427,7 @@ describe("CodexAppServerClient", () => {
     ];
     MockTransport.codexHome = codexHome;
 
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -4483,7 +4510,7 @@ describe("CodexAppServerClient", () => {
     const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
     async function fixture(options: ConstructorParameters<
-      typeof import("../codex-app-server/client").CodexAppServerClient
+      typeof import("../codex-app-server/desktop-client").CodexAppServerClient
     >[0] = {}) {
       MockTransport.requireLoadedThreads = true;
       const recovery = await import("../codex-app-server/invalid-response-message-id-recovery");
@@ -4494,7 +4521,7 @@ describe("CodexAppServerClient", () => {
         path: repaired.rolloutPath,
         updatedAt: 1_775_000_000,
       }];
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({
         command: "codex",
         directoryResolver: async () => [],
@@ -5035,7 +5062,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("stops owner search pagination at its absolute deadline", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const send = MockTransport.prototype.send;
@@ -5057,7 +5084,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("follows thread/list pagination for archived codex threads", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5128,7 +5155,7 @@ describe("CodexAppServerClient", () => {
     }));
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
       const client = new CodexAppServerClient({
         command: "codex"
@@ -5197,7 +5224,7 @@ describe("CodexAppServerClient", () => {
     }));
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
       const client = new CodexAppServerClient({
         command: "codex"
@@ -5223,7 +5250,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not synthesize summaries from raw conversation text", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5239,7 +5266,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("requests updated-at sorted interactive threads so stale created-order entries do not leak into the first page", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5275,7 +5302,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses state-db thread metadata instead of JSONL mtime repair for navigation timestamps", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5313,7 +5340,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("matches Codex Desktop catalog-portal parity for stale roots and deleted worktrees", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5383,7 +5410,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("hydrates archived thread metadata after the initial active-thread load", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5433,7 +5460,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps protocol branch metadata separate from the locally observed branch", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5466,7 +5493,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps the protocol branch when the observed branch drifts after branch creation", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5499,7 +5526,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps the protocol branch when a workspace is detached at HEAD", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5536,7 +5563,7 @@ describe("CodexAppServerClient", () => {
   it.each(["final", "tool", "legacy"] as const)(
     "preserves replay partial answers before %s output without assigning a terminal timestamp",
     async (following) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const nextItem = following === "tool"
         ? { id: "tool", type: "commandExecution", command: "pwd", status: "inProgress" }
         : { id: "next", type: "agentMessage", text: "Next result.",
@@ -5576,7 +5603,7 @@ describe("CodexAppServerClient", () => {
   );
 
   it("extracts transcript messages and pagination metadata from thread/read", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -5713,7 +5740,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves Codex async question choices in thread replay", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-async-question", {
       thread: {
         turns: [{
@@ -5760,7 +5787,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("inherits envelope timestamps for nested thread/read messages", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-envelope-messages", {
       events: [
         {
@@ -5826,7 +5853,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each(["inProgress", "completed"])("does not stamp a long %s turn's commentary and work with its start time", async (status) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-long-turn", {
       thread: {
         turns: [{
@@ -5860,7 +5887,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps individual replay item times for commentary, work, and plans", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-item-times", {
       thread: {
         turns: [{
@@ -5887,7 +5914,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses turn completion time for final assistant entries without item timestamps", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-final-completed-at", {
       thread: {
         turns: [
@@ -5939,7 +5966,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not let an older same-text assistant message hide a newer turn reply", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-repeated-assistant-text", {
       events: [
         {
@@ -6007,7 +6034,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("counts added, removed, and updated FileChange variants from thread/read", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-file-change-counts", {
       thread: {
         id: "thread-file-change-counts",
@@ -6218,7 +6245,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves add and delete patches that start with unified diff metadata", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-metadata-patches", {
       thread: {
         id: "thread-metadata-patches",
@@ -6339,7 +6366,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("omits giant raw file-change payloads from inline transcript diffs", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const rawJsonl = [
       '{"backend":"codex","captureId":"large","method":"initialize"}',
       '{"backend":"codex","captureId":"large","method":"thread/read"}',
@@ -6410,7 +6437,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("extracts thread status from thread/read", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-idle-status", {
       thread: {
         id: "thread-idle-status",
@@ -6436,7 +6463,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves protocol thread/read activity groups at their captured item positions", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-captured-order", {
       thread: {
         turns: [
@@ -6539,7 +6566,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("labels historical Codex searches by query instead of root path", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-search-label", {
       thread: {
         turns: [
@@ -6588,7 +6615,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("hydrates paginated Codex transcripts through turn and item list requests", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     MockTransport.readThreadResultByThreadId.set("thread-paginated", {
       thread: {
@@ -6744,7 +6771,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("loads one activity from wrapped item pages without reading base history", async () => {
-    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
     const threadId = "activity-thread";
     const turnId = "activity-turn";
     const items = [
@@ -6774,7 +6801,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([3, 100])("reads an exact %i-command group in canonical order with experimental opt-in", async (count) => {
-    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
     const threadId = "bounded-thread";
     const turnId = "bounded-turn";
     const ids = Array.from({ length: count }, (_, index) => `command-${index}`);
@@ -6804,7 +6831,7 @@ describe("CodexAppServerClient", () => {
 
   it.each(["unavailable", "missing", "wrong-turn", "duplicate", "unexpected-item", "non-command", "malformed"])(
     "falls back to complete turn items for %s bounded responses", async (scenario) => {
-      const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+      const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
       const threadId = "fallback-thread";
       const turnId = "fallback-turn";
       const items = ["one", "two"].map((id) => ({ id, type: "commandExecution", command: id,
@@ -6840,7 +6867,7 @@ describe("CodexAppServerClient", () => {
     { name: "over 100", ids: Array.from({ length: 101 }, (_, index) => `item-${index}`) },
   ])(
     "uses turn pagination for $name item IDs", async ({ ids }) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       MockTransport.threadItemsListResultByRequest.set("limit-thread:limit-turn:", {
         data: [{ turnId: "limit-turn", item: { id: "one", type: "commandExecution", command: "one", status: "completed" } }],
         nextCursor: null, backwardsCursor: null,
@@ -6856,7 +6883,7 @@ describe("CodexAppServerClient", () => {
   );
 
   it.each([10, 100, 1000])("measures command expansion response bytes in a synthetic %i-item turn", async (count) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadId = "synthetic-thread";
     const turnId = "synthetic-turn";
     const data = Array.from({ length: count }, (_, index) => ({ turnId,
@@ -6894,7 +6921,7 @@ describe("CodexAppServerClient", () => {
 
   it.each(["exact", "unavailable", "missing", "wrong-turn", "wrong-item", "non-command", "malformed", "duplicate", "legacy"])(
     "isolates a middle invocation from its undiscovered command group (%s)", async (scenario) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const threadId = "unloaded-thread";
       const turnId = "unloaded-turn";
       const items = ["before", "target", "after"].map((id) => ({ id, type: "commandExecution", command: id,
@@ -6937,7 +6964,7 @@ describe("CodexAppServerClient", () => {
   );
 
   it("surfaces invocation read errors without hiding them behind history reads", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadItemsReadError = { code: -32000, message: "Owner read failed" };
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
@@ -6947,7 +6974,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([20, 200, 1000])("measures unloaded invocation reads against paging %i synthetic older turns", async (turns) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadId = "unloaded-synthetic";
     const history = Array.from({ length: turns }, (_, index) => ({
       id: `turn-${index}`, status: "completed", itemsView: "full",
@@ -6997,7 +7024,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("falls back to the legacy Codex turn item list method", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadId = "thread-legacy-item-list";
     const turnId = "turn-legacy-item-list";
     MockTransport.readThreadResultByThreadId.set(threadId, {
@@ -7061,7 +7088,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses Codex turn cursors for bounded older transcript pages", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     MockTransport.readThreadResultByThreadId.set("thread-older-page", {
       thread: { id: "thread-older-page", turns: [] },
@@ -7145,7 +7172,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("retries transient session metadata failures while paging Codex history", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadId = "thread-transient-paginated-history";
     const turnId = "turn-transient-paginated-history";
     const transientError = {
@@ -7215,7 +7242,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.readThreadResultByThreadId.set("archive-metadata", {
       thread: { id: "archive-metadata", name: "Old thread", cwd: "/repo/current-checkout", updatedAt: 1_777_500_000, isPinned: true, status: { type: "idle" } },
     });
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       const summary = await client.readThreadSummary("archive-metadata");
@@ -7231,7 +7258,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.readThreadResultByThreadId.set("rename-metadata", {
       thread: { id: "rename-metadata", name: "Please fix the parser", preview: "Please fix the parser" },
     });
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       expect((await client.readThreadSummary("rename-metadata")).title).toBe("Fix the parser");
@@ -7250,7 +7277,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.readThreadResultByThreadId.set("unnamed-metadata", {
       thread: { id: "unnamed-metadata", name, preview: "Please fix the parser" },
     });
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       expect(await client.readThreadName("unnamed-metadata")).toBeUndefined();
@@ -7258,7 +7285,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("forwards metadata-only thread/read requests to Codex", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -7293,7 +7320,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves image parts from Codex thread/read messages", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -7380,7 +7407,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("projects native imageView history into local image placeholders for safe materialization", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const file = path.join(os.tmpdir(), "native (v1)#100%.png");
     const item = { type: "imageView", id: "native-view", path: file } satisfies ThreadItem;
     MockTransport.readThreadResultByThreadId.set("thread-native-image", {
@@ -7399,7 +7426,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps distinct native image views of the same path in replay", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const file = path.join(os.tmpdir(), "screenshot.png");
     const items = ["before", "after"].map((id) => ({ type: "imageView", id, path: file } satisfies ThreadItem));
     MockTransport.readThreadResultByThreadId.set("thread-repeated-image", {
@@ -7419,7 +7446,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("attaches custom tool output images to the final assistant message", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const imageUrl = "data:image/jpeg;base64,AQID";
     MockTransport.readThreadResultByThreadId.set("thread-custom-tool-image", {
       thread: {
@@ -7499,7 +7526,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("attaches direct MCP image content to the final assistant message", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const imageUrl = "data:image/webp;base64,AQID";
     MockTransport.readThreadResultByThreadId.set("thread-direct-mcp-image", {
       thread: {
@@ -7580,7 +7607,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("renders JSON-wrapped MCP image results and attaches them to the final message", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const imageUrl = "data:image/webp;base64,AQID";
     MockTransport.readThreadResultByThreadId.set("thread-wrapped-mcp-image", {
       thread: {
@@ -7659,7 +7686,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("attaches loopback image exports from MCP results to the final assistant message", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const imageUrl =
       "http://127.0.0.1:51729/media?grant=signed-image&signature=signed-media";
     MockTransport.readThreadResultByThreadId.set("thread-mcp-image", {
@@ -7719,7 +7746,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("projects typed MCP resource links into transcript image parts", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const imageUrl =
       "http://127.0.0.1:51729/media?grant=full-image&signature=signed-media";
     MockTransport.readThreadResultByThreadId.set("thread-mcp-resource-link", {
@@ -7811,7 +7838,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("attaches images embedded in MCP resource result text to the final assistant message", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const imageBlob = "AQID";
     MockTransport.readThreadResultByThreadId.set("thread-mcp-resource-image", {
       thread: {
@@ -7888,7 +7915,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("deduplicates Codex raw event user messages when a response item carries the image", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-raw-image-events", {
       events: [
         {
@@ -7993,7 +8020,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps distinct same-text image prompts with different image sources", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-distinct-image-prompts", {
       events: [
         {
@@ -8056,7 +8083,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("restores token usage activity from Codex rollout token_count events", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-token-count-events", {
       events: [
         {
@@ -8120,7 +8147,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("prices Codex rollout token_count events from turn_context model metadata", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-token-count-priced", {
       events: [
         {
@@ -8203,7 +8230,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("prices a single Astra request above 272K at the long-context rate", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-astra-long-request", {
       events: [
         {
@@ -8268,7 +8295,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("prices token_count entries with each turn's own model metadata", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-token-count-model-switch", {
       thread: {
         id: "thread-token-count-model-switch",
@@ -8372,7 +8399,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not price a turn by borrowing another turn's model metadata", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-token-count-missing-turn-context", {
       events: [
         {
@@ -8461,7 +8488,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves local image fields from durable user message records", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-local-image-records", {
       thread: {
         turns: [
@@ -8517,7 +8544,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves durable localImage content parts after restart", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-local-image-content", {
       thread: {
         turns: [
@@ -8585,7 +8612,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("extracts structured plan items from thread/read", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-plan-item", {
       thread: {
         turns: [
@@ -8660,7 +8687,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("extracts rollout-style review events and suppresses hidden review prompts", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const reviewOutput = {
       findings: [],
       overall_correctness: "patch is correct",
@@ -8787,7 +8814,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("suppresses assistant messages that duplicate plain exited review text", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-plain-review", {
       thread: {
         turns: [
@@ -8837,7 +8864,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("merges review-shaped assistant findings into summary-only exited review events", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const reviewSummary =
       "The queued-review behavior introduces draft/attachment loss in realistic active-turn workflows.";
     const reviewText = `${reviewSummary}\n\nFull review comments:\n\n- [P2] Preserve the live draft after starting a queued review — /Users/fixture-user/.codex/worktrees/mp1febj4/PwrAgnt/apps/desktop/src/renderer/src/features/composer/Composer.tsx:1673-1677\n  When this path is reached from sendQueuedTurn, the user may already have started composing another reply while the review waited in the queue.`;
@@ -8888,7 +8915,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("suppresses explicitly marked inline review instructions without native review events", async () => {
-    const { extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const { extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
     const text = "<pwragent-inline-review-instructions>\nInspect this diff and report findings.\n</pwragent-inline-review-instructions>";
     const replay = extractThreadReplayFromReadResult({ thread: { turns: [{ id: "inline-turn", items: [
       { type: "userMessage", id: "internal", content: [{ type: "text", text }] },
@@ -8902,7 +8929,7 @@ describe("CodexAppServerClient", () => {
     ["userMessage", "branch"], ["message", "branch"],
     ["userMessage", "pullRequest"], ["message", "pullRequest"],
   ])("suppresses native review instructions on replay with %s shape and %s target", async (type, target) => {
-    const { extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const { extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
     const text = target === "pullRequest" ? pullRequestReviewPrompt
       : "Review the code changes against the base branch 'origin/main'. The merge base commit for this comparison is abc123. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
     const replay = extractThreadReplayFromReadResult({ thread: { turns: [
@@ -8921,7 +8948,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("retains user-authored review instructions without a native review marker", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-review-prompt", {
       thread: {
         turns: [
@@ -8978,7 +9005,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes entered review display text from Codex hints", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-review-hint", {
       thread: {
         turns: [
@@ -9021,7 +9048,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps review start history and timestamps final reviews at completion", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-review-history", {
       thread: {
         turns: [
@@ -9078,7 +9105,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes generated in-progress activity statuses from thread/read", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-in-progress-tools", {
       thread: {
         turns: [
@@ -9161,7 +9188,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses MCP titles and preserves expandable invocations, output, and images", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-mcp-tool-details", {
       thread: {
         turns: [
@@ -9248,7 +9275,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses dynamic tool titles while preserving expandable tool identity", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-dynamic-tool-title", {
       thread: {
         turns: [
@@ -9313,7 +9340,7 @@ describe("CodexAppServerClient", () => {
   // PwrAgent's own tools take no title argument, so read_thread and
   // send_message_to_thread rows could not be opened to see their call.
   it("makes an untitled dynamic tool call expandable, and leaves an empty one alone", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-dynamic-tool-untitled", {
       thread: {
         turns: [
@@ -9371,7 +9398,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("hydrates dynamic tool result images from persisted thread activity", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-pdf-tool-image", {
       thread: {
         turns: [
@@ -9437,7 +9464,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("hydrates persisted OpenAI function calls as transcript activity", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-openai-function-calls", {
       thread: {
         turns: [
@@ -9576,7 +9603,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("hydrates Codex subAgentActivity workers as transcript activity", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-agent-activity", {
       thread: {
         turns: [{
@@ -9626,7 +9653,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("summarizes input to a worker in the live summary's words", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-agent-input", {
       thread: {
         turns: [{
@@ -9652,7 +9679,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps a row per worker when parallel workers share a UUIDv7 prefix", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     // UUIDv7 leads with a millisecond timestamp, so workers started together
     // share their first 8 characters. Replay merges rows by label; labels
     // built from that prefix collapsed three workers into one.
@@ -9702,7 +9729,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("hydrates collaboration agent tool calls as transcript activity", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-collab-agents", {
       thread: {
         turns: [
@@ -9852,7 +9879,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes request_user_input requests from rpc envelope ids", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -9936,7 +9963,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes generated turn notifications before forwarding", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -9992,7 +10019,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("remaps a failed turn/completed into turn/failed with a readable error", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -10054,7 +10081,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("forwards structured reconnect details and fallback warnings to UI subscribers", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -10088,7 +10115,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not log a Codex error notification as an unknown notification", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -10126,7 +10153,7 @@ describe("CodexAppServerClient", () => {
   it.each([null, "Use the paginated history APIs."])(
     "keeps Codex deprecation notices in diagnostics (details=%s)",
     async (details) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         await client.getInitializeResult();
@@ -10155,7 +10182,7 @@ describe("CodexAppServerClient", () => {
   );
 
   it("consumes Codex native goal notifications without changing normalized thread state", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       await client.getInitializeResult();
@@ -10190,7 +10217,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("recognizes Codex hook lifecycle notifications", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -10233,7 +10260,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes Codex thread settings service tier notifications", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -10312,7 +10339,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("logs diagnostics for Codex skills changed notifications", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -10375,7 +10402,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps guardian decisions in thread activity without changing ordinary warnings", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -10417,7 +10444,7 @@ describe("CodexAppServerClient", () => {
       + " (3 consecutive, 3 in the last 50 reviews); interrupting the turn.";
 
     async function startClient() {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({
         command: "codex",
         directoryResolver: async () => [],
@@ -10557,7 +10584,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes config warnings with project trust metadata", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -10609,7 +10636,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("writes Codex project trust through config/value/write", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -10640,7 +10667,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves tool metadata on live item notifications", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -10701,7 +10728,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("extracts update_plan function calls from thread/read", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-plan-call", {
       thread: {
         turns: [
@@ -10779,7 +10806,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("extracts wrapped update_plan response items from thread/read", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-wrapped-plan-call", {
       thread: {
         turns: [
@@ -10860,7 +10887,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes skills/list results for composer autocomplete", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -10916,7 +10943,7 @@ describe("CodexAppServerClient", () => {
   ])("waits for Codex $detail inventory and still bounds a hung request", async ({
     detail, delayMs, timeoutMs,
   }) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     await client.listMcpServers({ detail });
     const transport = MockTransport.instances.at(-1)!;
@@ -10946,7 +10973,7 @@ describe("CodexAppServerClient", () => {
   ])("honors MCP inventory timeout overrides: $expectedMs ms", async ({
     requestTimeoutMs, mcpInventoryTimeoutMs, expectedMs,
   }) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex", requestTimeoutMs, mcpInventoryTimeoutMs,
     });
@@ -10969,7 +10996,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes MCP inventory without forwarding tool schemas", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadMcpServerStatusResult = {
       data: [
         {
@@ -11044,7 +11071,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves an unknown MCP authentication status", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadMcpServerStatusResult = {
       data: [
         {
@@ -11078,7 +11105,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("falls back to global MCP inventory when the thread is not loaded", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.mcpServerStatusThreadError = {
       code: -32602,
       message: "thread not found: thread-idle",
@@ -11133,7 +11160,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("reloads MCP config through the app-server protocol", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -11153,7 +11180,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("starts MCP OAuth login through the app-server protocol", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -11172,7 +11199,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("removes one quoted MCP server config key and reloads", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -11193,7 +11220,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("adds observed MCP startup failures to inventory", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadMcpServerStatusResult = {
       data: [{
         name: "datadog",
@@ -11245,7 +11272,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps MCP startup status scoped to its inventory thread", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadMcpServerStatusResult = {
       data: [{
         name: "atlassian",
@@ -11320,7 +11347,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("extracts thread ids from nested thread results when creating a thread", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -11339,7 +11366,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("passes explicit user source classification when starting Codex threads", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -11363,7 +11390,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("forks a Codex thread through thread/fork with workspace and permission overrides", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -11422,7 +11449,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("withholds setup variables from Codex when the profile turns them off", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     let passSetupVariables = false;
     const client = new CodexAppServerClient({
       command: "codex",
@@ -11475,7 +11502,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("forks a Codex thread from a CAS-provided rollout path without reading it", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -11506,9 +11533,10 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it.each(["openai", "local-fixture"])("adapts parent tools for the effective %s provider at start and resume", async (provider) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+  it.each(["openai", "local-fixture", "unavailable"])("adapts parent tools for the effective %s provider at start and resume", async (provider) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.configReadResult = { config: { model_provider: provider } };
+    MockTransport.configReadError = provider === "unavailable" ? { message: "Effective config is unavailable" } : undefined;
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     const dynamicTools: DynamicToolSpec[] = [{
       type: "namespace", name: "pwragent", description: "PwrAgent", tools: [{
@@ -11523,7 +11551,7 @@ describe("CodexAppServerClient", () => {
       if (spec.type !== "namespace") throw new Error("Expected namespace fixture");
       for (const method of ["thread/start", "thread/resume"]) {
         const sent = requests.find((request) => request.method === method);
-        expect(sent.params.dynamicTools).toEqual(provider === "openai" ? dynamicTools : [{
+        expect(sent.params.dynamicTools).toEqual(provider !== "local-fixture" ? dynamicTools : [{
           ...spec.tools[0], name: "pwragent__create_pull_request", deferLoading: false,
         }]);
       }
@@ -11535,7 +11563,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("passes dynamic tool specs when creating a thread", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -11598,7 +11626,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("passes a complete dynamic tool replacement when resuming a thread", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const dynamicTools: DynamicToolSpec[] = [
       {
         type: "namespace",
@@ -11649,7 +11677,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("sends managed Token Miser activation only on thread start and resume", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await client.startThread({
@@ -11686,7 +11714,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("starts an ephemeral review with creation-time tools without resuming a missing rollout", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     const dynamicTools: DynamicToolSpec[] = [{
       type: "function", name: "read_token_miser_output", description: "Read review tool output.",
@@ -11711,7 +11739,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("refreshes dynamic tools before the first turn only when requested", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-first-refresh",
@@ -11778,7 +11806,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("refreshes a replacement catalog before a fork's first turn", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -11809,7 +11837,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("passes thread-local MCP config and redacts MCP bearer headers from observers", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const observedMessages: string[] = [];
     const config = {
       mcp_servers: {
@@ -11869,7 +11897,7 @@ describe("CodexAppServerClient", () => {
 
   it("uses the 0.144 App Server wire contracts and advertises tools only at thread start", async () => {
     MockTransport.serverVersion = "0.144.0";
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const dynamicTools: DynamicToolSpec[] = [
       {
         type: "namespace",
@@ -11942,7 +11970,7 @@ describe("CodexAppServerClient", () => {
 
   it("preserves the 0.135 App Server wire contracts for local old servers", async () => {
     MockTransport.serverVersion = "0.135.0";
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const dynamicTools: DynamicToolSpec[] = [
       {
         type: "namespace",
@@ -12028,7 +12056,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("passes local environment shell hydration to Codex thread/start config", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12074,7 +12102,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves bundled tools in a hydrated Codex thread/start PATH", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const bundledToolsDirectory = await createBundledToolsDirectory();
     const capturedPath = "/Users/fixture-user/.nvm/versions/node/v26.0.0/bin:/usr/bin";
     const client = new CodexAppServerClient({
@@ -12109,7 +12137,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves bundled tools in a hydrated Codex thread/resume PATH", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const bundledToolsDirectory = await createBundledToolsDirectory();
     const capturedPath = "/Users/fixture-user/project/.venv/bin:/usr/bin";
     const client = new CodexAppServerClient({
@@ -12145,7 +12173,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("enables default-mode request_user_input in Codex thread/start config", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12174,7 +12202,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("starts the first turn on a newly created thread without a resume preflight", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.turnStartResult = {
       thread: {
         id: "thread-3",
@@ -12216,7 +12244,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("sends Fast mode as Codex priority serviceTier on the first turn of a newly created thread", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12275,7 +12303,7 @@ describe("CodexAppServerClient", () => {
     { operation: "steer", fileType: "file" },
     { operation: "steer", fileType: "localFile" },
   ])("reports prepared file-message text before sending the wire request ($operation, $fileType)", async ({ operation, fileType }) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     const method = operation === "start" ? "turn/start" : "turn/steer";
     const requests = () => MockTransport.instances.flatMap((transport) =>
@@ -12315,7 +12343,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("stores file inputs as local file references before sending Codex turns", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const pdfBytes = Buffer.from("%PDF-1.7\n/image data\n");
     MockTransport.turnStartResult = {
       thread: {
@@ -12388,7 +12416,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("sends explicit local file references as Codex mentions", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.turnStartResult = {
       thread: {
         id: "thread-3",
@@ -12457,7 +12485,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("resumes a created thread again after the first turn has started", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.turnStartResult = {
       thread: {
         id: "thread-3",
@@ -12518,7 +12546,7 @@ describe("CodexAppServerClient", () => {
     };
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
       const client = new CodexAppServerClient({
         command: "codex",
@@ -12563,6 +12591,48 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("announces a first-prompt name as derived and drops Codex's echo of each name it set", async () => {
+    const threadId = "thread-name-echoes";
+    MockTransport.threadStartResult = {
+      thread: { id: threadId, cwd: "/fixture/workspace", preview: "", name: null, updatedAt: 1_777_347_163 },
+      model: "gpt-5.5",
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const names: unknown[] = [];
+    client.onNotification((notification) => {
+      if (notification.method === "thread/name/updated") names.push(notification.params);
+    });
+    try {
+      await client.startThread({ cwd: "/fixture/workspace" });
+      const transport = MockTransport.instances.at(-1)!;
+      // Codex 0.159.2 echoes every thread/name/set, without a titleSource.
+      transport.notify("thread/name/updated", { threadId, threadName: "Untitled thread" });
+      await client.startTurn({ threadId, input: [{ type: "text", text: "Repair the flaky login test" }] });
+      transport.notify("thread/name/updated", { threadId, threadName: "Repair the flaky login test" });
+      // A rename made elsewhere, such as another Codex client, still arrives.
+      transport.notify("thread/name/updated", { threadId, threadName: "Renamed elsewhere" });
+      await vi.waitFor(() => expect(names).toHaveLength(2));
+      expect(names).toEqual([
+        { threadId, threadName: "Repair the flaky login test", titleSource: "derived" },
+        { threadId, threadName: "Renamed elsewhere" },
+      ]);
+      // An echo that never came expires: a later rename to that name still arrives.
+      await client.renameThread({ threadId, name: "Release checklist" });
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+      try {
+        transport.notify("thread/name/updated", { threadId, threadName: "Release checklist" });
+        await vi.waitFor(() => expect(names).toHaveLength(3));
+      } finally {
+        clock.mockRestore();
+      }
+      expect(names[2]).toEqual({ threadId, threadName: "Release checklist" });
+    } finally {
+      await client.close();
+    }
+  });
+
   it("retries a derived thread name while new session metadata is temporarily unreadable", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
     const threadId = "thread-transient-metadata-name";
@@ -12591,7 +12661,7 @@ describe("CodexAppServerClient", () => {
     ]);
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({
         command: "codex",
         directoryResolver: async () => [],
@@ -12629,7 +12699,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not derive a Codex thread name for resumed threads with unknown current names", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12672,7 +12742,7 @@ describe("CodexAppServerClient", () => {
     };
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
       const client = new CodexAppServerClient({
         command: "codex",
@@ -12719,7 +12789,7 @@ describe("CodexAppServerClient", () => {
     };
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
       const client = new CodexAppServerClient({
         command: "codex",
@@ -12749,7 +12819,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("permanently deletes threads through the provider protocol", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       await expect(client.deleteThread({ threadId: "expired" })).resolves.toEqual({ threadId: "expired" });
@@ -12762,7 +12832,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("archives threads through the Codex app server", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12789,7 +12859,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("forwards Codex archive lifecycle notifications", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12844,7 +12914,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("restores threads through the Codex app server", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12871,7 +12941,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("renames threads through the Codex app server", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12922,7 +12992,7 @@ describe("CodexAppServerClient", () => {
       thread: { id: "local-title-helper" },
       turn: { id: "local-title-turn", output: [{ type: "text", text: '{"title":"Test local addition"}' }] },
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     await expect(client.generateTitle({
       prompt: "Write an add function and tests",
@@ -12945,7 +13015,7 @@ describe("CodexAppServerClient", () => {
 
   it("does not invent a title model when the provider advertises none", async () => {
     MockTransport.modelListResult = createModelListResponse([]);
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     await expect(client.generateTitle({
       prompt: "Name this thread", promptVersion: "thread-title-v3", schema: {}, schemaName: "thread_title", timeoutMs: 5_000,
@@ -12955,7 +13025,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("generates thread titles through an ephemeral Codex helper turn", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const observedMessages: string[] = [];
     let helperAccount = "original-helper-account";
     MockTransport.threadMcpServerStatusResult = {
@@ -13241,7 +13311,7 @@ describe("CodexAppServerClient", () => {
     const cases = ["title", "structured", "data-only", "tool"] as const;
 
     async function runHelper(kind: typeof cases[number], fallback: boolean) {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       if (fallback) {
         MockTransport.threadStartErrors = [{ code: -32602, message: "unsupported helper config" }];
       }
@@ -13345,7 +13415,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([false, true])("forwards structured helper instructions and model (execution disabled=%s)", async (disableExecution) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadMcpServerStatusResult = { data: [], nextCursor: null };
     MockTransport.threadStartResult = {
       thread: { id: "structured-helper" },
@@ -13456,7 +13526,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("returns a structured helper failure as soon as Codex reports it", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: { id: "structured-helper" },
       instructionSources: [],
@@ -13509,7 +13579,7 @@ describe("CodexAppServerClient", () => {
     // `turn/start` returns the finished structured record on some servers
     // (the immediate-record branch exists for exactly that), so bounding it
     // at `timeoutMs` would make a raised `turnTimeoutMs` a silent no-op.
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: { id: "budget-helper" },
       instructionSources: [],
@@ -13576,7 +13646,7 @@ describe("CodexAppServerClient", () => {
 
     function startToolTurn(
       client: InstanceType<
-        Awaited<typeof import("../codex-app-server/client")>["CodexAppServerClient"]
+        Awaited<typeof import("../codex-app-server/desktop-client")>["CodexAppServerClient"]
       >,
       onToolCall: (request: {
         method: string;
@@ -13594,7 +13664,7 @@ describe("CodexAppServerClient", () => {
     }
 
     it("advertises the tools on the helper thread and asks for no output schema", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       MockTransport.threadStartResult = {
         thread: { id: "tool-helper" },
         instructionSources: [],
@@ -13642,7 +13712,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it("routes a tool call on its helper thread to the supplied handler", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       MockTransport.threadStartResult = {
         thread: { id: "tool-helper" },
         instructionSources: [],
@@ -13705,7 +13775,7 @@ describe("CodexAppServerClient", () => {
      * which an ephemeral helper turn can never satisfy.
      */
     it("does not route a tool call from another thread to the handler", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       MockTransport.threadStartResult = {
         thread: { id: "tool-helper" },
         instructionSources: [],
@@ -13749,7 +13819,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it("stops routing tool calls once the turn is over", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       MockTransport.threadStartResult = {
         thread: { id: "tool-helper" },
         instructionSources: [],
@@ -13792,7 +13862,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it("reports a failed turn as failed", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       MockTransport.threadStartResult = {
         thread: { id: "tool-helper" },
         instructionSources: [],
@@ -13833,7 +13903,7 @@ describe("CodexAppServerClient", () => {
   ])("selects the available helper model without overriding explicit models: $expected", async ({
     hidden, override, expected,
   }) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     MockTransport.modelListResult = createModelListResponse([
       createCodexModel({ id: "gpt-6-luna", hidden }),
@@ -13862,7 +13932,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("runs each helper on its helper model setting and skips a model Codex does not offer", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     let settings: DesktopHelperModelSettings = {
       defaultModel: "gpt-5.5",
       helpers: {
@@ -13942,7 +14012,7 @@ describe("CodexAppServerClient", () => {
       effort: "high",
     },
   ])("runs federation naming with the configured model $model and effort $effort", async ({ settings, model, effort }) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const { generateFederationShortNames, planFederationShortNames } =
       await import("../federation/federation-short-name-generator");
     const client = new CodexAppServerClient({
@@ -13985,7 +14055,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("reads the helper catalog once, even when it is empty and turns start together", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     MockTransport.modelListResult = createModelListResponse([]);
     const run = async () => await client.generateStructuredObject({
@@ -14009,7 +14079,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses a fresh helper thread for every title and unsubscribes each one", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -14133,7 +14203,7 @@ describe("CodexAppServerClient", () => {
         ],
       },
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -14183,7 +14253,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("fails closed before starting a title helper when MCP inventory inspection fails", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.configReadError = { message: "inventory unavailable" };
     const client = new CodexAppServerClient({
       command: "codex",
@@ -14220,7 +14290,7 @@ describe("CodexAppServerClient", () => {
   it.each(["thread/start", "mcpServerStatus/list"])(
     "isolates helper startup warnings before the %s response without hiding interactive warnings",
     async (method) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       MockTransport.threadStartResult = {
         thread: { id: "thread-title-helper" },
         instructionSources: [],
@@ -14274,7 +14344,7 @@ describe("CodexAppServerClient", () => {
   );
 
   it("releases startup warning delivery when a helper start returns no thread ID", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {};
     const interactiveWarning = {
       method: "warning",
@@ -14303,7 +14373,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("runs the bounded helper turn when Codex retains global instructions", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: { id: "thread-title-helper" },
       instructionSources: ["/Users/fixture-user/.codex/AGENTS.md"],
@@ -14361,7 +14431,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("rejects any MCP tools that survive the helper thread overlay", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: { id: "thread-title-helper" },
       instructionSources: [],
@@ -14407,7 +14477,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("fails closed when Codex omits the helper instruction-source signal", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: { id: "thread-title-helper" },
     };
@@ -14443,7 +14513,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("unsubscribes and releases helper tracking when a title turn fails", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: { id: "thread-title-helper" },
       instructionSources: [],
@@ -14511,7 +14581,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("unsubscribes and releases helper tracking when a title turn times out", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: { id: "thread-title-helper" },
       instructionSources: [],
@@ -14564,7 +14634,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses helper title item completions when turn completion omits items", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-title-helper",
@@ -14645,7 +14715,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses helper title notifications that arrive before the turn/start response", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-title-helper",
@@ -14713,7 +14783,7 @@ describe("CodexAppServerClient", () => {
   it.each(["turn response", "turn notification", "review response"])(
     "skips new thread history until the first %s",
     async (firstTurnSignal) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const threadId = "thread-awaiting-env-setup";
       MockTransport.threadStartResult = { thread: { id: threadId, turns: [] } };
       MockTransport.readThreadResultByThreadId.set(threadId, {
@@ -14777,7 +14847,7 @@ describe("CodexAppServerClient", () => {
   );
 
   it("reads fork history before its first new turn and preserves missing-lineage errors", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadId = "thread-fork";
     MockTransport.readThreadResultByThreadId.set(threadId, {
       thread: { id: threadId, turns: [] },
@@ -14796,7 +14866,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("treats unmaterialized new threads as empty transcripts", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadErrorByThreadId.set("thread-empty", {
       code: -32600,
       message:
@@ -14825,7 +14895,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("treats unmaterialized turns-list reads as empty transcripts", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadId = "thread-empty-turns-list";
     MockTransport.readThreadResultByThreadId.set(threadId, {
       thread: { id: threadId, turns: [] },
@@ -14857,7 +14927,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("retries thread reads while new session metadata is temporarily unreadable", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const threadId = "thread-transient-metadata-read";
     MockTransport.readThreadTransientErrorsByThreadId.set(threadId, [
       {
@@ -14893,7 +14963,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("best-effort resumes an existing thread before starting a turn", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -14967,7 +15037,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not resend dynamic tools when resuming or starting a turn", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -14997,7 +15067,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("passes GPT-5.6 max and ultra reasoning efforts through to turn/start", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -15038,7 +15108,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("enables default-mode request_user_input in Codex thread/resume config", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -15072,7 +15142,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("sends Fast mode as Codex priority serviceTier when resuming an existing thread", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -15130,7 +15200,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("sends an explicit serviceTier clear when Fast mode is unchecked on an existing thread", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -15188,7 +15258,7 @@ describe("CodexAppServerClient", () => {
     serviceTier,
     expectedTier,
   }) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -15223,7 +15293,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not pass image filenames to Codex as adjacent text context", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -15257,7 +15327,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("forwards approvalPolicy and sandboxPolicy on every turn/start so per-thread permission profile refreshes", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -15293,7 +15363,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("encodes danger-full-access as the dangerFullAccess SandboxPolicy variant on turn/start", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -15325,7 +15395,7 @@ describe("CodexAppServerClient", () => {
   it.each([undefined, []])("preserves an active-writer conflict without attempting turn/start (tools: %s)", async (dynamicTools) => {
     const message = "thread shared-thread already has an active writer";
     MockTransport.threadResumeError = { code: -32600, message };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -15347,7 +15417,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("refreshes an environment selected after creation but before the first turn", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.serverCapabilitiesResult = {
       codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" },
     };
@@ -15372,7 +15442,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([false, true])("defers first-turn environment changes on stock Codex (capability RPC unavailable: %s)", async (unavailable) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     if (unavailable) {
       vi.spyOn(client, "readServerCapabilities").mockRejectedValue(new Error("Method not found"));
@@ -15413,7 +15483,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not start a turn when resuming its shell environment fails", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadResumeError = { message: "resume failed" };
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
@@ -15447,7 +15517,7 @@ describe("CodexAppServerClient", () => {
       code: -32000,
       message: "transient codex error",
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -15479,7 +15549,7 @@ describe("CodexAppServerClient", () => {
       code: -32000,
       message: "dynamic tool refresh failed",
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -15510,7 +15580,7 @@ describe("CodexAppServerClient", () => {
 
   it("updates a newly created thread workspace before its first rollout exists", async () => {
     MockTransport.requireLoadedThreads = true;
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -15535,7 +15605,7 @@ describe("CodexAppServerClient", () => {
 
   it("resumes an unloaded thread at the handoff destination before updating its workspace", async () => {
     MockTransport.requireLoadedThreads = true;
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -15575,7 +15645,7 @@ describe("CodexAppServerClient", () => {
       code: -32600,
       message: "thread not found: thread-workspace",
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -15597,7 +15667,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("translates a pinned PR target to native custom instructions without leaking its discriminant", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     const headCommit = "b".repeat(40);
     const baseCommit = "a".repeat(40);
@@ -15625,7 +15695,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("best-effort resumes an existing thread before starting a review", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -15735,7 +15805,7 @@ describe("CodexAppServerClient", () => {
 
     it("uses the acknowledged initial catalog and awaits current effective settings without resume", async () => {
       MockTransport.serverVersion = "0.160.0";
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools });
@@ -15753,7 +15823,7 @@ describe("CodexAppServerClient", () => {
 
     it("reuses admitted catalog proof after an owned realtime handoff and stop on stock 0.160", async () => {
       MockTransport.serverVersion = "0.160.0";
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools });
@@ -15780,7 +15850,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it.each(["turn/started", "thread/closed", "reset"])("revokes admitted proof on unowned %s", async (event) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools });
@@ -15793,7 +15863,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it("revokes admitted proof before a failed catalog refresh", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools });
@@ -15816,7 +15886,7 @@ describe("CodexAppServerClient", () => {
         environmentId: "sample-env", environmentName: "Sample environment", executionTarget: "local" as const,
         cwd: settings.cwd, shellEnvironment: { SAMPLE_TOOLCHAIN: "original" },
       };
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools, codexEnvironmentRuntime: runtime });
@@ -15861,7 +15931,7 @@ describe("CodexAppServerClient", () => {
       MockTransport.serverVersion = "0.160.0";
       const updating = deferred();
       const finishUpdate = deferred();
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({
         command: "codex", directoryResolver: async () => [],
         connectionObserver: { onMessage: async (event) => {
@@ -15897,7 +15967,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it.each(["active", "resume", "settings"])("rejects persisted voice restoration on %s failure", async (failure) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         if (failure === "active") MockTransport.readThreadResultByThreadId.set("persisted-director", { thread: { id: "persisted-director", status: { type: "active" } } });
@@ -15915,7 +15985,7 @@ describe("CodexAppServerClient", () => {
     it.each([false, true])("awaits settings acknowledgment and rechecks ownership (invalidated: %s)", async (invalidate) => {
       const updating = deferred();
       const finishUpdate = deferred();
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({
         command: "codex", directoryResolver: async () => [],
         connectionObserver: {
@@ -15945,7 +16015,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it("rejects changed catalogs, environment, workspace and input policy without updating settings", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools });
@@ -15961,7 +16031,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it("fails admission when a settings update is rejected", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools });
@@ -15982,7 +16052,7 @@ describe("CodexAppServerClient", () => {
         cwd: settings.cwd, shellEnvironment: { SAMPLE_TOOLCHAIN: "original" },
       };
       const changedTools: DynamicToolSpec[] = [{ ...dynamicTools[0], name: "fixture_changed" }];
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools, codexEnvironmentRuntime: runtime });
@@ -16025,7 +16095,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it("invalidates first-turn ownership on app-server reset even for the same ID", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools });
@@ -16035,7 +16105,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it("does not trust persisted IDs or forked threads", async () => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         expect(await client.prepareFreshNativeVoiceThread({ ...settings, threadId: "persisted-manager", dynamicTools })).toBe(false);
@@ -16045,7 +16115,7 @@ describe("CodexAppServerClient", () => {
     });
 
     it.each(["turn/started", "thread/closed"])("invalidates proof when %s arrives outside a local turn start", async (method) => {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       try {
         const { threadId } = await client.startThread({ ...settings, dynamicTools });
@@ -16056,7 +16126,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("refreshes an existing thread catalog without inference or instruction overrides", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     const dynamicTools: DynamicToolSpec[] = [{
       type: "function", name: "fixture_manager", description: "Contrived manager tool", inputSchema: { type: "object" }, deferLoading: false,
@@ -16074,7 +16144,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("updates loaded voice thread settings and resumes environment overrides without inference", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       await client.refreshThreadTools({
@@ -16099,7 +16169,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("rejects voice preparation when live thread settings cannot be applied", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     MockTransport.threadSettingsUpdateError = "Sample settings rejected.";
     try {
@@ -16112,7 +16182,7 @@ describe("CodexAppServerClient", () => {
 
   it("rejects catalog refresh while the runtime reports an active turn", async () => {
     MockTransport.readThreadResultByThreadId.set("fixture-active", { thread: { id: "fixture-active", status: { type: "active" } } });
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       await expect(client.refreshThreadTools({ threadId: "fixture-active", dynamicTools: [] })).rejects.toThrow("current turn");
@@ -16123,7 +16193,7 @@ describe("CodexAppServerClient", () => {
 
   it("does not conceal a failed catalog refresh", async () => {
     MockTransport.threadResumeError = { message: "fixture refresh failed" };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       await expect(client.refreshThreadTools({ threadId: "fixture-failed", dynamicTools: [] })).rejects.toThrow("fixture refresh failed");
@@ -16155,7 +16225,7 @@ describe("CodexAppServerClient", () => {
         ],
       },
     ];
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -16190,7 +16260,7 @@ describe("CodexAppServerClient", () => {
       code: -32000,
       message: "review dynamic tool refresh failed",
     };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -16220,7 +16290,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("rejects review/start responses that omit a real turn id", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.reviewStartResult = {
       reviewThreadId: "thread-2",
     };
@@ -16242,7 +16312,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("maps plan-mode turns onto supported model and reasoning overrides", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.threadResumeResult = {
       thread: {
         id: "thread-2"
@@ -16289,7 +16359,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("falls back to the requested thread and a pending turn id when turn/start omits ids", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.turnStartResult = {};
 
     const client = new CodexAppServerClient({
@@ -16312,7 +16382,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes legacy runId turn/start responses", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.turnStartResult = {
       threadId: "thread-2",
       runId: "turn-legacy"
@@ -16338,7 +16408,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("best-effort resumes an existing thread before interrupting a turn", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -16375,7 +16445,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("treats turn/interrupt timeouts as a best-effort success", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.turnInterruptResponseMode = "timeout";
 
     const client = new CodexAppServerClient({
@@ -16398,7 +16468,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([null, "session", "always"])("normalizes MCP elicitation and preserves the %s grant on the wire", async (persist) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -16492,7 +16562,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([1, 2])("does not infer native approval identity from %i preceding MCP tool items", async (itemCount) => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     await client.getInitializeResult();
     const wire = nativeCodexMcpApprovalFixture();
@@ -16523,7 +16593,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("logs each MCP elicitation request without its parameter values", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -16628,7 +16698,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves URL-mode MCP elicitation requests", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -16689,7 +16759,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes approval requests from rpc envelope ids and nested thread metadata", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -16742,7 +16812,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("normalizes legacy exec command approval ids for notification handling", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -16797,7 +16867,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps realtime traffic isolated, uses protocol fields, and disconnects voice on close", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();
     const ordinary = vi.fn();
     const realtime = vi.fn();
@@ -16834,4 +16904,641 @@ describe("CodexAppServerClient", () => {
     expect(transport.connectCount).toBe(connects);
   });
 
+
+  describe("idle app server recycle", () => {
+    const MINUTE = 60_000;
+    const settings = {
+      enabled: true,
+      idleMs: 20 * MINUTE,
+      maxUptimeMs: 8 * 60 * MINUTE,
+      maxChildProcesses: 64,
+      maxOpenFds: 1_024,
+      minUptimeMs: 30 * MINUTE,
+    };
+    const quiescent = () => true;
+
+    async function recycleFixture(children = 557, options: Partial<ConstructorParameters<
+      typeof import("../codex-app-server/desktop-client").CodexAppServerClient
+    >[0]> = {}) {
+      let now = 0;
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+      const { withCodexRequestActivity } = await import("../codex-app-server/request-activity");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+        now: () => now,
+        sampleAppServerProcessTree: async () => ({ childProcessCount: children }),
+        ...options,
+      });
+      await client.getInitializeResult();
+      const transport = MockTransport.instances.at(-1)!;
+      const initializeCount = () => transport.sentMessages
+        .filter((message) => JSON.parse(message).method === "initialize").length;
+      return {
+        client,
+        transport,
+        initializeCount,
+        withCodexRequestActivity,
+        advance: (ms: number) => { now += ms; },
+      };
+    }
+
+    it("replaces an idle server that leaked child processes; the next request starts a fresh one", async () => {
+      const { client, transport, initializeCount, advance } = await recycleFixture(557);
+      transport.stopReport = { descendants: 557, orphansReaped: 3 };
+      advance(45 * MINUTE);
+
+      const outcome = await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent });
+
+      expect(outcome).toEqual({
+        kind: "recycled",
+        record: expect.objectContaining({
+          reasons: ["child-processes"],
+          pid: 4242,
+          uptimeMs: 45 * MINUTE,
+          idleMs: 45 * MINUTE,
+          childProcessCount: 557,
+          orphansReaped: 3,
+        }),
+      });
+      expect(transport.closeCount).toBe(1);
+      expect(codexClientLogInfo).toHaveBeenCalledWith(
+        "Codex app server recycled while idle",
+        expect.objectContaining({ reasons: ["child-processes"], childProcessCount: 557 }),
+      );
+      expect(client.getAppServerRecycleStatus()).toEqual(expect.objectContaining({
+        recycleCount: 1,
+        lastCheck: expect.objectContaining({ outcome: "recycled" }),
+      }));
+      // Lazy restart: nothing starts until something needs Codex.
+      expect(initializeCount()).toBe(1);
+      await client.getInitializeResult();
+      expect(initializeCount()).toBe(2);
+      await client.close();
+    });
+
+    it("replaces an idle server past its uptime limit even with few children", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      const outcome = await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent });
+      expect(outcome).toEqual({
+        kind: "recycled",
+        record: expect.objectContaining({ reasons: ["uptime"], childProcessCount: 3 }),
+      });
+      expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("postpones recycling when the operator reads an old thread", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      advance(5 * MINUTE);
+
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 5 * MINUTE });
+      expect(transport.closeCount).toBe(0);
+      advance(15 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("does not postpone recycling for a background thread read or account poll", async () => {
+      const { client, transport, advance, withCodexRequestActivity } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      await withCodexRequestActivity({ countsAsActivity: false }, async () => {
+        await client.readThread({ threadId: "thread-2", includeTurns: false });
+        await client.readAccount();
+        await client.readRateLimits();
+      });
+
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({
+          kind: "recycled",
+          record: expect.objectContaining({ idleMs: 8 * 60 * MINUTE }),
+        }));
+      expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("does not postpone recycling for idle-thread unsubscribe probes", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      MockTransport.threadStatusByThreadId.set("thread-2", { type: "idle" });
+      await client.startTurn({ threadId: "thread-2", input: [] });
+      advance(8 * 60 * MINUTE);
+      expect(await client.unsubscribeIdleThreads({ idleMs: 10 * MINUTE, isThreadBusy: () => false }))
+        .toEqual(["thread-2"]);
+
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      expect(transport.closeCount).toBe(1);
+      await client.close();
+    });
+
+    it("keeps a concurrent operator read active while a background poll awaits its response", async () => {
+      let started!: () => void;
+      let finish!: () => void;
+      const polling = new Promise<void>((resolve) => { started = resolve; });
+      const response = new Promise<void>((resolve) => { finish = resolve; });
+      const { client, transport, advance, withCodexRequestActivity } = await recycleFixture(3, {
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (event.direction === "outbound" && event.envelope.method === "account/read") {
+              started();
+              await response;
+            }
+          },
+        },
+      });
+      advance(8 * 60 * MINUTE);
+      const poll = withCodexRequestActivity({ countsAsActivity: false }, () => client.readAccount());
+      await polling;
+      advance(MINUTE);
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      advance(10 * MINUTE);
+      finish();
+      await poll;
+      advance(9 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 19 * MINUTE });
+      expect(transport.closeCount).toBe(0);
+      advance(MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("starts the idle window when a slow operator read settles", async () => {
+      let started!: () => void;
+      let finish!: () => void;
+      const reading = new Promise<void>((resolve) => { started = resolve; });
+      const response = new Promise<void>((resolve) => { finish = resolve; });
+      const { client, transport, advance } = await recycleFixture(3, {
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (event.direction === "outbound" && event.envelope.method === "thread/read") {
+              started();
+              await response;
+            }
+          },
+        },
+      });
+      advance(8 * 60 * MINUTE);
+      const read = client.readThread({ threadId: "thread-2", includeTurns: false });
+      await reading;
+      advance(25 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "busy", blocker: "in-flight-request" });
+      finish();
+      await read;
+      advance(5 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 5 * MINUTE });
+      expect(transport.closeCount).toBe(0);
+      await client.close();
+    });
+
+    it("cancels a recycle if an operator read arrives during process sampling", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(8 * 60 * MINUTE);
+      const sample = await client.readAppServerProcessSample();
+      let sampled!: () => void;
+      let finish!: () => void;
+      const sampling = new Promise<void>((resolve) => { sampled = resolve; });
+      const response = new Promise<void>((resolve) => { finish = resolve; });
+      vi.spyOn(client, "readAppServerProcessSample").mockImplementationOnce(async () => {
+        sampled();
+        await response;
+        return sample;
+      });
+      const recycle = client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent });
+      await sampling;
+      advance(MINUTE);
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      finish();
+
+      expect(await recycle).toEqual({ kind: "busy", blocker: "app-server-activity" });
+      expect(transport.closeCount).toBe(0);
+      await client.close();
+    });
+
+    it("leaves a young or healthy server running", async () => {
+      const { client, transport, advance } = await recycleFixture(3);
+      advance(45 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "healthy" }));
+      const young = await recycleFixture(557);
+      young.advance(25 * MINUTE);
+      expect(await young.client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "healthy" }));
+      expect(transport.closeCount).toBe(0);
+      expect(young.transport.closeCount).toBe(0);
+      await client.close();
+      await young.client.close();
+    });
+
+    it("measures the idle window from the last message Codex sent", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      advance(40 * MINUTE);
+      transport.emitInbound({ method: "thread/status/changed", params: {
+        threadId: "thread-2", status: { type: "idle" },
+      } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      advance(5 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-idle", idleMs: 5 * MINUTE });
+      advance(15 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("never restarts while a turn runs", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      transport.emitInbound({ method: "turn/started", params: {
+        threadId: "thread-busy", turn: { id: "turn-busy", status: "inProgress" },
+      } });
+      advance(10 * 60 * MINUTE);
+      await vi.waitFor(async () => expect(
+        await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }),
+      ).toEqual({ kind: "busy", blocker: "running-turn" }));
+      expect(transport.closeCount).toBe(0);
+
+      transport.emitInbound({ method: "turn/completed", params: {
+        threadId: "thread-busy", turn: { id: "turn-busy", status: "completed" },
+      } });
+      await vi.waitFor(async () => expect(
+        await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }),
+      ).toEqual(expect.objectContaining({ kind: "not-idle" })));
+      advance(21 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("never restarts while an approval waits for the operator", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      let answer!: (value: unknown) => void;
+      const requests: unknown[] = [];
+      client.onRequest((request) => {
+        requests.push(request);
+        return new Promise((resolve) => { answer = resolve; });
+      });
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        id: "approval-1",
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-2", turnId: "turn-7", itemId: "call-1", command: "ls" },
+      });
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      advance(10 * 60 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "busy", blocker: "pending-server-request" });
+      expect(transport.closeCount).toBe(0);
+
+      answer({ decision: "accept" });
+      await vi.waitFor(async () => expect(
+        await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }),
+      ).toEqual(expect.objectContaining({ kind: "not-idle" })));
+      advance(21 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("asks Codex before stopping and keeps a server with an active thread", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      transport.loadedThreads.add("thread-quiet");
+      MockTransport.threadStatusByThreadId.set("thread-quiet", {
+        type: "active", activeFlags: ["waitingOnUserInput"],
+      } as { type: string });
+      advance(45 * MINUTE);
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "busy", blocker: "codex-active-thread" });
+      expect(transport.closeCount).toBe(0);
+
+      MockTransport.threadStatusByThreadId.set("thread-quiet", { type: "idle" });
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual(expect.objectContaining({ kind: "recycled" }));
+      await client.close();
+    });
+
+    it("re-checks the owner's quiescence at the barrier, right before stopping", async () => {
+      const { client, transport, advance } = await recycleFixture();
+      advance(45 * MINUTE);
+      let checks = 0;
+      // Idle when the check starts; a turn is reserved before the barrier.
+      const outcome = await client.maybeRecycleIdleAppServer({
+        settings,
+        isQuiescent: () => ++checks === 1,
+      });
+      expect(outcome).toEqual({ kind: "busy", blocker: "registry-work" });
+      expect(checks).toBe(2);
+      expect(transport.closeCount).toBe(0);
+      expect(client.getAppServerRecycleStatus()).toEqual({
+        recycleCount: 0,
+        lastCheck: expect.objectContaining({ outcome: "busy", blocker: "registry-work" }),
+      });
+      await client.close();
+    });
+
+    it("does nothing when no server is running", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      expect(await client.maybeRecycleIdleAppServer({ settings, isQuiescent: quiescent }))
+        .toEqual({ kind: "not-running" });
+      expect(await client.readAppServerProcessSample()).toBeUndefined();
+      expect(MockTransport.instances.at(-1)!.connectCount).toBe(0);
+      await client.close();
+    });
+  });
+
+  describe("idle thread unsubscribe", () => {
+    const MINUTE = 60_000;
+    const idleMs = 10 * MINUTE;
+
+    function deferred() {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => { resolve = done; });
+      return { promise, resolve };
+    }
+
+    async function idleFixture(
+      options: Partial<ConstructorParameters<
+        typeof import("../codex-app-server/desktop-client").CodexAppServerClient
+      >[0]> = {},
+    ) {
+      let now = 0;
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+        now: () => now,
+        ...options,
+      });
+      await client.getInitializeResult();
+      const transport = MockTransport.instances.at(-1)!;
+      const sent = () => transport.sentMessages.map((message) => JSON.parse(message) as {
+        method?: string;
+        params?: { threadId?: string };
+      });
+      const open = async (threadId: string) => {
+        MockTransport.threadStatusByThreadId.set(threadId, { type: "idle" });
+        await client.startTurn({ threadId, input: [] });
+      };
+      return {
+        client,
+        transport,
+        sent,
+        open,
+        advance: (ms: number) => { now += ms; },
+      };
+    }
+
+    it("releases idle threads so Codex can unload them, and the loaded count stops growing", async () => {
+      const { client, transport, sent, open, advance } = await idleFixture();
+      for (let round = 0; round < 3; round += 1) {
+        for (let index = 0; index < 5; index += 1) await open(`thread-${round}-${index}`);
+        expect(transport.loadedThreads.size).toBe(5);
+        advance(idleMs - 1);
+        expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false })).toEqual([]);
+        advance(1);
+        const released = await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false });
+        expect(released).toHaveLength(5);
+        // Before this change every thread stayed loaded: 15 after three rounds.
+        expect(transport.loadedThreads.size).toBe(0);
+        expect(client.getSubscribedThreadCount()).toBe(0);
+      }
+      expect(sent().filter((request) => request.method === "thread/unsubscribe")).toHaveLength(15);
+      expect(codexClientLogInfo).toHaveBeenCalledWith(
+        "unsubscribed idle Codex threads",
+        { count: 5, stillSubscribed: 0 },
+      );
+
+      // Next use resumes the thread, which reloads it.
+      await open("thread-0-0");
+      expect(transport.loadedThreads).toEqual(new Set(["thread-0-0"]));
+      const resumes = sent().filter((request) =>
+        request.method === "thread/resume" && request.params?.threadId === "thread-0-0");
+      expect(resumes).toHaveLength(2);
+      await client.close();
+    });
+
+    it("releases a thread stopped by a system error, which runs nothing", async () => {
+      const { client, transport, open, advance } = await idleFixture();
+      await open("thread-error");
+      MockTransport.threadStatusByThreadId.set("thread-error", { type: "systemError" });
+      advance(idleMs);
+
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-error"]);
+      expect(transport.loadedThreads.size).toBe(0);
+      await client.close();
+    });
+
+    it.each([
+      { parentThreadId: "thread-parent" },
+      { source: { subAgent: { thread_spawn: { parent_thread_id: "thread-parent" } } } },
+    ])("keeps sub-agents without re-reading them on later sweeps: %j", async (metadata) => {
+      const { client, transport, sent, open, advance } = await idleFixture();
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, ...metadata },
+      });
+      await open("thread-idle");
+      advance(idleMs);
+      const sweep = () => client.unsubscribeIdleThreads({
+        idleMs, isThreadBusy: () => false, limit: 1,
+      });
+      const childReads = () => sent().filter((request) =>
+        request.method === "thread/read" && request.params?.threadId === "thread-child");
+      const readsBefore = childReads().length;
+
+      expect(await sweep()).toEqual([]);
+      expect(childReads()).toHaveLength(readsBefore + 1);
+      // A cached child does not consume the pass's candidate limit either.
+      expect(await sweep()).toEqual(["thread-idle"]);
+      for (let pass = 0; pass < 3; pass += 1) {
+        advance(idleMs);
+        expect(await sweep()).toEqual([]);
+      }
+      // Viewing the child again preserves its known parent relationship.
+      await open("thread-child");
+      advance(idleMs);
+      expect(await sweep()).toEqual([]);
+      expect(childReads()).toHaveLength(readsBefore + 1);
+      expect(transport.loadedThreads).toEqual(new Set(["thread-child"]));
+      expect(client.getSubscribedThreadCount()).toBe(1);
+      expect(sent().filter((request) =>
+        request.method === "thread/unsubscribe" && request.params?.threadId === "thread-child"))
+        .toEqual([]);
+      await client.close();
+    });
+
+    it("forgets a kept sub-agent when Codex closes it", async () => {
+      const { client, transport, sent, open, advance } = await idleFixture();
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, parentThreadId: "thread-parent" },
+      });
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false })).toEqual([]);
+
+      transport.emitInbound({ method: "thread/closed", params: { threadId: "thread-child" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(client.getSubscribedThreadCount()).toBe(0);
+      // A fresh subscription must classify the runtime from its new read.
+      await open("thread-child");
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-child"]);
+      expect(sent().filter((request) => request.method === "thread/read")).toHaveLength(2);
+      await client.close();
+    });
+
+    it("forgets kept sub-agents when the server resets", async () => {
+      const { client, open, advance } = await idleFixture();
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, parentThreadId: "thread-parent" },
+      });
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false })).toEqual([]);
+
+      await client.close();
+      await open("thread-child");
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-child"]);
+      await client.close();
+    });
+
+    it("does not cache a sub-agent closed while its sweep read is in flight", async () => {
+      const reading = deferred();
+      const finishRead = deferred();
+      let blockRead = false;
+      const { client, transport, open, advance } = await idleFixture({
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (blockRead && event.direction === "outbound" && event.envelope.method === "thread/read") {
+              blockRead = false;
+              reading.resolve();
+              await finishRead.promise;
+            }
+          },
+        },
+      });
+      await open("thread-child");
+      MockTransport.threadStatusByThreadId.delete("thread-child");
+      MockTransport.readThreadResultByThreadId.set("thread-child", {
+        thread: { id: "thread-child", status: { type: "idle" }, parentThreadId: "thread-parent" },
+      });
+      advance(idleMs);
+      blockRead = true;
+      const sweep = client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false });
+      await reading.promise;
+      transport.emitInbound({ method: "thread/closed", params: { threadId: "thread-child" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      finishRead.resolve();
+      expect(await sweep).toEqual([]);
+      await open("thread-child");
+      advance(idleMs);
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-child"]);
+      await client.close();
+    });
+
+    it("keeps threads with a turn, a waiting approval, owner-tracked work, or Codex activity", async () => {
+      const { client, transport, open, advance } = await idleFixture();
+      for (const threadId of ["thread-turn", "thread-approval", "thread-owner", "thread-active", "thread-idle"]) {
+        await open(threadId);
+      }
+      transport.emitInbound({ method: "turn/started", params: {
+        threadId: "thread-turn", turn: { id: "turn-live", status: "inProgress" },
+      } });
+      const requests: unknown[] = [];
+      client.onRequest((request) => {
+        requests.push(request);
+        return new Promise(() => undefined);
+      });
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        id: "approval-1",
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-approval", turnId: "turn-7", itemId: "call-1", command: "ls" },
+      });
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      MockTransport.threadStatusByThreadId.set("thread-active", {
+        type: "active", activeFlags: ["waitingOnUserInput"],
+      } as { type: string });
+      advance(idleMs);
+
+      const released = await client.unsubscribeIdleThreads({
+        idleMs,
+        isThreadBusy: (threadId) => threadId === "thread-owner",
+      });
+
+      expect(released).toEqual(["thread-idle"]);
+      expect([...transport.loadedThreads].sort()).toEqual([
+        "thread-active", "thread-approval", "thread-owner", "thread-turn",
+      ]);
+      // Codex's report of activity restarts that thread's idle clock.
+      advance(idleMs - 1);
+      MockTransport.threadStatusByThreadId.set("thread-active", { type: "idle" });
+      expect(await client.unsubscribeIdleThreads({
+        idleMs,
+        isThreadBusy: (threadId) => threadId === "thread-owner",
+      })).toEqual([]);
+      await client.close();
+    });
+
+    it("replays the resume of an operation whose thread was released mid-flight", async () => {
+      const updating = deferred();
+      const finishUpdate = deferred();
+      let firstUpdate = true;
+      const { client, sent, advance } = await idleFixture({
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (firstUpdate && event.direction === "outbound" && event.envelope.method === "thread/settings/update") {
+              firstUpdate = false;
+              updating.resolve();
+              await finishUpdate.promise;
+            }
+          },
+        },
+      });
+      MockTransport.threadStatusByThreadId.set("thread-2", { type: "idle" });
+      const review = client.startReview({
+        threadId: "thread-2",
+        target: { type: "uncommittedChanges" },
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+      });
+      await updating.promise;
+      advance(idleMs);
+      const sweep = client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false });
+      finishUpdate.resolve();
+      expect(await sweep).toEqual(["thread-2"]);
+      await review;
+      expect(sent().map((request) => request.method).slice(-4)).toEqual([
+        "thread/unsubscribe", "thread/resume", "thread/settings/update", "review/start",
+      ]);
+      await client.close();
+    });
+
+    it("resumes again after Codex closes a thread on its own", async () => {
+      const { client, transport, sent, open } = await idleFixture();
+      await open("thread-2");
+      transport.emitInbound({ method: "thread/closed", params: { threadId: "thread-2" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(client.getSubscribedThreadCount()).toBe(0);
+      await open("thread-2");
+      expect(sent().filter((request) => request.method === "thread/resume")).toHaveLength(2);
+      await client.close();
+    });
+  });
 });

@@ -23,9 +23,142 @@ function inPath(input: Record<string, unknown>): string {
   return target ? ` in ${path.basename(target)}` : "";
 }
 
+/** An https link the row may open. A link carrying credentials is not one. */
+function httpsUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Names what a call of one of Claude Code's own file and web tools reads or
- * changes. Other tools keep the generic row with their input.
+ * Claude Code's artifact tools, which publish and read pages on claude.ai.
+ * `Artifact` takes every action; the others take a family of them.
+ */
+export const CLAUDE_ARTIFACT_TOOLS: ReadonlySet<string> = new Set([
+  "Artifact", "ArtifactComments", "ArtifactData", "ArtifactCheck",
+]);
+
+type ArtifactRow = { kind: "read" | "write"; label: string };
+
+/** `Artifact` actions, as the bundled Claude Code 2.1.303 names them. */
+const ARTIFACT_ACTIONS: Record<string, ArtifactRow> = {
+  list: { kind: "read", label: "Listed artifacts" },
+  read: { kind: "read", label: "Read an artifact" },
+  list_types: { kind: "read", label: "Listed artifact types" },
+  quickstart: { kind: "read", label: "Read how to start an artifact" },
+  describe_type: { kind: "read", label: "Read an artifact type" },
+  list_files: { kind: "read", label: "Listed an artifact's files" },
+  read_file: { kind: "read", label: "Read an artifact's file" },
+  list_assets: { kind: "read", label: "Listed an artifact's files" },
+  read_asset: { kind: "read", label: "Read an artifact's file" },
+  upload_asset: { kind: "write", label: "Uploaded a file to an artifact" },
+  delete_asset: { kind: "write", label: "Deleted a file from an artifact" },
+  comments: { kind: "read", label: "Read artifact comments" },
+  reply: { kind: "write", label: "Replied to an artifact comment" },
+  resolve: { kind: "write", label: "Resolved an artifact comment" },
+  read_page_data: { kind: "read", label: "Read an artifact's page data" },
+  read_db: { kind: "read", label: "Read artifact data" },
+  write_db: { kind: "write", label: "Wrote artifact data" },
+  verify: { kind: "read", label: "Checked an artifact" },
+  preview: { kind: "read", label: "Previewed an artifact" },
+  delete: { kind: "write", label: "Deleted an artifact" },
+  pin: { kind: "write", label: "Pinned an artifact" },
+  unpin: { kind: "write", label: "Unpinned an artifact" },
+  share: { kind: "write", label: "Changed who can see an artifact" },
+};
+
+/** The `Artifact` action a call takes; a family tool's action maps onto one. */
+export function claudeArtifactAction(name: string, input: Record<string, unknown>): string {
+  const action = stringField(input, "action");
+  switch (name) {
+    case "ArtifactComments":
+      return action === "read" || action === undefined ? "comments" : action;
+    case "ArtifactData":
+      return action && ["get", "list", "query", "profiles"].includes(action) ? "read_db" : "write_db";
+    case "ArtifactCheck":
+      return action ?? "verify";
+    default:
+      return action ?? "publish";
+  }
+}
+
+/**
+ * An artifact call's row. A deleted artifact's link no longer opens, so it
+ * gets none. No row takes the source file as its path: publishing does not
+ * change the file.
+ */
+function claudeArtifactDetail(params: {
+  id: string; name: string; input: Record<string, unknown>; status: ActivityStatus;
+}): AppServerThreadActivityDetail | undefined {
+  const { id, name, input, status } = params;
+  const action = claudeArtifactAction(name, input);
+  const url = action === "delete" ? undefined : httpsUrl(input.url);
+  if (action === "publish") {
+    const file = stringField(input, "file_path");
+    const title = stringField(input, "title") ?? (file ? path.basename(file) : undefined);
+    return { id, kind: "write", label: title ? `Published ${title}` : "Published an artifact", ...(url ? { url } : {}), status };
+  }
+  const row = ARTIFACT_ACTIONS[action];
+  return row ? { id, kind: row.kind, label: row.label, ...(url ? { url } : {}), status } : undefined;
+}
+
+function resultRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+}
+
+/** The page a publish or read result names. */
+function artifactPage(action: string, result: unknown): { url: string; title?: string } | undefined {
+  if (action !== "publish" && action !== "read") return undefined;
+  const record = resultRecord(result);
+  const page = resultRecord(action === "read" ? record?.read : record);
+  const url = httpsUrl(page?.url);
+  return page && url ? { url, title: stringField(page, "title") } : undefined;
+}
+
+/**
+ * Artifact actions whose result the operator reads: listings, comments, data,
+ * and where a downloaded file was saved. Any other result, such as a
+ * quickstart's or a publish's, is written for the model, and a read returns
+ * the page's raw HTML.
+ */
+const ARTIFACT_OPERATOR_OUTPUT = new Set([
+  "list", "comments", "read_db", "list_files", "list_assets", "read_file", "read_asset",
+]);
+
+/**
+ * Whether a successful artifact call's row shows the result text: when the
+ * text is for the operator, or when the result does not confirm what the
+ * row says. A publish or read with no readable page keeps the text that
+ * names it, and a delete keeps it unless the result says it deleted.
+ */
+export function claudeArtifactShowsOutput(action: string, result: unknown): boolean {
+  if (ARTIFACT_OPERATOR_OUTPUT.has(action)) return true;
+  if (action === "publish" || action === "read") return !artifactPage(action, result);
+  if (action === "delete") return resultRecord(resultRecord(result)?.artifact_delete)?.deleted !== true;
+  return false;
+}
+
+/**
+ * The row of an artifact call Claude Code answered. A publish, including one
+ * that creates an artifact from a type, names the page and links to it. A
+ * read names the page it read.
+ */
+export function claudeArtifactResult(
+  detail: AppServerThreadActivityDetail, action: string, result: unknown,
+): AppServerThreadActivityDetail | undefined {
+  const page = artifactPage(action, result);
+  if (!page) return undefined;
+  const verb = action === "read" ? "Read" : "Published";
+  return { ...detail, url: page.url, ...(page.title ? { label: `${verb} ${page.title}` } : {}) };
+}
+
+/**
+ * Names what a call of one of Claude Code's own file, web and artifact tools
+ * reads or changes. Other tools keep the generic row with their input.
  */
 export function claudeToolDetail(params: {
   id: string; name: string; input: Record<string, unknown>; status: ActivityStatus;
@@ -57,7 +190,7 @@ export function claudeToolDetail(params: {
     case "Write":
       return file ? { id, kind: "write", label: `Wrote ${path.basename(file)}`, path: file, status } : undefined;
     default:
-      return undefined;
+      return CLAUDE_ARTIFACT_TOOLS.has(params.name) ? claudeArtifactDetail(params) : undefined;
   }
 }
 

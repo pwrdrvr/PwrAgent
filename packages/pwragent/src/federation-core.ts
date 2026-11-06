@@ -16,9 +16,15 @@ export * from "@pwragent/federation/git-instance-handoff";
 export * from "@pwragent/federation/federation-file-push";
 
 export { AgentToolRouter } from "@pwragent/agent-tools/agent-tool-router";
-export { mergeCausalMessagingContext } from "@pwragent/shared";
+export { fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "@pwragent/shared";
 export { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 
 export { resolveMessagingOutboundFile, validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
 
 export * from "@pwragent/federation/federation-replacement-receiver";
+export { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "@pwragent/federation/federation-backend-methods";
+
+export { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-store";
+export { buildThreadIdentityKey, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+
+export { CodexAppServerClient } from "@pwragent/owner-core/codex-app-server/client";

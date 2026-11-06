@@ -18,6 +18,8 @@ import {
 } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { THREAD_DEPENDENCY_SCHEMA } from "./thread-dependency-store.js";
+import { PROJECT_HELD_WAKEUP_SCHEMA } from "./project-held-wakeup-store.js";
+import { RESTART_CONTINUATION_SCHEMA } from "./restart-continuation-store.js";
 import { MESSAGING_REQUEST_SCHEMA } from "./messaging-request-store.js";
 import { THREAD_SANDBOX_SCHEMA } from "./thread-sandbox-store.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
@@ -2881,6 +2883,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_STATUS_WATCH_SCHEMA);
     ensurePrStatusWatchTerminalColumns(db);
     db.exec(THREAD_DEPENDENCY_SCHEMA);
+    db.exec(PROJECT_HELD_WAKEUP_SCHEMA);
+    db.exec(RESTART_CONTINUATION_SCHEMA);
     db.exec(MESSAGING_REQUEST_SCHEMA);
     db.exec(THREAD_SANDBOX_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);

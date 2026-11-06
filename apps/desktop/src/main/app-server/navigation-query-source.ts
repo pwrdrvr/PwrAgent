@@ -9,9 +9,10 @@ import {
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
-import type { NavigationQueryIndex } from "./navigation-query-projection";
+import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
+import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
 import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
 import { nextNavigationObservation } from "./navigation-observation-clock";
 import {
@@ -19,6 +20,7 @@ import {
   NavigationDirectorySetAnnouncer,
 } from "./navigation-directory-set-announcer";
 import { getMainLogger } from "../log";
+import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 
 const indexReads = new NavigationIndexReadPool(1_000);
 const latestVisibilityScanByRegistry = new WeakMap<DesktopBackendRegistry, number>();
@@ -35,7 +37,8 @@ function sourceId(value: object): number {
  * reads. This intentionally does not hydrate queue entries, launchpad
  * environments, or any other selected-thread collection. Messaging bindings
  * are the exception: every row draws its binding chips and Unbind items from
- * them, so they come from one read of the active bindings.
+ * them, so they come from one read of the active bindings. CI watch marks
+ * come from one read of the active watches the same way.
  */
 export async function loadLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
@@ -53,7 +56,12 @@ export async function loadLocalNavigationQueryIndex(params: {
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
-  const version = overlayStore.readNavigationSourceVersion?.();
+  // An index's coverage reads the startup refresh state, so an index built
+  // while startup was checking must not serve a reader after it finishes.
+  // The refreshed event invalidates the read too, but a listener that runs
+  // before the pool's (owner PR metadata) would join the stale index.
+  const version = `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${
+    registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
   return indexReads.read(key, async (signal, checkpoint) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
@@ -73,6 +81,7 @@ export async function loadLocalNavigationQueryIndex(params: {
     // reflects every boundary observed before this value.
     const observedAt = nextNavigationObservation();
     const visibilitySourceVersion = backend === "all" ? overlayStore.readNavigationSourceVersion?.() : undefined;
+    const directoryScopeCheckpoint = registry.navigationDirectoryScope?.checkpoint();
     if (backend === "all") latestVisibilityScanByRegistry.set(registry, observedAt);
     const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
     // Creation uses the same complete membership that the sidebar just read.
@@ -81,11 +90,12 @@ export async function loadLocalNavigationQueryIndex(params: {
     // Normal and forced-refresh scans have independent pool keys. Only the
     // latest scan may publish, and an intervening mutation also makes its
     // membership and pin ranks obsolete even when its coverage is complete.
-    if (backend === "all" && index.coverage?.state === "complete"
+    if (backend === "all"
       && latestVisibilityScanByRegistry.get(registry) === observedAt
       && !navigationChanged
       && visibilitySourceVersion === overlayStore.readNavigationSourceVersion?.()) {
-      registry.rememberNavigationVisibilityIndex?.(index);
+      if (directoryScopeCheckpoint !== undefined) registry.navigationDirectoryScope.remember(index, directoryScopeCheckpoint);
+      if (index.coverage?.state === "complete") registry.rememberNavigationVisibilityIndex?.(index);
     }
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {
@@ -139,12 +149,15 @@ async function buildLocalNavigationQueryIndex(params: {
   const registry = params.registry;
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
-  const listedThreads = await registry.listThreads({
-    backend: backend === "all" ? undefined : backend,
-    callerReason: params.callerReason,
-    enrichDirectories: true,
-    ...(params.refreshProviders ? { forceRefresh: true } : {}),
-  });
+  // Membership refreshes also run on navigation and directory-announcer
+  // timers. Opening a thread counts through its own foreground read.
+  const listedThreads = await withCodexRequestActivity({ countsAsActivity: false }, () =>
+    registry.listThreads({
+      backend: backend === "all" ? undefined : backend,
+      callerReason: params.callerReason,
+      enrichDirectories: true,
+      ...(params.refreshProviders ? { forceRefresh: true } : {}),
+    }));
   params.signal?.throwIfAborted();
   // An overtaken scan whose follow-up already has readers hands them over
   // here instead of spending CPU on a projection nobody would keep.
@@ -161,8 +174,14 @@ async function buildLocalNavigationQueryIndex(params: {
     const messagingBindings = bindings.get(buildThreadIdentityKey(thread.source, thread.id));
     return messagingBindings ? { ...thread, messagingBindings } : thread;
   });
-  const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
+  // One read of every active watch, for the rows' CI watch marks.
+  const watchedThreads = await attachNavigationPrCiWatchMarks(
     boundThreads,
+    async () => await overlayStore.listAllActivePrStatusWatches(),
+  );
+  params.signal?.throwIfAborted();
+  const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
+    watchedThreads,
   );
   params.signal?.throwIfAborted();
   const threads = await registry.hydrateThreadGitWorkingStates(canonicalThreads, {

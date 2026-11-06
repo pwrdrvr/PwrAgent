@@ -277,11 +277,10 @@ git push origin v1.0.0-alpha.7
 
 The `Release Desktop (macOS universal + arm64 + Windows + Linux DEB)` workflow contains
 the desktop jobs below, plus shared-source/npm preflight, Outpost validation,
-npm publication and a final completion gate (unit tests fan out across two lanes and Linux packaging
-across two architectures). macOS dependency setup, lint/typecheck, and unit
-tests use the restricted `[self-hosted, macOS, ARM64, pwrdrvr-macos]` runner
-pool. Preparation and signing use GitHub-hosted `macos-26`, restoring the
-working release environment from before the signing migration:
+npm publication and a final completion gate (unit tests fan out across four lanes and Linux packaging
+across two architectures). Every macOS job runs on the free GitHub-hosted
+`macos-26` runner. Its macOS 26 host supplies the runtime that actool 26 needs
+to compile the app icon:
 
 Before desktop dependency setup, `Check shared release source and npm
 prerequisites` verifies the protected tag/event/source SHA and operator migration.
@@ -290,27 +289,23 @@ license and offline/native installation checks on Node 22 and 24. These jobs
 have no npm publish credentials/OIDC permission. Node 24's tested package is
 retained for the protected npm job; failure prevents desktop packaging.
 
-1. `Install macOS dependencies` seeds or reuses the guest's persistent pnpm,
-   Corepack, and Electron caches under `~/Library/Caches/pwragent-ci`. Every
-   self-hosted source job installs its own workspace links against that store. A warm
-   store skips the GitHub dependency-cache download; cold guests seed it
-   through the pinned `configure-nodejs` action. This mode replaces lookup-only
-   setup, which cannot be combined with a persistent store.
+1. `Install macOS dependencies` populates the GitHub dependency cache only on
+   a miss (`lookup-only`). The parallel jobs restore it after this job
+   succeeds.
 2. `Lint and typecheck` restores dependencies, checks release metadata and
    authoritative Homebrew/Winget channels, and runs `pnpm lint`, including
    native typecheck, licensing, syntax and typed Oxlint, and the repository's
    correctness gates. There is no formatting pass.
-3. `macOS unit tests (lane N of 2)` runs the complete workspace suite split
-   with `pnpm test --shard=<lane>/2`. Both lanes select Xcode with actool 26 and
+3. `macOS unit tests (lane N of 4)` runs the complete workspace suite split
+   with `pnpm test --shard=<lane>/4`. All lanes select Xcode with actool 26 and
    set `PWRAGENT_REQUIRE_ACTOOL=1`, so the icon compile test cannot silently skip.
+   Each lane retains its JSON test timings as a seven-day workflow artifact.
 4. `Prepare macOS signing input` runs
-   `apps/desktop/scripts/release.mjs --prepare-only` for both architectures
-   on GitHub-hosted `macos-26`, with the standard dependency cache rather than
-   a persistent guest store.
+   `apps/desktop/scripts/release.mjs --prepare-only` for both architectures.
    It runs alongside lint/typecheck and the unit test lanes after cache setup.
    These jobs have `contents: read`, explicit `id-token: none`, no Apple secrets,
    and checkout credentials disabled. macOS signing, Linux packaging, and
-   Windows preparation require this job, lint/typecheck, and both test lanes
+   Windows preparation require this job, lint/typecheck, and all four test lanes
    to succeed.
 5. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
    environment, with `contents: read` and explicit `id-token: none`. It does

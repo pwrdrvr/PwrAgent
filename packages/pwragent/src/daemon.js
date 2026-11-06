@@ -68,10 +68,10 @@ export async function serve({ directory, workspace, home, command, profile }) {
     const store = new JobStore(directory, { version: 1, workspace, codexHome: home });
     runtime = new Runtime({ store, workspace, home, command,
       onFailure: (error) => { console.error(`Headless runtime stopped: ${error.message}`); void stop(error); } });
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, codexPid: runtime.codex.child.pid }) + "\n");
     process.on("SIGTERM", signalStop);
     process.on("SIGINT", signalStop);
     await runtime.codex.initialize();
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, codexPid: runtime.codex.child.pid }) + "\n");
     federation = new HeadlessFederation({ directory, runtime, profile, onFailure: (error) => { void stop(error); } });
     await federation.start();
     if (shutdown) return done;
@@ -116,7 +116,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
     });
     if (shutdown) { server.close(); return await done; }
     server.on("error", (error) => { void stop(error); });
-    console.log(JSON.stringify({ ready: true, socket: socketPath, pid: process.pid }));
+    console.log(JSON.stringify({ ready: true, socket: socketPath, pid: process.pid, running: runtime.running }));
     return await done;
   } catch (error) {
     await stop(error);

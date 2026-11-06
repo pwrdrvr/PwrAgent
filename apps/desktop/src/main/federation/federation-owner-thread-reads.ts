@@ -50,6 +50,7 @@ export async function readThreadForPeer(
   const response = await registry.readThread({
     backend,
     display: request.display,
+    ...(request.countsAsActivity !== undefined ? { countsAsActivity: request.countsAsActivity } : {}),
     threadId: request.threadId,
     ...(request.includeTurns !== undefined
       ? { includeTurns: request.includeTurns }

@@ -33,7 +33,7 @@ export type NormalizedImage = {
   conversionPath: "renderer" | "heic-fallback";
   dataUrl: string;
   height: number;
-  mimeType: NormalizedImageMimeType;
+  mimeType: string;
   original: {
     height: number;
     mimeType: string;
@@ -62,6 +62,8 @@ type CanvasHandle = {
 };
 
 type NormalizeImageFileOptions = {
+  /** Remote owners enforce the pixel budget after receiving the original. */
+  preserveOriginalIfLarger?: boolean;
   fallback?: (request: ImageFallbackRequest) => Promise<ImageFallbackResponse>;
   jpegQuality?: number;
   maxPatchCount?: number;
@@ -231,6 +233,14 @@ export async function normalizeImageFile(
     conversionPath: "renderer",
   });
   timing.totalMs = performance.now() - startedAt;
+  if (options.preserveOriginalIfLarger && normalized.size >= file.size) {
+    return { ...normalized, timing,
+      dataUrl: await dependencies.readBlobAsDataUrl(blob),
+      mimeType: originalMimeType, size: file.size,
+      width: normalized.original.width, height: normalized.original.height,
+      original: { ...normalized.original, mimeType: originalMimeType, size: file.size },
+    };
+  }
   return { ...normalized, timing };
 }
 

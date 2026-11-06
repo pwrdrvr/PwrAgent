@@ -44,6 +44,85 @@ module.exports = {
       },
     },
     {
+      name: "workspace-packages-do-not-import-apps",
+      severity: "error",
+      comment:
+        "Workspace libraries and the Outpost must remain independent of host applications.",
+      from: { path: "^packages/" },
+      to: { path: "^(@pwragent/desktop(?:/|$)|apps/)" },
+    },
+    {
+      name: "federation-only-imports-shared",
+      severity: "error",
+      comment:
+        "Federation is a reusable transport layer; shared is its only internal dependency.",
+      from: { path: "^packages/federation/" },
+      to: {
+        path: "^(@pwragent/(?!federation(?:/|$)|shared(?:/|$))|pwragent(?:/|$)|packages/(?!federation/|shared/))",
+      },
+    },
+    {
+      name: "agent-tools-only-imports-shared",
+      severity: "error",
+      comment:
+        "Agent tool contracts and routing depend on shared, not on transports or owner implementations.",
+      from: { path: "^packages/agent-tools/" },
+      to: {
+        path: "^(@pwragent/(?!agent-tools(?:/|$)|shared(?:/|$))|pwragent(?:/|$)|packages/(?!agent-tools/|shared/))",
+      },
+    },
+    {
+      name: "messaging-interface-only-imports-shared",
+      severity: "error",
+      comment:
+        "The messaging interface is independent of the other reusable libraries and owner implementations.",
+      from: { path: "^packages/messaging/interface/" },
+      to: {
+        path: "^(@pwragent/(?!messaging-interface(?:/|$)|shared(?:/|$))|pwragent(?:/|$)|packages/(?!messaging/interface/|shared/))",
+      },
+    },
+    {
+      name: "messaging-providers-only-import-interface",
+      severity: "error",
+      comment:
+        "Messaging adapters depend only on their generic interface, never transport or owner libraries.",
+      from: { path: "^packages/messaging/providers/([^/]+)/" },
+      to: {
+        path: "^(@pwragent/(?!messaging-interface(?:/|$))|pwragent(?:/|$)|packages/(?!messaging/interface/|messaging/providers/$1/))",
+      },
+    },
+    {
+      name: "owner-core-only-imports-shared",
+      severity: "error",
+      comment:
+        "Owner policy depends only on shared, never transports, tool routing, providers or hosts.",
+      from: { path: "^packages/owner-core/" },
+      to: {
+        path: "^(@pwragent/(?!owner-core(?:/|$)|shared(?:/|$))|pwragent(?:/|$)|packages/(?!owner-core/|shared/))",
+      },
+    },
+    {
+      name: "outpost-only-imports-reusable-libraries",
+      severity: "error",
+      comment:
+        "The Outpost can bundle reusable owner libraries, but cannot depend on messaging provider adapters.",
+      from: { path: "^packages/pwragent/" },
+      to: {
+        path: "^(@pwragent/(?!shared(?:/|$)|federation(?:/|$)|agent-tools(?:/|$)|messaging-interface(?:/|$)|owner-core(?:/|$))|packages/(?!pwragent/|shared/|federation/|agent-tools/|messaging/interface/|owner-core/))",
+      },
+    },
+    {
+      name: "outpost-workspace-imports-use-bundle-entry",
+      severity: "error",
+      comment:
+        "Only src/federation-core.ts may import workspace libraries; the published JavaScript consumes its bundle.",
+      from: {
+        path: "^packages/pwragent/",
+        pathNot: "^packages/pwragent/src/federation-core\\.ts$",
+      },
+      to: { path: "^(@pwragent/|packages/(?!pwragent/))" },
+    },
+    {
       name: "desktop-renderer-only-imports-shared",
       severity: "error",
       comment:

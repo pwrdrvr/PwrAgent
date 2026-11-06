@@ -5,6 +5,10 @@ import {
   disposeComposerFilePushIpc,
   registerComposerFilePushIpc,
 } from "./federation-composer-file-push";
+import {
+  disposeThreadHandoffIpc,
+  registerThreadHandoffIpc,
+} from "./federation-thread-handoff";
 import type {
   ReadFederationActivityRequest,
   ConfigureFederationTailscaleRequest,
@@ -12,8 +16,6 @@ import type {
   FederationPinDisposition,
   GenerateFederationInviteRequest,
   GenerateFederationInviteResponse,
-  HandoffInstanceThreadRequest,
-  HandoffInstanceThreadResult,
   ImportFederationInviteRequest,
   ImportFederationInviteResponse,
   OpenFederationWindowRequest,
@@ -63,7 +65,6 @@ import {
   FEDERATION_PIN_IMPACT_CHANNEL,
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
-  FEDERATION_HANDOFF_THREAD_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_SHORT_NAME_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
@@ -110,6 +111,7 @@ export function registerFederationIpcHandlers(): void {
   registerCloudflareSetupIpc();
   registerFederationServicesIpc();
   registerComposerFilePushIpc();
+  registerThreadHandoffIpc();
   for (const channel of [
     FEDERATION_READ_ACTIVITY_CHANNEL,
     FEDERATION_RESET_ACTIVITY_CHANNEL,
@@ -161,7 +163,6 @@ export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_REVOKE_PEER_CHANNEL);
-  ipcMain.removeHandler(FEDERATION_HANDOFF_THREAD_CHANNEL);
   ipcMain.removeHandler(FEDERATION_RESET_ENROLLMENT_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
@@ -427,37 +428,6 @@ export function registerFederationIpcHandlers(): void {
     },
   );
   ipcMain.handle(
-    FEDERATION_HANDOFF_THREAD_CHANNEL,
-    async (
-      _event,
-      request: HandoffInstanceThreadRequest,
-    ): Promise<HandoffInstanceThreadResult> => {
-      // The desktop dialog sends only threads this instance owns; a
-      // remote-owned source stays with the agent tool, which names it.
-      if (
-        !request
-        || typeof request.sourceThreadId !== "string"
-        || !request.sourceThreadId
-        || !isFederationInstanceId(request.targetInstanceId)
-        || (request.operation !== "copy" && request.operation !== "move")
-        || (
-          request.targetRepositoryPath !== undefined
-          && typeof request.targetRepositoryPath !== "string"
-        )
-      ) {
-        throw new Error("Invalid thread handoff request");
-      }
-      return await getDesktopFederationRuntime().handoffInstanceThread({
-        sourceThreadId: request.sourceThreadId,
-        targetInstanceId: request.targetInstanceId,
-        operation: request.operation,
-        ...(request.targetRepositoryPath?.trim()
-          ? { targetRepositoryPath: request.targetRepositoryPath.trim() }
-          : {}),
-      });
-    },
-  );
-  ipcMain.handle(
     FEDERATION_PIN_IMPACT_CHANNEL,
     async (
       _event,
@@ -529,7 +499,6 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_REVOKE_PEER_CHANNEL);
-  ipcMain.removeHandler(FEDERATION_HANDOFF_THREAD_CHANNEL);
   ipcMain.removeHandler(FEDERATION_RESET_ENROLLMENT_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
@@ -539,5 +508,6 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_WATCH_DIRECTORY_SET_CHANNEL);
   ipcMain.removeHandler(FEDERATION_PIN_IMPACT_CHANNEL);
   disposeComposerFilePushIpc();
+  disposeThreadHandoffIpc();
   rendererSubscriptionCleanupIds.clear();
 }

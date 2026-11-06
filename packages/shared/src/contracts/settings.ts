@@ -91,6 +91,13 @@ export const MANAGED_GROK_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
 export const MANAGED_CODEX_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
   "latest";
 
+/**
+ * PwrDrvr Git releases follow the same two tracks. huntharo/git publishes a
+ * build for testing as a GitHub pre-release; Latest offers only promoted ones.
+ */
+export const MANAGED_GIT_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
+  "latest";
+
 export const DESKTOP_UPDATE_TRAINS = ["stable", "beta"] as const;
 
 export type DesktopUpdateTrain = (typeof DESKTOP_UPDATE_TRAINS)[number];
@@ -824,6 +831,10 @@ export type DesktopAppearanceSnapshot = {
    *  background (xterm's `minimumContrastRatio`). Off by default, so each
    *  theme's own ANSI colors render as published. */
   terminalMinimumContrast: DesktopSettingsValue<boolean>;
+  /** Looping status animations (the thinking scanner, spinners,
+   *  indeterminate sweeps, status-dot pulses) run twice, then hold still.
+   *  Sets `<html data-motion="calm">`. Off by default. */
+  calmMotion: DesktopSettingsValue<boolean>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
@@ -1082,6 +1093,8 @@ export type DesktopGlabDiscoverySnapshot = {
 
 export type DesktopGitCandidateSource =
   | "bundled"
+  /** A PwrDrvr Git release downloaded from Settings → Git → Updates. */
+  | "managed"
   | "env"
   | "config"
   | "path"
@@ -1106,6 +1119,8 @@ export type DesktopGitDiscoveryCandidate = {
   lfsVersion?: string;
   versionFailureReason?: string;
   failureReason?: string;
+  /** `managed` only: the release's generation id, `<version>-<rev7>`. */
+  generation?: string;
 };
 
 export type DesktopGitDiscoverySnapshot = {
@@ -1161,7 +1176,73 @@ export type DesktopApplicationsSnapshot = {
   git: {
     path: DesktopSettingsValue<string>;
     discovery: DesktopGitDiscoverySnapshot;
+    /** Settings snapshots only; the applications list leaves it out. */
+    managed?: DesktopManagedGitSnapshot;
   };
+};
+
+/** A Git selection Settings can make, and the one Roll back returns to. */
+export type DesktopGitRuntimeChoice =
+  | { kind: "bundled" }
+  | { kind: "managed"; generation: string }
+  | { kind: "path"; path: string };
+
+export type DesktopManagedGitRelease = {
+  generation: string;
+  version: string;
+  tag: string;
+  executable: string;
+  lfsVersion?: string;
+  installedAt: number;
+  /** Set when the release failed a check in this run; it will not be run. */
+  failure?: string;
+};
+
+/**
+ * PwrDrvr Git releases downloaded after this build shipped. Absent on
+ * platforms with no custom runtime (Windows keeps Dugite's MinGit).
+ */
+export type DesktopManagedGitSnapshot = {
+  supported: boolean;
+  bundledVersion: string;
+  /** The build track this profile follows. */
+  track: DesktopUpdateChannel;
+  /** Each track's newest release as of the last check, newer than the bundle. */
+  tracks: { latestTag?: string; prereleaseTag?: string };
+  /** The release chosen with Use, by generation id, when one is. */
+  selected?: string;
+  /** What Roll back returns to. */
+  previous?: DesktopGitRuntimeChoice;
+  releases: DesktopManagedGitRelease[];
+  /** The last check's answer for `track`. */
+  check?: {
+    checkedAt: number;
+    available?: {
+      tag: string;
+      version: string;
+      generation: string;
+      archiveBytes?: number;
+    };
+    needsAppUpdate?: { version: string };
+    error?: string;
+  };
+  /** Tag downloading in this window, while one is. */
+  installing?: string;
+};
+
+export type ManagedGitActionRequest =
+  /** `ifStale`: Settings opening; asks GitHub only when the last check is old. */
+  | { action: "check"; ifStale?: boolean }
+  | { action: "install"; tag: string }
+  | { action: "cancel" }
+  | { action: "select"; choice: DesktopGitRuntimeChoice }
+  | { action: "remove"; generation: string }
+  /** Writes the track only: no network, no download, no change of Git. */
+  | { action: "track"; track: DesktopUpdateChannel };
+
+export type ManagedGitActionResponse = {
+  snapshot: DesktopSettingsSnapshot;
+  error?: string;
 };
 
 export type DesktopFederationSettingsSnapshot = {
@@ -1675,6 +1756,7 @@ export type DesktopSettingsConfigPatch = {
       lightTheme?: DesktopLightTheme;
       themedDockIcon?: boolean;
       terminalMinimumContrast?: boolean;
+      calmMotion?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -1934,6 +2016,14 @@ export type DesktopSettingsConfigPatch = {
     };
     git?: {
       path?: string;
+      /**
+       * Main process only: written by the managed-Git select action after it
+       * verifies the release. The generic settings write drops both keys.
+       */
+      managed?: string;
+      managedPrevious?: string;
+      /** Build track Settings offers releases from. Never changes which Git runs. */
+      managedBuildChannel?: DesktopUpdateChannel;
     };
   };
   worktrees?: {
@@ -1985,6 +2075,7 @@ export type DesktopConfigBootstrapSnapshot = {
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
+    calmMotion: boolean;
   };
   onboarding: {
     completed: boolean;

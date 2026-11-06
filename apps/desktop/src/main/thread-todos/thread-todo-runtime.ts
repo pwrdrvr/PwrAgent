@@ -1,5 +1,8 @@
+import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { assertNoMergeHolds } from "../thread-merge-holds/thread-merge-holds";
 import type {
   AppServerBackendKind,
+  AppServerThreadMessageOrigin,
   AppServerThreadReviewEntry,
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
@@ -182,6 +185,8 @@ export function installThreadTodoRuntime(params: {
   readDefaultMergeMethod: () => ThreadTodoMergeMethod;
   /** The federation agent tools, which start threads on peers. */
   federation?: PwrAgentFederationHandler;
+  /** The same tools sending one message origin, for a card's peer start. */
+  federationWithOrigin?: (messageOrigin: AppServerThreadMessageOrigin) => PwrAgentFederationHandler;
   /** Plan cards for threads started on a peer. */
   peerPlans?: ThreadTodoPeerPlans;
   /** What the live card feed reads besides the services, and where it publishes. */
@@ -232,6 +237,7 @@ export function installThreadTodoRuntime(params: {
   todos.setRunners(createThreadTodoRunners({
     registry,
     federation,
+    ...(params.federationWithOrigin ? { federationWithOrigin: params.federationWithOrigin } : {}),
     listProjects,
     plans: {
       raiseHere: (thread, plan) => raiseThreadTodoPlan(registry, thread, plan, todos),
@@ -350,6 +356,13 @@ export function installThreadTodoRuntime(params: {
     input: AddThreadTodoInput,
   ): Promise<AddThreadTodoInput> => {
     const action = input.action;
+    if (action?.type === "send_message") {
+      // Raising the card must not fail on a lookup; the send discovers it too.
+      const target = await Promise.resolve()
+        .then(() => registry.locateThreadTodoMessageTarget(thread, action.target))
+        .catch(() => action.target);
+      return target === action.target ? input : { ...input, action: { ...action, target } };
+    }
     if (action?.type !== "start_thread") return input;
     const { model, reasoningEffort } = await settleModel(thread, action);
     const { model: _model, reasoningEffort: _effort, ...rest } = action;
@@ -472,7 +485,8 @@ export function installThreadTodoRuntime(params: {
 /** The registry calls a to-do's Start thread makes. */
 export type ThreadTodoRunnerRegistry = Pick<
   DesktopBackendRegistry,
-  "readThreadHandoffSettings" | "readBackendModelOptions" | "listBackends" | "renameThread" | "startThread" | "startTurn" | "sendThreadTodoMessage"
+  | "readThreadHandoffSettings" | "readBackendModelOptions" | "listBackends" | "renameThread" | "startThread" | "startTurn"
+  | "sendThreadTodoMessage" | "buildThreadTodoMessageOrigin"
 >;
 
 /**
@@ -488,6 +502,11 @@ export type ThreadTodoRunnerRegistry = Pick<
 export function createThreadTodoRunners(params: {
   registry: ThreadTodoRunnerRegistry;
   federation?: PwrAgentFederationHandler;
+  /**
+   * The federation tools with one message origin: a peer start then labels
+   * its prompt as the card's. Without it the start carries the default origin.
+   */
+  federationWithOrigin?: (messageOrigin: AppServerThreadMessageOrigin) => PwrAgentFederationHandler;
   /**
    * This machine's Directories rows, whose origins find a card's project on
    * a peer that files it under another name.
@@ -534,10 +553,18 @@ export function createThreadTodoRunners(params: {
       await registry.sendThreadTodoMessage(request);
       return { summary: `Sent to ${request.target.title ?? request.target.threadId}` };
     },
-    mergePullRequest: async (request) =>
-      await new GithubPrFetcher().mergePullRequest(request),
+    mergePullRequest: async (request) => {
+      assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+        backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest: request.pullRequest,
+      });
+      return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: (pullRequest) => {
+        assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+          backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest,
+        });
+      } });
+    },
     startThread: async ({
-      sourceBackend, sourceThreadId, cwd, crossProject, action, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
+      sourceBackend, sourceThreadId, cwd, crossProject, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
     }) => {
       const source = await registry.readThreadHandoffSettings({
         backend: sourceBackend,
@@ -636,10 +663,17 @@ export function createThreadTodoRunners(params: {
       const planned = plan && plans
         ? await raisePlan(() => plans.raiseHere({ backend: started.backend, threadId: started.threadId }, plan), started)
         : false;
+      // The operator sent the card's prompt, so the thread shows where it came from.
+      const messageOrigin = await registry.buildThreadTodoMessageOrigin({
+        backend: sourceBackend,
+        threadId: sourceThreadId,
+        todo,
+      });
       await registry.startTurn({
         backend: started.backend,
         threadId: started.threadId,
         input: [{ type: "text", text: planned ? withThreadTodoPlanNote(action.prompt) : action.prompt }],
+        messageOrigin,
         ...settings,
       });
       return {
@@ -656,6 +690,7 @@ export function createThreadTodoRunners(params: {
             project,
             crossProject,
             action,
+            todo,
             modelSettings,
             workMode,
             environment,
@@ -721,9 +756,15 @@ export function createThreadTodoRunners(params: {
             // An older peer gets the prompt alone.
             const peerPlans = plans?.peer;
             const plannable = plan !== undefined && peerPlans?.supports(instanceId) === true;
+            const messageOrigin = await registry.buildThreadTodoMessageOrigin({
+              backend: sourceBackend,
+              threadId: sourceThreadId,
+              todo,
+            });
+            const createThread = params.federationWithOrigin?.(messageOrigin) ?? federation;
             // No title: create_instance_thread has none to set, and the
             // peer names the thread from its first turn.
-            const created = await federation({
+            const created = await createThread({
               operation: "create_instance_thread",
               context,
               args: {
@@ -740,6 +781,12 @@ export function createThreadTodoRunners(params: {
                   : {}),
                 ...(speed ? { fastMode: speed === "fast" } : {}),
                 ...((workMode ?? action.workMode) ? { workMode: workMode ?? action.workMode } : {}),
+                // As on this machine, the peer's checkout can sit on a branch
+                // with another thread's unpublished work, and a card that
+                // says New worktree must not fall back to sharing it.
+                ...((workMode ?? action.workMode) === "worktree"
+                  ? { worktreeBase: "default_branch" as const, requiredWorkMode: "worktree" as const }
+                  : {}),
                 ...(environment ? { environment } : {}),
                 groupingMode: crossProject ? "none" : "subthread",
               },
@@ -754,12 +801,18 @@ export function createThreadTodoRunners(params: {
                 : peerPlans.raise(thread.instanceId, { ...started, title: plan.title, items: plan.items }),
               { threadId: thread.threadId, instanceId: thread.instanceId });
             }
+            // An owner that predates requiredWorkMode falls back instead of
+            // refusing. The thread exists by now, so say where it runs.
+            const fellBack = (workMode ?? action.workMode) === "worktree" && thread.workMode === "local";
             return {
               backend: thread.backend,
               threadId: thread.threadId,
               ...(thread.isLocal
                 ? {}
                 : { instanceId: thread.instanceId, instanceLabel: thread.instanceLabel }),
+              ...(fellBack
+                ? { notice: `${thread.instanceLabel} could not create a worktree. The thread runs in its project checkout.` }
+                : {}),
             };
           },
         }

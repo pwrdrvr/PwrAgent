@@ -6,6 +6,7 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
   static latest: ArchiveCleanupTransport;
   activeIds = ["active", "transition"];
   archivedIds = ["archive-one", "archive-two", "archive-three"];
+  rows?: { active: Array<{ id: string; cwd: string }>; archived: Array<{ id: string; cwd: string }> };
   readonly listings: Array<{ archived: boolean; cursor?: string; sortKey?: string }> = [];
   private readonly heldKinds = new Set<boolean>();
   private readonly replies: Array<{ archived: boolean; reply: () => void }> = [];
@@ -51,12 +52,15 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
     const request = JSON.parse(message) as {
       id?: number;
       method?: string;
-      params?: { archived?: boolean; cursor?: string; sortKey?: string };
+      params?: { archived?: boolean; cursor?: string; sortKey?: string; limit?: number; threadId?: string };
     };
     if (request.id === undefined) return;
     let result: unknown = {};
     if (request.method === "initialize") {
       result = { userAgent: "fixture/1.0", codexHome: "/fixture", platformFamily: "unix", platformOs: "linux" };
+    } else if (request.method === "thread/read") {
+      const row = [...(this.rows?.active ?? []), ...(this.rows?.archived ?? [])].find((row) => row.id === request.params?.threadId);
+      result = { thread: row ? { ...row, name: row.id, updatedAt: 1 } : undefined };
     } else if (request.method === "thread/list") {
       const archived = request.params?.archived === true;
       const cursor = request.params?.cursor;
@@ -71,6 +75,12 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
         data: ids.map((id) => ({ id, name: id, updatedAt: 1, cwd: "/fixture/project" })),
         nextCursor: archived && page + 1 < this.archivedIds.length ? String(page + 1) : null,
       };
+      if (this.rows) {
+        const rows = archived ? this.rows.archived : this.rows.active;
+        const end = page + Math.min(request.params?.limit ?? 25, 100);
+        result = { data: rows.slice(page, end).map((row) => ({ ...row, name: row.id, updatedAt: 1 })),
+          nextCursor: end < rows.length ? String(end) : null };
+      }
     }
     const reply = () => this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
     if (request.method === "thread/list" && this.heldKinds.delete(request.params?.archived === true)) {

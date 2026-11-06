@@ -6,6 +6,7 @@ import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
+import { ModelDropdown } from "../composer/ModelDropdown";
 import { useTodoDispatchBackends, useTodoDispatchContext } from "./TodoDispatchProvider";
 import { customTodoDispatchSettings, formatTodoDispatchSettings, todoDispatchRecentResolves } from "./todo-dispatch-model";
 
@@ -148,9 +149,8 @@ export function TodoModelPicker(props: MachinePickerProps) {
                 const next = providers.find((entry) => entry.kind === value);
                 if (next) props.onPick(customTodoDispatchSettings(next));
               }} />
-            <ComposerDropdown ariaLabel="To-do model" triggerRole="menuitem" menuPlacement="below" disabled={models.length === 0}
-              options={models.length ? models.map((entry) => ({ value: entry.id, label: entry.label ?? entry.id }))
-                : [{ value: "", label: "Default model" }]}
+            <ModelDropdown ariaLabel="To-do model" triggerRole="menuitem" menuPlacement="below" disabled={models.length === 0}
+              kind={backend?.kind} models={models} emptyOptions={[{ value: "", label: "Default model" }]}
               value={selection.settings.model ?? ""} onChange={(value) => {
                 if (backend) props.onPick(customTodoDispatchSettings(backend, value));
               }} />

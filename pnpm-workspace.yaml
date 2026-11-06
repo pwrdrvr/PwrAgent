@@ -5,6 +5,11 @@ packages:
   - packages/messaging/providers/*
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
+  # GHSA-3g3m-2fjr-6pw4 and GHSA-g3hv-75wg-m249 security fixes.
+  # path-scurry 3 is required by glob 14. All three were published 2026-10-27.
+  - 'glob@14.0.2'
+  - 'minimatch@11.0.1'
+  - 'path-scurry@3.0.0'
   # Explicit Codex protocol upgrade; the published type changes were inspected.
   - '@pwrdrvr/codex-app-server-protocol@0.164.0'
   # Explicit native-check migration pins, benchmarked before adoption.
@@ -149,34 +154,45 @@ allowBuilds:
 
 overrides:
   "@babel/core": "7.29.6"
-  "@hono/node-server": "2.0.10"
+  "@hono/node-server": "2.1.3"
   "@types/node": "^24.12.4"
   "axios": "^1.16.0"
+  "body-parser@2": "2.4.0"
   "brace-expansion@1": "1.1.21"
   "brace-expansion@2": "2.1.7"
   "brace-expansion@5": "5.0.12"
-  "dompurify": "3.4.16"
+  "dompurify": "3.4.17"
   "esbuild": "0.28.1"
-  "fast-uri": "3.1.8"
+  "fast-uri": "3.1.9"
   "form-data": "4.0.6"
-  "hono": "4.13.5"
-  "ip-address": "10.7.1"
+  # Keep glob 7 for callback consumers; its parser compatibility is patched.
+  "glob@13": "14.0.2"
+  "hono": "4.13.11"
+  "ip-address": "10.7.4"
   "js-yaml": "4.3.2"
+  "katex@<0.18.2": "0.18.2"
+  "minimatch": "11.0.1"
   "postcss": "8.5.23"
   "prosemirror-model": "1.25.9"
-  "prosemirror-view": "1.41.9"
+  "prosemirror-view": "1.42.3"
   "protobufjs": "7.6.5"
-  "qs": "6.16.0"
+  "qs": "6.16.1"
   "rollup": "4.61.1"
+  "source-map-js": "1.2.2"
   "tar": "7.5.22"
   "tmp": "0.2.7"
-  "undici@6": "6.28.1"
-  "undici@7": "7.29.1"
+  "undici@6": "6.29.1"
+  "undici@7": "7.30.1"
   "ws": "8.22.0"
 
 patchedDependencies:
+  # Preserve legacy packaging APIs when adopting minimatch's named exports
+  # and non-RegExp parser results. The patches also support current versions.
+  "@electron/asar@3.4.1": "patches/@electron__asar@3.4.1.patch"
   "@sigstore/core@4.0.1": "patches/@sigstore__core@4.0.1.patch"
   "@tufjs/models@5.0.0": "patches/@tufjs__models@5.0.0.patch"
+  "dir-compare@4.2.0": "patches/dir-compare@4.2.0.patch"
+  "glob@7.2.3": "patches/glob@7.2.3.patch"
   "khroma@2.1.0": "patches/khroma@2.1.0.patch"
   "playwright@1.63.0": "patches/playwright@1.63.0.patch"
   "playwright-core@1.63.0": "patches/playwright-core@1.63.0.patch"

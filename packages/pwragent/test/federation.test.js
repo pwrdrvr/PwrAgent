@@ -11,14 +11,6 @@ import {
 import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
 import { setup, eventually } from "./helpers.js";
 
-async function port() {
-  const server = net.createServer();
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const value = server.address().port;
-  await new Promise((resolve) => server.close(resolve));
-  return value;
-}
-
 async function viewer(invite, identity = { id: randomUUID(), ...generateFederationIdentityKeyPair(), noiseStatic: generateNoiseStaticKeyPair() }, mode = "enroll", capabilities = HEADLESS_CAPABILITIES) {
   const events = [];
   let rpc;
@@ -42,9 +34,31 @@ async function viewer(invite, identity = { id: randomUUID(), ...generateFederati
   };
 }
 
+test("the invite CLI binds an available port and retains it for later invites", { timeout: 20000 }, async (t) => {
+  const h = await setup(t);
+  const command = h.launch(["federation-invite", "--port", "0"]);
+  assert.equal((await command.done).code, 0, command.errors);
+  const invite = decodeFederationInvite(JSON.parse(command.output).invite);
+  const assignedPort = Number(new URL(invite.gatewayUrl).port);
+  assert.ok(assignedPort > 0 && assignedPort <= 65535);
+  assert.equal(JSON.parse(readFileSync(path.join(h.directory, "federation.json"), "utf8")).listenPort, assignedPort);
+  const next = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
+  assert.equal(next.gatewayUrl, invite.gatewayUrl);
+  assert.equal((await h.rpc("federation-status")).listener.url, invite.gatewayUrl);
+  const configured = decodeFederationInvite((await h.rpc("federation-invite", { port: assignedPort })).invite);
+  assert.equal(configured.gatewayUrl, invite.gatewayUrl);
+  const v = await viewer(next);
+  t.after(() => v.connection.close());
+  assert.ok((await v.call("listBackends")).backends.length);
+  await assert.rejects(h.rpc("federation-invite", { port: assignedPort === 65535 ? 65534 : assignedPort + 1 }), /existing listener port/);
+  for (const invalid of [-1, 65536, 1.5]) {
+    await assert.rejects(h.rpc("federation-invite", { port: invalid }), /Federation port must be/);
+  }
+});
+
 test("encrypted desktop protocol enrolls, browses, runs, reconnects and reads while owner remains alive", { timeout: 20000 }, async (t) => {
   const h = await setup(t);
-  const issued = await h.rpc("federation-invite", { port: await port(), label: "Fixture outpost" });
+  const issued = await h.rpc("federation-invite", { port: 0, label: "Fixture outpost" });
   const invite = decodeFederationInvite(issued.invite);
   let v = await viewer(invite);
   t.after(() => v.connection.close());
@@ -79,9 +93,33 @@ test("encrypted desktop protocol enrolls, browses, runs, reconnects and reads wh
   await assert.rejects(viewer(invite, v.identity, "reconnect"), /revoked_peer/);
 });
 
+test("an explicit title survives the shared client's derived first-turn name and restart", { timeout: 20000 }, async (t) => {
+  const h = await setup(t);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
+  let v = await viewer(invite);
+  t.after(() => v.connection.close());
+  v.subscribe();
+  const { threadId } = await v.call("startThread", { backend: "codex", cwd: h.workspace });
+  await v.call("renameThread", { threadId, title: "Release checklist" });
+  await v.call("startTurn", { backend: "codex", threadId, input: [{ type: "text", text: "Rewrite everything" }] });
+  await eventually(async () => (await v.call("resolveThread", { threadId })).thread.threadStatus === "idle");
+  const thread = (await v.call("resolveThread", { threadId })).thread;
+  assert.deepEqual([thread.title, thread.titleSource], ["Release checklist", "explicit"]);
+  const names = v.events.filter((event) => event.method === "backend.event")
+    .map((event) => event.params.notification).filter((event) => event.method === "thread/name/updated");
+  assert.ok(names.length > 0);
+  assert.ok(names.every((event) => event.params.threadName === "Release checklist"));
+  v.connection.close();
+  await h.stop(h.daemon);
+  await h.start();
+  v = await viewer(invite, v.identity, "reconnect");
+  const reopened = (await v.call("resolveThread", { threadId })).thread;
+  assert.deepEqual([reopened.title, reopened.titleSource], ["Release checklist", "explicit"]);
+});
+
 test("launchpad creation validates ownership and unsupported settings before creating a thread", { timeout: 20000 }, async (t) => {
   const h = await setup(t);
-  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: await port() })).invite);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
   const v = await viewer(invite);
   t.after(() => v.connection.close());
   const config = await v.call("getNavigationLaunchpadConfig", { protocol: 2, directoryKey: h.workspace });
@@ -110,10 +148,50 @@ test("launchpad creation validates ownership and unsupported settings before cre
   await assert.rejects(restricted.call("materializeDirectoryLaunchpad", params), /capability|forbidden/i);
 });
 
+test("a thread is named from its first prompt, persists the name and tells subscribed viewers", { timeout: 20000 }, async (t) => {
+  const h = await setup(t);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
+  let v = await viewer(invite);
+  t.after(() => v.connection.close());
+  v.subscribe();
+  const prompt = "Please summarize the npm 1.3.7 smoke results for the release notes.";
+  const created = await v.call("materializeDirectoryLaunchpad", { directoryKey: h.workspace, launchpad: { prompt } });
+  const title = "Summarize the npm 1.3.7 smoke results for the release notes";
+  const events = () => v.events.filter((event) => event.method === "backend.event").map((event) => event.params.notification);
+  const renamed = await eventually(() => events().find((event) => event.method === "thread/name/updated"));
+  assert.deepEqual(renamed.params, { threadId: created.threadId, threadName: title, titleSource: "derived" });
+  assert.ok(events().some((event) => event.method === "navigation/invalidated" && event.params.sourceMethod === "thread/name/updated"
+    && event.params.threadId === created.threadId), "navigation viewers refresh the row");
+  const row = (await v.call("getNavigationQueryPage", { protocol: 2, query: { kind: "lens", lens: "inbox" } })).entries[0].row;
+  assert.equal(row.title, title);
+  assert.equal(row.titleSource, "derived");
+  const idle = (threadId) => eventually(async () => (await v.call("resolveThread", { threadId })).thread.threadStatus === "idle");
+  await idle(created.threadId);
+  await v.call("startTurn", { backend: "codex", threadId: created.threadId, input: [{ type: "text", text: "A later turn is not the title" }] });
+  assert.equal((await v.call("resolveThread", { threadId: created.threadId })).thread.title, title);
+  await idle(created.threadId);
+  // A thread submitted from the local CLI is named the same way.
+  await h.submit("cli-job", "Can you check the release checklist for 1.3.8?");
+  const cliThread = (await h.finished("cli-job")).threadId;
+  v.connection.close();
+  await h.stop(h.daemon);
+  const registry = JSON.parse(readFileSync(path.join(h.directory, "threads.json"), "utf8"));
+  assert.deepEqual(registry.threads.map(({ id, title: name, titleSource }) => ({ id, name, titleSource })), [
+    { id: created.threadId, name: title, titleSource: "derived" },
+    { id: cliThread, name: "Check the release checklist for 1.3.8?", titleSource: "derived" },
+  ]);
+  await h.start();
+  v = await viewer(invite, v.identity, "reconnect");
+  assert.equal((await v.call("resolveThread", { threadId: created.threadId })).thread.title, title, "the name survives a restart");
+  await v.call("renameThread", { threadId: cliThread, title: "Release checklist" });
+  const renamedRow = (await v.call("resolveThread", { threadId: cliThread })).thread;
+  assert.deepEqual([renamedRow.title, renamedRow.titleSource], ["Release checklist", "explicit"]);
+});
+
 test("SCP-style invite import joins through an outbound SSH-forward equivalent, survives tunnel loss and rejoins", { timeout: 20000 }, async (t) => {
   const gateway = await setup(t);
   const outpost = await setup(t);
-  const issued = await gateway.rpc("federation-invite", { port: await port() });
+  const issued = await gateway.rpc("federation-invite", { port: 0 });
   const decoded = decodeFederationInvite(issued.invite);
   const destination = new URL(decoded.gatewayUrl);
   const sockets = new Set();
@@ -176,7 +254,7 @@ test("SCP-style invite import joins through an outbound SSH-forward equivalent, 
 
 test("ungranted mutation capabilities and wrong pinned keys fail closed", { timeout: 15000 }, async (t) => {
   const h = await setup(t);
-  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: await port() })).invite);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
   const v = await viewer(invite, undefined, "enroll", ["thread_navigation"]);
   t.after(() => v.connection.close());
   await assert.rejects(v.call("startThread", { backend: "codex" }), /capability/i);
@@ -192,14 +270,36 @@ test("ungranted mutation capabilities and wrong pinned keys fail closed", { time
   assert.deepEqual(reconnected.connection.capabilities, HEADLESS_CAPABILITIES);
 });
 
+test("owner methods require the same grants as on desktop", { timeout: 15000 }, async (t) => {
+  const h = await setup(t);
+  const enroll = async (grants) => {
+    const v = await viewer(decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite), undefined, "enroll", grants);
+    t.after(() => v.connection.close());
+    return v;
+  };
+  const owner = await enroll(HEADLESS_CAPABILITIES);
+  const created = await owner.call("startThread", { backend: "codex", cwd: h.workspace });
+  const ref = { backend: "codex", threadId: created.threadId };
+  const navigation = await enroll(["thread_navigation"]);
+  assert.equal((await navigation.call("getNavigationQueryPage", { protocol: 2, query: { kind: "lens", lens: "inbox" } })).entries.length, 1);
+  for (const [method, params] of [["getNavigationSelectedDetail", { protocol: 2, ref }], ["getNavigationQueueProjection", { protocol: 2, ref }],
+    ["getNavigationLaunchpadConfig", { protocol: 2, directoryKey: h.workspace }], ["listBackends", {}]]) {
+    await assert.rejects(navigation.call(method, params), /capability/i, `${method} needs thread_detail`);
+  }
+  const detail = await enroll(["thread_navigation", "thread_detail"]);
+  assert.equal((await detail.call("getNavigationSelectedDetail", { protocol: 2, ref })).identity, "present");
+  const noEnvironment = await enroll(HEADLESS_CAPABILITIES.filter((capability) => capability !== "environment_actions"));
+  await assert.rejects(noEnvironment.call("materializeDirectoryLaunchpad", { directoryKey: h.workspace, launchpad: {} }), /capability/i);
+  assert.equal(h.calls().filter((message) => message.method === "thread/start").length, 1, "a refused launchpad creates no thread");
+});
+
 for (const relay of [false, true]) {
   test(`event classes require their own grants over encrypted ${relay ? "relayed" : "direct"} connections`, { timeout: 20000 }, async (t) => {
     const gateway = await setup(t);
-    const gatewayPort = await port();
-    const issue = async () => decodeFederationInvite((await gateway.rpc("federation-invite", { port: gatewayPort })).invite);
+    const issue = async () => decodeFederationInvite((await gateway.rpc("federation-invite", { port: 0 })).invite);
     const invite = await issue();
     const owner = relay ? await setup(t) : gateway;
-    if (relay) await owner.rpc("federation-join", { invite: (await gateway.rpc("federation-invite", { port: gatewayPort })).invite });
+    if (relay) await owner.rpc("federation-join", { invite: (await gateway.rpc("federation-invite", { port: 0 })).invite });
     const ownerId = (await owner.rpc("federation-status")).instanceId;
     const subscribers = [];
     for (const grants of [[], ["thread_navigation"], ["thread_detail"], ["thread_navigation", "thread_detail"]]) {
@@ -258,9 +358,9 @@ for (const outcome of ["success", "failure"]) {
     const first = await setup(t);
     const next = await setup(t);
     const outpost = await setup(t);
-    const firstInvite = (await first.rpc("federation-invite", { port: await port() })).invite;
+    const firstInvite = (await first.rpc("federation-invite", { port: 0 })).invite;
     const firstPort = Number(new URL(decodeFederationInvite(firstInvite).gatewayUrl).port);
-    const nextInvite = (await next.rpc("federation-invite", { port: await port() })).invite;
+    const nextInvite = (await next.rpc("federation-invite", { port: 0 })).invite;
     const sockets = new Set();
     const pending = [];
     let held = false;
@@ -300,9 +400,8 @@ for (const outcome of ["success", "failure"]) {
 
 test("messaging origins never replace required handoff capabilities", { timeout: 20000 }, async (t) => {
   const h = await setup(t);
-  const listenPort = await port();
   for (const missing of ["turn_control", "environment_actions", "file_push", "messaging_route"]) {
-    const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: listenPort })).invite);
+    const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
     const v = await viewer(invite, undefined, "enroll", HEADLESS_CAPABILITIES.filter((capability) => capability !== missing));
     t.after(() => v.connection.close());
     for (const messageOrigin of [{ kind: "messaging" }, { kind: "agent", causalMessagingSource: { ownerId: "owner", requestId: "human" } }]) {

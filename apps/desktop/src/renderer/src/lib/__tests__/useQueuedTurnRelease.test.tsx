@@ -783,6 +783,175 @@ describe("useQueuedTurnRelease", () => {
     expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
   });
 
+  it("never starts a failed scheduled review when the thread goes idle", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "review-turn",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    // The shape the scheduled-action projection gives a failed review.
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "scheduled-projection:scheduled-1",
+      failedScheduledActionId: "scheduled-1",
+      errorMessage: "Thread already has an active turn in progress",
+      text: "/review main",
+      imageAttachments: [],
+      fileAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: {
+          type: "baseBranch",
+          branch: "main",
+        },
+      },
+    });
+
+    const backend = backendSummary();
+    backend.capabilities.startReview = true;
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backend],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toMatchObject({
+      failedScheduledActionId: "scheduled-1",
+    });
+  });
+
+  it("holds a turn queued behind a failed scheduled action until the failure is deleted", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      turnId: "turn-follow-up",
+    }));
+    const startReview = vi.fn();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+      startTurn,
+    };
+    const scopeKey = "thread:codex:thread-a";
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurns(scopeKey, [
+      {
+        id: "scheduled-projection:scheduled-1",
+        failedScheduledActionId: "scheduled-1",
+        errorMessage: "Thread already has an active turn in progress",
+        text: "/review main",
+        imageAttachments: [],
+        fileAttachments: [],
+        reviewCommand: {
+          displayText: "Review changes against main",
+          target: { type: "baseBranch", branch: "main" },
+        },
+      },
+      {
+        id: "queued-follow-up",
+        text: "Follow up after the review",
+        imageAttachments: [],
+        fileAttachments: [],
+        input: [{ type: "text", text: "Follow up after the review" }],
+      },
+    ]);
+
+    const backend = backendSummary();
+    backend.capabilities.startReview = true;
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backend],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    const goIdle = async () => {
+      await act(async () => {
+        for (const listener of listeners) {
+          listener({
+            backend: "codex",
+            notification: {
+              method: "thread/status/changed",
+              params: {
+                threadId: "thread-a",
+                status: { type: "idle" },
+              },
+            },
+          });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    };
+
+    await goIdle();
+    expect(startReview).not.toHaveBeenCalled();
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(composerDraftStore.getQueuedTurns(scopeKey).map((entry) => entry.id)).toEqual([
+      "scheduled-projection:scheduled-1",
+      "queued-follow-up",
+    ]);
+
+    // The operator deletes the failed row; the turn behind it goes next.
+    composerDraftStore.removeQueuedTurnById(scopeKey, "scheduled-projection:scheduled-1");
+    await goIdle();
+    expect(startReview).not.toHaveBeenCalled();
+    expect(startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-a",
+        input: [{ type: "text", text: "Follow up after the review" }],
+      })
+    );
+  });
+
   it("releases a queued review on its picked reviewer, not the thread's", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const startReview = vi.fn(async (request: StartReviewRequest) => ({

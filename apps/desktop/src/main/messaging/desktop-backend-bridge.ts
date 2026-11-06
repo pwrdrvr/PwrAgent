@@ -89,7 +89,7 @@ import type {
 } from "./core/messaging-adapter";
 import { MessagingFederatedThreadTargetError } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { buildMessageContent } from "../codex-app-server/client";
+import { buildMessageContent } from "../codex-app-server/desktop-client";
 import { getMainLogger } from "../log";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
@@ -643,6 +643,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
   }): Promise<AppServerThreadStatus | undefined> {
     const response = await this.readThread({
       ...request,
@@ -690,6 +691,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
   }): Promise<string | undefined> {
     return (await this.readThreadLastAssistantReply(request))?.text;
   }
@@ -698,6 +700,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
   }): Promise<MessagingLastAssistantReply | undefined> {
     const response = await this.readThread({
       ...request,
@@ -1299,6 +1302,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
     includeTurns?: boolean;
     limit?: number;
   }) {

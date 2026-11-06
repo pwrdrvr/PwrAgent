@@ -1,0 +1,256 @@
+import { splitGraphemes, type AppServerBackendKind } from "@pwragent/shared";
+import { buildThreadTitlePrompt } from "./thread-title-prompt";
+
+export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v3";
+const THREAD_TITLE_TIMEOUT_MS = 20_000;
+const THREAD_TITLE_TURN_TIMEOUT_MS = 180_000;
+const REQUESTED_MAX_TITLE_CHARACTERS = 50;
+const REQUESTED_MAX_TITLE_WORDS = 6;
+const TITLE_LIMIT_TOLERANCE = 0.3;
+const ACCEPTED_MAX_TITLE_CHARACTERS = Math.floor(
+  REQUESTED_MAX_TITLE_CHARACTERS * (1 + TITLE_LIMIT_TOLERANCE),
+);
+const ACCEPTED_MAX_TITLE_WORDS = Math.floor(
+  REQUESTED_MAX_TITLE_WORDS * (1 + TITLE_LIMIT_TOLERANCE),
+);
+
+const THREAD_TITLE_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title"],
+  properties: {
+    title: {
+      type: "string",
+      minLength: 1,
+      description:
+        "A concise thread title of 6 words or fewer and no more than 50 characters.",
+    },
+  },
+} as const;
+
+export type ThreadTitleAdapterParams = {
+  backend?: AppServerBackendKind;
+  prompt: string;
+  promptVersion: string;
+  schema: Record<string, unknown>;
+  schemaName: string;
+  threadId?: string;
+  timeoutMs: number;
+  /** Inference budget, separate from helper setup and cleanup round-trips. */
+  turnTimeoutMs?: number;
+};
+
+export type ThreadTitleAdapterResult =
+  | {
+      status: "ok";
+      object: unknown;
+      accountKey?: string;
+      cachedTokens?: number;
+      helperThreadId?: string;
+      helperTurnId?: string;
+      model?: string;
+      reasoningEffort?: string;
+      serviceTier?: string;
+      tokenUsage?: unknown;
+    }
+  | {
+      status: "unavailable" | "failed";
+      reason: string;
+    };
+
+export type ThreadTitleGenerator = {
+  generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult>;
+};
+
+export type ThreadTitleGenerationResult =
+  | ({
+      status: "generated";
+      title: string;
+    } & ThreadTitleGenerationMetadata)
+  | ({
+      status: "invalid";
+      reason: string;
+    } & ThreadTitleGenerationMetadata)
+  | {
+      status: "unavailable" | "failed";
+      reason: string;
+    };
+
+export type ThreadTitleGenerationMetadata = {
+  accountKey?: string;
+  cachedTokens?: number;
+  helperThreadId?: string;
+  helperTurnId?: string;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  tokenUsage?: unknown;
+};
+
+export type ThreadTitleGenerationServiceOptions = {
+  generators?: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
+  generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
+  timeoutMs?: number;
+  turnTimeoutMs?: number;
+};
+
+export class ThreadTitleGenerationService {
+  private readonly generators: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
+  private readonly generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
+  private readonly timeoutMs: number;
+  private readonly turnTimeoutMs: number;
+
+  constructor(options: ThreadTitleGenerationServiceOptions = {}) {
+    this.generators = options.generators ?? {};
+    this.generatorResolver = options.generatorResolver;
+    this.timeoutMs = options.timeoutMs ?? THREAD_TITLE_TIMEOUT_MS;
+    this.turnTimeoutMs = options.turnTimeoutMs ?? options.timeoutMs ?? THREAD_TITLE_TURN_TIMEOUT_MS;
+  }
+
+  canGenerateTitle(backend: AppServerBackendKind): boolean {
+    return Boolean(
+      this.generators[backend] ?? this.generatorResolver?.(backend),
+    );
+  }
+
+  async generateTitle(params: {
+    backend: AppServerBackendKind;
+    threadId?: string;
+    userPrompt: string;
+  }): Promise<ThreadTitleGenerationResult> {
+    const userPrompt = params.userPrompt.trim();
+    if (!userPrompt) {
+      return {
+        status: "invalid",
+        reason: "empty_prompt",
+      };
+    }
+
+    const generator =
+      this.generators[params.backend] ?? this.generatorResolver?.(params.backend);
+    if (!generator) {
+      return {
+        status: "unavailable",
+        reason: `${params.backend}_title_generator_unavailable`,
+      };
+    }
+
+    const result = await generator.generateTitle({
+      backend: params.backend,
+      prompt: buildThreadTitlePrompt(userPrompt),
+      promptVersion: THREAD_TITLE_PROMPT_VERSION,
+      schema: THREAD_TITLE_RESPONSE_SCHEMA,
+      schemaName: "thread_title",
+      threadId: params.threadId,
+      timeoutMs: this.timeoutMs,
+      turnTimeoutMs: this.turnTimeoutMs,
+    });
+    if (result.status !== "ok") {
+      return result;
+    }
+
+    const normalized = normalizeThreadTitleObject(result.object);
+    const metadata = threadTitleGenerationMetadata(result);
+    if (!normalized.title) {
+      return {
+        status: "invalid",
+        reason: normalized.reason,
+        ...metadata,
+      };
+    }
+
+    return {
+      status: "generated",
+      title: normalized.title,
+      ...metadata,
+    };
+  }
+}
+
+function normalizeThreadTitleObject(
+  object: unknown
+): { title?: string; reason: string } {
+  if (!object || typeof object !== "object" || Array.isArray(object)) {
+    return { reason: "title_payload_must_be_object" };
+  }
+
+  const title = (object as { title?: unknown }).title;
+  if (typeof title !== "string") {
+    return { reason: "title_must_be_string" };
+  }
+
+  const cleaned = cleanThreadTitle(title);
+  if (!cleaned) {
+    return { reason: "title_empty" };
+  }
+  return {
+    title: truncateThreadTitle(cleaned),
+    reason: "ok",
+  };
+}
+
+function threadTitleGenerationMetadata(
+  result: Extract<ThreadTitleAdapterResult, { status: "ok" }>,
+): ThreadTitleGenerationMetadata {
+  return {
+    ...(result.accountKey ? { accountKey: result.accountKey } : {}),
+    ...(result.cachedTokens !== undefined ? { cachedTokens: result.cachedTokens } : {}),
+    ...(result.helperThreadId ? { helperThreadId: result.helperThreadId } : {}),
+    ...(result.helperTurnId ? { helperTurnId: result.helperTurnId } : {}),
+    ...(result.model ? { model: result.model } : {}),
+    ...(result.reasoningEffort ? { reasoningEffort: result.reasoningEffort } : {}),
+    ...(result.serviceTier ? { serviceTier: result.serviceTier } : {}),
+    ...(result.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
+  };
+}
+
+function cleanThreadTitle(value: string): string {
+  let title = value.trim();
+  title = stripMatchingQuotes(title);
+  title = title.replace(/[.!?。！？]+$/u, "").trim();
+  return title;
+}
+
+export function truncateThreadTitle(value: string): string {
+  const words = value.split(/\s+/u);
+  const wordTruncated = words
+    .slice(0, ACCEPTED_MAX_TITLE_WORDS)
+    .join(" ");
+  if (Array.from(wordTruncated).length <= ACCEPTED_MAX_TITLE_CHARACTERS) {
+    return wordTruncated;
+  }
+  // Count code points, as the limit does, but keep or drop each grapheme
+  // cluster whole: a cut inside one leaves half a ZWJ emoji or a letter
+  // without its NFD accent.
+  let kept = "";
+  let codePoints = 0;
+  for (const cluster of splitGraphemes(wordTruncated)) {
+    const size = Array.from(cluster).length;
+    if (codePoints + size > ACCEPTED_MAX_TITLE_CHARACTERS) {
+      break;
+    }
+    kept += cluster;
+    codePoints += size;
+  }
+  // A first cluster longer than the whole limit cannot be kept whole; cut it
+  // rather than return an empty title the caller has already ruled out.
+  return cleanThreadTitle(
+    kept || Array.from(wordTruncated).slice(0, ACCEPTED_MAX_TITLE_CHARACTERS).join(""),
+  );
+}
+
+function stripMatchingQuotes(value: string): string {
+  const pairs: Array<[string, string]> = [
+    ['"', '"'],
+    ["'", "'"],
+    ["`", "`"],
+  ];
+
+  for (const [left, right] of pairs) {
+    if (value.startsWith(left) && value.endsWith(right) && value.length >= 2) {
+      return value.slice(1, -1).trim();
+    }
+  }
+
+  return value;
+}

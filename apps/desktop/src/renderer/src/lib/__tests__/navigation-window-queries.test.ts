@@ -81,23 +81,137 @@ it.each(["reads", "time"] as const)("bounds saved pagination demand on startup b
   } finally { queries.dispose(); clock.mockRestore(); }
 });
 
-it("does not start saved expansion when a list is first opened after startup", async () => {
+it("restores saved pin depth when a project is first opened after startup, bounded like one click", async () => {
+  // Launch in another lens, then open Directories later: the saved depth
+  // still applies. Only one Load more click's reads are spent on it.
   let now = 0;
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-  const later = request("later");
-  const read = vi.fn(async (request: NavigationQueryRequest) => owner("fresh", 1000)({ ...request, pageSize: 1 }));
+  const read = vi.fn(owner("fresh", 1000));
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
-    loadedRowsByQuery: { [navigationResumeQueryKey(later)]: 100_000 },
+    loadedRowsByQuery: { [navigationResumeQueryKey(pins())]: 110, [navigationResumeQueryKey(pins("huge"))]: 100_000 },
   });
   try {
     queries.setDemand(new Map([["lens", request()]]));
-    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
-    now = 10_001;
+    await settled(queries, "lens");
+    now = 60_000;
     read.mockClear();
-    queries.setDemand(new Map([["lens", later]]));
-    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(1);
+    queries.setDemand(new Map([["directory-pins:project", pins()]]));
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(110);
+    expect(read).toHaveBeenCalledTimes(2);
+    read.mockClear();
+    queries.setDemand(new Map([["directory-pins:huge", pins("huge")]]));
+    await settled(queries, "directory-pins:huge");
+    expect(read.mock.calls.filter(([sent]) => sent.cursor)).toHaveLength(8);
+    expect(queries.getSnapshot().resources.get("directory-pins:huge")?.state.page?.directories).toHaveLength(810);
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
+it("keeps a Load more depth after browsing evicts the project's cached pins", async () => {
+  // Leaving Directories caches the pin page. Each selection, filter, or
+  // disclosure cached afterwards can push it out, long after startup.
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const onLoadMore = vi.fn();
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: vi.fn(owner("fresh", 1000)) }, undefined,
+    { loadedRowsByQuery: {}, onLoadMore });
+  const project = new Map([["directory-pins:project", pins()]]);
+  try {
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    await queries.loadMore("directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(110);
+    now = 60_000;
+    for (let index = 0; index < 65; index += 1) {
+      queries.setDemand(new Map([["lens", request(`browse-${index}`)]]));
+      await settled(queries, "lens");
+    }
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(110);
+    expect(onLoadMore).toHaveBeenCalledOnce();
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
+it("keeps the saved depth when the startup budget cuts a restore short", async () => {
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    // A slow owner spends the whole restore budget on the first page.
+    if (now === 0) now = 10_000;
+    return owner("fresh", 1000)(request);
+  });
+  const onLoadMore = vi.fn();
+  const onRangeReset = vi.fn();
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(pins())]: 110 }, onLoadMore, onRangeReset });
+  const project = new Map([["directory-pins:project", pins()]]);
+  try {
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(10);
+    // Collapse and reopen the project.
+    queries.setDemand(new Map());
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(110);
+    expect(onLoadMore).not.toHaveBeenCalled();
+    expect(onRangeReset).not.toHaveBeenCalled();
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
+it("does not lower the saved depth when Load more follows a restore cut short", async () => {
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    if (now === 0) now = 10_000;
+    return owner("fresh", 1000)(request);
+  });
+  const key = navigationResumeQueryKey(pins());
+  const onLoadMore = vi.fn();
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [key]: 310 }, onLoadMore });
+  const project = new Map([["directory-pins:project", pins()]]);
+  try {
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    await queries.loadMore("directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(110);
+    expect(onLoadMore).toHaveBeenCalledExactlyOnceWith(key, 310);
+    queries.setDemand(new Map());
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(310);
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
+it("restores a longer cached range without first showing only the first page", async () => {
+  let now = 0;
+  let slow = true;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    if (request.cursor && slow) now += 10_000;
+    return owner("fresh", 1000)(request);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(pins())]: 310 } });
+  const project = new Map([["directory-pins:project", pins()]]);
+  const sizes: number[] = [];
+  try {
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(110);
+    slow = false;
+    queries.setDemand(new Map());
+    const unsubscribe = queries.subscribe(() => {
+      const rows = queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories?.length;
+      if (rows !== undefined) sizes.push(rows);
+    });
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    unsubscribe();
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(310);
+    expect(Math.min(...sizes)).toBe(110);
   } finally { queries.dispose(); clock.mockRestore(); }
 });
 
@@ -151,12 +265,18 @@ it("publishes the first page before a saved continuation fails and does not retr
   } finally { queries.dispose(); }
 });
 
-it.each(["demand", "visibility"] as const)("does not revive saved expansion after %s interrupts startup", async (interrupt) => {
+it.each(["demand", "visibility"] as const)("restores saved depth again after %s interrupts startup", async (interrupt) => {
+  // A project that leaves demand for one render, or a window hidden during
+  // startup, ends that restore. The next opening restores the saved depth;
+  // the interrupted read's late page is discarded.
   const extension = deferred<NavigationQueryPage>();
-  const read = vi.fn(async (request: NavigationQueryRequest) => request.cursor
-    ? extension.promise : owner("fresh", 1000)({ ...request, pageSize: 1 }));
+  let held = false;
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    if (request.cursor && !held) { held = true; return extension.promise; }
+    return owner("fresh", 1000)(request);
+  });
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
-    loadedRowsByQuery: { [navigationResumeQueryKey(request())]: 100_000 },
+    loadedRowsByQuery: { [navigationResumeQueryKey(request())]: 210 },
   });
   const demand = new Map([["lens", request()]]);
   try {
@@ -164,11 +284,11 @@ it.each(["demand", "visibility"] as const)("does not revive saved expansion afte
     await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     if (interrupt === "demand") { queries.setDemand(new Map()); queries.setDemand(demand); }
     else { queries.setVisible(false); queries.setVisible(true); }
-    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
-    extension.resolve(page({ directories: directoryRows(1, 100), nextCursor: "late:100" }));
+    await settled(queries, "lens");
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(210);
+    extension.resolve(page({ directories: directoryRows(10, 110), nextCursor: "late:110" }));
     await queries.refresh();
-    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(1);
-    expect(read.mock.calls.filter(([sent]) => sent.cursor)).toHaveLength(1);
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(210);
   } finally { queries.dispose(); }
 });
 
@@ -203,6 +323,15 @@ it.each(["restart", "rebaseline"] as const)("keeps an explicit %s reset across l
     expect(reopened.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
   } finally { reopened.dispose(); }
 });
+function pins(directoryKey = "project"): NavigationQueryRequest {
+  return { protocol: 2, consumer: "main-sidebar", pageSize: 10, query: { kind: "directory", directoryKey, roots: "pinned" } };
+}
+function settled(controller: NavigationWindowQueries, id: string) {
+  return vi.waitFor(() => {
+    const resource = controller.getSnapshot().resources.get(id);
+    expect(resource?.loading === false && Boolean(resource.state.page)).toBe(true);
+  });
+}
 function page(patch: Partial<NavigationQueryPage> = {}): NavigationQueryPage {
   return { protocol: 2, queryKey: "query", generation: "generation", ownerEpoch: "owner", countsRevision: "revision",
     counts: { total: 100, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, entries: [], complete: false, nextCursor: "next", ...patch };
@@ -379,6 +508,52 @@ it("coalesces invalidations during a pending read into one following refresh", a
   await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   expect(read).toHaveBeenCalledTimes(2);
   queries.dispose();
+});
+
+it("rebuilds an invalidated queued Load more before extending its fresh snapshot", async () => {
+  const gates: Array<() => void> = [];
+  let block = false;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (block && sent.query.kind === "lens" && sent.query.filter !== "target") {
+      await new Promise<void>((resolve) => gates.push(resolve));
+    }
+    return owner("fresh", 250)(sent);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map(Array.from({ length: 5 }, (_, i) => [String(i), request(i === 4 ? "target" : String(i))])));
+  try {
+    await vi.waitFor(() => expect([...queries.getSnapshot().resources.values()].every((resource) => !resource.loading)).toBe(true));
+    block = true;
+    const blockers = Array.from({ length: 4 }, (_, i) => queries.refresh(String(i)));
+    await vi.waitFor(() => expect(gates).toHaveLength(4));
+    read.mockClear();
+    const more = queries.loadMore("4");
+    queries.invalidate("4");
+    gates.splice(0).forEach((finish) => finish());
+    await Promise.all([...blockers, more]);
+    expect(read.mock.calls.map(([sent]) => Boolean(sent.cursor))).toEqual([false, true]);
+    expect(queries.getSnapshot().resources.get("4")?.state.page?.directories).toHaveLength(110);
+  } finally { queries.dispose(); gates.splice(0).forEach((finish) => finish()); }
+});
+
+it("settles recovery readiness when a coalesced refresh cannot repeat an expired baseline", async () => {
+  const pending = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockResolvedValueOnce(page()).mockImplementationOnce(async () => {
+    await pending.promise;
+    throw new Error("navigation_cursor_expired");
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["lens", request()]]));
+  try {
+    await settled(queries, "lens");
+    const first = queries.refresh();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    const second = queries.refresh();
+    pending.resolve(page());
+    await Promise.all([first, second]);
+    expect(queries.getSnapshot().resources.get("lens")).toMatchObject({ loading: false, state: { rebaselineRequired: true } });
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally { queries.dispose(); pending.resolve(page()); }
 });
 
 it("schedules every expanded resource with four physical reads instead of dropping demand after eight", async () => {

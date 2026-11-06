@@ -2036,6 +2036,43 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("lazily reprices persisted Anthropic monitor rows and preserves provider estimates", async () => {
+    for (const [id, model, tokens, basis] of [
+      ["haiku-old", "unknown-haiku", 90_000, undefined],
+      ["haiku-provider", "claude-haiku-5-5", 120_000, "provider-reported"],
+      ["haiku-aggregate", "claude-haiku-5-5", 120_000, undefined],
+    ] as const) {
+      await store.upsertThreadUsageLine({ line: buildUsageLine({
+        backend: "claude", provider: "anthropic", model,
+        createdAt: Date.UTC(2026, 10, 2), scope: "monitor", source: "monitor",
+        parentThreadId: "parent-thread", threadId: id, usageLineId: id,
+        inputTokens: tokens + 834, cachedInputTokens: tokens, uncachedInputTokens: 834,
+        outputTokens: 238, reasoningOutputTokens: 0, totalTokens: tokens + 1_072,
+        priceStatus: basis ? "priced" : "unpriced", priceUnavailableReason: basis ? undefined : "missing-rate",
+        pricingBasis: basis, totalCostMicros: basis ? 12_345 : 0,
+        cachedInputCostMicros: 0, uncachedInputCostMicros: 0, outputCostMicros: 0,
+        pricingCatalogId: undefined, pricingCatalogVersion: undefined, pricingRateId: undefined,
+      }) });
+    }
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET model = 'claude-haiku-5-5' WHERE usage_line_id = 'haiku-old'").run();
+
+    const pricing = await store.readThreadPricing({ backend: "claude", threadId: "parent-thread" });
+    expect(pricing.lines.find((line) => line.usageLineId === "haiku-old")).toMatchObject({
+      priceStatus: "priced", provider: "anthropic", totalCostMicros: 1_102,
+      pricingCatalogId: "anthropic-api", pricingRateId: "anthropic:2026-10-07:claude-haiku-5-5:standard:input-lte-100k",
+    });
+    expect(pricing.lines.find((line) => line.usageLineId === "haiku-provider")).toMatchObject({
+      priceStatus: "priced", pricingBasis: "provider-reported", totalCostMicros: 12_345,
+      cachedInputCostMicros: 0, uncachedInputCostMicros: 0, outputCostMicros: 0,
+    });
+    expect(pricing.lines.find((line) => line.usageLineId === "haiku-aggregate")).toMatchObject({
+      priceStatus: "unpriced", priceUnavailableReason: "insufficient-token-breakdown", totalCostMicros: 0,
+    });
+    expect(pricing.summaries).toEqual([expect.objectContaining({
+      provider: "anthropic", totalCostMicros: 13_447, pricedUsageLineCount: 2, unpricedUsageLineCount: 1,
+    })]);
+  });
+
   it("reprices persisted Grok ACP usage under the xAI provider", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

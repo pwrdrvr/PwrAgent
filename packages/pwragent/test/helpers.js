@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { call } from "../src/client.js";
+import { ACTIVE } from "../src/store.js";
 
 const cli = process.env.PWRAGENT_TEST_CLI || fileURLToPath(new URL("../bin/pwragent.js", import.meta.url));
 const fixture = fileURLToPath(new URL("./fixtures/codex.js", import.meta.url));
@@ -19,12 +20,27 @@ export async function eventually(check, waitMs = timeout) {
   throw new Error("Condition did not become true");
 }
 
+export async function restartAfterCompletedTurn(h, turn, wait = eventually) {
+  // A workspace write can precede saved provider history and turn/completed.
+  // The owning runtime's completed job is the restart readiness boundary.
+  await wait(async () => {
+    const job = (await h.rpc("list")).find((job) => job.threadId === turn.threadId && job.turnId === turn.turnId);
+    if (!job || ACTIVE.has(job.status)) return false;
+    if (job.status !== "completed") throw new Error(`Expected a completed turn before restart; got ${job.status}`);
+    return true;
+  });
+  await h.stop(h.daemon);
+  return h.start();
+}
+
 export async function setup(t) {
   // The daemon refuses a socket path over 100 bytes (the Unix sun_path
   // limit), and the socket sits 35 bytes below this root. A root inside the
   // checkout fails in long checkouts such as Sandboxer's ~/pwragent/wt/<sha>,
   // so use /tmp: os.tmpdir() is a long /private/var/folders/... on macOS.
-  const root = mkdtempSync("/tmp/pwragent-h-");
+  // The daemon registers canonical project paths, and macOS /tmp is a link
+  // to /private/tmp, so callers must use the canonical root too.
+  const root = realpathSync(mkdtempSync("/tmp/pwragent-h-"));
   const workspace = path.join(root, "w");
   const home = path.join(root, "c");
   const data = path.join(root, "f");

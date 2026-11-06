@@ -15,7 +15,7 @@ import { discoverDesktopApplications } from "../settings/application-discovery";
 import { discoverGitCommands } from "../settings/git-discovery";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { discoverGlabCommands } from "../settings/glab-discovery";
-import { CodexAppServerClient } from "../codex-app-server/client";
+import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import type { ManagedCodexRuntime } from "../codex-managed-runtime";
 
 vi.mock("../settings/git-discovery", async (importOriginal) => ({

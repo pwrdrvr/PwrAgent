@@ -7,6 +7,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
+  AppServerThreadMessageOrigin,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
@@ -505,6 +506,129 @@ describe("TranscriptList", () => {
       backend: "codex",
       instanceId: "pwr_remote",
       threadId: "remote-source-thread",
+    });
+  });
+
+  describe("to-do dispatched prompts", () => {
+    const raisingThread = {
+      id: "source-thread",
+      title: "Branch picker error handling",
+      titleSource: "derived",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: true, unread: false },
+    } as NavigationThreadSummary;
+
+    const renderTodoMessage = (
+      origin: AppServerThreadMessageOrigin,
+      threads: NavigationThreadSummary[] = [raisingThread],
+    ) => {
+      const onShowThread = vi.fn();
+      const view = render(
+        <ThreadLinkProvider onShowThread={onShowThread} threads={threads}>
+          <TranscriptList
+            entries={[
+              {
+                type: "message",
+                id: "message-todo",
+                role: "user",
+                text: "Stabilize the sync test before the release branch.",
+                origin,
+              },
+            ]}
+            loading={false}
+            loadingMore={false}
+            onLoadOlder={async () => undefined}
+          />
+        </ThreadLinkProvider>,
+      );
+      return { ...view, onShowThread };
+    };
+
+    it("says a to-do from the raising thread sent it and links that thread", () => {
+      const { container, onShowThread } = renderTodoMessage({
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "source-thread" },
+        threadTodo: { id: "todo-1", title: "Fix flaky sync test" },
+      });
+
+      const role = screen.getByText("To-do from");
+      expect(screen.queryByText("From thread")).not.toBeInTheDocument();
+      expect(screen.queryByText("User")).not.toBeInTheDocument();
+      expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
+      expect(role).toHaveAttribute("data-tooltip", "Sent from the to-do “Fix flaky sync test”.");
+      expect(role).toHaveClass("tooltip-target");
+      // The card is resolved by now: nothing links or expands it.
+      expect(container.querySelector("[aria-expanded]")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open thread Branch picker error handling" }));
+      expect(onShowThread).toHaveBeenCalledWith({ backend: "codex", threadId: "source-thread" });
+    });
+
+    it("adds no tooltip for a card without a title", () => {
+      renderTodoMessage({
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "source-thread" },
+        threadTodo: { id: "todo-1" },
+      });
+
+      expect(screen.getByText("To-do from")).not.toHaveAttribute("data-tooltip");
+    });
+
+    it("says only To-do when no raising thread can be shown", () => {
+      // No thread links and no source title: nothing can follow "from".
+      render(
+        <TranscriptList
+          entries={[
+            {
+              type: "message",
+              id: "message-todo",
+              role: "user",
+              text: "Stabilize the sync test before the release branch.",
+              origin: {
+                kind: "agent",
+                sourceThread: { backend: "codex", threadId: "unknown-thread" },
+                threadTodo: { id: "todo-1", title: "Fix flaky sync test" },
+              },
+            },
+          ]}
+          loading={false}
+          loadingMore={false}
+          onLoadOlder={async () => undefined}
+        />,
+      );
+
+      expect(screen.getByText("To-do")).toBeInTheDocument();
+      expect(screen.queryByText("To-do from")).not.toBeInTheDocument();
+    });
+
+    it("names a remote raising thread's instance", () => {
+      renderTodoMessage({
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          instanceId: "pwr_remote",
+          instanceLabel: "Studio Mac",
+          threadId: "remote-source-thread",
+          title: "Remote pagination audit",
+        },
+        threadTodo: { id: "todo-1", title: "Fix flaky sync test" },
+      }, []);
+
+      expect(screen.getByText("To-do from")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open thread Remote pagination audit" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Runs on Studio Mac")).toBeInTheDocument();
+    });
+
+    it("reads a malformed marker as an ordinary thread message", () => {
+      renderTodoMessage({
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "source-thread" },
+        threadTodo: { id: 7 } as never,
+      });
+
+      expect(screen.getByText("From thread")).toBeInTheDocument();
+      expect(screen.queryByText("To-do from")).not.toBeInTheDocument();
     });
   });
 
@@ -2904,6 +3028,91 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.getByText("First commentary.")).toBeVisible();
     expect(screen.getByText("Second commentary.")).toBeVisible();
     expect(screen.getByText("Third commentary.")).toBeVisible();
+  });
+
+  it("keeps clickable image previews when a running turn completes and its work folds", () => {
+    const image = { type: "image" as const, url: "https://example.com/after.png", alt: "After screenshot" };
+    const messageImage = { type: "image" as const, url: "https://example.com/before.png", alt: "Before screenshot" };
+    const turn = { id: "image-turn", status: "in_progress" as const, startedAt: Date.now() };
+    const entries: AppServerThreadEntry[] = [
+      {
+        type: "activity",
+        id: "image-tool",
+        summary: "Inspected screenshots",
+        details: [
+          { id: "image-detail", kind: "read", label: "Read screenshot", images: [image, image] },
+        ],
+        turn,
+      },
+      {
+        type: "message",
+        id: "image-commentary",
+        role: "assistant",
+        phase: "commentary",
+        text: "Comparing the screenshots.",
+        parts: [messageImage],
+        turn,
+      },
+    ];
+    const onOpenImage = vi.fn();
+    const props = { loading: false, loadingMore: false, onLoadOlder: async () => undefined, onOpenImage };
+    const view = render(<TranscriptList {...props} entries={entries} activeTurnId={turn.id} />);
+    expect(screen.getAllByRole("img", { name: "After screenshot" })).toHaveLength(2);
+
+    const completedTurn = { ...turn, status: "completed" as const, durationMs: 90_000 };
+    const completedEntries: AppServerThreadEntry[] = [
+      ...entries.map((entry) => ({ ...entry, turn: completedTurn })),
+      { type: "message", id: "image-final", role: "assistant", phase: "final", text: "The screenshots look right.", turn: completedTurn },
+    ];
+    view.rerender(<TranscriptList {...props} entries={completedEntries} />);
+
+    const toggle = screen.getByRole("button", { name: /Worked for 1m 30s/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Inspected screenshots")).not.toBeInTheDocument();
+    expect(screen.getByText("The screenshots look right.")).toBeVisible();
+    const previews = screen.getByRole("group", { name: "Images from previous work" });
+    expect(within(previews).getAllByRole("img")).toHaveLength(2);
+    fireEvent.click(within(previews).getByRole("button", { name: "Expand transcript image 1" }));
+    expect(onOpenImage).toHaveBeenCalledWith(image);
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("group", { name: "Images from previous work" })).not.toBeInTheDocument();
+    expect(screen.getByText("Inspected screenshots")).toBeVisible();
+
+    fireEvent.click(toggle);
+    expect(screen.getAllByRole("img", { name: "After screenshot" })).toHaveLength(1);
+    expect(screen.getByRole("img", { name: "Before screenshot" })).toBeVisible();
+  });
+
+  it("keeps a stopped turn's work open until the operator folds it", () => {
+    const turn = { id: "stopped-turn", status: "cancelled" as const, durationMs: 430_000 };
+    const entries: AppServerThreadEntry[] = [
+      { type: "activity", id: "tool-1", summary: "Read AGENTS.md", details: [], turn },
+      { type: "activity", id: "tool-2", summary: "Ran cargo test", details: [], turn },
+    ];
+    const onExpandedWorkPhaseGroupIdsChange = vi.fn();
+    const props = {
+      entries,
+      loading: false,
+      loadingMore: false,
+      threadId: "thread-1",
+      onExpandedWorkPhaseGroupIdsChange,
+      onLoadOlder: async () => undefined,
+    };
+    const view = render(<TranscriptList {...props} expandedWorkPhaseGroupIds={[]} />);
+
+    const toggle = screen.getByRole("button", { name: /Worked for 7m 10s · 2 tool updates/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Ran cargo test")).toBeVisible();
+
+    fireEvent.click(toggle);
+    const foldedGroupIds = onExpandedWorkPhaseGroupIdsChange.mock.calls[0]?.[0];
+    expect(foldedGroupIds).toHaveLength(1);
+
+    view.rerender(<TranscriptList {...props} expandedWorkPhaseGroupIds={foldedGroupIds} />);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Ran cargo test")).not.toBeInTheDocument();
   });
 
   it("restores expanded work and the viewport after the transcript remounts", () => {

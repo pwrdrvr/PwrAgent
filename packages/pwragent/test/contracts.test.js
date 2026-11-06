@@ -48,7 +48,7 @@ test("registry recovers uncertain work without replay, binds workspace/home and 
   assert.throws(() => new JobStore(directory, identity), SyntaxError);
 });
 
-for (const [fixture, expected] of [["silent-codex.js", /timed out/], ["invalid-codex.js", /Invalid Codex response/]]) {
+for (const [fixture, expected] of [["silent-codex.js", /timeout/], ["invalid-codex.js", /Invalid Codex response/]]) {
   test(`App Server ${fixture} fails pending requests and cleans up`, { timeout: 5000 }, async () => {
     const command = fileURLToPath(new URL(`./fixtures/${fixture}`, import.meta.url));
     chmodSync(command, 0o755);

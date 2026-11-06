@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
+import * as gitDiscovery from "../settings/git-discovery";
 import { suggestedSlackAppName } from "../messaging/messaging-settings-domain";
 import { managedGrokBuildsEnabledForRuntime } from "../settings/desktop-config";
 import {
@@ -69,6 +70,37 @@ function expectBundledGitPath(actual: string | undefined, inherited: string[]): 
 }
 
 describe("DesktopSettingsService", () => {
+  it("drains superseded discovery caches and closes admission before quit", async () => {
+    const releases: Array<() => void> = [];
+    const discovery = vi.spyOn(gitDiscovery, "discoverGitCommands").mockImplementation(
+      () => new Promise((resolve) => {
+        releases.push(() => resolve({ candidates: [] }));
+      }),
+    );
+    try {
+      const service = new DesktopSettingsService({
+        configPath: path.join(createTempRoot(), "config.toml"),
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      const first = service.refreshGitDiscovery();
+      const second = service.refreshGitDiscovery();
+      expect(discovery).toHaveBeenCalledTimes(2);
+      let closed = false;
+      const closing = service.closeCommandDiscovery().then(() => { closed = true; });
+      releases[1]();
+      await second;
+      expect(closed).toBe(false);
+      releases[0]();
+      await first;
+      await closing;
+      await service.refreshGitDiscovery();
+      expect(discovery).toHaveBeenCalledTimes(2);
+    } finally {
+      discovery.mockRestore();
+    }
+  });
+
   it("refuses default Codex launch arguments after an invalid cold-start profile", () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
@@ -3252,6 +3284,7 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
 
     // Write non-default values. The byte-preserving patch path should
@@ -3264,6 +3297,7 @@ describe("DesktopSettingsService", () => {
           lightTheme: "catppuccin-latte",
           themedDockIcon: false,
           terminalMinimumContrast: true,
+          calmMotion: true,
           density: "compact",
           sidebarTextSize: "lg",
         },
@@ -3277,6 +3311,7 @@ describe("DesktopSettingsService", () => {
     expect(writtenFile).toContain('light_theme = "catppuccin-latte"');
     expect(writtenFile).toContain("themed_dock_icon = false");
     expect(writtenFile).toContain("terminal_minimum_contrast = true");
+    expect(writtenFile).toContain("calm_motion = true");
     expect(writtenFile).toContain('density = "compact"');
     expect(writtenFile).toContain('sidebar_text_size = "lg"');
 
@@ -3301,6 +3336,10 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "config",
     });
+    expect(afterWrite.general.appearance.calmMotion).toEqual({
+      value: true,
+      source: "config",
+    });
     expect(afterWrite.general.appearance.density).toEqual({
       value: "compact",
       source: "config",
@@ -3316,6 +3355,7 @@ describe("DesktopSettingsService", () => {
       density: "compact",
       sidebarTextSize: "lg",
       transcriptTextSize: "md",
+      calmMotion: true,
     });
 
     // Restore to defaults: the patch path should DELETE the keys
@@ -3328,6 +3368,7 @@ describe("DesktopSettingsService", () => {
           lightTheme: "tangerine-light",
           themedDockIcon: true,
           terminalMinimumContrast: false,
+          calmMotion: false,
           density: "mission-control",
           sidebarTextSize: "md",
         },
@@ -3340,6 +3381,7 @@ describe("DesktopSettingsService", () => {
     expect(restoredFile).not.toContain("light_theme");
     expect(restoredFile).not.toContain("themed_dock_icon");
     expect(restoredFile).not.toContain("terminal_minimum_contrast");
+    expect(restoredFile).not.toContain("calm_motion");
     expect(restoredFile).not.toContain('density = "');
     expect(restoredFile).not.toContain('sidebar_text_size = "');
 
@@ -3355,6 +3397,10 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "default",
     });
+    expect(afterRestore.general.appearance.calmMotion).toEqual({
+      value: false,
+      source: "default",
+    });
     expect(afterRestore.general.appearance.density.source).toBe("default");
     expect(afterRestore.general.appearance.sidebarTextSize.source).toBe(
       "default",
@@ -3366,6 +3412,7 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
   });
 
@@ -3437,6 +3484,7 @@ describe("DesktopSettingsService", () => {
       density: "compact",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
 
     // Patch that restores defaults still fires (the renderer needs to
@@ -3460,6 +3508,7 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
 
     // Patch with `general` but only developerMode (not appearance) must
@@ -3486,6 +3535,7 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
 
     // A theme-only patch is an appearance change too: every window has to
@@ -3503,6 +3553,25 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
+    });
+
+    // Calm motion is an appearance axis: every window re-applies
+    // `<html data-motion>`.
+    await service.writeConfigPatchTargeted({
+      general: {
+        appearance: { calmMotion: true },
+      },
+    });
+    expect(onAppearanceChange).toHaveBeenCalledTimes(5);
+    expect(onAppearanceChange).toHaveBeenLastCalledWith({
+      theme: "dark",
+      darkTheme: "tangerine-dark",
+      lightTheme: "blue-light",
+      density: "mission-control",
+      sidebarTextSize: "md",
+      transcriptTextSize: "md",
+      calmMotion: true,
     });
   });
 
@@ -4467,6 +4536,33 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveCodexSpawnEnv().CODEX_HOME).toBe(
       path.join(root, "codex", "profiles", "work"),
     );
+  });
+
+  it("never reads the operator's home profile when given a child env", () => {
+    // The operator's real ~/.pwragent chose another Git; this process runs
+    // under its own PWRAGENT_HOME. An injected env names neither root.
+    const home = createTempRoot();
+    const operatorProfile = path.join(home, ".pwragent", "profiles", "default");
+    fs.mkdirSync(operatorProfile, { recursive: true });
+    fs.writeFileSync(
+      path.join(operatorProfile, "config.toml"),
+      "[applications.git]\npath = \"/operator/host-git/bin/git\"\n",
+    );
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("PWRAGENT_HOME", createTempRoot());
+    try {
+      const service = new DesktopSettingsService({
+        env: { PATH: ["/usr/bin", "/bin"].join(path.delimiter) } as NodeJS.ProcessEnv,
+        secretStore: new MemoryDesktopSecretStore(),
+        resolveCodexShellEnv: () => ({ PATH: "/usr/bin" }),
+      });
+
+      expect(service.resolveGitCommandPreference()).toBeUndefined();
+      expectBundledGitPath(service.resolveCodexSpawnEnv().PATH, ["/usr/bin"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("adds login shell PATH entries to the Codex app-server spawn env", () => {

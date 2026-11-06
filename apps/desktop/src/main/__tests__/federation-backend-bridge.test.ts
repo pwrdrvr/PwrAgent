@@ -21,13 +21,16 @@ import {
   FEDERATION_RESPONSE_BYTE_BUDGET,
   FederationRemoteBackendClient,
   QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE,
+  PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE,
   QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE,
   registerFederationBackendHandlers,
   additionalFederationBackendCapabilities,
+  authenticateMessageOrigin,
   type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
+import { THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE } from "../pr-status/thread-pr-watches-federation";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
@@ -4117,6 +4120,22 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it("routes explicit merge-hold resolution to the owner with authenticated peer provenance", async () => {
+    const manageThreadMergeHolds = vi.fn(async () => ({ holds: [], dependents: [] }));
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "waiting-owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES, now: () => 2_000 });
+    router.registerConnection({ peerId: "windows", capabilities: ["turn_control"], sendEnvelope: (envelope) => replies.push(envelope) });
+    registerFederationBackendHandlers({ router, backend: { manageThreadMergeHolds } as unknown as FederationBackendOperations });
+    const request = { action: "resolve", backend: "codex", threadId: "waiting", holdId: "hold-17", note: "Windows findings reconciled" };
+    await router.routeEnvelope({ sourcePeerId: "windows", envelope: {
+      id: "resolve-hold", kind: "request", method: FEDERATION_BACKEND_METHODS.manageThreadMergeHolds, params: request,
+      protocolVersion: 1, sourceInstanceId: "windows", targetInstanceId: "waiting-owner", createdAt: 1_000,
+    } });
+    expect(manageThreadMergeHolds).toHaveBeenCalledWith(request, { requesterInstanceId: "windows" });
+    expect(replies.at(-1)).toMatchObject({ kind: "response", result: { holds: [], dependents: [] } });
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.manageThreadMergeHolds]).toBe("turn_control");
+  });
+
   it("maps expanded remote control operations to capability-guarded handlers", async () => {
     const backend: FederationBackendOperations = {
       getNavigationSnapshot: vi.fn(),
@@ -4134,6 +4153,7 @@ describe("federation backend bridge", () => {
       markThreadSeen: vi.fn(),
       setThreadReaction: vi.fn(),
       setThreadLock: vi.fn(),
+      manageThreadMergeHolds: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
       mountRemoteChild: vi.fn(),
@@ -4660,6 +4680,7 @@ describe("federation backend bridge", () => {
         markThreadSeen: vi.fn(),
         setThreadReaction: vi.fn(),
         setThreadLock: vi.fn(),
+      manageThreadMergeHolds: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
         mountRemoteChild: vi.fn(),
@@ -5126,6 +5147,127 @@ describe("backend.setQueuedTurnPaused", () => {
   });
 });
 
+describe("project Forge Automation methods", () => {
+  const directoryKey = "directory:/Users/owner/repos/PwrAgent";
+  const automation = {
+    paused: true,
+    pausedAt: 1_000,
+    autoFixMergeConflicts: true,
+    autoFixCiFailures: true,
+    prWatches: true,
+    refuseThreadMessages: true,
+    wakeupPolicy: "hold" as const,
+  };
+  const envelope = (
+    id: string,
+    method: string,
+    params: unknown,
+  ): FederationProtocolEnvelope => ({
+    id,
+    kind: "request",
+    method,
+    params,
+    protocolVersion: 1,
+    sourceInstanceId: "viewer_one",
+    targetInstanceId: "owner_one",
+    createdAt: 1_000,
+  });
+  const ownerRouter = (params: {
+    backend: Partial<FederationBackendOperations>;
+    viewerCapabilities: FederationCapability[];
+  }) => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: params.viewerCapabilities,
+      sendEnvelope: (reply) => replies.push(reply),
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: params.backend as FederationBackendOperations,
+    });
+    return { router, replies };
+  };
+
+  it("gates all three on turn control", () => {
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.setProjectForgeAutomation])
+      .toBe("turn_control");
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.listProjectHeldWakeups])
+      .toBe("turn_control");
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups])
+      .toBe("turn_control");
+  });
+
+  it("saves, lists and resolves on the owner for a viewer granted turn control", async () => {
+    const setProjectForgeAutomation = vi.fn(async () => ({ directoryKey, automation }));
+    const listProjectHeldWakeups = vi.fn(async () => ({ directoryKey, wakeups: [] }));
+    const resolveProjectHeldWakeups = vi.fn(async () => ({ results: [{ entryId: "held-1", status: "discarded" as const }] }));
+    const { router, replies } = ownerRouter({
+      backend: { setProjectForgeAutomation, listProjectHeldWakeups, resolveProjectHeldWakeups },
+      viewerCapabilities: ["turn_control"],
+    });
+    const resolutions = [{ entryId: "held-1", backend: "codex", threadId: "thread-1", action: "discard" }];
+
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-1", FEDERATION_BACKEND_METHODS.setProjectForgeAutomation, { directoryKey, automation }) });
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-2", FEDERATION_BACKEND_METHODS.listProjectHeldWakeups, { directoryKey }) });
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-3", FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups, { directoryKey, resolutions }) });
+
+    expect(setProjectForgeAutomation).toHaveBeenCalledWith({ directoryKey, automation });
+    expect(listProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey });
+    expect(resolveProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey, resolutions });
+    expect(replies.map((reply) => reply.kind)).toEqual(["response", "response", "response"]);
+    expect(replies[0]).toMatchObject({ result: { directoryKey, automation } });
+  });
+
+  it("refuses a viewer without turn control, without touching the owner's project", async () => {
+    const setProjectForgeAutomation = vi.fn();
+    const resolveProjectHeldWakeups = vi.fn();
+    const { router, replies } = ownerRouter({
+      backend: { setProjectForgeAutomation, resolveProjectHeldWakeups },
+      viewerCapabilities: ["thread_navigation", "thread_detail", "project_forge_automation"],
+    });
+
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-4", FEDERATION_BACKEND_METHODS.setProjectForgeAutomation, { directoryKey, automation }) });
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-5", FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups, { directoryKey, resolutions: [] }) });
+
+    expect(replies.map((reply) => reply.kind)).toEqual(["error", "error"]);
+    expect(setProjectForgeAutomation).not.toHaveBeenCalled();
+    expect(resolveProjectHeldWakeups).not.toHaveBeenCalled();
+  });
+
+  it("tells the viewer to update an older owner, and passes other failures through", async () => {
+    const olderOwner = vi.fn(async () => {
+      throw Object.assign(new Error("No handler"), { code: "method_not_found" });
+    });
+    const older = new FederationRemoteBackendClient({ request: olderOwner } as unknown as FederationRpcEndpoint);
+    await expect(older.setProjectForgeAutomation({ directoryKey, automation }))
+      .rejects.toThrow(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
+    await expect(older.listProjectHeldWakeups({ directoryKey }))
+      .rejects.toThrow(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
+    await expect(older.resolveProjectHeldWakeups({ directoryKey, resolutions: [] }))
+      .rejects.toThrow(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
+
+    const offline = vi.fn(async () => { throw new Error("Peer disconnected."); });
+    await expect(
+      new FederationRemoteBackendClient({ request: offline } as unknown as FederationRpcEndpoint)
+        .setProjectForgeAutomation({ directoryKey, automation }),
+    ).rejects.toThrow("Peer disconnected.");
+    expect(olderOwner).toHaveBeenCalledWith({
+      method: FEDERATION_BACKEND_METHODS.setProjectForgeAutomation,
+      params: { directoryKey, automation },
+    });
+  });
+});
+
 describe("federation workspace recovery methods", () => {
   function route(backend: Partial<FederationBackendOperations>, capabilities: Parameters<FederationRouter["registerConnection"]>[0]["capabilities"]) {
     const replies: FederationProtocolEnvelope[] = [];
@@ -5241,5 +5383,128 @@ describe("federation workspace recovery methods", () => {
     });
 
     expect(JSON.stringify(reply)).toContain("method_not_found");
+  });
+});
+
+describe("federated to-do provenance", () => {
+  const sourceThread = {
+    backend: "codex" as const,
+    threadId: "raising-thread",
+    instanceId: "spoofed_instance",
+    title: "Raising thread",
+  };
+  const authenticate = (messageOrigin: Record<string, unknown>) => authenticateMessageOrigin({
+    messageOrigin: messageOrigin as never,
+    resolveSourceInstance: () => ({ label: "Viewer Mac" }),
+    sourceInstanceId: "viewer_one",
+  });
+
+  it("keeps a valid card marker and still forces the sender's instance", () => {
+    expect(authenticate({
+      kind: "agent", sourceThread, threadTodo: { id: "todo-1", title: "Rewrite the CLI" },
+    })).toEqual({
+      kind: "agent",
+      sourceThread: {
+        backend: "codex", threadId: "raising-thread", instanceId: "viewer_one",
+        instanceLabel: "Viewer Mac", title: "Raising thread",
+      },
+      threadTodo: { id: "todo-1", title: "Rewrite the CLI" },
+    });
+  });
+
+  it("drops a malformed card marker and caps a long title", () => {
+    for (const threadTodo of [{ id: "" }, { id: 7 }, { id: "x".repeat(201) }, "todo-1", [{ id: "todo-1" }]]) {
+      expect(authenticate({ kind: "agent", sourceThread, threadTodo })).not.toHaveProperty("threadTodo");
+    }
+    expect(authenticate({
+      kind: "agent", sourceThread, threadTodo: { id: "todo-1", title: { text: "Not text" } },
+    })?.threadTodo).toEqual({ id: "todo-1" });
+    expect(authenticate({
+      kind: "agent", sourceThread, threadTodo: { id: "todo-1", title: "t".repeat(400) },
+    })?.threadTodo?.title).toHaveLength(120);
+  });
+
+  it("drops a card marker that names no raising thread or rides another kind", () => {
+    expect(authenticate({ kind: "agent", threadTodo: { id: "todo-1" } })).toEqual({ kind: "agent" });
+    expect(authenticate({ kind: "pwragent", sourceThread, threadTodo: { id: "todo-1" } }))
+      .not.toHaveProperty("threadTodo");
+  });
+
+  it("passes an origin without a marker through unchanged", () => {
+    const origin = { kind: "pwragent" as const };
+    expect(authenticate(origin)).toBe(origin);
+  });
+});
+
+describe("backend.manageThreadPrWatchesV1", () => {
+  const connectOwner = (params: {
+    backend: Partial<FederationBackendOperations>;
+    viewerCapabilities: FederationCapability[];
+  }) => {
+    const router = new FederationRouter({
+      localInstanceId: "owner",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({
+      peerId: "viewer",
+      capabilities: params.viewerCapabilities,
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: params.backend as FederationBackendOperations,
+    });
+    rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer",
+      remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); },
+    });
+    return new FederationRemoteBackendClient(rpc);
+  };
+  const cancel = { action: "cancel" as const, backend: "codex" as const, threadId: "thread-1", watchId: "watch-1" };
+
+  it("stops a watch on its owner for a viewer granted turn control", async () => {
+    const manageThreadPrWatchesV1 = vi.fn(async () => ({ ok: true as const, cancelled: true }));
+    const client = connectOwner({
+      backend: { manageThreadPrWatchesV1 },
+      viewerCapabilities: ["turn_control"],
+    });
+
+    await expect(client.manageThreadPrWatchesV1(cancel)).resolves.toEqual({ ok: true, cancelled: true });
+    expect(manageThreadPrWatchesV1).toHaveBeenCalledExactlyOnceWith(cancel);
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1])
+      .toBe("turn_control");
+  });
+
+  it("refuses a viewer without turn control, and leaves the watch alone", async () => {
+    const manageThreadPrWatchesV1 = vi.fn();
+    const client = connectOwner({
+      backend: { manageThreadPrWatchesV1 },
+      viewerCapabilities: ["thread_navigation", "thread_detail"],
+    });
+
+    await expect(client.manageThreadPrWatchesV1(cancel)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "forbidden" },
+    });
+    expect(manageThreadPrWatchesV1).not.toHaveBeenCalled();
+  });
+
+  it("tells the viewer to update an owner that predates the request", async () => {
+    const client = connectOwner({ backend: {}, viewerCapabilities: ["turn_control"] });
+
+    await expect(client.manageThreadPrWatchesV1(cancel)).resolves.toEqual({
+      ok: false,
+      error: { code: "federation_unsupported", message: THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE },
+    });
+  });
+
+  it("passes other failures through", async () => {
+    const offline = vi.fn(async () => { throw new Error("Peer disconnected."); });
+    await expect(
+      new FederationRemoteBackendClient({ request: offline } as unknown as FederationRpcEndpoint)
+        .manageThreadPrWatchesV1(cancel),
+    ).rejects.toThrow("Peer disconnected.");
   });
 });

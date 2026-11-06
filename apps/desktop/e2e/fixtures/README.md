@@ -91,6 +91,29 @@ fixture for CI.
 - If a capture includes secrets or machine-specific paths, use the replay
   derivation redaction flags when promoting the fixture.
 
+## Repeated Responses
+
+The replay serves a run of consecutive `response` steps in any order. The app
+calls `initialize`, `thread/list`, `thread/read`, and `skills/list` again on
+its own, at startup and on refresh. The replay answers each such call with the
+next scripted response for it, then keeps reusing the last one. A refresh that
+arrives early can therefore take a response that describes the state after a
+user action. On a slow runner the app then shows a thread that does not exist
+yet.
+
+`validateReplayFixture` rejects a second, different response to the same call
+in one run. Fix the fixture with the field that says what the response answers:
+
+- `afterResponseId`: the response that causes it, such as the `thread/start`
+  that creates the thread a later `thread/list` lists.
+- `threadId` (`thread/read` only): the thread it reads. Set it on every
+  `thread/read` in the run or on none.
+- `before` (`thread/read` only): the cursor of the older page it answers.
+
+Identical repeats are allowed, as are responses separated by a notification or
+request step. `derive:replay-fixture` sets `threadId` and `before` from each
+captured read request.
+
 ## Protocol Parity Fixture Inventory
 
 The current fixture set is still valid after rollout-file removal, but most

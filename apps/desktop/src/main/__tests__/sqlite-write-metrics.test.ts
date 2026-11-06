@@ -322,6 +322,38 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
+  it("budgets a Claude turn's live usage reports at one commit each", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+      flushLiveThreadUsageLines(): Promise<void>;
+    };
+    const target = { backend: "claude" as const, threadId: "claude-live-usage-fixture" };
+    const report = (step: number) => internal.emit({ backend: "claude", notification: {
+      method: "thread/tokenUsage/updated", params: {
+        threadId: target.threadId, turnId: "turn", model: "claude-opus-5-5",
+        tokenUsage: { last: { inputTokens: 350 * step, cachedInputTokens: 200 * step, cacheWriteInputTokens: 50,
+          outputTokens: 20 * step, totalTokens: 370 * step }, claudeCostUSD: 0.1 * step },
+      },
+    } });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // Three reports 30 seconds apart while the turn runs, then the result's.
+        for (let step = 1; step <= 4; step += 1) {
+          await report(step);
+          await internal.flushLiveThreadUsageLines();
+        }
+      });
+      const pricing = await store.readThreadPricing(target);
+      expect(pricing.lines).toHaveLength(1);
+      expect(pricing.lines[0]).toMatchObject({ totalCostMicros: 400_000, outputTokens: 80 });
+      expectSqliteWriteBudget({ scenario: "claude-live-turn-usage", note: "Three live usage reports and the result's, each in its own flush window: one commit per report. Reports run at most every 30 s and only while Claude streams, so ~120 commits per streaming hour (~6.8 MB at ~57 KB each); 0 MB/day idle", writes });
+    } finally { await registry.close(); }
+  });
+
   it("budgets Claude creation and operator mode changes without repeat-selection writes", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
@@ -342,6 +374,200 @@ describe("sqlite write metrics", () => {
       });
       expectSqliteWriteBudget({ scenario: "claude-permission-selection", note: "one operator mode selection; 100 duplicate selections add no writes", writes });
     } finally { await registry.close(); }
+  });
+
+  it("shows Claude's own sub-agents as harness cards and in the thread list's tray, never in Actions", async () => {
+    const run = gitCommand.getMockImplementation()!;
+    // This fixture is not a Git repository; keep native Git startup out of the turn.
+    gitCommand.mockImplementation(async (cwd, args, options) => {
+      if (cwd === tempDir && args.join(" ") === "rev-parse --abbrev-ref HEAD") {
+        return { stdout: "", stderr: "" };
+      }
+      return await run(cwd, args, options);
+    });
+    const progressGate = Promise.withResolvers<void>();
+    const progressDone = Promise.withResolvers<void>();
+    const finishGate = Promise.withResolvers<void>();
+    const events: AgentEvent[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        getSessionInfo: async () => undefined,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+        query: ({ prompt, options = {} }) => {
+          if (typeof prompt === "string") throw new Error("Expected streaming input");
+          const input = prompt[Symbol.asyncIterator]();
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            await input.next();
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            yield { type: "assistant", parent_tool_use_id: null, message: {
+              id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+            } } as ClaudeMessage;
+            yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent",
+              description: "Audit the SDK", task_type: "local_agent", subagent_type: "general-purpose",
+              is_backgrounded: true } as ClaudeMessage;
+            yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+              message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as ClaudeMessage;
+            yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as ClaudeMessage;
+            await progressGate.promise;
+            for (let index = 0; index < 20; index += 1) {
+              yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent",
+                description: "Audit the SDK", usage: { total_tokens: index, tool_uses: index, duration_ms: index },
+                last_tool_name: "Grep" } as ClaudeMessage;
+            }
+            progressDone.resolve();
+            await finishGate.promise;
+            yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
+              status: "completed", output_file: "", summary: "Audit done" } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: () => { finishGate.resolve(); } }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    registry.onEvent((event) => { events.push(event); });
+    const panel = async (threadId: string) => ({
+      counts: await store.readThreadSubAgentLensCounts({ backend: "claude", threadId, visibleSince: 0 }),
+      cards: await store.listThreadSubAgentLensPage({
+        backend: "claude", threadId, lens: "harness", limit: 20, offset: 0, visibleSince: 0,
+      }),
+    });
+    const tray = async (threadId: string) =>
+      (await registry.listThreads({ backend: "claude", forceRefresh: true }))
+        .find((thread) => thread.id === threadId)?.codexNativeSubAgents;
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" });
+      await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Audit" }] });
+      await vi.waitFor(async () => expect((await panel(threadId)).cards).toHaveLength(1));
+
+      // Running: a harness card, a working tray row, and no Actions row.
+      expect(await panel(threadId)).toMatchObject({
+        counts: { harness: 1, pwragent: 0, "token-miser": 0 },
+        cards: [{ monitorId: "claude-native:agent-1", task: "Audit the SDK", status: "running",
+          backend: "claude", agentName: "general-purpose" }],
+      });
+      expect(await tray(threadId)).toEqual([expect.objectContaining({
+        threadId: "claude-native:agent-1", title: "Audit the SDK", threadStatus: "active", agentNickname: "general-purpose",
+      })]);
+      expect((await registry.listBackgroundTerminals({ backend: "claude", threadId })).terminals).toEqual([]);
+      // Waiting For still lists it: Claude takes another turn when it ends.
+      expect(registry.listBackendTaskWakes({ backend: "claude", threadId })).toEqual([expect.objectContaining({
+        processId: "agent-1", kind: "agent", command: "Audit the SDK", background: true,
+      })]);
+      expect(events.filter((event) => event.notification.method === "thread/backgroundTasks/updated")
+        .flatMap((event) => (event.notification.params as { tasks: unknown[] }).tasks)).toEqual([]);
+      expect(events.some((event) => event.notification.method === "thread/subAgents/updated")).toBe(true);
+
+      // Progress is a live view; it never writes the card.
+      const progress = await measureSqliteWrites(async () => {
+        progressGate.resolve();
+        await progressDone.promise;
+      });
+      expectSqliteWriteBudget({ scenario: "claude-subagent-progress",
+        note: "20 progress reports from one running Claude sub-agent; progress stays in memory, zero commits", writes: progress.writes });
+
+      finishGate.resolve();
+      await vi.waitFor(async () => expect((await panel(threadId)).cards[0]?.status).toBe("success"));
+      expect((await panel(threadId)).cards[0]).toMatchObject({
+        monitorId: "claude-native:agent-1", outcome: "success", lastMessage: "Audit done", completedAt: expect.any(Number),
+      });
+      expect(await tray(threadId)).toEqual([expect.objectContaining({
+        threadId: "claude-native:agent-1", threadStatus: "idle",
+      })]);
+      await vi.waitFor(() => expect(registry.listBackendTaskWakes({ backend: "claude", threadId })).toEqual([]));
+    } finally {
+      // A failed assertion must not leave the fake session parked on a gate,
+      // or closing it hangs and hides the failure behind a timeout.
+      progressGate.resolve();
+      finishGate.resolve();
+      await registry.close();
+    }
+  });
+
+  it("budgets one commit when a Claude sub-agent starts and one when it ends", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      recordClaudeSubAgents(params: { threadId: string; subAgents: Array<{
+        monitorId: string; taskId: string; task: string; status: ThreadSubAgentSummary["status"];
+        agentName?: string; lastMessage?: string; startedAt?: number;
+      }> }): Promise<void>;
+    };
+    const card = { monitorId: "claude-native:agent-1", taskId: "agent-1", task: "Audit the SDK", agentName: "Explore", startedAt: 1 };
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await internal.recordClaudeSubAgents({ threadId: "claude-thread", subAgents: [{ ...card, status: "running" }] });
+        await internal.recordClaudeSubAgents({ threadId: "claude-thread", subAgents: [{ ...card, status: "success", lastMessage: "Done" }] });
+        // A card that ended keeps its end; a late report writes nothing.
+        await internal.recordClaudeSubAgents({ threadId: "claude-thread", subAgents: [{ ...card, status: "running" }] });
+      });
+      expect(await store.getThreadSubAgent({ backend: "claude", threadId: "claude-thread", monitorId: card.monitorId }))
+        .toMatchObject({ status: "success", outcome: "success", lastMessage: "Done" });
+      expectSqliteWriteBudget({ scenario: "claude-subagent-cards",
+        note: "one Claude sub-agent's start and end, then a late report: 2 commits per sub-agent, ~24.7 KB WAL each; ~1 MB/day at 20 sub-agents/day, ~10 MB/day at 200; zero idle", writes });
+    } finally { await registry.close(); }
+  });
+
+  it("budgets the origin a to-do card's Start thread records on its first prompt", async () => {
+    const run = gitCommand.getMockImplementation()!;
+    // This fixture is not a Git repository; keep native Git startup out of the budget.
+    gitCommand.mockImplementation(async (cwd, args, options) => {
+      if (cwd === tempDir && args.join(" ") === "rev-parse --abbrev-ref HEAD") {
+        return { stdout: "", stderr: "" };
+      }
+      return await run(cwd, args, options);
+    });
+    const finish = Promise.withResolvers<void>();
+    const prompts: SDKUserMessage[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        getSessionInfo: async () => undefined,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+        query: ({ prompt, options = {} }) => {
+          if (typeof prompt === "string") throw new Error("Expected streaming input");
+          const input = prompt[Symbol.asyncIterator]();
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            prompts.push((await input.next()).value);
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            // The turn stays open, so its completion stays outside the budget.
+            await finish.promise;
+            yield { type: "result", subtype: "success", is_error: false,
+              user_message_uuid: prompts.at(-1)?.uuid,
+            } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: () => { finish.resolve(); } }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" });
+      const identity = { backend: "claude" as const, threadId };
+      const origin: AppServerThreadMessageOrigin = {
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "raising-thread", title: "Raising thread" },
+        threadTodo: { id: "todo-1", title: "Rewrite the CLI" },
+      };
+      const { result: started, writes } = await measureSqliteWrites(async () =>
+        await registry.startTurn({ ...identity, input: [{ type: "text", text: "Rewrite the CLI" }], messageOrigin: origin }));
+      expectSqliteWriteBudget({ scenario: "thread-todo-start-origin",
+        note: "One to-do Start thread click: the started thread's first prompt with its to-do origin. The origin row is the only write the card adds; ~1.2 MB/day at 100 starts, zero idle writes.",
+        writes });
+      const messageId = `user:${started.turnId}`;
+      expect((await store.readThreadMessageOrigins({ ...identity, messageIds: [messageId] }))[messageId]).toEqual(origin);
+      await vi.waitFor(() => expect(prompts).toHaveLength(1));
+    } finally {
+      finish.resolve();
+      try { await registry.close(); }
+      finally { gitCommand.mockImplementation(run); }
+    }
   });
 
   it("keeps 24 hourly inactive-thread sweeps read-only", async () => {
@@ -1117,6 +1343,11 @@ describe("sqlite write metrics", () => {
   it("holds a thread rewind, and its undo, to one commit each", async () => {
     // An operator rewinds or undoes by hand, never per turn or per event.
     // At ~16 KB of WAL per commit, 100 rewinds and undos a day is ~1.6 MB.
+    await store.appendTurnFailure({
+      backend: "claude",
+      threadId: "rewind-thread",
+      failure: { id: "failure-1", turnId: "turn-1", error: "API error", occurredAt: 1_799_999_999_000 },
+    });
     const { writes } = await measureSqliteWrites(async () => {
       await store.appendThreadRewind({
         backend: "claude",
@@ -1142,6 +1373,8 @@ describe("sqlite write metrics", () => {
       scenario: "thread-rewind-and-undo",
       writes,
     });
+    expect((await store.getThreadOverlayState({ backend: "claude", threadId: "rewind-thread" }))?.turnFailureLog)
+      .toBeUndefined();
     expect((await store.getThreadOverlayState({ backend: "claude", threadId: "rewind-thread" }))?.rewindLog)
       .toEqual([{
         id: "rewind-1",
@@ -2466,7 +2699,8 @@ describe("sqlite write metrics", () => {
 
     try {
       const { writes } = await measureSqliteWrites(async () => {
-        if (causal) await internal.persistThreadMessageOrigin({ backend: "acp:kimi", threadId: monitorRecord.monitorThreadId,
+        // Every ACP monitor brief persists its origin, causal or not.
+        await internal.persistThreadMessageOrigin({ backend: "acp:kimi", threadId: monitorRecord.monitorThreadId,
           messageId: `user:${monitorRecord.monitorTurnId}`, origin: { kind: "sub-agent", ...monitorRecord.causalContext } });
         await internal.persistTaskMonitorSubAgent(monitorRecord, {
           status: "running",
@@ -2536,15 +2770,68 @@ describe("sqlite write metrics", () => {
       });
 
       expectSqliteWriteBudget({
-        // Measured at four commits per completed monitor, independent of the
-        // 120 heartbeats. At 100 monitors/day that is 400 commits/day; this
-        // calibration observed about 115 KB per lifecycle, or about 11 MB/day.
+        // Measured at five commits per completed monitor, independent of the
+        // 120 heartbeats. At 100 monitors/day that is 500 commits/day; this
+        // calibration observed about 160 KB per lifecycle, or about 16 MB/day.
         note: causal ? "One attributed ACP monitor origin plus lifecycle and final usage; 120 heartbeats add no commits. Provenance is one fixed reference captured at delegation."
-          : "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
+          : "one ACP monitor start with its brief's origin, 120 transient heartbeats, completion, and final usage attribution",
         scenario: causal ? "messaging-causal-monitor-lifecycle" : "acp-task-monitor-lifecycle",
         writes,
       });
       expect(internal.completedTaskMonitorsByThread.size).toBe(0);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([false, true])("bounds one Codex monitor recovery turn start (causal messaging=%s)", async (causal) => {
+    const codexClient = Object.assign(createStubBackendClient() as object, {
+      startTurn: async () => ({ threadId: "monitor-thread", turnId: "monitor-recovery-turn" }),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: codexClient as never,
+      overlayStore: store as never,
+    });
+    const monitorRecord = {
+      ...(causal ? { causalContext: { causalMessagingSource: { ownerId: "1".repeat(64), requestId: "2".repeat(64), surfaceSelector: "3".repeat(64) } } } : {}),
+      activeCommandCount: 0,
+      backend: "codex" as const,
+      createdAt: 1_800_000_000_000,
+      heartbeatIntervalSeconds: 30,
+      lastActivityAt: 1_800_000_000_000,
+      monitorId: "monitor-write-budget",
+      monitorThreadId: "monitor-thread",
+      monitorTurnId: "monitor-turn",
+      parentBackend: "codex" as const,
+      parentThreadId: "parent-thread",
+      parentTurnId: "parent-turn",
+      pollIntervalSeconds: 30,
+      preferredModel: "gpt-5.6-luna",
+      preferredReasoningEffort: "low",
+      startupTimeoutSeconds: 45,
+      task: "Wait for one bounded external operation.",
+    };
+    const internal = registry as unknown as {
+      startTaskMonitorRecoveryTurn(params: {
+        record: typeof monitorRecord;
+        terminalStatus: "completed";
+      }): Promise<void>;
+    };
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await internal.startTaskMonitorRecoveryTurn({ record: monitorRecord, terminalStatus: "completed" });
+      });
+
+      expect(monitorRecord.monitorTurnId).toBe("monitor-recovery-turn");
+      expectSqliteWriteBudget({
+        // A monitor makes at most one recovery attempt. At 100 recovered
+        // messaging monitors/day, one ~12 KB commit each is about 1.2 MB/day.
+        note: causal ? "One Codex monitor recovery turn delegated from a messaging turn writes its prompt origin in one commit; at most one recovery per monitor. ~12 KB each: ~1.2 MB/day at 100 recovered messaging monitors/day, 0 MB/day idle."
+          : "A Codex monitor recovery turn with no messaging origin writes nothing.",
+        scenario: causal ? "messaging-causal-codex-monitor-recovery" : "codex-task-monitor-recovery",
+        writes,
+      });
     } finally {
       await registry.close();
     }
@@ -2637,6 +2924,71 @@ describe("sqlite write metrics", () => {
         "one pending total-spend alert and one renderer acknowledgement; repeated updates and acknowledgements are read-only",
       scenario: "thread-spend-alert-boundary",
       writes,
+    });
+  });
+
+  it("bounds automation lifecycle writes and ignores duplicate terminal outcomes", async () => {
+    const automationStore = new AutomationStore(stateDb);
+    automationStore.createAutomation({
+      id: "automation-lifecycle",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      now: 0,
+    });
+    automationStore.createRun({
+      id: "run-1",
+      automationId: "automation-lifecycle",
+      trigger: "manual",
+      now: 0,
+    });
+
+    const lifecycle = await measureSqliteWrites(() => {
+      automationStore.markRunStarted({ runId: "run-1", backendTurnId: "turn-1", now: 100 });
+      automationStore.markRunTerminal({ runId: "run-1", status: "completed", now: 1_000 });
+      automationStore.markRunStarted({
+        runId: "run-1",
+        backendThreadId: "headless-1",
+        backendTurnId: "turn-1",
+        queueEntryId: "queue-1",
+        now: 0,
+      });
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-run-lifecycle",
+      note: "One start, one terminal outcome and one late identity acknowledgement: 4 boundary commits, ~86.5 KB/run or ~8.7 MB/day at 100 runs/day; 0 MB/day idle.",
+      writes: lifecycle.writes,
+    });
+
+    const duplicates = await measureSqliteWrites(() => {
+      for (let index = 0; index < 100; index += 1) {
+        automationStore.markRunStarted({
+          runId: "run-1",
+          backendThreadId: "headless-1",
+          backendTurnId: "turn-1",
+          queueEntryId: "queue-1",
+          now: 2_000 + index,
+        });
+        automationStore.markRunQueued({ runId: "run-1", queueEntryId: "queue-1", now: 2_000 + index });
+        for (const status of ["completed", "failed", "cancelled", "skipped"] as const) {
+          automationStore.markRunTerminal({ runId: "run-1", status, errorMessage: "Late", now: 2_000 + index });
+        }
+      }
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-run-duplicate-lifecycle",
+      note: "100 repeated started/queued acknowledgements and conflicting terminal outcomes: zero commits, 0 MB/day.",
+      writes: duplicates.writes,
+    });
+    expect(automationStore.getRun("run-1")).toMatchObject({
+      status: "completed",
+      completedAt: 1_000,
+      startedAt: 100,
+      backendThreadId: "headless-1",
+      backendTurnId: "turn-1",
+      queueEntryId: "queue-1",
     });
   });
 
@@ -2783,13 +3135,12 @@ describe("sqlite write metrics", () => {
       const runNow = await service.runNow({ automationId: created.automation.id });
 
       const { writes } = await measureSqliteWrites(async () => {
-        // Fifty five-minute windows with fifty items each model a long-running,
-        // tool-heavy automation. Periodic whole-artifact rewrites would make
-        // WAL growth quadratic as every window rewrote all prior windows.
-        // One 2,500-item boundary write measures 704,520 WAL bytes; even ten
-        // such extreme runs/day stay linear at 7,045,200 bytes (about 6.7 MiB).
+        // Fifty five-minute windows exercise a long-running automation. Five
+        // items per window retain the growing transcript without paying for
+        // thousands of per-event lookups. A periodic whole-artifact rewrite
+        // would still write during a window and fail the one-commit budget.
         for (let windowIndex = 0; windowIndex < 50; windowIndex += 1) {
-          for (let itemIndex = 0; itemIndex < 50; itemIndex += 1) {
+          for (let itemIndex = 0; itemIndex < 5; itemIndex += 1) {
             await Promise.all(
               registryListeners.map((listener) =>
                 listener({
@@ -2817,13 +3168,13 @@ describe("sqlite write metrics", () => {
       });
 
       expectSqliteWriteBudget({
-        note: "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
+        note: "250 completed tool items across 50 windows, one shutdown-boundary artifact write",
         scenario: "automation-run-transcript-burst",
         writes,
       });
       expect(
         automationStore.getRunArtifact(runNow.run.id)?.transcriptEvents,
-      ).toHaveLength(2_500);
+      ).toHaveLength(250);
     } finally {
       service.dispose();
       vi.useRealTimers();

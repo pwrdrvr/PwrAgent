@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Query, SDKMessage, SlashCommand, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerAvailableCommandSummary } from "@pwragent/shared";
 import { ClaudeBackend, type ClaudeBackendOptions } from "../claude/claude-backend";
-import { claudeCommandSummaries } from "../claude/claude-commands";
+import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "../claude/claude-commands";
 import { readClaudeMcpServerStatus } from "../claude/claude-models";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 
@@ -79,6 +79,21 @@ describe("claudeCommandSummaries", () => {
       { name: "compact", description: "compact description", backend: "claude", scope: "session", source: "provider" },
       { name: "deploy", backend: "claude", scope: "session", source: "provider" },
     ]);
+  });
+
+  it("offers the artifact commands Claude Code 2.1.303 lists once artifacts are on", () => {
+    // Captured from supportedCommands() with CLAUDE_CODE_ARTIFACT=1; the
+    // same session's terminal_slash_commands was the seed list.
+    const summaries = claudeCommandSummaries([
+      command("design", { description: "Make a new Design artifact from a brief", argumentHint: "[what to design]" }),
+      command("slides", { description: "Make a new Slides deck artifact from a brief", argumentHint: "[what the deck is about]" }),
+      command("artifact-diagramming"),
+      command("artifact-capabilities"),
+    ], new Set(CLAUDE_TERMINAL_COMMANDS_SEED));
+    expect(summaries.map((summary) => summary.name)).toEqual([
+      "design", "slides", "artifact-diagramming", "artifact-capabilities",
+    ]);
+    expect(summaries[0]).toMatchObject({ description: "Make a new Design artifact from a brief", backend: "claude" });
   });
 });
 

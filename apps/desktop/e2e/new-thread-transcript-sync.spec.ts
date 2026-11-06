@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { mastheadAction } from "./fixtures/window-chrome";
 
@@ -115,6 +115,8 @@ async function createNewThreadTranscriptFixture(): Promise<{
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            // The empty read belongs to the new thread, not to a startup reread.
+            afterResponseId: "thread-start-1",
             result: {
               entries: [],
               messages: [],
@@ -374,6 +376,8 @@ async function createNewThreadFocusFixture(): Promise<{
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            // The empty read belongs to the new thread, not to a startup reread.
+            afterResponseId: "thread-start-1",
             result: {
               entries: [],
               messages: [],
@@ -430,6 +434,9 @@ test("top-level new thread rereads the created thread until the assistant reply 
       .fill("Let's test creating a new thread again");
     await app.window.getByRole("button", { name: "Start thread" }).click();
 
+    // Submission first renders a separate Preparing transcript region. Wait
+    // for startup to hand ownership to the real transcript before checking it.
+    await app.window.getByRole("region", { name: "Transcript", exact: true }).waitFor();
     await expect(
       app.window
         .getByRole("region", { name: "Transcript" })

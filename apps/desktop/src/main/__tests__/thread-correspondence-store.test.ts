@@ -5,7 +5,7 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import type { AppServerThreadMessageEntry, AppServerThreadReplay } from "@pwragent/shared";
 import { parseThreadCorrespondenceMessage } from "@pwragent/shared";
 import { ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
-import { extractThreadReplayFromReadResult } from "../codex-app-server/client";
+import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 
 const emptyReplay: AppServerThreadReplay = {
   entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },

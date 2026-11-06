@@ -3,6 +3,8 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
   MCP_CONNECTION_IDS,
+  isMcpIpcUrl,
+  parseMcpIpcUrl,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
@@ -18,6 +20,7 @@ import {
   type McpStdioLaunch,
 } from "@pwragent/shared";
 import { resolveDesktopConfigPath } from "../settings/desktop-config";
+import { validateMcpIpcPlatform } from "./mcp-ipc-http";
 import {
   applyTomlEdits,
   parseTomlTables,
@@ -372,7 +375,7 @@ export class McpConnectionRegistry {
       id,
       displayName,
       serverUrl,
-      authMode: "oauth",
+      authMode: isMcpIpcUrl(serverUrl) ? "none" : "oauth",
       kind: "remote",
       enabled: true,
       selectForNewThreads: false,
@@ -450,6 +453,7 @@ export class McpConnectionRegistry {
       ...target,
       displayName,
       serverUrl,
+      authMode: isMcpIpcUrl(serverUrl) ? "none" : "oauth",
       updatedAt: this.now(),
     };
     this.writeStoredConnections(
@@ -601,6 +605,11 @@ export class McpConnectionRegistry {
 }
 
 export function normalizeMcpServerUrl(value: string): string {
+  if (isMcpIpcUrl(value)) {
+    const endpoint = parseMcpIpcUrl(value.trim());
+    validateMcpIpcPlatform(endpoint);
+    return endpoint.url;
+  }
   let url: URL;
   try {
     url = new URL(value.trim());
@@ -827,7 +836,7 @@ function connectionFromRow(
       id,
       displayName,
       serverUrl: normalizeMcpServerUrl(serverUrl),
-      authMode: "oauth",
+      authMode: isMcpIpcUrl(serverUrl) ? "none" : "oauth",
       kind: "remote",
       enabled: row.enabled !== false,
       // Opt-in: a row written before this key existed, or by hand without it,

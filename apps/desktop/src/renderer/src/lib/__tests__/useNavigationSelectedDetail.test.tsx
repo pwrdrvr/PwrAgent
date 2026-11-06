@@ -18,6 +18,31 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+it.each(["thread/dependencies/updated", "thread/scheduledAction/updated"])("refreshes a peer's wakes for %s without refreshing local detail", async (method) => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>().mockResolvedValue(detail("initial"));
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => undefined; } };
+  const target = { scope: "remote" as const, instanceId: "owner" };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref, federationTarget: target }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  const notify = (threadId: string) => listener!({ backend: "codex", federationTarget: target, notification: {
+    method, params: method === "thread/scheduledAction/updated" ? { action: { threadId } } : { threadId },
+  } } as AgentEvent);
+  act(() => notify("unrelated"));
+  expect(read).toHaveBeenCalledTimes(1);
+  act(() => notify(ref.threadId));
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  unmount();
+  read.mockClear();
+  const local = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(local.result.current.state?.readiness).toBe("ready"));
+  act(() => listener!({ backend: "codex", notification: { method,
+    params: method === "thread/scheduledAction/updated" ? { action: { threadId: ref.threadId } } : { threadId: ref.threadId },
+  } } as unknown as AgentEvent));
+  expect(read).toHaveBeenCalledTimes(1);
+  local.unmount();
+});
+
 it("keeps composer configuration ready while independent history pages load", async () => {
   const collection = deferred<NavigationSelectedDetailResponse>();
   const configured = { ...detail("config"), collections: [{ name: "subAgents" as const, count: 1, revision: "history" }] };
@@ -331,5 +356,27 @@ it("does not fetch sub-agent history when the transcript requests only its requi
   await waitFor(() => expect(result.current.state?.detail?.thread?.activeSubAgents).toEqual([]));
   expect(read).toHaveBeenCalledTimes(2);
   expect(read.mock.calls.every(([request]) => !request.collection)).toBe(true);
+  unmount();
+});
+
+it("re-reads owner-projected PR watches when a watch changes", async () => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  const watch = {
+    watchId: "watch-ci", backend: "codex" as const, threadId: ref.threadId, prKey: "github.com/pwrdrvr/pwragent#1",
+    prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1", prNumber: 1, headSha: "a".repeat(40),
+    notifyOn: ["success" as const], createdAt: 1, failureHandledByAutoFix: false,
+  };
+  const watching = detail("watching");
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockResolvedValueOnce({ ...watching, thread: { ...watching.thread!, activePrWatches: [watch] } })
+    .mockResolvedValue({ ...detail("stopped"), thread: { ...detail("stopped").thread!, activePrWatches: [] } });
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => undefined; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(result.current.state?.detail?.thread?.activePrWatches).toHaveLength(1));
+  act(() => listener!({ backend: "codex", notification: {
+    method: "thread/prWatches/updated", params: { backend: "codex", threadId: ref.threadId, prKey: watch.prKey },
+  } }));
+  await waitFor(() => expect(result.current.state?.detail?.revision).toBe("stopped"));
+  expect(result.current.state?.detail?.thread?.activePrWatches).toEqual([]);
   unmount();
 });
