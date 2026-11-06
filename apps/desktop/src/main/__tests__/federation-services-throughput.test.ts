@@ -24,7 +24,7 @@ import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import {
   FederationGatewayWebSocketServer, connectFederationClient, federationTransportCodecForTest,
 } from "../federation/federation-transport";
-import { FederationStore } from "../federation/federation-store";
+import { FederationStore } from "../storage/federation-store";
 import { encodeFederationFramePayload } from "../federation/federation-frame-codec";
 import { generateFederationIdentityKeyPair } from "../federation/federation-identity";
 import { generateNoiseStaticKeyPair, NoiseIKHandshake } from "../federation/federation-noise";

@@ -1,3 +1,8 @@
+import {
+  createThreadDependencyStorage,
+  createThreadSandboxStorage,
+  createThreadSearchStorage,
+} from "../storage/desktop-runtime-storage";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
 import { type ManageThreadMergeHoldsRequest, type ManageThreadMergeHoldsResponse } from "@pwragent/shared";
@@ -16,7 +21,6 @@ import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition"
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { THREAD_PR_WATCH_HISTORY_MAX_LIMIT, type ThreadPrAutoFixState, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse, type WatchThreadPullRequestReason } from "@pwragent/shared";
 import { type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
-import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { type ThreadPendingWakesList, type ThreadPendingWakesRequest, type ThreadPendingWakesResponse } from "@pwragent/shared";
 import { findRemoteHomeDirectoryIndex } from "@pwragent/shared";
 import {
@@ -58,9 +62,9 @@ import type {
   PrAutoDispatchCandidateChange,
   PrLookupCacheEntry,
   PrStatusCacheEntry,
-  SqliteOverlayStore,
-} from "../state/overlay-store-sqlite";
-import { canonicalizeDetachedPrKeys } from "../state/overlay-store-sqlite";
+  DesktopOwnerStorage,
+} from "../storage/desktop-overlay-store";
+import { canonicalizeDetachedPrKeys } from "../pr-status/detached-pr-keys";
 import {
   type AgentEvent,
   type AppServerBackendKind,
@@ -306,15 +310,14 @@ import {
 } from "../app-server/thread-working-state-refresh-policy";
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
-import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
 import {
   DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE,
   DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS,
   isFreshDirectoryGitStatusCacheEntry,
 } from "../app-server/directory-git-status-refresh-policy";
-import { getAppScheduledThreadActionStore, getAppStateDb, getAppStateMode } from "../state/app-state";
-import { ThreadSandboxStore } from "../state/thread-sandbox-store";
+import { getAppScheduledThreadActionStore, getAppStateMode } from "../storage/desktop-runtime-storage";
 import {
   SandboxerPrCleanupService,
   formatSandboxCleanupLines,
@@ -325,11 +328,11 @@ import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connectio
 import {
   listModelSettingsRecents,
   recordModelSettingsRecent,
-} from "../state/model-settings-recents-store";
+} from "../storage/desktop-recents-service";
 import {
   listRecentFileReferencePaths,
   recordRecentFileReferencePaths,
-} from "../state/recent-file-references-store";
+} from "../storage/desktop-recents-service";
 import {
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
@@ -434,7 +437,6 @@ import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
-import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import {
   shapeReadThreadFileDiffsForRenderer,
 } from "../app-server/thread-file-diff-cache";
@@ -502,7 +504,7 @@ type DirectoryGitRefreshTarget = Pick<NavigationDirectoryRow, "key" | "path" | "
 
 type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
-    SqliteOverlayStore,
+    DesktopOwnerStorage,
     | "readDetachedThreadPullRequests"
     | "initializeNavigationUnreadBaseline"
     | "readDirectoryGitStatusCache"
@@ -1739,7 +1741,7 @@ class DesktopAppServerService {
   private getThreadSearchService(): ThreadSearchService {
     if (!this.threadSearchService) {
       this.threadSearchService = new ThreadSearchService(
-        new ThreadSearchStore(getAppStateDb()),
+        createThreadSearchStorage(),
         async ({ backend, archived }) => {
           const threads = await getDesktopBackendRegistry().listThreads({
             backend,
@@ -5181,7 +5183,7 @@ class DesktopAppServerService {
       autoFix: async (thread) => await this.listThreadPrAutoFixStates(thread),
       // A plain store read: the coordinator's list waits behind evaluations,
       // and selected detail reads this list.
-      dependencies: async (thread, endedLimit) => new ThreadDependencyStore(getAppStateDb().raw)
+      dependencies: async (thread, endedLimit) => createThreadDependencyStorage()
         .listPendingWakes(thread.backend, thread.threadId, endedLimit),
       scheduledActions: (thread, endedLimit) => getAppScheduledThreadActionStore().listPendingWakes({ ...thread, endedLimit }),
       monitors: (thread) => registry.listPendingTaskMonitorWakes(thread),
@@ -7887,7 +7889,7 @@ class DesktopAppServerService {
   private getSandboxerPrCleanup(): SandboxerPrCleanupService | undefined {
     if (!getAppStateMode()) return undefined;
     if (!this.sandboxerPrCleanup) {
-      const store = new ThreadSandboxStore(getAppStateDb().raw);
+      const store = createThreadSandboxStorage();
       this.sandboxerPrCleanup = new SandboxerPrCleanupService({
         store,
         openTransport: async (params) =>
@@ -9714,7 +9716,7 @@ class DesktopAppServerService {
         .listRecentFileReferences();
     }
     return {
-      files: listRecentFileReferencePaths(getAppStateDb()).map((filePath) => ({
+      files: listRecentFileReferencePaths().map((filePath) => ({
         label: path.basename(filePath),
         path: filePath,
       })),
@@ -9734,7 +9736,7 @@ class DesktopAppServerService {
         .recordRecentFileReferences(ownerRequest);
       return;
     }
-    recordRecentFileReferencePaths(getAppStateDb(), request.paths ?? []);
+    recordRecentFileReferencePaths(request.paths ?? []);
   }
 
   async listModelSettingsRecents(
@@ -9750,7 +9752,7 @@ class DesktopAppServerService {
         .listModelSettingsRecents(ownerRequest);
     }
     return {
-      recents: listModelSettingsRecents(getAppStateDb(), request.scope),
+      recents: listModelSettingsRecents(request.scope),
     };
   }
 
@@ -9767,7 +9769,7 @@ class DesktopAppServerService {
         .recordModelSettingsRecent(ownerRequest);
       return;
     }
-    recordModelSettingsRecent(getAppStateDb(), request.scope, request.recent);
+    recordModelSettingsRecent(request.scope, request.recent);
   }
 
   async registerDirectoryFromDisk(
@@ -10102,7 +10104,7 @@ class DesktopAppServerService {
 
   private getThreadDependencyCoordinator(): ThreadDependencyCoordinator {
     if (!this.threadDependencyCoordinator) {
-      const store = new ThreadDependencyStore(getAppStateDb().raw);
+      const store = createThreadDependencyStorage();
       this.threadDependencyCoordinator = new ThreadDependencyCoordinator({
         store,
         hasDeliveryReceipt: (dependency) => store.hasDeliveryReceipt(dependency),

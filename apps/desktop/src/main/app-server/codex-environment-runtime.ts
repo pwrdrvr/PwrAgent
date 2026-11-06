@@ -37,7 +37,7 @@ import {
   preferStableWindowsBashPath,
   windowsBashCandidates,
 } from "../windows-shell";
-import type { CodexEnvironmentHydrationStoreLike } from "./codex-environment-hydration-store";
+import type { CodexEnvironmentHydrationStoreLike } from "../storage/codex-environment-hydration-store";
 
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
 

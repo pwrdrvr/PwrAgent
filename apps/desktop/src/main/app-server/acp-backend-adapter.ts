@@ -1,3 +1,7 @@
+import {
+  createAcpAgentStorage,
+  createAcpSessionStorage,
+} from "../storage/desktop-runtime-storage";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -29,7 +33,6 @@ import {
   usageLimitProviderForBackend,
 } from "@pwragent/shared";
 import {
-  AcpAgentStore,
   type AcpAgentStore as AcpAgentStoreLike,
 } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
@@ -98,7 +101,6 @@ import {
   acpRuntimeSupportsSessionLoad,
 } from "../acp/acp-runtime-capabilities";
 import {
-  AcpSessionStore,
   type AcpSessionMetadata,
   type AcpSessionStore as AcpSessionStoreContract,
 } from "../acp/acp-session-store";
@@ -131,10 +133,9 @@ import {
 } from "../acp/grok-cli-update";
 import { getMainLogger } from "../log";
 import {
-  getAppStateDb,
   getAppStateMode,
   isAppStateInitialized,
-} from "../state/app-state";
+} from "../storage/desktop-runtime-storage";
 import {
   resolveActiveProfilePath,
   resolveBootstrapProfilePath,
@@ -1316,14 +1317,14 @@ export class AcpBackendAdapter {
         ? undefined
         : options.acpAgentStore ??
           (isAppStateInitialized()
-            ? new AcpAgentStore(getAppStateDb())
+            ? createAcpAgentStorage()
             : undefined);
     this.acpSessionStore =
       options.acpSessionStore === null
         ? undefined
         : options.acpSessionStore ??
           (isAppStateInitialized()
-            ? new AcpSessionStore(getAppStateDb())
+            ? createAcpSessionStorage()
             : undefined);
     this.acpRolloutStore =
       options.acpRolloutStore === null

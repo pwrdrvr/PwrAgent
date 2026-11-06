@@ -38,7 +38,7 @@ import {
   STAR_MAP_WRITE_WORKSPACE_CHANNEL,
 } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
-import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,

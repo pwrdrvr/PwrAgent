@@ -10,7 +10,7 @@ import {
   THREAD_DEPENDENCY_PROMPT_PLAN_LEAD, THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD,
   THREAD_TODO_DETAIL_MAX_LENGTH, THREAD_TODO_TITLE_MAX_LENGTH, threadDependencyDeliveryTarget, threadDependencyTodoKey,
 } from "@pwragent/shared";
-import type { ThreadDependencyStore } from "../state/thread-dependency-store";
+import type { ThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { isSameNumberInAnotherRepository } from "../pr-status/forge-reference";
 
 export type DependencyThreadSnapshot = {
@@ -42,7 +42,7 @@ export type OperatorTodoDelivery = {
 };
 
 type Options = {
-  store: ThreadDependencyStore;
+  store: ThreadDependencyStorage;
   /** Without it, operator registrations are refused. */
   operatorTodos?: OperatorTodoDelivery;
   readThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot>;

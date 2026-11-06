@@ -1,3 +1,4 @@
+import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
@@ -82,9 +83,9 @@ import type {
 } from "@pwragent/shared";
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
 import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_QUEUE_LIMIT, type ArchiveCleanupContext } from "./archive-cleanup-queue";
-import { ArchiveCleanupCheckpointStore, type ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
-import { ProjectHeldWakeupStore, type StoredProjectHeldWakeup } from "../state/project-held-wakeup-store";
-import { RestartContinuationStore, type StoredRestartContinuation } from "../state/restart-continuation-store";
+import type { ArchiveCleanupCheckpointStorage, ArchiveCleanupIntent } from "../storage/desktop-runtime-storage";
+import type { ProjectHeldWakeupStorage, StoredProjectHeldWakeup } from "../storage/desktop-runtime-storage";
+import type { RestartContinuationStorage, StoredRestartContinuation } from "../storage/desktop-runtime-storage";
 import type { RestartGateStatus } from "../../shared/restart-gate";
 import {
   OPEN_RESTART_GATE,
@@ -216,17 +217,26 @@ import {
   resolveActiveProfilePath,
 } from "../profile";
 import {
-  getAppStateDb,
+  createAcpAvailableCommandsStorage,
+  createArchiveCleanupCheckpointStorage,
+  createCodexEnvironmentHydrationStorage,
+  createProjectHeldWakeupStorage,
+  createProviderThreadSnapshotStorage,
+  createRestartContinuationStorage,
+  createThreadSearchStorage,
+  createTokenMiserStorage,
+} from "../storage/desktop-runtime-storage";
+import {
   getAppStateMode,
   isAppStateInitialized,
-} from "../state/app-state";
-import { runOneTimeArchivedWorktreeRepair } from "../state/archived-worktree-repair";
+} from "../storage/desktop-runtime-storage";
+import { runOneTimeArchivedWorktreeRepair } from "../storage/desktop-runtime-storage";
 import type {
   ArchivedThreadAutomationRetirement,
   OverlayStoreLike,
-  SqliteOverlayStore,
+  DesktopOwnerStorage,
   WorktreeGitWorkingStateCacheEntry,
-} from "../state/overlay-store-sqlite";
+} from "../storage/desktop-overlay-store";
 import { requestShowThread } from "../window-show-thread";
 import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
@@ -659,7 +669,6 @@ import { subAgentActivityToolCall } from "../codex-app-server/subagent-activity"
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { OwnerContentSearch } from "../thread-search/owner-content-search";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
-import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import {
   handleAutomationInspectionDynamicToolCall,
   isAutomationInspectionDynamicToolCall,
@@ -757,7 +766,7 @@ import {
 } from "../token-miser/token-miser-types";
 import { TokenMiserDiagnostics, type TokenMiserDiagnosticContext } from "../token-miser/token-miser-diagnostics";
 import { TokenMiserService, type TokenMiserServiceOptions } from "../token-miser/token-miser-service";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
   estimateTokenCount,
   type TokenMiserObjectMetadata,
@@ -771,7 +780,7 @@ import {
 } from "../agent-tools/agent-tool-mcp-server";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { CodexProtocolCaptureSession } from "../diagnostics/codex-protocol-capture";
-import { getDesktopOverlayStore } from "./desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
@@ -796,9 +805,8 @@ import {
   type ThreadInfoIdentity,
 } from "./thread-info-store";
 import {
-  ProviderThreadSnapshotStore,
   type ProviderThreadSnapshotStoreLike,
-} from "./provider-thread-snapshot-store";
+} from "../storage/provider-thread-snapshot-store";
 import type { GitReadRequest } from "../git-info/read-cache";
 import {
   resolveWorktreeRepositoryDirectory,
@@ -810,7 +818,6 @@ import {
   selectStaleWorktreeWorkingStatePaths,
 } from "./thread-working-state-refresh-policy";
 import {
-  AcpAvailableCommandsStore,
   type AcpAvailableCommandsStoreLike,
 } from "../acp/acp-available-commands-store";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
@@ -913,9 +920,9 @@ import {
   type CodexEnvironmentSelection,
 } from "./codex-environment-runtime";
 import {
-  CodexEnvironmentHydrationStore,
+  type CodexEnvironmentHydrationStore,
   type CodexEnvironmentHydrationStoreLike,
-} from "./codex-environment-hydration-store";
+} from "../storage/codex-environment-hydration-store";
 import {
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
@@ -944,7 +951,7 @@ import {
   ownThreadInputAttachments,
   stageTurnInputAttachmentsForRetention,
 } from "./turn-input-attachment-files";
-import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
+import type { MessagingStoreLike } from "../storage/desktop-runtime-storage";
 import {
   PdfAttachmentStore,
   type PendingPdfAttachment,
@@ -2379,8 +2386,8 @@ type WorktreeArchiveCandidate = {
   worktreePath: string;
 };
 
-type ProjectHeldWakeupStoreLike = Pick<ProjectHeldWakeupStore, "save" | "update" | "remove" | "claimOrphaned">;
-type RestartContinuationStoreLike = Pick<RestartContinuationStore, "saveAll" | "remove" | "claimOrphaned">;
+type ProjectHeldWakeupStoreLike = ProjectHeldWakeupStorage;
+type RestartContinuationStoreLike = RestartContinuationStorage;
 
 /** A running turn a quiet restart stops and continues after the restart. */
 export type QuietRestartTarget = {
@@ -7271,7 +7278,7 @@ function createDefaultCodexEnvironmentHydrationStore():
   | CodexEnvironmentHydrationStore
   | undefined {
   try {
-    return new CodexEnvironmentHydrationStore(getAppStateDb());
+    return createCodexEnvironmentHydrationStorage();
   } catch {
     return undefined;
   }
@@ -9303,9 +9310,9 @@ export type MergeHoldReminderDelivery = {
   publish: (todo: ThreadTodo) => void;
 };
 
-type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
+type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<OwnerThreadRegistry, "getThreadMetadata">> & Partial<
   Pick<
-    SqliteOverlayStore,
+    DesktopOwnerStorage,
     | "acknowledgeThreadEnvironmentFailure"
     | "manageThreadMergeHolds"
     | "listActiveThreadMergeHolds"
@@ -9726,7 +9733,7 @@ export class DesktopBackendRegistry {
     promise: Promise<ArchiveThreadResponse>;
   }>();
   private readonly archiveRepairOwners = new Map<string, string>();
-  private readonly archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">;
+  private readonly archiveCleanupCheckpointStore?: ArchiveCleanupCheckpointStorage;
   private readonly projectHeldWakeupStore?: ProjectHeldWakeupStoreLike;
   /** Project-held entries with a durable copy, by queue entry id, as stored. */
   private readonly durableProjectHeldWakeups = new Map<string, StoredProjectHeldWakeup>();
@@ -10537,7 +10544,14 @@ export class DesktopBackendRegistry {
       if (isAcpBackendId(backend)) {
         model = this.acpBackend.getSession(backend, threadId)?.acpRuntime?.currentModelId?.trim() || undefined;
       }
-      model ??= (await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.model?.trim() || undefined;
+      if (model === undefined) {
+        // The default desktop adapter uses the shared owner port. Older injected
+        // overlay adapters can still supply the desktop model projection.
+        const metadata = this.overlayStore.getThreadMetadata
+          ? await this.overlayStore.getThreadMetadata({ backend, threadId })
+          : await this.overlayStore.getThreadOverlayState({ backend, threadId });
+        model = metadata?.model?.trim() || undefined;
+      }
     } catch (error) {
       model = undefined;
       backendRegistryLog.warn("could not read the thread's model for forge rules", { backend, threadId, error: String(error) });
@@ -11261,7 +11275,7 @@ export class DesktopBackendRegistry {
       ) => Promise<unknown> | unknown,
     ) => () => void;
     runtimeInstanceId?: string;
-    archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover"> | null;
+    archiveCleanupCheckpointStore?: ArchiveCleanupCheckpointStorage | null;
     /** `null` keeps held wake-ups in memory only. */
     projectHeldWakeupStore?: ProjectHeldWakeupStoreLike | null;
     /** `null` keeps no restart continuations. */
@@ -11286,11 +11300,11 @@ export class DesktopBackendRegistry {
     this.runtimeInstanceId =
       options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
     this.archiveCleanupCheckpointStore = options?.archiveCleanupCheckpointStore === null ? undefined
-      : options?.archiveCleanupCheckpointStore ?? (isAppStateInitialized() ? new ArchiveCleanupCheckpointStore(getAppStateDb().raw) : undefined);
+      : options?.archiveCleanupCheckpointStore ?? (isAppStateInitialized() ? createArchiveCleanupCheckpointStorage() : undefined);
     this.projectHeldWakeupStore = options?.projectHeldWakeupStore === null ? undefined
-      : options?.projectHeldWakeupStore ?? (isAppStateInitialized() ? new ProjectHeldWakeupStore(getAppStateDb().raw) : undefined);
+      : options?.projectHeldWakeupStore ?? (isAppStateInitialized() ? createProjectHeldWakeupStorage() : undefined);
     this.restartContinuationStore = options?.restartContinuationStore === null ? undefined
-      : options?.restartContinuationStore ?? (isAppStateInitialized() ? new RestartContinuationStore(getAppStateDb().raw) : undefined);
+      : options?.restartContinuationStore ?? (isAppStateInitialized() ? createRestartContinuationStorage() : undefined);
     this.restartDispatchPlanOptions = options?.restartDispatchPlan ?? {};
     this.registrySessionId = options?.registrySessionId ?? randomUUID();
     this.runningTurnShutdownStopTimeoutMs =
@@ -11315,7 +11329,7 @@ export class DesktopBackendRegistry {
         ? undefined
         : options?.providerThreadSnapshotStore
           ?? (isAppStateInitialized()
-            ? new ProviderThreadSnapshotStore(getAppStateDb())
+            ? createProviderThreadSnapshotStorage()
             : undefined);
     const replayClients = createReplayClientsFromEnv();
     const createsLiveCodexClient =
@@ -11763,10 +11777,9 @@ export class DesktopBackendRegistry {
         },
         onError: () => backendRegistryLog.warn("Token Miser diagnostic batch could not be saved"),
       });
-      this.tokenMiserStore = new TokenMiserStore(
+      this.tokenMiserStore = createTokenMiserStorage(
         path.join(tokenMiserStateDir, "objects"),
         {
-          stateDb: getAppStateDb(),
           onMetadataUpdated: async (metadata, reason) => {
             if (reason === "retrieval") this.tokenMiserDiagnostics?.recordRetrieval(metadata);
             this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
@@ -11887,7 +11900,7 @@ export class DesktopBackendRegistry {
         ? undefined
         : options?.acpAvailableCommandsStore ??
           (isAppStateInitialized()
-            ? new AcpAvailableCommandsStore(getAppStateDb())
+            ? createAcpAvailableCommandsStorage()
             : undefined);
     this.acpAvailableCommandProbeBudgetMs =
       options?.acpAvailableCommandProbeBudgetMs
@@ -16875,7 +16888,7 @@ export class DesktopBackendRegistry {
           },
         });
         const report = isAppStateInitialized()
-          ? await runOneTimeArchivedWorktreeRepair({ db: getAppStateDb().raw, repair, force: manual })
+          ? await runOneTimeArchivedWorktreeRepair({ repair, force: manual })
           : manual ? await repair() : undefined;
         if (!report) return;
         publishProgress(report.candidates.length + report.emptyContainerCandidates.length, report);
@@ -52355,7 +52368,7 @@ export class DesktopBackendRegistry {
   readonly ownerContentSearch = new OwnerContentSearch(async (request, signal) => {
     if (!this.ownerThreadSearchService) {
       this.ownerThreadSearchService = new ThreadSearchService(
-        new ThreadSearchStore(getAppStateDb()),
+        createThreadSearchStorage(),
         async (params) => await this.listThreadSearchCandidates(params),
         new ProviderTranscriptThreadSearchAdapter(async (params) => await this.readThreadForContentSearch(params)),
       );
@@ -52386,7 +52399,7 @@ export class DesktopBackendRegistry {
       return this.threadInspectionSearchService;
     }
     this.threadInspectionSearchService = new ThreadSearchService(
-      new ThreadSearchStore(getAppStateDb()),
+      createThreadSearchStorage(),
       async ({ backend, archived }) =>
         await this.listThreads({
           backend,

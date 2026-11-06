@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => ({
   listActiveThreadPrStatusWatches: vi.fn(),
 }));
 
-vi.mock("../app-server/desktop-overlay-store", () => ({
+vi.mock("../storage/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot: mocks.reconcileNavigationSnapshot,
     projectNavigationThreadDetail: mocks.projectNavigationThreadDetail,

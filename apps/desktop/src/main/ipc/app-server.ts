@@ -209,7 +209,7 @@ import {
   getExistingDesktopBackendRegistry,
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
-import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_GET_PR_ACTIVITY_CHANNEL,

@@ -4,11 +4,11 @@ import type { FederationRemoteTarget, NavigationDirectorySummary, NavigationIden
   NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
-import type { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import type { DesktopOwnerStorage } from "../storage/desktop-overlay-store";
 
 /** Resolve compact viewer membership through the live owner cache, without awaiting a peer. */
 export async function loadViewerNavigationPins(
-  store: Pick<SqliteOverlayStore, "readRemoteThreadPinNavigationRows" | "updateRemoteThreadPinSnapshots" | "removeRemoteThreadPin">,
+  store: Pick<DesktopOwnerStorage, "readRemoteThreadPinNavigationRows" | "updateRemoteThreadPinSnapshots" | "removeRemoteThreadPin">,
   cache: Pick<RemoteThreadSummaryCache, "resolvePinnedThreads">,
 ): Promise<NavigationThreadSummary[]> {
   const saved = await store.readRemoteThreadPinNavigationRows();

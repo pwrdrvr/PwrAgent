@@ -20,7 +20,7 @@ import {
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopBackendRegistry } from "./backend-registry";
-import { getDesktopOverlayStore } from "./desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";

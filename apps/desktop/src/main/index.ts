@@ -16,7 +16,7 @@ import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from
 import { removeRetiredCiArtifactStore } from "./pr-status/forge-artifact-download";
 import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
 import { observeStorageArchive } from "./state/storage-maintenance";
-import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "./storage/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import type {
   CreateInstanceThreadResult,

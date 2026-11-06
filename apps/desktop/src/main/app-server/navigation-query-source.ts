@@ -8,7 +8,7 @@ import {
   navigationQueryEventRequiresRefresh,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
-import { getDesktopOverlayStore } from "./desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";

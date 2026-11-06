@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FederationStore } from "../federation/federation-store";
+import { FederationStore } from "../storage/federation-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 

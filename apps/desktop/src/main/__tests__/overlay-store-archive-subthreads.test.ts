@@ -6,7 +6,7 @@ import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { ProviderThreadSnapshotStore } from "../app-server/provider-thread-snapshot-store";
+import { ProviderThreadSnapshotStore } from "../storage/provider-thread-snapshot-store";
 
 describe("archiving nested subthreads", () => {
   let db: StateDb;

@@ -2,7 +2,7 @@ import { buildThreadIdentityKey, navigationInvalidationMayChangeMembership, navi
   type AgentEvent, type MarkNavigationDirectorySeenRequest, type MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { ArchiveThreadRequest, ArchiveThreadResponse, RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./backend-registry";
-import { getDesktopOverlayStore } from "./desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
 
 function directoryCheckChangeDescription(event: AgentEvent): string {

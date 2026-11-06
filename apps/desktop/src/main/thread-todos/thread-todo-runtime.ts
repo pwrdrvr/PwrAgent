@@ -1,4 +1,4 @@
-import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { assertNoMergeHolds } from "../thread-merge-holds/thread-merge-holds";
 import type {
   AppServerBackendKind,

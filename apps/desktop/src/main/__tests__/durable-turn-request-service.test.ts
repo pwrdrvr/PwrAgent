@@ -1,3 +1,4 @@
+import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -41,7 +42,7 @@ function setup(options: { now?: () => number; dispatch?: FederationBackendOperat
   const file = database();
   const authorize = vi.fn(async () => {});
   const dispatch = vi.fn(options.dispatch ?? (async (request) => ({ backend: request.backend, threadId: request.threadId, turnId: "turn", queueStatus: "started" as const, queueEntryId: request.queueEntryId })));
-  const make = () => new DurableTurnRequestService({ stateDb: file.db, ownerInstanceId: OWNER, now: options.now ?? (() => NOW), authorize, dispatch, maxPerCaller: options.maxPerCaller, maxTotal: options.maxTotal });
+  const make = () => new DurableTurnRequestService({ storage: new SqliteDurableTurnRequestStore(file.db), ownerInstanceId: OWNER, now: options.now ?? (() => NOW), authorize, dispatch, maxPerCaller: options.maxPerCaller, maxTotal: options.maxTotal });
   return { file, service: make(), make, authorize, dispatch };
 }
 function lookup(value: SubmitDurableTurnRequest) {
@@ -75,7 +76,7 @@ describe("durable turn request inbox", () => {
     let finish!: (value: { backend: "codex"; threadId: string; turnId: string }) => void;
     const fixture = setup({ dispatch: () => new Promise((resolve) => { finish = resolve; }) });
     const otherDb = StateDb.open(fixture.file.dbPath);
-    const other = new DurableTurnRequestService({ stateDb: otherDb, ownerInstanceId: OWNER, now: () => NOW, authorize: fixture.authorize, dispatch: fixture.dispatch });
+    const other = new DurableTurnRequestService({ storage: new SqliteDurableTurnRequestStore(otherDb), ownerInstanceId: OWNER, now: () => NOW, authorize: fixture.authorize, dispatch: fixture.dispatch });
     const value = submission();
     try {
       const first = fixture.service.submit(SCOPE, value);
@@ -187,7 +188,7 @@ describe("durable turn request inbox", () => {
     const value = submission();
     await fixture.service.submit(SCOPE, value);
     fixture.file.reopen();
-    const restarted = new DurableTurnRequestService({ stateDb: fixture.file.db, ownerInstanceId: OWNER, now: () => NOW, authorize: fixture.authorize, dispatch: fixture.dispatch, isQueued: async () => false });
+    const restarted = new DurableTurnRequestService({ storage: new SqliteDurableTurnRequestStore(fixture.file.db), ownerInstanceId: OWNER, now: () => NOW, authorize: fixture.authorize, dispatch: fixture.dispatch, isQueued: async () => false });
     expect((await restarted.get(SCOPE, lookup(value)))?.state).toBe("uncertain");
     await restarted.submit(SCOPE, value);
     expect(fixture.dispatch).toHaveBeenCalledTimes(1);

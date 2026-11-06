@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
-import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
+import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 

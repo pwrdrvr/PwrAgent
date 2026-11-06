@@ -1,3 +1,4 @@
+import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -26,7 +27,7 @@ function setup() {
   cleanups.push(() => { db.close(); removeTempStateDbDir(tempDir); });
   const dispatch = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread", turnId: "turn" }));
   const steer = vi.fn(async (request: SubmitDurableSteerRequest["request"] & { requestId: string }) => ({ ok: true as const, backend: "codex" as const, threadId: "thread", requestId: request.requestId, turnId: "turn", disposition: "steered" as const }));
-  const service = new DurableTurnRequestService({ stateDb: db, ownerInstanceId: "owner", now: () => NOW, authorize: async () => {}, dispatch, steer });
+  const service = new DurableTurnRequestService({ storage: new SqliteDurableTurnRequestStore(db), ownerInstanceId: "owner", now: () => NOW, authorize: async () => {}, dispatch, steer });
   const router = new FederationRouter({ localInstanceId: "owner", trustedRelayPeerId: "relay", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES, additionalRequiredCapabilities: additionalFederationBackendCapabilities });
   // Durable inputs must be checked, not transformed into un-hashed owner paths.
   const resolveTurnInput = vi.fn(async () => { throw new Error("Must not rewrite canonical inputs"); });

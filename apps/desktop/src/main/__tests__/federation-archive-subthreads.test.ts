@@ -4,7 +4,7 @@ import type { NavigationQueryPage, NavigationThreadSummary, RemoteThreadPin, Upd
 import { buildFederatedThreadRef } from "@pwragent/shared";
 import { DesktopFederationRuntime, getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
-import { setDesktopOverlayStoreForTests, resetDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
+import { setDesktopOverlayStoreForTests, resetDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";

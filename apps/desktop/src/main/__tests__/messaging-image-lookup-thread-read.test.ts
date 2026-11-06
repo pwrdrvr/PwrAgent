@@ -19,7 +19,7 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   resetDesktopOverlayStoreForTests,
   setDesktopOverlayStoreForTests,
-} from "../app-server/desktop-overlay-store";
+} from "../storage/desktop-overlay-store";
 import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,

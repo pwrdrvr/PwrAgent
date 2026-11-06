@@ -16,7 +16,7 @@ import {
   dialFederationSshEndpoint,
   parseFederationSshEndpoint,
 } from "../federation/federation-ssh";
-import { FederationStore } from "../federation/federation-store";
+import { FederationStore } from "../storage/federation-store";
 import {
   connectFederationClient,
   FederationGatewayWebSocketServer,

@@ -182,7 +182,7 @@ import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
-import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
+import type { ProviderThreadSnapshot } from "../storage/provider-thread-snapshot-store";
 import { GitWorkingStateService } from "../app-server/git-working-state-service";
 import {
   mockSubAgentReads,
@@ -672,6 +672,10 @@ function createOverlayStoreMock(params?: {
         instanceLabel: "Laptop",
         localPinnedRank,
       })),
+    getThreadMetadata: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => {
+      const overlay = overlays.get(`${backend}:${threadId}`);
+      return overlay ? { backend, threadId, executionMode: overlay.executionMode ?? "default", model: overlay.model } : undefined;
+    },
     getThreadOverlayState: async ({
       backend,
       threadId,

@@ -47,7 +47,7 @@ import * as desktopSettingsSingleton from "../settings/desktop-settings-singleto
 import {
   resetDesktopOverlayStoreForTests,
   setDesktopOverlayStoreForTests,
-} from "../app-server/desktop-overlay-store";
+} from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import {

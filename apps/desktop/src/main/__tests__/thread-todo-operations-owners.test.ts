@@ -15,7 +15,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({ listThreads: fixture.listThreads }),
 }));
-vi.mock("../app-server/desktop-overlay-store", () => ({
+vi.mock("../storage/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({ readManagedSubAgentThreadKeys: () => fixture.managed }),
 }));
 vi.mock("../app-server/navigation-query-source", () => ({ loadLocalNavigationQueryIndex: fixture.loadIndex }));

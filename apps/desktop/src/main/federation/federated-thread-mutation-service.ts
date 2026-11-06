@@ -7,7 +7,7 @@ import {
   type PwrAgentFederatedThreadMutationHandler,
   type PwrAgentFederatedThreadMutationRequestV2,
 } from "../agent-tools/pwragent-thread-agent-tools";
-import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
+import type { RemoteThreadTargetStore } from "../storage/remote-thread-target-store";
 import {
   FederatedThreadTargetError,
   resolveFederatedThreadTarget,

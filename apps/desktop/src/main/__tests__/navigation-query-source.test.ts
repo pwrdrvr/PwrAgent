@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => {
     },
   };
 });
-vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
+vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));

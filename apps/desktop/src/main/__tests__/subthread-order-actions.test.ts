@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   store: undefined as SqliteOverlayStore | undefined,
 }));
 vi.mock("../app-server/navigation-query-source", () => ({ loadLocalNavigationQueryIndex: mocks.loadIndex }));
-vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
+vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({ publishLocalEvent: mocks.publish }),
 }));

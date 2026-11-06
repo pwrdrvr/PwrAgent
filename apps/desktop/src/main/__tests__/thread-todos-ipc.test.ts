@@ -61,7 +61,7 @@ vi.mock("../thread-todos/thread-todo-runtime", () => ({
     fixture.listProjects = options.listProjects;
   },
 }));
-vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
+vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
 vi.mock("../settings/desktop-settings-singleton", () => ({ getDesktopSettingsService: () => ({}) }));
 vi.mock("../app-server/navigation-query-source", () => ({ loadLocalNavigationQueryIndex: fixture.loadIndex }));

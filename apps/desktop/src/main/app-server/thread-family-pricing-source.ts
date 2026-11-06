@@ -1,5 +1,5 @@
 import type { NavigationIdentity, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
-import { getDesktopOverlayStore } from "./desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
 import { readThreadFamilyPricing } from "./thread-family-pricing";

@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   store: undefined as unknown as SqliteOverlayStore,
   threads: [] as NavigationThreadSummary[],
 }));
-vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
+vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({
   listThreads: async () => mocks.threads,
   canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,

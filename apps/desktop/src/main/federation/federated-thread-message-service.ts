@@ -17,7 +17,7 @@ import type {
   PwrAgentFederatedThreadMessageResult,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import { getMainLogger } from "../log";
-import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
+import type { RemoteThreadTargetStore } from "../storage/remote-thread-target-store";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import { isFederationPeerUnavailableError } from "./federation-peer-unavailable-error";
 import { hasFederationErrorCode } from "./federation-rpc";
