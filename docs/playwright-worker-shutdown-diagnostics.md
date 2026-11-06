@@ -170,6 +170,14 @@ byte count. These observations help locate startup progress within the existing
 deadline. They do not establish which operation caused a timeout, and a flag
 alone does not satisfy the positive control.
 
+Run from `C:\Program Files (x86)`, 30 of 227 hosted startups missed the
+readiness check, each stopped at a different stage: no output, inside
+Extension Gallery initialization, or after it but before the prompt. That is
+the OS-volume stall described under "Symbolizing captured stacks", not one
+hung step. Both diagnostics workflows therefore copy the Debuggers directory
+into `RUNNER_TEMP`, verify `cdb.exe` and `dbgeng.dll` there, and point
+`PWRAGENT_WINDOWS_CDB_EXE` at the copy.
+
 The artifact's `probeFailure.triageGuide` points to this section. The controller
 also emits a bounded `[windows-pipe-evidence]` record with
 `kind: "native-stack-setup-failed"`, the sanitized failure fields, and that guide
