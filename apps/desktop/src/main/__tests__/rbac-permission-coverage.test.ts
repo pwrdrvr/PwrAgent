@@ -19,6 +19,11 @@ import { MESSAGING_COMMAND_CATALOG } from "../messaging/core/messaging-command-c
  * package (not shared) because only here can it import the real catalog.
  */
 describe("rbac permission coverage", () => {
+  it("gates both Claude deleted-session recovery routes on the reply floor", () => {
+    expect(permissionForCommandVerb("continue")).toBe("message.reply");
+    expect(permissionForActionId("claude:continue-session")).toBe("message.reply");
+  });
+
   it("maps every command verb except help", () => {
     for (const spec of MESSAGING_COMMAND_CATALOG) {
       if (spec.verb === "help") {

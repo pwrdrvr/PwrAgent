@@ -21,6 +21,7 @@ describe("MESSAGING_COMMAND_CATALOG", () => {
       "agent",
       "new",
       "status",
+      "continue",
       "detach",
       "monitor",
       "schedule",

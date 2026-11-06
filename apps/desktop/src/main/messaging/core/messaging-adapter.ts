@@ -292,6 +292,10 @@ export type MessagingBackendBridge = {
     request: SteerTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
   ): Promise<SteerTurnResponse>;
   compactThread?(request: CompactThreadRequest): Promise<CompactThreadResponse>;
+  continueClaudeThreadInNewSession?(request: {
+    threadId: string;
+    federationTarget?: FederationTarget;
+  }): Promise<{ threadId: string }>;
   setThreadLock?(request: SetThreadLockRequest): Promise<SetThreadLockResponse>;
   interruptTurn?(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   listSkills?(

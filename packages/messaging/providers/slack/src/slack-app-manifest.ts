@@ -11,7 +11,7 @@ import { MESSAGING_COMMAND_CATALOG } from "@pwragent/messaging-interface";
  * commands, or settings flags change in a way that existing customer
  * apps should reinstall.
  */
-export const SLACK_APP_MANIFEST_VERSION = 2;
+export const SLACK_APP_MANIFEST_VERSION = 3;
 
 export const DEFAULT_SLACK_SLASH_COMMAND_PREFIX = "pwragent_";
 

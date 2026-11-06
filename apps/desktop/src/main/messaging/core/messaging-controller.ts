@@ -2749,6 +2749,10 @@ export class MessagingController {
       await this.handleScheduledCommand(event);
       return;
     }
+    if (verb === "continue") {
+      await this.continueClaudeThreadInNewSession(event);
+      return;
+    }
     if (verb === "status") {
       if (event.args[0]?.toLowerCase() === "handoff") {
         await this.handleStatusCallback({
@@ -5706,6 +5710,10 @@ export class MessagingController {
   }
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
+    if (event.actionId === "claude:continue-session") {
+      await this.continueClaudeThreadInNewSession(event);
+      return;
+    }
     const privateReplyAction = readPrivateReplyAction(event);
     if (privateReplyAction) {
       await this.handlePrivateReplyCallback(event, privateReplyAction);
@@ -8392,6 +8400,30 @@ export class MessagingController {
     this.logger.debug?.(
       `messaging turn-failure deliver thread=${binding.threadId} binding=${binding.id} preview="${compactLogPreview(text)}"`,
     );
+    if (
+      isClaudeSessionGoneFailure(event)
+      && !federationTargetForBinding(binding)
+      && this.options.backend.continueClaudeThreadInNewSession
+    ) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("claude-session-gone"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          title: "Turn failed",
+          body: `${text}\n\nSend /continue to continue in a new session.`,
+          actions: [{
+            id: "claude:continue-session",
+            label: "Continue in a new session",
+            style: "primary",
+            value: { bindingId: binding.id, threadId: binding.threadId },
+            fallbackText: "/continue",
+          }],
+        }),
+        binding,
+      );
+      return;
+    }
     await this.deliver(
       buildErrorIntent({
         id: this.newIntentId("turn-failed"),
@@ -15108,6 +15140,58 @@ export class MessagingController {
       locked,
     });
     // Refresh handled by the thread-state update bus.
+  }
+
+  private async continueClaudeThreadInNewSession(
+    event: MessagingInboundCommandEvent | MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    // Recovery replaces only a session Claude confirms is gone. It preserves
+    // the thread's messages and execution settings, so the reply floor applies.
+    if (!(await this.requirePermission(event, "message.reply", "claude:continue-session"))) {
+      return;
+    }
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!(await this.requireRemoteScopeForBinding(event, binding, "claude:continue-session:remote-instance"))) {
+      return;
+    }
+    let errorMessage: string | undefined;
+    if (!binding) {
+      errorMessage = "This conversation is not attached to a thread. Use /resume to choose one.";
+    } else if (
+      event.kind === "callback"
+      && (readStringValue(event.value, "bindingId") !== binding.id
+        || readStringValue(event.value, "threadId") !== binding.threadId)
+    ) {
+      errorMessage = "This conversation is now attached to a different thread. Send /continue for the current thread.";
+    } else if (binding.backend !== "claude") {
+      errorMessage = "Only Claude threads can continue in a new session.";
+    } else if (federationTargetForBinding(binding)) {
+      errorMessage = "Continue this Claude thread on its owning instance.";
+    } else if (!this.options.backend.continueClaudeThreadInNewSession) {
+      errorMessage = "This backend does not support continuing Claude in a new session.";
+    } else {
+      try {
+        await this.options.backend.continueClaudeThreadInNewSession({ threadId: binding.threadId });
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (errorMessage !== undefined) {
+      await this.deliver(buildErrorIntent({
+        id: this.newIntentId("claude-continue-failed"),
+        createdAt: this.now(),
+        title: "Could not continue in a new session",
+        body: errorMessage,
+        recoverable: true,
+      }), binding, event);
+      return;
+    }
+    await this.deliver(buildConfirmationIntent({
+      id: this.newIntentId("claude-continue-ready"),
+      createdAt: this.now(),
+      title: "Ready to continue",
+      body: "Your next message starts a new Claude session with this thread's conversation as context.",
+    }), binding, event);
   }
 
   private async compactThread(
@@ -23451,6 +23535,15 @@ function errorTextForBackendEvent(event: AgentEvent): string | undefined {
     return undefined;
   }
   return parseCodexTurnErrorMessage(message);
+}
+
+function isClaudeSessionGoneFailure(event: AgentEvent): boolean {
+  if (event.backend !== "claude" || event.notification.method !== "turn/failed") {
+    return false;
+  }
+  const turn = asPlainRecord(event.notification.params.turn);
+  const error = asPlainRecord(turn?.error);
+  return error?.recovery === "claudeSessionGone";
 }
 
 function assistantDeltaForBackendEvent(

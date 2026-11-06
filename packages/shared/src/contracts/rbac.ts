@@ -640,6 +640,7 @@ const COMMAND_VERB_PERMISSIONS: Record<string, MessagingPermissionId> = {
   schedule: "thread.control.schedule",
   scheduled: "thread.control.schedule",
   status: "thread.status.view",
+  continue: "message.reply",
   detach: "thread.detach",
   monitor: "thread.monitor",
 };
@@ -704,6 +705,9 @@ export function permissionForActionId(
 ): MessagingPermissionId | undefined {
   if (actionId.startsWith("command:")) {
     return permissionForCommandVerb(actionId.slice("command:".length));
+  }
+  if (actionId === "claude:continue-session") {
+    return "message.reply";
   }
   if (actionId.startsWith("handoff:")) {
     return "thread.control.handoff";

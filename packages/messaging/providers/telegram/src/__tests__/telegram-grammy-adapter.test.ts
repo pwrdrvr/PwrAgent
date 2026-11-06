@@ -1080,6 +1080,10 @@ describe("TelegramAdapter callback persistence", () => {
         description: "Show the current PwrAgent binding",
       },
       {
+        command: "continue",
+        description: "Continue a Claude thread after its session was deleted",
+      },
+      {
         command: "detach",
         description: "Detach this chat from PwrAgent",
       },

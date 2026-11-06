@@ -1168,6 +1168,16 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return await this.registry.compactThread(request);
   }
 
+  async continueClaudeThreadInNewSession(request: {
+    threadId: string;
+    federationTarget?: FederationTarget;
+  }): Promise<{ threadId: string }> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      throw new Error("Continue this Claude thread on its owning instance.");
+    }
+    return await this.registry.continueClaudeThreadInNewSession({ threadId: request.threadId });
+  }
+
   async interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse> {
     const remote = this.remoteBackend(request.federationTarget);
     if (remote) {

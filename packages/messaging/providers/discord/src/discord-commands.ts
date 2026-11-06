@@ -117,6 +117,13 @@ const DISCORD_COMMAND_DEFINITIONS: Array<
   },
   {
     contexts: COMMAND_CONTEXTS,
+    description: "Continue a Claude thread after its session was deleted.",
+    integration_types: COMMAND_INTEGRATION_TYPES,
+    name: "continue",
+    type: ApplicationCommandType.ChatInput,
+  },
+  {
+    contexts: COMMAND_CONTEXTS,
     description: "Detach this conversation from its current PwrAgent thread.",
     integration_types: COMMAND_INTEGRATION_TYPES,
     name: "detach",

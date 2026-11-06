@@ -53,13 +53,14 @@ import {
   messagingQuestionnaireActions,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
-import { textForDiscordIntent } from "@pwragent/messaging-provider-discord";
+import { actionsForDiscordIntent, textForDiscordIntent } from "@pwragent/messaging-provider-discord";
 import { textForFeishuIntent } from "@pwragent/messaging-provider-feishu";
 import { textForLineIntent } from "@pwragent/messaging-provider-line";
 import { textForMattermostIntent } from "@pwragent/messaging-provider-mattermost";
-import { textForSlackIntent } from "@pwragent/messaging-provider-slack";
+import { actionsForSlackIntent, textForSlackIntent } from "@pwragent/messaging-provider-slack";
 import {
   TelegramAdapter,
+  actionsForTelegramIntent,
   textForTelegramIntent,
   type TelegramBotApi,
   type TelegramEditMessageTextRequest,
@@ -10602,6 +10603,99 @@ describe("MessagingController", () => {
         body: "The model 'gpt-image-2' does not exist.",
       }),
     );
+  });
+
+  it.each([
+    ["telegram", actionsForTelegramIntent, textForTelegramIntent],
+    ["discord", actionsForDiscordIntent, textForDiscordIntent],
+    ["slack", actionsForSlackIntent, textForSlackIntent],
+  ] as const)("offers Claude session recovery on %s and confirms the next message starts it", async (channel, actionsForIntent, textForIntent) => {
+    const harness = await createHarness({ channel });
+    const inbound = buildCommandEvent("/continue");
+    inbound.channel.channel = channel;
+    const binding = await harness.store.upsertBinding({
+      id: "claude-binding", backend: "claude", threadId: "thread-1", channel: inbound.channel,
+      authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000,
+    });
+    const failure: AgentEvent = {
+      backend: "claude",
+      notification: { method: "turn/failed", params: {
+        threadId: "thread-1", turnId: "failed-turn", turn: {
+          id: "failed-turn", status: "failed", error: { message: "Claude deleted this session.", recovery: "claudeSessionGone" },
+        },
+      } },
+    };
+    await harness.controller.handleBackendEvent(failure);
+    await harness.controller.handleBackendEvent(failure);
+    const notices = harness.delivered.filter((intent) => intent.kind === "confirmation" && intent.title === "Turn failed");
+    expect(notices).toHaveLength(1);
+    const notice = notices[0]!;
+    expect(textForIntent(notice)).toContain("Claude deleted this session.");
+    const action = actionsForIntent(notice)[0]!;
+    expect(action).toMatchObject({
+      id: "claude:continue-session", label: "Continue in a new session",
+      value: { bindingId: binding.id, threadId: binding.threadId }, fallbackText: "/continue",
+    });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: action.id, value: action.value, channel: inbound.channel,
+    }));
+    expect(harness.continueClaudeThreadInNewSession).toHaveBeenCalledWith({ threadId: "thread-1" });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation", body: expect.stringContaining("Your next message starts a new Claude session"),
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("offers a command fallback on a text-only surface", async () => {
+    const harness = await createHarness({ capabilityProfile: { ...PERMISSIVE_CAPABILITY_PROFILE, actions: undefined } });
+    await harness.store.upsertBinding({
+      id: "claude-binding", backend: "claude", threadId: "thread-1", channel: buildCommandEvent("/continue").channel,
+      authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000,
+    });
+    await harness.controller.handleBackendEvent({
+      backend: "claude",
+      notification: { method: "turn/failed", params: {
+        threadId: "thread-1", turnId: "failed-turn", turn: {
+          id: "failed-turn", status: "failed", error: { message: "Claude deleted this session.", recovery: "claudeSessionGone" },
+        },
+      } },
+    });
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "confirmation", actions: [], body: expect.stringContaining("Send /continue"),
+    }));
+    await harness.controller.handleInboundEvent(buildCommandEvent("/continue"));
+    expect(harness.continueClaudeThreadInNewSession).toHaveBeenCalledWith({ threadId: "thread-1" });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("relays a Claude session recovery refusal without starting a turn", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "claude";
+    const harness = await createHarness({ navigation });
+    await bindThreadToBackend(harness, "claude");
+    harness.continueClaudeThreadInNewSession.mockRejectedValueOnce(new Error("Claude still has this conversation."));
+    await harness.controller.handleInboundEvent(buildCommandEvent("/continue"));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error", body: "Claude still has this conversation.",
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not offer session recovery for an ordinary Claude failure", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "claude";
+    const harness = await createHarness({ navigation });
+    await bindThreadToBackend(harness, "claude");
+    await harness.controller.handleBackendEvent({
+      backend: "claude",
+      notification: { method: "turn/failed", params: {
+        threadId: "thread-1", turnId: "failed-turn", turn: {
+          id: "failed-turn", status: "failed", error: { message: "Something else failed." },
+        },
+      } },
+    });
+    expect(harness.delivered).toContainEqual(expect.objectContaining({ kind: "error", title: "Turn failed", body: "Something else failed." }));
+    expect(harness.delivered.some((intent) => intent.kind === "confirmation" && intent.actions.length > 0)).toBe(false);
   });
 
   it("does not double-post the error notice for the same failed turn", async () => {
@@ -28178,6 +28272,7 @@ async function createHarness<
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
+  continueClaudeThreadInNewSession: ReturnType<typeof vi.fn>;
   setThreadLock: ReturnType<typeof vi.fn>;
   cancelThreadExecutionModeQueue: ReturnType<typeof vi.fn>;
   delivered: MessagingSurfaceIntent[];
@@ -28487,6 +28582,9 @@ async function createHarness<
     turnId: "compact-turn-1",
     itemId: "compact-item-1",
   }));
+  const continueClaudeThreadInNewSession = vi.fn(async (request: { threadId: string }) => ({
+    threadId: request.threadId,
+  }));
   const setThreadLock = vi.fn(async (request: { backend?: AppServerBackendKind; threadId: string }) => ({
     backend: request.backend ?? "codex",
     threadId: request.threadId,
@@ -28689,6 +28787,7 @@ async function createHarness<
   const backend: MessagingBackendBridge = {
     cancelScheduledThreadAction,
     compactThread,
+    continueClaudeThreadInNewSession,
     setThreadLock,
     cancelThreadExecutionModeQueue,
     ensureDirectoryLaunchpad,
@@ -28782,6 +28881,7 @@ async function createHarness<
   return {
     controller,
     compactThread,
+    continueClaudeThreadInNewSession,
     setThreadLock,
     cancelThreadExecutionModeQueue,
     delivered,

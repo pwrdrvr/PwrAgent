@@ -25,7 +25,7 @@ const manifestsDir = path.resolve(
 describe("official Slack app manifest", () => {
   it("matches the versioned JSON fixture", () => {
     const fixture = readFileSync(
-      path.join(manifestsDir, "pwragent-slack-app.v2.json"),
+      path.join(manifestsDir, "pwragent-slack-app.v3.json"),
       "utf8",
     );
     expect(slackAppManifestJson()).toBe(fixture);
@@ -33,7 +33,7 @@ describe("official Slack app manifest", () => {
 
   it("matches the versioned YAML fixture", () => {
     const fixture = readFileSync(
-      path.join(manifestsDir, "pwragent-slack-app.v2.yaml"),
+      path.join(manifestsDir, "pwragent-slack-app.v3.yaml"),
       "utf8",
     );
     expect(slackAppManifestYaml()).toBe(fixture);
@@ -48,7 +48,7 @@ describe("official Slack app manifest", () => {
           (command) => `/${DEFAULT_SLACK_SLASH_COMMAND_PREFIX}${command.verb}`,
         ),
       );
-    expect(manifest.features.slash_commands).toHaveLength(9);
+    expect(manifest.features.slash_commands).toHaveLength(10);
     expect(manifest.features.slash_commands.every(
       (command) => command.usage_hint === undefined,
     )).toBe(true);
@@ -56,7 +56,7 @@ describe("official Slack app manifest", () => {
 
   it("keeps PKCE, token rotation, and org deploy off", () => {
     const manifest = buildOfficialSlackAppManifest();
-    expect(SLACK_APP_MANIFEST_VERSION).toBe(2);
+    expect(SLACK_APP_MANIFEST_VERSION).toBe(3);
     expect(manifest.oauth_config.pkce_enabled).toBe(false);
     expect(manifest.settings.token_rotation_enabled).toBe(false);
     expect(manifest.settings.org_deploy_enabled).toBe(false);
