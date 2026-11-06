@@ -486,6 +486,26 @@ describe("review Auto-fix status", () => {
     await waitFor(() => expect(document.querySelector(`.review-todo__auto[data-phase="${phase}"]`)).toHaveTextContent(text!));
   });
 
+  it("hides a failed send once the card sends its own fix, and shows a new failure", async () => {
+    const base = installApi(review, review);
+    let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+    vi.mocked(base.onThreadTodosChanged!).mockImplementation((listener) => { changed = listener; return () => {}; });
+    const api = installAutoFix(base,
+      { armedTurnIds: [], runs: { review: { phase: "failed", at: 5, reason: "Thread is locked." } } });
+    const onDoHere = vi.fn(async () => true);
+    render(<ThreadTodoCard todo={threadReviewTodo(review)} running={false}
+      onRun={vi.fn()} onStartReview={vi.fn()} onResolve={vi.fn()} onDoHere={onDoHere} onSetItemChecked={vi.fn()} />);
+    await screen.findByText("Auto-fix could not start:");
+    fireEvent.click(screen.getByRole("button", { name: "Auto-fix" }));
+    await waitFor(() => expect(onDoHere).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(document.querySelector(".review-todo__auto")).toBeNull());
+    // A later automatic send that fails again is news.
+    vi.mocked(api.readReviewAutoFix).mockResolvedValueOnce(
+      { status: { armedTurnIds: [], runs: { review: { phase: "failed", at: 9, reason: "Model unavailable." } } } });
+    act(() => changed({ backend: "codex", threadId: "owner", at: 10 }));
+    await screen.findByText("Model unavailable.", { exact: false });
+  });
+
   it("shows no Auto-fix line when the run left nothing open or the owner does not answer", async () => {
     const dismissed: ThreadReview = { ...review, status: "dismissed" };
     const dismissedApi = installAutoFix(installApi(dismissed, dismissed),

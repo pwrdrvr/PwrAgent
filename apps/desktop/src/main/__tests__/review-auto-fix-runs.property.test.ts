@@ -5,7 +5,9 @@ import { ReviewAutoFixRuns, type ReviewAutoFixRunEvent } from "../thread-reviews
 /**
  * Rule: a review's Auto-fix run shows what its turn last did, as the owner's
  * queue reported it: waiting behind a running turn, running, finished, or
- * refused with the reason; a cancelled turn leaves no run. Viewers are told
+ * refused with the reason; a cancelled turn leaves no run. Once an agent or
+ * the operator settles a finding, a failed send is dropped, while a run that
+ * is still going or has ended stays. Viewers are told
  * exactly when what they show changes, so a queue position update that keeps
  * the run queued sends nothing.
  *
@@ -19,6 +21,7 @@ const QUEUE_STATUSES = ["queued", "held", "started", "failed", "blocked", "cance
 
 function shownAfter(current: Shown, event: ReviewAutoFixRunEvent): Shown {
   if (event.kind === "sendFailed") return { phase: "failed", reason: event.reason };
+  if (event.kind === "reviewUpdated") return current?.phase === "failed" ? undefined : current;
   if (event.status === "queued" || event.status === "held") return { phase: "queued" };
   if (event.status === "started") return { phase: "running" };
   if (event.status === "failed" || event.status === "blocked") {
@@ -47,6 +50,10 @@ const eventArb: fc.Arbitrary<{ reviewId: string; event: ReviewAutoFixRunEvent }>
       reason: fc.constantFrom("Thread is locked.", "Handing off."),
       at: fc.nat(),
     }),
+  }),
+  fc.record({
+    reviewId: reviewArb,
+    event: fc.record({ kind: fc.constant("reviewUpdated" as const), at: fc.nat() }),
   }),
 );
 
