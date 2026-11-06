@@ -350,6 +350,9 @@ export type LinkedDirectorySummary = {
 export type WorktreeSnapshotState =
   | "present"
   | "archived"
+  /** An idle thread's checkout, removed after this snapshot; the thread stays
+   * in the lists and the next send puts the checkout back. */
+  | "hibernated"
   | "restored"
   | "unavailable";
 
@@ -365,6 +368,8 @@ export type WorktreeSnapshotSummary = {
   sourceHead?: string;
   createdAt: number;
   archivedAt?: number;
+  /** When an idle checkout was hibernated. Set with state "hibernated". */
+  hibernatedAt?: number;
   restoredAt?: number;
   /** Physical checkout successfully recreated by restore, for shared-owner reuse. */
   restoredCheckoutIdentity?: { device: string; inode: string; birthtimeNs: string; gitDirectory: string };
@@ -696,6 +701,9 @@ export type AppServerThreadSummary = {
   };
   /** Set by the owner's selected-detail read when the worktree folder is gone. */
   workspaceMissing?: ThreadMissingWorkspace;
+  /** Set by the owner's selected-detail read while the worktree is hibernated
+   * and comes back on the next send. A failed restore reports workspaceMissing. */
+  workspaceHibernated?: ThreadHibernatedWorkspace;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   worktreeSnapshots?: WorktreeSnapshotSummary[];
   /** Native Codex provenance when this summary itself is a spawned worker. */
@@ -1326,8 +1334,20 @@ export type WorktreeRecoveryStep = {
   detail?: string;
 };
 
+/** A hibernated checkout: removed while idle, restored on the next send. */
+export type ThreadHibernatedWorkspace = {
+  worktreePath: string;
+  repositoryPath: string;
+  hibernatedAt: number;
+  branch?: string;
+  /** A restore is running now. */
+  restoring?: boolean;
+};
+
 export type WorktreeRecoveryFailureReason =
   | "repository-missing"
+  /** The branch no longer points at the commit the checkout was saved on. */
+  | "branch-moved"
   | "path-occupied"
   | "record-locked"
   | "checkpoint-missing"

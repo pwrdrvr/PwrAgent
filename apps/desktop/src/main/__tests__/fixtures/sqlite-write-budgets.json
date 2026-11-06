@@ -1603,5 +1603,11 @@
   "voice-open-thread-persisted-off-page-peer": {"commits": 0, "note": "100 opens with an empty loaded page and an existing ranked peer pin: exact persisted lookup preserves the complete pin payload, zero commits and 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "pr-watch-archive-retirement": {"commits": 1, "note": "Archive retires 40 watches, a pending repair, Auto-fix candidacy and a prerequisite subscription in one boundary commit (~0.091 MB); 10 archives/day cost ~0.91 MB/day. No per-event or idle commits.", "observedWalBytes": 90640, "rowsChanged": 44, "statements": 5},
   "pr-watch-archive-retirement-repeat": {"commits": 0, "note": "Repeated archive observations and startup pruning are read-only once subscriptions are retired: 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
-  "pr-setting-only-startup-retirement": {"commits": 1, "note": "Retire one legacy archived Auto-fix preference without live PR rows in one startup commit (~0.012 MB); one startup/day costs ~0.012 MB/day. Repeat scans write nothing.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1}
+  "pr-setting-only-startup-retirement": {"commits": 1, "note": "Retire one legacy archived Auto-fix preference without live PR rows in one startup commit (~0.012 MB); one startup/day costs ~0.012 MB/day. Repeat scans write nothing.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "checkout-hibernation-hibernate-one": {"commits": 1, "note": "one sweep hibernates one idle checkout", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1},
+  "checkout-hibernation-idle-sweeps": {"commits": 0, "note": "24 hourly sweeps after the only checkout hibernated", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "checkout-hibernation-kept": {"commits": 0, "note": "one sweep that keeps the only checkout", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "checkout-hibernation-restore": {"commits": 1, "note": "restore one hibernated checkout with no environment setup", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "checkout-hibernation-restore-with-setup": {"commits": 2, "note": "restore one hibernated checkout and re-run its environment setup", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
+  "checkout-hibernation-restore-failed": {"commits": 0, "note": "a refused restore of a hibernated checkout", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
 }

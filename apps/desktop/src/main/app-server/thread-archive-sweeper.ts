@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import type { AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
+  type DesktopCheckoutHibernationPolicy,
   THREAD_ARCHIVE_SWEEP_FAILURE_LIMIT,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepFailure,
@@ -54,9 +55,24 @@ type SweeperDeps = {
   workspaceArchiveBlocker?: (cwd: string, signal: AbortSignal) => Promise<string | undefined>;
   onError: (error: unknown, threadId?: string) => void;
   onStatus?: (status: DesktopThreadArchiveSweepStatus) => void;
+  /** Idle checkout hibernation, after the archive pass. Absent: no phase. */
+  hibernation?: CheckoutHibernationSweepDeps;
 };
 
-type SweepTally = Pick<DesktopThreadArchiveSweepStatus, "archived" | "deleted" | "failed" | "error" | "failures" | "threads">;
+export type CheckoutHibernationSweepDeps = {
+  getPolicy: () => DesktopCheckoutHibernationPolicy;
+  /** Why this candidate's checkout stays, from thread state alone, or
+   * undefined. Undefined target: the thread has no checkout to hibernate,
+   * and is not counted. */
+  keepReason: (candidate: ThreadArchiveCandidate, candidates: readonly ThreadArchiveCandidate[],
+    policy: DesktopCheckoutHibernationPolicy, now: number) => { target?: string; keep?: string };
+  /** Why the checkout itself must stay, from Git, or undefined. */
+  inspectWorkspace: (worktreePath: string, policy: DesktopCheckoutHibernationPolicy, signal: AbortSignal) => Promise<string | undefined>;
+  /** True when hibernated, false when cancelled, or the reason it was kept. */
+  hibernate: (candidate: ThreadArchiveCandidate, policy: DesktopCheckoutHibernationPolicy) => Promise<boolean | string>;
+};
+
+type SweepTally = Pick<DesktopThreadArchiveSweepStatus, "archived" | "deleted" | "failed" | "error" | "failures" | "threads" | "hibernation">;
 type SweepFailureDetails = { path?: string; threadId?: string };
 type SweepPhase = DesktopThreadArchiveSweepFailure["phase"];
 
@@ -142,9 +158,13 @@ export function isPwrAgentClaudeCheckout({ thread, overlay }: Pick<ThreadArchive
       && (!directory.worktreePath || isPwrAgentWorktreePath(directory.worktreePath)));
 }
 
-export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent, activePrWatch, unreadable }: ThreadArchiveCandidate): string | undefined {
+/** `allowPinned` is for checkout hibernation, which keeps the thread listed. */
+export function archiveCandidateProtectionReason(
+  { thread, overlay, activeSubAgent, activePrWatch, unreadable }: ThreadArchiveCandidate,
+  options: { allowPinned?: boolean } = {},
+): string | undefined {
   if (unreadable) return "Thread state unreadable";
-  if (thread.isPinned || overlay?.pinnedRank !== undefined) return "Pinned thread";
+  if (!options.allowPinned && (thread.isPinned || overlay?.pinnedRank !== undefined)) return "Pinned thread";
   if (overlay?.agent) return "Agent thread";
   if (overlay?.mergeHolds?.some((hold) => hold.status === "waiting")) return "Merge held";
   if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
@@ -381,6 +401,69 @@ export class ThreadArchiveSweeper {
     try { tally.deleted += await this.deps.cleanupRetention?.((error, details) => this.count(tally, "retention", error, details)) || 0; }
     catch (error) { if (!this.abort.signal.aborted) this.fail(tally, "retention", error); }
     if (this.abort.signal.aborted) return;
+    // Hibernation runs whether or not archiving is on, after it, so a thread
+    // archived this sweep is not hibernated first.
+    await this.archiveThreads(tally);
+    if (this.abort.signal.aborted) return;
+    await this.hibernateCheckouts(tally);
+  }
+
+  private async hibernateCheckouts(tally: SweepTally): Promise<void> {
+    const deps = this.deps.hibernation;
+    if (!deps) return;
+    let policy: DesktopCheckoutHibernationPolicy;
+    try { policy = deps.getPolicy(); }
+    catch (error) {
+      this.fail(tally, "hibernation", error);
+      tally.hibernation = { checked: 0, hibernated: 0, kept: {}, skipped: "The hibernation policy could not be read" };
+      return;
+    }
+    const hibernation: NonNullable<SweepTally["hibernation"]> = { checked: 0, hibernated: 0, kept: {} };
+    tally.hibernation = hibernation;
+    if (!policy.enabled) {
+      hibernation.skipped = "Hibernation is off";
+      return;
+    }
+    const keep = (reason: string) => { hibernation.kept[reason] = (hibernation.kept[reason] ?? 0) + 1; };
+    let candidates: ThreadArchiveCandidate[];
+    try { candidates = await this.deps.listCandidates(); }
+    catch (error) {
+      if (!this.abort.signal.aborted) this.fail(tally, "hibernation", error);
+      hibernation.skipped = "Threads could not be listed";
+      return;
+    }
+    for (const candidate of candidates) {
+      if (this.abort.signal.aborted) return;
+      // Native sub-agents share their root's checkout.
+      if (candidate.thread.codexNativeSubAgent) continue;
+      try {
+        const listed = deps.keepReason(candidate, candidates, policy, Date.now());
+        if (!listed.target) continue;
+        hibernation.checked += 1;
+        if (listed.keep) {
+          keep(listed.keep);
+          continue;
+        }
+        const workspace = await deps.inspectWorkspace(listed.target, policy, this.abort.signal);
+        if (this.abort.signal.aborted) return;
+        if (workspace) {
+          keep(workspace);
+          continue;
+        }
+        if (JSON.stringify(deps.getPolicy()) !== JSON.stringify(policy)) return;
+        const result = await deps.hibernate(candidate, policy);
+        if (result === true) hibernation.hibernated += 1;
+        else keep(result === false ? "Hibernation cancelled" : result);
+      } catch (error) {
+        if (!this.abort.signal.aborted) {
+          this.count(tally, "hibernation", error, { threadId: candidate.thread.id });
+          this.deps.onError(error, candidate.thread.id);
+        }
+      }
+    }
+  }
+
+  private async archiveThreads(tally: SweepTally): Promise<void> {
     let policy: DesktopThreadArchivePolicy;
     try { policy = this.deps.getPolicy?.() ?? { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" as const }; }
     catch (error) {

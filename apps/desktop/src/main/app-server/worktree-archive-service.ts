@@ -39,6 +39,19 @@ type ArchiveWorktreeParams = {
   beforeRemove?: () => Promise<() => void>;
 };
 
+type HibernateWorktreeParams = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  worktreePath: string;
+  repositoryPath?: string;
+  now?: number;
+  /** The snapshot may not be larger than this. Unlike archive's
+   * maxSnapshotBytes, it only ever lowers the service limit. */
+  capSnapshotBytes: number;
+  /** Re-runs the hibernation checks and returns a synchronous assert. */
+  beforeRemove: () => Promise<() => void>;
+};
+
 type RestoreWorktreeParams = {
   backend: AppServerBackendKind;
   threadId: string;
@@ -69,6 +82,14 @@ type WorktreeArchiveServiceOptions = {
 
 export const MAX_WORKTREE_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_WORKTREE_SNAPSHOT_FILES = 10_000;
+
+/** The checkout changed after its snapshot was written; it was kept. */
+export class SnapshotTreeMismatchError extends Error {
+  constructor(worktreePath: string) {
+    super(`The checkout changed while its snapshot was written; it was kept: ${worktreePath}`);
+    this.name = "SnapshotTreeMismatchError";
+  }
+}
 
 export class MissingArchiveWorktreeError extends Error {
   constructor(worktreePath: string) {
@@ -123,6 +144,16 @@ async function runGit(
 ): Promise<GitResult> {
   const env = buildPwrAgentChildProcessEnv(process.env, options.env);
   return await runGitCommand(cwd, args, { ...options, env });
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await lstat(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function trimGitOutput(value: string): string {
@@ -290,7 +321,45 @@ export class WorktreeArchiveService {
     return { snapshotRef, repositoryPath };
   }
 
-  private async snapshotAndRemove(params: ArchiveWorktreeParams): Promise<Omit<WorktreeSnapshotSummary, "backend">> {
+  /**
+   * Snapshot and remove an idle thread's checkout, keeping the thread. The
+   * snapshot is capped, and its tree must still equal the checkout's
+   * `add -A` tree once the checks have run again; otherwise the checkout is
+   * kept and the snapshot ref goes back to what it was.
+   */
+  async hibernate(params: HibernateWorktreeParams): Promise<WorktreeSnapshotSummary> {
+    const removed = await this.snapshotAndRemove({
+      backend: params.backend,
+      threadId: params.threadId,
+      worktreePath: params.worktreePath,
+      repositoryPath: params.repositoryPath,
+      now: params.now,
+      beforeRemove: params.beforeRemove,
+    }, {
+      capSnapshotBytes: params.capSnapshotBytes,
+      verifyTree: async (worktreePath) => await this.readCheckoutTree(worktreePath),
+    });
+    const { archivedAt, ...rest } = removed;
+    return { ...rest, backend: params.backend, state: "hibernated", hibernatedAt: archivedAt };
+  }
+
+  /** The tree `git add -A` would stage, from a throwaway index. */
+  async readCheckoutTree(worktreePath: string): Promise<string> {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-tree-"));
+    try {
+      const env = { GIT_INDEX_FILE: path.join(tempDir, "index") };
+      await this.runGit(worktreePath, ["read-tree", "HEAD"], { env });
+      await this.runGit(worktreePath, ["add", "-A", "--", "."], { env });
+      return trimGitOutput((await this.runGit(worktreePath, ["write-tree"], { env })).stdout);
+    } finally {
+      await rm(tempDir, { force: true, recursive: true });
+    }
+  }
+
+  private async snapshotAndRemove(
+    params: ArchiveWorktreeParams,
+    hibernation?: { capSnapshotBytes: number; verifyTree: (worktreePath: string) => Promise<string> },
+  ): Promise<Omit<WorktreeSnapshotSummary, "backend">> {
     let worktreePath: string;
     try {
       worktreePath = await realpath(path.resolve(params.worktreePath));
@@ -347,32 +416,58 @@ export class WorktreeArchiveService {
       worktree,
       worktreePath,
       maxSnapshotBytes: params.maxSnapshotBytes,
+      capSnapshotBytes: hibernation?.capSnapshotBytes,
     });
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
+    const previousRef = hibernation ? await this.readRef(repositoryPath, snapshotRef) : undefined;
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
-    const assertRemoval = await params.beforeRemove?.();
-    assertRemoval?.();
-    await this.repositoryRemovals.run(commonDirectory, async () => await withWorktreeTerminalsClosed(worktreePath, async () => {
-      // Removal admission and terminal teardown can await other work. Recheck
-      // Git's lock protection before modifying even ignored link entries.
-      await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory, removing: true });
-      if (trimGitOutput((await this.runGit(worktreePath, ["rev-parse", "--verify", "HEAD"])).stdout) !== head) {
-        throw new Error("Worktree HEAD changed during snapshot preparation; the worktree was kept.");
-      }
+    let removalStarted = false;
+    let assertRemoval: (() => void) | undefined;
+    try {
+      assertRemoval = await params.beforeRemove?.();
       assertRemoval?.();
-      if (process.platform === "win32") {
-        await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);
+      if (hibernation) {
+        // Check 6: the work about to be removed is exactly what was saved.
+        const snapshotTree = trimGitOutput((await this.runGit(repositoryPath, ["rev-parse", `${snapshotCommit}^{tree}`])).stdout);
+        if (await hibernation.verifyTree(worktreePath) !== snapshotTree) throw new SnapshotTreeMismatchError(worktreePath);
+        assertRemoval?.();
       }
-      assertRemoval?.();
-      await this.runGit(
-        repositoryPath,
-        ["worktree", "remove", "--force", worktreePath],
-        // Git for Windows can hand work to another git.exe after the launcher
-        // exits. Own that complete process tree atomically and do not report the
-        // archive complete until the Job's active-process count reaches zero.
-        { ownProcessTree: true, beforeSpawn: assertRemoval },
-      );
-    }, assertRemoval));
+    } catch (error) {
+      // Nothing was removed. Put back the snapshot an earlier archive or
+      // hibernation left under this per-path ref.
+      if (hibernation) await this.resetRef(repositoryPath, snapshotRef, snapshotCommit, previousRef).catch(() => {});
+      throw error;
+    }
+    try {
+      await this.removeCheckout({ worktreePath, gitDirectory, commonDirectory, repositoryPath, head, assertRemoval,
+        onRemovalStarted: () => { removalStarted = true; } });
+    } catch (error) {
+      if (!hibernation) throw error;
+      if (!removalStarted) {
+        await this.resetRef(repositoryPath, snapshotRef, snapshotCommit, previousRef).catch(() => {});
+        throw error;
+      }
+      // A removal that stopped partway (Windows can hold files open) may have
+      // already deleted work. Keep the checkout only while it is intact;
+      // otherwise record the snapshot so the missing-checkout card can
+      // recover from it.
+      const intact = await pathExists(worktreePath)
+        && await hibernation.verifyTree(worktreePath).then(
+          async (tree) => tree === trimGitOutput((await this.runGit(repositoryPath, ["rev-parse", `${snapshotCommit}^{tree}`])).stdout),
+          () => false,
+        );
+      if (intact) {
+        await this.resetRef(repositoryPath, snapshotRef, snapshotCommit, previousRef).catch(() => {});
+        throw error;
+      }
+      const archivedAt = params.now ?? Date.now();
+      return {
+        id: snapshotIdForPath(worktreePath), threadId: params.threadId, worktreePath, repositoryPath,
+        snapshotRef, snapshotCommit, sourceBranch: worktree.branch, sourceHead: worktree.head,
+        createdAt: archivedAt, archivedAt, state: "archived", ignoredFilesExcluded: true,
+        unavailableReason: `The checkout was only partly removed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
 
     const archivedAt = params.now ?? Date.now();
     return {
@@ -389,6 +484,50 @@ export class WorktreeArchiveService {
       state: "archived",
       ignoredFilesExcluded: true,
     };
+  }
+
+  private async removeCheckout(params: {
+    worktreePath: string;
+    gitDirectory: string;
+    commonDirectory: string;
+    repositoryPath: string;
+    head: string;
+    assertRemoval?: () => void;
+    onRemovalStarted: () => void;
+  }): Promise<void> {
+    const { worktreePath, gitDirectory, commonDirectory, repositoryPath, head, assertRemoval } = params;
+    await this.repositoryRemovals.run(commonDirectory, async () => await withWorktreeTerminalsClosed(worktreePath, async () => {
+      // Removal admission and terminal teardown can await other work. Recheck
+      // Git's lock protection before modifying even ignored link entries.
+      await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory, removing: true });
+      if (trimGitOutput((await this.runGit(worktreePath, ["rev-parse", "--verify", "HEAD"])).stdout) !== head) {
+        throw new Error("Worktree HEAD changed during snapshot preparation; the worktree was kept.");
+      }
+      assertRemoval?.();
+      if (process.platform === "win32") {
+        params.onRemovalStarted();
+        await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);
+      }
+      assertRemoval?.();
+      await this.runGit(
+        repositoryPath,
+        ["worktree", "remove", "--force", worktreePath],
+        // Git for Windows can hand work to another git.exe after the launcher
+        // exits. Own that complete process tree atomically and do not report the
+        // archive complete until the Job's active-process count reaches zero.
+        { ownProcessTree: true, beforeSpawn: () => { assertRemoval?.(); params.onRemovalStarted(); } },
+      );
+    }, assertRemoval));
+  }
+
+  private async readRef(repositoryPath: string, ref: string): Promise<string | undefined> {
+    const result = await this.runGit(repositoryPath, ["for-each-ref", "--format=%(objectname)", ref]);
+    return trimGitOutput(result.stdout) || undefined;
+  }
+
+  /** Compare-and-swap the ref from `current` back to `previous`, or delete it. */
+  private async resetRef(repositoryPath: string, ref: string, current: string, previous: string | undefined): Promise<void> {
+    await this.runGit(repositoryPath, previous ? ["update-ref", ref, previous, current] : ["update-ref", "-d", ref, current]);
   }
 
   async deleteSnapshot(snapshot: WorktreeSnapshotSummary): Promise<void> {
@@ -606,6 +745,7 @@ export class WorktreeArchiveService {
 
   private async createSnapshotCommit(params: {
     maxSnapshotBytes?: number;
+    capSnapshotBytes?: number;
     backend: SnapshotOwner;
     threadId: string;
     worktree: WorktreeInfo;
@@ -630,7 +770,12 @@ export class WorktreeArchiveService {
       if (files.size > MAX_WORKTREE_SNAPSHOT_FILES) {
         throw new Error(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
       }
-      const limit = Math.max(this.maxSnapshotBytes, params.maxSnapshotBytes ?? 0);
+      // A reviewed approval may raise the limit; hibernation's own setting
+      // may only lower it.
+      const limit = Math.min(
+        Math.max(this.maxSnapshotBytes, params.maxSnapshotBytes ?? 0),
+        params.capSnapshotBytes ?? Number.POSITIVE_INFINITY,
+      );
       let bytes = 0;
       for (const file of files) {
         try {

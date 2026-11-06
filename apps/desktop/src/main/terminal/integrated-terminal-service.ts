@@ -640,6 +640,14 @@ export class IntegratedTerminalService {
     }
   }
 
+  hasOpenIn(worktreePath: string): boolean {
+    return [...this.sessionsById.values()].some((session) => !session.closing && this.isInWorktree(session.cwd, worktreePath))
+      || [...this.pendingCreates.values()].some(({ request }) => this.isInWorktree(
+        (request.sessionId ? this.archived.get(request.sessionId)?.summary.cwd : undefined) ?? request.cwd,
+        worktreePath,
+      ));
+  }
+
   async withWorktreeClosed<T>(worktreePath: string, work: () => Promise<T>, assertCurrent?: () => void): Promise<T> {
     assertCurrent?.();
     this.assertWorktreeAvailable(worktreePath);

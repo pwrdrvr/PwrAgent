@@ -1,4 +1,5 @@
 import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
+import type { DesktopCheckoutHibernationPolicy } from "../checkout-hibernation-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
@@ -1729,6 +1730,7 @@ export type DesktopSettingsSnapshot = {
   applications: DesktopApplicationsSnapshot;
   worktrees: {
     archive?: DesktopThreadArchivePolicy;
+    hibernate?: DesktopCheckoutHibernationPolicy;
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
     effectivePath: string;
   };
@@ -2034,6 +2036,7 @@ export type DesktopSettingsConfigPatch = {
   };
   worktrees?: {
     archive?: Partial<DesktopThreadArchivePolicy>;
+    hibernate?: Partial<DesktopCheckoutHibernationPolicy>;
     storage?: DesktopWorktreeStorageLocation;
   };
 };
