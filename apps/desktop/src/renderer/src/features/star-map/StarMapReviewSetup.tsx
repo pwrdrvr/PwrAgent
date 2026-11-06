@@ -40,6 +40,8 @@ type StarMapReviewSetupProps = {
   error?: string;
   onCancel: () => void;
   onSubmit: (request: StarMapReviewRequest) => void;
+  /** Settings -> General -> Reviews. The switch starts here and still changes one review. */
+  reviewAutoFixDefault?: boolean;
   submitting: boolean;
   thread: NavigationThreadSummary;
 };
@@ -231,8 +233,9 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     }
   }, [branchEdited, branchOptions]);
 
-  // Auto-fix is on for every review; unticking it lasts for this one.
-  const [autoFix, setAutoFix] = useState(true);
+  // Starts at the Settings default when the card opens; a click lasts for
+  // this one review.
+  const [autoFix, setAutoFix] = useState(props.reviewAutoFixDefault ?? true);
   const autoFixSupported = props.backend?.capabilities.reviewAutoFix === true;
   const afterReview: ReviewAfterAction | undefined = autoFixSupported
     ? autoFix ? "auto-fix" : "wait"

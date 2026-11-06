@@ -547,6 +547,8 @@ type StarMapScreenProps = {
   /** Settings -> Pricing, for the chat cards' context satellites. */
   pricingDisplayOptions?: { codexCredits: boolean; usd: boolean };
   pastedImageMaxPatches?: number;
+  /** Settings -> General -> Reviews: whether a new review panel opens with Auto-fix on. */
+  reviewAutoFixDefault?: boolean;
   threadPricingSummaryEnabled?: boolean;
   /**
    * Which surface this is, for the published view snapshot. The map is its
@@ -6527,6 +6529,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               onRectCommit={commitChatCardRect}
               onRectChange={chatCards.setRect}
               pastedImageMaxPatches={props.pastedImageMaxPatches}
+              reviewAutoFixDefault={props.reviewAutoFixDefault}
               rect={card.rect}
               resolveRect={(rect, kind) =>
                 resolveChatCardRect(card.key, rect, kind)

@@ -103,6 +103,9 @@ export function StarMapWindow() {
           pastedImageMaxPatches={
             settings.snapshot?.imageUploads.pastedImageMaxPatches.value
           }
+          reviewAutoFixDefault={
+            settings.snapshot?.general.autoFixReviews?.value ?? true
+          }
           pricingDisplayOptions={{
             codexCredits:
               settings.snapshot?.experimental.threadPricingDisplayCodexCredits

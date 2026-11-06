@@ -239,13 +239,18 @@ resolutions at three commits and about 29 KB WAL, approximately 2.9 MB/day at
 
 ## Auto-fix
 
-The review panel's **Auto-fix findings** switch is on for every new review,
-in the composer and in Star Map. When it is on, the review's open findings go
-to the thread's own agent as soon as the review lands, so nobody has to come
-back and click Fix. The thread's agent runs the fix, with the thread's own
-provider, model and reasoning, never the reviewer: it has the change's
-history, and a reviewer on another provider cannot edit the checkout. Turning
-the switch off lasts for that one review, as a reviewer override does.
+The review panel's **Auto-fix findings** switch appears in the composer and
+in Star Map. When it is on, the review's open findings go to the thread's own
+agent as soon as the review lands, so nobody has to come back and click Fix.
+The thread's agent runs the fix, with the thread's own provider, model and
+reasoning, never the reviewer: it has the change's history, and a reviewer on
+another provider cannot edit the checkout.
+
+The switch starts at **Settings → General → Reviews → Start reviews with
+Auto-fix on**, stored per profile as `general.auto_fix_reviews` in
+`config.toml` and on when unset. Changing the switch in the panel lasts for
+that one review, as a reviewer override does. A queued review keeps the
+choice it was queued with, whatever the setting says later.
 
 The request carries `afterReview: "auto-fix"`. An omitted value means
 `"wait"`, so an owner never starts fixing for a viewer that did not ask. The

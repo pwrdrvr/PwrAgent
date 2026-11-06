@@ -132,6 +132,7 @@ export type DesktopSettingsConfig = {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
     pinnedThreadsOnTop?: boolean;
+    autoFixReviews?: boolean;
     passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
@@ -722,6 +723,9 @@ export function desktopSettingsPatchToEdits(
       ["general", "pinned_threads_on_top"],
       patch.general.pinnedThreadsOnTop,
     );
+  }
+  if (patch.general?.autoFixReviews !== undefined) {
+    set(["general", "auto_fix_reviews"], patch.general.autoFixReviews);
   }
   if (patch.general?.passSetupVariablesToAgents !== undefined) {
     set(
@@ -2236,6 +2240,7 @@ function normalizeDesktopConfig(
         general?.attention_promote_on_turn_end,
       ),
       pinnedThreadsOnTop: readBoolean(general?.pinned_threads_on_top),
+      autoFixReviews: readBoolean(general?.auto_fix_reviews),
       passSetupVariablesToAgents: readBoolean(
         general?.pass_setup_variables_to_agents,
       ),
@@ -2736,6 +2741,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     config.general?.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
   const pinnedThreadsOnTop = config.general?.pinnedThreadsOnTop;
+  const autoFixReviews = config.general?.autoFixReviews;
   const passSetupVariablesToAgents = config.general?.passSetupVariablesToAgents;
   const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
   const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
@@ -2762,6 +2768,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     confirmQuitWithInProgressThreads !== undefined ||
     attentionPromoteOnTurnEnd !== undefined ||
     pinnedThreadsOnTop !== undefined ||
+    autoFixReviews !== undefined ||
     passSetupVariablesToAgents !== undefined ||
     interactiveSvgSkipNotice !== undefined ||
     interactiveSvgAutoOpen !== undefined ||
@@ -2808,6 +2815,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (pinnedThreadsOnTop !== undefined) {
       pruned.general.pinnedThreadsOnTop = pinnedThreadsOnTop;
+    }
+    if (autoFixReviews !== undefined) {
+      pruned.general.autoFixReviews = autoFixReviews;
     }
     if (passSetupVariablesToAgents !== undefined) {
       pruned.general.passSetupVariablesToAgents = passSetupVariablesToAgents;

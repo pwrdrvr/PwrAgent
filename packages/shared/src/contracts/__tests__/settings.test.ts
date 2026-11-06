@@ -38,6 +38,7 @@ describe("desktop settings contracts", () => {
           value: true,
           source: "default",
         },
+        autoFixReviews: { value: true, source: "default" },
         passSetupVariablesToAgents: {
           value: true,
           source: "default",

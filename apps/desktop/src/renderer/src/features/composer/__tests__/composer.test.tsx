@@ -8039,6 +8039,43 @@ describe("Composer", () => {
     }));
   });
 
+  /**
+   * Rule: the review panel's Auto-fix switch starts at Settings -> General ->
+   * Reviews, and the request carries what the operator leaves it at.
+   */
+  it.each([
+    { setting: undefined, starts: true },
+    { setting: true, starts: true },
+    { setting: false, starts: false },
+  ])("starts the Auto-fix switch at the Settings default ($setting) and sends the choice", async ({ setting, starts }) => {
+    const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true,
+      reviewCodexSubAgent: true, reviewAutoFix: true };
+    render(<Composer
+      backends={[backend]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      disabled={false} skills={[]}
+      reviewAutoFixDefault={setting}
+      thread={{
+        id: "thread-1", title: "Review default", titleSource: "explicit",
+        source: "codex", executionMode: "default", inbox: { inInbox: false },
+        linkedDirectories: [],
+      }}
+    />);
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    const toggle = screen.getByRole("switch", { name: "Auto-fix findings" });
+    expect(toggle).toHaveAttribute("aria-checked", String(starts));
+    // One click changes this review only.
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", String(!starts));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      afterReview: starts ? "wait" : "auto-fix",
+    }));
+  });
+
   it.each(["click", "keyboard"])("routes a sole secondary PR with its required review mode via %s", async (input) => {
     const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
     const backend = backendSummary("codex");

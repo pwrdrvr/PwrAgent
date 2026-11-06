@@ -859,6 +859,8 @@ export type ThreadViewProps = {
   agentCommandsStatus?: AgentCommandsStatus;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
+  /** Settings -> General -> Reviews: whether a new review panel opens with Auto-fix on. */
+  reviewAutoFixDefault?: boolean;
   /** Token Miser experiment availability gate. */
   tokenMiserEnabled?: boolean;
   /** Inherited Token Miser state when a thread has no explicit override. */
@@ -4341,6 +4343,7 @@ export function ThreadView(props: ThreadViewProps) {
         onPickDirectoryForReference={props.onPickDirectoryForReference}
         pastedImageMaxPatches={props.pastedImageMaxPatches}
         pdfAnalysisEnabled={props.pdfAnalysisEnabled}
+        reviewAutoFixDefault={props.reviewAutoFixDefault}
         tokenMiserEnabled={props.tokenMiserEnabled}
         tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
         monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}

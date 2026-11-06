@@ -1018,6 +1018,12 @@ export class DesktopSettingsService {
           config.general?.pinnedThreadsOnTop,
           true,
         ),
+        // Default on: a review is usually started to be acted on, and the
+        // point of Auto-fix is that nobody has to come back to send it.
+        autoFixReviews: this.resolveConfigBoolean(
+          config.general?.autoFixReviews,
+          true,
+        ),
         // Default on: agents then run the same toolchain the setup script
         // selected. The variables are filtered for secrets when captured.
         passSetupVariablesToAgents: this.resolveConfigBoolean(

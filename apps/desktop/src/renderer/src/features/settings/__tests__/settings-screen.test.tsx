@@ -123,6 +123,7 @@ function createSnapshot(
         value: true,
         source: "default",
       },
+      autoFixReviews: { value: true, source: "default" },
       passSetupVariablesToAgents: {
         value: true,
         source: "default",
@@ -2073,6 +2074,17 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           attentionPromoteOnTurnEnd: false,
+        },
+      });
+    });
+    expect(
+      getLabeledSwitch("Start reviews with Auto-fix on"),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(getLabeledSwitch("Start reviews with Auto-fix on"));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          autoFixReviews: false,
         },
       });
     });

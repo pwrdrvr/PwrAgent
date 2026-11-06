@@ -3161,6 +3161,33 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("starts reviews with Auto-fix on by default and persists the opt-out", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettingsProjection()).general.autoFixReviews).toEqual({
+      value: true,
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      general: {
+        autoFixReviews: false,
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("auto_fix_reviews = false");
+    expect((await service.readSettingsProjection()).general.autoFixReviews).toEqual({
+      value: false,
+      source: "config",
+    });
+  });
+
   it("passes setup variables to agents by default and persists the opt-out", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
