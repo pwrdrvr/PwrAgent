@@ -17,7 +17,7 @@ import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_T
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { runGitCommand } from "../app-server/git-executable";
-import { CodexEnvironmentHydrationStore } from "../app-server/codex-environment-hydration-store";
+import { CodexEnvironmentHydrationStore } from "../storage/codex-environment-hydration-store";
 import type { CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
 import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
 import { AutomationStore } from "../automations/automation-store";

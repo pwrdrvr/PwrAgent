@@ -9,7 +9,7 @@ import type {
 } from "@pwragent/shared";
 import { formatFederationPeerDisplayLabel } from "@pwragent/shared";
 import { getMainLogger } from "../log";
-import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
+import type { RemoteThreadTargetStore } from "../storage/remote-thread-target-store";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import { hasFederationErrorCode } from "./federation-rpc";
 import { lookupFederationArchivedThreads } from "./federation-collection-client";

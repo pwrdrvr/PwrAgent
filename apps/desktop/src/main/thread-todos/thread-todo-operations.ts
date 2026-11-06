@@ -39,7 +39,7 @@ import {
 import { listThreadTodoDispatchEnvironments } from "../thread-todos/thread-todo-dispatch";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
-import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { listThreadTodosForAvailableOwners } from "../thread-todos/thread-todo-owners";
 
 /**

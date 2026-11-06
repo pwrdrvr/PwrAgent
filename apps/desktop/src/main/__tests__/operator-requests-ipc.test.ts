@@ -26,7 +26,7 @@ vi.mock("electron", () => ({ ipcMain: {
   handle: (channel: string, handler: (event: unknown, request: unknown) => Promise<unknown>) => fixture.handlers.set(channel, handler),
 } }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
-vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
+vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
 vi.mock("../state/app-state", () => ({ getAppStateDb: () => ({}) }));
 vi.mock("../operator-requests/operator-request-store", () => ({ OperatorRequestStore: class {} }));
 vi.mock("../operator-requests/operator-request-service", () => ({ OperatorRequestService: class {

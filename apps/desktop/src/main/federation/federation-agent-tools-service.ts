@@ -53,7 +53,7 @@ import { listCodexEnvironmentOptions } from "../app-server/codex-environment-con
 import { describeCreatedThreadEnvironment } from "../app-server/created-thread-environment";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
+import type { RemoteThreadTargetStore } from "../storage/remote-thread-target-store";
 import { FederatedSearchService } from "./federated-search-service";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import {

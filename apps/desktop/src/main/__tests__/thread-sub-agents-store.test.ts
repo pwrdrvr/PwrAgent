@@ -12,7 +12,7 @@ import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { statSync } from "node:fs";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
+import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

@@ -25,7 +25,7 @@ import {
   NoiseIKHandshake,
 } from "../federation/federation-noise";
 import { FederationSessionRegistry } from "../federation/federation-session-state";
-import { FederationStore } from "../federation/federation-store";
+import { FederationStore } from "../storage/federation-store";
 import {
   connectFederationClient,
   FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES,

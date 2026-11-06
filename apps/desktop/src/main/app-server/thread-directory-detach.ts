@@ -6,7 +6,7 @@ import type {
   LinkedDirectorySummary,
   AppServerThreadSummary,
 } from "@pwragent/shared";
-import type { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import type { DesktopOwnerStorage } from "../storage/desktop-overlay-store";
 
 function normalizeLinkedDirectoryPathForMatch(
   value: string | undefined,
@@ -52,7 +52,7 @@ function countDistinctLinkedDirectories(
 export async function detachOwnedThreadDirectory(
   request: DetachDirectoryFromThreadRequest,
   deps: {
-    overlayStore: Pick<SqliteOverlayStore, "getThreadOverlayState" | "removeLinkedDirectory">;
+    overlayStore: Pick<DesktopOwnerStorage, "getThreadOverlayState" | "removeLinkedDirectory">;
     readThread: (backend: AppServerBackendKind, threadId: string) => Promise<Pick<AppServerThreadSummary, "linkedDirectories"> | undefined>;
     publishUpdate: (backend: AppServerBackendKind, threadId: string) => Promise<void>;
   },

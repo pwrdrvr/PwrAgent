@@ -14,7 +14,7 @@ import {
   terminateAllCodexEnvironmentDetachedCommands,
   type DetachedCommandSummary,
 } from "./app-server/codex-environment-runtime";
-import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "./storage/desktop-overlay-store";
 import { getDesktopAutomationService } from "./automations/desktop-automation-service";
 import { runQuietRestart } from "./quiet-restart";
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";

@@ -62,7 +62,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../app-server/desktop-overlay-store", () => ({
+vi.mock("../storage/desktop-overlay-store", () => ({
   getDesktopOverlayStore: vi.fn(),
 }));
 vi.mock("../app-server/star-map-intake", () => ({

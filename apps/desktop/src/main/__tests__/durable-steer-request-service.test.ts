@@ -1,3 +1,4 @@
+import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -39,7 +40,7 @@ function setup(options: { now?: () => number; maxTotal?: number } = {}) {
   const authorize = vi.fn(async (_scope: string, _request: GetDurableTurnRequest) => {});
   const dispatch = vi.fn(async () => { throw new Error("Steer must never start a new turn"); });
   const steer = vi.fn(async (request: SubmitDurableSteerRequest["request"] & { requestId: string }): Promise<ControlActiveTurnResponse> => ({ ok: true, backend: request.backend, threadId: request.threadId, requestId: request.requestId, turnId: request.expectedTurnId, disposition: "steered" }));
-  const make = () => new DurableTurnRequestService({ stateDb: db, ownerInstanceId: "owner", authorize, dispatch, steer, now: options.now ?? (() => NOW), maxTotal: options.maxTotal });
+  const make = () => new DurableTurnRequestService({ storage: new SqliteDurableTurnRequestStore(db), ownerInstanceId: "owner", authorize, dispatch, steer, now: options.now ?? (() => NOW), maxTotal: options.maxTotal });
   return { get db() { return db; }, dbPath, service: make(), make, authorize, dispatch, steer, reopen() { db.close(); db = StateDb.open(dbPath); } };
 }
 function lookup(value: SubmitDurableSteerRequest) {
@@ -70,7 +71,7 @@ describe("durable steer request inbox", () => {
       return { ok: true, backend: "codex", threadId: "thread", requestId: request.requestId, turnId: request.expectedTurnId, disposition: "steered" };
     });
     const otherDb = StateDb.open(fixture.dbPath);
-    const other = new DurableTurnRequestService({ stateDb: otherDb, ownerInstanceId: "owner", authorize: fixture.authorize, dispatch: fixture.dispatch, steer: fixture.steer, now: () => NOW });
+    const other = new DurableTurnRequestService({ storage: new SqliteDurableTurnRequestStore(otherDb), ownerInstanceId: "owner", authorize: fixture.authorize, dispatch: fixture.dispatch, steer: fixture.steer, now: () => NOW });
     try {
       const value = submission();
       const first = fixture.service.submitSteer(SCOPE, value);

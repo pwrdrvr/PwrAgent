@@ -59,7 +59,7 @@ const {
   })),
 }));
 
-vi.mock("../app-server/desktop-overlay-store", () => ({
+vi.mock("../storage/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     getThreadOverlayState,
     readDirectoryGitStatusCache,

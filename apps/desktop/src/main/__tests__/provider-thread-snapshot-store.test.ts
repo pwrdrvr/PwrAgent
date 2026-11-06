@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ProviderThreadSnapshotStore } from "../app-server/provider-thread-snapshot-store";
+import { ProviderThreadSnapshotStore } from "../storage/provider-thread-snapshot-store";
 import { StateDb } from "../state/state-db";
 import {
   measureSqliteWrites,

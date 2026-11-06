@@ -7,7 +7,7 @@ import {
   getDesktopBackendRegistry,
   getExistingDesktopBackendRegistry,
 } from "./backend-registry";
-import { getDesktopOverlayStore } from "./desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 
 /**
  * Marks a thread this desktop owns as seen, for its own window or for a peer.

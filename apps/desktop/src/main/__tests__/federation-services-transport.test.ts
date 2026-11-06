@@ -9,7 +9,7 @@ import { FederationServiceForwarder } from "../federation/federation-service-for
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FederationGatewayWebSocketServer, connectFederationClient } from "../federation/federation-transport";
-import { FederationStore } from "../federation/federation-store";
+import { FederationStore } from "../storage/federation-store";
 import { generateFederationIdentityKeyPair } from "../federation/federation-identity";
 import { generateNoiseStaticKeyPair } from "../federation/federation-noise";
 import { createFederationEnrollmentInvite } from "../federation/federation-enrollment";

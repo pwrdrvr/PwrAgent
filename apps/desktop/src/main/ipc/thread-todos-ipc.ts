@@ -4,7 +4,7 @@ import {
   listLocalTodoOwnerThreads, localThreadTodoOperations, readManagedTodoThreadKeys,
 } from "../thread-todos/thread-todo-operations";
 import { ThreadTodoViewHub } from "../thread-todos/thread-todo-views";
-import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { readLocalNavigationDirectoryIndex } from "../app-server/navigation-directory-index";
 import { getMainLogger } from "../log";
 import { ipcMain } from "electron";

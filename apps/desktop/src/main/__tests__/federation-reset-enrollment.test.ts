@@ -35,7 +35,7 @@ vi.mock("../state/app-state", () => ({
   isAppStateInitialized: () => true,
 }));
 
-vi.mock("../app-server/desktop-overlay-store", () => ({
+vi.mock("../storage/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     removeRemoteThreadPinsForInstance,
     tombstoneRemoteThreadPinsForInstance,

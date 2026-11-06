@@ -13,7 +13,7 @@ import {
   type SubmitDurableSteerRequest,
   type ControlActiveTurnResponse,
 } from "@pwragent/shared";
-import type { StateDb } from "../state/state-db";
+import type { DurableTurnRequestStorage } from "./durable-turn-request-storage";
 
 import { DurableTurnRequestError } from "@pwragent/federation/errors";
 export { DurableTurnRequestError } from "@pwragent/federation/errors";
@@ -28,7 +28,7 @@ type Receipt = DurableTurnReceipt | DurableSteerReceipt;
  */
 export class DurableTurnRequestService {
   constructor(private readonly options: {
-    stateDb: StateDb;
+    storage: DurableTurnRequestStorage;
     ownerInstanceId: string;
     authorize: (scope: string, request: GetDurableTurnRequest) => Promise<void>;
     dispatch: (request: DurableTurnPayload & { queueEntryId: string }, scope: string) => Promise<StartTurnResponse>;
@@ -93,7 +93,6 @@ export class DurableTurnRequestService {
       if (replay.state !== "accepted" || replay.result) return this.reconcile(scope, replay);
     }
 
-    const db = this.options.stateDb.raw;
     const admitted = this.transaction(() => {
       const existing = this.read(scope, clientRequest.id);
       if (existing) {
@@ -101,9 +100,9 @@ export class DurableTurnRequestService {
         return existing;
       }
       // Prune only expired records. Never evict a still-valid deduplication key.
-      db.prepare("DELETE FROM durable_turn_requests WHERE expires_at <= ?").run(now);
-      const total = (db.prepare("SELECT count(*) AS n FROM durable_turn_requests").get() as { n: number }).n;
-      const caller = (db.prepare("SELECT count(*) AS n FROM durable_turn_requests WHERE caller_scope = ?").get(scope) as { n: number }).n;
+      this.options.storage.pruneExpired(now);
+      const total = this.options.storage.count();
+      const caller = this.options.storage.count(scope);
       if (total >= (this.options.maxTotal ?? 4096) || caller >= (this.options.maxPerCaller ?? 1024)) this.fail("request_quota_exceeded");
       const receipt: Receipt = {
         version: 1, id: clientRequest.id, payloadHash: clientRequest.payloadHash,
@@ -112,9 +111,7 @@ export class DurableTurnRequestService {
         state: "accepted", acceptedAt: now, updatedAt: now, expiresAt,
         ...(operation === "steerTurn" ? { operation: "steerTurn" as const } : {}),
       };
-      db.prepare(`INSERT INTO durable_turn_requests
-        (caller_scope, request_id, payload_hash, expires_at, receipt_json, queue_entry_id)
-        VALUES (?, ?, ?, ?, ?, ?)`).run(scope, receipt.id, receipt.payloadHash, expiresAt, JSON.stringify(receipt), receipt.queueEntryId);
+      this.options.storage.insert(scope, receipt);
       return receipt;
     });
     const claimed = this.transaction(() => {
@@ -196,28 +193,26 @@ export class DurableTurnRequestService {
       : event.terminalStatus === "turn/failed" ? "failed"
         : event.terminalStatus === "turn/completed" ? "completed" : undefined;
     if (event.status === "terminal" && !outcome) return;
-    const db = this.options.stateDb.raw;
-    const match = db.prepare("SELECT receipt_json FROM durable_turn_requests WHERE queue_entry_id = ?").get(event.queueEntryId) as { receipt_json: string } | undefined;
-    if (!match) return;
-    const existing = JSON.parse(match.receipt_json) as DurableTurnReceipt;
+    const existing = this.options.storage.readQueueReceipt(event.queueEntryId);
+    if (!existing) return;
     if (existing.state === "completed" || (event.status === "started" && existing.state === "dispatched")) return;
     this.transaction(() => {
-      const row = db.prepare("SELECT caller_scope, receipt_json FROM durable_turn_requests WHERE queue_entry_id = ?").get(event.queueEntryId) as { caller_scope: string; receipt_json: string } | undefined;
+      const row = this.options.storage.findQueueReceipt(event.queueEntryId);
       if (!row) return;
-      const receipt = JSON.parse(row.receipt_json) as DurableTurnReceipt;
+      const receipt = row.receipt;
       if (receipt.backend !== event.backend || receipt.threadId !== event.threadId || receipt.state === "completed") return;
       if (event.status === "started") {
         if (!event.turnId || receipt.state === "dispatched") return;
-        this.write(row.caller_scope, { ...receipt, state: "dispatched", updatedAt: this.now(), result: {
+        this.write(row.scope, { ...receipt, state: "dispatched", updatedAt: this.now(), result: {
           backend: event.backend, threadId: event.threadId, queueEntryId: event.queueEntryId, turnId: event.turnId, queueStatus: "started",
         } });
       } else if (event.status === "failed") {
         // A submission failure is not proof that the provider rejected it.
         if (receipt.state !== "dispatched" && receipt.state !== "uncertain") {
-          this.write(row.caller_scope, { ...receipt, state: "uncertain", updatedAt: this.now() });
+          this.write(row.scope, { ...receipt, state: "uncertain", updatedAt: this.now() });
         }
       } else {
-        this.write(row.caller_scope, { ...receipt, state: "completed", outcome, updatedAt: this.now() });
+        this.write(row.scope, { ...receipt, state: "completed", outcome, updatedAt: this.now() });
       }
     });
   }
@@ -248,22 +243,15 @@ export class DurableTurnRequestService {
   }
 
   private transaction<T>(work: () => T): T {
-    const db = this.options.stateDb.raw;
-    const synchronous = db.pragma("synchronous", { simple: true }) as number;
-    // Receipt and claim commits must survive OS/power loss before dispatch.
-    // No await here: other application writes cannot interleave on this handle.
-    db.pragma("synchronous = FULL");
-    try { return db.transaction(work).immediate(); }
-    finally { db.pragma(`synchronous = ${synchronous}`); }
+    return this.options.storage.transaction(work);
   }
 
   private read(scope: string, id: string): Receipt | undefined {
-    const row = this.options.stateDb.raw.prepare("SELECT receipt_json FROM durable_turn_requests WHERE caller_scope = ? AND request_id = ?").get(scope, id) as { receipt_json: string } | undefined;
-    return row ? JSON.parse(row.receipt_json) as Receipt : undefined;
+    return this.options.storage.read(scope, id);
   }
 
   private write(scope: string, receipt: Receipt): void {
-    this.options.stateDb.raw.prepare("UPDATE durable_turn_requests SET receipt_json = ? WHERE caller_scope = ? AND request_id = ?").run(JSON.stringify(receipt), scope, receipt.id);
+    this.options.storage.write(scope, receipt);
   }
 
   private validateScope(scope: string): void {

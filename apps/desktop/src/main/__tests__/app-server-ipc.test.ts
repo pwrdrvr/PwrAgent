@@ -1139,7 +1139,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   }),
 }));
 
-vi.mock("../app-server/desktop-overlay-store", () => ({
+vi.mock("../storage/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => overlayStoreFixture.stable ?? ({
     reconcileNavigationSnapshot,
     readNavigationQueryIndex,
@@ -2413,7 +2413,7 @@ describe("app server ipc", () => {
 
   it("reconciles a newer canonical PR event instead of applying an older startup inventory", async () => {
     const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
-    const { getDesktopOverlayStore } = await import("../app-server/desktop-overlay-store");
+    const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
     // The production store is a singleton. Keep this test's owner identity
     // stable so the service loop can reuse the fresh replacement index.
     overlayStoreFixture.stable = getDesktopOverlayStore();

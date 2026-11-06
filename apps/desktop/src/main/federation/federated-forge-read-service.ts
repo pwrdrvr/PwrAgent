@@ -1,7 +1,7 @@
 import { isAppServerBackendKind } from "@pwragent/shared";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
-import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
+import type { RemoteThreadTargetStore } from "../storage/remote-thread-target-store";
 import { resolveFederatedThreadTarget, type FederatedThreadTargetRuntime } from "./federated-thread-target-service";
 
 export function createOwnerRoutedForgeReadHandler(options: {

@@ -22,6 +22,23 @@ test("every Windows Desktop E2E run keeps fixture storage on the runner temp vol
   }
 });
 
+// The desktop-main suite also writes native diagnostic build products under
+// os.tmpdir(). Its C# probe hit the 20 s compiler deadline on the C: temp root
+// in CI run 42294585123. Keep the unit fixture outputs on the same volume as
+// E2E; this does not change the compiler deadline or bypass its positive control.
+test("every Windows desktop-main run keeps native diagnostic build products on the runner temp volume", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const job = workflow.split(/\n  (?=[\w-]+:\n)/).find((block) => block.startsWith("windows-desktop-main:"));
+  expect(job).toBeDefined();
+  const testSteps = job.split("\n      - ").filter((step) =>
+    /pnpm test --project desktop-main\b|run-retry-failures\.mjs unit$/.test(step.trim()));
+  expect(testSteps).toHaveLength(2);
+  for (const step of testSteps) {
+    expect(step).toMatch(/^ {10}TEMP: \$\{\{ runner\.temp \}\}$/m);
+    expect(step).toMatch(/^ {10}TMP: \$\{\{ runner\.temp \}\}$/m);
+  }
+});
+
 // CDB's startup loads its engine and extension packages from its install
 // directory inside the controlled probe's 5 s readiness check. Run from
 // C:\Program Files (x86), 30 of 227 hosted startups missed it, stalled at

@@ -63,7 +63,7 @@ import {
   type FederationPtyProcess,
 } from "../../src/main/federation/federation-pty-service";
 import { FederationRouter } from "../../src/main/federation/federation-router";
-import { FederationStore } from "../../src/main/federation/federation-store";
+import { FederationStore } from "../../src/main/storage/federation-store";
 import { FederationGatewayWebSocketServer } from "../../src/main/federation/federation-transport";
 import { removeTempRoot } from "./temp-root-cleanup";
 

@@ -1,7 +1,7 @@
 import { buildThreadIdentityKey, isRemoteFederationTarget, resolveThreadParentKey } from "@pwragent/shared";
 import type { NavigationThreadSummary, UpdateSubthreadOrderRequest, UpdateSubthreadOrderResponse } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./backend-registry";
-import { getDesktopOverlayStore } from "./desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
 import { loadViewerNavigationPins } from "./navigation-viewer-pins";
 

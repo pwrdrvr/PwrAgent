@@ -18,7 +18,7 @@ import { getMainLogger } from "../log";
 import type { OperatorRequestService } from "../operator-requests/operator-request-service";
 import { createDesktopOperatorRequestService, installOperatorRequestService, localOperatorQuestionOperations } from "../operator-requests/operator-request-runtime";
 import { FederatedOperatorRequestService } from "../federation/federation-operator-requests";
-import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { federationTargetForChannelSubscriber, subscribersForChannel } from "../window-channels";
 

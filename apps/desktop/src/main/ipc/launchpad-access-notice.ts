@@ -3,7 +3,7 @@ import {
   LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL,
   LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL,
 } from "../../shared/ipc";
-import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 
 /**
  * The one-time notice that upgraded launchpads now start Codex and Claude

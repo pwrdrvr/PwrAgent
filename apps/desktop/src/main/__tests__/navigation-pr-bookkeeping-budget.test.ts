@@ -6,7 +6,7 @@ import { openInMemoryStateDb } from "./sqlite-test-utils";
 import budgets from "./fixtures/navigation-listing-budgets.json";
 
 const source = vi.hoisted(() => ({ store: undefined as SqliteOverlayStore | undefined }));
-vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => source.store }));
+vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => source.store }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";

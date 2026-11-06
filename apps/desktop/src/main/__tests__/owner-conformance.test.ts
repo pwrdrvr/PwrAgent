@@ -22,7 +22,7 @@ import {
   projectLocalEventForFederation,
   unsequencedFederationEventPayload,
 } from "../federation/federation-runtime";
-import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
+import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";

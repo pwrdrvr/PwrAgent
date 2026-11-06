@@ -92,7 +92,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildMessageContent } from "../codex-app-server/desktop-client";
 import { getMainLogger } from "../log";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
-import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { hasFederationErrorCode } from "../federation/federation-rpc";
 import { findAssistantMessageForText } from "./find-assistant-reply-message";
