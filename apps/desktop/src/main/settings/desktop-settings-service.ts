@@ -726,13 +726,13 @@ export class DesktopSettingsService {
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
     this.argv = options.argv ?? process.argv;
-    // The service's own profile belongs to the running process. `env` holds
-    // setting overrides and what child processes inherit; reading the
-    // profile root from it sent an env without PWRAGENT_HOME to the
-    // operator's real ~/.pwragent.
+    // The service's own profile belongs to the running process. `env` and
+    // `argv` hold setting overrides and what child processes inherit;
+    // reading the profile from them sent an env without PWRAGENT_HOME to
+    // the operator's real ~/.pwragent.
     this.configPath =
       options.configPath ??
-      resolveDesktopConfigPath({ argv: this.argv });
+      resolveDesktopConfigPath();
     this.configStore = options.configStore ?? new DesktopConfigStore({
       configPath: this.configPath,
     });
