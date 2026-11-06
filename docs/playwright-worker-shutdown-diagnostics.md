@@ -139,6 +139,61 @@ plus explicit missing-symbol/capture status. Raw debugger output, arguments,
 memory and environment are never uploaded. At most four roots are
 sampled per lane; the owning close's deadline remains unchanged.
 
+### Controlled native debugger setup failures
+
+When that controlled probe fails, `native-stack-setup.json` also reports whether
+CDB emitted its banner, started and completed Extension Gallery initialization,
+reached a command prompt, and emitted the readiness marker. `outputBytes` counts
+the retained debugger text inspected for those flags; it is not a total stream
+byte count. These observations help locate startup progress within the existing
+deadline. They do not establish which operation caused a timeout, and a flag
+alone does not satisfy the positive control.
+
+The artifact's `probeFailure.triageGuide` points to this section. The controller
+also emits a bounded `[windows-pipe-evidence]` record with
+`kind: "native-stack-setup-failed"`, the sanitized failure fields, and that guide
+path, so the context remains discoverable when artifact upload is interrupted.
+
+For a new failure:
+
+1. Read `native-stack-setup.json`, `tools.json`, and the controller's
+   `summary.json` at the failed run's exact head. Compare tool and Electron
+   hashes, the Node version, and the runner OS image before comparing results.
+   With `--electron-only`, failed setup prevents Electron samples from starting.
+   Ordinary E2E may continue with native stack capture disabled. A setup failure
+   is not evidence of an Electron shutdown failure.
+2. Read `probeFailure.reason` with the startup observations. No readiness marker
+   means the marker was not found in the retained text within the control's
+   deadline. Extension initialization starting without observed completion does
+   not prove that extensions, networking, or symbol loading caused the delay.
+   The booleans describe retained text, not a complete event timeline; earlier
+   text can leave the bounded buffer. `outputBytes: 0` means no text was retained.
+   Flags describe the debugger session that failed. The later ordinary capture
+   and quit session does not emit the readiness marker. If the `debugger` object
+   is absent, inspect the probe's preceding setup and cleanup steps rather than
+   treating missing flags as a debugger observation.
+3. Trace the corresponding stage in `windows-pipe-diagnostics-probe.mjs`,
+   `windows-native-stack.mjs`, and
+   `run-windows-e2e-with-pipe-diagnostics.mjs`. Use owned Windows processes to
+   establish a lifecycle/readiness oracle that fails on unchanged code before
+   changing behavior. Keep creation identity, noninvasive nonsuspending attach,
+   heartbeat, cancellation, debugger quit, and the positive control intact. Do
+   not increase timeouts or retries, bypass the control, or persist raw debugger
+   output to obtain a passing run. Follow the repository's current Windows lab
+   ownership and authorization guidance before native lab work.
+
+The motivating failure was [run 41925366134](https://github.com/pwrdrvr/PwrAgent/actions/runs/41925366134),
+head `57606a017ad103325d7d69863f51f0a98b5978c0`, job `126908239121`.
+Artifact `windows-native-quit-evidence` (`13368224053`) recorded
+`debugger-readiness-timeout`, neither detach nor network-path rejection, and zero
+requests or captures. The same CDB, Handle, helper, and Electron hashes later
+passed unchanged in [run 42125556092](https://github.com/pwrdrvr/PwrAgent/actions/runs/42125556092),
+including all 12 fresh-profile Electron cases. An owned Windows Server 2022
+control also passed unchanged, but used an older CDB build. Those passes do not
+identify the timeout's cause. This is a separate diagnostic setup problem from
+PR #3367's handoff-dialog native shutdown failure; a passing control does not
+establish reproduction or repair of that failure.
+
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
 fire-and-forget prewarm. Vitest's separate prewarm setup still awaits its

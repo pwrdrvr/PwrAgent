@@ -76,17 +76,23 @@ describe("Windows natural pipe evidence", () => {
   });
 
   it("retains known preflight failure reasons without exception text or debugger output", () => {
+    const triageGuide = "docs/playwright-worker-shutdown-diagnostics.md#controlled-native-debugger-setup-failures";
+    const noProgress = { bannerObserved: false, extensionInitializationStarted: false,
+      extensionInitializationCompleted: false, commandPromptObserved: false, readinessMarkerObserved: false };
     const output = "cdb: The system does not support detach on exit\nWARNING: Network path disallowed\nC:\\private\\secret.pdb token";
     const error = new Error("Noninvasive debugger exited before readiness");
     error.nativeDebugger = { ...nativeDebuggerStatus(output), exitCode: 0, rawOutput: output };
     const failure = nativeProbeFailure(error);
-    expect(failure).toEqual({ reason: "debugger-exited-before-readiness",
-      debugger: { exitCode: 0, detachUnsupported: true, networkPathDisallowed: true } });
+    expect(failure).toEqual({ reason: "debugger-exited-before-readiness", triageGuide,
+      debugger: { exitCode: 0, detachUnsupported: true, networkPathDisallowed: true,
+        ...noProgress, outputBytes: Buffer.byteLength(output) } });
     expect(JSON.stringify(failure)).not.toMatch(/private|secret|token|rawOutput/);
-    expect(nativeDebuggerStatus("native frames")).toEqual({ detachUnsupported: false, networkPathDisallowed: false });
-    expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed" });
+    expect(nativeDebuggerStatus("native frames")).toEqual({ detachUnsupported: false, networkPathDisallowed: false,
+      ...noProgress, outputBytes: 13 });
+    expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed", triageGuide });
     expect(nativeProbeFailure({ nativeDebugger: { exitCode: output, detachUnsupported: output } })).toEqual({
-      reason: "controlled-probe-failed", debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false },
+      reason: "controlled-probe-failed", triageGuide, debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false,
+        ...noProgress, outputBytes: undefined },
     });
   });
 
@@ -300,8 +306,14 @@ describe("Windows natural pipe evidence", () => {
     const result = await promisify(execFile)(process.execPath, [path.join(import.meta.dirname, "windows-pipe-diagnostics-probe.mjs")], {
       windowsHide: true, timeout: 35000,
     });
-    expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({
+    const proof = JSON.parse(result.stdout);
+    expect(proof).toEqual(expect.objectContaining({
       creationIdentityVerified: true, nativeExitTimeVerified: true,
     }));
+    // The owned live process is the oracle: readiness must lead to frames,
+    // a moving heartbeat during attach, and survival of cancellation and q.
+    if (process.env.PWRAGENT_WINDOWS_CDB_EXE) {
+      expect(proof).toMatchObject({ noninvasiveDebuggerVerified: true, debuggerQuitVerified: true });
+    }
   }, 40000);
 });
