@@ -321,6 +321,16 @@ export function RecentsList(props: RecentsListProps) {
   const recentsSectionShown = listSection !== undefined && pinnedRoots.length > 0
     && (topLevelThreads.length > 0 || startingRootThreads.length > 0 || Children.toArray(props.pager).length > 0);
   const recentsCollapsed = recentsSectionShown && recentsCollapsedState;
+  // The header goes when the last pin does, and a fold it leaves behind would
+  // hide the list again under the next pin. Drop the fold only once the pins
+  // are settled at none: a lens switch or a reload starts the group's page
+  // empty while it loads, and that must keep the fold.
+  const pinsSettledEmpty = listSection !== undefined && groupActive && pinnedRoots.length === 0
+    && (!props.pagedNavigation
+      || (pinnedResource?.state.page !== undefined && !pinnedResource.loading && !pinnedResource.state.error));
+  useEffect(() => {
+    if (pinsSettledEmpty && recentsCollapsedState) setRecentsCollapsed(false);
+  }, [pinsSettledEmpty, recentsCollapsedState, setRecentsCollapsed]);
   // A new selection inside the folded section (⌘K, a notification) or a
   // thread starting at its top would land out of sight, so either reopens
   // it, as a revealed pin reopens the Pinned group. Folding with a thread

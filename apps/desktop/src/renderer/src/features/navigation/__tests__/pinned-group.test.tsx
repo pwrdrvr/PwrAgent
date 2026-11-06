@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { ComponentProps } from "react";
 import {
   KEEP_AT_TOP_RANK_BOUNDARY,
@@ -704,5 +705,77 @@ describe("The list's section under the Pinned group", () => {
       }
       cleanup();
     }
+  });
+});
+
+// Model: the list's fold is the operator's toggle, dropped whenever the pins
+// settle at none, so the next pin brings the list back open. A reload (a lens
+// switch) leaves the group's page empty while it loads and keeps the fold.
+describe("The list's fold against a model", () => {
+  type Step = "toggle" | "unpinAll" | "pinOne" | "reload" | "settle";
+  const request = (roots: "pinned" | "unpinned", pageSize: number) => ({ protocol: 2 as const,
+    consumer: "main-sidebar" as const, query: { kind: "lens" as const, lens: "recents" as const, roots }, pageSize });
+  const draw = (threads: NavigationThreadSummary[], loading: boolean) => {
+    const pins = request("pinned", 100);
+    const list = request("unpinned", 10);
+    const resources = new Map<string, NavigationWindowResource>([
+      ["lens-pins", loading
+        ? { id: "lens-pins", loading: true, state: createNavigationPageState(pins) }
+        : { id: "lens-pins", loading: false, state: { ...createNavigationPageState(pins),
+          page: navigationQueryFixture(pins, { threads }, { ownerLensOrder: true }), stale: false } }],
+      ["lens", { id: "lens", loading: false, state: { ...createNavigationPageState(list),
+        page: navigationQueryFixture(list, { threads }, { ownerLensOrder: true }), stale: false } }],
+    ]);
+    return (
+      <RecentsList
+        pagedNavigation={{ resources } as unknown as ComponentProps<typeof RecentsList>["pagedNavigation"]}
+        pinnedResourceId="lens-pins"
+        resourceIds={["lens"]}
+        listSection={{ title: "Created", icon: null }}
+        threads={threads}
+        onOpenThreadContextMenu={() => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+  };
+  const unpinned = population.map(({ pinnedRank: _rank, ...entry }) => entry);
+  const onePin = unpinned.map((entry) => entry === unpinned[0] ? { ...entry, pinnedRank: "4096" } : entry);
+
+  it("keeps the operator's fold until the pins settle at none", () => {
+    fc.assert(fc.property(
+      fc.array(fc.constantFrom<Step>("toggle", "unpinAll", "pinOne", "reload", "settle"), { maxLength: 14 }),
+      (steps) => {
+        let threads: NavigationThreadSummary[] = population;
+        let loading = false;
+        let folded = false;
+        const view = render(draw(threads, loading));
+        try {
+          for (const step of steps) {
+            const header = () => screen.queryByRole("button", { name: /^Created,/ });
+            if (step === "toggle") {
+              if (!header()) continue;
+              fireEvent.click(header()!);
+              folded = !folded;
+            } else {
+              if (step === "unpinAll") threads = unpinned;
+              if (step === "pinOne") threads = onePin;
+              if (step === "reload") loading = true;
+              if (step === "settle") loading = false;
+              view.rerender(draw(threads, loading));
+            }
+            const hasPins = threads.some((entry) => entry.pinnedRank !== undefined);
+            if (!hasPins && !loading) folded = false;
+            const shown = hasPins && !loading;
+            if (!shown) {
+              expect(header(), steps.join(",")).toBeNull();
+            } else {
+              expect(header(), steps.join(",")).toHaveAttribute("aria-expanded", String(!folded));
+            }
+          }
+        } finally {
+          cleanup();
+        }
+      },
+    ), { numRuns: 120 });
   });
 });

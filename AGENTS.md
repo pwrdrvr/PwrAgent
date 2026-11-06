@@ -734,6 +734,8 @@ Render a brand through `BrandLockup`
     neutral. Its collapse is window-local view state, not persisted, and
     independent of the group's.
     A newly selected thread or a starting thread inside it reopens it.
+    Removing the last pin drops the fold, so the next pin shows the list
+    open; a lens switch, whose pins are still loading, keeps it.
 - Offer visible pin ordering in Directories and in the Pinned group.
   Both use `useThreadPinOrdering`; do not fork it.
 - The pin-order controls are:
