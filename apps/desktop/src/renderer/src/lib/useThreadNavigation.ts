@@ -1,3 +1,6 @@
+import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
+import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
+export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import type { LaunchpadCreationStatus } from "@pwragent/shared";
 import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
@@ -30,6 +33,7 @@ import type {
   AppServerThreadStatus,
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
+  ArchiveCleanupProgress,
   CodexThreadEnvironmentRuntime,
   DesktopProviderModelDefaults,
   FederationInstanceId,
@@ -124,13 +128,6 @@ import {
 
 export type BrowseMode = NavigationBrowseMode;
 export type { ThreadWorkspaceMode } from "./subthread-launchpads";
-
-export type ArchiveThreadNotice = {
-  id: string;
-  title: string;
-  message: string;
-  detail?: string;
-};
 
 export type ArchiveThreadOptions = {
   includeSubthreads?: boolean;
@@ -674,33 +671,6 @@ function resolveCreateThreadTargetDirectory(args: {
     directoryLabel: workspaceDirectory?.label ?? ROOT_NEW_THREAD_WORKSPACE_LABEL,
     directoryPath: workspaceDirectory?.path,
     gitStatus: workspaceDirectory?.gitStatus,
-  };
-}
-
-function formatArchiveCleanupNotice(
-  cleanup: ArchiveThreadCleanupResult[]
-): ArchiveThreadNotice | undefined {
-  const failures = cleanup.filter(
-    (item) => (item.error || !item.skippedReason?.startsWith("Worktree is still used by"))
-      && (!item.removedWorktree || item.error || item.skippedReason)
-  );
-  const firstFailure = failures[0];
-  if (!firstFailure) {
-    return undefined;
-  }
-
-  const reason = firstFailure.error ?? firstFailure.skippedReason ?? "cleanup was skipped";
-  const title = "Worktree cleanup skipped";
-  const message = "Thread archived. The worktree cleanup did not complete.";
-  const detail = firstFailure.worktreePath
-    ? `${firstFailure.worktreePath}: ${reason}`
-    : reason;
-
-  return {
-    id: [firstFailure.worktreePath ?? "no-worktree", reason, Date.now().toString()].join("\n"),
-    title,
-    message,
-    detail,
   };
 }
 
@@ -3062,6 +3032,8 @@ export function useThreadNavigation(
   archivedThreadKeys: ReadonlySet<string>;
   archiveThreadNotice?: ArchiveThreadNotice;
   dismissArchiveThreadNotice: () => void;
+  archiveCleanupProgressNotice?: AppNoticeToastNotice;
+  dismissArchiveCleanupProgressNotice: () => void;
   worktreeArchiveError?: string;
   loading: boolean;
   loaded: boolean;
@@ -3522,6 +3494,8 @@ export function useThreadNavigation(
   }), [desktopApi]);
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
   const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
+  const [archiveCleanupProgressNotice, setArchiveCleanupProgressNotice] = useState<AppNoticeToastNotice>();
+  const dismissedArchiveCleanupBatch = useRef<string | undefined>(undefined);
   const [worktreeArchiveError, setWorktreeArchiveError] = useState<string>();
   const [renameThreadError, setRenameThreadError] = useState<string>();
   // Held in a ref so a caller that rebuilds the callback every render cannot
@@ -4695,6 +4669,12 @@ export function useThreadNavigation(
             : current
         );
         scheduleEventRefresh();
+        return;
+      }
+
+      if (method === "archiveCleanup/progress") {
+        const progress = event.notification.params as ArchiveCleanupProgress;
+        if (dismissedArchiveCleanupBatch.current !== progress.batchId) setArchiveCleanupProgressNotice(formatArchiveCleanupProgress(progress));
         return;
       }
 
@@ -10102,6 +10082,11 @@ export function useThreadNavigation(
     setArchiveThreadNotice(undefined);
   }, []);
 
+  const dismissArchiveCleanupProgressNotice = useCallback((): void => {
+    if (archiveCleanupProgressNotice) dismissedArchiveCleanupBatch.current = archiveCleanupProgressNotice.id.slice("archive-cleanup:".length);
+    setArchiveCleanupProgressNotice(undefined);
+  }, [archiveCleanupProgressNotice]);
+
   return {
     browseMode: shownBrowseMode,
     pinnedThreadsOnTop,
@@ -10130,6 +10115,8 @@ export function useThreadNavigation(
     archivedThreadKeys,
     archiveThreadNotice,
     dismissArchiveThreadNotice,
+    archiveCleanupProgressNotice,
+    dismissArchiveCleanupProgressNotice,
     worktreeArchiveError,
     loading: state.loading,
     loaded: Boolean(state.rows),

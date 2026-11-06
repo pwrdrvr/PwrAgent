@@ -461,12 +461,20 @@ describe("archive cleanup pipeline", () => {
       }
       return states;
     });
-    const completed = new Promise<AgentEvent>((resolve) => fixture.registry.onEvent((event) => {
-      if (event.notification.method !== "thread/archiveCleanup/completed") return;
-      const cleanup = event.notification.params.cleanup;
-      if (Array.isArray(cleanup) && cleanup.some((item: { removedWorktree?: boolean }) => item.removedWorktree)) resolve(event);
-    }));
-    await drivePacer(fixture.registry, Promise.all([fixture.registry.archiveThread({ backend: "codex", threadId: "target" }), completed]));
+    let removed!: () => void;
+    const completed = new Promise<void>((resolve) => {
+      removed = resolve;
+      fixture.registry.onEvent((event) => {
+        if (event.notification.method !== "thread/archiveCleanup/completed") return;
+        const cleanup = event.notification.params.cleanup;
+        if (Array.isArray(cleanup) && cleanup.some((item: { removedWorktree?: boolean }) => item.removedWorktree)) resolve();
+      });
+    });
+    const request = fixture.registry.archiveThread({ backend: "codex", threadId: "target" }).then((response) => {
+      if (response.cleanup.some((item) => item.removedWorktree)) removed();
+      return response;
+    });
+    await drivePacer(fixture.registry, Promise.all([request, completed]));
     expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
     expect(fixture.client.archiveThread).toHaveBeenCalledOnce();
   });
@@ -631,7 +639,7 @@ describe("archive cleanup pipeline", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-20T17:32:23.599Z"));
     const directory = { id: "shared", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/shared" };
-    const targets = [codexThread({ id: "first", linkedDirectories: [directory] }), codexThread({ id: "second", linkedDirectories: [directory] })];
+    const targets = ["first", "blocking-2", "blocking-3", "blocking-4", "second"].map((id) => codexThread({ id, linkedDirectories: [directory] }));
     const fixture = buildArchiveBurst([codexThread({ id: "shared-user", linkedDirectories: [directory] })], targets);
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
@@ -644,7 +652,7 @@ describe("archive cleanup pipeline", () => {
     await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
     const fields = { backend: "codex", threadId: "second", runtimeInstanceId: "cleanup-fixture" };
     expect(registryLog.info).toHaveBeenCalledWith("thread archive requested", expect.objectContaining({ ...fields, requestedAt }));
-    expect(registryLog.info).toHaveBeenCalledWith("archive cleanup queued", expect.objectContaining({ ...fields, queuedAt: requestedAt, queueDepth: 2 }));
+    expect(registryLog.info).toHaveBeenCalledWith("archive cleanup queued", expect.objectContaining({ ...fields, queuedAt: requestedAt, queueDepth: 5 }));
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expect(registryLog.info).toHaveBeenCalledWith("archive cleanup stage started", expect.objectContaining({ threadId: "first", stage: "metadata" }));
     release();
@@ -808,7 +816,7 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.counts.providerPages).toBe(17);
   });
 
-  it.each(["during discovery", "between jobs"])("refreshes batch discovery after a workspace change %s", async (timing) => {
+  it.each(["during discovery", "before the next batch"])("refreshes batch discovery after a workspace change %s", async (timing) => {
     vi.useFakeTimers();
     const firstDirectory = { id: "first", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/first" };
     const secondDirectory = { ...firstDirectory, id: "second", worktreePath: "/contrived/second" };
@@ -830,19 +838,20 @@ describe("archive cleanup pipeline", () => {
         return await read(params);
       });
     } else {
-      fixture.registry.onEvent((event) => {
-        if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "first") {
-          void changeWorkspace();
-        }
-      });
+      const first = new Promise<void>((resolve) => fixture.registry.onEvent((event) => {
+        if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "first") resolve();
+      }));
+      await fixture.registry.archiveThread({ backend: "codex", threadId: "first", backgroundCleanup: true });
+      await drivePacer(fixture.registry, first);
+      await changeWorkspace();
     }
-    await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
+    await Promise.all((timing === "during discovery" ? targets : targets.slice(1)).map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
     await drivePacer(fixture.registry, fixture.finished);
     expect(fixture.completions[1]?.notification.params).toMatchObject({ cleanup: [expect.objectContaining({ skippedReason: expect.stringContaining("new-user") })] });
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
     // The batch reads the fleet once; the workspace change rereads only the
     // identity it names.
-    expect(fixture.counts.providerPages).toBe(2);
+    expect(fixture.counts.providerPages).toBe(timing === "during discovery" ? 2 : 4);
     expect(readSummary).toHaveBeenCalledTimes(2);
   });
 
@@ -879,23 +888,24 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.counts.providerPages).toBe(2);
   });
 
-  it("refreshes cached children when a thread is regrouped between cleanup jobs", async () => {
+  it("refreshes children when a thread is regrouped before the next batch", async () => {
     vi.useFakeTimers();
     const targets = [codexThread({ id: "first" }), codexThread({ id: "second" })];
     const fixture = buildArchiveBurst([codexThread({ id: "child" })], targets);
     fixture.overlays.set("child", { backend: "codex", threadId: "child", extraLinkedDirectories: [], parentThreadId: "first", parentThreadBackend: "codex" });
-    fixture.registry.onEvent((event) => {
-      if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "first") {
-        fixture.overlays.set("child", { backend: "codex", threadId: "child", extraLinkedDirectories: [], parentThreadId: "second", parentThreadBackend: "codex" });
-        void publishNotification(fixture.registry, { method: "thread/parent/set",
-          params: { threadId: "child", parentThreadId: "second", parentThreadBackend: "codex" } });
-      }
-    });
-    await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
+    const first = new Promise<void>((resolve) => fixture.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "first") resolve();
+    }));
+    await fixture.registry.archiveThread({ backend: "codex", threadId: "first", backgroundCleanup: true });
+    await drivePacer(fixture.registry, first);
+    fixture.overlays.set("child", { backend: "codex", threadId: "child", extraLinkedDirectories: [], parentThreadId: "second", parentThreadBackend: "codex" });
+    await publishNotification(fixture.registry, { method: "thread/parent/set",
+      params: { threadId: "child", parentThreadId: "second", parentThreadBackend: "codex" } });
+    await fixture.registry.archiveThread({ backend: "codex", threadId: "second", backgroundCleanup: true });
     await drivePacer(fixture.registry, fixture.finished);
     expect(fixture.store.setThreadParent).toHaveBeenCalledTimes(2);
-    // The regrouping rereads the child's overlay, not the fleet.
-    expect(fixture.counts.providerPages).toBe(2);
+    // A fully drained batch obtains fresh membership and child overlays.
+    expect(fixture.counts.providerPages).toBe(4);
   });
 
   it.each([false, true])("retains supplied historical repair paths when canonical keys differ (%s)", async (differentKeys) => {
@@ -1163,10 +1173,12 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.counts.archiveMutations).toBe(1);
     expect(await request).toMatchObject({ cleanupPending: true, cleanup: [] });
     expect(fixture.counts.providerPages).toBe(0);
-    await vi.advanceTimersToNextTimerAsync();
+    await fixture.registry.whenArchiveCleanupCheckpointPendingForTests();
+    await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
     // Admission itself yields, then the provider page gets its own slice.
     expect(fixture.counts.providerPages).toBe(0);
-    await vi.advanceTimersToNextTimerAsync();
+    await fixture.registry.whenArchiveCleanupCheckpointPendingForTests();
+    await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
     expect(fixture.counts.providerPages).toBe(1);
     expect(fixture.counts.overlayReads).toBe(0);
     await drivePacer(fixture.registry, fixture.completion);

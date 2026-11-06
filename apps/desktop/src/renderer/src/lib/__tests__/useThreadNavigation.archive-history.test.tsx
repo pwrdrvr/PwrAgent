@@ -70,6 +70,27 @@ it("lifts the archive exclusion when the request fails", async () => {
   await waitFor(() => expect(result.current.selectedThread?.id).toBe("b"));
 });
 
+it("shows active cleanup before completion, respects dismissal for the batch, and clears on drain", async () => {
+  const f = fixture();
+  const { result } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  const progress = (batchId: string, drained = false): AgentEvent => ({ backend: "codex", notification: {
+    method: "archiveCleanup/progress",
+    params: { batchId, active: drained ? [] : [{ backend: "codex", threadId: "a", worktreePath: "/contrived/checkout" }],
+      queued: drained ? 0 : 2, completed: drained ? 3 : 0, total: 3 },
+  } });
+  act(() => f.emit(progress("first")));
+  expect(result.current.archiveCleanupProgressNotice?.message).toContain("1 active");
+  expect(result.current.archiveCleanupProgressNotice?.facts?.[0]?.value).toBe("/contrived/checkout");
+  act(() => result.current.dismissArchiveCleanupProgressNotice());
+  act(() => f.emit(progress("first")));
+  expect(result.current.archiveCleanupProgressNotice).toBeUndefined();
+  act(() => f.emit(progress("second")));
+  expect(result.current.archiveCleanupProgressNotice).toBeDefined();
+  act(() => f.emit(progress("second", true)));
+  expect(result.current.archiveCleanupProgressNotice).toBeUndefined();
+});
+
 it("keeps archive and unarchive events scoped to the full backend and instance identity", async () => {
   const f = fixture();
   const { result } = renderHook(() => useThreadNavigation(f.api));
