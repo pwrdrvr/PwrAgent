@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { ComponentProps } from "react";
 import {
   KEEP_AT_TOP_RANK_BOUNDARY,
@@ -11,6 +12,7 @@ import {
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { RecentsList, readPinnedGroupCounts } from "../RecentsList";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
+import type { PendingLaunchpadCreation } from "../../../lib/useThreadNavigation";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 
@@ -78,7 +80,7 @@ function renderRecents(props: Partial<ComponentProps<typeof Sidebar>> = {}) {
 }
 
 function pinnedGroup(): HTMLElement | null {
-  return document.querySelector<HTMLElement>(".pinned-group");
+  return document.querySelector<HTMLElement>(".pinned-group:not(.recents-group)");
 }
 
 function groupHeader(): HTMLElement {
@@ -92,7 +94,7 @@ function titlesIn(container: HTMLElement): string[] {
 
 function listTitles(): string[] {
   const list = [...document.querySelectorAll<HTMLElement>(".sidebar-list--compact[role='list']")]
-    .find((element) => !element.closest(".pinned-group"));
+    .find((element) => !element.closest(".pinned-group:not(.recents-group)"));
   return list ? titlesIn(list) : [];
 }
 
@@ -566,5 +568,219 @@ describe("Pinned group before its pages are read again", () => {
       "Glossary search index",
       "Flaky auth fixture",
     ]);
+  });
+});
+
+describe("The list's section under the Pinned group", () => {
+  const recentsHeader = () => screen.getByRole("button", { name: /^Created,/ });
+  const rerenderRecents = (view: ReturnType<typeof renderRecents>, props: Partial<ComponentProps<typeof Sidebar>>) =>
+    view.rerender(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={[]}
+        loading={false}
+        threads={population}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        {...props}
+      />,
+    );
+
+  it("is headed by its lens tab's name in Updated too", () => {
+    renderRecents({ browseMode: "inbox" });
+
+    expect(screen.getByRole("button", { name: /^Updated,/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("button", { name: /^Created,/ })).toBeNull();
+  });
+
+  it("draws no list header while pins are not on top", () => {
+    renderRecents({ pinnedThreadsOnTop: false });
+
+    expect(screen.queryByRole("button", { name: /^Created,/ })).toBeNull();
+  });
+
+  it("heads the list under the Pinned group with its own collapsible header", () => {
+    renderRecents();
+
+    expect(recentsHeader()).toHaveAccessibleName("Created, 3 threads");
+    expect(recentsHeader()).toHaveAttribute("aria-expanded", "true");
+    expect(listTitles()).toEqual([
+      "Dark-mode chart tokens",
+      "Glossary search index",
+      "Flaky auth fixture",
+    ]);
+  });
+
+  it("folds the list away and leaves the pins on screen", () => {
+    renderRecents();
+    fireEvent.click(recentsHeader());
+
+    expect(recentsHeader()).toHaveAttribute("aria-expanded", "false");
+    expect(recentsHeader()).toHaveAccessibleName("Created, 3 threads, 0 active threads, 0 unread");
+    expect(listTitles()).toEqual([]);
+    expect(titlesIn(pinnedGroup()!)).toEqual([
+      "Release manager",
+      "Docs IA migration",
+      "Rate limiter rewrite",
+    ]);
+
+    fireEvent.click(recentsHeader());
+    expect(listTitles()).toHaveLength(3);
+  });
+
+  it("folds independently of the Pinned group", () => {
+    const onSetPinnedGroupCollapsed = vi.fn();
+    renderRecents({ onSetPinnedGroupCollapsed });
+    fireEvent.click(recentsHeader());
+
+    expect(onSetPinnedGroupCollapsed).not.toHaveBeenCalled();
+    expect(groupHeader()).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("draws no list header without a pin, so the lens never folds blank", () => {
+    renderRecents({ threads: [chartTokens, glossary, flakyFixture] });
+
+    expect(screen.queryByRole("button", { name: /^Created,/ })).toBeNull();
+    expect(listTitles()).toHaveLength(3);
+  });
+
+  it("reopens for a newly selected thread inside it, and only then", () => {
+    const view = renderRecents({ selectedItemKey: "codex:glossary" });
+    // Folding with a list thread already open keeps it folded.
+    fireEvent.click(recentsHeader());
+    expect(listTitles()).toEqual([]);
+
+    rerenderRecents(view, { selectedItemKey: "codex:release" });
+    expect(listTitles()).toEqual([]);
+
+    rerenderRecents(view, { selectedItemKey: "codex:flaky" });
+    expect(recentsHeader()).toHaveAttribute("aria-expanded", "true");
+    expect(listTitles()).toContain("Flaky auth fixture");
+  });
+
+  it("reopens when a thread starts at its top", () => {
+    const view = renderRecents();
+    fireEvent.click(recentsHeader());
+    expect(listTitles()).toEqual([]);
+
+    const starting: PendingLaunchpadCreation = {
+      operationId: "startup-1",
+      submittedAt: 1_000,
+      selectionKey: "starting-launchpad:1",
+      directoryKey: "",
+      directoryLabel: "",
+      launchpad: {
+        backend: "codex",
+        executionMode: "default",
+        prompt: "Add a crop tool",
+      } as PendingLaunchpadCreation["launchpad"],
+      composerScopeKey: "launchpad:starting:1",
+      setupProgressKey: "starting-launchpad:1",
+      title: "Add a crop tool",
+      input: [],
+    };
+    rerenderRecents(view, { pendingLaunchpadCreations: [starting] });
+    expect(recentsHeader()).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // Oracle: for every way of pinning the population, the list has a header
+  // exactly when some root is left unpinned, and it counts those roots. The
+  // lens's pager is an array of controls, empty when nothing is left to load,
+  // and an array of nulls once drew "Created, 0 threads" over no rows.
+  it("draws a header exactly when a root is left unpinned, for every pin pattern", () => {
+    for (let mask = 1; mask < 1 << population.length; mask += 1) {
+      const threads = population.map((entry, index) => (mask & (1 << index)
+        ? { ...entry, pinnedRank: entry.pinnedRank ?? String(4096 + index) }
+        : { ...entry, pinnedRank: undefined }));
+      const unpinned = threads.filter((entry) => entry.pinnedRank === undefined).length;
+      renderRecents({ threads });
+      const header = screen.queryByRole("button", { name: /^Created,/ });
+      if (unpinned === 0) {
+        expect(header, `mask ${mask}`).toBeNull();
+      } else {
+        expect(header, `mask ${mask}`).toHaveAccessibleName(`Created, ${unpinned} thread${unpinned === 1 ? "" : "s"}`);
+      }
+      cleanup();
+    }
+  });
+});
+
+// Model: the list's fold is the operator's toggle, dropped whenever the pins
+// settle at none, so the next pin brings the list back open. A reload (a lens
+// switch) leaves the group's page empty while it loads and keeps the fold.
+describe("The list's fold against a model", () => {
+  type Step = "toggle" | "unpinAll" | "pinOne" | "reload" | "settle";
+  const request = (roots: "pinned" | "unpinned", pageSize: number) => ({ protocol: 2 as const,
+    consumer: "main-sidebar" as const, query: { kind: "lens" as const, lens: "recents" as const, roots }, pageSize });
+  const draw = (threads: NavigationThreadSummary[], loading: boolean) => {
+    const pins = request("pinned", 100);
+    const list = request("unpinned", 10);
+    const resources = new Map<string, NavigationWindowResource>([
+      ["lens-pins", loading
+        ? { id: "lens-pins", loading: true, state: createNavigationPageState(pins) }
+        : { id: "lens-pins", loading: false, state: { ...createNavigationPageState(pins),
+          page: navigationQueryFixture(pins, { threads }, { ownerLensOrder: true }), stale: false } }],
+      ["lens", { id: "lens", loading: false, state: { ...createNavigationPageState(list),
+        page: navigationQueryFixture(list, { threads }, { ownerLensOrder: true }), stale: false } }],
+    ]);
+    return (
+      <RecentsList
+        pagedNavigation={{ resources } as unknown as ComponentProps<typeof RecentsList>["pagedNavigation"]}
+        pinnedResourceId="lens-pins"
+        resourceIds={["lens"]}
+        listSection={{ title: "Created", icon: null }}
+        threads={threads}
+        onOpenThreadContextMenu={() => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+  };
+  const unpinned = population.map(({ pinnedRank: _rank, ...entry }) => entry);
+  const onePin = unpinned.map((entry) => entry === unpinned[0] ? { ...entry, pinnedRank: "4096" } : entry);
+
+  it("keeps the operator's fold until the pins settle at none", () => {
+    fc.assert(fc.property(
+      fc.array(fc.constantFrom<Step>("toggle", "unpinAll", "pinOne", "reload", "settle"), { maxLength: 8 }),
+      (steps) => {
+        let threads: NavigationThreadSummary[] = population;
+        let loading = false;
+        let folded = false;
+        const view = render(draw(threads, loading));
+        try {
+          for (const step of steps) {
+            const header = () => screen.queryByRole("button", { name: /^Created,/ });
+            if (step === "toggle") {
+              if (!header()) continue;
+              fireEvent.click(header()!);
+              folded = !folded;
+            } else {
+              if (step === "unpinAll") threads = unpinned;
+              if (step === "pinOne") threads = onePin;
+              if (step === "reload") loading = true;
+              if (step === "settle") loading = false;
+              view.rerender(draw(threads, loading));
+            }
+            const hasPins = threads.some((entry) => entry.pinnedRank !== undefined);
+            if (!hasPins && !loading) folded = false;
+            const shown = hasPins && !loading;
+            if (!shown) {
+              expect(header(), steps.join(",")).toBeNull();
+            } else {
+              expect(header(), steps.join(",")).toHaveAttribute("aria-expanded", String(!folded));
+            }
+          }
+        } finally {
+          cleanup();
+        }
+      },
+    ), {
+      // Every run mounts the sidebar and rerenders it per step, so keep the
+      // count modest; the two sequences that break the rule always run.
+      numRuns: 30,
+      examples: [[["toggle", "unpinAll", "pinOne"]], [["toggle", "reload", "settle"]]],
+    });
   });
 });

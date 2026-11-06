@@ -9434,6 +9434,19 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* The list under the Pinned group, headed by its lens tab's name and icon.
+   The icon names the lens, so it stays neutral: the accent belongs to the
+   pins. The section ends the lane above the start actions, whose own
+   hairline closes the list; drawing the group's hairline as well would stack
+   two rules 14px apart. */
+.pinned-group.recents-group {
+  border-bottom: 0;
+}
+
+.recents-group .pinned-group__icon {
+  color: var(--text-muted);
+}
+
 /* The group's size, in the readouts' type so the meta reads as one row: mono,
    tabular, and the two-digit box `.directory-row__summary-meta` gives every
    count so the readouts beside it hold their x. Muted: it is a size, not a
