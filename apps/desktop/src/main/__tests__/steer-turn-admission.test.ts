@@ -24,7 +24,7 @@ describe("admitSteerTurn", () => {
     }));
     const create = vi.fn();
 
-    await expect(admitSteerTurn({ steerTurn }, { create }, request))
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, request))
       .resolves.toEqual({
         backend: "codex",
         threadId: "thread-1",
@@ -54,7 +54,7 @@ describe("admitSteerTurn", () => {
     };
     const create = vi.fn(async () => ({ action }));
 
-    await expect(admitSteerTurn({ steerTurn }, { create }, request))
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, request))
       .resolves.toMatchObject({
         disposition: "held",
         scheduledAction: action,
@@ -78,8 +78,32 @@ describe("admitSteerTurn", () => {
     });
     const create = vi.fn();
 
-    await expect(admitSteerTurn({ steerTurn }, { create }, request))
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, request))
       .rejects.toThrow("backend disconnected");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("keeps Claude steering on the provider's current turn", async () => {
+    const response = {
+      backend: "claude" as const, threadId: "thread-1", turnId: "turn-1",
+      disposition: "steered" as const,
+    };
+    const steerTurn = vi.fn(async () => response);
+    const create = vi.fn();
+
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, { ...request, backend: "claude" }))
+      .resolves.toEqual(response);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("does not drop a native-review steer when no fallback payload was supplied", async () => {
+    const steerTurn = vi.fn(async () => {
+      throw new Error("Native review steering is unsupported; queue a follow-up instead.");
+    });
+    const create = vi.fn();
+
+    await expect(admitSteerTurn({ steerTurn }, { create, get: () => undefined }, { ...request, fallback: undefined }))
+      .rejects.toThrow("Native review steering is unsupported");
     expect(create).not.toHaveBeenCalled();
   });
 });

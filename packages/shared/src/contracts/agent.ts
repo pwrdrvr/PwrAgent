@@ -680,7 +680,8 @@ export type SteerTurnRequest = {
   delivery?: SteerTurnDelivery;
   /**
    * Durable fallback accepted by main together with the steer request. Main
-   * schedules it when the expected target is already stale.
+   * schedules it when the expected target is already stale or a native
+   * review cannot accept steering.
    */
   fallback?: {
     displayText: string;
@@ -694,10 +695,12 @@ export type SteerTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId: string;
-  disposition?: "held" | "queued" | "steered" | "scheduled";
+  disposition?: "held" | "queued" | "steered" | "scheduled" | "started";
   queueEntryId?: string;
   queueEntryCreatedAt?: number;
   holdReason?: string;
+  /** Why this steer was accepted as an automatic follow-up instead. */
+  fallbackReason?: "native-review";
   scheduledAction?: ScheduledThreadAction;
 };
 

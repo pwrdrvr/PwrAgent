@@ -472,7 +472,7 @@ function scopeKeyForAction(action: ScheduledThreadAction, target: FederationTarg
   return buildThreadComposerScopeKey(action.backend, action.threadId, target);
 }
 
-function isScheduledThreadAction(value: unknown): value is ScheduledThreadAction {
+export function isScheduledThreadAction(value: unknown): value is ScheduledThreadAction {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<ScheduledThreadAction>;
   return (

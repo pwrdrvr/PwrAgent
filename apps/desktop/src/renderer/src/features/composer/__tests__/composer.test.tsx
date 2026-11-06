@@ -13914,6 +13914,66 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
+  it.each(["scheduled", "dispatching", "queued", "failed"] as const)(
+    "shows the queued toast only after the owner accepts a native review follow-up (%s)",
+    async (status) => {
+      const backend = backendSummary("codex");
+      backend.capabilities.steerTurn = true;
+      const onShowNotice = vi.fn();
+      const startTurn = vi.fn();
+      const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
+        backend: request.backend, threadId: request.threadId, turnId: request.expectedTurnId,
+        disposition: "scheduled" as const,
+        fallbackReason: "native-review" as const,
+        scheduledAction: {
+          id: "native-review-follow-up", backend: request.backend, threadId: request.threadId,
+          kind: "turn" as const, origin: "desktop" as const, status,
+          scheduledFor: Date.now(), createdAt: Date.now(), updatedAt: Date.now(),
+          displayText: request.fallback!.displayText, turn: request.fallback!.turn,
+          ...(status === "queued" ? { queueEntryId: "queued-follow-up" } : {}),
+          ...(status === "failed" ? { errorMessage: "Could not queue follow-up" } : {}),
+        },
+      }));
+      render(<Composer
+        activeTurnId="review-turn"
+        backends={[backend]}
+        desktopApi={{ steerTurn, startTurn, onAgentEvent: () => () => undefined }}
+        onShowNotice={onShowNotice}
+        skills={[]}
+        thread={{
+          id: "native-review-parent", title: "Native review", source: "codex",
+          titleSource: "explicit", executionMode: "default", linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />);
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Was `/etc` protected on Linux, I hope?" },
+      });
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+
+      if (status === "failed") {
+        await waitFor(() => expect(screen.getByText("Could not queue follow-up")).toBeInTheDocument());
+        expect(onShowNotice).not.toHaveBeenCalled();
+        expect(screen.getByLabelText("Pending steer message")).toHaveTextContent("Was `/etc` protected on Linux, I hope?");
+        expect(startTurn).not.toHaveBeenCalled();
+        return;
+      }
+      await waitFor(() => expect(onShowNotice).toHaveBeenCalledOnce());
+      expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
+        title: "Message queued",
+        message: "Steering is unavailable during this type of Codex review. Your message was queued instead.",
+        tone: "neutral",
+      }));
+      expect(steerTurn).toHaveBeenCalledOnce();
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Queued message")).toHaveTextContent("Was `/etc` protected on Linux, I hope?");
+      expect(screen.queryByLabelText("Pending steer message")).not.toBeInTheDocument();
+      expect(screen.queryByText("Action failed")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Reply")).toHaveValue("");
+    },
+  );
+
   it("does not reinterpret a backend-owned stale steer fallback in React", async () => {
     let agentEventHandler:
       | ((event: {

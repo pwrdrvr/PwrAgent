@@ -178,6 +178,9 @@ import { RestartContinuationStore, type StoredRestartContinuation } from "../sta
 import type { RestartDispatchPlanOptions } from "../app-server/restart-continuation-gate";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
+import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
+import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import { GitWorkingStateService } from "../app-server/git-working-state-service";
@@ -40231,6 +40234,117 @@ command = "pnpm dev"
       vi.useRealTimers();
     }
   });
+
+  it.each([
+    ["thread-parent", false], ["thread-review", false],
+    ["thread-parent", true], ["thread-review", true],
+  ] as const)(
+    "queues a refused native review steer once (%s, completion during admission: %s)",
+    async (reviewThreadId, completesDuringAdmission) => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const temp = createTempStateDb("pwragent-native-review-steer-");
+      const db = StateDb.open(temp.dbPath);
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "turn/steer", "review/start"] },
+        startReviewResult: { threadId: "thread-parent", reviewThreadId, turnId: "review-turn" },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: new SqliteOverlayStore(db), threadTitleGenerationService: null,
+      });
+      let elapsed = 0;
+      let heartbeat: (() => void) | undefined;
+      const scheduler = new ScheduledThreadActionService({
+        registry, store: new ScheduledThreadActionStore(db), now: () => Date.now() + elapsed,
+        setTimer: vi.fn(() => ({}) as ReturnType<typeof setTimeout>), clearTimer: vi.fn(),
+        setLeaseTimer: vi.fn((callback: () => void) => {
+          heartbeat = callback;
+          return {} as ReturnType<typeof setInterval>;
+        }), clearLeaseTimer: vi.fn(),
+      });
+      onTestFinished(async () => {
+        scheduler.dispose();
+        await registry.close();
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+        vi.unstubAllEnvs();
+      });
+      await discoverCodexBackendForTest(registry);
+      await registry.startReview({
+        backend: "codex", threadId: "thread-parent", target: { type: "uncommittedChanges" },
+      });
+      scheduler.start();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const start = vi.spyOn(codexClient, "startTurn");
+      const steer = vi.spyOn(codexClient, "steerTurn");
+      const input = [{ type: "text" as const, text: "Was /etc protected on Linux?" }];
+      const request = {
+        backend: "codex" as const, threadId: "thread-parent", expectedTurnId: "review-turn",
+        requestId: "native-review-steer", input,
+        fallback: { displayText: input[0]!.text, turn: { input } },
+      };
+      const terminal = {
+        method: "turn/completed" as const,
+        params: { threadId: reviewThreadId, turnId: "review-turn",
+          turn: { id: "review-turn", status: "completed" as const, output: [] } },
+      };
+      const admissionRegistry = completesDuringAdmission ? {
+        steerTurn: async (...args: Parameters<DesktopBackendRegistry["steerTurn"]>) => {
+          try {
+            return await registry.steerTurn(...args);
+          } catch (error) {
+            await codexClient.emit(terminal);
+            throw error;
+          }
+        },
+      } : registry;
+
+      const { result, writes } = await measureSqliteWrites(() => admitSteerTurn(admissionRegistry, scheduler, request));
+      if (!completesDuringAdmission) {
+        expectSqliteWriteBudget({
+          scenario: "native-review-steer-follow-up", writes,
+          note: "One refused native review steer persisted and queued: 3 commits, ~45 KB per admission, ~4.5 MB/day at 100 steers/day, plus the existing scheduler's lease renewals while queued. Retries add no commits.",
+        });
+      }
+      expect(result).toMatchObject({
+        disposition: completesDuringAdmission ? "started" : "scheduled", fallbackReason: "native-review",
+        scheduledAction: { status: completesDuringAdmission ? "started" : "queued", turn: { input } },
+      });
+      expect(result.scheduledAction?.manualReleaseRequired).not.toBe(true);
+      expect(steer).not.toHaveBeenCalled();
+      if (!completesDuringAdmission) {
+        expect(start).not.toHaveBeenCalled();
+        const { result: replay, writes: retryWrites } = await measureSqliteWrites(() =>
+          admitSteerTurn(registry, scheduler, request));
+        expect(replay).toEqual(result);
+        expect(retryWrites.commits).toBe(0);
+        const { writes: waitingWrites } = await measureSqliteWrites(async () => {
+          for (let tick = 0; tick < 6; tick += 1) {
+            elapsed += 10_000;
+            heartbeat!();
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+        });
+        expectSqliteWriteBudget({
+          scenario: "native-review-steer-follow-up-waiting-minute", writes: waitingWrites,
+          note: "Six existing 10-second scheduler lease renewals: 6 commits, ~25 KB per waiting minute. Admission plus one minute of waiting per steer projects ~7 MB/day at 100 steers/day.",
+        });
+      }
+
+      await codexClient.emit(terminal);
+      await expect.poll(() => start.mock.calls.length).toBe(1);
+      await codexClient.emit(terminal);
+      expect(start).toHaveBeenCalledOnce();
+      expect(codexClient.lastStartTurnParams).toMatchObject({ threadId: "thread-parent", input });
+      expect(steer).not.toHaveBeenCalled();
+      await expect.poll(() => scheduler.get(result.scheduledAction!.id)?.status).toBe("started");
+      const { result: lateReplay, writes: lateRetryWrites } = await measureSqliteWrites(() =>
+        admitSteerTurn(registry, scheduler, request));
+      expect(lateReplay).toMatchObject({ disposition: "started", scheduledAction: { status: "started" } });
+      expect(lateRetryWrites.commits).toBe(0);
+      expect(start).toHaveBeenCalledOnce();
+      expect(steer).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["thread-parent", "thread-review"])(
     "keeps native review ownership and releases the parent queue once (%s)",
