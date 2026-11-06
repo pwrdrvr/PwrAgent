@@ -150,6 +150,8 @@ import {
   type SetThreadReactionRequest,
   type SetThreadReactionResponse,
   type SetThreadLockRequest,
+  type SetThreadCheckoutHibernationRequest,
+  type SetThreadCheckoutHibernationResponse,
   type SetThreadLockResponse,
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
@@ -288,6 +290,7 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_LOCK_CHANNEL,
+  NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL,
   NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL,
   NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL,
   NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL,
@@ -1134,6 +1137,16 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadLockRequest,
     ): Promise<SetThreadLockResponse> => {
       return await appServerService.setThreadLock(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL,
+    async (
+      _event,
+      request: SetThreadCheckoutHibernationRequest,
+    ): Promise<SetThreadCheckoutHibernationResponse> => {
+      return await appServerService.setThreadCheckoutHibernation(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL);
@@ -1991,6 +2004,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_LOCK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL);

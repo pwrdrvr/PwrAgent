@@ -146,6 +146,8 @@ import type {
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   SetThreadLockRequest,
+  SetThreadCheckoutHibernationRequest,
+  SetThreadCheckoutHibernationResponse,
   SetThreadLockResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
@@ -688,6 +690,7 @@ export type FederationBackendOperations = {
     request: SetThreadLockRequest,
     options?: { requesterInstanceId?: string },
   ): Promise<SetThreadLockResponse>;
+  setThreadCheckoutHibernation?(request: SetThreadCheckoutHibernationRequest): Promise<SetThreadCheckoutHibernationResponse>;
   setThreadPin(request: SetThreadPinRequest): Promise<SetThreadPinResponse>;
   reorderThreadPins(
     request: ReorderThreadPinsRequest,
@@ -1327,6 +1330,17 @@ export function registerFederationBackendHandlers(params: {
         { requesterInstanceId: envelope.sourceInstanceId },
       ),
   );
+  if (params.backend.setThreadCheckoutHibernation) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.setThreadCheckoutHibernation, async (envelope) => {
+      const request = envelope.params as SetThreadCheckoutHibernationRequest;
+      return await params.backend.setThreadCheckoutHibernation!({
+        backend: request.backend,
+        threadId: request.threadId,
+        ...(typeof request.restore === "boolean" ? { restore: request.restore } : {}),
+        ...(typeof request.keepAwake === "boolean" ? { keepAwake: request.keepAwake } : {}),
+      });
+    });
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadPin,
     async (envelope) =>
@@ -2515,6 +2529,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<SetThreadLockResponse>({
       method: FEDERATION_BACKEND_METHODS.setThreadLock,
       params: request,
+    });
+  }
+
+  async setThreadCheckoutHibernation(
+    request: SetThreadCheckoutHibernationRequest,
+  ): Promise<SetThreadCheckoutHibernationResponse> {
+    // A restore runs Git and can run project setup on the owner.
+    return await this.rpc.request<SetThreadCheckoutHibernationResponse>({
+      method: FEDERATION_BACKEND_METHODS.setThreadCheckoutHibernation,
+      params: request,
+      timeoutMs: 600_000,
     });
   }
 

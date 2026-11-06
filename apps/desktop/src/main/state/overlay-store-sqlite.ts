@@ -5429,6 +5429,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return nextState;
   }
 
+  /** One commit per change; false clears the field. */
+  async setThreadKeepCheckoutAwake(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    keepAwake: boolean;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const { keepCheckoutAwake: _cleared, ...rest } = current;
+    const nextState: ThreadOverlayState = params.keepAwake ? { ...rest, keepCheckoutAwake: true } : rest;
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   claimMonitorJobSuggestion(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -12545,6 +12564,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadAgent"
   | "setQueuedThreadAgentChange"
   | "setThreadTokenMiser"
+  | "setThreadKeepCheckoutAwake"
   | "setThreadMonitorJobSuggestions"
   | "claimMonitorJobSuggestion"
   | "setThreadHandoffOrigin"

@@ -53,6 +53,7 @@ const scenario = fc.record({
   idleFor: fc.integer({ min: 0, max: 90 * DAY }),
   seenLater: fc.integer({ min: 0, max: 10 * DAY }),
   snapshot: usually("none", "hibernated", "archivedPending", "archivedRestored", "restored"),
+  keepAwake: rarely,
   busy: rarely,
   sharedPath: rarely,
 });
@@ -91,6 +92,7 @@ function build(input: Scenario): { candidate: ThreadArchiveCandidate; policy: De
     lastSeenAt: updatedAt - input.seenLater,
     worktreeSnapshots: snapshots,
     ...(input.pinned === "rank" ? { pinnedRank: 1 } : {}),
+    ...(input.keepAwake ? { keepCheckoutAwake: true } : {}),
     ...(input.archived === "tombstone" ? { archiveTombstonedAt: 1 } : {}),
     ...(input.archived === "retention" ? { archiveRetentionStartedAt: 1 } : {}),
     ...(input.agent ? { agent: {} as ThreadOverlayState["agent"] } : {}),
@@ -110,6 +112,8 @@ function eligible(input: Scenario): boolean {
   const idleDays = input.idleFor / DAY;
   return input.enabled
     && input.archived === "no"
+    // Keep it awake exempts the thread until the operator turns it off.
+    && !input.keepAwake
     && !input.unreadable
     // Agent, merge hold, pending work, PR watch, schedule, remote execution, active.
     && !input.agent && !input.mergeHeld && !input.pendingWork && !input.prWatch && !input.scheduled && !input.remote

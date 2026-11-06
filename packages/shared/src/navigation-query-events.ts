@@ -38,6 +38,7 @@ const ROW_CHANGE_METHODS = new Set([
   "thread/started", "thread/archived", "thread/deleted", "thread/unarchived", "thread/status/changed",
   "navigation/thread/seen", "thread/name/updated", "thread/rewound",
   "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated", "thread/lock/updated", "thread/mergeHolds/updated",
+  "thread/checkoutHibernation/updated",
   "thread/pin/added", "thread/pin/removed", "thread/pin/reordered",
   "thread/agent/updated", "thread/parent/set", "thread/parent/cleared", "thread/turnQueue/updated",
   "thread/subthreadOrder/updated", "thread/subthreadsCollapsed/updated", "thread/subAgents/updated",
@@ -71,6 +72,8 @@ const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
   "thread/turnQueue/updated", "thread/turnQueue/reordered",
+  // A row's hibernation marks; hibernating never moves a thread between groups.
+  "thread/checkoutHibernation/updated",
   // A row's CI watch marks; watches never move a thread between groups.
   "thread/prWatches/updated",
   "navigation/threadGitWorkingState/updated", "navigation/directoryGitStatus/updated",

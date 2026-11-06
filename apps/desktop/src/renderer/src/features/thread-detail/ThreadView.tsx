@@ -27,6 +27,7 @@ import type {
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
+  SetThreadCheckoutHibernationResponse,
   AppServerAvailableCommandSummary,
   AppServerCollaborationModeRequest,
   AppServerBackendKind,
@@ -220,6 +221,7 @@ import {
   WorkspaceRecoveryNotice,
   type WorkspaceRecoveryOutcome,
 } from "../workspace-recovery/MissingWorktreeCard";
+import { HibernatedCheckoutCard } from "../workspace-recovery/HibernatedCheckoutCard";
 import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
 
 import {
@@ -1067,6 +1069,10 @@ export type ThreadViewProps = {
   onRecreateThreadWorktree?: (
     request: Pick<RecreateThreadWorktreeRequest, "worktreePath" | "skipCheckpoint" | "detached">
   ) => Promise<RecreateThreadWorktreeResponse>;
+  /** Restore now, or Keep it awake, for the selected thread's hibernated checkout. */
+  onSetThreadCheckoutHibernation?: (
+    change: { restore?: boolean; keepAwake?: boolean },
+  ) => Promise<SetThreadCheckoutHibernationResponse>;
   /** Moves the selected thread to its main checkout without switching it. */
   onMoveThreadToMainCheckout?: (
     worktreePath: string
@@ -4202,6 +4208,10 @@ export function ThreadView(props: ThreadViewProps) {
     ? selectedThread?.workspaceMissing
     : undefined;
   const missingWorkspaceOwnerStatus = selectedThread?.federation?.peerStatus;
+  // A hibernated checkout keeps the composer: the next send restores it.
+  const hibernatedWorkspace = threadView && !missingWorkspace
+    ? selectedThread?.workspaceHibernated
+    : undefined;
   const missingWorkspaceTurnActive = Boolean(props.activeTurnId);
   const composerReplacedByRecovery = Boolean(missingWorkspace) && !missingWorkspaceTurnActive;
   const workspaceRecoverySlot = missingWorkspace && selectedThread && selectedThreadKey ? (
@@ -4228,6 +4238,23 @@ export function ThreadView(props: ThreadViewProps) {
         ? async () => await props.onArchiveThread!(selectedThread)
         : undefined}
       onRecovered={(outcome) => setWorkspaceRecovery({ threadKey: selectedThreadKey, outcome })}
+    />
+  ) : hibernatedWorkspace && selectedThreadKey ? (
+    <HibernatedCheckoutCard
+      key={`${selectedThreadKey}:${hibernatedWorkspace.worktreePath}`}
+      workspace={hibernatedWorkspace}
+      ownerLabel={selectedThread?.federation?.instanceLabel ?? props.activeFederationOwnerLabel}
+      ownerOffline={
+        missingWorkspaceOwnerStatus !== undefined
+        && missingWorkspaceOwnerStatus !== "connected"
+        && missingWorkspaceOwnerStatus !== "degraded"
+      }
+      onRestore={props.onSetThreadCheckoutHibernation
+        ? async () => await props.onSetThreadCheckoutHibernation!({ restore: true })
+        : undefined}
+      onKeepAwake={props.onSetThreadCheckoutHibernation
+        ? async () => await props.onSetThreadCheckoutHibernation!({ keepAwake: true })
+        : undefined}
     />
   ) : workspaceRecoveryOutcome ? (
     <WorkspaceRecoveryNotice

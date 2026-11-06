@@ -372,6 +372,11 @@ export type WorktreeSnapshotSummary = {
   archivedAt?: number;
   /** When an idle checkout was hibernated. Set with state "hibernated". */
   hibernatedAt?: number;
+  /** What a hibernation saved, for the thread card: uncommitted files and
+   * their size, and the ignored output folders removed with the checkout. */
+  changedFileCount?: number;
+  changedBytes?: number;
+  removedOutput?: string[];
   restoredAt?: number;
   /** Physical checkout successfully recreated by restore, for shared-owner reuse. */
   restoredCheckoutIdentity?: { device: string; inode: string; birthtimeNs: string; gitDirectory: string };
@@ -1342,8 +1347,20 @@ export type ThreadHibernatedWorkspace = {
   repositoryPath: string;
   hibernatedAt: number;
   branch?: string;
+  /** Uncommitted files the snapshot holds, and their size. */
+  changedFileCount?: number;
+  changedBytes?: number;
+  /** Ignored output folders, such as node_modules, removed with the checkout. */
+  removedOutput?: string[];
   /** A restore is running now. */
   restoring?: boolean;
+  /** How far the running restore is: putting the checkout back, then the
+   * project environment setup. */
+  restorePhase?: "checkout" | "setup";
+  /** The restore runs the project environment setup after the checkout. */
+  runsSetup?: boolean;
+  /** The operator exempted this thread from hibernation. */
+  keepAwake?: boolean;
 };
 
 export type WorktreeRecoveryFailureReason =
@@ -2571,6 +2588,18 @@ export type AppServerNotification =
         threadId: string;
         queuedExecutionMode: ThreadExecutionMode;
         queuedAt: number;
+      };
+    }
+  | {
+      /** A thread's checkout hibernated, began or advanced a restore, came
+       * back, or its Keep it awake setting changed. `workspace` is the
+       * hibernated checkout as the thread card shows it, null once the
+       * checkout is awake, and absent when only `keepAwake` changed. */
+      method: "thread/checkoutHibernation/updated";
+      params: {
+        threadId: string;
+        workspace?: ThreadHibernatedWorkspace | null;
+        keepAwake?: boolean;
       };
     }
   | {

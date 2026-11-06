@@ -48,6 +48,7 @@ import type {
 import {
   buildThreadUrl,
   comparePinnedDirectories,
+  toolWorktreeRootOwner,
   comparePinnedThreads,
   isKeptAtTopThread,
   isPinnedDirectory,
@@ -460,6 +461,11 @@ type SidebarProps = {
     present: boolean,
   ) => Promise<void>;
   /** Locks (or re-notes) the thread when `locked`, else unlocks it. */
+  /** Keep Checkout Awake, from the thread menu. */
+  onSetThreadCheckoutHibernation?: (
+    thread: NavigationThreadSummary,
+    change: { restore?: boolean; keepAwake?: boolean },
+  ) => Promise<unknown>;
   onSetThreadLock?: (
     thread: NavigationThreadSummary,
     locked: boolean,
@@ -2022,6 +2028,13 @@ export function Sidebar(props: SidebarProps) {
     })();
   };
 
+  // Checkable too: it toggles in place. Turning it on also restores a
+  // hibernated checkout, on the thread's owner.
+  const toggleKeepCheckoutAwakeFromContextMenu = (thread: NavigationThreadSummary): void => {
+    void props.onSetThreadCheckoutHibernation?.(thread, { keepAwake: !thread.keepCheckoutAwake })
+      .catch(() => {});
+  };
+
   const markUnreadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
     void revealHoverStableSnapshot(() => props.onMarkThreadUnread?.(thread));
@@ -3067,6 +3080,18 @@ export function Sidebar(props: SidebarProps) {
     contextMenuPinnedThreadIndex >= 0 &&
     (contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1 || !completeThreadPinOrder);
   const contextMenuHasPinAction = contextMenuCanPin;
+  // Keep Checkout Awake: only a PwrAgent worktree can hibernate. A remote
+  // row needs the grant a restore on its owner does.
+  const contextMenuCanKeepAwake = Boolean(
+    contextMenuPinThread
+      && !contextMenuIsBulk
+      && props.onSetThreadCheckoutHibernation
+      && contextMenuCanRouteRemoteCapability("turn_control")
+      && contextMenuPinThread.linkedDirectories.some((directory) =>
+        directory.kind === "worktree" && toolWorktreeRootOwner(directory.worktreePath) === "pwragent"),
+  );
+  // The checkable items share one section and the check column.
+  const contextMenuHasCheckSection = contextMenuHasPinAction || contextMenuCanKeepAwake;
   // Keep at Top only means something where pin order is visible.
   const contextMenuCanKeepAtTop = Boolean(
     contextMenuHasPinAction
@@ -3087,7 +3112,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenuCanSendToMachine ||
     contextMenuCanArchive;
   const contextMenuHasTopActions =
-    contextMenuHasPinAction ||
+    contextMenuHasCheckSection ||
     contextMenuHasCreationActions ||
     contextMenuHasManagementActions ||
     contextMenuCanRemoveRemotePin;
@@ -3696,7 +3721,7 @@ export function Sidebar(props: SidebarProps) {
         <div
           ref={contextMenuRef}
           className={`thread-context-menu${
-            contextMenuHasPinAction ? " thread-context-menu--check-column" : ""
+            contextMenuHasCheckSection ? " thread-context-menu--check-column" : ""
           }`}
           role="menu"
           aria-label={
@@ -3826,11 +3851,12 @@ export function Sidebar(props: SidebarProps) {
                   </button>
                 </div>
               ) : null}
-              {contextMenuCanRemoveRemotePin && contextMenuHasPinAction ? (
+              {contextMenuCanRemoveRemotePin && contextMenuHasCheckSection ? (
                 <div className="thread-context-menu__separator" role="separator" />
               ) : null}
-              {contextMenuHasPinAction ? (
+              {contextMenuHasCheckSection ? (
                 <div className="thread-context-menu__section">
+                  {contextMenuHasPinAction ? (
                   <button
                     role="menuitemcheckbox"
                     aria-checked={Boolean(contextMenuPinThread!.pinnedRank)}
@@ -3845,6 +3871,7 @@ export function Sidebar(props: SidebarProps) {
                     <span>Pinned</span>
                     {menuShortcut("threads.toggle_pin")}
                   </button>
+                  ) : null}
                   {contextMenuCanKeepAtTop ? (
                     <button
                       role="menuitemcheckbox"
@@ -3861,9 +3888,23 @@ export function Sidebar(props: SidebarProps) {
                       {menuShortcut("threads.toggle_keep_at_top")}
                     </button>
                   ) : null}
+                  {contextMenuCanKeepAwake ? (
+                    <button
+                      role="menuitemcheckbox"
+                      aria-checked={Boolean(contextMenuPinThread!.keepCheckoutAwake)}
+                      type="button"
+                      onClick={() => toggleKeepCheckoutAwakeFromContextMenu(contextMenuPinThread!)}
+                      onKeyDown={closeContextMenuOnEnter}
+                    >
+                      <span className="thread-context-menu__check" aria-hidden="true">
+                        <CheckIcon size={12} strokeWidth={3} />
+                      </span>
+                      <span>Keep Checkout Awake</span>
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
-              {contextMenuHasPinAction &&
+              {contextMenuHasCheckSection &&
               (contextMenuHasCreationActions || contextMenuHasManagementActions) ? (
                 <div className="thread-context-menu__separator" role="separator" />
               ) : null}

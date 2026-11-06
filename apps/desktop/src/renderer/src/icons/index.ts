@@ -55,6 +55,7 @@ export { OpenAIIcon } from "./OpenAIIcon";
 export { PackageIcon } from "./PackageIcon";
 export { LockIcon } from "./LockIcon";
 export { PauseIcon } from "./PauseIcon";
+export { MoonIcon } from "./MoonIcon";
 export { PencilIcon } from "./PencilIcon";
 export { PinIcon } from "./PinIcon";
 export { PlanIcon } from "./PlanIcon";

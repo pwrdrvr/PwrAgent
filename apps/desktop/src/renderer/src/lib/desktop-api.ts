@@ -313,6 +313,8 @@ import type {
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   SetThreadLockRequest,
+  SetThreadCheckoutHibernationRequest,
+  SetThreadCheckoutHibernationResponse,
   SetThreadLockResponse,
   RecentThreadLockNotesResponse,
   ThreadLockNoteRequest,
@@ -1572,6 +1574,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadLock?: (
     request: SetThreadLockRequest,
   ) => Promise<SetThreadLockResponse>;
+  /** Restore a hibernated checkout now, or set Keep it awake. Runs on the owner. */
+  setThreadCheckoutHibernation?: (
+    request: SetThreadCheckoutHibernationRequest,
+  ) => Promise<SetThreadCheckoutHibernationResponse>;
   listRecentThreadLockNotes?: () => Promise<RecentThreadLockNotesResponse>;
   rememberThreadLockNote?: (
     request: ThreadLockNoteRequest,

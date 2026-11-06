@@ -101,3 +101,41 @@ describe("ThreadView with a missing worktree", () => {
     await waitFor(() => expect(onArchiveThread).toHaveBeenCalledWith(selected));
   });
 });
+
+describe("ThreadView with a hibernated checkout", () => {
+  const workspaceHibernated = {
+    worktreePath: WORKTREE, repositoryPath: "/home/dev/src/atlas", hibernatedAt: 1,
+    branch: "fix/retry-backoff", changedFileCount: 2, changedBytes: 2048,
+  };
+
+  it("shows the hibernated card above a composer that stays", () => {
+    const { container } = render(
+      <ThreadView {...baseProps} selectedThread={thread({ workspaceMissing: undefined, workspaceHibernated })} />,
+    );
+    expect(screen.getByRole("region", { name: /Checkout hibernated/ })).toBeInTheDocument();
+    expect(container.querySelector(".composer")).not.toBeNull();
+  });
+
+  it("routes Restore now and Keep it awake to the owner", async () => {
+    const onSetThreadCheckoutHibernation = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "t1", keepAwake: true, hibernated: false,
+    }));
+    render(
+      <ThreadView
+        {...baseProps}
+        selectedThread={thread({ workspaceMissing: undefined, workspaceHibernated })}
+        onSetThreadCheckoutHibernation={onSetThreadCheckoutHibernation}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Keep it awake" }));
+    await waitFor(() => expect(onSetThreadCheckoutHibernation).toHaveBeenCalledWith({ keepAwake: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore now" }));
+    await waitFor(() => expect(onSetThreadCheckoutHibernation).toHaveBeenLastCalledWith({ restore: true }));
+  });
+
+  it("gives way to the missing-worktree card once a restore is refused", () => {
+    render(<ThreadView {...baseProps} selectedThread={thread({ workspaceHibernated })} />);
+    expect(screen.getByRole("region", { name: /worktree is gone/ })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Checkout hibernated/ })).toBeNull();
+  });
+});

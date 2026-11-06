@@ -7956,6 +7956,20 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* A hibernated checkout. The row stays as it was, so this shows only on the
+   lifted X-ray card, never on a row in any density or in a preview. */
+.thread-row__chip--xray-only {
+  display: none;
+}
+
+.thread-row-shell[data-xray-target] .thread-row__chip--xray-only {
+  display: inline-flex;
+}
+
+.thread-row__chip--hibernated {
+  color: var(--text-secondary);
+}
+
 /* Pending outbound-message chips. "Scheduled" is the solid-accent CTA —
    a future send time is the highest-priority signal, so it mirrors the
    approval/input pill weight. "Queued" (waiting on the active turn) is
@@ -25179,6 +25193,15 @@ a.button {
   color: var(--text-primary);
 }
 
+/* A hibernated checkout's restore, step by step. */
+.missing-worktree-card__step.is-active {
+  color: var(--text-primary);
+}
+
+.missing-worktree-card__step.is-active .missing-worktree-card__step-mark {
+  color: var(--accent);
+}
+
 .missing-worktree-card__step-mark {
   display: inline-flex;
   width: 16px;
@@ -41619,6 +41642,11 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer__queued--paused .composer__queued-text {
   color: var(--text-secondary);
+}
+
+/* The send waits while a hibernated checkout comes back. */
+.composer__queued--waiting-checkout .composer__queued-label {
+  color: var(--status-warning-text);
 }
 
 .composer__queued-pause-glyph {

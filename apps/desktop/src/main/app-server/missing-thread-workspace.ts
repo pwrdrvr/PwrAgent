@@ -118,6 +118,9 @@ export function describeHibernatedThreadWorkspace(
     repositoryPath: snapshot.repositoryPath,
     hibernatedAt: snapshot.hibernatedAt ?? snapshot.createdAt,
     ...(branch ? { branch } : {}),
+    ...(snapshot.changedFileCount !== undefined ? { changedFileCount: snapshot.changedFileCount } : {}),
+    ...(snapshot.changedBytes !== undefined ? { changedBytes: snapshot.changedBytes } : {}),
+    ...(snapshot.removedOutput?.length ? { removedOutput: snapshot.removedOutput } : {}),
     ...(restoring ? { restoring: true } : {}),
   };
 }

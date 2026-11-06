@@ -13057,6 +13057,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
       {queuedTurns.map((queued, index) => {
         const queuedScopeKey = composerScopeKey;
+        // The send waits for a hibernated checkout's restore, then starts.
+        const waitingForCheckout = props.thread?.workspaceHibernated?.restoring === true;
         const backendOwned = Boolean(
           queued.backendQueuePending
           || queued.queueEntryId
@@ -13082,6 +13084,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ? "Failed to send"
           : scheduledSendAt
           ? `Scheduled · sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
+          : waitingForCheckout
+          ? "Waiting for checkout"
           : undefined;
         const failed = Boolean(queued.errorMessage || queued.manualReleaseRequired);
         const movable = queuedReorder.canMove(queued.id);
@@ -13095,6 +13099,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               scheduledSendAt ? "composer__queued--scheduled" : "",
               failed ? "composer__queued--failed" : "",
               queued.paused ? "composer__queued--paused" : "",
+              queuedLabel === "Waiting for checkout" ? "composer__queued--waiting-checkout" : "",
               // Rows waiting on an answer keep their actions on screen.
               failed || scheduledSendAt || queued.paused
                 ? "composer__queued--pinned-actions"

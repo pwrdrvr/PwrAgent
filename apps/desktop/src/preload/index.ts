@@ -323,6 +323,8 @@ import type {
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   SetThreadLockRequest,
+  SetThreadCheckoutHibernationRequest,
+  SetThreadCheckoutHibernationResponse,
   SetThreadLockResponse,
   RecentThreadLockNotesResponse,
   ThreadLockNoteRequest,
@@ -1063,6 +1065,7 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_LOCK_CHANNEL,
+  NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL,
   NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL,
   NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL,
   NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL,
@@ -2803,6 +2806,10 @@ const desktopApi = Object.freeze({
     request: SetThreadLockRequest,
   ): Promise<SetThreadLockResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_LOCK_CHANNEL, request),
+  setThreadCheckoutHibernation: async (
+    request: SetThreadCheckoutHibernationRequest,
+  ): Promise<SetThreadCheckoutHibernationResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL, request),
   listRecentThreadLockNotes: async (): Promise<RecentThreadLockNotesResponse> =>
     await ipcRenderer.invoke(NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL),
   rememberThreadLockNote: async (

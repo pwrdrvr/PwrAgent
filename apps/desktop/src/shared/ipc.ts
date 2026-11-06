@@ -381,6 +381,7 @@ export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen"
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
 export const NAVIGATION_SET_THREAD_LOCK_CHANNEL = "navigation:set-thread-lock";
+export const NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL = "navigation:set-thread-checkout-hibernation";
 export const NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL =
   "navigation:recent-thread-lock-notes";
 export const NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL =

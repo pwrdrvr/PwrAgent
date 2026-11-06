@@ -191,7 +191,7 @@ describe("hibernation workspace checks (real Git)", () => {
     const { worktree } = await createFixture();
     await mkdir(path.join(worktree, "node_modules", "dep"), { recursive: true });
     await writeFile(path.join(worktree, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
-    expect(await probe(worktree, { removeRebuildableOutput: true })).toEqual({ files: 0, bytes: 0 });
+    expect(await probe(worktree, { removeRebuildableOutput: true })).toEqual({ files: 0, bytes: 0, removedOutput: ["node_modules"] });
     expect(await probe(worktree, { removeRebuildableOutput: false })).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.ignored });
   });
 
@@ -459,5 +459,114 @@ describe("idle checkout hibernation and restore", () => {
     expect(started).not.toHaveBeenCalled();
     expect(registry.readCheckoutHibernation(identity).restoreFailure?.message).toBe(registry.getQueuedTurnsForThread(identity)[0]!.holdReason);
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated" });
+  });
+});
+
+describe("Restore now and Keep it awake", () => {
+  type HibernationEvent = { workspace?: { restoring?: boolean; restorePhase?: string } | null; keepAwake?: boolean };
+  const hibernationEvents = (registry: DesktopBackendRegistry) => {
+    const events: HibernationEvent[] = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/checkoutHibernation/updated") events.push(event.notification.params as HibernationEvent);
+    });
+    return events;
+  };
+
+  it("keeps a thread awake in one commit, restores its checkout, and the sweep then keeps it", async () => {
+    const fixture = await createFixture();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
+    const { registry, store } = fixture.open();
+    await sweep(registry);
+    expect(await exists(fixture.worktree)).toBe(false);
+    const events = hibernationEvents(registry);
+    const recreate = recreateSpy(registry);
+    const result = await registry.setThreadCheckoutHibernation({ ...identity, keepAwake: true });
+    expect(result).toEqual({ ...identity, keepAwake: true, hibernated: false });
+    expect(recreate).toHaveBeenCalledTimes(1);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
+    expect((await store.getThreadOverlayState(identity))?.keepCheckoutAwake).toBe(true);
+    // The exemption, then the restore's start and end.
+    expect(events).toEqual([
+      { threadId: THREAD_ID, keepAwake: true },
+      { threadId: THREAD_ID, workspace: expect.objectContaining({ restoring: true, restorePhase: "checkout" }) },
+      { threadId: THREAD_ID, workspace: null },
+    ]);
+
+    // Idle again, the sweep keeps it until the operator turns this off.
+    expect(await sweep(registry)).toMatchObject({ hibernated: 0, kept: { "Kept awake": 1 } });
+    expect(await exists(fixture.worktree)).toBe(true);
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(await registry.setThreadCheckoutHibernation({ ...identity, keepAwake: false }))
+        .toEqual({ ...identity, keepAwake: false, hibernated: false });
+    });
+    expectSqliteWriteBudget({ scenario: "checkout-hibernation-keep-awake-toggle", note: "turn Keep it awake off on an awake thread", writes });
+    expect((await store.getThreadOverlayState(identity))?.keepCheckoutAwake).toBeUndefined();
+    // Setting what is already set writes nothing.
+    const { writes: unchanged } = await measureSqliteWrites(async () => {
+      await registry.setThreadCheckoutHibernation({ ...identity, keepAwake: false });
+    });
+    expect(unchanged.commits).toBe(0);
+    // With the exemption off, the restore it made still counts as activity.
+    expect(await sweep(registry)).toMatchObject({ hibernated: 0, kept: { "Recently active": 1 } });
+  });
+
+  it("restores now without a send, and reports the snapshot it saved", async () => {
+    const fixture = await createFixture();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
+    await writeFile(path.join(fixture.worktree, "notes.txt"), "untracked\n");
+    await mkdir(path.join(fixture.worktree, "node_modules", "dep"), { recursive: true });
+    await writeFile(path.join(fixture.worktree, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+    const { registry, store } = fixture.open();
+    await sweep(registry);
+    expect(await snapshotOf(store)).toMatchObject({ state: "hibernated", changedFileCount: 2, removedOutput: ["node_modules"] });
+    expect((await snapshotOf(store))?.changedBytes).toBeGreaterThan(0);
+    expect(registry.readCheckoutHibernation(identity)).toEqual({ restoring: false });
+
+    const result = await registry.setThreadCheckoutHibernation({ ...identity, restore: true });
+    expect(result).toEqual({ ...identity, keepAwake: false, hibernated: false });
+    expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("untracked\n");
+    expect((await store.getThreadOverlayState(identity))?.keepCheckoutAwake).toBeUndefined();
+  });
+
+  it("answers a refused restore with its reason and keeps the snapshot", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open();
+    await sweep(registry);
+    await git(fixture.repo, ["worktree", "add", path.join(fixture.root, "elsewhere"), "owned"]);
+    const result = await registry.setThreadCheckoutHibernation({ ...identity, restore: true });
+    expect(result).toMatchObject({ keepAwake: false, hibernated: true, restoreError: expect.stringContaining("owned") });
+    expect(await snapshotOf(store)).toMatchObject({ state: "hibernated" });
+    expect(registry.readCheckoutHibernation(identity).restoreFailure?.message).toBe(result.restoreError);
+  });
+
+  it("keeps the restoring card through project setup, then clears it", async () => {
+    const fixture = await createFixture({ environment: true });
+    let releaseSetup!: () => void;
+    const setupStarted = new Promise<void>((resolve) => {
+      releaseSetup = resolve;
+    });
+    let setupRunning!: () => void;
+    const running = new Promise<void>((resolve) => { setupRunning = resolve; });
+    const runner = vi.fn<CodexEnvironmentCommandRunner>(async () => {
+      setupRunning();
+      await setupStarted;
+      return { exitCode: 0, output: "installed", durationMs: 1 };
+    });
+    const { registry, store } = fixture.open(ON, { commandRunner: runner });
+    await store.setThreadCodexEnvironmentRuntime({ ...identity, codexEnvironmentRuntime: {
+      environmentId: "env", environmentName: "Env", executionTarget: "local", setupStatus: "succeeded",
+    } as never });
+    await sweep(registry);
+    const restore = registry.setThreadCheckoutHibernation({ ...identity, restore: true });
+    await running;
+    // The snapshot already reads restored; the card still shows the restore.
+    expect(await snapshotOf(store)).toMatchObject({ state: "restored" });
+    expect(registry.readCheckoutHibernation(identity)).toMatchObject({
+      restoring: true,
+      progress: { restoring: true, restorePhase: "setup", runsSetup: true, branch: "owned", worktreePath: fixture.worktree },
+    });
+    releaseSetup();
+    await restore;
+    expect(registry.readCheckoutHibernation(identity)).toEqual({ restoring: false });
   });
 });

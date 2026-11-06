@@ -32,7 +32,7 @@ const IN_PROGRESS_MARKERS = [
 
 export type HibernationWorkspaceInspection =
   | { keep: string }
-  | { keep?: undefined; files: number; bytes: number };
+  | { keep?: undefined; files: number; bytes: number; removedOutput?: string[] };
 
 async function exists(target: string): Promise<boolean> {
   try {
@@ -106,7 +106,8 @@ export async function inspectHibernationWorkspace(
       return { keep: HIBERNATION_WORKSPACE_KEEP_REASONS.stash };
     }
   }
+  const removedOutput = workspace.rebuildableOutput?.length ? { removedOutput: workspace.rebuildableOutput } : {};
   return workspace.kind === "clean"
-    ? { files: 0, bytes: 0 }
-    : { files: workspace.files, bytes: workspace.bytes };
+    ? { files: 0, bytes: 0, ...removedOutput }
+    : { files: workspace.files, bytes: workspace.bytes, ...removedOutput };
 }

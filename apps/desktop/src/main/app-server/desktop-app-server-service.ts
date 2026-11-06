@@ -216,6 +216,8 @@ import {
   type SetThreadReactionRequest,
   type SetThreadReactionResponse,
   type SetThreadLockRequest,
+  type SetThreadCheckoutHibernationRequest,
+  type SetThreadCheckoutHibernationResponse,
   type SetThreadLockResponse,
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
@@ -8483,6 +8485,26 @@ class DesktopAppServerService {
       locked: request.locked,
       ...(request.note !== undefined ? { note: request.note } : {}),
     }, { source: "operator" });
+  }
+
+  async setThreadCheckoutHibernation(
+    request: SetThreadCheckoutHibernationRequest,
+  ): Promise<SetThreadCheckoutHibernationResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadCheckoutHibernation(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().setThreadCheckoutHibernation({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      ...(request.restore !== undefined ? { restore: request.restore } : {}),
+      ...(request.keepAwake !== undefined ? { keepAwake: request.keepAwake } : {}),
+    });
   }
 
   async setThreadPin(

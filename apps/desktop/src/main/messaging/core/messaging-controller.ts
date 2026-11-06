@@ -1768,6 +1768,9 @@ export class MessagingController {
       );
       return;
     }
+    // Status surfaces show nothing about a hibernated checkout. A send from
+    // a conversation restores it on the owner like any other send.
+    if (event.notification.method === "thread/checkoutHibernation/updated") return;
     if (
       event.notification.method === "thread/executionMode/updated" ||
       event.notification.method === "thread/modelSettings/updated" ||

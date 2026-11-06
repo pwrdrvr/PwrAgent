@@ -5314,6 +5314,23 @@ describe("federation workspace recovery methods", () => {
     expect(moveThreadToMainCheckout).toHaveBeenCalledWith({ backend: "codex", threadId: "t1", worktreePath: "/wt" });
   });
 
+  it("restores or keeps awake a hibernated checkout on the owner, with only those fields", async () => {
+    const setThreadCheckoutHibernation = vi.fn(async () => ({ backend: "codex", threadId: "t1", keepAwake: true, hibernated: false }));
+    const { request } = route({ setThreadCheckoutHibernation } as never, ["turn_control"]);
+    await request("awake", FEDERATION_BACKEND_METHODS.setThreadCheckoutHibernation, {
+      backend: "codex", threadId: "t1", keepAwake: true, restore: "yes", worktreePath: "/elsewhere",
+      federationTarget: { scope: "remote", instanceId: "elsewhere" },
+    });
+    expect(setThreadCheckoutHibernation).toHaveBeenCalledWith({ backend: "codex", threadId: "t1", keepAwake: true });
+
+    const viewer = route({ setThreadCheckoutHibernation } as never, ["thread_detail"]);
+    const refused = await viewer.request("restore", FEDERATION_BACKEND_METHODS.setThreadCheckoutHibernation, {
+      backend: "codex", threadId: "t1", restore: true,
+    });
+    expect(refused).toMatchObject({ kind: "error" });
+    expect(setThreadCheckoutHibernation).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a viewer without turn control", async () => {
     const moveThreadToMainCheckout = vi.fn();
     const { request } = route({ moveThreadToMainCheckout } as never, ["thread_detail"]);
