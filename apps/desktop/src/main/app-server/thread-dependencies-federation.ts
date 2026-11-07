@@ -86,6 +86,8 @@ export function qualifyPeerDependentOwners(
 
 /** How long one peer may take to list its waits before it is left out. */
 export const PEER_ACTIVE_TIMEOUT_MS = 3_000;
+/** Share a burst of window reads without retaining a peer's snapshot for long. */
+export const PEER_ACTIVE_CACHE_MS = 1_000;
 
 function withinPeerTimeout<T>(request: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -95,23 +97,72 @@ function withinPeerTimeout<T>(request: Promise<T>): Promise<T> {
   return Promise.race([request, timeout]).finally(() => clearTimeout(timer));
 }
 
+/** One runtime's peer snapshots, including requests still within their timeout. */
+export function createPeerActiveDependencyCollector(
+  runtime: ThreadDependenciesFederationRuntime,
+  now: () => number = Date.now,
+) {
+  const entries = new Map<string, { promise: Promise<ThreadDependency[]>; expiresAt?: number }>();
+  return {
+    invalidate(instanceId?: string): void {
+      if (instanceId === undefined) entries.clear();
+      else entries.delete(instanceId);
+    },
+    async collect(): Promise<Array<{ dependency: ThreadDependency; owner: FederationRemoteTarget }>> {
+      // Recheck connectivity and grants even when a snapshot is cached.
+      const peers = runtime.connectedPeerTargets().filter((peer) => supports(runtime, peer.target));
+      const connected = new Set(peers.map((peer) => peer.target.instanceId));
+      for (const instanceId of entries.keys()) if (!connected.has(instanceId)) entries.delete(instanceId);
+      const results = await Promise.allSettled(peers.map(async ({ target }) => {
+        let entry = entries.get(target.instanceId);
+        if (!entry || (entry.expiresAt !== undefined && now() >= entry.expiresAt)) {
+          // Cache the promise before starting the RPC so all callers share
+          // slow peers too. A failed peer is briefly cached as absent.
+          const next: NonNullable<typeof entry> = {
+            promise: Promise.resolve().then(async () => {
+              const remote = runtime.remoteBackend(target);
+              const response = remote.manageThreadDependencies
+                ? await withinPeerTimeout(remote.manageThreadDependencies({ action: "active" }))
+                : { dependencies: [] };
+              return response.dependencies;
+            }).catch(() => []).then((dependencies) => {
+              // An invalidation detaches this entry. Its late reply cannot
+              // put an older snapshot back into the cache.
+              next.expiresAt = now() + PEER_ACTIVE_CACHE_MS;
+              return dependencies;
+            }),
+          };
+          entries.set(target.instanceId, next);
+          entry = next;
+        }
+        return (await entry.promise).map((dependency) => ({ dependency, owner: target }));
+      }));
+      return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+    },
+  };
+}
+
+const peerActiveCollectors = new WeakMap<ThreadDependenciesFederationRuntime, ReturnType<typeof createPeerActiveDependencyCollector>>();
+
+/** Drop a changed owner's snapshot before windows react to its event. */
+export function invalidatePeerActiveDependencies(runtime: ThreadDependenciesFederationRuntime, instanceId?: string): void {
+  peerActiveCollectors.get(runtime)?.invalidate(instanceId);
+}
+
 /**
- * Every capable peer's active registrations, named by owner. A peer that
- * does not answer in time is left out: an offline machine is not a
- * thread's problem to report, and must not hold up this machine's chips.
+ * Every capable peer's active registrations, named by owner. Window `active`
+ * and per-thread `list` reads share the same short-lived snapshots. A peer
+ * that fails or times out is left out, so it cannot hold up local chips.
  */
 export async function collectPeerActiveDependencies(
   runtime: ThreadDependenciesFederationRuntime,
 ): Promise<Array<{ dependency: ThreadDependency; owner: FederationRemoteTarget }>> {
-  const peers = runtime.connectedPeerTargets().filter((peer) => supports(runtime, peer.target));
-  const results = await Promise.allSettled(peers.map(async (peer) => {
-    const remote = runtime.remoteBackend(peer.target);
-    const response = remote.manageThreadDependencies
-      ? await withinPeerTimeout(remote.manageThreadDependencies({ action: "active" }))
-      : { dependencies: [] };
-    return response.dependencies.map((dependency) => ({ dependency, owner: peer.target }));
-  }));
-  return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  let collector = peerActiveCollectors.get(runtime);
+  if (!collector) {
+    collector = createPeerActiveDependencyCollector(runtime);
+    peerActiveCollectors.set(runtime, collector);
+  }
+  return await collector.collect();
 }
 
 /** Adds the waits other machines keep on this machine's thread. */
