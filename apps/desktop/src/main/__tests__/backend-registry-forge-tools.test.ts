@@ -1,8 +1,10 @@
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   type AppServerMcpElicitationRequestNotification,
+  type AppServerNotification,
   type AppServerPendingRequestNotification,
   type ForgeAgentToolPolicy,
   type ThreadExecutionMode,
@@ -16,6 +18,7 @@ import { createTempStateDb } from "./sqlite-test-utils";
 import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { ForgeReadError } from "../pr-status/forge-tool-contract";
+import { FORGE_PR_WRITE_OPERATIONS, type ForgePrToolArgs } from "../pr-status/forge-pr-tool-contract";
 
 type DynamicResult = { success: boolean; contentItems: Array<{ type: string; text?: string }> };
 
@@ -29,9 +32,18 @@ describe("backend forge tool dispatch", () => {
   let github: ReturnType<typeof vi.fn<ForgePrToolHandler>>;
   let attach: ReturnType<typeof vi.fn<(args: unknown) => Promise<unknown>>>;
   let realAttach: (args: unknown) => Promise<unknown>;
+  let startCodexTurn: ReturnType<typeof vi.fn<(params: { threadId: string }) => Promise<{ threadId: string; turnId: string }>>>;
+  let codexNotification: (notification: AppServerNotification) => Promise<void>;
+  let lifecycleTurnSequence: number;
   let internals: {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
+    activeCodexTurnCollaborationModes: Map<string, "default" | "plan">;
+    claudeBackend: {
+      sessions: Map<string, { config: { permissionMode: "plan" } }>;
+      executionMode(threadId: string): Promise<ThreadExecutionMode>;
+    };
+    gatedForgePrToolHandler: ForgePrToolHandler;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<DynamicResult>;
     handleAttachThreadPullRequestInspectionRequest: (args: unknown) => Promise<unknown>;
   };
@@ -46,13 +58,23 @@ describe("backend forge tool dispatch", () => {
     directory = fixture.tempDir;
     db = StateDb.open(fixture.dbPath);
     overlayStore = new SqliteOverlayStore(db);
+    startCodexTurn = vi.fn(async ({ threadId }) => ({ threadId, turnId: "turn-2" }));
+    lifecycleTurnSequence = 0;
     registry = new DesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
         listThreads: async () => [{ id: "thread-1", title: "Fixture work", titleSource: "explicit", source: "codex", linkedDirectories: [] }],
-        onNotification: () => () => {}, onPendingRequest: () => () => {}, readConfiguredMcpServerNames: async () => [],
+        onNotification: (listener: (notification: AppServerNotification) => Promise<void>) => {
+          codexNotification = listener;
+          return () => {};
+        },
+        onPendingRequest: () => () => {}, readConfiguredMcpServerNames: async () => [],
+        readThread: async ({ threadId }: { threadId: string }) => ({
+          thread: { id: threadId, title: "Fixture work", titleSource: "explicit", source: "codex", linkedDirectories: [] }, entries: [],
+        }),
+        listModels: async () => [], startTurn: startCodexTurn,
       } as never,
-      overlayStore, isBootstrapMode: () => false,
+      overlayStore, isBootstrapMode: () => false, resolveTokenMiserEnabled: () => false,
     });
     internals = registry as unknown as typeof internals;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
@@ -430,6 +452,188 @@ describe("backend forge tool dispatch", () => {
     const result = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-automation-pr"));
     expect(text(result)).toContain("approval_required");
     expect(github).not.toHaveBeenCalled();
+  });
+
+  describe.each(["codex", "claude"] as const)("%s plan-turn forge invariant", (backend) => {
+    const writeArgs: ForgePrToolArgs = {
+      number: 9, title: "Fixture fix", head: "fix/fixture", body: "Fixture comment", runId: 42,
+      commentId: 1, reviewThreadId: "review-1", resolved: true, expectedHeadSha: "a".repeat(40),
+    };
+
+    async function refusesWrite(operation: typeof FORGE_PR_WRITE_OPERATIONS[number], event: ForgePrToolArgs["event"] = "COMMENT") {
+      const abort = new AbortController();
+      const prompts = vi.fn();
+      const unsubscribe = registry.onEvent((value) => {
+        if (value.notification.method === "mcpServer/elicitation/request") {
+          prompts();
+          // An unexpected card must fail the invariant instead of waiting for a person.
+          abort.abort();
+        }
+      });
+      try {
+        await expect(internals.gatedForgePrToolHandler(operation, { ...writeArgs, event }, {
+          backend, threadId: "thread-1", turnId: "turn-1", transport: backend === "codex" ? "codex_dynamic_tool" : "mcp", signal: abort.signal,
+        })).rejects.toMatchObject({ code: "plan_mode", message: expect.stringContaining("Put this step in your plan") });
+        expect(prompts).not.toHaveBeenCalled();
+        expect(github).not.toHaveBeenCalled();
+        expect(attach).not.toHaveBeenCalled();
+      } finally {
+        unsubscribe();
+      }
+    }
+
+    beforeEach(() => {
+      // Plan mode must win over the turn's approval mode.
+      if (backend === "codex") {
+        internals.activeCodexTurnCollaborationModes.set("codex:thread-1:turn-1", "plan");
+      } else {
+        internals.claudeBackend.sessions.set("thread-1", { config: { permissionMode: "plan" } });
+        vi.spyOn(internals.claudeBackend, "executionMode").mockResolvedValue("full-access");
+      }
+    });
+
+    afterEach(() => {
+      internals.claudeBackend.sessions.delete("thread-1");
+    });
+
+    it.each(["allow", "auto", "ask"] as const)("refuses every write without a card at %s", async (level) => {
+      for (const group of ["pull_requests", "comments", "issues", "ci", "approve_merge"] as const) policy.access[group] = level;
+      internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+      for (const operation of FORGE_PR_WRITE_OPERATIONS) {
+        for (const event of operation === "submit_pull_request_review" ? ["COMMENT", "APPROVE", "REQUEST_CHANGES"] as const : ["COMMENT"] as const) {
+          await refusesWrite(operation, event);
+        }
+      }
+      await internals.gatedForgePrToolHandler("get_pull_request", { number: 9 }, {
+        backend, threadId: "thread-1", turnId: "turn-1", transport: "mcp",
+      });
+      expect(github).toHaveBeenCalledTimes(1);
+    });
+
+    it("never widens plan access when the write, level, or execution mode changes", async () => {
+      await fc.assert(fc.asyncProperty(
+        fc.constantFrom(...FORGE_PR_WRITE_OPERATIONS),
+        fc.constantFrom("allow", "auto", "ask"),
+        fc.constantFrom("default", "auto", "full-access"),
+        fc.constantFrom("COMMENT", "APPROVE", "REQUEST_CHANGES"),
+        async (operation, level, mode, event) => {
+          for (const group of ["pull_requests", "comments", "issues", "ci", "approve_merge"] as const) policy.access[group] = level;
+          internals.activeCodexTurnModes.set("thread-1:turn-1", mode);
+          await refusesWrite(operation, event);
+        },
+      ), { numRuns: 25 });
+    });
+  });
+
+  async function assertCodexPlanLifecycle({ startNotification, terminal, pendingResponse = false }: {
+    startNotification: boolean;
+    terminal: "completed" | "idle";
+    pendingResponse?: boolean;
+  }) {
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    internals.activeCodexTurnModes.delete("thread-1:turn-1");
+    policy.access.pull_requests = "allow";
+    const turnId = `lifecycle-turn-${++lifecycleTurnSequence}`;
+    const nextTurnId = `lifecycle-turn-${++lifecycleTurnSequence}`;
+    const writesBefore = github.mock.calls.length;
+    const context = { backend: "codex", threadId: "thread-1", turnId, transport: "codex_dynamic_tool" } as const;
+    const args = { title: "Fixture fix", head: "fix/fixture" };
+    const refused = () => expect(internals.gatedForgePrToolHandler("create_pull_request", args, context))
+      .rejects.toMatchObject({ code: "plan_mode" });
+    startCodexTurn.mockReset();
+    startCodexTurn.mockImplementationOnce(async ({ threadId }) => {
+      // A tool can arrive before either the start notification or the start response.
+      await refused();
+      if (startNotification) {
+        await codexNotification({
+          method: "turn/started", params: { threadId, turnId, turn: { id: turnId } },
+        });
+      }
+      await refused();
+      // This is the client's fallback when the start response has no turn id.
+      return { threadId, turnId: pendingResponse ? `pending:${threadId}` : turnId };
+    });
+    await registry.startTurn({ backend: "codex", threadId: "thread-1", collaborationMode: { mode: "plan" }, input: [{ type: "text", text: "Plan the fix" }] });
+    await refused();
+    if (pendingResponse && !startNotification) {
+      expect(internals.activeTurnKeys.has("codex:thread-1:pending:thread-1")).toBe(true);
+      await codexNotification({
+        method: "turn/started", params: { threadId: "thread-1", turnId, turn: { id: turnId } },
+      });
+      await refused();
+    }
+    expect(internals.activeCodexTurnCollaborationModes.get(`codex:thread-1:${turnId}`)).toBe("plan");
+    expect(internals.activeCodexTurnCollaborationModes.has("codex:thread-1:pending:thread-1")).toBe(false);
+    expect(internals.activeCodexTurnModes.has("thread-1:pending:thread-1")).toBe(false);
+    expect(internals.activeTurnKeys.has("codex:thread-1:pending:thread-1")).toBe(false);
+    expect(registry.getActiveTurnForThread(context)?.turnId).toBe(turnId);
+    expect(github).toHaveBeenCalledTimes(writesBefore);
+    await internals.gatedForgePrToolHandler("get_pull_request", { number: 9 }, context);
+    expect(github).toHaveBeenLastCalledWith("get_pull_request", { number: 9 }, context);
+    await codexNotification(terminal === "idle"
+      ? { method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } }
+      : { method: "turn/completed", params: { threadId: "thread-1", turnId, turn: { id: turnId, status: "completed", output: [] } } });
+    expect(internals.activeCodexTurnCollaborationModes.size).toBe(0);
+    startCodexTurn.mockResolvedValueOnce({ threadId: "thread-1", turnId: nextTurnId });
+    await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Implement the fix" }] });
+    await internals.gatedForgePrToolHandler("create_pull_request", args, { ...context, turnId: nextTurnId });
+    expect(github).toHaveBeenCalledTimes(writesBefore + 2);
+    await codexNotification({
+      method: "turn/completed", params: { threadId: "thread-1", turnId: nextTurnId, turn: { id: nextTurnId, status: "completed", output: [] } },
+    });
+    expect(internals.activeCodexTurnCollaborationModes.size).toBe(0);
+  }
+
+  it.each([
+    { startNotification: true, terminal: "completed" },
+    { startNotification: false, terminal: "completed" },
+    { startNotification: true, terminal: "idle" },
+    { startNotification: false, terminal: "idle" },
+  ] as const)("keeps the Codex plan rule through turn start and clears it before the next default turn (start notification: $startNotification, terminal: $terminal)", assertCodexPlanLifecycle);
+
+  it("keeps the Codex plan guard when a pending start response precedes the real turn id", async () => {
+    await assertCodexPlanLifecycle({ startNotification: false, terminal: "completed", pendingResponse: true });
+  });
+
+  it("follows the provider's real-id binding for either start-response order", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({
+      startNotification: fc.boolean(), pendingResponse: fc.boolean(), terminal: fc.constantFrom("completed", "idle"),
+    }), async (lifecycle) => {
+      try {
+        await assertCodexPlanLifecycle(lifecycle);
+      } finally {
+        // A failed run must not leave an occupied turn for the next shrink.
+        await codexNotification({ method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } });
+      }
+    }), { numRuns: 25 });
+  });
+
+  it("forgets Codex plan mode when turn start fails", async () => {
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    internals.activeCodexTurnModes.delete("thread-1:turn-1");
+    startCodexTurn.mockRejectedValueOnce(new Error("Fixture start failure"));
+    await expect(registry.startTurn({
+      backend: "codex", threadId: "thread-1", collaborationMode: { mode: "plan" }, input: [{ type: "text", text: "Plan the fix" }],
+    })).rejects.toThrow("Fixture start failure");
+    expect(internals.activeCodexTurnCollaborationModes.size).toBe(0);
+  });
+
+  it.each([false, true])("does not resurrect Codex plan mode when the turn completes before its start response (pending response: %s)", async (pendingResponse) => {
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    internals.activeCodexTurnModes.delete("thread-1:turn-1");
+    startCodexTurn.mockImplementationOnce(async ({ threadId }) => {
+      await codexNotification({
+        method: "turn/started", params: { threadId, turnId: "turn-2", turn: { id: "turn-2" } },
+      });
+      await codexNotification({
+        method: "turn/completed", params: { threadId, turnId: "turn-2", turn: { id: "turn-2", status: "completed", output: [] } },
+      });
+      return { threadId, turnId: pendingResponse ? `pending:${threadId}` : "turn-2" };
+    });
+    await registry.startTurn({
+      backend: "codex", threadId: "thread-1", collaborationMode: { mode: "plan" }, input: [{ type: "text", text: "Plan the fix" }],
+    });
+    expect(internals.activeCodexTurnCollaborationModes.size).toBe(0);
   });
 
   describe("in a Claude thread", () => {

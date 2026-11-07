@@ -126,11 +126,14 @@ it led to the gateway card for the same call, or to the forge card for an
 `ask` write, and an `allow` forge group still asked. The gateway card names
 the upstream tool and follows the connection's Tool approval setting,
 conversation approvals and automation allowlists. The forge card follows
-`[git.agent_tools]`, its project rules and the turn's mode, and keeps
-`approve_merge` asking in every mode but Full Access. Claude still decides
-these tools in `plan` mode and applies the operator's own `ask` and `deny`
-rules for them. The rules are fixed when the process starts and do not
-depend on the forge levels, so a Settings change never relaunches Claude.
+`[git.agent_tools]`, its project rules and the turn's mode. Outside plan
+turns, `approve_merge` asks unless the turn has Full Access. Claude still
+applies the operator's own `ask` and `deny` rules for these tools, and its
+`plan` mode still asks for a forge write and for any gateway call; a plan
+turn normally decides both without Claude's card (below). Explicit gateway
+`ask` rules still show Claude's card. The rules are fixed when
+the process starts and do not depend on the forge levels, so a Settings
+change never relaunches Claude.
 A live session that lacks them relaunches for them, or keeps asking until
 its next launch while a task runs. Other PwrAgent tools still ask through
 `canUseTool`.
@@ -142,6 +145,33 @@ with the plan as its input. PwrAgent shows that plan as the turn's plan card,
 as it shows a Codex plan, and declines the call without an approval card, so
 the turn ends with the plan in front of the operator, who replies to
 implement it.
+
+A plan turn does not write to GitHub or GitLab. Claude's `plan` mode still
+calls `canUseTool` for a forge write, although `allowedTools` lists it.
+Accepting Claude's card then led to the forge card for the same call. In a
+plan turn PwrAgent declines every forge write in `canUseTool`, with no card,
+and tells Claude to put the step in its plan. The shared forge gate also
+refuses writes whenever the live process's permission mode is `plan`, before
+considering `allow`, `auto`, `ask`, project rules, or conversation grants.
+This protects the forge even if a CLI version skips `canUseTool` for an
+allowed tool. Codex plan turns follow the same rule using their active
+collaboration mode. The forge reads are read-only tools, so plan mode runs
+them without asking, and the forge policy decides them as in any other turn.
+
+A Claude plan turn does not change anything through an MCP connection
+either. Plan mode asks for every `call_mcp_tool` call because the wrapper is
+not read-only. The permission handler passes it to the gateway without a
+card only when the SDK identifies PwrAgent's host-registered server
+(`mcpServer.source` is `sdk` and its name is `pwragent`) and no explicit
+`ask` rule matched. Rule-forced asks, configured servers with the same name,
+and calls without server-origin metadata keep the ordinary approval card.
+Only the gateway knows which upstream tool the call names.
+An upstream tool marked read-only and not destructive follows the
+connection's Tool approval setting, as in any other turn. Every other tool
+is refused before Full Access, automation grants, or conversation approvals,
+with no card, and Claude is told to put the step in its plan. The gateway
+reads the open process's permission mode through `livePermissionMode`. See
+[MCP gateway tools](mcp-gateway-tools.md).
 
 A thread's linked directories other than its working directory, including
 directories attached later with `attach_thread_directory`, are passed as

@@ -19,6 +19,7 @@ import {
 } from "../claude/claude-permissions";
 import { createClaudeElicitationHandler } from "../claude/claude-elicitation";
 import { buildForgeToolDefinitions } from "../agent-tools/pwragent-forge-pr-agent-tools";
+import { FORGE_PR_WRITE_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
@@ -1527,10 +1528,13 @@ describe("Claude SDK backend", () => {
     }, { setPermissionMode: vi.fn().mockResolvedValue(undefined) });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access" });
     expect(f.backend.liveExecutionMode(threadId)).toBeUndefined();
+    expect(f.backend.livePermissionMode(threadId)).toBeUndefined();
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Plan the fix" }], collaborationMode: { mode: "plan" } });
     expect(f.backend.liveExecutionMode(threadId)).toBe("default");
+    expect(f.backend.livePermissionMode(threadId)).toBe("plan");
     await f.backend.setExecutionMode(threadId, "auto");
     expect(f.backend.liveExecutionMode(threadId)).toBe("auto");
+    expect(f.backend.livePermissionMode(threadId)).toBe("auto");
     finish();
     await f.waitForTurn();
   });
@@ -3692,6 +3696,92 @@ describe("Claude permission bridge", () => {
     const result = await handler("ExitPlanMode", { plan: "1. Do it" }, { signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
     expect(request).not.toHaveBeenCalled();
     expect(result).toMatchObject({ behavior: "deny", message: expect.stringContaining("end your turn") });
+  });
+
+  // Claude's plan mode still calls canUseTool for an allowed forge write.
+  // Accepting its card led to the forge policy's card for the same call.
+  it.each([
+    "create_pull_request", "add_issue_comment", "rerun_failed_ci_jobs", "merge_pull_request",
+  ])("refuses the forge write %s in a plan turn without a card", async (operation) => {
+    const request = vi.fn();
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
+    const result = await handler(`mcp__pwragent__${operation}`, { title: "Fix" }, { signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
+    expect(request).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      behavior: "deny",
+      message: `This is a plan turn, which is read-only, so PwrAgent did not run ${operation}. `
+        + "Put this step in your plan. The operator will reply when the plan should be implemented.",
+    });
+  });
+
+  it("leaves forge reads, other tools and turns that are not plan turns to their usual path", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "accept" });
+    const signal = () => ({ signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
+    const planHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
+    // A forge read reaches the handler only if plan mode stops treating it as read-only.
+    await expect(planHandler("mcp__pwragent__get_pull_request", { number: 1 }, signal())).resolves.toMatchObject({ behavior: "allow" });
+    await expect(planHandler("mcp__pwragent__mutate_thread", { title: "x" }, signal())).resolves.toMatchObject({ behavior: "allow" });
+    // A connection server's tool of the same name is not a forge tool.
+    await expect(planHandler("mcp__pwragent_crm__create_pull_request", {}, signal())).resolves.toMatchObject({ behavior: "allow" });
+    const defaultHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => false, request, cancelRequest: async () => {} });
+    await expect(defaultHandler("mcp__pwragent__create_pull_request", { title: "Fix" }, signal())).resolves.toMatchObject({ behavior: "allow" });
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it("refuses every forge write and no forge read in a plan turn", async () => {
+    const handler = createClaudePermissionHandler({
+      threadId: "thread", turnId: () => "turn", planTurn: () => true, cancelRequest: async () => {},
+      request: async () => ({ decision: "accept" }),
+    });
+    const refused: string[] = [];
+    for (const tool of CLAUDE_FORGE_TOOLS) {
+      const result = await handler(tool, {}, { signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
+      if (result?.behavior === "deny") refused.push(tool.slice("mcp__pwragent__".length));
+    }
+    expect(refused.sort()).toEqual([...FORGE_PR_WRITE_OPERATIONS].sort());
+  });
+
+  it("passes a plan turn's gateway call to the gateway without a card", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const input = { connectionId: "one", toolName: "lookup", schemaRevision: "r1", arguments: { id: "fixture" } };
+    const context = () => ({
+      signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request",
+      mcpServer: { name: "pwragent", source: "sdk" },
+    });
+    const planHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
+    await expect(planHandler(CLAUDE_MCP_GATEWAY_TOOL, input, context())).resolves.toEqual({ behavior: "allow", updatedInput: input });
+    expect(request).not.toHaveBeenCalled();
+    // Outside a plan turn, an operator's own ask rule still gets its card.
+    const defaultHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => false, request, cancelRequest: async () => {} });
+    await expect(defaultHandler(CLAUDE_MCP_GATEWAY_TOOL, input, context())).resolves.toMatchObject({ behavior: "deny" });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an explicit gateway ask rule's card in a plan turn", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
+    const result = await handler(CLAUDE_MCP_GATEWAY_TOOL, {}, {
+      signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request",
+      mcpServer: { name: "pwragent", source: "sdk" },
+      matchedAskRule: { source: "user", toolName: CLAUDE_MCP_GATEWAY_TOOL },
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ behavior: "deny" });
+  });
+
+  it.each([
+    { name: "pwragent", source: "project" },
+    { name: "pwragent", source: "user" },
+    { name: "pwragent_crm", source: "sdk" },
+    undefined,
+  ])("keeps a plan turn's card for an unverified gateway origin %j", async (mcpServer) => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
+    const result = await handler(CLAUDE_MCP_GATEWAY_TOOL, {}, {
+      signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request", mcpServer,
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ behavior: "deny" });
   });
 
   it("asks the operator before Claude leaves a plan mode it entered on its own", async () => {

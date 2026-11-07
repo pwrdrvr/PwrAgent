@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { CanUseTool, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { PWRAGENT_TOOL_NAMESPACE, type AppServerPendingRequestNotification, type ThreadExecutionMode } from "@pwragent/shared";
-import { FORGE_PR_TOOL_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
+import { FORGE_PR_TOOL_OPERATIONS, FORGE_PR_WRITE_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
 import { FORGE_READ_OPERATIONS } from "../pr-status/forge-tool-contract";
 import { CLAUDE_ARTIFACT_TOOLS } from "./claude-tool-activity";
 
@@ -13,7 +13,15 @@ export const CLAUDE_MCP_GATEWAY_TOOL = `mcp__${PWRAGENT_TOOL_NAMESPACE}__call_mc
  * request and issue reads, and every write, merging included.
  */
 export const CLAUDE_FORGE_TOOLS: readonly string[] = [...FORGE_READ_OPERATIONS, ...FORGE_PR_TOOL_OPERATIONS]
-  .map((operation) => `mcp__${PWRAGENT_TOOL_NAMESPACE}__${operation}`);
+  .map(claudePwragentToolName);
+
+/** The forge tools that change the forge, as Claude names them, to their operations. */
+const CLAUDE_FORGE_WRITE_OPERATIONS: ReadonlyMap<string, string> = new Map(FORGE_PR_WRITE_OPERATIONS
+  .map((operation) => [claudePwragentToolName(operation), operation]));
+
+function claudePwragentToolName(operation: string): string {
+  return `mcp__${PWRAGENT_TOOL_NAMESPACE}__${operation}`;
+}
 
 /**
  * Tools Claude runs without asking, because PwrAgent decides them itself.
@@ -26,15 +34,19 @@ export const CLAUDE_FORGE_TOOLS: readonly string[] = [...FORGE_READ_OPERATIONS, 
  * A forge tool follows `[git.agent_tools]` on every call: the group's level,
  * the repository's project rules and the turn's mode. Allow runs, Off is
  * refused by name, and Ask, or Auto outside the modes that run it, gets
- * PwrAgent's card. Approve and merge keeps that card in every mode but Full
- * Access. Claude's card came first and named only the tool, so a write
- * asked twice and an Allow group still asked. The list is fixed, not read
- * from the policy, so a Settings change applies to the next call without
- * relaunching the process, and an Off tool stays unadvertised.
+ * PwrAgent's card. Outside plan turns, Approve and merge keeps that card
+ * unless the turn has Full Access. Claude's card came first and named only
+ * the tool, so a write asked twice and an Allow group still asked. The list
+ * is fixed, not read from the policy, so a Settings change applies to the
+ * next call without relaunching the process, and an Off tool stays unadvertised.
  *
  * The rules name exact tools on PwrAgent's own server, so they are set only
- * when that server is attached. Claude still applies its plan mode and the
- * operator's own `ask` and `deny` rules for these tools.
+ * when that server is attached. Claude still applies the operator's own
+ * `ask` and `deny` rules for these tools. Its plan mode still asks for a
+ * forge write and for any gateway call. A plan turn refuses the forge write
+ * without a card and passes a verified host gateway call to the gateway,
+ * which refuses an upstream tool that is not read-only. An explicit ask
+ * rule still gets Claude's card.
  */
 export function claudeAllowedTools(mcpServers: Options["mcpServers"]): string[] {
   return mcpServers && Object.hasOwn(mcpServers, PWRAGENT_TOOL_NAMESPACE)
@@ -73,6 +85,19 @@ export const CLAUDE_EXIT_PLAN_TOOL = "ExitPlanMode";
  */
 const CLAUDE_PLAN_HANDOFF = "The operator has your plan and will reply when it should be implemented. "
   + "Stay in plan mode and end your turn now.";
+
+/**
+ * A plan turn is read-only, so a call that would change something is refused
+ * without a card. Claude's plan mode still asks for an allowed tool that is
+ * not read-only, and accepting that card led to PwrAgent's own card for the
+ * same call. A forge write is refused here. A gateway call is refused by the
+ * gateway, which knows whether the upstream tool is read-only. The forge
+ * reads are read-only tools, which plan mode runs without asking.
+ */
+export function claudePlanTurnRefusal(action: string): string {
+  return `This is a plan turn, which is read-only, so PwrAgent did not run ${action}. `
+    + "Put this step in your plan. The operator will reply when the plan should be implemented.";
+}
 
 /**
  * The input a card shows. Claude Code adds its own `__`-prefixed fields to an
@@ -116,6 +141,9 @@ export function createClaudePermissionHandler(options: {
   /**
    * Whether the operator asked for this turn to plan. Claude can also enter
    * plan mode on its own, and then leaving it needs the operator's approval.
+   * This handler refuses forge writes and hands gateway calls to the gateway
+   * in a plan turn before showing a card. Both gates also check the live
+   * process's permission mode.
    */
   planTurn?: () => boolean;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
@@ -124,6 +152,14 @@ export function createClaudePermissionHandler(options: {
   return async (toolName, input, context) => {
     if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
     if (toolName === CLAUDE_EXIT_PLAN_TOOL && options.planTurn?.()) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
+    const forgeWrite = CLAUDE_FORGE_WRITE_OPERATIONS.get(toolName);
+    if (forgeWrite && options.planTurn?.()) return { behavior: "deny", message: claudePlanTurnRefusal(forgeWrite) };
+    // Only our host-registered gateway checks whether the upstream tool reads
+    // or writes. A configured namesake is untrusted, and an operator ask rule
+    // still requires a human decision even for our own gateway.
+    if (toolName === CLAUDE_MCP_GATEWAY_TOOL && options.planTurn?.()
+      && context.mcpServer?.source === "sdk" && context.mcpServer.name === PWRAGENT_TOOL_NAMESPACE
+      && !context.matchedAskRule) return { behavior: "allow", updatedInput: input };
     const requestId = randomUUID();
     const turnId = options.turnId();
     const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"

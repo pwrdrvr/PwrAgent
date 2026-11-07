@@ -218,6 +218,8 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   transientMessage?: AppServerTransientThreadMessageEntry;
   pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
+  // Compaction resets pages, but a matching row must keep its observed order.
+  compactionOrderSources?: AppServerThreadEntry[];
   // Lightweight reading state belongs beside the bounded transcript cache.
   // ThreadView is allowed to unmount while thread navigation resolves.
   expandedTranscriptActivityIds?: string[];
@@ -1049,6 +1051,7 @@ function reconcileRetainedTranscriptTail(
   >();
   let pendingRetainedEntries: AppServerThreadEntry[] = [];
   let lastMatchedFreshEntry: AppServerThreadEntry | undefined;
+  const freshTurnIds = new Set(freshEntries.flatMap((entry) => entry.turn?.id ? [entry.turn.id] : []));
 
   for (const retainedEntry of retainedEntries) {
     const freshEntry = freshEntryByRetainedEntry.get(retainedEntry);
@@ -1057,8 +1060,22 @@ function reconcileRetainedTranscriptTail(
       continue;
     }
 
+    if (pendingRetainedEntries.length > 0 && !lastMatchedFreshEntry && freshEntries[0]) {
+      // The newest window can advance past whole retained turns while an
+      // older page is in flight. Keep that prefix above the new window,
+      // rather than immediately above a later matching turn inside it.
+      const firstSharedTurn = pendingRetainedEntries.findIndex((entry) =>
+        !entry.turn?.id || freshTurnIds.has(entry.turn.id));
+      const prefixLength = firstSharedTurn === -1 ? pendingRetainedEntries.length : firstSharedTurn;
+      if (prefixLength > 0) {
+        retainedEntriesBeforeFresh.set(freshEntries[0], pendingRetainedEntries.slice(0, prefixLength));
+        pendingRetainedEntries = pendingRetainedEntries.slice(prefixLength);
+      }
+    }
     if (pendingRetainedEntries.length > 0) {
-      retainedEntriesBeforeFresh.set(freshEntry, pendingRetainedEntries);
+      retainedEntriesBeforeFresh.set(freshEntry, [
+        ...(retainedEntriesBeforeFresh.get(freshEntry) ?? []), ...pendingRetainedEntries,
+      ]);
       pendingRetainedEntries = [];
     }
     lastMatchedFreshEntry = freshEntry;
@@ -5494,7 +5511,9 @@ export function useThreadSessionState(params: {
             ...(current.pendingAssistantMessage ? [current.pendingAssistantMessage] : []),
           ];
           const transcriptOrderSources = mergeTranscriptEntries(
-            current.response?.replay.entries ?? [],
+            current.compactionOrderSources
+              ? mergeTranscriptEntries(current.compactionOrderSources, current.response?.replay.entries ?? [])
+              : current.response?.replay.entries ?? [],
             liveTranscriptSources
           );
           const orderedResponse = carryForwardTranscriptEntryOrder(
@@ -5673,6 +5692,7 @@ export function useThreadSessionState(params: {
                 : undefined,
             loading: false,
             completionHydrationRetries,
+            compactionOrderSources: undefined,
             needsHydrationAfterCompletion,
             retainedLiveEntryCount: nextRetainedLiveEntries.length,
             retainedLiveEntryVersion:
@@ -7412,6 +7432,18 @@ export function useThreadSessionState(params: {
           delete loadedHistoryIndexesRef.current[targetThreadKey];
           return {
             ...current,
+            compactionOrderSources: event.notification.method === "thread/compacted"
+              ? mergeTranscriptEntries(
+                  current.compactionOrderSources
+                    ? mergeTranscriptEntries(current.compactionOrderSources, current.response?.replay.entries ?? [])
+                    : current.response?.replay.entries ?? [],
+                  [
+                    ...current.optimisticEntries,
+                    ...(retainedLiveEntriesRef.current[targetThreadKey]?.values() ?? []),
+                    ...(current.pendingAssistantMessage ? [current.pendingAssistantMessage] : []),
+                  ],
+                )
+              : undefined,
             activeTurnId: undefined,
             activeTurnStartedAt: undefined,
             contextWindow: undefined,

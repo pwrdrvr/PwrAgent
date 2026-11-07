@@ -1460,9 +1460,11 @@ select_for_new_threads = true
   describe("in a Claude thread", () => {
     type ClaudeModes = {
       liveExecutionMode(threadId: string): ThreadExecutionMode | undefined;
+      livePermissionMode(threadId: string): "plan" | undefined;
       executionMode(threadId: string): Promise<ThreadExecutionMode>;
     };
     let live: ThreadExecutionMode | undefined;
+    let plan: boolean;
     let saved: ThreadExecutionMode;
     let events: AgentEvent[];
     let reply: { action: "accept" | "decline"; content: Record<string, never> | null; _meta: { persist: "session" } | null };
@@ -1475,10 +1477,12 @@ select_for_new_threads = true
 
     beforeEach(() => {
       live = undefined;
+      plan = false;
       saved = "default";
       reply = { action: "decline", content: null, _meta: null };
       const claude = (registry as unknown as { claudeBackend: ClaudeModes }).claudeBackend;
       vi.spyOn(claude, "liveExecutionMode").mockImplementation(() => live);
+      vi.spyOn(claude, "livePermissionMode").mockImplementation(() => plan ? "plan" : undefined);
       vi.spyOn(claude, "executionMode").mockImplementation(async () => saved);
       events = [];
       registry.onEvent(async (event) => {
@@ -1530,6 +1534,64 @@ select_for_new_threads = true
       vi.mocked(claude.executionMode).mockRejectedValue(new Error("missing thread"));
       expect(await invoke()).toBe(false);
       expect(events).toHaveLength(1);
+    });
+
+    // Claude's permission handler passes a plan turn's gateway calls here
+    // unasked, so this is the only place that can tell a read from a write.
+    describe("in a plan turn", () => {
+      const refusal = "This is a plan turn, which is read-only, so PwrAgent did not run \"lookup\" on Fixture. "
+        + "Put this step in your plan. The operator will reply when the plan should be implemented.";
+      const approve = (annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }) => internals.approveGatewayInvocation(
+        { ...args, serverName: "Fixture" },
+        { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" },
+        new AbortController().signal, annotations,
+      );
+
+      beforeEach(() => {
+        plan = true;
+        live = "default";
+      });
+
+      // Every hint combination: refused unless read-only and not destructive.
+      const hints = [undefined, true, false] as const;
+      it.each(hints.flatMap((readOnlyHint) => hints.map((destructiveHint) => ({ readOnlyHint, destructiveHint }))))(
+        "decides readOnlyHint $readOnlyHint, destructiveHint $destructiveHint without a card",
+        async ({ readOnlyHint, destructiveHint }) => {
+          const annotations = { ...(readOnlyHint === undefined ? {} : { readOnlyHint }), ...(destructiveHint === undefined ? {} : { destructiveHint }) };
+          if (readOnlyHint === true && destructiveHint !== true) expect(await approve(annotations)).toBe(true);
+          else await expect(approve(annotations)).rejects.toThrow(refusal);
+          expect(events).toEqual([]);
+          expect(internals.pendingServerRequests.size).toBe(0);
+        },
+      );
+
+      it("refuses it under bypass permissions, a conversation approval and an automation", async () => {
+        reply = { action: "accept", content: {}, _meta: { persist: "session" } };
+        plan = false;
+        expect(await invoke()).toBe(true);
+        plan = true;
+        await expect(approve()).rejects.toThrow(refusal);
+        live = "full-access";
+        await expect(approve()).rejects.toThrow(refusal);
+        (internals.headlessAutomationTurns as Map<string, unknown>).set("claude:thread-1:turn-1", {
+          agentThreadId: "automation-1", backend: "claude", automationRunId: "run-1",
+          executionMode: "full-access", executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
+        });
+        await expect(approve()).rejects.toThrow(refusal);
+        expect(events).toHaveLength(1);
+      });
+
+      // Through the gateway service, as Claude's MCP server reaches it after
+      // the permission handler let the call through unasked.
+      it("refuses a write through the gateway before the upstream call", async () => {
+        internals.activeTurnKeys.add("claude:thread-1:turn-1");
+        await store.setThreadMcpConnectionIds({ backend: "claude", threadId: "thread-1", connectionIds: ["one"] });
+        const gateway = (registry as unknown as { mcpGatewayTools: { call(args: unknown, context: AgentToolCallContext): Promise<unknown> } }).mcpGatewayTools;
+        await expect(gateway.call(args, { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" }))
+          .rejects.toThrow(refusal);
+        expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
+        expect(events).toEqual([]);
+      });
     });
 
     it.each(["full-access", "default", "auto"] as const)("honors %s for a headless Claude automation", async (mode) => {
