@@ -110,18 +110,29 @@ describe("opt-in rendering capture", () => {
         lagging = false;
         return value;
       });
+      let signalStarted!: () => void;
+      const captureStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+      electron.debuggerApi.sendCommand.mockImplementation((method: string) => {
+        if (method === "Tracing.start") signalStarted();
+        return commands(method);
+      });
+      let pending: ReturnType<typeof captureRenderingDiagnostics> | undefined;
       try {
-        let settled = false;
-        const pending = captureRenderingDiagnostics(root, seconds).finally(() => { settled = true; });
-        await started();
-        // Step the clock as the capture's own sampling and transfer timers ask.
-        for (let step = 0; !settled && step < 200; step++) await vi.advanceTimersByTimeAsync(250);
+        pending = captureRenderingDiagnostics(root, seconds);
+        await captureStarted;
+        // Include the fractional lag rounded up by the expiry check. The
+        // filesystem still runs on the real event loop after the trace stops.
+        await vi.advanceTimersByTimeAsync(seconds * 1000 + 1);
         const result = await pending;
         const summary = JSON.parse(await readFile(result.summaryPath, "utf8"));
         expect(summary.reason).toBe("duration");
         expect(summary.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
         expect(result.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
       } finally {
+        if (pending) {
+          await stopRenderingDiagnostics().catch(() => {});
+          await pending.catch(() => {});
+        }
         now.mockRestore();
         vi.useRealTimers();
       }
