@@ -8,7 +8,7 @@ import {
   type DependencyThreadSnapshot, type OperatorTodoDelivery,
 } from "../app-server/thread-dependency-coordinator";
 import { ThreadTodoService } from "../thread-todos/thread-todo-service";
-import { ThreadTodoStore } from "../thread-todos/thread-todo-store";
+import { ThreadTodoStore } from "../storage/thread-todo-store";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";

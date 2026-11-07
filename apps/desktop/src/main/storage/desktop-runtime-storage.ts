@@ -1,3 +1,7 @@
+import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
+import { SqliteThreadReviewStorage } from "./thread-review-storage-sqlite";
+import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
+import { ThreadTodoStore } from "./thread-todo-store";
 import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { getAppStateDb, getAppStateMode, isAppStateInitialized, getAppScheduledThreadActionStore as getScheduledThreadActionStore } from "../state/app-state";
@@ -61,4 +65,12 @@ export function createTokenMiserStorage(directory: string, options: Omit<TokenMi
 }
 export function runOneTimeArchivedWorktreeRepair(options: Omit<Parameters<typeof runRepair>[0], "db">) {
   return runRepair({ ...options, db: getAppStateDb().raw });
+}
+
+export function createThreadTodoStorage(): ThreadTodoStorage {
+  return new ThreadTodoStore(getAppStateDb());
+}
+
+export function createThreadReviewStorage(): ThreadReviewStorage {
+  return new SqliteThreadReviewStorage(getAppStateDb());
 }

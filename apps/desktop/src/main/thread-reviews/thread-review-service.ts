@@ -13,10 +13,9 @@ import type {
 import {
   THREAD_REVIEW_ITEM_STATUSES,
   buildLegacyEncodedThreadIdentityKey,
-  normalizeThreadReview,
   normalizeThreadReviewItemStatus,
 } from "@pwragent/shared";
-import type { StateDb } from "../state/state-db";
+import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
 import { normalizeReviewCategory, parseReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
 
 /**
@@ -30,7 +29,6 @@ export const THREAD_REVIEW_TEXT_LIMITS = { title: 300, summary: 1_000, body: 4_0
 export const THREAD_REVIEW_MAX_FINDINGS = 200;
 /** Rows one list returns, as the to-do store caps the cards it is merged with. */
 const THREAD_REVIEW_LIST_LIMIT = 500;
-const TRACKING_STARTED_KEY = "thread_review_tracking_started_at";
 /**
  * Resolution notes for outcomes the reviewer reported about its own findings.
  * Each names the reviewer's own word, so the agent reading `list_reviews` can
@@ -63,35 +61,19 @@ export class ThreadReviewService {
   private onUpdated: (review: ThreadReview) => void = () => {};
 
   constructor(
-    private readonly db: StateDb,
+    private readonly storage: ThreadReviewStorage,
     private readonly onChanged: (event: ThreadTodosChangedEvent) => void = () => {},
     private readonly now: () => number = Date.now,
   ) {
     // Shared-profile instances must agree on one boundary, including after a
     // restart. Do not move it forward each time a window or service is opened.
-    const stored = db.getMeta(TRACKING_STARTED_KEY);
-    this.trackingStartedAt = stored === undefined ? db.raw.transaction(() => {
-      const existing = db.getMeta(TRACKING_STARTED_KEY);
-      if (existing !== undefined) return Number(existing);
-      const startedAt = now();
-      db.setMeta(TRACKING_STARTED_KEY, String(startedAt));
-      return startedAt;
-    }).immediate() : Number(stored);
+    this.trackingStartedAt = storage.trackingStartedAt(now);
   }
 
   list(request: ListThreadReviewsRequest = {}, options: { includeDetached?: boolean } = {}): ThreadReview[] {
     const reviews: ThreadReview[] = [];
     const attachments = new Map<string, Array<{ provider: string; org: string; repo: string; number: number }>>();
-    const rows = this.db.raw.prepare(`SELECT payload FROM thread_reviews
-      WHERE (? = 'all' OR status = ?)
-        AND (? IS NULL OR backend = ?) AND (? IS NULL OR thread_id = ?)
-      ORDER BY updated_at DESC, review_id`).iterate(
-      request.status ?? "open", request.status ?? "open",
-      request.backend ?? null, request.backend ?? null,
-      request.threadId ?? null, request.threadId ?? null,
-    ) as Iterable<{ payload: string }>;
-    for (const row of rows) {
-      const review = parseReview(row.payload);
+    for (const review of this.storage.iterate(request)) {
       if (this.isUntriagedLegacyImport(review)) continue;
       // Queue reads follow the current attachment list. Full status reads
       // also serve the transcript, whose resolutions survive PR detachment.
@@ -102,9 +84,7 @@ export class ThreadReviewService {
         const key = buildLegacyEncodedThreadIdentityKey(review.backend, review.threadId);
         let prs = attachments.get(key);
         if (!prs) {
-          const overlay = this.db.raw.prepare("SELECT json_extract(payload, '$.prs') AS prs FROM threads WHERE thread_id = ?")
-            .get(key) as { prs: string | null } | undefined;
-          const storedPrs = overlay?.prs ? JSON.parse(overlay.prs) as NonNullable<typeof prs> : [];
+          const storedPrs = this.storage.getAttachedPullRequests(key);
           attachments.set(key, storedPrs);
           prs = storedPrs;
         }
@@ -128,9 +108,7 @@ export class ThreadReviewService {
   }
 
   get(id: string): ThreadReview | undefined {
-    const row = this.db.raw.prepare("SELECT payload FROM thread_reviews WHERE review_id = ?")
-      .get(id) as { payload: string } | undefined;
-    return row ? parseReview(row.payload) : undefined;
+    return this.storage.get(id);
   }
 
   record(identity: ThreadReviewIdentity, input: RecordThreadReviewInput, origin: ThreadReview["origin"] = "explicit"): ThreadReview {
@@ -145,7 +123,7 @@ export class ThreadReviewService {
     const enroll = (review: ThreadReview): boolean => origin === "explicit" && this.isUntriagedLegacyImport(review);
     if (recorded && !enroll(recorded)) return recorded;
     let changed = false;
-    const review = this.db.raw.transaction(() => {
+    const review = this.storage.runExclusive(() => {
       const existing = this.get(id);
       // An artifact is immutable. Replaying it must never reopen settled work.
       if (existing) {
@@ -153,8 +131,7 @@ export class ThreadReviewService {
         // replacing findings, ids, timestamps, or documented resolutions.
         if (enroll(existing)) {
           existing.origin = "explicit";
-          this.db.raw.prepare("UPDATE thread_reviews SET payload = ? WHERE review_id = ?")
-            .run(JSON.stringify(existing), id);
+          this.storage.enrollReview(id, existing);
           changed = true;
         }
         return existing;
@@ -179,12 +156,10 @@ export class ThreadReviewService {
           note: "Review completed with no findings.", actor: "system", at: createdAt,
         } as ThreadReviewResolution } : {}),
       };
-      this.db.raw.prepare(`INSERT INTO thread_reviews
-        (review_id, backend, thread_id, status, updated_at, payload) VALUES (?, ?, ?, ?, ?, ?)`)
-        .run(id, identity.backend, identity.threadId, review.status, review.updatedAt, JSON.stringify(review));
+      this.storage.insert(review);
       changed = true;
       return review;
-    }).immediate();
+    });
     if (changed) this.emit(review);
     return review;
   }
@@ -252,7 +227,7 @@ export class ThreadReviewService {
     }
     if (unchanged(request.itemId ? snapshot.items.find((item) => item.id === request.itemId) : snapshot)) return snapshot;
     let changed = false;
-    const review = this.db.raw.transaction(() => {
+    const review = this.storage.runExclusive(() => {
       const review = this.get(request.id);
       if (!review || (identity && (review.backend !== identity.backend || review.threadId !== identity.threadId))) {
         throw new ThreadReviewError("not_found", "Review not found on this thread.");
@@ -315,11 +290,10 @@ export class ThreadReviewService {
         // documented findings. Reopening the review restores its open findings.
       }
       review.updatedAt = now;
-      this.db.raw.prepare("UPDATE thread_reviews SET status = ?, updated_at = ?, payload = ? WHERE review_id = ?")
-        .run(review.status, now, JSON.stringify(review), review.id);
+      this.storage.update(review);
       changed = true;
       return review;
-    }).immediate();
+    });
     if (changed) {
       this.emit(review);
       this.onUpdated(review);
@@ -345,7 +319,7 @@ export class ThreadReviewService {
     const snapshot = this.get(id);
     if (!snapshot || !settles(snapshot)) return snapshot;
     let changed = false;
-    const review = this.db.raw.transaction(() => {
+    const review = this.storage.runExclusive(() => {
       const review = this.get(id);
       if (!review || !settles(review)) return review;
       const now = this.now();
@@ -365,11 +339,10 @@ export class ThreadReviewService {
         review.resolution = { note: ALL_FINDINGS_SETTLED_NOTE, actor: "system", at: now };
       }
       review.updatedAt = now;
-      this.db.raw.prepare("UPDATE thread_reviews SET status = ?, updated_at = ?, payload = ? WHERE review_id = ?")
-        .run(review.status, now, JSON.stringify(review), review.id);
+      this.storage.update(review);
       changed = true;
       return review;
-    }).immediate();
+    });
     if (changed && review) this.emit(review);
     return review;
   }
@@ -385,9 +358,4 @@ export class ThreadReviewService {
   private emit(review: ThreadReview): void {
     this.onChanged({ backend: review.backend, threadId: review.threadId, at: this.now() });
   }
-}
-
-function parseReview(payload: string): ThreadReview {
-  // An older build sharing this profile can still write `dismissed`.
-  return normalizeThreadReview(JSON.parse(payload) as ThreadReview);
 }

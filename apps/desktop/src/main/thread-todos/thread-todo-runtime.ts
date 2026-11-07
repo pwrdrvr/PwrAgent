@@ -24,7 +24,7 @@ import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federati
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher.js";
-import { getAppStateDb } from "../state/app-state.js";
+import { createThreadTodoStorage } from "../storage/desktop-runtime-storage.js";
 import {
   findPeerThreadTodoProject,
   threadTodoProjectIdentity,
@@ -46,7 +46,6 @@ import {
   type ThreadTodoActionPatch,
   type ThreadTodoActionRunners,
 } from "./thread-todo-service.js";
-import { ThreadTodoStore } from "./thread-todo-store.js";
 import { withThreadTodoPlanNote, type ThreadTodoPlan } from "./thread-todo-plan.js";
 import { ThreadTodoFeed, type ThreadTodoFeedOwner } from "./thread-todo-feed.js";
 import {
@@ -74,7 +73,7 @@ let listProjectCandidates: (() => Promise<ThreadTodoProjectCandidate[]>) | undef
 export function getThreadTodoService(): ThreadTodoService {
   if (!service) {
     service = new ThreadTodoService({
-      store: new ThreadTodoStore(getAppStateDb()),
+      store: createThreadTodoStorage(),
       defaultMergeMethod: () =>
         readDefaultMergeMethod?.() ?? DEFAULT_THREAD_TODO_MERGE_METHOD,
     });

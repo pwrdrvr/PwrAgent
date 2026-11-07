@@ -14,7 +14,7 @@ import {
   type PwrAgentThreadTodoHandler,
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { ThreadTodoError, ThreadTodoService } from "../thread-todos/thread-todo-service";
-import { ThreadTodoStore } from "../thread-todos/thread-todo-store";
+import { ThreadTodoStore } from "../storage/thread-todo-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const CONTEXT: AgentToolCallContext = {

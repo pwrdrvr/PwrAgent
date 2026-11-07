@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures/electron-test";
 import { StateDb } from "../src/main/state/state-db";
-import { ThreadTodoStore } from "../src/main/thread-todos/thread-todo-store";
+import { ThreadTodoStore } from "../src/main/storage/thread-todo-store";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 

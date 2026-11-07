@@ -1,3 +1,4 @@
+import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { operatorTodoItemKey, threadReviewTodo, type ThreadReview } from "@pwragent/shared";
@@ -13,7 +14,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 function createFixture(db = openInMemoryStateDb()) {
   const clock = { now: 1_000 };
-  const reviews = new ThreadReviewService(db, () => {}, () => clock.now);
+  const reviews = new ThreadReviewService(new SqliteThreadReviewStorage(db), () => {}, () => clock.now);
   const store = new OperatorRequestStore(db);
   const operator = new OperatorRequestService({
     registry: { getThreadInfo: () => undefined, listPendingServerRequests: () => [], onEvent: () => () => {} },

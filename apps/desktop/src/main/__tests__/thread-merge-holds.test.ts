@@ -7,7 +7,7 @@ import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { appendMergeHoldDependents, assertNoMergeHolds, buildMergeHoldReminder, qualifyMergeHoldOwners, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
 import { ThreadTodoService } from "../thread-todos/thread-todo-service";
-import { ThreadTodoStore } from "../thread-todos/thread-todo-store";
+import { ThreadTodoStore } from "../storage/thread-todo-store";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, removeTempStateDbDir, openInMemoryStateDb } from "./sqlite-test-utils";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
