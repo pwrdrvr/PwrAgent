@@ -43,7 +43,9 @@ export const FEDERATION_BACKEND_METHODS = {
   setThreadReaction: "backend.setThreadReaction",
   setThreadLock: "backend.setThreadLock",
   setThreadCheckoutHibernation: "backend.setThreadCheckoutHibernation",
+  /** Wait Until Done, before v1.3.15. Answered so older peers fail clearly; see `legacyManageThreadMergeHolds`. */
   manageThreadMergeHolds: "backend.manageThreadMergeHolds",
+  manageThreadDependencies: "backend.manageThreadDependencies",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
   mountRemoteChild: "backend.mountRemoteChild",
@@ -216,6 +218,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // A watch wakes the thread with an agent turn, and stopping one cancels
   // that wake, so both sit with Auto-fix under turn control.
   [FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.manageThreadDependencies]: "turn_control",
   // A project's Forge Automation decides which turns the owner starts on its
   // own, and a held wake-up's Send starts one, so all three take the
   // turn-control grant. Listing rides with them: only the resume flow asks.

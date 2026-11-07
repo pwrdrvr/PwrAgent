@@ -5,9 +5,11 @@ import {
 } from "../storage/desktop-runtime-storage";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
-import { type ManageThreadMergeHoldsRequest, type ManageThreadMergeHoldsResponse } from "@pwragent/shared";
 import type { DesktopAutomaticArchiveRetiredNotice } from "@pwragent/shared";
-import { appendMergeHoldDependents, assertNoMergeHolds, qualifyMergeHoldOwners, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
+import { assertMergeNotHeld } from "./thread-dependency-merge-hold";
+import {
+  appendPeerDependents, collectPeerActiveDependencies, manageRemoteThreadDependencies, readFederationThreadDependenciesRequest,
+} from "./thread-dependencies-federation";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
@@ -22,7 +24,7 @@ import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { THREAD_PR_WATCH_HISTORY_MAX_LIMIT, type ThreadPrAutoFixState, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse, type WatchThreadPullRequestReason } from "@pwragent/shared";
-import { type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
+import { isThreadDependencyLocalThreadCondition, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
 import { type ThreadPendingWakesList, type ThreadPendingWakesRequest, type ThreadPendingWakesResponse } from "@pwragent/shared";
 import { findRemoteHomeDirectoryIndex } from "@pwragent/shared";
 import {
@@ -4453,10 +4455,11 @@ class DesktopAppServerService {
       assertCanMerge: (repository, number) => {
         const marker = repository.provider === "gitlab" ? "-/merge_requests" : "pull";
         try {
-          assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+          const overlay = getDesktopOverlayStore();
+          assertMergeNotHeld(createThreadDependencyStorage().active(), {
             backend: context?.backend ?? "", threadId: context?.threadId ?? "",
             pullRequest: `https://${repository.host}/${repository.owner}/${repository.repo}/${marker}/${number}`,
-          });
+          }, (thread) => overlay.readThreadPullRequestUrls(thread));
         } catch (error) {
           throw new ForgeReadError("merge_held", error instanceof Error ? error.message : String(error));
         }
@@ -8475,21 +8478,6 @@ class DesktopAppServerService {
     };
   }
 
-  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, actor = "operator"): Promise<ManageThreadMergeHoldsResponse> {
-    validateMergeHoldRequest({ ...request, backend: request.backend ?? "codex", threadId: request.threadId ?? "" });
-    const runtime = getDesktopFederationRuntime();
-    if (request.federationTarget?.scope === "remote") {
-      const { federationTarget, ...ownerRequest } = request;
-      const localId = (await runtime.health()).instanceId;
-      if (federationTarget.instanceId !== localId) {
-        const response = await runtime.remoteBackend(federationTarget).manageThreadMergeHolds(ownerRequest);
-        return qualifyMergeHoldOwners(response, federationTarget, localId);
-      }
-    }
-    const response = await getDesktopBackendRegistry().manageThreadMergeHolds(request, actor);
-    return await appendMergeHoldDependents(response, request, runtime);
-  }
-
   async setThreadLock(
     request: SetThreadLockRequest,
   ): Promise<SetThreadLockResponse> {
@@ -10186,13 +10174,13 @@ class DesktopAppServerService {
         // reconciles again (see `startAppServerOwnerNavigation`).
         canDispatch: (dependency) => this.ownerNavigationActive
           && !getDesktopBackendRegistry().isRestartGateClosed?.()
-          && (dependency.conditions.every((condition) => condition.when === "turn_completed")
+          && (dependency.conditions.every((condition) => condition.when === "turn_completed" || condition.when === "marked_done")
             || (this.backgroundPrPollingEnabled
               && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
         changed: async (dependency) => {
           // Prerequisite threads list their dependents, so they refresh too.
           const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
-          for (const target of [dependency, ...dependency.conditions]) {
+          for (const target of [dependency, ...dependency.conditions.filter(isThreadDependencyLocalThreadCondition)]) {
             targets.set(JSON.stringify([target.backend, target.threadId]), { backend: target.backend, threadId: target.threadId });
           }
           for (const target of targets.values()) {
@@ -10274,18 +10262,65 @@ class DesktopAppServerService {
     };
   }
 
-  listActiveThreadDependencies(): ManageThreadDependenciesResponse {
+  /** This instance's active registrations, plus connected peers' for their rows. */
+  async listActiveThreadDependencies(): Promise<ManageThreadDependenciesResponse> {
     // Before a profile's state opens there is nothing to list, not an error.
     if (!getAppStateMode()) return { dependencies: [] };
-    return { dependencies: this.getThreadDependencyCoordinator().active() };
+    const dependencies = this.getThreadDependencyCoordinator().active();
+    const peerActive = await collectPeerActiveDependencies(getDesktopFederationRuntime());
+    return peerActive.length ? { dependencies, peerActive } : { dependencies };
   }
 
+  /**
+   * `actor` names who marks a prerequisite done. A request naming a peer's
+   * thread goes to that peer; a local `list` also gathers the waits other
+   * machines keep on this thread.
+   */
   async manageThreadDependencies(request: ManageThreadDependenciesRequest,
-    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">): Promise<ManageThreadDependenciesResponse> {
+    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
+    actor = "operator"): Promise<ManageThreadDependenciesResponse> {
+    // A peer's window reads its owner's registrations, not this machine's.
+    if (request?.action === "active" && request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await manageRemoteThreadDependencies({ action: "active" }, request.federationTarget,
+        (await getDesktopFederationRuntime().health().catch(() => undefined))?.instanceId, getDesktopFederationRuntime());
+    }
     if (!request || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
       throw new Error("A local backend and waiting threadId are required.");
     }
-    if (Object.keys(request).some((key) => !["action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff", "dependencyId"].includes(key))) throw new Error("Unknown dependency request field.");
+    if (Object.keys(request).some((key) => ![
+      "action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff",
+      "steps", "holdMerge", "dependencyId", "conditionIndex", "note", "federationTarget",
+    ].includes(key))) throw new Error("Unknown dependency request field.");
+    const { federationTarget, ...owned } = request;
+    const runtime = getDesktopFederationRuntime();
+    const localInstanceId = (await runtime.health().catch(() => undefined))?.instanceId;
+    if (federationTarget && isRemoteFederationTarget(federationTarget) && federationTarget.instanceId !== localInstanceId) {
+      return await manageRemoteThreadDependencies(owned, federationTarget, localInstanceId, runtime);
+    }
+    const response = await this.manageLocalThreadDependencies(owned, provenance, actor);
+    return owned.action === "list" ? await appendPeerDependents(response, owned as { backend: string; threadId: string }, localInstanceId, runtime) : response;
+  }
+
+  /**
+   * A peer's Continue After request about this machine's threads. The router
+   * already required its turn_control grant, which can read every thread's
+   * waits anyway; `active` leaves continuations out, as it does for a window.
+   */
+  async manageThreadDependenciesForPeer(request: unknown, requesterInstanceId: string | undefined): Promise<ManageThreadDependenciesResponse> {
+    const owned = readFederationThreadDependenciesRequest(request);
+    if (!owned) throw new Error("Unknown Continue After action.");
+    if (owned.action === "active") {
+      return getAppStateMode() ? { dependencies: this.getThreadDependencyCoordinator().active() } : { dependencies: [] };
+    }
+    return await this.manageLocalThreadDependencies(owned, undefined, requesterInstanceId ? `peer:${requesterInstanceId}` : "peer");
+  }
+
+  private async manageLocalThreadDependencies(request: ManageThreadDependenciesRequest,
+    provenance: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous"> | undefined,
+    actor: string): Promise<ManageThreadDependenciesResponse> {
+    if (typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
+      throw new Error("A local backend and waiting threadId are required.");
+    }
     if (request.action === "create") {
       validateDependencyCreate(request);
       // The resumed turn starts from this text alone, for the operator's
@@ -10295,15 +10330,15 @@ class DesktopAppServerService {
       }
       if (request.conditions?.some((condition) => !isAppServerBackendKind(condition?.backend))) throw new Error("Prerequisites must use known local backends.");
       // Validate PR-only prerequisites through the protocol before
-      // registration; the coordinator already reads turn prerequisites.
+      // registration; the coordinator already reads turn and done ones.
       for (const condition of request.conditions ?? []) {
-        if (condition.when !== "turn_completed") await this.readDependencyThread({ backend: condition.backend, threadId: condition.threadId });
+        if (isPrDependencyCondition(condition)) await this.readDependencyThread({ backend: condition.backend, threadId: condition.threadId });
       }
-      if (request.conditions?.some((condition) => condition.when !== "turn_completed") && !this.backgroundPrPollingEnabled) {
+      if (request.conditions?.some(isPrDependencyCondition) && !this.backgroundPrPollingEnabled) {
         throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
       }
     }
-    return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() }, provenance);
+    return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() }, provenance, actor);
   }
 
   /**
@@ -10315,7 +10350,7 @@ class DesktopAppServerService {
   dependencyProjectNotice(request: ManageThreadDependenciesRequest): string | undefined {
     if (
       request?.action !== "create"
-      || !request.conditions?.some((condition) => condition?.when !== "turn_completed")
+      || !request.conditions?.some((condition) => condition && isPrDependencyCondition(condition))
       || typeof request.backend !== "string"
       || !isAppServerBackendKind(request.backend)
       || typeof request.threadId !== "string"
@@ -10583,4 +10618,9 @@ export function resetAppServerServiceForTests(): void {
 export async function startAppServerOwnerNavigation(): Promise<void> {
   await appServerService.startOwnerNavigation();
   await appServerService.reconcileThreadDependencies();
+}
+
+/** A prerequisite that waits on a PR, so it needs background PR polling. */
+function isPrDependencyCondition(condition: Pick<ThreadDependencyCondition, "when">): boolean {
+  return condition.when !== "turn_completed" && condition.when !== "marked_done";
 }

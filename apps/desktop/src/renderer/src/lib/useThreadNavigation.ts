@@ -4376,7 +4376,6 @@ export function useThreadNavigation(
           || method === "thread/reactions/updated"
           || method === "thread/lock/updated"
           || method === "thread/checkoutHibernation/updated"
-          || method === "thread/mergeHolds/updated"
           || method === "thread/prAutoDispatch/pendingUpdated"
           || method === "thread/prAutoDispatch/updated"
           || method === "thread/status/changed"
@@ -4546,11 +4545,6 @@ export function useThreadNavigation(
             rows: nextResponse,
           };
         });
-        scheduleEventRefresh();
-        return;
-      }
-
-      if (method === "thread/mergeHolds/updated") {
         scheduleEventRefresh();
         return;
       }

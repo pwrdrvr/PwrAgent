@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import type { NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
+import type { AppServerBackendKind, FederationTarget, NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
 import { buildThreadIdentityKey, THREAD_DEPENDENCY_CONDITION_PHRASES, threadDependencyDeliveryTarget } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -21,6 +21,8 @@ export type ThreadDependencyIndicator = {
   alert: boolean;
   /** Every prerequisite with its state, one per line. */
   tooltip: string;
+  /** A waiting registration holds this thread's merges. */
+  mergeHeld: boolean;
 };
 
 export type ThreadDependencyIndicatorsValue = {
@@ -36,13 +38,35 @@ const EMPTY: ReadonlyMap<string, ThreadDependencyIndicator> = new Map();
 // change several at once, so a burst becomes one list request.
 const REFRESH_DEBOUNCE_MS = 150;
 
-/** A local thread's indicator. Dependencies run on the owning machine, so a peer's row has none. */
+/**
+ * The key a thread's indicator is filed under: its owner as this window
+ * names it (none for this machine), then the thread.
+ */
+export function threadDependencyIndicatorKey(backend: AppServerBackendKind, threadId: string, instanceId?: string): string {
+  return instanceId ? `${instanceId}:${buildThreadIdentityKey(backend, threadId)}` : buildThreadIdentityKey(backend, threadId);
+}
+
+/** A thread's indicator. A peer's row reads the waits its owner keeps. */
+export function readThreadDependencyIndicator(
+  context: Pick<ThreadDependencyIndicatorsValue, "byThreadKey"> | undefined,
+  thread: Pick<NavigationThreadSummary, "id" | "source" | "federation">,
+): ThreadDependencyIndicator | undefined {
+  if (!context) return undefined;
+  const target = thread.federation?.ref.target;
+  const instanceId = target?.scope === "remote" ? target.instanceId : undefined;
+  const indicator = context.byThreadKey.get(threadDependencyIndicatorKey(thread.source, thread.id, instanceId));
+  if (indicator || !instanceId) return indicator;
+  // A remote window's list comes from the instance it fronts, unqualified.
+  const windowTarget = readRendererFederationTarget();
+  return windowTarget?.scope === "remote" && windowTarget.instanceId === instanceId
+    ? context.byThreadKey.get(threadDependencyIndicatorKey(thread.source, thread.id))
+    : undefined;
+}
+
 export function useThreadDependencyIndicator(
   thread: Pick<NavigationThreadSummary, "id" | "source" | "federation">,
 ): ThreadDependencyIndicator | undefined {
-  const context = useContext(ThreadDependencyIndicatorsContext);
-  if (!context || thread.federation) return undefined;
-  return context.byThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
+  return readThreadDependencyIndicator(useContext(ThreadDependencyIndicatorsContext), thread);
 }
 
 export function useThreadDependencyIndicatorsContext(): ThreadDependencyIndicatorsValue | undefined {
@@ -50,14 +74,15 @@ export function useThreadDependencyIndicatorsContext(): ThreadDependencyIndicato
 }
 
 /**
- * Lists this instance's active registrations and refreshes on every
- * `thread/dependencies/updated` event. A failed refresh keeps the last list:
- * a row losing its chip would read as the wait having ended.
+ * Lists the active registrations of this instance and its connected peers,
+ * and refreshes on every `thread/dependencies/updated` event. In a remote
+ * window, main asks that window's instance. A failed refresh keeps the last
+ * list: a row losing its chip would read as the wait having ended.
  */
 export function useThreadDependencyIndicators(desktopApi?: DesktopApi): ReadonlyMap<string, ThreadDependencyIndicator> {
   const [indicators, setIndicators] = useState(EMPTY);
   useEffect(() => {
-    if (!desktopApi?.manageThreadDependencies || readRendererFederationTarget()?.scope === "remote") {
+    if (!desktopApi?.manageThreadDependencies) {
       setIndicators(EMPTY);
       return;
     }
@@ -69,7 +94,7 @@ export function useThreadDependencyIndicators(desktopApi?: DesktopApi): Readonly
       try {
         const response = await desktopApi.manageThreadDependencies!({ action: "active" });
         if (disposed || sequence !== latest) return;
-        const next = summarizeThreadDependencies(response.dependencies);
+        const next = summarizeThreadDependencies(response.dependencies, response.peerActive);
         // Rows read this through context; an equal list keeps its identity so
         // an update that changes no chip re-renders no row.
         setIndicators((current) => sameIndicators(current, next) ? current : next);
@@ -79,7 +104,7 @@ export function useThreadDependencyIndicators(desktopApi?: DesktopApi): Readonly
     };
     void refresh();
     const unsubscribe = desktopApi.onAgentEvent?.((event) => {
-      if (event.federationTarget?.scope === "remote" || event.notification.method !== "thread/dependencies/updated") return;
+      if (event.notification.method !== "thread/dependencies/updated") return;
       clearTimeout(timer);
       timer = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
     });
@@ -94,11 +119,16 @@ export function useThreadDependencyIndicators(desktopApi?: DesktopApi): Readonly
 
 export function summarizeThreadDependencies(
   dependencies: readonly ThreadDependency[],
+  peerActive: readonly { dependency: ThreadDependency; owner: FederationTarget }[] = [],
 ): ReadonlyMap<string, ThreadDependencyIndicator> {
   const byThread = new Map<string, ThreadDependency[]>();
-  for (const dependency of dependencies) {
+  const entries = [
+    ...dependencies.map((dependency) => ({ dependency, instanceId: undefined as string | undefined })),
+    ...peerActive.map(({ dependency, owner }) => ({ dependency, instanceId: owner.scope === "remote" ? owner.instanceId : undefined })),
+  ];
+  for (const { dependency, instanceId } of entries) {
     if (!ACTIVE_DEPENDENCY_STATUSES.has(dependency.status)) continue;
-    const key = buildThreadIdentityKey(dependency.backend, dependency.threadId);
+    const key = threadDependencyIndicatorKey(dependency.backend, dependency.threadId, instanceId);
     const items = byThread.get(key);
     if (items) items.push(dependency);
     else byThread.set(key, [dependency]);
@@ -107,10 +137,12 @@ export function summarizeThreadDependencies(
   for (const [key, items] of byThread) {
     items.sort((left, right) => left.createdAt - right.createdAt);
     const alert = items.some(needsDeliveryReview);
+    const mergeHeld = items.some(holdsMerge);
     indicators.set(key, {
       count: items.length,
       alert,
-      label: alert ? "Check delivery" : items.length > 1 ? `${items.length} waiting` : progressLabel(items[0]!),
+      mergeHeld,
+      label: alert ? "Check delivery" : mergeHeld ? "Merge held" : items.length > 1 ? `${items.length} waiting` : progressLabel(items[0]!),
       tooltip: items.map(describeRegistration).join("\n\n"),
     });
   }
@@ -124,11 +156,14 @@ function sameIndicators(
   if (left.size !== right.size) return false;
   for (const [key, indicator] of right) {
     const other = left.get(key);
-    if (!other || other.count !== indicator.count || other.alert !== indicator.alert
+    if (!other || other.count !== indicator.count || other.alert !== indicator.alert || other.mergeHeld !== indicator.mergeHeld
       || other.label !== indicator.label || other.tooltip !== indicator.tooltip) return false;
   }
   return true;
 }
+
+const holdsMerge = (dependency: ThreadDependency): boolean =>
+  Boolean(dependency.holdMerge) && (dependency.status === "waiting" || dependency.status === "ready");
 
 function progressLabel(dependency: ThreadDependency): string {
   if (dependency.status === "ready") {
@@ -149,8 +184,9 @@ function describeRegistration(dependency: ThreadDependency): string {
   const lines = dependency.conditions.map((condition, index) => {
     const state = evidenceFor(dependency, index)?.state;
     const mark = state === "satisfied" ? "✓" : state === "failed" ? "✗" : "○";
-    return `${mark} ${condition.title || condition.threadId} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`;
+    return `${mark} ${condition.subject?.trim() || condition.title || condition.threadId} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`;
   });
+  if (holdsMerge(dependency)) lines.push("Merging waits.");
   if (threadDependencyDeliveryTarget(dependency) === "operator") lines.push("Then reminds you.");
   if (needsDeliveryReview(dependency)) lines.push("Delivery needs review.");
   return [heading, ...lines].join("\n");

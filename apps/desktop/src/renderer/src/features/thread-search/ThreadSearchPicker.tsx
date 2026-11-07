@@ -48,6 +48,8 @@ export function ThreadSearchPicker<T>(props: {
   /** Absent while there is nothing to go back to. */
   onCancel?: () => void;
   triggerRef?: RefObject<HTMLButtonElement | null>;
+  /** Start a new search after each pick, for pickers that add several rows. */
+  clearOnPick?: boolean;
   onPick: (target: T, thread: NavigationThreadSummary) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -108,7 +110,9 @@ export function ThreadSearchPicker<T>(props: {
   };
 
   const choose = (row: ThreadSearchCandidate<T> | undefined): void => {
-    if (row && !props.disabled) props.onPick(row.target, row.thread);
+    if (!row || props.disabled) return;
+    props.onPick(row.target, row.thread);
+    if (props.clearOnPick) changeQuery("");
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {

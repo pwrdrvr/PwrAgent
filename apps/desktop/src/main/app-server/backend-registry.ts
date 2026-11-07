@@ -2,8 +2,6 @@ import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
-import type { ManageThreadMergeHoldsRequest, ManageThreadMergeHoldsResponse, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
-import { blockingMergeHolds, buildMergeHoldReminder, validateMergeHoldRequest, type MergeHoldReminderCard } from "../thread-merge-holds/thread-merge-holds";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
@@ -237,6 +235,7 @@ import {
   createProjectHeldWakeupStorage,
   createProviderThreadSnapshotStorage,
   createRestartContinuationStorage,
+  createThreadDependencyStorage,
   createThreadSearchStorage,
   createTokenMiserStorage,
 } from "../storage/desktop-runtime-storage";
@@ -9352,19 +9351,10 @@ type CodexRetryableTurnStart = {
   turnId?: string;
 };
 
-/** The to-do service seen from a wait marked done. `raise` runs inside the hold's transaction. */
-export type MergeHoldReminderDelivery = {
-  prepare: (thread: { backend: AppServerBackendKind; threadId: string }) => Promise<{ cwd?: string; sourceProject?: ThreadTodoProject }>;
-  raise: (card: MergeHoldReminderCard, placement: { cwd?: string; sourceProject?: ThreadTodoProject }) => ThreadTodo;
-  publish: (todo: ThreadTodo) => void;
-};
-
 type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<OwnerThreadRegistry, "getThreadMetadata">> & Partial<
   Pick<
     DesktopOwnerStorage,
     | "acknowledgeThreadEnvironmentFailure"
-    | "manageThreadMergeHolds"
-    | "listActiveThreadMergeHolds"
     | "adoptLegacyRemoteDirectoryLaunchpad"
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
@@ -11020,7 +11010,7 @@ export class DesktopBackendRegistry {
   private threadMaintenanceToolHandler: ThreadMaintenanceToolHandler | undefined;
   private threadMaintenanceToolScans: ThreadMaintenanceToolScans | undefined;
   private threadDependencyToolHandler:
-    | ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">) => Promise<PwrAgentThreadInspectionResponse>)
+    | ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">, actor?: string) => Promise<PwrAgentThreadInspectionResponse>)
     | undefined;
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
@@ -13274,54 +13264,6 @@ export class DesktopBackendRegistry {
     this.threadPullRequestWatchToolHandler = handler ?? undefined;
   }
 
-  private threadMergeHoldToolHandler?: (request: ManageThreadMergeHoldsRequest, actor: string) => Promise<ManageThreadMergeHoldsResponse>;
-
-  setThreadMergeHoldToolHandler(handler: typeof this.threadMergeHoldToolHandler): void {
-    this.threadMergeHoldToolHandler = handler;
-  }
-
-  private mergeHoldReminders?: MergeHoldReminderDelivery;
-
-  /** Where a wait marked done raises the operator's reminder card. */
-  setMergeHoldReminderDelivery(delivery: MergeHoldReminderDelivery | undefined): void {
-    this.mergeHoldReminders = delivery;
-  }
-
-  /** Local authority. This does not start, stop, or steer a turn. */
-  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, actor: string): Promise<ManageThreadMergeHoldsResponse> {
-    if (!this.overlayStore.manageThreadMergeHolds || !this.overlayStore.listActiveThreadMergeHolds) throw new Error("Merge holds are unavailable on this instance.");
-    const normalized = { ...request, backend: request.backend ?? "codex", threadId: request.threadId ?? "" };
-    validateMergeHoldRequest(normalized);
-    const all = this.overlayStore.listActiveThreadMergeHolds();
-    if (request.action === "active") return { holds: all, dependents: [] };
-    if (request.action === "create") await this.readThread({ backend: normalized.backend, threadId: normalized.threadId, includeTurns: false });
-    // Placement is async, so it is read before the transaction, as for a
-    // dependency's reminder. The card itself commits with the resolve.
-    const delivery = request.action === "resolve" ? this.mergeHoldReminders : undefined;
-    const placement = delivery ? await delivery.prepare(normalized).catch(() => ({})) : {};
-    let reminder: ThreadTodo | undefined;
-    const holds = this.overlayStore.manageThreadMergeHolds(normalized, actor, Date.now(), delivery ? (hold, stillWaiting) => {
-      reminder = delivery.raise(buildMergeHoldReminder(hold, stillWaiting), placement);
-      return reminder.id;
-    } : undefined);
-    if (reminder) delivery?.publish(reminder);
-    if (request.action !== "list") {
-      await this.emit({ backend: normalized.backend, notification: {
-        method: "thread/mergeHolds/updated",
-        params: { threadId: normalized.threadId, mergeHolds: holds.filter((hold) => hold.status === "waiting") },
-      } });
-    }
-    const overlay = await this.overlayStore.getThreadOverlayState(normalized);
-    const prUrl = request.pullRequest && /^\d+$/.test(request.pullRequest)
-      ? overlay?.prs?.find((pr) => pr.number === Number(request.pullRequest))?.url
-      : request.pullRequest;
-    return {
-      holds, blockingHolds: blockingMergeHolds(all, { ...normalized, pullRequest: prUrl }),
-      dependents: request.includeDependents === false ? [] : all.filter((hold) => hold.dependency?.target.scope === "local"
-        && hold.dependency.backend === normalized.backend && hold.dependency.threadId === normalized.threadId).map((hold) => ({ hold })),
-    };
-  }
-
   setThreadMaintenanceToolHandler(handler: ThreadMaintenanceToolHandler | undefined): void {
     this.threadMaintenanceToolHandler = handler;
     this.threadMaintenanceToolScans = handler ? new ThreadMaintenanceToolScans({
@@ -13331,7 +13273,7 @@ export class DesktopBackendRegistry {
   }
 
   setThreadDependencyToolHandler(
-    handler: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">) => Promise<PwrAgentThreadInspectionResponse>) | undefined,
+    handler: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">, actor?: string) => Promise<PwrAgentThreadInspectionResponse>) | undefined,
   ): void {
     this.threadDependencyToolHandler = handler;
   }
@@ -13352,6 +13294,24 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestDetachHandler | null | undefined,
   ): void {
     this.threadPullRequestDetachHandler = handler ?? undefined;
+  }
+
+  private threadDependenciesPeerHandler?: (
+    request: import("@pwragent/shared").ManageThreadDependenciesRequest,
+    requesterInstanceId: string | undefined,
+  ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
+
+  setThreadDependenciesPeerHandler(handler: typeof this.threadDependenciesPeerHandler): void {
+    this.threadDependenciesPeerHandler = handler;
+  }
+
+  /** A peer's Continue After request about one of this owner's threads. */
+  async manageThreadDependenciesForPeer(
+    request: import("@pwragent/shared").ManageThreadDependenciesRequest,
+    requesterInstanceId: string | undefined,
+  ): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> {
+    if (!this.threadDependenciesPeerHandler) throw new Error("Continue After is not available on this instance yet.");
+    return await this.threadDependenciesPeerHandler(request, requesterInstanceId);
   }
 
   setThreadPrWatchesPeerHandler(
@@ -16914,6 +16874,7 @@ export class DesktopBackendRegistry {
       (await this.overlayStore.listAllActivePrStatusWatches()).map((watch) =>
         buildThreadIdentityKey(watch.backend, watch.threadId)),
     );
+    const mergeHeldThreadKeys = this.readMergeHeldThreadKeys();
     const candidates: ThreadArchiveCandidate[] = [];
     // A failed read keeps only the threads it covers, never the whole list.
     const unreadable = (error: unknown, backend: AppServerBackendKind, threadId?: string) => {
@@ -16931,8 +16892,9 @@ export class DesktopBackendRegistry {
       } catch (error) { unreadable(error, backend); }
       for (const thread of backendThreads) {
         const activePrWatch = watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
+        const mergeHeld = mergeHeldThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
         if (!overlays) {
-          candidates.push({ thread, activePrWatch, unreadable: true });
+          candidates.push({ thread, activePrWatch, mergeHeld, unreadable: true });
           continue;
         }
         try {
@@ -16940,14 +16902,23 @@ export class DesktopBackendRegistry {
             thread, overlay: overlays[thread.id],
             activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
             activePrWatch,
+            mergeHeld,
           });
         } catch (error) {
           unreadable(error, backend, thread.id);
-          candidates.push({ thread, overlay: overlays[thread.id], activePrWatch, unreadable: true });
+          candidates.push({ thread, overlay: overlays[thread.id], activePrWatch, mergeHeld, unreadable: true });
         }
       }
     }
     return candidates;
+  }
+
+  /** Threads a Continue After wait holds from merging; auto-archive keeps them. */
+  private readMergeHeldThreadKeys(): Set<string> {
+    if (!isAppStateInitialized()) return new Set();
+    return new Set(createThreadDependencyStorage().active()
+      .filter((dependency) => dependency.holdMerge && (dependency.status === "waiting" || dependency.status === "ready"))
+      .map((dependency) => buildThreadIdentityKey(dependency.backend, dependency.threadId)));
   }
 
   /** The project a candidate counts toward: its main checkout. */
@@ -17589,6 +17560,7 @@ export class DesktopBackendRegistry {
       overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
       activeSubAgent: await this.hasArchiveActiveSubAgent(backend, threadId),
       activePrWatch: (await this.overlayStore.listActiveThreadPrStatusWatches({ backend, threadId })).length > 0,
+      mergeHeld: this.readMergeHeldThreadKeys().has(buildThreadIdentityKey(backend, threadId)),
     };
   }
 
@@ -51280,20 +51252,6 @@ export class DesktopBackendRegistry {
       });
     }
 
-    if (request.operation === "manage_thread_merge_holds") {
-      if (!this.threadMergeHoldToolHandler) return threadInspectionFailure("unsupported_operation", "Merge holds are not available.");
-      if (request.args.action === "active") return threadInspectionFailure("invalid_arguments", "Use list for a thread's merge holds.");
-      try {
-        const response = await this.threadMergeHoldToolHandler({
-          ...request.args, backend: request.args.backend ?? request.context.backend,
-          threadId: request.args.threadId ?? request.context.threadId,
-        }, `agent:${request.context.backend}:${request.context.threadId}`);
-        return { ok: true, data: { threadMergeHolds: response } };
-      } catch (error) {
-        return threadInspectionFailure("invalid_arguments", error instanceof Error ? error.message : String(error));
-      }
-    }
-
     if (request.operation === "manage_thread_dependencies") {
       if (!this.threadDependencyToolHandler) return threadInspectionFailure("unsupported_operation", "Thread dependencies are not available.");
       // The resumed turn may have lost the plan to compaction, so an agent must
@@ -51310,7 +51268,7 @@ export class DesktopBackendRegistry {
           : {}),
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
-      }, await this.readCausalMessagingContext(request.context));
+      }, await this.readCausalMessagingContext(request.context), `agent:${request.context.backend}:${request.context.threadId}`);
     }
 
     if (request.operation === "mark_project_read") {
@@ -51653,7 +51611,10 @@ export class DesktopBackendRegistry {
       Boolean(condition) && typeof condition === "object"
       && typeof (condition as { backend?: unknown }).backend === "string"
       && typeof (condition as { threadId?: unknown }).threadId === "string"
-      && (condition as { title?: unknown }).title === undefined;
+      && (condition as { title?: unknown }).title === undefined
+      // A peer's thread or "something else" is not in this machine's list.
+      && (condition as { subject?: unknown }).subject === undefined
+      && (condition as { target?: unknown }).target === undefined;
     const missing = (conditions as unknown[]).filter(untitled);
     if (missing.length === 0) return conditions;
     const titles = new Map<string, string>();
@@ -55941,7 +55902,6 @@ function toThreadInspectionSummary(
     linkedDirectories,
     linkedRepositories: summarizeLinkedRepositories(linkedDirectories),
     ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
-    ...(overlay?.mergeHolds?.some((hold) => hold.status === "waiting") ? { mergeHolds: overlay.mergeHolds.filter((hold) => hold.status === "waiting") } : {}),
   };
 }
 
@@ -55953,7 +55913,6 @@ function toThreadInspectionSummaryFromNavigation(
     agent: thread.agent,
     handoffOrigin: thread.handoffOrigin,
     ...(thread.prs?.length ? { pullRequests: thread.prs } : {}),
-    ...(thread.mergeHolds?.length ? { mergeHolds: thread.mergeHolds } : {}),
   };
 }
 

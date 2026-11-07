@@ -66,7 +66,7 @@ function operatorTodos(stateDb = db, prepare: OperatorTodoDelivery["prepare"] = 
 
 const cards = () => new ThreadTodoStore(db).list({ status: "all" });
 
-function create(agent: ThreadDependencyCoordinator, conditions = [condition("foundation")], extra: Partial<Pick<ManageThreadDependenciesRequest, "mode" | "onFailure" | "threadId" | "continuation" | "deliver" | "handoff">> = {}) {
+function create(agent: ThreadDependencyCoordinator, conditions = [condition("foundation")], extra: Partial<Pick<ManageThreadDependenciesRequest, "mode" | "onFailure" | "threadId" | "continuation" | "deliver" | "handoff" | "steps" | "holdMerge">> = {}) {
   return agent.manage({ action: "create", backend: "codex", threadId: "dependencies", conditions, ...extra });
 }
 
@@ -653,5 +653,80 @@ describe("operator delivery", () => {
     });
     expect(cards()).toHaveLength(1);
     expectSqliteWriteBudget({ scenario: "thread-dependency-operator-reminder", note: "One operator dependency registration and its reminder card; the card and the delivered claim share one commit, and later PR events write nothing. ~62 KB per reminder: ~6.2 MB/day at 100 reminders, 0 MB/day idle.", writes });
+  });
+});
+
+describe("marked-done prerequisites", () => {
+  const peerThread = (threadId: string): ThreadDependencyCondition => ({
+    backend: "codex", threadId, when: "marked_done", target: { scope: "remote", instanceId: "windows-lab" },
+  });
+  const outside: ThreadDependencyCondition = { backend: "codex", threadId: "", when: "marked_done", subject: "Legal signs off on the license change" };
+  const hold = (extra: Parameters<typeof create>[2] = {}) => ({
+    deliver: "operator" as const, continuation: "Validation is done: rebase and merge.", ...extra,
+  });
+
+  it("is met only by mark_done, never by the prerequisite's turns", async () => {
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos() });
+    const { dependencies: [item] } = await create(agent, [condition("foundation", "marked_done")], hold());
+    snapshots.get("foundation")!.turns = [{ id: "foundation-turn", status: "completed" }];
+    snapshots.get("foundation")!.activeTurnId = undefined;
+    await agent.handleThreadEvent(condition("foundation"));
+    await agent.handlePrEvent();
+    expect(store.get("codex", "dependencies", item!.id)).toMatchObject({ status: "waiting" });
+    expect(cards()).toEqual([]);
+    await agent.manage({ action: "mark_done", backend: "codex", threadId: "dependencies", dependencyId: item!.id, note: "Windows run clean" }, undefined, "agent:codex:foundation");
+    const done = store.get("codex", "dependencies", item!.id)!;
+    expect(done.status).toBe("delivered");
+    expect(done.evidence[0]).toMatchObject({ state: "satisfied", reason: "Windows run clean", markedDoneBy: "agent:codex:foundation" });
+    expect(cards()).toHaveLength(1);
+  });
+
+  it("registers peer and outside prerequisites without reading them, and turns steps into a checklist", async () => {
+    // Only the waiting thread is this machine's to read.
+    const readThread = vi.fn(async (target: { threadId: string }) => {
+      if (target.threadId !== "dependencies") throw new Error("Thread not found");
+      return { turns: [], prs: [] };
+    });
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos(), readThread });
+    const { dependencies: [item] } = await create(agent, [peerThread("lab-run"), outside], {
+      ...hold(), steps: ["Rebase onto #3291", "Merge #17"], holdMerge: true,
+    });
+    expect(readThread.mock.calls.map(([target]) => target.threadId)).toEqual(["dependencies"]);
+    expect(item).toMatchObject({ status: "waiting", holdMerge: true, steps: ["Rebase onto #3291", "Merge #17"] });
+    // Marking one of two leaves the wait waiting; the second releases it.
+    await agent.manage({ action: "mark_done", backend: "codex", threadId: "dependencies", dependencyId: item!.id, conditionIndex: 1 });
+    expect(store.get("codex", "dependencies", item!.id)).toMatchObject({ status: "waiting" });
+    expect(store.get("codex", "dependencies", item!.id)!.evidence.find((entry) => entry.condition.subject)).toMatchObject({ reason: "Marked done", markedDoneBy: "operator" });
+    await agent.manage({ action: "mark_done", backend: "codex", threadId: "dependencies", dependencyId: item!.id });
+    const [card] = cards();
+    expect(card).toMatchObject({ kind: "reminder", items: [
+      { id: "step-1", text: "Rebase onto #3291", checked: false },
+      { id: "step-2", text: "Merge #17", checked: false },
+    ] });
+    expect(card!.title.endsWith(": Rebase onto #3291 (+1 more)")).toBe(true);
+  });
+
+  it("refuses shapes the owner could not keep", async () => {
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos() });
+    // A peer's thread has no turns or PRs here to watch.
+    await expect(create(agent, [{ ...peerThread("lab-run"), when: "pr_merged" }], hold())).rejects.toThrow();
+    await expect(create(agent, [{ ...outside, when: "ci_passed" }], hold())).rejects.toThrow();
+    await expect(create(agent, [outside], { continuation: "x", steps: ["Merge"] })).rejects.toThrow();
+    await expect(create(agent, [outside], { ...hold(), steps: Array.from({ length: 13 }, (_, index) => `Step ${index}`) })).rejects.toThrow();
+    const { dependencies: [item] } = await create(agent, [outside], hold());
+    await expect(agent.manage({ action: "mark_done", backend: "codex", threadId: "dependencies", dependencyId: item!.id, note: "x".repeat(2001) })).rejects.toThrow("at most");
+    await agent.manage({ action: "cancel", backend: "codex", threadId: "dependencies", dependencyId: item!.id });
+    await expect(agent.manage({ action: "mark_done", backend: "codex", threadId: "dependencies", dependencyId: item!.id })).rejects.toThrow("no longer active");
+  });
+
+  it("budgets one marked-done wait from registration through its reminder", async () => {
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos() });
+    const { writes } = await measureSqliteWrites(async () => {
+      const { dependencies: [item] } = await create(agent, [peerThread("lab-run")], { ...hold(), holdMerge: true });
+      for (let tick = 0; tick < 10; tick++) await agent.handlePrEvent();
+      await agent.manage({ action: "mark_done", backend: "codex", threadId: "dependencies", dependencyId: item!.id, note: "Done" });
+    });
+    expect(cards()).toHaveLength(1);
+    expectSqliteWriteBudget({ scenario: "thread-dependency-marked-done", note: "One marked-done wait: registration, mark done, and its reminder card; PR events in between write nothing. Operator-paced, so ~0 MB/day idle.", writes });
   });
 });

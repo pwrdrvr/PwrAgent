@@ -56,7 +56,6 @@ export * from "./contracts/operator-requests";
 export * from "./contracts/thread-dependencies";
 export * from "./contracts/thread-pr-watches";
 export * from "./contracts/thread-pending-wakes";
-export * from "./contracts/thread-merge-holds";
 export * from "./contracts/thread-system-messages";
 export * from "./contracts/thread-search";
 export * from "./messaging-contact-labels";

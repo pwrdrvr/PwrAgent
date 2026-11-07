@@ -1055,7 +1055,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             } : undefined}
             onUnlockThread={props.onUnlockThread}
             onShowTab={selectTab}
-            onOpenContinueAfter={openContinueAfter && !ownerLabel ? () => openContinueAfter(thread) : undefined}
+            onOpenContinueAfter={openContinueAfter ? () => openContinueAfter(thread) : undefined}
           />
         );
       }

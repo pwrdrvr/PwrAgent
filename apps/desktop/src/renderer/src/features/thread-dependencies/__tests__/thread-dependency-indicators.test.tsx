@@ -7,6 +7,7 @@ import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import {
   ThreadDependencyIndicatorsContext,
   summarizeThreadDependencies,
+  threadDependencyIndicatorKey,
   useThreadDependencyIndicators,
   type ThreadDependencyIndicator,
 } from "../useThreadDependencyIndicators";
@@ -34,11 +35,31 @@ const thread: NavigationThreadSummary = {
 };
 
 describe("summarizeThreadDependencies", () => {
+  it("says the merge is held while a holding registration waits, and names a subject", () => {
+    const held: ThreadDependency = {
+      ...waiting, holdMerge: true,
+      conditions: [{ backend: "codex", threadId: "", when: "marked_done", subject: "Windows validation" }],
+      evidence: [],
+    };
+    const indicator = summarizeThreadDependencies([held]).get("codex:consumer");
+    expect(indicator).toMatchObject({ count: 1, mergeHeld: true, label: "Merge held" });
+    expect(indicator?.tooltip).toBe("Continue after:\n○ Windows validation is marked done\nMerging waits.");
+    // A delivered registration no longer holds anything.
+    expect(summarizeThreadDependencies([{ ...held, status: "delivered" }]).size).toBe(0);
+  });
+
+  it("files a peer's registrations under its owner, apart from a local thread with the same id", () => {
+    const indicators = summarizeThreadDependencies([waiting], [{ dependency: { ...waiting, holdMerge: true }, owner: { scope: "remote", instanceId: "laptop" } }]);
+    expect(indicators.get(threadDependencyIndicatorKey("codex", "consumer"))).toMatchObject({ mergeHeld: false, label: "1 of 2" });
+    expect(indicators.get(threadDependencyIndicatorKey("codex", "consumer", "laptop"))).toMatchObject({ mergeHeld: true, label: "Merge held" });
+  });
+
   it("shows one registration's progress and names every prerequisite in the tooltip", () => {
     const indicator = summarizeThreadDependencies([waiting]).get("codex:consumer");
     expect(indicator).toEqual({
       count: 1,
       alert: false,
+      mergeHeld: false,
       label: "1 of 2",
       tooltip: "Continue after all of:\n✓ Split settings schema has a reviewable PR\n○ Split settings schema is merged",
     });
@@ -159,7 +180,7 @@ describe("useThreadDependencyIndicators", () => {
 });
 
 describe("sidebar dependency chip", () => {
-  const indicator: ThreadDependencyIndicator = { count: 1, alert: false, label: "1 of 2", tooltip: "Continue after all of:" };
+  const indicator: ThreadDependencyIndicator = { count: 1, alert: false, label: "1 of 2", tooltip: "Continue after all of:", mergeHeld: false };
 
   function renderChips(value: { indicator?: ThreadDependencyIndicator; open?: (thread: NavigationThreadSummary) => void }, subject = thread) {
     const onRowClick = vi.fn();
@@ -196,7 +217,7 @@ describe("sidebar dependency chip", () => {
     expect(chip).not.toHaveAttribute("tabindex");
   });
 
-  it("draws nothing for a thread without registrations or for a peer's thread", () => {
+  it("draws nothing for a thread without registrations, nor a local thread's chip on a peer's row", () => {
     renderChips({ indicator }, {
       ...thread,
       federation: {
@@ -208,5 +229,22 @@ describe("sidebar dependency chip", () => {
     cleanup();
     renderChips({});
     expect(screen.queryByRole("img", { name: /Continue after/ })).toBeNull();
+  });
+
+  it("draws a peer's row from the registrations its owner keeps", () => {
+    render(
+      <ThreadDependencyIndicatorsContext.Provider value={{
+        byThreadKey: new Map([[threadDependencyIndicatorKey("codex", "consumer", "peer"), { ...indicator, mergeHeld: true, label: "Merge held" }]]),
+      }}>
+        <ThreadMetaChips thread={{
+          ...thread,
+          federation: {
+            ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "consumer" },
+            instanceLabel: "Laptop", peerStatus: "connected", capabilities: [],
+          },
+        } as NavigationThreadSummary} />
+      </ThreadDependencyIndicatorsContext.Provider>,
+    );
+    expect(screen.getByRole("img", { name: "Continue after: Merge held" })).toBeInTheDocument();
   });
 });

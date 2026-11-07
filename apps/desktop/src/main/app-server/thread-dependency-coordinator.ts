@@ -5,7 +5,10 @@ import type {
   ThreadDependency, ThreadDependencyCondition, ThreadDependencyEvidence, ThreadTodo, ThreadTodoProject,
 } from "@pwragent/shared";
 import {
-  isRepairableDependencyFailure, THREAD_DEPENDENCY_CONDITION_PHRASES, THREAD_DEPENDENCY_CONDITIONS, THREAD_DEPENDENCY_DELIVERY_TARGETS,
+  isRepairableDependencyFailure, isThreadDependencyLocalThreadCondition,
+  THREAD_DEPENDENCY_CONDITION_PHRASES, THREAD_DEPENDENCY_CONDITIONS, THREAD_DEPENDENCY_DELIVERY_TARGETS,
+  THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH, THREAD_DEPENDENCY_MAX_STEPS, THREAD_DEPENDENCY_STEP_MAX_LENGTH,
+  THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH, threadDependencyMarkDoneIndex,
   THREAD_DEPENDENCY_PROMPT_ANY_MET, THREAD_DEPENDENCY_PROMPT_FAILED, THREAD_DEPENDENCY_PROMPT_INTRO,
   THREAD_DEPENDENCY_PROMPT_PLAN_LEAD, THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD,
   THREAD_TODO_DETAIL_MAX_LENGTH, THREAD_TODO_TITLE_MAX_LENGTH, threadDependencyDeliveryTarget, threadDependencyTodoKey,
@@ -28,6 +31,8 @@ export type DependencyTodoCard = {
   title: string;
   detail?: string;
   action?: { type: "start_thread"; prompt: string };
+  /** The registration's reminder steps, as a checklist. */
+  items?: { id: string; text: string; checked: boolean }[];
 };
 
 /** Where a card's Start thread runs, read before the claim. */
@@ -98,10 +103,16 @@ export class ThreadDependencyCoordinator {
     return result;
   }
 
+  /** `actor` names who marks a prerequisite done: "operator", "agent:…" or "peer:…". */
   manage(request: ManageThreadDependenciesRequest & { backend: AppServerBackendKind; threadId: string },
-    provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">): Promise<ManageThreadDependenciesResponse> {
+    provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
+    actor = "operator"): Promise<ManageThreadDependenciesResponse> {
     return this.serialize(async () => {
       if (request.action === "list") return this.response(request);
+      if (request.action === "mark_done") {
+        await this.markDone(request, actor);
+        return this.response(request);
+      }
       if (request.action === "cancel" || request.action === "dismiss") {
         if (!request.dependencyId) throw new Error("dependencyId is required to cancel a dependency.");
         const changed = request.action === "dismiss"
@@ -119,6 +130,11 @@ export class ThreadDependencyCoordinator {
       const conditions: ThreadDependencyCondition[] = [];
       for (const original of request.conditions!) {
         const condition = { ...original };
+        // Only this machine's threads can be read; Mark Done ends the rest.
+        if (!isThreadDependencyLocalThreadCondition(condition)) {
+          conditions.push(condition);
+          continue;
+        }
         const snapshot = await this.options.readThread(condition);
         if (condition.when === "turn_completed" && !condition.turnId) {
           condition.turnId = snapshot.activeTurnId ?? snapshot.turns.at(-1)?.id;
@@ -135,6 +151,8 @@ export class ThreadDependencyCoordinator {
         conditions, mode: request.mode ?? "all", onFailure: request.onFailure ?? "notify",
         ...(request.continuation?.trim() ? { continuation: request.continuation.trim() } : {}),
         deliver, ...(request.handoff ? { handoff: true } : {}),
+        ...(request.steps?.length ? { steps: request.steps.map((step) => step.trim()) } : {}),
+        ...(request.holdMerge ? { holdMerge: true } : {}),
         status: "waiting", evidence: [], createdAt: now, updatedAt: now,
       });
       const registered = JSON.stringify(item);
@@ -145,6 +163,36 @@ export class ThreadDependencyCoordinator {
       if (!stored || JSON.stringify(stored) === registered) await this.options.changed(item);
       return this.response(request);
     });
+  }
+
+  /**
+   * Marks one `marked_done` prerequisite satisfied with the operator's or
+   * agent's note, then evaluates the registration, which may deliver it.
+   */
+  private async markDone(request: ManageThreadDependenciesRequest & { backend: AppServerBackendKind; threadId: string }, actor: string): Promise<void> {
+    if (!request.dependencyId) throw new Error("dependencyId is required to mark a prerequisite done.");
+    const note = typeof request.note === "string" ? request.note.trim() : "";
+    if (note.length > THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH) {
+      throw new Error(`note is at most ${THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH} characters.`);
+    }
+    if (request.conditionIndex !== undefined && (!Number.isInteger(request.conditionIndex) || request.conditionIndex < 0)) {
+      throw new Error("conditionIndex must be a prerequisite's position, from 0.");
+    }
+    const item = this.options.store.get(request.backend, request.threadId, request.dependencyId);
+    if (!item || (item.status !== "waiting" && item.status !== "ready")) throw new Error("This wait is no longer active.");
+    const index = threadDependencyMarkDoneIndex(item, request.conditionIndex);
+    if (index === undefined) throw new Error("This wait has no prerequisite left to mark done.");
+    const condition = item.conditions[index]!;
+    const key = JSON.stringify(condition);
+    const marked: ThreadDependencyEvidence = { condition, state: "satisfied", reason: note || "Marked done", observedAt: this.now(), markedDoneBy: actor };
+    const saved = await this.save(item, {
+      ...item,
+      evidence: item.evidence.some((entry) => JSON.stringify(entry.condition) === key)
+        ? item.evidence.map((entry) => JSON.stringify(entry.condition) === key ? marked : entry)
+        : [...item.evidence, marked],
+    });
+    if (!saved) throw new Error("This wait changed while it was being marked done. Try again.");
+    await this.evaluate(saved);
   }
 
   private response(target: { backend: AppServerBackendKind; threadId: string }): ManageThreadDependenciesResponse {
@@ -185,7 +233,8 @@ export class ThreadDependencyCoordinator {
     return this.serialize(async () => {
       if (turn || consumerAvailable) this.busyConsumers.delete(identity(target));
       for (const item of this.options.store.active()) {
-        if (identity(item) === identity(target) || item.conditions.some((condition) => identity(condition) === identity(target))) {
+        if (identity(item) === identity(target) || item.conditions.some((condition) =>
+          isThreadDependencyLocalThreadCondition(condition) && identity(condition) === identity(target))) {
           await this.evaluate(item, turn ? { target, turn } : undefined);
         }
       }
@@ -229,6 +278,13 @@ export class ThreadDependencyCoordinator {
     for (const [conditionIndex, stored] of item.conditions.entries()) {
       let condition = stored;
       const previous = item.evidence.find((entry) => JSON.stringify(entry.condition) === JSON.stringify(condition));
+      // A judgement: nothing observed ends it, and Mark Done is final.
+      if (condition.when === "marked_done") {
+        evidence.push(previous?.state === "satisfied"
+          ? previous
+          : { condition, state: "waiting", reason: "Waiting to be marked done", observedAt: this.now() });
+        continue;
+      }
       // A pinned turn is immutable after completion. CI evidence is deliberately
       // reevaluated, including when the consumer was busy at the last success.
       if (condition.when === "turn_completed" && previous && previous.state !== "waiting") {
@@ -403,7 +459,7 @@ export class ThreadDependencyCoordinator {
 class LostDependencyClaim extends Error {}
 
 export function validateDependencyCreate(request: ManageThreadDependenciesRequest): void {
-  if (request.action !== "create") throw new Error("action must be create, list, or cancel.");
+  if (request.action !== "create") throw new Error("action must be create, list, cancel, dismiss, or mark_done.");
   if (request.deliver !== undefined && !THREAD_DEPENDENCY_DELIVERY_TARGETS.includes(request.deliver)) throw new Error("deliver must be agent or operator.");
   if (request.handoff !== undefined && typeof request.handoff !== "boolean") throw new Error("handoff must be true or false.");
   if (request.handoff && request.deliver !== "operator") throw new Error("handoff requires deliver: operator.");
@@ -412,16 +468,38 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
   if (request.mode !== undefined && request.mode !== "all" && request.mode !== "any") throw new Error("mode must be all or any.");
   if (request.onFailure !== undefined && request.onFailure !== "notify" && request.onFailure !== "wait") throw new Error("onFailure must be notify or wait.");
   if (request.continuation !== undefined && (typeof request.continuation !== "string" || request.continuation.length > 8000)) throw new Error("continuation must be text of at most 8000 characters.");
+  if (request.holdMerge !== undefined && typeof request.holdMerge !== "boolean") throw new Error("holdMerge must be true or false.");
+  if (request.steps !== undefined) {
+    if (request.deliver !== "operator") throw new Error("steps require deliver: operator; a resumed thread gets the continuation.");
+    if (!Array.isArray(request.steps) || request.steps.length > THREAD_DEPENDENCY_MAX_STEPS
+      || request.steps.some((step) => typeof step !== "string" || !step.trim() || step.length > THREAD_DEPENDENCY_STEP_MAX_LENGTH)) {
+      throw new Error(`steps must be at most ${THREAD_DEPENDENCY_MAX_STEPS} nonempty lines of at most ${THREAD_DEPENDENCY_STEP_MAX_LENGTH} characters.`);
+    }
+  }
   for (const condition of request.conditions) {
     if (!condition || typeof condition.backend !== "string" || !condition.backend.trim()
-      || typeof condition.threadId !== "string" || !condition.threadId.trim()
+      || typeof condition.threadId !== "string"
       || !THREAD_DEPENDENCY_CONDITIONS.includes(condition.when)) throw new Error("Each condition requires backend, threadId, and a supported when value.");
-    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title", "subject", "target"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (condition.subject !== undefined) {
+      if (typeof condition.subject !== "string" || !condition.subject.trim() || condition.subject.length > THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH) {
+        throw new Error(`subject must be nonempty text of at most ${THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH} characters.`);
+      }
+      if (condition.threadId !== "" || condition.target !== undefined || condition.when !== "marked_done") {
+        throw new Error("A subject prerequisite names no thread (threadId \"\") and is always marked_done.");
+      }
+    } else if (!condition.threadId.trim()) throw new Error("Each condition requires backend, threadId, and a supported when value.");
+    if (condition.target !== undefined) {
+      if (!condition.target || condition.target.scope !== "remote" || typeof condition.target.instanceId !== "string"
+        || !condition.target.instanceId.trim() || condition.target.instanceId.length > 200) throw new Error("target must name the prerequisite's machine: { scope: \"remote\", instanceId }.");
+      if (condition.when !== "marked_done") throw new Error("A thread on another machine can only be a marked_done prerequisite.");
+    }
     if (condition.title !== undefined && (typeof condition.title !== "string" || condition.title.length > 200)) throw new Error("A prerequisite title must be text of at most 200 characters.");
     for (const value of [condition.turnId, condition.prUrl, condition.headSha]) {
       if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > 2000)) throw new Error("Condition identifiers must be nonempty text of at most 2000 characters.");
     }
     if (condition.when === "turn_completed" && (condition.prUrl || condition.headSha)) throw new Error("PR fields cannot be used for a turn completion condition.");
+    if (condition.when === "marked_done" && (condition.prUrl || condition.headSha)) throw new Error("PR fields cannot be used for a marked_done condition.");
     if (condition.when !== "turn_completed" && condition.turnId) throw new Error("turnId is only valid for turn completion.");
   }
 }
@@ -467,7 +545,8 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
       ? item.mode === "any" ? THREAD_DEPENDENCY_PROMPT_ANY_MET : `its prerequisites were met (all of ${item.conditions.length})`
       : THREAD_DEPENDENCY_PROMPT_FAILED}.`,
     ...item.evidence.map((entry) => {
-      const name = entry.condition.title?.trim() ? `"${entry.condition.title.trim()}"` : `Thread ${entry.condition.threadId}`;
+      const label = entry.condition.subject?.trim() || entry.condition.title?.trim();
+      const name = label ? `"${label}"` : `Thread ${entry.condition.threadId}`;
       return `- ${name} ${THREAD_DEPENDENCY_CONDITION_PHRASES[entry.condition.when]}: ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}`;
     }),
     "",
@@ -479,7 +558,9 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
       : ["Report the prerequisite failure. Do not bypass the dependency or begin dependent work; repair only if the operator already authorized it.",
         ...item.continuation ? ["", THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD, item.continuation] : []],
     "Do not poll this dependency or start a Job Monitor for it.",
-    `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => `${condition.backend}:${condition.threadId} (${condition.when})`).join(", ")}.`,
+    `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => condition.subject !== undefined
+      ? `"${condition.subject}" (${condition.when})`
+      : `${condition.backend}:${condition.threadId}${condition.target ? ` on ${condition.target.instanceId}` : ""} (${condition.when})`).join(", ")}.`,
   ].join("\n");
 }
 
@@ -488,6 +569,7 @@ const MET_PHRASES: Record<ThreadDependencyCondition["when"], string> = {
   pr_attached: "has a reviewable PR",
   ci_passed: "passed CI",
   pr_merged: "merged",
+  marked_done: "done",
 };
 
 function clip(text: string, max: number): string {
@@ -498,7 +580,7 @@ function clip(text: string, max: number): string {
 function prerequisiteLabel(entry: ThreadDependencyEvidence, max = 48): string {
   const number = entry.condition.when === "turn_completed" ? undefined : entry.prUrl?.match(/\/pull\/(\d+)/)?.[1];
   if (number) return `#${number}`;
-  const title = entry.condition.title?.trim();
+  const title = entry.condition.subject?.trim() || entry.condition.title?.trim();
   return title ? clip(title, max) : `Thread ${entry.condition.threadId.slice(0, 8)}`;
 }
 
@@ -517,15 +599,20 @@ export function buildDependencyTodo(item: ThreadDependency): DependencyTodoCard 
       ? `${prerequisiteLabel(entry)} ${MET_PHRASES[entry.condition.when]}`
       : `${prerequisiteLabel(entry)} failed: ${entry.reason}`).join(success ? " and " : "; ");
   const continuation = item.continuation?.trim();
-  const fullTitle = success && continuation ? `${summary}: ${continuation}` : summary;
+  // With steps, the title names the first and the card lists them all.
+  const headline = success && item.steps?.length
+    ? `${item.steps[0]}${item.steps.length > 1 ? ` (+${item.steps.length - 1} more)` : ""}`
+    : continuation;
+  const fullTitle = success && headline ? `${summary}: ${headline}` : summary;
   const title = clip(fullTitle, THREAD_TODO_TITLE_MAX_LENGTH);
   const evidence = item.evidence.map((entry) => {
-    const state = entry.state === "satisfied" ? "met" : entry.state;
+    const state = entry.state === "satisfied" ? entry.condition.when === "marked_done" ? "done" : "met" : entry.state;
     return `• ${prerequisiteLabel(entry, 120)} (${state}): ${entry.reason}${entry.prUrl ? ` ${entry.prUrl}` : ""}`;
   });
+  const steps = success ? item.steps ?? [] : [];
   const detail = [
     ...success
-      ? title !== fullTitle && continuation ? [continuation, ""] : []
+      ? (title !== fullTitle || steps.length > 0) && continuation && continuation !== steps.join("\n") ? [continuation, ""] : []
       : continuation ? [`Not started: ${continuation}`, ""] : [],
     ...evidence,
   ].join("\n");
@@ -535,6 +622,7 @@ export function buildDependencyTodo(item: ThreadDependency): DependencyTodoCard 
     ...(detail ? { detail: clip(detail, THREAD_TODO_DETAIL_MAX_LENGTH) } : {}),
     // Never offer to start dependent work after a prerequisite failed.
     ...(item.handoff && success && continuation ? { action: { type: "start_thread" as const, prompt: continuation } } : {}),
+    ...(steps.length ? { items: steps.map((text, index) => ({ id: `step-${index + 1}`, text, checked: false })) } : {}),
   };
 }
 

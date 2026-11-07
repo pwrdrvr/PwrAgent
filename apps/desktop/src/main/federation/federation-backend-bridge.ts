@@ -1,4 +1,4 @@
-import type { ManageThreadMergeHoldsRequest, ManageThreadMergeHoldsResponse } from "@pwragent/shared";
+import type { ManageThreadDependenciesRequest, ManageThreadDependenciesResponse } from "@pwragent/shared";
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
 import {
   FEDERATION_BACKEND_METHODS,
@@ -685,7 +685,17 @@ export type FederationBackendOperations = {
   setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse>;
-  manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, options?: { requesterInstanceId?: string }): Promise<ManageThreadMergeHoldsResponse>;
+  /**
+   * Wait Until Done, which v1.3.15 folded into Continue After. Peers on
+   * v1.3.13–14 still call it: reads answer that nothing waits, and changes
+   * are refused with a request to update.
+   */
+  legacyManageThreadMergeHolds(request: unknown): Promise<{ holds: []; dependents: [] }>;
+  /**
+   * Continue After on this owner's threads. Optional on owner adapters so a
+   * viewer of an older owner receives method_not_found.
+   */
+  manageThreadDependencies?(request: unknown, options?: { requesterInstanceId?: string }): Promise<ManageThreadDependenciesResponse>;
   setThreadLock(
     request: SetThreadLockRequest,
     options?: { requesterInstanceId?: string },
@@ -1318,8 +1328,8 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.manageThreadMergeHolds,
-    async (envelope) => await params.backend.manageThreadMergeHolds(
-      envelope.params as ManageThreadMergeHoldsRequest, { requesterInstanceId: envelope.sourceInstanceId },
+    async (envelope) => await params.backend.legacyManageThreadMergeHolds(
+      envelope.params,
     ),
   );
   params.router.registerHandler(
@@ -1423,6 +1433,14 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as SendThreadPrAutoDispatchNowRequest,
       ),
   );
+  if (params.backend.manageThreadDependencies) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.manageThreadDependencies,
+      async (envelope) => await params.backend.manageThreadDependencies!(
+        envelope.params, { requesterInstanceId: envelope.sourceInstanceId },
+      ),
+    );
+  }
   if (params.backend.manageThreadPrWatchesV1) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1,
@@ -2519,8 +2537,12 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
-  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest): Promise<ManageThreadMergeHoldsResponse> {
-    return await this.rpc.request<ManageThreadMergeHoldsResponse>({ method: FEDERATION_BACKEND_METHODS.manageThreadMergeHolds, params: request });
+  async legacyManageThreadMergeHolds(request: unknown): Promise<{ holds: []; dependents: [] }> {
+    return await this.rpc.request<{ holds: []; dependents: [] }>({ method: FEDERATION_BACKEND_METHODS.manageThreadMergeHolds, params: request });
+  }
+
+  async manageThreadDependencies(request: ManageThreadDependenciesRequest): Promise<ManageThreadDependenciesResponse> {
+    return await this.rpc.request<ManageThreadDependenciesResponse>({ method: FEDERATION_BACKEND_METHODS.manageThreadDependencies, params: request });
   }
 
   async setThreadLock(

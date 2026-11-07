@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { ThreadDependency } from "@pwragent/shared";
-import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, isThreadDependencyLocalThreadCondition } from "@pwragent/shared";
 
 export const THREAD_DEPENDENCY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS thread_dependencies (
@@ -26,11 +26,18 @@ function signature(dependency: ThreadDependency): string {
     dependency.backend, dependency.threadId, dependency.mode,
     dependency.onFailure, dependency.continuation ?? "",
     dependency.deliver ?? "agent", dependency.handoff ?? false,
+    dependency.steps ?? [], dependency.holdMerge ?? false,
     dependency.conditions.map((condition) => JSON.stringify([
       condition.backend, condition.threadId, condition.when,
       condition.turnId ?? "", condition.prUrl ?? "", condition.headSha ?? "",
+      condition.subject ?? "", condition.target?.instanceId ?? "",
     ])).sort(),
   ]);
+}
+
+/** A prerequisite thread on this machine; one on a peer or a subject is no edge here. */
+function localThreadKey(condition: ThreadDependency["conditions"][number]): string | undefined {
+  return isThreadDependencyLocalThreadCondition(condition) ? key(condition.backend, condition.threadId) : undefined;
 }
 
 export class ThreadDependencyStore {
@@ -63,7 +70,7 @@ export class ThreadDependencyStore {
   dependents(backend: string, threadId: string): ThreadDependency[] {
     const target = key(backend, threadId);
     return this.active()
-      .filter((item) => item.conditions.some((condition) => key(condition.backend, condition.threadId) === target))
+      .filter((item) => item.conditions.some((condition) => localThreadKey(condition) === target))
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 
@@ -92,7 +99,10 @@ export class ThreadDependencyStore {
       for (const item of [...active, candidate]) {
         const consumer = key(item.backend, item.threadId);
         const targets = edges.get(consumer) ?? new Set<string>();
-        item.conditions.forEach((condition) => targets.add(key(condition.backend, condition.threadId)));
+        item.conditions.forEach((condition) => {
+          const target = localThreadKey(condition);
+          if (target) targets.add(target);
+        });
         edges.set(consumer, targets);
       }
       const consumer = key(candidate.backend, candidate.threadId);
@@ -102,7 +112,10 @@ export class ThreadDependencyStore {
         seen.add(node);
         return [...(edges.get(node) ?? [])].some((target) => reachesConsumer(target, seen));
       };
-      if (candidate.conditions.some((condition) => reachesConsumer(key(condition.backend, condition.threadId), new Set()))) {
+      if (candidate.conditions.some((condition) => {
+        const target = localThreadKey(condition);
+        return target !== undefined && reachesConsumer(target, new Set());
+      })) {
         throw new Error("This dependency would create a thread dependency cycle.");
       }
       this.db.prepare(

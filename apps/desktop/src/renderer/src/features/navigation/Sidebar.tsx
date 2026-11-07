@@ -1,4 +1,3 @@
-import { useThreadMergeHoldsOpener } from "../thread-merge-holds/useThreadMergeHolds";
 import {
   getSubthreadProjectIdentity,
   getThreadNamedBranch,
@@ -237,7 +236,7 @@ function useRevealListChange<Args extends unknown[], Result>(
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
-import { useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
+import { readThreadDependencyIndicator, useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
 
 type SidebarProps = {
   /** Director voice's mic, rendered first in the masthead; it subscribes to voice itself. */
@@ -710,7 +709,6 @@ export function Sidebar(props: SidebarProps) {
   const federationTarget = readRendererFederationTarget();
   const openThreadMaintenance = useContext(ThreadMaintenanceLauncherContext);
   const dependencyIndicators = useThreadDependencyIndicatorsContext();
-  const openMergeHolds = useThreadMergeHoldsOpener();
   const contextMenuRef = useRef<HTMLDivElement>(null);
   // What had focus when the thread context menu opened: the row's ⋮ button,
   // or wherever focus was for a right-click. Escape, Tab and a finished
@@ -2700,14 +2698,10 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanContinueAfter = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
-      props.onContinueAfter &&
-      !contextMenu.thread.federation &&
-      readRendererFederationTarget()?.scope !== "remote",
+      props.onContinueAfter,
   );
   const contextMenuDependencyCount = contextMenu && contextMenuCanContinueAfter
-    ? dependencyIndicators?.byThreadKey.get(
-        threadSummaryIdentityKey(contextMenu.thread),
-      )?.count ?? 0
+    ? readThreadDependencyIndicator(dependencyIndicators, contextMenu.thread)?.count ?? 0
     : 0;
   // A collapsed parent's sub-threads are not loaded; its row still reports
   // how many it has, so the menu offers the same two archives either way.
@@ -4087,12 +4081,6 @@ export function Sidebar(props: SidebarProps) {
                     >
                       <span>Lock Thread…</span>
                       {menuShortcut("threads.lock")}
-                    </button>
-                  ) : null}
-                  {openMergeHolds && !contextMenuIsBulk ? (
-                    <button role="menuitem" type="button" onClick={() => { const target = contextMenu.thread; setContextMenu(undefined); openMergeHolds(target); }}>
-                      <span>Wait Until Done…</span>
-                      {contextMenu.thread.mergeHolds?.length ? <span className="thread-context-menu__aside">{contextMenu.thread.mergeHolds.length} waiting</span> : null}
                     </button>
                   ) : null}
                   {contextMenuCanContinueAfter ? (

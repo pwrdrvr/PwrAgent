@@ -39,6 +39,16 @@ describe("PwrAgent thread agent tools", () => {
     expect(buildPwrAgentThreadToolRouter(handler, { namespace: "pwragent_threads" }).buildMcpTools().some((tool) => tool.name === "manage_thread_dependencies")).toBe(false);
   });
 
+  it("keeps the retired Wait Until Done tool callable for old threads, pointing at Continue After", async () => {
+    const handler = vi.fn();
+    const router = buildPwrAgentThreadToolRouter(handler);
+    expect(router.buildMcpTools().map((tool) => tool.name)).not.toContain("manage_thread_merge_holds");
+    const result = await router.handleMcpToolCall({ backend: "codex", threadId: "old-thread",
+      tool: "manage_thread_merge_holds", args: { action: "create", reason: "Windows validation" } });
+    expect(JSON.stringify(result)).toContain("Wait Until Done moved into Continue After");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("lets an agent route a dependency to the operator as a reminder card", async () => {
     const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
     const router = buildPwrAgentThreadToolRouter(handler);

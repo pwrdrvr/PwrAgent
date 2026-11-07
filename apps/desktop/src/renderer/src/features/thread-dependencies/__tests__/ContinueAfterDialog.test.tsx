@@ -1,7 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
+import type {
+  ManageThreadDependenciesRequest,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationThreadSummary,
+  ThreadDependency,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { ContinueAfterDialog } from "../ContinueAfterDialog";
@@ -20,10 +26,20 @@ const dependency: ThreadDependency = {
   mode: "all", onFailure: "wait", evidence: [], createdAt: 1, updatedAt: 1,
 };
 
-function pageOf(rows: NavigationThreadSummary[], complete = true) {
-  return vi.fn(async (_request: unknown, _consumerId: string) => ({
-    entries: rows.map((row) => ({ row })), complete, coverage: { state: "complete" },
-  }));
+/** An api whose empty search lists `recent`, the way ⌘K lists recent threads. */
+function searchingApi(manage: unknown, recent: NavigationThreadSummary[] = []): DesktopApi {
+  return {
+    manageThreadDependencies: manage,
+    getNavigationQueryPage: vi.fn(async (request: NavigationQueryRequest) => {
+      const rows = request.query.kind === "search" ? [] : recent;
+      return {
+        protocol: 2, queryKey: request.query.kind, generation: "generation", ownerEpoch: "owner", countsRevision: "counts",
+        counts: { total: rows.length, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+        entries: rows.map((row) => ({ row })),
+      } as unknown as NavigationQueryPage;
+    }),
+    jumpSearchRemoteThreads: vi.fn(async () => ({ results: [] })),
+  } as unknown as DesktopApi;
 }
 
 function renderDialog(api: DesktopApi, subject = thread) {
@@ -32,32 +48,40 @@ function renderDialog(api: DesktopApi, subject = thread) {
   return { ...view, onClose };
 }
 
+/** The search row for `title`, once the recent threads have loaded. */
+const findOption = (title: string) => screen.findByRole("option", { name: new RegExp(title) });
+
+async function pick(title: string) {
+  const option = await findOption(title);
+  await act(async () => { fireEvent.click(within(option).getByRole("button", { name: new RegExp(title) })); });
+}
+
 const dialog = () => screen.getByRole("dialog", { name: "Continue After" });
 const instructions = () => screen.getByRole("textbox", { name: "Instructions" });
 
 describe("Continue After dialog", () => {
   it("opens on the form when nothing is registered and saves exactly the picked row", async () => {
     const manage = vi.fn(async (request) => ({ dependencies: request.action === "create" ? [dependency] : [] }));
-    const query = pageOf([thread, target]);
-    const release = vi.fn(async () => {});
-    const api = { manageThreadDependencies: manage, getNavigationQueryPage: query, releaseNavigationQuery: release } as unknown as DesktopApi;
+    const api = searchingApi(manage, [thread, target]);
     renderDialog(api);
     await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "list", backend: "codex", threadId: "waiting" }));
     // The dialog stays in its loading view until the list response resolves;
     // the call alone does not mean the form has rendered.
     await waitFor(() => expect(dialog()).toHaveAccessibleDescription("Choose what “Dependencies” waits for, and what it does next."));
-    const results = await screen.findByRole("list", { name: "Threads" });
-    await waitFor(() => expect(release).toHaveBeenCalledWith(query.mock.calls[0]![1]));
-    expect(query).toHaveBeenCalledWith({ protocol: 2, consumer: "search", inventory: "owner", query: { kind: "lens", lens: "recents" }, pageSize: 100 }, expect.any(String));
+    expect(screen.getByRole("combobox", { name: "Find a thread to wait for" })).toHaveFocus();
+    await findOption("Foundation");
     // The waiting thread itself is never offered.
-    expect(within(results).queryByRole("button", { name: "Dependencies" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Dependencies/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
-    fireEvent.click(within(results).getByRole("button", { name: "Foundation" }));
-    expect(within(results).getByRole("button", { name: "Foundation" })).toHaveAttribute("aria-pressed", "true");
+    await pick("Foundation");
+    // A picked thread leaves the search; its row is the only place it shows.
+    expect(screen.queryByRole("option", { name: /Foundation/ })).not.toBeInTheDocument();
     expect(screen.getByText("Its PR can be attached later.")).toBeInTheDocument();
     // A single prerequisite has no all/any choice; a CI condition offers the failure policy.
     expect(screen.queryByRole("group", { name: "Continue when" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "If CI fails" })).toBeInTheDocument();
+    // Waiting on CI alone leaves merging alone.
+    expect(screen.getByRole("checkbox", { name: "Hold merging until then" })).not.toBeChecked();
     // The resumed turn starts from the instructions, so they are required.
     expect(instructions()).toBeRequired();
     expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
@@ -80,9 +104,8 @@ describe("Continue After dialog", () => {
 
   it("adds with ⌘Enter from the instructions, where Enter alone adds a line", async () => {
     const manage = vi.fn(async () => ({ dependencies: [] }));
-    const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([target]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    renderDialog(api);
-    fireEvent.click(await screen.findByRole("button", { name: "Foundation" }));
+    renderDialog(searchingApi(manage, [target]));
+    await pick("Foundation");
     fireEvent.change(instructions(), { target: { value: "Rebase onto main" } });
     fireEvent.keyDown(instructions(), { key: "Enter" });
     expect(manage).not.toHaveBeenCalledWith(expect.objectContaining({ action: "create" }));
@@ -91,9 +114,8 @@ describe("Continue After dialog", () => {
   });
 
   it("closes from the form with Cancel when there is no list to go back to", async () => {
-    const api = { manageThreadDependencies: vi.fn(async () => ({ dependencies: [] })), getNavigationQueryPage: pageOf([target]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    const { onClose } = renderDialog(api);
-    await screen.findByRole("list", { name: "Threads" });
+    const { onClose } = renderDialog(searchingApi(vi.fn(async () => ({ dependencies: [] })), [target]));
+    await findOption("Foundation");
     expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -101,19 +123,17 @@ describe("Continue After dialog", () => {
 
   it("opens on the registrations, adds from the same dialog, and goes back without saving", async () => {
     const manage = vi.fn(async () => ({ dependencies: [dependency] }));
-    const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([target, second]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    const { onClose } = renderDialog(api);
+    const { onClose } = renderDialog(searchingApi(manage, [target, second]));
     expect(await screen.findByText("Waiting")).toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Threads" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Find a thread to wait for" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add Prerequisites…" }));
-    const results = await screen.findByRole("list", { name: "Threads" });
-    fireEvent.click(await within(results).findByRole("button", { name: "Driver bump" }));
+    await pick("Driver bump");
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(screen.queryByRole("list", { name: "Threads" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Find a thread to wait for" })).not.toBeInTheDocument();
     expect(manage).not.toHaveBeenCalledWith(expect.objectContaining({ action: "create" }));
     // The form starts empty again.
     fireEvent.click(screen.getByRole("button", { name: "Add Prerequisites…" }));
-    await screen.findByRole("list", { name: "Threads" });
+    await findOption("Driver bump");
     expect(screen.queryByRole("button", { name: "Remove Driver bump" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
@@ -130,12 +150,9 @@ describe("Continue After dialog", () => {
 
   it("submits every visible row with its own condition and the all/any choice", async () => {
     const manage = vi.fn(async () => ({ dependencies: [] }));
-    const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([target, second]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    renderDialog(api);
-    const results = await screen.findByRole("list", { name: "Threads" });
-    await waitFor(() => expect(within(results).getByRole("button", { name: "Driver bump" })).toBeInTheDocument());
-    fireEvent.click(within(results).getByRole("button", { name: "Foundation" }));
-    fireEvent.click(within(results).getByRole("button", { name: "Driver bump" }));
+    renderDialog(searchingApi(manage, [target, second]));
+    await pick("Foundation");
+    await pick("Driver bump");
     chooseSelectOption(screen.getByRole("combobox", { name: "Continue when Foundation" }), "Finishes its turn");
     chooseSelectOption(screen.getByRole("combobox", { name: "Continue when Driver bump" }), "Is merged");
     // No row waits on CI, so the CI failure policy has nothing to govern.
@@ -153,18 +170,13 @@ describe("Continue After dialog", () => {
     }));
   });
 
-  it("removes a row when its thread is chosen again or removed", async () => {
-    const api = { manageThreadDependencies: vi.fn(async () => ({ dependencies: [] })), getNavigationQueryPage: pageOf([target]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    renderDialog(api);
-    const option = await screen.findByRole("button", { name: "Foundation" });
+  it("removes a row and offers its thread again", async () => {
+    renderDialog(searchingApi(vi.fn(async () => ({ dependencies: [] })), [target]));
+    await pick("Foundation");
     fireEvent.change(instructions(), { target: { value: "Continue" } });
-    fireEvent.click(option);
-    expect(screen.getByRole("button", { name: "Remove Foundation" })).toBeInTheDocument();
-    fireEvent.click(option);
-    expect(screen.queryByRole("button", { name: "Remove Foundation" })).not.toBeInTheDocument();
-    fireEvent.click(option);
+    expect(screen.queryByRole("option", { name: /Foundation/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove Foundation" }));
-    expect(option).toHaveAttribute("aria-pressed", "false");
+    expect(await findOption("Foundation")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
   });
 
@@ -178,9 +190,8 @@ describe("Continue After dialog", () => {
         sourceRepository: { provider: "github.com", org: "unrelated", repo: "widgets" } },
     ] } as unknown as NavigationThreadSummary;
     const manage = vi.fn(async () => ({ dependencies: [] }));
-    const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([withPrs]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    renderDialog(api);
-    fireEvent.click(await screen.findByRole("button", { name: "Foundation" }));
+    renderDialog(searchingApi(manage, [withPrs]));
+    await pick("Foundation");
     fireEvent.change(instructions(), { target: { value: "Continue" } });
     expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
     expect(selectOptionLabels(screen.getByRole("combobox", { name: "Pull request for Foundation" }))).toEqual(["#4127", "#4131"]);
@@ -195,9 +206,8 @@ describe("Continue After dialog", () => {
     const secondaryOnly = { ...target, primaryGitRepository: "github.com/acme/widgets", prs: [
       { provider: "github.com", org: "acme", repo: "docs", number: 77, url: "https://github.com/acme/docs/pull/77" },
     ] } as unknown as NavigationThreadSummary;
-    const api = { manageThreadDependencies: vi.fn(async () => ({ dependencies: [] })), getNavigationQueryPage: pageOf([secondaryOnly]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    renderDialog(api);
-    fireEvent.click(await screen.findByRole("button", { name: "Foundation" }));
+    renderDialog(searchingApi(vi.fn(async () => ({ dependencies: [] })), [secondaryOnly]));
+    await pick("Foundation");
     expect(screen.getByText("Its PR can be attached later.")).toBeInTheDocument();
     expect(screen.queryByText(/Follows #77/)).not.toBeInTheDocument();
   });
@@ -208,18 +218,15 @@ describe("Continue After dialog", () => {
       conditions: [{ backend: "codex", threadId: "waiting", when: "pr_merged" }],
     };
     const manage = vi.fn(async () => ({ dependencies: [], dependents: [waiter] }));
-    const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([dependent, target]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    renderDialog(api);
+    renderDialog(searchingApi(manage, [dependent, target]));
     expect(await screen.findByRole("heading", { name: "Waiting on this thread" })).toBeInTheDocument();
     expect(screen.getByText("until it is merged")).toBeInTheDocument();
-    expect(screen.getByText("Not waiting on other threads.")).toBeInTheDocument();
+    expect(screen.getByText("Not waiting on anything.")).toBeInTheDocument();
+    // Only a marked-done wait can be marked done from here.
+    expect(screen.queryByRole("button", { name: "Mark Done…" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add Prerequisites…" }));
-    const results = await screen.findByRole("list", { name: "Threads" });
-    const blocked = await within(results).findByRole("button", { name: /Downstream/ });
-    expect(blocked).toHaveAttribute("aria-disabled", "true");
-    expect(within(blocked).getByText("Waits on this")).toBeInTheDocument();
-    fireEvent.click(blocked);
-    expect(screen.queryByRole("button", { name: "Remove Downstream" })).not.toBeInTheDocument();
+    await findOption("Foundation");
+    expect(screen.queryByRole("option", { name: /Downstream/ })).not.toBeInTheDocument();
   });
 
   it("shows per-prerequisite progress and the plan with saved titles instead of thread ids", async () => {
@@ -256,28 +263,154 @@ describe("Continue After dialog", () => {
     expect(screen.getByText("Prerequisite failed")).toBeInTheDocument();
   });
 
-  it("reminds the operator instead of resuming the thread when chosen", async () => {
+  it("reminds the operator with a checklist of steps instead of resuming the thread", async () => {
     const manage = vi.fn(async () => ({ dependencies: [] }));
-    const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([target]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    renderDialog(api);
-    const results = await screen.findByRole("list", { name: "Threads" });
-    fireEvent.click(await within(results).findByRole("button", { name: "Foundation" }));
+    renderDialog(searchingApi(manage, [target]));
+    await pick("Foundation");
     const whenMet = screen.getByRole("group", { name: "When met" });
     expect(within(whenMet).getByRole("button", { name: "Resume this thread" })).toHaveAttribute("aria-pressed", "true");
     // Start thread is offered only for a reminder.
     expect(screen.queryByRole("checkbox", { name: "Offer to start a thread with this reminder" })).not.toBeInTheDocument();
     fireEvent.click(within(whenMet).getByRole("button", { name: "Remind me" }));
     expect(screen.queryByRole("textbox", { name: "Instructions" })).not.toBeInTheDocument();
-    const reminder = screen.getByRole("textbox", { name: "Reminder" });
+    const reminder = screen.getByRole("textbox", { name: "Remind me to" });
     expect(reminder).toBeRequired();
-    expect(reminder).toHaveAccessibleDescription("Required. It becomes a to-do card on this thread, after the met prerequisites. No turn starts.");
-    fireEvent.change(reminder, { target: { value: "Write the release notes" } });
+    expect(reminder).toHaveAccessibleDescription("Required. One step per line. They become a checklist on a to-do card on this thread. No turn starts.");
+    fireEvent.change(reminder, { target: { value: "- Rebase onto #3291\n\n2. Merge #17\n" } });
     fireEvent.click(screen.getByRole("checkbox", { name: "Offer to start a thread with this reminder" }));
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(manage).toHaveBeenCalledWith({
       action: "create", backend: "codex", threadId: "waiting",
       conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed", title: "Foundation" }],
-      mode: "all", onFailure: "wait", continuation: "Write the release notes", deliver: "operator", handoff: true,
+      mode: "all", onFailure: "wait", continuation: "Rebase onto #3291\nMerge #17", deliver: "operator", handoff: true,
+      steps: ["Rebase onto #3291", "Merge #17"],
+    }));
+  });
+
+  it("refuses more reminder steps than a card holds", async () => {
+    renderDialog(searchingApi(vi.fn(async () => ({ dependencies: [] })), [target]));
+    await pick("Foundation");
+    fireEvent.click(within(screen.getByRole("group", { name: "When met" })).getByRole("button", { name: "Remind me" }));
+    const reminder = screen.getByRole("textbox", { name: "Remind me to" });
+    fireEvent.change(reminder, { target: { value: Array.from({ length: 13 }, (_, index) => `Step ${index + 1}`).join("\n") } });
+    expect(reminder).toHaveAccessibleDescription("Use at most 12 steps of 200 characters.");
+    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+  });
+
+  it("waits for something that is not a thread, and holds merging until it is marked done", async () => {
+    const manage = vi.fn(async () => ({ dependencies: [] }));
+    renderDialog(searchingApi(manage, [target]));
+    await findOption("Foundation");
+    fireEvent.click(screen.getByRole("button", { name: "Add Something Else" }));
+    const subject = screen.getByRole("textbox", { name: "Something else to wait for" });
+    fireEvent.change(instructions(), { target: { value: "Merge the fix" } });
+    // A blank row names nothing to wait for.
+    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+    fireEvent.change(subject, { target: { value: " Windows validation of the shutdown fix " } });
+    const hold = screen.getByRole("checkbox", { name: "Hold merging until then" });
+    expect(hold).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith({
+      action: "create", backend: "codex", threadId: "waiting",
+      conditions: [{ backend: "codex", threadId: "", when: "marked_done", subject: "Windows validation of the shutdown fix" }],
+      mode: "all", onFailure: "wait", continuation: "Merge the fix", holdMerge: true,
+    }));
+  });
+
+  it("leaves merging alone when the operator unticks the hold", async () => {
+    const manage = vi.fn(async (_request: ManageThreadDependenciesRequest) => ({ dependencies: [] }));
+    renderDialog(searchingApi(manage, [target]));
+    await pick("Foundation");
+    chooseSelectOption(screen.getByRole("combobox", { name: "Continue when Foundation" }), "Is marked done");
+    const hold = screen.getByRole("checkbox", { name: "Hold merging until then" });
+    expect(hold).toBeChecked();
+    fireEvent.click(hold);
+    fireEvent.change(instructions(), { target: { value: "Continue" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith(expect.objectContaining({ action: "create" })));
+    const create = manage.mock.calls.find(([request]) => request.action === "create")![0];
+    expect(create).not.toHaveProperty("holdMerge");
+    expect(create).toMatchObject({ conditions: [{ threadId: "foundation", when: "marked_done" }] });
+  });
+
+  it("waits on another machine's thread until it is marked done, named from the waiting thread's owner", async () => {
+    const peerRow = {
+      ...target, id: "validation", title: "Windows validation",
+      federation: {
+        ref: { backend: "codex", threadId: "validation", target: { scope: "remote", instanceId: "win-lab" } },
+        instanceLabel: "Windows lab", peerStatus: "connected", capabilities: ["turn_control"],
+      },
+    } as unknown as NavigationThreadSummary;
+    const manage = vi.fn(async () => ({ dependencies: [] }));
+    renderDialog(searchingApi(manage, [peerRow]));
+    await pick("Windows validation");
+    // Only "marked done" crosses machines, so there is no milestone to choose.
+    expect(screen.queryByRole("combobox", { name: "Continue when Windows validation" })).not.toBeInTheDocument();
+    expect(screen.getByText("On another machine. Waits until that thread, you, or an agent mark it done.")).toBeInTheDocument();
+    fireEvent.change(instructions(), { target: { value: "Merge" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith(expect.objectContaining({
+      action: "create",
+      conditions: [{ backend: "codex", threadId: "validation", when: "marked_done", title: "Windows validation", target: { scope: "remote", instanceId: "win-lab" } }],
+      holdMerge: true,
+    })));
+  });
+
+  it("manages a peer's thread on its owner", async () => {
+    const peerThread = {
+      ...thread,
+      federation: {
+        ref: { backend: "codex", threadId: "waiting", target: { scope: "remote", instanceId: "lab" } },
+        instanceLabel: "Lab", peerStatus: "connected", capabilities: ["turn_control"],
+      },
+    } as unknown as NavigationThreadSummary;
+    const manage = vi.fn(async () => ({ dependencies: [] }));
+    renderDialog(searchingApi(manage, [target]), peerThread);
+    await waitFor(() => expect(manage).toHaveBeenCalledWith({
+      action: "list", backend: "codex", threadId: "waiting", federationTarget: { scope: "remote", instanceId: "lab" },
+    }));
+    expect(screen.queryByText(/available for local threads/)).not.toBeInTheDocument();
+  });
+
+  it("marks its own marked-done prerequisite done with a note", async () => {
+    const waitingForDone: ThreadDependency = {
+      ...dependency, holdMerge: true,
+      conditions: [{ backend: "codex", threadId: "", when: "marked_done", subject: "Windows validation" }],
+    };
+    const manage = vi.fn(async (_request: ManageThreadDependenciesRequest) => ({ dependencies: [waitingForDone] }));
+    renderDialog(searchingApi(manage));
+    expect(await screen.findByText("Windows validation")).toBeInTheDocument();
+    expect(screen.getByText("Merge held")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Mark Done… Windows validation" }));
+    const markDone = screen.getByRole("button", { name: "Mark Done" });
+    fireEvent.change(screen.getByRole("textbox", { name: "What finished (optional)" }), { target: { value: " Windows checks passed. " } });
+    fireEvent.click(markDone);
+    await waitFor(() => expect(manage).toHaveBeenCalledWith({
+      action: "mark_done", backend: "codex", threadId: "waiting",
+      dependencyId: "dependency-1", conditionIndex: 0, note: "Windows checks passed.",
+    }));
+    // The list is read again after the mark.
+    await waitFor(() => expect(manage.mock.calls.filter(([request]) => request.action === "list")).toHaveLength(2));
+    expect(screen.queryByRole("textbox", { name: "What finished (optional)" })).not.toBeInTheDocument();
+  });
+
+  it("lets this thread mark done the wait another machine keeps on it, on that machine", async () => {
+    const remoteWaiter: ThreadDependency = {
+      ...dependency, id: "remote-wait", threadId: "merge-work",
+      conditions: [{ backend: "codex", threadId: "waiting", when: "marked_done", title: "Dependencies", target: { scope: "remote", instanceId: "mac" } }],
+    };
+    const manage = vi.fn(async () => ({
+      dependencies: [], peerDependents: [{ dependency: remoteWaiter, owner: { scope: "remote" as const, instanceId: "lab" } }],
+    }));
+    renderDialog(searchingApi(manage));
+    expect(await screen.findByRole("heading", { name: "Waiting on this thread" })).toBeInTheDocument();
+    expect(screen.getByText("until it is marked done")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Mark Done…" }));
+    // The note is optional; the owner records "Marked done" without one.
+    fireEvent.click(screen.getByRole("button", { name: "Mark Done" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith({
+      action: "mark_done", backend: "codex", threadId: "merge-work", federationTarget: { scope: "remote", instanceId: "lab" },
+      dependencyId: "remote-wait", conditionIndex: 0,
     }));
   });
 
@@ -316,25 +449,13 @@ describe("Continue After dialog", () => {
     await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "dismiss", backend: "codex", threadId: "waiting", dependencyId: "dependency-1" }));
   });
 
-  it("filters as the operator types and releases each navigation consumer", async () => {
-    const query = pageOf([target], false);
-    const release = vi.fn(async () => {});
-    const api = { manageThreadDependencies: vi.fn(async () => ({ dependencies: [] })), getNavigationQueryPage: query, releaseNavigationQuery: release } as unknown as DesktopApi;
-    renderDialog(api);
-    expect(await screen.findByText("Showing recent matches. Refine the search to find another thread.")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "Find a thread" }), { target: { value: "Foundation" } });
-    await waitFor(() => expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ query: { kind: "lens", lens: "recents", filter: "Foundation" }, pageSize: 100 }), expect.any(String)));
-    await waitFor(() => expect(release).toHaveBeenCalledTimes(2));
-  });
-
   it("shows a refused registration in the dialog and keeps the form", async () => {
     const manage = vi.fn(async (request) => {
       if (request.action === "create") throw new Error("This dependency would create a thread dependency cycle.");
       return { dependencies: [] };
     });
-    const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([target]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
-    renderDialog(api);
-    fireEvent.click(await screen.findByRole("button", { name: "Foundation" }));
+    renderDialog(searchingApi(manage, [target]));
+    await pick("Foundation");
     fireEvent.change(instructions(), { target: { value: "Continue" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("This dependency would create a thread dependency cycle.");

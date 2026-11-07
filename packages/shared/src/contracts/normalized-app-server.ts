@@ -2850,10 +2850,6 @@ export type AppServerNotification =
       };
     }
   | {
-      method: "thread/mergeHolds/updated";
-      params: { threadId: string; mergeHolds: import("./thread-merge-holds").ThreadMergeHold[] };
-    }
-  | {
       method: "thread/lock/updated";
       params: {
         threadId: string;

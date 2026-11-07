@@ -1,4 +1,6 @@
-import { useThreadMergeHolds } from "../thread-merge-holds/useThreadMergeHolds";
+import { mergeHoldingDependencies, useThreadDependencyList } from "../thread-dependencies/useThreadDependencyList";
+import { conditionName } from "../thread-dependencies/dependency-labels";
+import { getDesktopApi } from "../../lib/desktop-api";
 import { TodoDispatchFacts, useTodoDispatchTarget } from "./TodoDispatchFacts";
 import { TodoPullRequestChip } from "./TodoPullRequestChip";
 import { todoDispatchPickKey, useTodoDispatchContext, type TodoDispatchChoices } from "./TodoDispatchProvider";
@@ -673,9 +675,14 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     && (!messageTarget.instanceId || messageTarget.instanceId === todo.federationTarget?.instanceId);
   const canSendMessage = !todo.federationTarget
     || props.instances?.some((instance) => instance.instanceId === todo.federationTarget?.instanceId && instance.messageTarget);
-  const mergeHolds = useThreadMergeHolds(todo.backend, todo.threadId, todo.federationTarget, undefined, action?.type === "merge_pull_request" && todo.status === "open", action?.type === "merge_pull_request" ? action.pullRequest : undefined);
-  const blockingMergeHolds = mergeHolds.data?.blockingHolds ?? mergeHolds.data?.holds;
-  const mergeHeld = blockingMergeHolds?.some((hold) => hold.status === "waiting");
+  // Continue After waits that hold this thread's merges. Main refuses the
+  // merge either way; the card says why before it is tried.
+  const mergeHolds = useThreadDependencyList(
+    todo.backend, todo.threadId, todo.federationTarget, getDesktopApi(),
+    action?.type === "merge_pull_request" && todo.status === "open",
+  );
+  const blockingMergeHolds = mergeHoldingDependencies(mergeHolds.data);
+  const mergeHeld = blockingMergeHolds.length > 0;
   const titleId = `thread-todo-title-${todo.id}`;
   const prompt = action?.type === "start_thread" || action?.type === "send_message" ? action.prompt : undefined;
   const hasFacts = action?.type === "merge_pull_request";
@@ -838,9 +845,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           </>
         );
       case "merge_pull_request": {
-        if (mergeHeld || !mergeHolds.ready || mergeHolds.error) return <span role="status" className="thread-todo-card__hint">{mergeHeld
-          ? `Merge waits for ${blockingMergeHolds?.filter((hold) => hold.status === "waiting").map((hold) => hold.reason).join("; ")}`
-          : mergeHolds.error ? "Could not check what merging waits for. Reopen this card to try again." : "Checking what merging waits for…"}</span>;
+        // An owner that cannot answer still refuses a held merge itself.
+        if (mergeHeld || (!mergeHolds.ready && !mergeHolds.error)) return <span role="status" className="thread-todo-card__hint">{mergeHeld
+          ? `Merge waits for ${blockingMergeHolds.flatMap((dependency) => dependency.conditions.map(conditionName)).join("; ")}`
+          : "Checking what merging waits for…"}</span>;
         if (confirmingMerge) {
           return (
             <>
