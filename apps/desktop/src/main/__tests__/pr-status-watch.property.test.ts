@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import type { PrStatusWatchStorage } from "@pwragent/owner-core/pr-status-storage";
 import {
   buildPullRequestStatusKey,
   type AppServerTurnInputItem,
@@ -375,6 +376,7 @@ describe("PR watch over a head as GitHub runs it (model)", () => {
         const stateDb = openInMemoryStateDb();
         try {
           const store = new SqliteOverlayStore(stateDb);
+          const storage: PrStatusWatchStorage = store;
           const wakes: string[] = [];
           const model: ModelState = {
             head: {
@@ -391,7 +393,7 @@ describe("PR watch over a head as GitHub runs it (model)", () => {
           const real: RealSystem = {
             wakes,
             coordinator: new PrStatusWatchCoordinator({
-              store,
+              store: storage,
               registry: {
                 submitTurnIfIdle: async (request: { input: AppServerTurnInputItem[] }) => {
                   const input = request.input[0];

@@ -8,7 +8,6 @@ import type {
   PrSummary,
   PrActivityEvent,
   PrActivityTone,
-  ThreadOverlayState,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
 } from "@pwragent/shared";
@@ -20,13 +19,7 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   parseThreadIdentityKey,
 } from "@pwragent/shared";
-import type {
-  PrAutoDispatchBudgetCompletionResult,
-  PrAutoDispatchBudgetReservationResult,
-  PrAutoDispatchPendingRecord,
-  PrAutoDispatchRecoveryResult,
-  PrAutoDispatchScheduleResult,
-} from "../state/overlay-store-sqlite";
+import type { PrAutoDispatchStorage } from "@pwragent/owner-core/pr-status-storage";
 import { describePrRepairDecision } from "./pr-activity";
 import { isTerminalPullRequest } from "./pr-derivations";
 
@@ -58,114 +51,6 @@ export type PrAutoDispatchOutcome = {
   error?: string;
 };
 
-type PrAutoDispatchStore = {
-  getThreadOverlayState(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): Promise<ThreadOverlayState | undefined>;
-  scheduleThreadPrAutoDispatch(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    pending: ThreadPrAutoDispatchPending;
-    prompt: string;
-    maxAttempts: number;
-    allowCancelledRearm?: boolean;
-  }): Promise<PrAutoDispatchScheduleResult>;
-  resetThreadPrAutoDispatchForOperator(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): Promise<boolean>;
-  beginThreadPrAutoDispatch(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    fingerprint: string;
-    leaseExpiresAt: number;
-    maxAttempts: number;
-    now: number;
-    ownerId: string;
-  }): Promise<
-    | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
-    | { status: "disabled" | "locked" | "stale" | "attempt-limit" }
-  >;
-  reserveThreadPrAutoDispatchBudget(params: {
-    backend: AppServerBackendKind;
-    config: PrAutoDispatchBudgetConfig;
-    fingerprint: string;
-    now: number;
-    ownerId: string;
-    threadId: string;
-  }): Promise<PrAutoDispatchBudgetReservationResult>;
-  rejectThreadPrAutoDispatchForBudget(params: {
-    backend: AppServerBackendKind;
-    fingerprint: string;
-    now: number;
-    ownerId: string;
-    threadId: string;
-  }): Promise<boolean>;
-  restoreThreadPrAutoDispatchAfterBusy(params: {
-    backend: AppServerBackendKind;
-    budgetConfig: PrAutoDispatchBudgetConfig;
-    threadId: string;
-    fingerprint: string;
-    ownerId: string;
-    scheduledAt: number;
-    now: number;
-  }): Promise<ThreadPrAutoDispatchPending | undefined>;
-  renewThreadPrAutoDispatchLease(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    fingerprint: string;
-    leaseExpiresAt: number;
-    now: number;
-    ownerId: string;
-  }): Promise<boolean>;
-  finishThreadPrAutoDispatch(params: {
-    backend: AppServerBackendKind;
-    budgetConfig: PrAutoDispatchBudgetConfig;
-    threadId: string;
-    fingerprint: string;
-    ownerId: string;
-    refundBudgetReservation?: boolean;
-    status: "dispatched" | "failed";
-    now: number;
-  }): Promise<PrAutoDispatchBudgetCompletionResult | undefined>;
-  cancelThreadPrAutoDispatch(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    fingerprint: string;
-    now?: number;
-    status?: "cancelled" | "deferred" | "resolved" | "superseded";
-  }): Promise<boolean>;
-  cancelPendingThreadPrAutoDispatchForPr(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    prKey: string;
-    now: number;
-  }): Promise<boolean>;
-  resolveThreadPrAutoDispatchIncident(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    prKey: string;
-    resolvedKinds: ThreadPrAutoDispatchEventKind[];
-    now: number;
-  }): Promise<void>;
-  getThreadPrAutoDispatchPending(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): Promise<PrAutoDispatchPendingRecord | undefined>;
-  listPendingThreadPrAutoDispatches(): Promise<Array<
-    PrAutoDispatchPendingRecord & {
-      backend: AppServerBackendKind;
-      threadId: string;
-    }
-  >>;
-  recoverOrphanedThreadPrAutoDispatches(params: {
-    budgetConfig: PrAutoDispatchBudgetConfig;
-    now: number;
-    scheduledAt: number;
-  }): Promise<PrAutoDispatchRecoveryResult>;
-};
-
 type PrAutoDispatchRegistry = {
   submitTurnIfIdle(params: {
     backend: AppServerBackendKind;
@@ -195,7 +80,7 @@ export class PrAutoDispatchCoordinator {
 
   constructor(
     private readonly options: {
-      store: PrAutoDispatchStore;
+      store: PrAutoDispatchStorage;
       onActivity?: (event: Omit<PrActivityEvent, "id" | "occurredAt">) => void;
       registry: PrAutoDispatchRegistry;
       isBackgroundPollingEnabled?: () => boolean;
