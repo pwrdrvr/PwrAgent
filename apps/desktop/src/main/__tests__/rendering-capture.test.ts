@@ -99,6 +99,8 @@ describe("opt-in rendering capture", () => {
   // Linux CI reported a 10 s capture as 9999 ms.
   it("never stops a timed capture before its full length, however far the loop clock lags", async () => {
     for (const [seconds, lagMs] of [[1, 0.2], [10, 0.6], [10, 0.999], [30, 0.5], [3, 0]] as const) {
+      // `started` must observe this capture, not the preceding iteration.
+      electron.debuggerApi.sendCommand.mockClear();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       // The fake clock stands in for both; only the start read runs ahead.
       const loopNow = () => Date.now();
@@ -111,11 +113,11 @@ describe("opt-in rendering capture", () => {
         return value;
       });
       try {
-        let settled = false;
-        const pending = captureRenderingDiagnostics(root, seconds).finally(() => { settled = true; });
+        const pending = captureRenderingDiagnostics(root, seconds);
         await started();
-        // Step the clock as the capture's own sampling and transfer timers ask.
-        for (let step = 0; !settled && step < 200; step++) await vi.advanceTimersByTimeAsync(250);
+        // Advance through the deadline, including its fractional-clock correction.
+        // The capture's filesystem work completes on the real event loop.
+        await vi.advanceTimersByTimeAsync(seconds * 1000 + 1);
         const result = await pending;
         const summary = JSON.parse(await readFile(result.summaryPath, "utf8"));
         expect(summary.reason).toBe("duration");
