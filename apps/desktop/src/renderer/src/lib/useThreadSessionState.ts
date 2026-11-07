@@ -1553,7 +1553,28 @@ function pruneOptimisticEntries(
 
   const latestResponseTurnId = latestTranscriptTurnId(response.replay.entries);
   const latestResponseCreatedAt = latestTranscriptCreatedAt(response.replay.entries);
-  return optimisticEntries.filter((entry) => {
+  return optimisticEntries.map((entry) => {
+    if (entry.type !== "activity" || !entry.id.startsWith("live-tools-")) {
+      return entry;
+    }
+    // A read can acknowledge only the first commands of a live bucket. Keep
+    // its unseen suffix, rather than rendering the acknowledged commands in
+    // both the replay row and the live row.
+    const acknowledged = completedReplayToolDetails(response.replay.entries)
+      .get(entry.turn?.id ?? "");
+    if (!acknowledged) {
+      return entry;
+    }
+    const details = entry.details.filter((detail) =>
+      detail.status !== "completed" || !acknowledged.has(detail.id)
+    );
+    return details.length === entry.details.length ? entry : {
+      ...entry,
+      details,
+      summary: summarizeLiveActivity(details),
+      status: summarizeActivityStatus(details),
+    };
+  }).filter((entry) => {
     if (entry.type === "message") {
       const isLaunchpadPlaceholder =
         entry.id === launchpadMessageCandidate?.entry.id;
@@ -1589,6 +1610,9 @@ function pruneOptimisticEntries(
     }
 
     if (entry.type === "activity") {
+      if (entry.id.startsWith("live-tools-") && entry.details.length === 0) {
+        return false;
+      }
       if (
         latestResponseTurnId &&
         entry.turn?.id !== latestResponseTurnId &&
@@ -1607,6 +1631,27 @@ function pruneOptimisticEntries(
 
     return !response.replay.entries.some((candidate) => candidate.id === entry.id);
   });
+}
+
+const completedReplayToolDetailCache = new WeakMap<AppServerThreadEntry[], Map<string, Set<string>>>();
+
+function completedReplayToolDetails(entries: AppServerThreadEntry[]): Map<string, Set<string>> {
+  const cached = completedReplayToolDetailCache.get(entries);
+  if (cached) {
+    return cached;
+  }
+  const byTurn = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    if (entry.type !== "activity" || !entry.turn?.id) continue;
+    for (const detail of entry.details) {
+      if (detail.status !== "completed") continue;
+      const ids = byTurn.get(entry.turn.id) ?? new Set<string>();
+      ids.add(detail.id);
+      byTurn.set(entry.turn.id, ids);
+    }
+  }
+  completedReplayToolDetailCache.set(entries, byTurn);
+  return byTurn;
 }
 
 // Keyed by the immutable replay array, like `replayActivityMatches` below:
@@ -5450,7 +5495,10 @@ export function useThreadSessionState(params: {
           const responseWithRetainedTail = preserveRetainedTranscriptTail(
             orderedResponse,
             current.response,
-            Boolean(current.loadedHistory),
+            // An in-flight older page is anchored to the current tail's
+            // cursor. Keep that bridge if the newest window advances before
+            // the page arrives, or the two pages leave a permanent gap.
+            Boolean(current.loadedHistory) || current.loadingMore,
           );
           const hydratedPendingRequest = lifecycleChangedDuringRead
             ? undefined
@@ -6272,6 +6320,18 @@ export function useThreadSessionState(params: {
         });
       }
 
+      if (
+        event.notification.method === "thread/compacted"
+        || event.notification.method === "thread/rewound"
+      ) {
+        // Reads and pagination cursors from before the reset cannot rebuild
+        // the new history. Invalidate them before scheduling a fresh read.
+        hydrationsRef.current.set(targetThreadKey, transitionThreadHydration(
+          hydrationsRef.current.get(targetThreadKey), { type: "invalidate" },
+        ));
+        conditionalReadsRef.current.delete(targetThreadKey);
+      }
+
       updateSession(targetThreadKey, (session) => {
         const current = transitionTransientMessagesAtBoundary(
           session,
@@ -6751,6 +6811,12 @@ export function useThreadSessionState(params: {
               })
             : undefined;
           if (assistantMessageEntry) {
+            const observedMessage = current.pendingAssistantMessage?.id === assistantMessageEntry.id
+              ? current.pendingAssistantMessage
+              : current.optimisticEntries.find((entry) => entry.id === assistantMessageEntry.id)
+                ?? current.response?.replay.entries.find((entry) => entry.id === assistantMessageEntry.id);
+            const sequence = readRendererSequence(observedMessage) ?? current.nextLiveEntrySequence;
+            const completedEntry = withRendererSequence(assistantMessageEntry, sequence);
             const responseWithUsage = taskMonitorUsageEntry
               ? appendThreadEntries(
                   current.response,
@@ -6771,7 +6837,7 @@ export function useThreadSessionState(params: {
                 ...current.optimisticEntries.filter(
                   (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
                 ),
-                assistantMessageEntry,
+                completedEntry,
               ]
             );
 
@@ -6783,6 +6849,7 @@ export function useThreadSessionState(params: {
               optimisticEntries: current.optimisticEntries.filter(
                 (entry) => entry.type !== "message"
               ),
+              nextLiveEntrySequence: Math.max(current.nextLiveEntrySequence, sequence + 1),
               pendingAssistantMessage:
                 current.pendingAssistantMessage?.id === assistantMessageEntry.id
                   ? undefined
@@ -7342,6 +7409,8 @@ export function useThreadSessionState(params: {
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
             loadedHistory: undefined,
+            loading: false,
+            loadingMore: false,
             pendingUsageActivityEntry: undefined,
             pendingTurnUsage: undefined,
             pendingStatusText: undefined,
