@@ -208,6 +208,7 @@ import {
   type PwrAgentFederatedThreadMessageRequest,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import { MESSAGING_EAGER_TOOLS, VOICE_MANAGER_EAGER_TOOLS } from "../agent-tools/pwragent-tool-search";
+import { THREAD_MAINTENANCE_TOOL_WAIT_MS } from "../agent-tools/thread-maintenance-tool-scans";
 
 const jeepStickerPageFixture = fileURLToPath(
   new URL("./fixtures/pdf/jeep-sticker-page-size.pdf", import.meta.url),
@@ -72410,7 +72411,7 @@ describe("thread maintenance agent tools", () => {
     });
     onTestFinished(() => registry.close());
     const handler = {
-      scan: vi.fn(async () => scan),
+      scan: vi.fn(async (_request: { scanId: string }): Promise<typeof scan> => scan),
       getScan: vi.fn((scanId: string) => scanId === "scan-1" ? scan : undefined),
       getRun: vi.fn((): typeof finished | undefined => undefined),
       start: vi.fn(() => ({ run: { ...finished, running: true }, done: Promise.resolve(finished) })),
@@ -72445,7 +72446,8 @@ describe("thread maintenance agent tools", () => {
     const { handler, call, payload } = await setup();
     const response = await call("scan_thread_maintenance", { projectKey: "/repo", rules: { mode: "age", inactivityDays: 30 } });
     expect(response.success).toBe(true);
-    expect(handler.scan).toHaveBeenCalledExactlyOnceWith({ projectKey: "/repo", rules: { mode: "age", inactivityDays: 30 } });
+    expect(handler.scan).toHaveBeenCalledExactlyOnceWith({ projectKey: "/repo", rules: { mode: "age", inactivityDays: 30 },
+      scanId: expect.any(String) });
     expect(payload(response).maintenanceScan).toMatchObject({
       scanId: "scan-1",
       threads: { checked: 3, idleCount: 2, truncated: false, projects: [{ key: "/repo", idleCount: 2 }] },
@@ -72455,6 +72457,56 @@ describe("thread maintenance agent tools", () => {
       }, { threadId: "idle-clean", offeredForArchive: true }] },
     });
     expect(handler.start).not.toHaveBeenCalled();
+  });
+
+  // Claude Code aborts an MCP call with no response after 60 seconds, and a
+  // full scan of a large fleet took over two minutes. The call must answer
+  // within its wait whatever the scan takes, a retry must join the running
+  // scan, and reading by scanId must return the scan the service produced.
+  it("answers a scan that outlasts one call, then reads it by scanId", async () => {
+    const { handler, call, payload } = await setup();
+    let finish!: () => void;
+    handler.scan.mockImplementation(async (request) => await new Promise<typeof scan>((resolve) => {
+      finish = () => resolve({ ...scan, scanId: request.scanId });
+    }));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => { vi.useRealTimers(); });
+
+    const first = call("scan_thread_maintenance", { projectKey: "/repo" });
+    await vi.advanceTimersByTimeAsync(THREAD_MAINTENANCE_TOOL_WAIT_MS);
+    const firstPayload = payload(await first);
+    expect(firstPayload.maintenanceScan).toBeUndefined();
+    const pending = firstPayload.maintenanceScanPending;
+    expect(pending).toMatchObject({ running: true, projectKey: "/repo", scanId: expect.any(String) });
+    expect(pending.guidance).toContain("only this scanId");
+
+    const retry = call("scan_thread_maintenance", { projectKey: "/repo" }, "maint-retry");
+    await vi.advanceTimersByTimeAsync(THREAD_MAINTENANCE_TOOL_WAIT_MS);
+    expect(payload(await retry).maintenanceScanPending.scanId).toBe(pending.scanId);
+    expect(handler.scan).toHaveBeenCalledExactlyOnceWith({ projectKey: "/repo", scanId: pending.scanId });
+
+    const read = call("scan_thread_maintenance", { scanId: pending.scanId }, "maint-read");
+    await vi.advanceTimersByTimeAsync(1_000);
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(payload(await read).maintenanceScan).toMatchObject({ scanId: pending.scanId, threads: { checked: 3, idleCount: 2 } });
+    expect(handler.scan).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [{ scanId: "scan-1", projectKey: "/repo" }, "Pass scanId alone"],
+    [{ scanId: "" }, "nonempty scanId"],
+  ])("refuses scan arguments %j", async (args, message) => {
+    const { handler, call, payload } = await setup();
+    const response = await call("scan_thread_maintenance", args);
+    expect(payload(response)).toMatchObject({ code: "invalid_arguments" });
+    expect(payload(response).message).toContain(message);
+    expect(handler.scan).not.toHaveBeenCalled();
+  });
+
+  it("reports a scan it no longer has as not found", async () => {
+    const { call, payload } = await setup();
+    expect(payload(await call("scan_thread_maintenance", { scanId: "gone" }))).toMatchObject({ code: "not_found" });
   });
 
   it("opens the dialog for the operator without starting a run", async () => {
@@ -72491,6 +72543,24 @@ describe("thread maintenance agent tools", () => {
       removeCheckouts: [{ backend: "codex", threadId: "archived", worktreePath: "/wt/a/repo" }],
       trashCheckouts: [{ worktreePath: "/wt/b/kit" }], removeEmptyFolders: false });
     expect(payload(response).maintenanceRun).toMatchObject({ runId: "run-1", running: false });
+  });
+
+  // The card and the run share one call's limit, so a long run is reported
+  // as running instead of holding the call open for minutes.
+  it("answers an approved run that outlasts one call as running", async () => {
+    const { handler, call, payload, answer, events } = await setup();
+    handler.start.mockReturnValue({ run: { ...finished, running: true }, done: new Promise<typeof finished>(() => {}) });
+    let answered = false;
+    const pending = call("apply_thread_maintenance", { scanId: "scan-1", archive: [{ backend: "codex", threadId: "idle-clean" }] })
+      .then((response) => { answered = true; return response; });
+    await vi.waitFor(() => expect(events.some((event) => event.notification.method === "item/tool/requestUserInput")).toBe(true));
+    handler.getRun.mockReturnValue({ ...finished, running: true });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    onTestFinished(() => { vi.useRealTimers(); });
+    await answer("Run maintenance");
+    await vi.advanceTimersByTimeAsync(THREAD_MAINTENANCE_TOOL_WAIT_MS);
+    expect(answered).toBe(true);
+    expect(payload(await pending).maintenanceRun).toMatchObject({ runId: "run-1", running: true });
   });
 
   it("hibernates reviewed idle checkouts after the operator approves the card", async () => {

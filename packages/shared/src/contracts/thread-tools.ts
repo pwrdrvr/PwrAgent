@@ -200,6 +200,8 @@ export type ScanThreadMaintenanceToolArgs = {
   /** Limit the scan to one project: its main checkout path. */
   projectKey?: string;
   rules?: Partial<import("../thread-maintenance").ThreadMaintenanceRules>;
+  /** Read a scan an earlier call started, waiting while it runs. Pass alone. */
+  scanId?: string;
 };
 
 export type ApplyThreadMaintenanceToolArgs = {
@@ -283,6 +285,16 @@ export type ThreadMaintenanceScanToolResult = {
   failureCount: number;
   failures: import("../thread-maintenance").ThreadMaintenanceFailure[];
   /** The latest run, when one exists. */
+  run?: ThreadMaintenanceRunToolResult;
+  guidance: string;
+};
+
+/** A scan still running when the call's wait ended. It keeps running. */
+export type ThreadMaintenanceScanPendingToolResult = {
+  scanId: string;
+  running: true;
+  startedAt: number;
+  projectKey?: string;
   run?: ThreadMaintenanceRunToolResult;
   guidance: string;
 };
@@ -1027,6 +1039,9 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             maintenanceScan: ThreadMaintenanceScanToolResult;
+          }
+        | {
+            maintenanceScanPending: ThreadMaintenanceScanPendingToolResult;
           }
         | {
             maintenanceRun: ThreadMaintenanceRunToolResult;
