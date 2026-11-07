@@ -82,7 +82,7 @@ describe("opt-in rendering capture", () => {
   });
 
   it("automatically stops without another renderer request", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const pending = captureRenderingDiagnostics(root, 1);
     await started();
     await vi.advanceTimersByTimeAsync(1000);
@@ -90,6 +90,39 @@ describe("opt-in rendering capture", () => {
     expect(JSON.parse(await readFile(result.summaryPath, "utf8")).reason).toBe("duration");
     expect(electron.debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Tracing.end")).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Node schedules a timer from the event loop's cached clock, which can trail
+  // performance.now() by however long synchronous work ran in that loop turn
+  // (creating the hidden session window). The capture reads its start from
+  // performance.now(), so a timer for the full length could stop it short:
+  // Linux CI reported a 10 s capture as 9999 ms.
+  it("never stops a timed capture before its full length, however far the loop clock lags", async () => {
+    for (const [seconds, lagMs] of [[1, 0.2], [10, 0.6], [10, 0.999], [30, 0.5], [3, 0]] as const) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      // The fake clock stands in for both; only the start read runs ahead.
+      const loopNow = () => Date.now();
+      let lagging = false;
+      // The session is created, then attached, then the start is read.
+      electron.debuggerApi.attach.mockImplementationOnce(() => { lagging = true; });
+      const now = vi.spyOn(performance, "now").mockImplementation(() => {
+        const value = loopNow() + (lagging ? lagMs : 0);
+        lagging = false;
+        return value;
+      });
+      let settled = false;
+      const pending = captureRenderingDiagnostics(root, seconds).finally(() => { settled = true; });
+      await started();
+      // Step the clock as the capture's own sampling and transfer timers ask.
+      for (let step = 0; !settled && step < 200; step++) await vi.advanceTimersByTimeAsync(250);
+      const result = await pending;
+      const summary = JSON.parse(await readFile(result.summaryPath, "utf8"));
+      expect(summary.reason).toBe("duration");
+      expect(summary.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
+      expect(result.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
+      now.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("admits existing and newly discovered pages without reattaching its own target", async () => {
@@ -145,7 +178,7 @@ describe("opt-in rendering capture", () => {
   });
 
   it.each(["Tracing.start", "Tracing.end", "IO.read", "IO.close"])("bounds a hung %s and destroys only its own session", async (hung) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     electron.debuggerApi.sendCommand.mockImplementation((method: string) => method === hung
       ? new Promise(() => {}) : commands(method));
     const pending = captureRenderingDiagnostics(root, 1);
@@ -184,7 +217,7 @@ describe("opt-in rendering capture", () => {
   });
 
   it.each(["partial read", "expansion limit", "failed end"])("cleans up a %s without repeating the end command", async (failure) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     let reads = 0;
     electron.debuggerApi.sendCommand.mockImplementation(async (method: string) => {
       if (method === "Tracing.end" && failure === "failed end") throw new Error("private-end-error");
