@@ -181,10 +181,12 @@ function ReviewVerdictBadge(props: {
 }
 
 export function TranscriptReview(props: TranscriptReviewProps) {
+  const reviewTarget = props.threadLinkSource
+    ? { scope: "remote" as const, instanceId: props.threadLinkSource.instanceId }
+    : props.fileViewerContext?.federationTarget;
   const reviewThread = props.parentThreadId
     ? { backend: props.parentThreadBackend ?? "codex", threadId: props.parentThreadId,
-        ...(props.fileViewerContext?.federationTarget?.scope === "remote"
-          ? { federationTarget: props.fileViewerContext.federationTarget } : {}),
+        ...(reviewTarget?.scope === "remote" ? { federationTarget: reviewTarget } : {}),
       }
     : undefined;
   const tracking = useTrackedReview(reviewThread, { sourceKey: props.entry.id });
