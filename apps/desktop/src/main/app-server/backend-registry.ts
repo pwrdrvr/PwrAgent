@@ -833,9 +833,7 @@ import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   selectStaleWorktreeWorkingStatePaths,
 } from "./thread-working-state-refresh-policy";
-import {
-  type AcpAvailableCommandsStoreLike,
-} from "../acp/acp-available-commands-store";
+import type { AcpAvailableCommandsStorage } from "@pwragent/owner-core/acp-storage";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
@@ -9700,7 +9698,7 @@ export class DesktopBackendRegistry {
   // repo's last-observed list is cached here and replayed for them. See
   // `resolveAcpAvailableCommands` for the read path and
   // `rememberAcpAvailableCommands` for the write-through.
-  private readonly acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike;
+  private readonly acpAvailableCommandsStore?: AcpAvailableCommandsStorage;
   private readonly acpAvailableCommandProbeBudgetMs: number;
   private readonly acpAvailableCommandProbes = new Map<
     string,
@@ -11273,7 +11271,7 @@ export class DesktopBackendRegistry {
     acpAgentStore?: AcpBackendAdapterOptions["acpAgentStore"];
     acpRolloutStore?: AcpBackendAdapterOptions["acpRolloutStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
-    acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike | null;
+    acpAvailableCommandsStore?: AcpAvailableCommandsStorage | null;
     providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike | null;
     acpAvailableCommandProbeBudgetMs?: number;
     discoverLocalAcpAgents?: LocalAcpDiscovery;

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpAgentClient } from "../acp/acp-client";
-import { AcpSessionStore } from "../acp/acp-session-store";
+import { AcpSessionStore } from "../storage/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

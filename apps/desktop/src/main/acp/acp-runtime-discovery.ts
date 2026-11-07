@@ -7,10 +7,7 @@ import type {
 } from "@pwragent/shared";
 import { AcpAgentClient, type AcpJsonRpcTransport } from "./acp-client.js";
 import { AcpStdioJsonRpcTransport } from "./acp-stdio-transport.js";
-import type {
-  AcpSessionMetadata,
-  AcpSessionStore,
-} from "./acp-session-store.js";
+import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 
 const ACP_DISCOVERY_REQUEST_TIMEOUT_MS = 20_000;
@@ -271,7 +268,7 @@ function findConfigOption(
 }
 
 class MemoryAcpSessionStore implements Pick<
-  AcpSessionStore,
+  AcpSessionStorage,
   "getSession" | "listSessions" | "upsertSession"
 > {
   private readonly sessions = new Map<string, AcpSessionMetadata>();

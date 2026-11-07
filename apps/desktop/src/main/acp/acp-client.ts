@@ -39,10 +39,7 @@ import {
   readAcpToolContentCommand,
   readAcpToolText,
 } from "./acp-command-extraction.js";
-import type {
-  AcpSessionMetadata,
-  AcpSessionStore,
-} from "./acp-session-store.js";
+import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import {
   isPwrAgentSyntheticAcpUpdate,
   type AcpRolloutRecord,
@@ -164,7 +161,7 @@ export type AcpPromptContentBlock =
   | { type: "image"; mimeType: string; data: string };
 
 type AcpSessionStoreLike = Pick<
-  AcpSessionStore,
+  AcpSessionStorage,
   "getSession" | "listSessions" | "upsertSession"
 >;
 

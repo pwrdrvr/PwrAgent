@@ -8,7 +8,7 @@ import { createTempStateDb } from "./sqlite-test-utils";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { AcpSessionStore } from "../acp/acp-session-store";
+import { AcpSessionStore } from "../storage/acp-session-store";
 import { FederatedSearchService } from "../federation/federated-search-service";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FederationRouter } from "../federation/federation-router";

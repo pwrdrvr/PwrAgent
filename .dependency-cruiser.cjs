@@ -221,9 +221,9 @@ module.exports = {
       name: "desktop-ipc-state-is-service-private",
       severity: "error",
       comment:
-        "Desktop IPC, federation, app-server, composer drafts, operator requests, PR status, scheduled actions, thread search, Token Miser, thread to-dos, thread reviews and the desktop settings service reach persistent state through owner and application services.",
+        "Desktop IPC, federation, app-server, composer drafts, operator requests, PR status, scheduled actions, thread search, Token Miser, thread to-dos, thread reviews, ACP and the desktop settings service reach persistent state through owner and application services.",
       from: {
-        path: "^apps/desktop/src/main/(?:(ipc|federation|app-server|composer-drafts|operator-requests|pr-status|scheduled-actions|thread-search|token-miser|thread-todos|thread-reviews)/|settings/desktop-settings-service\\.[cm]?[jt]sx?$)",
+        path: "^apps/desktop/src/main/(?:(ipc|federation|app-server|composer-drafts|operator-requests|pr-status|scheduled-actions|thread-search|token-miser|thread-todos|thread-reviews|acp)/|settings/desktop-settings-service\\.[cm]?[jt]sx?$)",
       },
       to: {
         path: "^apps/desktop/src/main/state/",

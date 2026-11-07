@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { resolveActiveProfileDir, resolveBootstrapProfileDir } from "../profile";
-import { getAppStateMode } from "../state/app-state";
+import { getAppStateMode } from "../storage/desktop-runtime-storage";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 import { discoverAcpRuntimeCapabilities } from "./acp-runtime-discovery.js";
 

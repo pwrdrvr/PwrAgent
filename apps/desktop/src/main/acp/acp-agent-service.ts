@@ -1,11 +1,10 @@
 import type { AcpBackendId } from "@pwragent/shared";
-import { getAppStateDb } from "../state/app-state";
-import { AcpAgentStore } from "./acp-agent-store";
+import { createAcpAgentStorage } from "../storage/desktop-runtime-storage";
 import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "./acp-registry-types";
 
 /** Installed-agent state and registry cache for desktop settings. */
 export class AcpAgentService {
-  private readonly store = new AcpAgentStore(getAppStateDb());
+  private readonly store = createAcpAgentStorage();
 
   saveRegistrySnapshot(snapshot: AcpRegistrySnapshot): void {
     this.store.saveRegistrySnapshot(snapshot);

@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
-import { AcpSessionStore } from "../acp/acp-session-store";
+import { AcpSessionStore } from "../storage/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { StateDb } from "../state/state-db";
 import {

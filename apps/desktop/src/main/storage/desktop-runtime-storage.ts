@@ -1,3 +1,5 @@
+import type { AcpAgentStorage, AcpAvailableCommandsStorage, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "../acp/acp-registry-types";
 import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
 import { SqliteThreadReviewStorage } from "./thread-review-storage-sqlite";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
@@ -11,9 +13,9 @@ import { RestartContinuationStore } from "../state/restart-continuation-store";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadSandboxStore } from "../state/thread-sandbox-store";
 import { runOneTimeArchivedWorktreeRepair as runRepair } from "../state/archived-worktree-repair";
-import { AcpAgentStore } from "../acp/acp-agent-store";
-import { AcpSessionStore } from "../acp/acp-session-store";
-import { AcpAvailableCommandsStore } from "../acp/acp-available-commands-store";
+import { AcpAgentStore } from "./acp-agent-store";
+import { AcpSessionStore } from "./acp-session-store";
+import { AcpAvailableCommandsStore } from "./acp-available-commands-store";
 import { ThreadSearchStore } from "./thread-search-store";
 import { SqliteTokenMiserStorage } from "./token-miser-storage-sqlite";
 import { TokenMiserStore, type TokenMiserStoreOptions } from "../token-miser/token-miser-store";
@@ -56,9 +58,9 @@ export function createProviderThreadSnapshotStorage() {
 export function createCodexEnvironmentHydrationStorage() {
   return new CodexEnvironmentHydrationStore(getAppStateDb());
 }
-export function createAcpAgentStorage() { return new AcpAgentStore(getAppStateDb()); }
-export function createAcpSessionStorage() { return new AcpSessionStore(getAppStateDb()); }
-export function createAcpAvailableCommandsStorage() { return new AcpAvailableCommandsStore(getAppStateDb()); }
+export function createAcpAgentStorage(): AcpAgentStorage<AcpRegistrySnapshot, AcpInstalledAgentRecord> { return new AcpAgentStore(getAppStateDb()); }
+export function createAcpSessionStorage(): AcpSessionStorage { return new AcpSessionStore(getAppStateDb()); }
+export function createAcpAvailableCommandsStorage(): AcpAvailableCommandsStorage { return new AcpAvailableCommandsStore(getAppStateDb()); }
 export function createThreadSearchStorage(): ThreadSearchStorage { return new ThreadSearchStore(getAppStateDb()); }
 export function createTokenMiserStorage(directory: string, options: Omit<TokenMiserStoreOptions, "storage">) {
   return new TokenMiserStore(directory, { ...options, storage: new SqliteTokenMiserStorage(getAppStateDb()) });
