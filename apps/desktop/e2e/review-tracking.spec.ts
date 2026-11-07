@@ -1,3 +1,4 @@
+import { SqliteThreadReviewStorage } from "../src/main/storage/thread-review-storage-sqlite";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -50,7 +51,7 @@ test("tracks a review created after tracking began, retains dismissals, and clea
       // Opening arbitrary old history must not opt it into the work queue.
       const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
       try {
-        new ThreadReviewService(db, undefined, () => 1_791_600_000_000 - 1);
+        new ThreadReviewService(new SqliteThreadReviewStorage(db), undefined, () => 1_791_600_000_000 - 1);
       } finally {
         db.close();
       }

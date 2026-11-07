@@ -1,3 +1,4 @@
+import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent, AppServerThreadReviewEntry, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { threadReviewTodo } from "@pwragent/shared";
@@ -37,7 +38,7 @@ describe("persistent thread reviews", () => {
     db = StateDb.open(temp.dbPath);
     clock = 1_000;
     events = [];
-    service = new ThreadReviewService(db, (event) => events.push(event), () => ++clock);
+    service = new ThreadReviewService(new SqliteThreadReviewStorage(db), (event) => events.push(event), () => ++clock);
   });
   afterEach(() => {
     db.close();
@@ -69,7 +70,7 @@ describe("persistent thread reviews", () => {
     const dismissed = service.update({ id: review.id, status: "dismissed", note: "This work is superseded.", url: "https://example.com/discussion" }, "user");
     db.close();
     db = StateDb.open(temp.dbPath);
-    service = new ThreadReviewService(db);
+    service = new ThreadReviewService(new SqliteThreadReviewStorage(db));
     expect(service.record(THREAD, INPUT)).toEqual(dismissed);
     expect(service.list()).toEqual([]);
     expect(service.list({ status: "dismissed" })[0]?.items[0]?.status).toBe("addressed");
@@ -278,7 +279,7 @@ describe("persistent thread reviews", () => {
     expect(service.importEntry(THREAD, old)).toBeUndefined();
     expect(service.importEntry(THREAD, undated)).toBeUndefined();
     clock += 10_000;
-    service = new ThreadReviewService(db, undefined, () => ++clock);
+    service = new ThreadReviewService(new SqliteThreadReviewStorage(db), undefined, () => ++clock);
     expect(service.importEntry(THREAD, old)).toBeUndefined();
     expect(service.importEntry(THREAD, undated)).toBeUndefined();
     // A completion missed while the app was closed can still be recovered.
@@ -291,7 +292,7 @@ describe("persistent thread reviews", () => {
     const entry = { type: "review" as const, id: "live-undated", review: "An unstructured review to inspect." };
     const review = service.importEntry(THREAD, entry, "live")!;
     expect(review.origin).toBe("automatic");
-    service = new ThreadReviewService(db, undefined, () => ++clock);
+    service = new ThreadReviewService(new SqliteThreadReviewStorage(db), undefined, () => ++clock);
     expect(service.list()).toEqual([review]);
     service.importEntry(THREAD, entry);
     expect(service.list()).toEqual([review]);
@@ -358,7 +359,7 @@ describe("persistent thread reviews", () => {
     expect(service.list({ ...THREAD, status: "all" })).toEqual([partial]);
     expect(partial.items[0]?.resolution?.note).toBe("Fixed cancellation.");
     expect(partial.items[1]?.status).toBe("open");
-    service = new ThreadReviewService(db);
+    service = new ThreadReviewService(new SqliteThreadReviewStorage(db));
     expect(service.list({ ...THREAD, status: "all" })).toEqual([partial]);
     const settled = service.update({ id: partial.id, itemId: partial.items[1]!.id, status: "declined", note: "Caller owns the connection." }, "user");
     expect(settled.status).toBe("handled");
@@ -368,7 +369,7 @@ describe("persistent thread reviews", () => {
   it("budgets the persistent tracking boundary once per profile, with no restart or read writes", async () => {
     db.raw.prepare("DELETE FROM meta WHERE key = ?").run("thread_review_tracking_started_at");
     const { writes } = await measureSqliteWrites(() => {
-      for (let index = 0; index < 100; index++) new ThreadReviewService(db).list();
+      for (let index = 0; index < 100; index++) new ThreadReviewService(new SqliteThreadReviewStorage(db)).list();
     });
     expect(writes.commits).toBe(1);
     expectSqliteWriteBudget({ scenario: "thread-review-tracking-start", note: "One profile tracking boundary; 100 service starts and reads. No repeated initialization or idle commits.", writes });

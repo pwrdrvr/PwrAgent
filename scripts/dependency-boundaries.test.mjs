@@ -82,13 +82,13 @@ beforeAll(async () => {
     storageCases.push({ from, to: target });
   }
 
-  for (const area of ["ipc", "ipc/nested", "app-server", "app-server/nested", "federation", "federation/nested", "composer-drafts", "composer-drafts/nested", "operator-requests", "operator-requests/nested", "pr-status", "pr-status/nested", "scheduled-actions", "scheduled-actions/nested", "thread-search", "thread-search/nested", "token-miser", "token-miser/nested", "thread-todos", "thread-todos/nested", "settings"]) {
+  for (const area of ["ipc", "ipc/nested", "app-server", "app-server/nested", "federation", "federation/nested", "composer-drafts", "composer-drafts/nested", "operator-requests", "operator-requests/nested", "pr-status", "pr-status/nested", "scheduled-actions", "scheduled-actions/nested", "thread-search", "thread-search/nested", "token-miser", "token-miser/nested", "thread-todos", "thread-todos/nested", "thread-reviews", "thread-reviews/nested", "settings"]) {
     for (const target of ["overlay", "app-state", "nested/store"]) {
       const to = `apps/desktop/src/main/state/${target}.js`;
       const from = `apps/desktop/src/main/${area}/state-${target.replaceAll("/", "-")}.js`;
       source(to, "export const value = 1;\n");
       source(from, `import ${JSON.stringify(relative(dirname(from), to).replaceAll("\\", "/"))};\n`);
-      ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation", "composer-drafts", "operator-requests", "pr-status", "scheduled-actions", "thread-search", "token-miser", "thread-todos"].includes(area.split("/")[0]) });
+      ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation", "composer-drafts", "operator-requests", "pr-status", "scheduled-actions", "thread-search", "token-miser", "thread-todos", "thread-reviews"].includes(area.split("/")[0]) });
     }
   }
 

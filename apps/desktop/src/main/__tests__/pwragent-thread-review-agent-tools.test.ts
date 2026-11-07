@@ -1,3 +1,4 @@
+import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { PWRAGENT_THREAD_REVIEW_OPERATION_NAMES } from "@pwragent/shared";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
@@ -8,7 +9,7 @@ import { ThreadReviewService } from "../thread-reviews/thread-review-service";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const db = openInMemoryStateDb();
-const service = new ThreadReviewService(db);
+const service = new ThreadReviewService(new SqliteThreadReviewStorage(db));
 const handler: PwrAgentThreadReviewHandler = {
   record: (identity, input) => service.record(identity, input),
   list: (identity, status) => service.list({ ...identity, status }),

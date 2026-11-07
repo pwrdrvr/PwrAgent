@@ -1,3 +1,5 @@
+import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
+import { SqliteThreadReviewStorage } from "./thread-review-storage-sqlite";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
 import { ThreadTodoStore } from "./thread-todo-store";
 import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
@@ -67,4 +69,8 @@ export function runOneTimeArchivedWorktreeRepair(options: Omit<Parameters<typeof
 
 export function createThreadTodoStorage(): ThreadTodoStorage {
   return new ThreadTodoStore(getAppStateDb());
+}
+
+export function createThreadReviewStorage(): ThreadReviewStorage {
+  return new SqliteThreadReviewStorage(getAppStateDb());
 }
