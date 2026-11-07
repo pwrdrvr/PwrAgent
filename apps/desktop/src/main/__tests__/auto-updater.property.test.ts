@@ -17,6 +17,19 @@ type Pending = {
 const fake = vi.hoisted(() => {
   const macrotask = globalThis.setImmediate;
   const handlers = new Map<string, Set<Handler>>();
+  const nativeHandlers = new Map<string, Handler>();
+  const native = {
+    checkForUpdates: vi.fn(),
+    once: (event: string, handler: Handler) => nativeHandlers.set(event, handler),
+    removeListener: (event: string, handler: Handler) => {
+      if (nativeHandlers.get(event) === handler) nativeHandlers.delete(event);
+    },
+    emit: (event: string) => {
+      const handler = nativeHandlers.get(event);
+      nativeHandlers.delete(event);
+      handler?.();
+    },
+  };
   const state = {
     feed: new Set<string>(),
     train: "stable" as "stable" | "beta",
@@ -36,6 +49,11 @@ const fake = vi.hoisted(() => {
     state.disk.add(version);
     state.file = version;
     emit("update-downloaded", { version });
+    // MacUpdater.doDownloadUpdate dispatches the zip's event first, then
+    // requests Squirrel staging only if auto-install is still enabled.
+    if (process.platform === "darwin" && autoUpdater.autoInstallOnAppQuit) {
+      native.checkForUpdates();
+    }
     if (autoUpdater.autoInstallOnAppQuit) state.quitHandlerAdded = true;
   };
   const stop = (canceled: boolean): void => {
@@ -110,6 +128,8 @@ const fake = vi.hoisted(() => {
   return {
     state,
     autoUpdater,
+    native,
+    nativeHandlers,
     macrotask,
     stop,
     succeed: () => {
@@ -120,6 +140,8 @@ const fake = vi.hoisted(() => {
     },
     reset: () => {
       handlers.clear();
+      nativeHandlers.clear();
+      native.checkForUpdates.mockReset();
       state.disk.clear();
       state.file = undefined;
       state.pending = undefined;
@@ -136,6 +158,7 @@ const fake = vi.hoisted(() => {
 vi.mock("@pwragent/shared", async (importOriginal) => await importOriginal());
 vi.mock("electron", () => ({
   app: { isPackaged: true, getVersion: () => "1.0.0" },
+  autoUpdater: fake.native,
   BrowserWindow: {
     getAllWindows: () => [{
       isDestroyed: () => false,
@@ -634,5 +657,70 @@ describe("auto-updater held-update model (Windows pending cache)", () => {
     // default short commands. With in-memory cache/settings and one module
     // reload per run this stays under the 5 s local test timeout.
     ), { numRuns: 400 });
+  });
+});
+
+/** An unselected installer must stay disarmed, but its replacement still
+ * needs a native staging request before its Restart offer can be shown. The
+ * fake's post-dispatch gate above is the oracle from MacUpdater's source. */
+async function runMacStagingSession(patch: number, beta: number, startTrain: Train): Promise<void> {
+  vi.clearAllTimers();
+  fake.reset();
+  const stableVersion = `1.0.${patch}`;
+  const betaVersion = `2.0.0-beta.${beta}`;
+  fake.state.feed = new Set([BASELINE, `v${stableVersion}`, `v${betaVersion}`]);
+  fake.state.train = startTrain;
+  vi.resetModules();
+  const updater = await import("../auto-updater");
+  updater.initAutoUpdater();
+  await settle();
+  fake.succeed();
+  await settle();
+  expect(fake.native.checkForUpdates).toHaveBeenCalledTimes(1);
+  // The first build has staged. The replacement's completion is delivered
+  // separately, only after main or MacUpdater actually requests staging.
+  fake.native.emit("update-downloaded");
+  fake.native.checkForUpdates.mockReset();
+  fake.native.checkForUpdates.mockImplementation(() => {
+    expect(fake.nativeHandlers.has("update-downloaded"), "observe staging before starting it").toBe(true);
+    expect(fake.nativeHandlers.has("error")).toBe(true);
+  });
+
+  fake.state.train = startTrain === "stable" ? "beta" : "stable";
+  const target = fake.state.train === "beta" ? betaVersion : stableVersion;
+  fake.state.changed();
+  await settle();
+  expect(fake.autoUpdater.autoInstallOnAppQuit, "the unselected installer stays disarmed").toBe(false);
+  fake.succeed();
+  await settle();
+  expect(fake.native.checkForUpdates, "the replacement must be staged explicitly").toHaveBeenCalledTimes(1);
+  expect(fake.autoUpdater.autoInstallOnAppQuit).toBe(false);
+  expect(updater.readAppUpdateStatus()).not.toEqual({ status: "downloaded", version: target });
+  fake.native.emit("update-downloaded");
+  expect(updater.readAppUpdateStatus()).toEqual({ status: "downloaded", version: target });
+  expect(fake.autoUpdater.autoInstallOnAppQuit).toBe(true);
+  expect(fake.nativeHandlers.size).toBe(0);
+}
+
+describe("macOS cross-track staging", () => {
+  function useMacUpdater(): void {
+    vi.useFakeTimers();
+    vi.stubEnv("NODE_ENV", "production");
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+  }
+
+  it("stages Beta explicitly while the held Stable installer is disarmed", async () => {
+    useMacUpdater();
+    await runMacStagingSession(1, 1, "stable");
+  });
+
+  it("every cross-track replacement requests staging before offering Restart", async () => {
+    useMacUpdater();
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 1, max: 100 }),
+      fc.integer({ min: 1, max: 100 }),
+      fc.constantFrom<Train>("stable", "beta"),
+      runMacStagingSession,
+    ), { numRuns: 25 });
   });
 });
