@@ -88,6 +88,8 @@ export function summarizeThreadMaintenanceScan(
           lastActivityAt: item.lastActivityAt, changedFiles: item.files, changedBytes: item.bytes,
           ...(item.archiveKey ? { offeredForArchive: true } : {}),
         })),
+        ...(scan.hibernate.notIdleYet !== undefined ? { notIdleYet: scan.hibernate.notIdleYet } : {}),
+        ...(scan.hibernate.alreadyHibernated !== undefined ? { alreadyHibernated: scan.hibernate.alreadyHibernated } : {}),
         kept: scan.hibernate.kept,
         ...(scan.hibernate.skipped ? { skipped: scan.hibernate.skipped } : {}),
         truncated: scan.hibernate.items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT,

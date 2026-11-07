@@ -149,6 +149,9 @@ export const APP_SERVER_GET_THREAD_MAINTENANCE_RUN_CHANNEL =
   "app-server:get-thread-maintenance-run";
 export const APP_SERVER_STOP_THREAD_MAINTENANCE_CHANNEL =
   "app-server:stop-thread-maintenance";
+/** A scan's live position, sent only to the window that asked for the scan. */
+export const THREAD_MAINTENANCE_SCAN_PROGRESS_EVENT_CHANNEL =
+  "thread-maintenance:scan-progress";
 export const THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL =
   "app-server:thread-maintenance-run-changed";
 /** Main asks the focused main window to open the Thread maintenance dialog. */

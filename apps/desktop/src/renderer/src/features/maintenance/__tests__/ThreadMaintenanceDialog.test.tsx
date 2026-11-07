@@ -6,11 +6,13 @@ import type {
   ThreadMaintenanceApplyRequest,
   ThreadMaintenanceRun,
   ThreadMaintenanceScan,
+  ThreadMaintenanceScanProgress,
+  ThreadMaintenanceScanStep,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { ThreadMaintenanceDialog } from "../ThreadMaintenanceDialog";
-import { buildApplyRequest, defaultSelection } from "../thread-maintenance-selection";
+import { buildApplyRequest, defaultSelection, runSteps } from "../thread-maintenance-selection";
 
 afterEach(() => {
   cleanup();
@@ -92,6 +94,8 @@ function fixtureScan(): ThreadMaintenanceScan {
           worktreePath: "/home/.pwragent/worktrees/w7c1/kiln-cli", lastActivityAt: NOW - 12 * DAY,
           files: 0, bytes: 0, removedOutput: ["target"] },
       ],
+      notIdleYet: 3,
+      alreadyHibernated: 5,
       kept: { "Other ignored files": 2, "Rebase in progress": 1, "Changes over the snapshot limit": 1 },
     },
     expired: { enabled: false, retentionDays: 0 },
@@ -126,10 +130,12 @@ async function continueToCheckouts(dialog: HTMLElement, archive: string) {
   fireEvent.click(await within(dialog).findByRole("button", { name: "Hibernate 2 and continue" }));
 }
 
+/** Combined with every step ticked, from the plan to the idle threads review. */
 async function openReview(api: DesktopApi, onOpenThread?: (thread: { backend: string; threadId: string }) => void) {
   const onClose = vi.fn();
   render(<ThreadMaintenanceDialog desktopApi={api} onClose={onClose} onOpenThread={onOpenThread} />);
   const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "Archive idle threads" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
   await screen.findByText("3 idle threads");
   return { dialog, onClose };
@@ -149,6 +155,13 @@ describe("ThreadMaintenanceDialog", () => {
       ["3", "Remove archived checkouts"],
       ["4", "Delete expired archives"],
     ]);
+    // Archiving is the operator's choice: it starts unticked.
+    expect(screen.getByRole("checkbox", { name: "Archive idle threads" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Hibernate idle checkouts" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Remove archived checkouts" })).toBeChecked();
+    expect(screen.getByText(/^Threads idle 5 days\. Their checkouts/)).toBeInTheDocument();
+    expect(screen.getByText("Stops twice for you")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Archive idle threads" }));
     expect(screen.getByText(/^Threads idle 5 days that aren't being archived\./)).toBeInTheDocument();
     expect(screen.getByText("Stops three times for you")).toBeInTheDocument();
     expect(screen.getByText("Never removed")).toBeInTheDocument();
@@ -161,6 +174,9 @@ describe("ThreadMaintenanceDialog", () => {
     const { dialog } = await openReview(api);
     expect(api.scanThreadMaintenance).toHaveBeenCalledWith({
       rules: { mode: "count", keepPerProject: 20, inactivityDays: 7, rebuildableOutputIsClean: true },
+      steps: ["threads", "hibernate", "checkouts"],
+      hibernateIdleDays: 7,
+      progressId: expect.any(String),
     });
     expect(within(dialog).getByRole("region", { name: "harbor-web" })).toBeInTheDocument();
     expect(within(dialog).getByText(/removes node_modules/)).toBeInTheDocument();
@@ -256,6 +272,163 @@ describe("ThreadMaintenanceDialog", () => {
     expect(await within(dialog).findByText("Maintenance finished")).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Stop after this item" })).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Close" })).toBeInTheDocument();
+  });
+
+  it("never archives from Combined unless the operator ticks it", async () => {
+    const { api } = fixtureApi();
+    render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    // The scan reads only the ticked steps, and the first review is hibernate.
+    expect(await within(dialog).findByText("2 idle checkouts can hibernate")).toBeInTheDocument();
+    expect(vi.mocked(api.scanThreadMaintenance!).mock.calls[0]![0]!.steps).toEqual(["hibernate", "checkouts"]);
+    const rail = within(dialog).getByRole("list", { name: "Steps" });
+    expect(within(rail).getAllByRole("listitem").map((step) => step.querySelector(".thread-maintenance__rail-title")?.textContent))
+      .toEqual(["Idle checkouts", "Archived checkouts"]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hibernate 2 and continue" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Remove 1 and finish" }));
+    await waitFor(() => expect(api.applyThreadMaintenance).toHaveBeenCalledOnce());
+    expect(vi.mocked(api.applyThreadMaintenance!).mock.calls[0]![0].archive).toEqual([]);
+  });
+
+  it("scans idle checkouts with the plan's idle days and says where every thread went", async () => {
+    const { api } = fixtureApi();
+    render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} hibernationPolicy={{
+      enabled: true, idleDays: 7, maxSnapshotMb: 25, removeRebuildableOutput: true, restoreOn: "send" }} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    const days = within(dialog).getByRole("spinbutton", { name: "Days idle before a checkout can hibernate" });
+    expect(days).toHaveValue(7);
+    expect(within(dialog).getByText(/The hourly sweep uses 7 days, set in Settings → Worktrees\./)).toBeInTheDocument();
+    fireEvent.change(days, { target: { value: "3" } });
+    expect(within(dialog).getByText(/^Threads idle 3 days\. Their checkouts/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    expect(vi.mocked(api.scanThreadMaintenance!).mock.calls[0]![0]).toMatchObject({ steps: ["hibernate", "checkouts"], hibernateIdleDays: 3 });
+
+    await within(dialog).findByText("2 idle checkouts can hibernate");
+    expect(within(dialog).getByText("9 checkouts on disk checked", { exact: false })).toBeInTheDocument();
+    const counts = dialog.querySelector(".thread-maintenance__dispositions")!;
+    const cells = [...counts.children].map((cell) => [...cell.children].map((part) => part.textContent));
+    expect(cells).toEqual([
+      ["Can hibernate", "2"],
+      ["Not idle yet", "3", "active in the last 7 days"],
+      ["Kept", "4", "reasons below"],
+      ["Already hibernated", "5", "not counted above"],
+    ]);
+  });
+
+  it("follows Settings' idle days until the field is edited, even when Settings load after open", async () => {
+    const { api } = fixtureApi();
+    const policy = (idleDays: number) => ({ enabled: true, idleDays, maxSnapshotMb: 25, removeRebuildableOutput: true, restoreOn: "send" as const });
+    const { rerender } = render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    const days = within(dialog).getByRole("spinbutton", { name: "Days idle before a checkout can hibernate" });
+    rerender(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} hibernationPolicy={policy(14)} />);
+    expect(days).toHaveValue(14);
+    fireEvent.change(days, { target: { value: "3" } });
+    rerender(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} hibernationPolicy={policy(21)} />);
+    expect(days).toHaveValue(3);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    expect(vi.mocked(api.scanThreadMaintenance!).mock.calls[0]![0]).toMatchObject({ hibernateIdleDays: 3 });
+    await within(dialog).findByText("2 idle checkouts can hibernate");
+  });
+
+  it("words a run's footnote by the steps it runs, not the dialog's plan", async () => {
+    const { api } = fixtureApi({
+      getThreadMaintenanceRun: vi.fn(async (): Promise<ThreadMaintenanceRun> => ({
+        runId: "agent-run", revision: REV(), scanId: "scan-9", running: true, startedAt: NOW, steps: [], problems: [],
+        current: { step: "hibernate", processed: 1, total: 2, object: "/home/.pwragent/worktrees/x/y" },
+      })),
+    } as Partial<DesktopApi>);
+    render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
+    expect(await screen.findByText("Each checkout comes back when its thread gets a message")).toBeInTheDocument();
+  });
+
+  it("never sends idle days for a scan without the idle checkouts step", async () => {
+    const { api } = fixtureApi();
+    render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: "Archived checkouts" }));
+    expect(within(dialog).queryByRole("spinbutton", { name: "Days idle before a checkout can hibernate" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    expect(vi.mocked(api.scanThreadMaintenance!).mock.calls[0]![0]).not.toHaveProperty("hibernateIdleDays");
+    await within(dialog).findByRole("button", { name: "Remove 1 and finish" });
+  });
+
+  it("cannot scan with every step unticked", () => {
+    const { api } = fixtureApi();
+    render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Hibernate idle checkouts" }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Remove archived checkouts" }));
+    expect(within(dialog).getByText("Tick a step to run")).toBeInTheDocument();
+    const scan = within(dialog).getByRole("button", { name: "Scan" });
+    expect(scan).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(scan);
+    expect(api.scanThreadMaintenance).not.toHaveBeenCalled();
+  });
+
+  it("shows what the scan is reading as it goes, and ignores another scan's progress", async () => {
+    const progressListeners = new Set<(progress: ThreadMaintenanceScanProgress) => void>();
+    let finishScan: (scan: ThreadMaintenanceScan) => void = () => {};
+    const { api, scan } = fixtureApi({
+      scanThreadMaintenance: vi.fn(() => new Promise<ThreadMaintenanceScan>((resolve) => { finishScan = resolve; })),
+      onThreadMaintenanceScanProgress: vi.fn((callback: (progress: ThreadMaintenanceScanProgress) => void) => {
+        progressListeners.add(callback);
+        return () => { progressListeners.delete(callback); };
+      }),
+    } as Partial<DesktopApi>);
+    render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    expect(within(dialog).getByRole("button", { name: "Scanning…" })).toHaveAttribute("aria-disabled", "true");
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Starting the scan…");
+    const progressId = vi.mocked(api.scanThreadMaintenance!).mock.calls[0]![0]!.progressId!;
+    const emit = (progress: Omit<ThreadMaintenanceScanProgress, "progressId" | "steps">, id = progressId) => {
+      act(() => { for (const listener of progressListeners) listener({ ...progress, progressId: id, steps: ["hibernate", "checkouts"] }); });
+    };
+
+    emit({ step: "hibernate", stage: "listing", processed: 0, total: 0, inFlight: [] });
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Reading threads…");
+    emit({ step: "hibernate", stage: "checking", processed: 16, total: 141,
+      inFlight: ["Price the cart drawer", "Stream progress to the TTY"] });
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Measuring idle checkouts");
+    expect(within(dialog).getByText("16 of 141")).toBeInTheDocument();
+    expect(within(dialog).getByText("16 / 141")).toBeInTheDocument();
+    expect(within(dialog).getByText("now: Price the cart drawer · Stream progress to the TTY")).toBeInTheDocument();
+    expect(within(dialog).getByRole("listitem", { current: "step" })).toHaveTextContent("Idle checkoutsscanning 16 of 141");
+
+    // Another window's (or an earlier) scan never moves this card.
+    emit({ step: "checkouts", stage: "checking", processed: 3, total: 9, inFlight: [] }, "someone-else");
+    expect(within(dialog).getByText("16 of 141")).toBeInTheDocument();
+
+    emit({ step: "checkouts", stage: "checking", processed: 2, total: 10, inFlight: ["/home/.pwragent/worktrees/q8d2/kiln-cli"] });
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Checking archived checkouts");
+    const rail = within(within(dialog).getByRole("list", { name: "Steps" })).getAllByRole("listitem");
+    expect(rail[0]).toHaveTextContent("scanned");
+    expect(rail[1]).toHaveAttribute("aria-current", "step");
+
+    await act(async () => { finishScan(scan); });
+    expect(await within(dialog).findByText("2 idle checkouts can hibernate")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("status")).toBeNull();
+  });
+
+  it("keeps the plan's tabs, heading and footer in place through scan and review", async () => {
+    const { api } = fixtureApi();
+    render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    // The pieces outside the scrolling body are the same elements throughout.
+    const frame = () => [...dialog.children].map((child) => child.className);
+    const planFrame = frame();
+    expect(planFrame).toEqual(["thread-maintenance__head", "thread-maintenance__tabs", "thread-maintenance__body", "thread-maintenance__foot"]);
+    const description = within(dialog).getByText(/^Find idle threads/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    expect(frame()).toEqual(planFrame);
+    await within(dialog).findByText("2 idle checkouts can hibernate");
+    expect(frame()).toEqual(planFrame);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hibernate 2 and continue" }));
+    await within(dialog).findByRole("button", { name: "Remove 1 and finish" });
+    expect(frame()).toEqual(planFrame);
+    expect(description).toBeInTheDocument();
   });
 
   it("closes on a click outside the dialog", () => {
@@ -500,6 +673,36 @@ describe("thread maintenance selection", () => {
     const scan = fixtureScan();
     expect(buildApplyRequest(scan, defaultSelection(scan), "combined").hibernate?.map((item) => item.threadId))
       .toEqual(["h-changes", "h-clean"]);
+  });
+
+  // Model: Combined runs exactly the steps its plan ticks, whatever the
+  // operator selected in any review. Archive is never ticked by default.
+  it("sends work only for the steps Combined's plan ticks", () => {
+    const scan = fixtureScan();
+    const threadKeys = scan.threads.projects.flatMap((project) => project.idle).map((row) => `${row.backend}:${row.threadId}`);
+    const checkoutPaths = scan.checkouts.items.map((item) => item.worktreePath);
+    const hibernateKeys = scan.hibernate!.items.map((item) => `${item.backend}:${item.threadId}`);
+    expect(runSteps("combined")).toEqual(["hibernate", "checkouts"]);
+    fc.assert(fc.property(
+      fc.record({ threads: fc.boolean(), hibernate: fc.boolean(), checkouts: fc.boolean() }),
+      fc.subarray(threadKeys), fc.subarray(checkoutPaths), fc.subarray(hibernateKeys), fc.boolean(),
+      (plan, threads, checkouts, hibernate, emptyFolders) => {
+        const steps = runSteps("combined", plan);
+        expect(steps).toEqual((["threads", "hibernate", "checkouts"] as ThreadMaintenanceScanStep[]).filter((step) => plan[step]));
+        const selection = { ...defaultSelection(scan), threads: new Set(threads), checkouts: new Set(checkouts),
+          hibernate: new Set(hibernate), emptyFolders };
+        const request = buildApplyRequest(scan, selection, steps);
+        const fields = {
+          threads: request.archive.length,
+          hibernate: request.hibernate?.length ?? 0,
+          checkouts: request.removeCheckouts.length + request.trashCheckouts.length
+            + (request.removeUnreferenced?.length ?? 0) + (request.removeEmptyFolders ? 1 : 0),
+        };
+        for (const [step, count] of Object.entries(fields)) {
+          if (!plan[step as ThreadMaintenanceScanStep]) expect(count, `unticked ${step} sent work`).toBe(0);
+        }
+      },
+    ), { numRuns: 300 });
   });
 
   // Model: a tab sends work for its own steps and nothing else, whatever

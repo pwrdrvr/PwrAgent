@@ -182,6 +182,8 @@ import type {
   ThreadMaintenanceRules,
   ThreadMaintenanceRun,
   ThreadMaintenanceScan,
+  ThreadMaintenanceScanProgress,
+  ThreadMaintenanceScanStep,
   DraftAutomationPromptRequest,
   DraftAutomationPromptResponse,
   ConfigureFederationTailscaleRequest,
@@ -1051,6 +1053,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   scanThreadMaintenance?: (request?: {
     rules?: Partial<ThreadMaintenanceRules>;
     projectKey?: string;
+    /** The steps to read. Absent: every step. */
+    steps?: ThreadMaintenanceScanStep[];
+    /** Idle days for this scan's hibernate step only. Settings keep theirs. */
+    hibernateIdleDays?: number;
+    /** Set to hear this scan's progress through onThreadMaintenanceScanProgress. */
+    progressId?: string;
   }) => Promise<ThreadMaintenanceScan>;
   /** Starts a run of selections from one scan. Resolves once it starts;
    * progress and the result arrive through onThreadMaintenanceRunChanged. */
@@ -1852,6 +1860,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => () => void;
   onThreadMaintenanceRunChanged?: (
     callback: (run: ThreadMaintenanceRun) => void,
+  ) => () => void;
+  /** Progress of a scan this window started with a progressId. */
+  onThreadMaintenanceScanProgress?: (
+    callback: (progress: ThreadMaintenanceScanProgress) => void,
   ) => () => void;
   /** File → Thread Maintenance…, an agent, or a project's context menu. */
   onOpenThreadMaintenanceRequested?: (

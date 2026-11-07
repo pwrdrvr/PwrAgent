@@ -109,6 +109,27 @@ export type ThreadMaintenanceFailure = {
 /** Runs in this order: archive, then hibernate, then archived checkouts. */
 export type ThreadMaintenanceStep = "threads" | "hibernate" | "checkouts" | "expired";
 
+/** The steps a scan can read, in run order. */
+export type ThreadMaintenanceScanStep = Exclude<ThreadMaintenanceStep, "expired">;
+
+export const THREAD_MAINTENANCE_SCAN_STEPS: readonly ThreadMaintenanceScanStep[] = ["threads", "hibernate", "checkouts"];
+
+/** Where a scan is, for the dialog's live status. Sent to the window that
+ * asked for the scan; never stored. */
+export type ThreadMaintenanceScanProgress = {
+  /** Matches the id the window sent with its scan request. */
+  progressId: string;
+  /** The steps this scan reads, in order. */
+  steps: ThreadMaintenanceScanStep[];
+  step: ThreadMaintenanceScanStep;
+  /** "listing" until the step knows how many items it will check. */
+  stage: "listing" | "checking";
+  processed: number;
+  total: number;
+  /** What is being checked now: thread titles, or checkout paths. */
+  inFlight: string[];
+};
+
 /** An idle thread whose checkout can hibernate: removed after its changes
  * are saved to a recovery snapshot, and restored on the thread's next send.
  * The thread stays in the lists. */
@@ -136,6 +157,9 @@ export type ThreadMaintenanceScan = {
   rules: ThreadMaintenanceRules;
   /** Set when the scan was limited to one project. */
   projectKey?: string;
+  /** The steps this scan read. Absent: every step. A step it did not read
+   * comes back empty. */
+  steps?: ThreadMaintenanceScanStep[];
   /** "none" until a disk accounting provider is connected. */
   spaceSource: "none" | "pwrdisk";
   threads: {
@@ -154,12 +178,21 @@ export type ThreadMaintenanceScan = {
   /** Idle checkouts that can hibernate, from threads this scan does not
    * offer to archive. Absent from owners that predate the step. */
   hibernate?: {
-    /** Hibernation's own settings, as the review ran them. */
+    /** Hibernation's own settings, as the review ran them. `idleDays` is
+     * the dialog's choice for this scan when it made one. */
     idleDays: number;
     maxSnapshotMb: number;
     removeRebuildableOutput: boolean;
+    /** Threads with a PwrAgent checkout on disk:
+     * `items` + `notIdleYet` + every `kept` count. */
     checked: number;
     items: ThreadMaintenanceHibernateCheckout[];
+    /** Active within `idleDays`. Counted in `checked`, not in `kept`. */
+    notIdleYet?: number;
+    /** Checkouts already hibernated. Not counted in `checked`: there is
+     * nothing on disk to hibernate. Absent from owners that predate it,
+     * which count both in `kept`. */
+    alreadyHibernated?: number;
     kept: Record<string, number>;
     skipped?: string;
   };

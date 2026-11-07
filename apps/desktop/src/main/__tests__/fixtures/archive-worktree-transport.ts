@@ -12,6 +12,8 @@ export type ArchiveWorktreeThread = {
   status?: Thread["status"];
   originator?: string;
   name?: string;
+  /** Unix seconds, as Codex reports it. Defaults to 2, long idle. */
+  updatedAt?: number;
   archived?: boolean;
 };
 
@@ -45,7 +47,7 @@ export class ArchiveWorktreeTransport implements JsonRpcTransport {
       const { wireSource, threadSource, ...metadata } = thread;
       return {
         ...metadata, source: wireSource ?? thread.source,
-        name: thread.name ?? thread.id, createdAt: 1, updatedAt: 2, modelProvider: "openai",
+        name: thread.name ?? thread.id, createdAt: 1, updatedAt: thread.updatedAt ?? 2, modelProvider: "openai",
         threadSource: threadSource === undefined ? (thread.source.startsWith("subAgent") ? "subagent" : "user") : threadSource,
         turns: [],
       };

@@ -109,6 +109,9 @@ function build(input: Scenario): { candidate: ThreadArchiveCandidate; policy: De
 /** The design, as one predicate. */
 function eligible(input: Scenario): boolean {
   const pwragentRoot = input.root === "pwragent" || input.root === "pwragentProfile";
+  // Codex never removes a checkout in ~/.codex/worktrees, so it hibernates
+  // too. A Claude thread's checkout there is not one PwrAgent made for it.
+  const toolRoot = pwragentRoot || (input.root === "codex" && input.source !== "claude");
   const idleDays = input.idleFor / DAY;
   return input.enabled
     && input.archived === "no"
@@ -119,8 +122,8 @@ function eligible(input: Scenario): boolean {
     && !input.agent && !input.mergeHeld && !input.pendingWork && !input.prWatch && !input.scheduled && !input.remote
     && !input.activeSubAgent
     && (input.threadStatus === "idle" || input.threadStatus === "notLoaded")
-    // Only PwrAgent's own, unborrowed worktrees.
-    && pwragentRoot && !input.external
+    // Only PwrAgent's and Codex's own, unborrowed worktrees.
+    && toolRoot && !input.external
     && input.snapshot !== "hibernated" && input.snapshot !== "archivedPending"
     && !(input.source === "claude" && idleDays > 30)
     && idleDays >= input.idleDays
@@ -140,10 +143,21 @@ describe("checkout hibernation keep rules", () => {
     }), { numRuns: 5000 });
   });
 
-  it("never hibernates a checkout under Codex's own worktree root", () => {
+  it("treats a checkout under Codex's worktree root like one under PwrAgent's", () => {
+    const notClaude = scenario.filter((input) => input.source !== "claude");
+    fc.assert(fc.property(notClaude, (input) => {
+      const codex = build({ ...input, root: "codex" });
+      const pwragent = build({ ...input, root: "pwragent" });
+      const options = { busy: input.busy, sharedPath: input.sharedPath };
+      expect(hibernationKeepReason(codex.candidate, NOW, codex.policy, options))
+        .toBe(hibernationKeepReason(pwragent.candidate, NOW, pwragent.policy, options));
+    }), { numRuns: 2000 });
+  });
+
+  it("keeps a Claude thread's checkout under Codex's worktree root", () => {
     fc.assert(fc.property(scenario, (input) => {
-      const { candidate, policy } = build({ ...input, root: "codex" });
-      expect(hibernationKeepReason(candidate, NOW, policy, { busy: false, sharedPath: false })).toBeDefined();
+      const { candidate, policy } = build({ ...input, source: "claude", root: "codex" });
+      expect(hibernationKeepReason(candidate, NOW, policy, { busy: input.busy, sharedPath: input.sharedPath })).toBeDefined();
     }));
   });
 });

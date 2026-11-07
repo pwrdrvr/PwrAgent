@@ -277,6 +277,10 @@ export type ThreadMaintenanceScanToolResult = {
       /** The archive list offers this thread too. Pick one, not both. */
       offeredForArchive?: boolean;
     }>;
+    /** Active within idleDays; not idle yet. */
+    notIdleYet?: number;
+    /** Already hibernated; not counted in `checked`. */
+    alreadyHibernated?: number;
     kept: Record<string, number>;
     skipped?: string;
     truncated: boolean;

@@ -1,19 +1,40 @@
-import type {
-  ThreadMaintenanceApplyRequest,
-  ThreadMaintenanceArchivedCheckout,
-  ThreadMaintenanceHibernateCheckout,
-  ThreadMaintenanceIdleThread,
-  ThreadMaintenanceOverLimitChoice,
-  ThreadMaintenanceScan,
-  ThreadMaintenanceWorkspace,
+import {
+  THREAD_MAINTENANCE_SCAN_STEPS,
+  type ThreadMaintenanceApplyRequest,
+  type ThreadMaintenanceArchivedCheckout,
+  type ThreadMaintenanceHibernateCheckout,
+  type ThreadMaintenanceIdleThread,
+  type ThreadMaintenanceOverLimitChoice,
+  type ThreadMaintenanceScan,
+  type ThreadMaintenanceScanStep,
+  type ThreadMaintenanceWorkspace,
 } from "@pwragent/shared";
 
-/** Which steps a tab runs. Combined runs every step in order. */
-export type ThreadMaintenanceMode = "combined" | "threads" | "hibernate" | "checkouts";
+/** Which steps a tab runs. Combined runs the steps its plan has ticked. */
+export type ThreadMaintenanceMode = "combined" | ThreadMaintenanceScanStep;
 
-/** Whether a tab runs a step. */
-export function modeRuns(mode: ThreadMaintenanceMode, step: Exclude<ThreadMaintenanceMode, "combined">): boolean {
-  return mode === "combined" || mode === step;
+/** The steps Combined runs, as the operator ticked them. */
+export type ThreadMaintenancePlan = Record<ThreadMaintenanceScanStep, boolean>;
+
+/** Archiving is the operator's choice, so Combined never starts with it on. */
+export const DEFAULT_THREAD_MAINTENANCE_PLAN: ThreadMaintenancePlan = { threads: false, hibernate: true, checkouts: true };
+
+/** The steps a tab runs, in run order. */
+export function runSteps(mode: ThreadMaintenanceMode, plan: ThreadMaintenancePlan = DEFAULT_THREAD_MAINTENANCE_PLAN): ThreadMaintenanceScanStep[] {
+  return THREAD_MAINTENANCE_SCAN_STEPS.filter((step) => mode === "combined" ? plan[step] : mode === step);
+}
+
+/** A tab, or the exact steps that run. A bare "combined" means every step. */
+export type ThreadMaintenanceSteps = ThreadMaintenanceMode | readonly ThreadMaintenanceScanStep[];
+
+function stepList(steps: ThreadMaintenanceSteps): readonly ThreadMaintenanceScanStep[] {
+  if (typeof steps !== "string") return steps;
+  return steps === "combined" ? THREAD_MAINTENANCE_SCAN_STEPS : [steps];
+}
+
+/** Whether a step runs. */
+export function stepRuns(steps: ThreadMaintenanceSteps, step: ThreadMaintenanceScanStep): boolean {
+  return stepList(steps).includes(step);
 }
 
 /** "keep" leaves an over-limit thread alone; it is never archived. */
@@ -35,10 +56,10 @@ export type ThreadMaintenanceSelection = {
 export function hibernateItems(
   scan: ThreadMaintenanceScan,
   selection?: Pick<ThreadMaintenanceSelection, "threads">,
-  mode?: ThreadMaintenanceMode,
+  steps?: ThreadMaintenanceSteps,
 ): ThreadMaintenanceHibernateCheckout[] {
   const items = scan.hibernate?.items ?? [];
-  if (!selection || !mode || !modeRuns(mode, "threads")) return items;
+  if (!selection || !steps || !stepRuns(steps, "threads")) return items;
   return items.filter((item) => !item.archiveKey || !selection.threads.has(item.archiveKey));
 }
 
@@ -67,16 +88,16 @@ export function defaultSelection(scan: ThreadMaintenanceScan): ThreadMaintenance
   };
 }
 
-/** One apply request for every reviewed step. A tab that runs one step
- * sends nothing for the others. */
+/** One apply request for every reviewed step. A step that does not run
+ * sends nothing, whatever was selected for it. */
 export function buildApplyRequest(
   scan: ThreadMaintenanceScan,
   selection: ThreadMaintenanceSelection,
-  mode: ThreadMaintenanceMode,
+  steps: ThreadMaintenanceSteps,
 ): ThreadMaintenanceApplyRequest {
-  const runThreads = modeRuns(mode, "threads");
-  const runCheckouts = modeRuns(mode, "checkouts");
-  const runHibernate = modeRuns(mode, "hibernate");
+  const runThreads = stepRuns(steps, "threads");
+  const runCheckouts = stepRuns(steps, "checkouts");
+  const runHibernate = stepRuns(steps, "hibernate");
   const archive = runThreads
     ? allIdleThreads(scan).flatMap((row) => {
       const key = idleThreadKey(row);
@@ -99,7 +120,7 @@ export function buildApplyRequest(
       .map(({ worktreePath }) => ({ worktreePath })),
     removeEmptyFolders: runCheckouts && selection.emptyFolders,
     hibernate: runHibernate
-      ? hibernateItems(scan, selection, mode).filter((item) => selection.hibernate.has(idleThreadKey(item)))
+      ? hibernateItems(scan, selection, steps).filter((item) => selection.hibernate.has(idleThreadKey(item)))
         .map(({ backend, threadId }) => ({ backend, threadId }))
       : [],
   };

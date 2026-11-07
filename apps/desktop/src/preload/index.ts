@@ -258,6 +258,8 @@ import type {
   ThreadMaintenanceRules,
   ThreadMaintenanceRun,
   ThreadMaintenanceScan,
+  ThreadMaintenanceScanProgress,
+  ThreadMaintenanceScanStep,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
@@ -847,6 +849,7 @@ import {
   APP_SERVER_GET_THREAD_MAINTENANCE_RUN_CHANNEL,
   APP_SERVER_STOP_THREAD_MAINTENANCE_CHANNEL,
   THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL,
+  THREAD_MAINTENANCE_SCAN_PROGRESS_EVENT_CHANNEL,
   WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
@@ -1899,6 +1902,9 @@ const desktopApi = Object.freeze({
   scanThreadMaintenance: async (request?: {
     rules?: Partial<ThreadMaintenanceRules>;
     projectKey?: string;
+    steps?: ThreadMaintenanceScanStep[];
+    hibernateIdleDays?: number;
+    progressId?: string;
   }): Promise<ThreadMaintenanceScan> =>
     await ipcRenderer.invoke(APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL, request),
   applyThreadMaintenance: async (request: ThreadMaintenanceApplyRequest): Promise<ThreadMaintenanceRun> =>
@@ -3408,6 +3414,15 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  onThreadMaintenanceScanProgress: (
+    callback: (progress: ThreadMaintenanceScanProgress) => void,
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: ThreadMaintenanceScanProgress) => callback(progress);
+    ipcRenderer.on(THREAD_MAINTENANCE_SCAN_PROGRESS_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(THREAD_MAINTENANCE_SCAN_PROGRESS_EVENT_CHANNEL, listener);
     };
   },
   onOpenThreadMaintenanceRequested: (
