@@ -16,7 +16,7 @@ import {
   readCodexAsyncQuestionRepliesFromNotification,
   readCodexAsyncQuestionsFromNotification,
 } from "@pwragent/shared";
-import type { OperatorRequestStore } from "./operator-request-store.js";
+import type { OperatorRequestStorage } from "@pwragent/owner-core/operator-request-storage";
 
 /** The registry surface the service reads. */
 export type OperatorRequestRegistry = {
@@ -30,7 +30,7 @@ export type OperatorRequestRegistry = {
 
 export type OperatorRequestServiceOptions = {
   registry: OperatorRequestRegistry;
-  store: OperatorRequestStore;
+  store: OperatorRequestStorage;
   broadcast: (event: OperatorRequestsChangedEvent) => void;
   now?: () => number;
 };
@@ -51,7 +51,7 @@ export type OperatorRequestServiceOptions = {
  */
 export class OperatorRequestService {
   private readonly registry: OperatorRequestRegistry;
-  private readonly store: OperatorRequestStore;
+  private readonly store: OperatorRequestStorage;
   private readonly broadcast: (event: OperatorRequestsChangedEvent) => void;
   private readonly now: () => number;
   private readonly firstSeenAt = new Map<string, number>();

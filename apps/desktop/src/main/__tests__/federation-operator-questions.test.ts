@@ -4,7 +4,7 @@ import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION
 import { FederationRouter } from "../federation/federation-router";
 import { installOperatorRequestService } from "../operator-requests/operator-request-runtime";
 import { OperatorRequestService } from "../operator-requests/operator-request-service";
-import { OperatorRequestStore } from "../operator-requests/operator-request-store";
+import { OperatorRequestStore } from "../storage/operator-request-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const submitThreadReply = vi.hoisted(() => vi.fn(async () => ({ status: "queued", entry: { backend: "codex", threadId: "thread", id: "queue-1" } })));

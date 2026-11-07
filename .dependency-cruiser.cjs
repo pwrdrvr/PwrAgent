@@ -221,9 +221,9 @@ module.exports = {
       name: "desktop-ipc-state-is-service-private",
       severity: "error",
       comment:
-        "Desktop IPC, federation, app-server and composer drafts reach persistent state through owner and application services.",
+        "Desktop IPC, federation, app-server, composer drafts and operator requests reach persistent state through owner and application services.",
       from: {
-        path: "^apps/desktop/src/main/(ipc|federation|app-server|composer-drafts)/",
+        path: "^apps/desktop/src/main/(ipc|federation|app-server|composer-drafts|operator-requests)/",
       },
       to: {
         path: "^apps/desktop/src/main/state/",
