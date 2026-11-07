@@ -99,8 +99,6 @@ describe("opt-in rendering capture", () => {
   // Linux CI reported a 10 s capture as 9999 ms.
   it("never stops a timed capture before its full length, however far the loop clock lags", async () => {
     for (const [seconds, lagMs] of [[1, 0.2], [10, 0.6], [10, 0.999], [30, 0.5], [3, 0]] as const) {
-      // `started` must observe this capture, not the preceding iteration.
-      electron.debuggerApi.sendCommand.mockClear();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       // The fake clock stands in for both; only the start read runs ahead.
       const loopNow = () => Date.now();
@@ -112,11 +110,18 @@ describe("opt-in rendering capture", () => {
         lagging = false;
         return value;
       });
+      let signalStarted!: () => void;
+      const captureStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+      electron.debuggerApi.sendCommand.mockImplementation((method: string) => {
+        if (method === "Tracing.start") signalStarted();
+        return commands(method);
+      });
+      let pending: ReturnType<typeof captureRenderingDiagnostics> | undefined;
       try {
-        const pending = captureRenderingDiagnostics(root, seconds);
-        await started();
-        // Advance through the deadline, including its fractional-clock correction.
-        // The capture's filesystem work completes on the real event loop.
+        pending = captureRenderingDiagnostics(root, seconds);
+        await captureStarted;
+        // Include the fractional lag rounded up by the expiry check. The
+        // filesystem still runs on the real event loop after the trace stops.
         await vi.advanceTimersByTimeAsync(seconds * 1000 + 1);
         const result = await pending;
         const summary = JSON.parse(await readFile(result.summaryPath, "utf8"));
@@ -124,6 +129,10 @@ describe("opt-in rendering capture", () => {
         expect(summary.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
         expect(result.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
       } finally {
+        if (pending) {
+          await stopRenderingDiagnostics().catch(() => {});
+          await pending.catch(() => {});
+        }
         now.mockRestore();
         vi.useRealTimers();
       }
