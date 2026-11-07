@@ -54235,6 +54235,45 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-size: 11.5px;
 }
 
+.thread-maintenance__largest-kept {
+  display: grid;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__largest-kept-rows {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-maintenance__largest-kept-rows li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+}
+
+.thread-maintenance__largest-kept-rows .thread-maintenance__path {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.thread-maintenance__largest-kept-why {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.thread-maintenance__largest-kept > .thread-maintenance__kept-toggle {
+  justify-self: start;
+  min-height: 24px;
+  font-size: 11.5px;
+}
+
 .thread-maintenance__coverage-line {
   display: flex;
   flex-wrap: wrap;

@@ -68,6 +68,10 @@ export type ThreadMaintenanceCoverage = {
   excluded?: { reason: string; count: number; allocatedBytes?: number }[];
   /** Threads read per backend (codex, claude, an ACP agent…). */
   providers?: { backend: string; threads: number }[];
+  /** The largest checkouts the step kept, by allocation, unmeasured last:
+   * at most ten unique paths, each with its stable keep reason. Shown so the
+   * operator can see what holds the space; never offered for removal. */
+  largestKept?: { path: string; reason: string; allocatedBytes?: number }[];
   measuredAt?: number;
 };
 

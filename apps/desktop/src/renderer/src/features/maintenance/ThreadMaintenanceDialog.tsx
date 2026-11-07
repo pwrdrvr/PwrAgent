@@ -507,7 +507,7 @@ function ScanStatus(props: { steps: readonly ReviewStep[]; progress?: ThreadMain
     : progress?.found !== undefined ? `${progress.found} found`
       : `step ${stepNumber} of ${props.steps.length}`;
   // What it reads now: the items in flight, else the listing's own words.
-  const now = progress?.inFlight.length ? `now: ${progress.inFlight.join(" · ")}`
+  const now = progress?.inFlight.length ? `${progress.detail ? `${progress.detail} · ` : ""}now: ${progress.inFlight.join(" · ")}`
     : progress?.detail || progress?.root ? [progress.detail, progress.root].filter(Boolean).join(" · ")
       : "\u00a0";
   return (
@@ -551,7 +551,8 @@ function Coverage(props: { coverage?: ThreadMaintenanceCoverage }) {
   // Any registered repository's worktrees can be a root, so the list folds.
   const [allRoots, setAllRoots] = useState(false);
   const rootsId = useId();
-  if (!coverage || (!coverage.roots.length && !coverage.providers?.length && !coverage.excluded?.length)) return null;
+  if (!coverage || (!coverage.roots.length && !coverage.providers?.length && !coverage.excluded?.length
+    && !coverage.largestKept?.length)) return null;
   const roots = largestFirst(coverage.roots.map((root) => ({
     ...root, space: root.allocatedBytes === undefined ? undefined : { allocatedBytes: root.allocatedBytes, lowerBound: root.lowerBound },
   })));
@@ -599,7 +600,44 @@ function Coverage(props: { coverage?: ThreadMaintenanceCoverage }) {
             .join(" · ")}
         </p>
       ) : null}
+      {coverage.largestKept?.length ? <LargestKept kept={coverage.largestKept} /> : null}
     </section>
+  );
+}
+
+/** Kept checkouts listed before "Show all". */
+const LARGEST_KEPT_ROWS = 5;
+
+/** The largest checkouts the step kept, with why: what holds the space.
+ * Information only; nothing here can be selected. */
+function LargestKept(props: { kept: NonNullable<ThreadMaintenanceCoverage["largestKept"]> }) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const rows = largestFirst(props.kept.map((row) => ({
+    ...row, space: row.allocatedBytes === undefined ? undefined : { allocatedBytes: row.allocatedBytes },
+  })));
+  const shown = open ? rows : rows.slice(0, LARGEST_KEPT_ROWS);
+  return (
+    <div className="thread-maintenance__largest-kept">
+      <p className="thread-maintenance__eyebrow">Largest kept</p>
+      <ul id={listId} aria-label="Largest kept checkouts" className="thread-maintenance__largest-kept-rows">
+        {shown.map((row) => (
+          <li key={row.path}>
+            <div>
+              <p className="thread-maintenance__path">{row.path}</p>
+              <p className="thread-maintenance__largest-kept-why">{row.reason}</p>
+            </div>
+            <span className="thread-maintenance__mono">{row.allocatedBytes === undefined ? "—" : formatBytes(row.allocatedBytes)}</span>
+          </li>
+        ))}
+      </ul>
+      {rows.length > LARGEST_KEPT_ROWS ? (
+        <button aria-controls={listId} aria-expanded={open} className="thread-maintenance__kept-toggle" type="button"
+          onClick={() => setOpen(!open)}>
+          {open ? "Show fewer" : `Show all ${rows.length}`}
+        </button>
+      ) : null}
+    </div>
   );
 }
 

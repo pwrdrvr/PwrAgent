@@ -245,6 +245,47 @@ describe("ThreadMaintenanceDialog sizes and progress", () => {
     expect(coverage).toHaveTextContent("2 outside a worktree root (3.0 GB)");
   });
 
+  it("names the largest kept checkouts and why, largest first, without offering them", async () => {
+    const kept = sizedScan();
+    // Scrambled on purpose: the order on screen is the dialog's.
+    kept.hibernate!.coverage!.largestKept = [
+      { path: "/w/c", reason: "Watching a PR", allocatedBytes: 30 * GB },
+      { path: "/w/unknown", reason: "Other ignored files" },
+      { path: "/w/a", reason: "Active in the last 3 days", allocatedBytes: 90 * GB },
+      { path: "/w/e", reason: "Kept awake", allocatedBytes: 4 * GB },
+      { path: "/w/b", reason: "Other ignored files", allocatedBytes: 41 * GB },
+      { path: "/w/f", reason: "Shared checkout", allocatedBytes: 2 * GB },
+      { path: "/w/d", reason: "Running or blocked", allocatedBytes: 12 * GB },
+    ];
+    const { api: desktopApi } = api({ scanThreadMaintenance: vi.fn(async () => kept) });
+    render(<ThreadMaintenanceDialog desktopApi={desktopApi} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    const list = await within(dialog).findByRole("list", { name: "Largest kept checkouts" });
+    const rows = () => within(list).getAllByRole("listitem").map((row) => row.textContent);
+    // Oracle: sorted by hand, unmeasured last.
+    expect(rows()).toEqual([
+      "/w/aActive in the last 3 days90 GB", "/w/bOther ignored files41 GB", "/w/cWatching a PR30 GB",
+      "/w/dRunning or blocked12 GB", "/w/eKept awake4.0 GB",
+    ]);
+    expect(within(list).queryByRole("checkbox")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Show all 7" }));
+    expect(rows().slice(5)).toEqual(["/w/fShared checkout2.0 GB", "/w/unknownOther ignored files—"]);
+  });
+
+  it("says what a checking step is doing beside the items in flight", () => {
+    const { api: desktopApi, emitProgress } = api({
+      scanThreadMaintenance: vi.fn(() => new Promise<ThreadMaintenanceScan>(() => {})),
+    });
+    render(<ThreadMaintenanceDialog desktopApi={desktopApi} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    const progressId = vi.mocked(desktopApi.scanThreadMaintenance!).mock.calls[0]![0]!.progressId!;
+    emitProgress({ progressId, steps: ["hibernate"], step: "hibernate", stage: "checking", processed: 4, total: 9,
+      inFlight: ["/w/a", "/w/b"], detail: "Measuring allocation" });
+    expect(within(dialog).getByText("Measuring allocation · now: /w/a · /w/b")).toBeInTheDocument();
+  });
+
   it("folds a long root list after the five largest roots", async () => {
     const many = sizedScan();
     many.hibernate!.coverage!.roots = Array.from({ length: 7 }, (_, index) => ({
