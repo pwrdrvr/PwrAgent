@@ -5,6 +5,8 @@ import {
   archiveCandidateProtectionReason,
   CLAUDE_CHECKOUT_KEEP_REASON,
   keepSubthreadParents,
+  MAX_SUBTHREADS_LEFT_BY_ARCHIVE,
+  peerSubthreadKey,
   subthreadChildren,
   subthreadsFirst,
   isProtectedArchiveCandidate,
@@ -268,6 +270,34 @@ describe("sub-thread parents", () => {
     // only, which is within the limit.
     expect(keepSubthreadParents(selected, children)).toEqual(["codex:mid"]);
     expect([...selected].sort()).toEqual(["codex:g1", "codex:g2", "codex:grand"]);
+  });
+
+  it("keeps every selected parent whose local and peer sub-threads left would exceed 2", () => {
+    fc.assert(fc.property(
+      fc.array(fc.nat({ max: 9 }), { minLength: 1, maxLength: 10 }),
+      fc.array(fc.nat({ max: 4 }), { minLength: 10, maxLength: 10 }),
+      fc.uniqueArray(fc.nat({ max: 9 }), { maxLength: 10 }),
+      (parents, peerCounts, chosen) => {
+        // Node i's parent is an earlier node, so the links form a forest.
+        const nodes = parents.map((parent, index): ThreadArchiveCandidate => ({
+          ...candidate(`n${index}`),
+          ...(index > 0 && parent < index
+            ? { overlay: { parentThreadId: `n${parent}` } as ThreadArchiveCandidate["overlay"] }
+            : {}),
+        }));
+        // Sub-threads on peers, which no archive here can archive.
+        const peer = new Map(nodes.map(({ thread }, index) => [`codex:${thread.id}`,
+          Array.from({ length: peerCounts[index]! }, (_, child) => peerSubthreadKey("pwr_peer", "codex", `${thread.id}-p${child}`))]));
+        const selected = new Set(chosen.filter((index) => index < nodes.length).map((index) => `codex:n${index}`));
+        keepSubthreadParents(selected, subthreadChildren(nodes, peer));
+        // Oracle, from the forest itself: what each selected thread leaves.
+        for (const key of selected) {
+          const id = key.slice("codex:".length);
+          const local = nodes.filter((node) => node.overlay?.parentThreadId === id && !selected.has(`codex:${node.thread.id}`)).length;
+          expect(local + (peer.get(key)?.length ?? 0)).toBeLessThanOrEqual(MAX_SUBTHREADS_LEFT_BY_ARCHIVE);
+        }
+      },
+    ));
   });
 
   it("never leaves a selected parent with more than 2 unselected sub-threads", () => {

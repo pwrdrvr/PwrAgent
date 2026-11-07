@@ -13,7 +13,8 @@ vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({ publishLocalEvent: mocks.publish }),
 }));
-import { type PeerChildSource, updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
+import { type PeerChildSource, peerSubthreadChildren, updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
+import { peerSubthreadKey } from "../app-server/thread-archive-sweeper";
 
 let db: ReturnType<typeof openInMemoryStateDb>;
 
@@ -248,3 +249,25 @@ async function writeLegacyParentLink(store: SqliteOverlayStore, backend: "claude
   (store as unknown as { putThread(key: string, state: object): void })
     .putThread(buildThreadIdentityKey(backend, threadId), { ...state, parentThreadBackend: undefined });
 }
+
+it("counts a peer thread as a sub-thread of this machine's thread only when it names this machine", () => {
+  const pin = (instanceId: string, id: string, extra: Partial<NavigationThreadSummary>, more: { revokedAt?: number } = {}) => ({
+    ref: buildFederatedThreadRef({ backend: "codex", threadId: id, instanceId }),
+    summary: summary("codex", id, extra), ...more,
+  });
+  const parent = { parentThreadId: "parent", parentThreadInstanceId: "pwr_local" };
+  const children = peerSubthreadChildren([
+    pin("pwr_peer", "child", parent),
+    pin("pwr_peer", "child", parent),
+    pin("pwr_peer", "claude-parent", { ...parent, parentThreadBackend: "claude" }),
+    pin("pwr_peer", "elsewhere", { parentThreadId: "parent", parentThreadInstanceId: "pwr_other" }),
+    pin("pwr_peer", "archived", { ...parent, archivedAt: 5 }),
+    pin("pwr_peer", "revoked", parent, { revokedAt: 5 }),
+    pin("pwr_local", "own", parent),
+  ], "pwr_local");
+  expect(children).toEqual(new Map([
+    [buildThreadIdentityKey("codex", "parent"), [peerSubthreadKey("pwr_peer", "codex", "child")]],
+    [buildThreadIdentityKey("claude", "parent"), [peerSubthreadKey("pwr_peer", "codex", "claude-parent")]],
+  ]));
+  expect(peerSubthreadChildren([pin("pwr_peer", "child", parent)], undefined)).toEqual(new Map());
+});

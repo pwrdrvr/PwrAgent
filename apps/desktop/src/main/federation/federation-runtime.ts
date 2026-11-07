@@ -60,6 +60,7 @@ import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from
 import { loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import {
   isPeerChildOfLocalThread,
+  peerSubthreadChildren,
   type PeerChildSource,
   updateLocalSubthreadOrder,
 } from "../app-server/subthread-order-actions";
@@ -3677,6 +3678,16 @@ export class DesktopFederationRuntime {
       },
     });
     return this.remoteThreadSummaryCache;
+  }
+
+  /** This machine's threads' sub-threads on peers, by parent identity key,
+   * from saved pins. Reads local state only, so an offline peer's children
+   * still count. */
+  async peerSubthreadsOfLocalThreads(): Promise<Map<string, string[]>> {
+    const pins = await getDesktopOverlayStore().listRemoteThreadPins();
+    // No pins, no peer sub-threads. Only the identity is needed, not the
+    // peer and config reads health() does, which could fail the sweep.
+    return pins.length ? peerSubthreadChildren(pins, this.ensureLocalInstanceId()) : new Map();
   }
 
   /** Promote cross-instance children before the archive removes their row. */

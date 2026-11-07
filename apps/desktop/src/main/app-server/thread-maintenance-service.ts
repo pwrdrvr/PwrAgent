@@ -26,6 +26,8 @@ import {
   archiveFamilies,
   keepSubthreadParents,
   MAX_SUBTHREADS_LEFT_BY_ARCHIVE,
+  PEER_SUBTHREADS_UNREADABLE,
+  isPeerSubthreadKey,
   SUBTHREAD_PARENT_KEEP_REASON,
   subthreadChildren,
   subthreadsFirst,
@@ -74,6 +76,8 @@ export type ThreadMaintenanceDeps = {
   getPolicy: () => DesktopThreadArchivePolicy;
   snapshotLimitBytes: number;
   listCandidates: () => Promise<ThreadArchiveCandidate[]>;
+  /** This machine's threads' sub-threads on peers, by parent identity key. */
+  listPeerSubthreads?: () => Promise<ReadonlyMap<string, readonly string[]>>;
   resolveProject: (candidate: ThreadArchiveCandidate) => Promise<string | undefined>;
   refreshCandidate: (candidate: ThreadArchiveCandidate) => Promise<ThreadArchiveCandidate>;
   isBusy: (candidate: ThreadArchiveCandidate) => boolean;
@@ -257,11 +261,18 @@ export class ThreadMaintenanceService {
       return { ...result, skipped: "Threads could not be listed" };
     }
     retained.candidates = candidates;
+    // Unread peer sub-threads could belong to any parent, so offer nothing.
+    let peerSubthreads: ReadonlyMap<string, readonly string[]> | undefined;
+    try { peerSubthreads = await this.deps.listPeerSubthreads?.(); }
+    catch (error) {
+      fail("threads", error);
+      return { ...result, skipped: PEER_SUBTHREADS_UNREADABLE };
+    }
     // The dialog's own rules start from the archive settings.
     const reviewPolicy: DesktopThreadArchivePolicy = { ...policy,
       mode: rules.mode, keepPerProject: rules.keepPerProject, inactivityDays: rules.inactivityDays };
     const groupFor = archiveFamilies(candidates);
-    retained.subthreads = subthreadChildren(candidates);
+    retained.subthreads = subthreadChildren(candidates, peerSubthreads);
     const projects = new Map<string, ThreadMaintenanceProject>();
     const projectFor = (key: string): ThreadMaintenanceProject => {
       let project = projects.get(key);
@@ -554,6 +565,21 @@ export class ThreadMaintenanceService {
     // Sub-threads first, so their parent's check below sees them archived.
     const keyOf = (item: { backend: string; threadId: string }) => buildThreadIdentityKey(item.backend as AppServerBackendKind, item.threadId);
     const ordered = subthreadsFirst(request.archive, (item) => retained.families.get(keyOf(item))?.family[0]);
+    // A peer can gain a sub-thread of one of ours after the scan. Count
+    // both reads; if this one fails, every parent with a peer sub-thread is
+    // kept, since the scan's count is no longer known to be current.
+    const subthreads = new Map(retained.subthreads);
+    let peerUnreadable = false;
+    if (request.archive.length) {
+      try {
+        for (const [key, list] of await this.deps.listPeerSubthreads?.() ?? []) {
+          subthreads.set(key, [...new Set([...subthreads.get(key) ?? [], ...list])]);
+        }
+      } catch (error) {
+        peerUnreadable = true;
+        this.deps.onError?.(error, { step: "threads" });
+      }
+    }
     const archivedKeys = new Set<string>();
     for (const [index, item] of ordered.entries()) {
       const entry = retained.families.get(keyOf(item));
@@ -569,7 +595,14 @@ export class ThreadMaintenanceService {
         addProblem({ step: "threads", kind: "kept", object, reason: "Stopped before archiving", backend: item.backend, threadId: item.threadId });
         continue;
       }
-      const left = (retained.subthreads.get(keyOf(item)) ?? []).filter((child) => !archivedKeys.has(child)).length;
+      const children = subthreads.get(keyOf(item)) ?? [];
+      if (peerUnreadable && children.some(isPeerSubthreadKey)) {
+        threadStep.kept += 1;
+        addProblem({ step: "threads", kind: "kept", object, reason: PEER_SUBTHREADS_UNREADABLE,
+          detail: "It has sub-threads on another instance. Scan again to retry.", backend: item.backend, threadId: item.threadId });
+        continue;
+      }
+      const left = children.filter((child) => !archivedKeys.has(child)).length;
       if (left > MAX_SUBTHREADS_LEFT_BY_ARCHIVE) {
         threadStep.kept += 1;
         addProblem({ step: "threads", kind: "kept", object, reason: `Would leave ${left} sub-threads without their parent`,
