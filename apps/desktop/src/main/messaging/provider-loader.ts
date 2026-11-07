@@ -1,6 +1,6 @@
 import type { MessagingChannelKind } from "@pwragent/messaging-interface";
 import { getMainLogger } from "../log";
-import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
+import type { MessagingStoreLike } from "./core/messaging-storage";
 import type { DesktopMessagingConfig } from "./messaging-config";
 import type { DesktopMessagingAdapter } from "./messaging-runtime";
 

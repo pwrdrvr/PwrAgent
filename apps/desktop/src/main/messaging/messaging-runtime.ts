@@ -1,8 +1,7 @@
 import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
 import { matchesAutomationConversation } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
-import { getAppStateDb } from "../state/app-state";
-import { SqliteMessagingRequestStore } from "../state/messaging-request-store";
+import { createMessagingRequestStorage } from "../storage/desktop-messaging-storage";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
 import {
   isMessagingInteractivePendingRequest,
@@ -11,7 +10,7 @@ import {
 } from "./core/messaging-controller";
 import { getRbacPolicyService } from "./rbac-policy-service";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
-import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
+import type { MessagingStoreLike } from "./core/messaging-storage";
 import type {
   MessagingAdapter,
   MessagingBackendBridge,
@@ -1548,7 +1547,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
     const controller = new MessagingController({
       adapter,
-      requestStore: new SqliteMessagingRequestStore(getAppStateDb().raw),
+      requestStore: createMessagingRequestStorage(),
       sourceInstanceId: getDesktopFederationRuntime().messagingSourceInstanceId(),
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,

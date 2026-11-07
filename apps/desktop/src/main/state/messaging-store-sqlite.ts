@@ -1,3 +1,5 @@
+import type { DesktopMessagingStorage } from "../messaging/core/messaging-storage";
+export type { MessagingStoreLike } from "../messaging/core/messaging-storage";
 import type {
   MessagingAdapterState,
   MessagingBindingRecord,
@@ -44,7 +46,7 @@ import { isAsyncQuestionnaireForThread } from "../messaging/core/messaging-store
 
 const SECRET_KEY_PATTERN = /token|secret|password|authorization|api[_-]?key/i;
 
-export class SqliteMessagingStore {
+export class SqliteMessagingStore implements DesktopMessagingStorage {
   constructor(private readonly stateDb: StateDb) {}
 
   async upsertBinding(
@@ -1541,63 +1543,3 @@ function sanitizeJsonValue(value: MessagingJsonValue): MessagingJsonValue {
   }
   return value;
 }
-
-export type MessagingStoreLike = Pick<
-  SqliteMessagingStore,
-  | "upsertBinding"
-  | "mergeBindingChannelMetadata"
-  | "getBinding"
-  | "upsertDefaultAgentAssignment"
-  | "getDefaultAgentAssignment"
-  | "findActiveDefaultAgentAssignmentForChannel"
-  | "findActiveDefaultAgentAssignments"
-  | "findActiveDefaultAgentAssignmentsForChannel"
-  | "findActiveDefaultAgentAssignmentForScope"
-  | "revokeDefaultAgentAssignment"
-  | "revokeDefaultAgentAssignmentsForTarget"
-  | "findActiveBindingForChannel"
-  | "findActiveBindings"
-  | "findActiveBindingsForBackend"
-  | "findActiveBindingsForThread"
-  | "revokeBinding"
-  | "upsertMonitorSubscription"
-  | "getMonitorSubscription"
-  | "findActiveMonitorSubscriptionForChannel"
-  | "findActiveMonitorSubscriptionsForChannelKind"
-  | "revokeMonitorSubscription"
-  | "upsertManagedTopic"
-  | "mergeManagedTopicObservation"
-  | "getManagedTopic"
-  | "findManagedTopicsForSupergroup"
-  | "findManagedTopicByConversation"
-  | "upsertThreadTopicLink"
-  | "findThreadTopicLink"
-  | "upsertTopicCleanupProposal"
-  | "getTopicCleanupProposal"
-  | "upsertPendingIntent"
-  | "getPendingIntent"
-  | "findActivePendingIntentForChannel"
-  | "findActivePendingIntentsForRequest"
-  | "findActivePendingAsyncQuestionnaires"
-  | "deletePendingIntent"
-  | "deletePendingIntentsForChannel"
-  | "deletePendingIntentsForThread"
-  | "cleanupExpiredPendingIntents"
-  | "upsertBrowseSession"
-  | "getBrowseSession"
-  | "findActiveBrowseSessionForChannel"
-  | "deleteBrowseSession"
-  | "cleanupExpiredBrowseSessions"
-  | "upsertCallbackHandle"
-  | "getCallbackHandle"
-  | "resolveCallbackHandle"
-  | "deleteCallbackHandle"
-  | "deleteCallbackHandlesForBinding"
-  | "cleanupExpiredCallbackHandles"
-  | "recordDelivery"
-  | "getDelivery"
-  | "readSnapshot"
-> & Partial<Pick<
-  SqliteMessagingStore,
-  "upsertObservedSurface"
->>;

@@ -22,7 +22,7 @@ import {
   type RbacPolicyStoreOptions,
 } from "../settings/rbac-policy-store";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
-import type { RecordMessagingActivityInput } from "./messaging-activity-log";
+import type { RecordMessagingActivityInput } from "@pwragent/owner-core/messaging-activity-storage";
 
 /**
  * Per-platform capability resolver injected into each `MessagingController`.

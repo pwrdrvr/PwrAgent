@@ -18,7 +18,7 @@ import {
   writeRbacPolicy,
 } from "../settings/rbac-policy-store";
 import { RbacPolicyService } from "../messaging/rbac-policy-service";
-import type { RecordMessagingActivityInput } from "../messaging/messaging-activity-log";
+import type { RecordMessagingActivityInput } from "../storage/messaging-activity-log";
 
 let tmpHome: string;
 let storeOptions: { env: NodeJS.ProcessEnv };

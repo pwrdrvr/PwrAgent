@@ -1,14 +1,14 @@
-import { getAppStateDb } from "../state/app-state";
-import { MessagingPairingStore } from "./messaging-pairing-store";
+import type { MessagingPairingStorage } from "@pwragent/owner-core/messaging-pairing-storage";
+import { createMessagingPairingStorage } from "../storage/desktop-messaging-storage";
 
-let storeOverride: MessagingPairingStore | null = null;
+let storeOverride: MessagingPairingStorage | null = null;
 
-export function getDesktopMessagingPairingStore(): MessagingPairingStore {
-  return storeOverride ?? new MessagingPairingStore(getAppStateDb());
+export function getDesktopMessagingPairingStore(): MessagingPairingStorage {
+  return storeOverride ?? createMessagingPairingStorage();
 }
 
 export function setDesktopMessagingPairingStoreForTests(
-  store: MessagingPairingStore | null,
+  store: MessagingPairingStorage | null,
 ): void {
   storeOverride = store;
 }

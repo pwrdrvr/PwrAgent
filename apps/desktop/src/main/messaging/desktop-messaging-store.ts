@@ -1,16 +1,16 @@
-import type { SqliteMessagingStore } from "../state/messaging-store-sqlite";
-import { getAppMessagingStore } from "../state/app-state";
+import type { DesktopMessagingStorage } from "./core/messaging-storage";
+import { getMessagingStorage } from "../storage/desktop-messaging-storage";
 
-let messagingStoreOverride: SqliteMessagingStore | null = null;
+let messagingStoreOverride: DesktopMessagingStorage | null = null;
 
-export function getDesktopMessagingStore(): SqliteMessagingStore {
-  return messagingStoreOverride ?? getAppMessagingStore();
+export function getDesktopMessagingStore(): DesktopMessagingStorage {
+  return messagingStoreOverride ?? getMessagingStorage();
 }
 
 export function resetDesktopMessagingStoreForTests(): void {
   messagingStoreOverride = null;
 }
 
-export function setDesktopMessagingStoreForTests(store: SqliteMessagingStore): void {
+export function setDesktopMessagingStoreForTests(store: DesktopMessagingStorage): void {
   messagingStoreOverride = store;
 }

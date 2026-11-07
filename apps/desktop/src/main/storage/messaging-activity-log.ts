@@ -1,3 +1,5 @@
+import type { MessagingActivityStorage, RecordMessagingActivityInput, RecordMessagingPlatformResponseActivityInput } from "@pwragent/owner-core/messaging-activity-storage";
+export type { RecordMessagingActivityInput, RecordMessagingPlatformResponseActivityInput } from "@pwragent/owner-core/messaging-activity-storage";
 import type {
   AppServerBackendKind,
   GetMessagingActivitySummaryResponse,
@@ -5,37 +7,11 @@ import type {
   MessagingActivityKind,
   MessagingActivityOrigin,
   MessagingChannelKind,
-  ThreadIdentifier,
 } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db";
 
 const DEFAULT_LIST_LIMIT = 100;
 const MAX_LIST_LIMIT = 500;
-
-export type RecordMessagingActivityInput = {
-  platform: MessagingActivityOrigin;
-  kind: MessagingActivityKind;
-  backend?: AppServerBackendKind;
-  threadId?: ThreadIdentifier;
-  bindingId?: string;
-  conversationId?: string;
-  conversationTitle?: string;
-  actorId?: string;
-  actorDisplayName?: string;
-  summary: string;
-  createdAt?: number;
-  /**
-   * Free-form bag of fields the row should remember without growing
-   * dedicated columns. Renderer may show these in the activity detail
-   * panel; consumers must treat the shape as opaque.
-   */
-  payload?: Record<string, unknown>;
-};
-
-export type RecordMessagingPlatformResponseActivityInput = {
-  platform: MessagingChannelKind;
-  createdAt?: number;
-};
 
 /**
  * Persisted messaging activity log. Rows live in the same sqlite DB as
@@ -43,7 +19,7 @@ export type RecordMessagingPlatformResponseActivityInput = {
  * `StateDb.cleanupExpired`. Writes are best-effort and fail-soft —
  * `record()` callers must not block message routing on a write error.
  */
-export class MessagingActivityLog {
+export class MessagingActivityLog implements MessagingActivityStorage {
   constructor(private readonly stateDb: StateDb) {}
 
   record(entry: RecordMessagingActivityInput): MessagingActivityEntry {

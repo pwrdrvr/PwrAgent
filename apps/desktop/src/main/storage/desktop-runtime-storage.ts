@@ -25,7 +25,7 @@ import { CodexEnvironmentHydrationStore } from "./codex-environment-hydration-st
 export type { ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 export type { StoredProjectHeldWakeup } from "../state/project-held-wakeup-store";
 export type { StoredRestartContinuation } from "../state/restart-continuation-store";
-export type { MessagingStoreLike } from "../state/messaging-store-sqlite";
+export type { MessagingStoreLike } from "../messaging/core/messaging-storage";
 export type ArchiveCleanupCheckpointStorage = Pick<ArchiveCleanupCheckpointStore, "save" | "recover">;
 export type ProjectHeldWakeupStorage = Pick<ProjectHeldWakeupStore, "save" | "update" | "remove" | "claimOrphaned">;
 export type RestartContinuationStorage = Pick<RestartContinuationStore, "saveAll" | "remove" | "claimOrphaned">;
