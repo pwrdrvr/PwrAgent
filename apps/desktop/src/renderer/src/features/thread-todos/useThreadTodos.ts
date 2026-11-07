@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type {
@@ -58,6 +59,7 @@ type ThreadTodosApi = Pick<
   | "onThreadTodosDelta"
   | "listThreadTodos"
   | "onThreadTodosChanged"
+  | "onAgentEvent"
   | "resolveThreadTodo"
   | "runThreadTodoAction"
   | "setThreadTodoItemChecked"
@@ -96,6 +98,7 @@ export function useThreadTodos(
   const [revision, setRevision] = useState(0);
   const [mergeMethods, setMergeMethods] = useState<ThreadTodoMergeMethodPreferences>();
   const [runningIds, setRunningIds] = useState<ReadonlySet<string>>(EMPTY_SET);
+  const selectedRefresh = useRef<{ key: string; reload: () => Promise<void> } | undefined>(undefined);
 
   const selectedBackend = selectedRemoteThread?.backend;
   const selectedThreadId = selectedRemoteThread?.threadId;
@@ -138,8 +141,24 @@ export function useThreadTodos(
       if (event.backend === undefined || (event.federationTarget?.instanceId === selectedInstanceId
         && event.backend === selectedBackend && event.threadId === selectedThreadId)) void reload();
     });
+    const unsubscribeAgent = api.onAgentEvent?.((event) => {
+      if (event.federationTarget?.scope !== "remote"
+        || event.federationTarget.instanceId !== selectedInstanceId || event.backend !== selectedBackend) return;
+      const { method, params } = event.notification;
+      if (method !== "thread/name/updated" && method !== "thread/modelSettings/updated") return;
+      if ((params as { threadId?: unknown } | undefined)?.threadId === selectedThreadId) void reload();
+    });
+    const refresh = { key: selectedKey, reload };
+    selectedRefresh.current = refresh;
     void reload();
-    return () => { cancelled = true; unsubscribe?.(); setSelectedCards(undefined); setSelectedError(undefined); };
+    return () => {
+      cancelled = true;
+      if (selectedRefresh.current === refresh) selectedRefresh.current = undefined;
+      unsubscribe?.();
+      unsubscribeAgent?.();
+      setSelectedCards(undefined);
+      setSelectedError(undefined);
+    };
   }, [api, selectedKey, selectedBackend, selectedThreadId, selectedInstanceId]);
 
   const openTodos = useMemo(() => {
@@ -155,6 +174,11 @@ export function useThreadTodos(
     let todos = EMPTY_TODOS;
     const show = (next: ThreadTodo[]): void => {
       if (next === todos) return;
+      const refresh = selectedRefresh.current;
+      if (refresh) {
+        const forSelected = (cards: ThreadTodo[]) => cards.filter((todo) => threadTodoThreadKey(todo) === refresh.key);
+        if (JSON.stringify(forSelected(todos)) !== JSON.stringify(forSelected(next))) void refresh.reload();
+      }
       todos = next.length > 0 ? next : EMPTY_TODOS;
       setOpenTodos(todos);
     };

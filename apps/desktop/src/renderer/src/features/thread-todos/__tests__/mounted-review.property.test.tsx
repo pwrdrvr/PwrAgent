@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ThreadTodo, ThreadTodosChangedEvent } from "@pwragent/shared";
+import type { AgentEvent, ThreadTodo, ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { useThreadTodos } from "../useThreadTodos";
 
 afterEach(cleanup);
@@ -50,6 +50,105 @@ it("shows one owner card when the selected thread is also pinned", async () => {
   };
   const { result } = renderHook(() => useThreadTodos(api, "", { backend: "codex", threadId: "selected", federationTarget: target }));
   await waitFor(() => expect(result.current.openTodos).toEqual([todo]));
+});
+
+it("keeps a selected pinned card equal to the owner's feed after metadata updates", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.array(fc.integer({ min: 0, max: 10000 }), { minLength: 1, maxLength: 5 }),
+    async (versions) => {
+      const target = { scope: "remote" as const, instanceId: "peer" };
+      const makeCard = (version: number): ThreadTodo => ({ id: "remote-todo:peer:review", backend: "codex", threadId: "selected",
+        federationTarget: target, kind: "reminder", status: "open", title: "Review", threadTitle: `Thread ${version}`,
+        createdAt: 1, updatedAt: 1 });
+      let ownerCard = makeCard(-1);
+      let deliver: (delta: ThreadTodoFeedDelta) => void = () => {};
+      const api = {
+        snapshotThreadTodos: async () => ({ epoch: "viewer", revision: 0, todos: [makeCard(-1)] }),
+        onThreadTodosDelta: (listener: typeof deliver) => { deliver = listener; return () => {}; },
+        listThreadTodos: vi.fn(async () => ({ todos: [ownerCard] })),
+      };
+      const { result, unmount } = renderHook(() => useThreadTodos(api, "",
+        { backend: "codex", threadId: "selected", federationTarget: target }));
+      try {
+        await waitFor(() => expect(result.current.openTodos).toEqual([ownerCard]));
+        await waitFor(() => expect(api.listThreadTodos).toHaveBeenCalled());
+        await act(async () => {});
+        for (const [index, version] of versions.entries()) {
+          ownerCard = makeCard(version);
+          await act(async () => { deliver({ epoch: "viewer", revision: index + 1, upserts: [ownerCard] }); });
+          await waitFor(() => expect(result.current.openTodos).toEqual([ownerCard]));
+        }
+      } finally {
+        unmount();
+      }
+    },
+  ), { numRuns: 25 });
+});
+
+it.each(["thread/name/updated", "thread/modelSettings/updated"])("refreshes the selected card on owner %s events", async (method) => {
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  let ownerCard: ThreadTodo = { id: "remote-todo:peer:review", backend: "codex", threadId: "selected",
+    federationTarget: target, kind: "reminder", status: "open", title: "Review", threadTitle: "Before", createdAt: 1, updatedAt: 1 };
+  let deliver: (event: AgentEvent) => void = () => {};
+  const api = {
+    snapshotThreadTodos: async () => ({ epoch: "viewer", revision: 0, todos: [] }),
+    onAgentEvent: (listener: typeof deliver) => { deliver = listener; return () => {}; },
+    listThreadTodos: vi.fn(async () => ({ todos: [ownerCard] })),
+  };
+  const { result } = renderHook(() => useThreadTodos(api, "", { backend: "codex", threadId: "selected", federationTarget: target }));
+  await waitFor(() => expect(result.current.openTodos).toEqual([ownerCard]));
+  act(() => {
+    deliver({ backend: "codex", federationTarget: target, notification: { method, params: { threadId: "other" } } } as AgentEvent);
+    deliver({ backend: "codex", federationTarget: { scope: "remote", instanceId: "other" },
+      notification: { method, params: { threadId: "selected" } } } as AgentEvent);
+  });
+  expect(api.listThreadTodos).toHaveBeenCalledTimes(1);
+  ownerCard = { ...ownerCard, threadTitle: "After" };
+  act(() => deliver({ backend: "codex", federationTarget: target, notification: { method, params: { threadId: "selected" } } } as AgentEvent));
+  await waitFor(() => expect(result.current.openTodos).toEqual([ownerCard]));
+});
+
+it("re-reads the owner when a feed update arrives during the selected card read", async () => {
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  const original: ThreadTodo = { id: "remote-todo:peer:review", backend: "codex", threadId: "selected",
+    federationTarget: target, kind: "reminder", status: "open", title: "Review", threadTitle: "Before", createdAt: 1, updatedAt: 1 };
+  const updated = { ...original, threadTitle: "After" };
+  let finishRead: (response: { todos: ThreadTodo[] }) => void = () => {};
+  let deliver: (delta: ThreadTodoFeedDelta) => void = () => {};
+  const listThreadTodos = vi.fn()
+    .mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }))
+    .mockResolvedValue({ todos: [updated] });
+  const api = {
+    snapshotThreadTodos: async () => ({ epoch: "viewer", revision: 0, todos: [] }),
+    onThreadTodosDelta: (listener: typeof deliver) => { deliver = listener; return () => {}; },
+    listThreadTodos,
+  };
+  const { result } = renderHook(() => useThreadTodos(api, "", { backend: "codex", threadId: "selected", federationTarget: target }));
+  await waitFor(() => expect(listThreadTodos).toHaveBeenCalledTimes(1));
+  act(() => deliver({ epoch: "viewer", revision: 1, upserts: [updated] }));
+  await act(async () => { finishRead({ todos: [original] }); });
+  await waitFor(() => expect(result.current.openTodos).toEqual([updated]));
+  expect(listThreadTodos).toHaveBeenCalledTimes(2);
+});
+
+it("refreshes the selected card when a pinned thread is renamed in the feed", async () => {
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  const original: ThreadTodo = { id: "remote-todo:peer:review", backend: "codex", threadId: "selected",
+    federationTarget: target, kind: "reminder", status: "open", title: "Review", threadTitle: "Before", createdAt: 1, updatedAt: 1 };
+  let ownerCard = original;
+  let deliver: (delta: ThreadTodoFeedDelta) => void = () => {};
+  const api = {
+    snapshotThreadTodos: async () => ({ epoch: "viewer", revision: 0, todos: [original] }),
+    onThreadTodosDelta: (listener: typeof deliver) => { deliver = listener; return () => {}; },
+    listThreadTodos: vi.fn(async () => ({ todos: [ownerCard] })),
+  };
+  const { result } = renderHook(() => useThreadTodos(api, "", { backend: "codex", threadId: "selected", federationTarget: target }));
+  await waitFor(() => expect(result.current.openTodos).toEqual([original]));
+  await waitFor(() => expect(api.listThreadTodos).toHaveBeenCalled());
+  await act(async () => {});
+  ownerCard = { ...original, threadTitle: "After" };
+  act(() => deliver({ epoch: "viewer", revision: 1, upserts: [ownerCard] }));
+  await waitFor(() => expect(result.current.openTodos).toEqual([ownerCard]));
 });
 
 it("reads the owner again when a change arrives during a failed read", async () => {
