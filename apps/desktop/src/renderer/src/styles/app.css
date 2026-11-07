@@ -25784,16 +25784,17 @@ a.button {
   overflow-wrap: anywhere;
 }
 
-/* The jump palette's search inside the to-do card: the field, the palette's
-   rows, and a footer. The card is ~340px wide, so each row stacks: the title,
-   then its metadata on one line (`.jump-palette__row-meta`). */
-.todo-destination-picker {
+/* The jump palette's search inline (ThreadSearchPicker), in the to-do card
+   and the Wait Until Done dialog: the field, the palette's rows, and a footer.
+   The card is ~340px wide, so each row stacks: the title, then its metadata
+   on one line (`.jump-palette__row-meta`). */
+.thread-search-picker {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
-.todo-destination-picker__field {
+.thread-search-picker__field {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -25805,12 +25806,12 @@ a.button {
   color: var(--text-muted);
 }
 
-.todo-destination-picker__field:focus-within {
+.thread-search-picker__field:focus-within {
   border-color: var(--focus-ring);
   box-shadow: 0 0 0 1px var(--accent-border);
 }
 
-.todo-destination-picker__field input {
+.thread-search-picker__field input {
   flex: 1;
   min-width: 0;
   padding: 6px 0;
@@ -25821,7 +25822,7 @@ a.button {
   outline: none;
 }
 
-.todo-destination-picker__results {
+.thread-search-picker__results {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -25836,7 +25837,7 @@ a.button {
   list-style: none;
 }
 
-.todo-destination-picker .jump-palette__row {
+.thread-search-picker .jump-palette__row {
   flex-direction: column;
   align-items: stretch;
   gap: 3px;
@@ -25844,11 +25845,11 @@ a.button {
   padding: 6px 8px;
 }
 
-.todo-destination-picker .jump-palette__row-title {
+.thread-search-picker .jump-palette__row-title {
   font-size: 12.5px;
 }
 
-.todo-destination-picker .jump-palette__row-meta {
+.thread-search-picker .jump-palette__row-meta {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -25859,18 +25860,18 @@ a.button {
    and the age never shrinks. The machine chip, branch, and project end in an
    ellipsis instead of running past the row. The branch gives way first; it no
    longer competes with the title, which has its own line. */
-.todo-destination-picker .jump-palette__row-branch {
+.thread-search-picker .jump-palette__row-branch {
   flex: 1 2 auto;
   max-width: none;
   text-align: left;
 }
 
-.todo-destination-picker .jump-palette__row .chip--instance {
+.thread-search-picker .jump-palette__row .chip--instance {
   flex: 0 1 auto;
 }
 
 /* A block, not a flex box, so `text-overflow` reaches its text. */
-.todo-destination-picker .jump-palette__row-repo {
+.thread-search-picker .jump-palette__row-repo {
   display: inline-block;
   flex: 0 1 auto;
   min-width: 0;
@@ -25881,18 +25882,18 @@ a.button {
   white-space: nowrap;
 }
 
-.todo-destination-picker .jump-palette__section-divider {
+.thread-search-picker .jump-palette__section-divider {
   padding: 8px 8px 4px;
 }
 
-.todo-destination-picker__empty {
+.thread-search-picker__empty {
   margin: 0;
   padding: 14px 0;
   color: var(--text-muted);
   text-align: center;
 }
 
-.todo-destination-picker__foot {
+.thread-search-picker__foot {
   display: flex;
   gap: 10px;
   min-width: 0;
@@ -25902,11 +25903,11 @@ a.button {
   white-space: nowrap;
 }
 
-.todo-destination-picker__foot-spacer {
+.thread-search-picker__foot-spacer {
   flex: 1;
 }
 
-.todo-destination-picker__status {
+.thread-search-picker__status {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -53422,6 +53423,48 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .thread-merge-holds__steps li { overflow-wrap: anywhere; }
 
 .thread-merge-holds__status-aside { color: var(--text-muted); }
+
+/* The waiting thread's name, on its own line under the heading. */
+.thread-merge-holds__subject {
+  margin: 2px 0 6px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Waiting on: the chosen thread or "No thread chosen", and its buttons. */
+.thread-merge-holds__on-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.thread-merge-holds__on-row .button { flex-shrink: 0; }
+
+.thread-merge-holds__on-none {
+  flex: 1;
+  color: var(--text-muted);
+}
+
+.thread-merge-holds__on-target {
+  display: grid;
+  flex: 1;
+  justify-items: start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.thread-merge-holds__on-target small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
 
 /* A held merge card says why in place of its merge button, at the card's
    detail size rather than the inherited body size. */

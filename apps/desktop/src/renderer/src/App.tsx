@@ -4742,7 +4742,7 @@ function DesktopAppShell(props: {
           )}
         </LiveThreadHandoff>
       ) : null}
-      {mergeHoldsThread ? <ThreadMergeHoldsDialog key={`${mergeHoldsThread.federation?.ref.target.scope === "remote" ? mergeHoldsThread.federation.ref.target.instanceId : "local"}:${mergeHoldsThread.source}:${mergeHoldsThread.id}`} thread={mergeHoldsThread} api={desktopApi} onClose={() => setMergeHoldsThread(undefined)} /> : null}
+      {mergeHoldsThread ? <ThreadMergeHoldsDialog key={`${mergeHoldsThread.federation?.ref.target.scope === "remote" ? mergeHoldsThread.federation.ref.target.instanceId : "local"}:${mergeHoldsThread.source}:${mergeHoldsThread.id}`} thread={mergeHoldsThread} api={desktopApi} localMachine={todoLocalMachine} onClose={() => setMergeHoldsThread(undefined)} /> : null}
       {continueAfter ? (
         <ContinueAfterDialog
           key={`${continueAfter.thread.source}:${continueAfter.thread.id}`}
