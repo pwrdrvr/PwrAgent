@@ -34,6 +34,7 @@ import type {
   PwrAgentFederationResponse,
   SearchFederationThreadsResult,
   SearchFederationThreadsToolArgs,
+  ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
   FEDERATION_CAPABILITIES,
@@ -47,6 +48,7 @@ import {
   resolveModelOptionReference,
   THREAD_ENVIRONMENT_NONE,
 } from "@pwragent/shared";
+import { checkAgentAccessRequest } from "../agent-tools/agent-access-ceiling";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import { normalizePwrAgentFederationRequest } from "../agent-tools/pwragent-federation-agent-tools";
 import { listCodexEnvironmentOptions } from "../app-server/codex-environment-config";
@@ -143,6 +145,15 @@ export function createFederationAgentToolsHandler(
     resolveMessageOrigin?: (
       context: PwrAgentFederationContext,
     ) => AppServerThreadMessageOrigin;
+    /**
+     * The calling thread's own access mode: the most `create_instance_thread`
+     * may ask for. Checked here, on the instance running the tool, because
+     * the owning peer sees only a mode and not that an agent chose it.
+     * Without a resolver nothing above Default Access is allowed.
+     */
+    resolveCallerExecutionMode?: (
+      context: PwrAgentFederationContext,
+    ) => ThreadExecutionMode | Promise<ThreadExecutionMode>;
   } = {},
 ): PwrAgentFederationHandler {
   const runtime = options.runtime ?? getDesktopFederationRuntime;
@@ -189,6 +200,13 @@ export function createFederationAgentToolsHandler(
         return await listAttentionThreads(runtime(), request.args, collectHostInfo);
       }
       if (request.operation === "create_instance_thread") {
+        if (request.args.executionMode !== undefined) {
+          const accessRefusal = checkAgentAccessRequest(
+            await options.resolveCallerExecutionMode?.(request.context) ?? "default",
+            { executionMode: request.args.executionMode },
+          );
+          if (accessRefusal) return failure(accessRefusal.code, accessRefusal.message);
+        }
         return await createInstanceThread(
           runtime(),
           request.args,

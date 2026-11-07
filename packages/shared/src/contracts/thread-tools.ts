@@ -91,7 +91,10 @@ export type PwrAgentThreadInspectionContext = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   now?: number;
-  /** Trusted invoking turn, used when owner resolution reaches a peer. */
+  /**
+   * Trusted invoking turn, used when owner resolution reaches a peer. Its
+   * live access mode also outranks the thread's stored one.
+   */
   turnId?: string;
   /** Trusted tool call id, used to anchor an operator confirmation card. */
   callId?: string;
