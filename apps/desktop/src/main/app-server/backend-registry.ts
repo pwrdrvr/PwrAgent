@@ -45333,13 +45333,14 @@ export class DesktopBackendRegistry {
       signal.throwIfAborted();
       if (reviewed !== undefined) return reviewed;
     }
-    // A parallel call may have established scoped consent during review.
-    if (hasConsent()) return true;
     // A Job Monitor's card approves reads only, so it offers no grant.
     const projectOffer = !monitor && approvalConnection
       ? await this.mcpProjectToolApprovalOffer({ connection: approvalConnection, resolution, repository })
       : undefined;
     signal.throwIfAborted();
+    // A parallel call may have established scoped consent during review or
+    // the project-label lookup, before this call registered its waiter.
+    if (hasConsent()) return true;
     if (projectOffer) {
       notification.params._meta = {
         ...readRecord(notification.params._meta),
