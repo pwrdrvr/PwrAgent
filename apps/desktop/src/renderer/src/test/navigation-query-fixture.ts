@@ -144,6 +144,17 @@ export function navigationQueryFixture(
       const members = inDirectory(directory);
       const memberKeys = new Set(members.map(key));
       const roots = members.filter((thread) => !resolveParentKey(thread) || !memberKeys.has(resolveParentKey(thread)!));
+      const unpinnedThreadCount = members.filter((thread) => {
+        let root = thread;
+        const visited = new Set<string>();
+        while (!visited.has(key(root))) {
+          visited.add(key(root));
+          const parent = byKey.get(resolveParentKey(root) ?? "");
+          if (!parent || !memberKeys.has(key(parent))) break;
+          root = parent;
+        }
+        return !root.pinnedRank && !thread.codexNativeSubAgent;
+      }).length;
       return { key: directory.key, kind: directory.kind, label: directory.label, path: directory.path,
         ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
         ...(directory.repositoryKeys ? { repositoryKeys: directory.repositoryKeys } : {}),
@@ -153,6 +164,7 @@ export function navigationQueryFixture(
         gitStatus: directory.gitStatus, latestUpdatedAt: directory.latestUpdatedAt, counts: counts(members),
         pinnedRootCount: roots.filter((thread) => thread.pinnedRank).length,
         unpinnedRootCount: roots.filter((thread) => !thread.pinnedRank).length,
+        unpinnedThreadCount,
         launchpadPresent: Boolean(directory.launchpad), launchpadBackend: directory.launchpad?.backend };
     });
   const size = request.pageSize ?? 100;

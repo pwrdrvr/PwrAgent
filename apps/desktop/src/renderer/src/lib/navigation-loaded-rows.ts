@@ -12,6 +12,7 @@ export type NavigationDirectoryView = Pick<NavigationDirectoryRow,
   counts?: NavigationCounts;
   pinnedRootCount?: number;
   unpinnedRootCount?: number;
+  unpinnedThreadCount?: number;
   latestUpdatedAt?: number;
   launchpadPresent?: boolean;
   launchpadBackend?: NavigationDirectoryRow["launchpadBackend"];

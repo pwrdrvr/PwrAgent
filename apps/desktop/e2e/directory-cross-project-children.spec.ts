@@ -18,6 +18,8 @@ test("keeps a peer parent's cross-project audit in its own directory", async ({ 
     { id: "storage-audit", title: "Storage property tests", linkedDirectories: [directory(diskPath)] },
     { id: "storage-fix", title: "Preserve scanned bytes", linkedDirectories: [directory(diskPath)] },
     { id: "git-local", title: "Git housekeeping", linkedDirectories: [directory(gitPath)] },
+    { id: "git-child", title: "Check repository state", linkedDirectories: [directory(gitPath)] },
+    { id: "git-grandchild", title: "Verify branch tracking", linkedDirectories: [directory(gitPath)] },
   ].map((thread, index) => ({ ...thread, titleSource: "explicit", source: "codex", executionMode: "default", updatedAt: 1000 - index }));
   const fixturePath = path.join(root, "project-grouping.fixture.json");
   await writeFile(fixturePath, JSON.stringify({
@@ -51,6 +53,10 @@ test("keeps a peer parent's cross-project audit in its own directory", async ({ 
         await overlay.setThreadParent({ backend: "codex", threadId: "storage-fix",
           parentThreadId: "storage-audit", parentThreadBackend: "codex" });
         await overlay.setThreadPin({ backend: "codex", threadId: "storage-audit", pinnedRank: "1024" });
+        await overlay.setThreadParent({ backend: "codex", threadId: "git-child",
+          parentThreadId: "git-local", parentThreadBackend: "codex" });
+        await overlay.setThreadParent({ backend: "codex", threadId: "git-grandchild",
+          parentThreadId: "git-child", parentThreadBackend: "codex" });
       } finally {
         stateDb.close();
       }
@@ -65,6 +71,12 @@ test("keeps a peer parent's cross-project audit in its own directory", async ({ 
     for (const project of [git, disk]) {
       if (await project.getAttribute("aria-expanded") !== "true") await project.click();
     }
+    // The collapsed population includes descendants whose child pages have
+    // never been opened, while the mounted peer pin stays above the divider.
+    const hideDirectoryThreads = app.window.getByRole("button", { name: "Hide directory threads for HarborGit", exact: true });
+    await expect(hideDirectoryThreads).toBeVisible();
+    await hideDirectoryThreads.click();
+    const showDirectoryThreads = app.window.getByRole("button", { name: "Show directory threads for HarborGit", exact: true });
     await expect(app.window.getByRole("button", { name: /^Repository property tests/ })).toBeVisible();
     await expect(app.window.getByRole("button", { name: /^Preserve scanned bytes/ }).first()).toBeVisible();
     await app.window.evaluate(async () => { await document.fonts.ready; });
@@ -72,6 +84,7 @@ test("keeps a peer parent's cross-project audit in its own directory", async ({ 
     if (!browserBounds) throw new Error("The directory browser has no layout.");
     await app.window.screenshot({ path: testInfo.outputPath("directory-project-grouping.png"),
       clip: { ...browserBounds, height: Math.min(browserBounds.height, 500) } });
+    await expect(showDirectoryThreads).toContainText("3");
     const audit = app.window.getByRole("button", { name: /^Storage property tests/ });
     await expect(audit).toHaveCount(1);
     await expect(app.window.getByRole("button", { name: /^Preserve scanned bytes/ })).toHaveCount(1);

@@ -136,6 +136,6 @@ export function buildPagedDirectoryPresentation(params: {
   return {
     directoryPinnedThreads, unpinnedThreads, selectedUnpinnedThreads, childThreadsByParentKey,
     ownerChildOrder: children.ownerChildOrder, ordinaryChildCounts, directoryThreadsCollapsed,
-    directoryUnpinnedThreadCount: params.directory.unpinnedRootCount ?? 0,
+    directoryUnpinnedThreadCount: params.directory.unpinnedThreadCount ?? params.directory.unpinnedRootCount ?? 0,
   };
 }
