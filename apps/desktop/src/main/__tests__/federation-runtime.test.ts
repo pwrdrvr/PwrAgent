@@ -21,6 +21,7 @@ import type {
   NavigationSnapshotTransportResponse,
   SetCelestialIconResponse,
   StarMapArrangementEntry,
+  ThreadDependency,
   ThreadPricingSummary,
 } from "@pwragent/shared";
 import {
@@ -65,7 +66,7 @@ import { FederationRouter } from "../federation/federation-router";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
 import { replacementPages } from "../federation/federation-replacement-pages";
 import { FEDERATION_EVENT_STREAM_METHOD } from "../federation/federation-event-stream";
-import { collectPeerActiveDependencies } from "../app-server/thread-dependencies-federation";
+import { appendPeerDependents, collectPeerActiveDependencies } from "../app-server/thread-dependencies-federation";
 import * as appState from "../state/app-state";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
 import * as directoryRegistration from "../app-server/directory-registration-service";
@@ -1490,6 +1491,75 @@ describe("DesktopFederationRuntime", () => {
     (runtime as unknown as RuntimeHarness).publishPeerStatus("owner_one", "disconnected");
     await collectPeerActiveDependencies(runtime);
     expect(manage).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])("keeps peer waits equal to their owner after navigation-only dependency events (gateway=%s)", async (viaGateway) => {
+    const capabilities: FederationCapability[] = [
+      "gateway_relay", "thread_navigation", "navigation_snapshot_deltas", "event_subscriptions",
+      "thread_dependencies_v1", "turn_control",
+    ];
+    const viewer = new DesktopFederationRuntime();
+    const owner = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const gateway = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const harness = viewer as unknown as RuntimeHarness;
+    for (const [runtime, id] of [[harness, "viewer_one"], [owner, "owner_one"], [gateway, "gateway_one"]] as const) {
+      runtime.localInstanceId = id;
+      runtime.router = new FederationRouter({ localInstanceId: id });
+    }
+    const viewerPeer = viaGateway ? "gateway_one" : "owner_one";
+    harness.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    owner.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    harness.router!.registerConnection(createConnection({
+      peerId: viewerPeer, capabilities,
+      sendEnvelope: (envelope) => viaGateway
+        ? gateway.applyEventSubscription(envelope, "viewer_one") : owner.applyEventSubscription(envelope, "viewer_one"),
+    }));
+    owner.router!.registerConnection(createConnection({
+      peerId: viaGateway ? "gateway_one" : "viewer_one", capabilities,
+      sendEnvelope: (envelope) => viaGateway
+        ? gateway.publishRemoteBackendEvent(envelope, "owner_one") : harness.publishRemoteBackendEvent(envelope, "owner_one"),
+    }));
+    gateway.router!.registerConnection(createConnection({
+      peerId: "owner_one", capabilities,
+      sendEnvelope: (envelope) => owner.applyEventSubscription(envelope, "gateway_one"),
+    }));
+    gateway.router!.registerConnection(createConnection({
+      peerId: "viewer_one", capabilities,
+      sendEnvelope: (envelope) => harness.publishRemoteBackendEvent(envelope, "gateway_one"),
+    }));
+    harness.setEventSubscriptions("sidebar", [{
+      sourceInstanceId: "owner_one", eventClasses: ["navigation"], threadSelection: { kind: "all" },
+    }]);
+    const target = { scope: "remote", instanceId: "owner_one" } as const;
+    let ownerWaits: ThreadDependency[] = [];
+    const manage = vi.fn(async () => ({ dependencies: ownerWaits }));
+    vi.spyOn(viewer, "connectedPeerTargets").mockReturnValue([{ target, label: "Owner", capabilities }]);
+    vi.spyOn(viewer, "remoteTargetSupportsCapability").mockReturnValue(true);
+    vi.spyOn(viewer, "remoteBackend").mockReturnValue({ manageThreadDependencies: manage } as never);
+    expect(await collectPeerActiveDependencies(viewer)).toEqual([]);
+    const published: AgentEvent[] = [];
+    viewer.setAgentEventPublisher((event) => published.push(event));
+    const wait: ThreadDependency = {
+      id: "wait", backend: "codex", threadId: "consumer", status: "waiting", mode: "all", onFailure: "wait",
+      createdAt: 1, updatedAt: 1, evidence: [],
+      conditions: [{ backend: "codex", threadId: "prereq", when: "marked_done", target: { scope: "remote", instanceId: "viewer_one" } }],
+    };
+    // The owner is the oracle: creation appears immediately, cancellation
+    // disappears immediately, even though no transcript event is delivered.
+    for (const current of [[wait], []]) {
+      ownerWaits = current;
+      owner.forwardLocalBackendEvent({ backend: "codex", notification: {
+        method: "thread/dependencies/updated", params: { threadId: "consumer", dependencyId: wait.id },
+      } });
+      expect(published.at(-1)?.notification).toMatchObject({
+        method: "navigation/invalidated", params: { sourceMethod: "thread/dependencies/updated" },
+      });
+      const expected = ownerWaits.map((dependency) => ({ dependency, owner: target }));
+      expect(await collectPeerActiveDependencies(viewer)).toEqual(expected);
+      expect((await appendPeerDependents({ dependencies: [] }, { backend: "codex", threadId: "prereq" }, "viewer_one", viewer)).peerDependents ?? []).toEqual(expected);
+    }
+    expect(published.map((event) => event.notification.method)).toEqual(["navigation/invalidated", "navigation/invalidated"]);
+    expect(manage).toHaveBeenCalledTimes(3);
   });
 
   it("propagates advertised viewer disconnects and reconnects to remote PTY sessions", () => {

@@ -7039,6 +7039,8 @@ export class DesktopFederationRuntime {
   private publishReceivedBackendEvent(event: AgentEvent): void {
     if (event.federationTarget?.scope === "remote"
       && (event.notification.method === "thread/dependencies/updated"
+        || (event.notification.method === "navigation/invalidated"
+          && event.notification.params.sourceMethod === "thread/dependencies/updated")
         || event.notification.method === "federation/eventStream/changed")) {
       invalidatePeerActiveDependencies(this, event.federationTarget.instanceId);
     }
