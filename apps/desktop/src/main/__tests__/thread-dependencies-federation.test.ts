@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FederationCapability, FederationRemoteTarget, ThreadDependency } from "@pwragent/shared";
 import {
-  THREAD_DEPENDENCIES_UNSUPPORTED_MESSAGE, appendPeerDependents, manageRemoteThreadDependencies,
-  readFederationThreadDependenciesRequest, type ThreadDependenciesFederationRuntime,
+  PEER_ACTIVE_TIMEOUT_MS, THREAD_DEPENDENCIES_UNSUPPORTED_MESSAGE, appendPeerDependents, collectPeerActiveDependencies,
+  manageRemoteThreadDependencies, qualifyPeerDependentOwners, readFederationThreadDependenciesRequest,
+  type ThreadDependenciesFederationRuntime,
 } from "../app-server/thread-dependencies-federation";
 
 const lab: FederationRemoteTarget = { scope: "remote", instanceId: "lab" };
@@ -56,5 +57,28 @@ describe("Continue After across machines", () => {
     ]);
     const response = await appendPeerDependents({ dependencies: [] }, { backend: "codex", threadId: "prereq" }, "mac", value);
     expect(response.peerDependents?.map((entry) => [entry.dependency.id, entry.owner])).toEqual([["on-us", lab]]);
+  });
+
+  it("leaves out a peer that does not answer in time instead of holding up the rest", async () => {
+    vi.useFakeTimers();
+    try {
+      const { value } = runtime([
+        { target: lab, capabilities: ["thread_dependencies_v1", "turn_control"], answer: async () => ({ dependencies: [wait("lab-wait", "mac")] }) },
+        { target: win, capabilities: ["thread_dependencies_v1", "turn_control"], answer: () => new Promise(() => {}) },
+      ]);
+      const listed = collectPeerActiveDependencies(value);
+      await vi.advanceTimersByTimeAsync(PEER_ACTIVE_TIMEOUT_MS);
+      expect((await listed).map((entry) => entry.dependency.id)).toEqual(["lab-wait"]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("shows a viewer its own waits on a peer's thread, relayed by the owner", async () => {
+    // The viewer "mac" opens the owner "win"'s thread. The owner relays every
+    // machine's waits on it, the viewer's included.
+    const { value } = runtime([{ target: { scope: "remote", instanceId: "mac" }, capabilities: ["thread_dependencies_v1", "turn_control"],
+      answer: async () => ({ dependencies: [wait("mac-wait", "win")] }) }]);
+    const owned = await appendPeerDependents({ dependencies: [] }, { backend: "codex", threadId: "prereq" }, "win", value);
+    const seen = qualifyPeerDependentOwners(owned, win, "mac");
+    expect(seen.peerDependents?.map((entry) => [entry.dependency.id, entry.owner])).toEqual([["mac-wait", { scope: "local" }]]);
   });
 });

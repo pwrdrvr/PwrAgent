@@ -84,10 +84,21 @@ export function qualifyPeerDependentOwners(
   };
 }
 
+/** How long one peer may take to list its waits before it is left out. */
+export const PEER_ACTIVE_TIMEOUT_MS = 3_000;
+
+function withinPeerTimeout<T>(request: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("The peer did not list its waits in time.")), PEER_ACTIVE_TIMEOUT_MS);
+  });
+  return Promise.race([request, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Every capable peer's active registrations, named by owner. A peer that
- * does not answer is left out: an offline machine is not a thread's problem
- * to report.
+ * does not answer in time is left out: an offline machine is not a
+ * thread's problem to report, and must not hold up this machine's chips.
  */
 export async function collectPeerActiveDependencies(
   runtime: ThreadDependenciesFederationRuntime,
@@ -95,7 +106,9 @@ export async function collectPeerActiveDependencies(
   const peers = runtime.connectedPeerTargets().filter((peer) => supports(runtime, peer.target));
   const results = await Promise.allSettled(peers.map(async (peer) => {
     const remote = runtime.remoteBackend(peer.target);
-    const response = remote.manageThreadDependencies ? await remote.manageThreadDependencies({ action: "active" }) : { dependencies: [] };
+    const response = remote.manageThreadDependencies
+      ? await withinPeerTimeout(remote.manageThreadDependencies({ action: "active" }))
+      : { dependencies: [] };
     return response.dependencies.map((dependency) => ({ dependency, owner: peer.target }));
   }));
   return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);

@@ -10312,7 +10312,13 @@ class DesktopAppServerService {
     if (owned.action === "active") {
       return getAppStateMode() ? { dependencies: this.getThreadDependencyCoordinator().active() } : { dependencies: [] };
     }
-    return await this.manageLocalThreadDependencies(owned, undefined, requesterInstanceId ? `peer:${requesterInstanceId}` : "peer");
+    const response = await this.manageLocalThreadDependencies(owned, undefined, requesterInstanceId ? `peer:${requesterInstanceId}` : "peer");
+    if (owned.action !== "list") return response;
+    // Relay the waits other machines, the requester included, keep on this
+    // thread; the requester names its own as local.
+    const runtime = getDesktopFederationRuntime();
+    const localInstanceId = (await runtime.health().catch(() => undefined))?.instanceId;
+    return await appendPeerDependents(response, owned as { backend: string; threadId: string }, localInstanceId, runtime);
   }
 
   private async manageLocalThreadDependencies(request: ManageThreadDependenciesRequest,

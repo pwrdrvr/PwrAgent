@@ -163,7 +163,7 @@ export type ManageThreadDependenciesRequest = {
   dependencyId?: string;
   /** `mark_done`: which `marked_done` prerequisite; the first open one when omitted. */
   conditionIndex?: number;
-  /** `mark_done`: what finished. Required. */
+  /** `mark_done`: what finished. Optional; the card says "Marked done" without it. */
   note?: string;
 };
 
