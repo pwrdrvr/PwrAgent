@@ -11,7 +11,7 @@ function deferred<T>() {
 
 // The owner is a fixed ordered list. A metadata event can fence a read but
 // cannot revoke the operator's saved Load more demand for that list.
-async function interruptedResume(firstPage: number, extraRows: number) {
+async function interruptedResume(firstPage: number, extraRows: number, interruptedPage: number) {
   const total = firstPage + extraRows;
   const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "viewer",
     pageSize: firstPage, query: { kind: "directory", directoryKey: "project", roots: "unpinned" } };
@@ -24,7 +24,7 @@ async function interruptedResume(firstPage: number, extraRows: number) {
   const dispatched = deferred<void>();
   const delivery = deferred<void>();
   const read = vi.fn(async (sent: NavigationQueryRequest): Promise<NavigationQueryPage> => {
-    if (read.mock.calls.length === 1) {
+    if (read.mock.calls.length === interruptedPage + 1) {
       dispatched.resolve();
       await delivery.promise;
     }
@@ -56,9 +56,37 @@ async function interruptedResume(firstPage: number, extraRows: number) {
 
 it("restores saved rows after metadata fences the opening read", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 10 }), fc.integer({ min: 1, max: 40 }),
-    interruptedResume));
+    fc.integer({ min: 0, max: 1 }), interruptedResume));
 });
 
 it("keeps a second row when the one-row opening page is invalidated before delivery", async () => {
-  await interruptedResume(1, 1);
+  await interruptedResume(1, 1, 0);
+});
+
+it("shares one continuation budget across metadata replacements", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+  try {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 12 }), async (interruptions) => {
+      const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", pageSize: 1,
+        query: { kind: "directory-index" } };
+      let cursors = 0;
+      const read = vi.fn(async (sent: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+        if (sent.cursor && ++cursors <= interruptions) queries.invalidate();
+        const start = Number(sent.cursor ?? 0);
+        return { protocol: 2, queryKey: "project", generation: "generation", ownerEpoch: "owner", countsRevision: "revision",
+          counts: { total: 1000, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: false,
+          entries: [], nextCursor: String(start + 1), directories: [{ key: String(start), label: String(start), kind: "directory",
+            counts: { total: 0, active: 0, unread: 0, review: 0 }, pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false }] };
+      });
+      const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+        { loadedRowsByQuery: { [navigationResumeQueryKey(request)]: 110 } });
+      try {
+        queries.setDemand(new Map([["project", request]]));
+        await queries.refresh();
+        expect(cursors).toBe(8);
+        expect(read.mock.calls.filter(([sent]) => sent.cursor).map(([sent]) => sent.deadlineAt)).toEqual(Array(8).fill(10_000));
+        expect(queries.getSnapshot().resources.get("project")).toMatchObject({ loading: false, state: { error: undefined } });
+      } finally { queries.dispose(); }
+    }));
+  } finally { clock.mockRestore(); }
 });

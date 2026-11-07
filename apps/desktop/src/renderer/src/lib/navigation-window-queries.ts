@@ -713,7 +713,11 @@ export class NavigationWindowQueries {
         if (this.isCurrent(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };
       } finally {
-        if (resuming && this.resources.get(resource.value.id) === resource) {
+        // An invalidation can discard the opening page before it is accepted.
+        // Its coalesced replacement still owes the saved depth. Carry the same
+        // budget into that read; a fenced response has not finished restoring.
+        if (resuming && this.resources.get(resource.value.id) === resource
+          && (!resource.refreshAfterPending || resource.value.state.pendingSequence === started.pendingSequence)) {
           this.finishResume(resource);
         }
         if (acquired) {

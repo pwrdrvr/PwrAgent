@@ -8,6 +8,7 @@ import { useNavigationDirectoryDisclosure } from "../useNavigationDirectoryDiscl
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { navigationIdentityKey, navigationThreadSelectionKey } from "../navigation-query-state";
+import { navigationResumeQueryKey } from "../navigation-window-queries";
 
 const directory: NavigationDirectoryRow = { key: "directory:off-page", kind: "directory", label: "Project",
   counts: { total: 1000, active: 20, unread: 30, review: 10 }, pinnedRootCount: 4, unpinnedRootCount: 996, launchpadPresent: false };
@@ -207,6 +208,56 @@ it("uses owner directory descriptors in a window browsing that owner", async () 
   await waitFor(() => expect(result.current.directories).toEqual([directory]));
   expect(result.current.selectedDirectoryKeys).toEqual([directory.key]);
   unmount();
+});
+
+it("restores neighbors of thread 13 when metadata fences the opening directory page", async () => {
+  const fixture = api();
+  const rows: NavigationRow[] = Array.from({ length: 14 }, (_, index) => ({
+    id: `thread-${index + 1}`, source: "codex", ref: { backend: "codex", threadId: `thread-${index + 1}` },
+    title: `Thread ${index + 1}`, titleSource: "explicit", rowRevision: "row", linkedDirectories: [],
+    inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+    queueCount: 0, queueState: "unknown",
+  }));
+  const selected = rows[12]!;
+  let deliver!: () => void;
+  const delivery = new Promise<void>((resolve) => { deliver = resolve; });
+  let opening = true;
+  fixture.read.mockImplementation(async (request) => {
+    if (request.query.kind === "directory-index") return page({ directories: [directory] });
+    if (request.query.kind === "exact") return page({ entries: [{ row: selected, placement: { kind: "root" }, orderKey: "13" }] });
+    if (request.query.kind !== "directory" || request.query.roots !== "unpinned") return page();
+    if (opening) {
+      opening = false;
+      await delivery;
+    }
+    const anchor = request.anchor;
+    const start = request.cursor ? Number(request.cursor)
+      : anchor?.kind === "thread" ? rows.findIndex((row) => row.id === anchor.ref.threadId) : 0;
+    const end = Math.min(rows.length, start + (request.pageSize ?? 10));
+    return page({ entries: rows.slice(start, end).map((row) => ({ row, placement: { kind: "root" }, orderKey: row.id })),
+      rangeStart: start, complete: end === rows.length, nextCursor: end < rows.length ? String(end) : undefined });
+  });
+  const onRangeReset = vi.fn();
+  const request = { protocol: 2 as const, consumer: "main-sidebar" as const, inventory: "viewer" as const,
+    query: { kind: "directory" as const, directoryKey: directory.key, roots: "unpinned" as const } };
+  const { result, unmount } = renderHook(() => useBoundedNavigationWindow({ ...base, desktopApi: fixture.desktopApi,
+    selectedRef: selected.ref, selectedDirectoryKeys: [directory.key], expandedByKey: { [directory.key]: true },
+    loadedRowsByQuery: { [navigationResumeQueryKey(request)]: 110 }, onRangeReset,
+  }));
+  try {
+    await waitFor(() => expect(opening).toBe(false));
+    await act(async () => {
+      result.current.invalidate();
+      const refresh = result.current.refresh();
+      deliver();
+      await refresh;
+    });
+    await waitFor(() => expect(result.current.resources.get(`directory:${directory.key}`)?.loading).toBe(false));
+    expect(result.current.resources.get(`directory:${directory.key}`)?.state.page?.entries.map(({ row }) => row.id))
+      .toEqual(rows.map((row) => row.id));
+    expect(onRangeReset).not.toHaveBeenCalled();
+    expect(fixture.read.mock.calls.some(([sent]) => sent.anchor)).toBe(false);
+  } finally { unmount(); }
 });
 
 it.each([5, 35])("restores selected root %s without discarding the first page when it already contains that root", async (index) => {
