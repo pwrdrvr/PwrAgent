@@ -23,7 +23,7 @@ import {
 import {
   OPERATOR_REQUEST_RETENTION_MS,
   OperatorRequestStore,
-} from "../operator-requests/operator-request-store";
+} from "../storage/operator-request-store";
 import { StateDb } from "../state/state-db";
 import {
   SQLITE_WRITE_METRICS_ENV,

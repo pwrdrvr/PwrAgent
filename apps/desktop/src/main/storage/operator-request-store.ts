@@ -5,6 +5,8 @@ import type {
   ListOperatorRequestsRequest,
 } from "@pwragent/shared";
 import { normalizeCodexAsyncQuestions } from "@pwragent/shared";
+import type { AsyncQuestionStatus, OperatorRequestStorage } from "@pwragent/owner-core/operator-request-storage";
+import { getAppStateDb } from "../state/app-state";
 import type { StateDb } from "../state/state-db.js";
 
 type AsyncQuestionRow = {
@@ -14,8 +16,6 @@ type AsyncQuestionRow = {
   questions_json: string;
   created_at: number;
 };
-
-export type AsyncQuestionStatus = "open" | "answered" | "dismissed";
 
 /** Resolved questions and seen marks older than this are pruned at start. */
 export const OPERATOR_REQUEST_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -29,7 +29,7 @@ export const OPERATOR_REQUEST_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * which is one explicit transaction: one commit per question that arrives,
  * per reply or dismissal, and per batch of items that came on screen.
  */
-export class OperatorRequestStore {
+export class OperatorRequestStore implements OperatorRequestStorage {
   constructor(private readonly stateDb: StateDb) {}
 
   /** Records an open question. A message already recorded keeps its row. */
@@ -223,4 +223,9 @@ function parseQuestions(json: string): CodexAsyncQuestion[] | undefined {
   } catch {
     return undefined;
   }
+}
+
+// Bind once when the application constructs its service, as before.
+export function createOperatorRequestStorage(): OperatorRequestStorage {
+  return new OperatorRequestStore(getAppStateDb());
 }

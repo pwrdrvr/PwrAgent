@@ -28,7 +28,7 @@ vi.mock("electron", () => ({ ipcMain: {
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
 vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
 vi.mock("../state/app-state", () => ({ getAppStateDb: () => ({}) }));
-vi.mock("../operator-requests/operator-request-store", () => ({ OperatorRequestStore: class {} }));
+vi.mock("../storage/operator-request-store", () => ({ createOperatorRequestStorage: () => ({}) }));
 vi.mock("../operator-requests/operator-request-service", () => ({ OperatorRequestService: class {
   constructor(options: { broadcast: (event: OperatorRequestsChangedEvent) => void }) { fixture.broadcast = options.broadcast; }
   start() {}
