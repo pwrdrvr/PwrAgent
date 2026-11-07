@@ -250,8 +250,10 @@ import type {
 } from "@pwragent/shared";
 import {
   isAppServerBackendKind,
+  isThreadExecutionMode,
   normalizeNavigationSnapshotThreadKeys,
   qualifyThreadUrlsInText,
+  type ThreadExecutionMode,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import { hasFederationErrorCode } from "./federation-rpc";
@@ -498,6 +500,52 @@ export type FederationMountRemoteChildRequest = {
 export type FederationMountRemoteChildResponse = {
   mounted: true;
 };
+
+/**
+ * The owner's own `general.block_agent_messages_to_higher_access` check for a
+ * peer's agent message. Returns why the message is refused, or undefined.
+ */
+export type CheckIncomingAgentMessageAccess = (request: {
+  backend: AppServerBackendKind;
+  threadId: string;
+  senderExecutionMode: ThreadExecutionMode | undefined;
+  requestedExecutionMode?: ThreadExecutionMode;
+  approvalPolicy?: string;
+  sandbox?: string;
+}) => Promise<string | undefined>;
+
+/**
+ * Applies the target owner's access check to an agent message from a peer, so
+ * a peer whose own setting is off, or that predates it, cannot bypass it.
+ * Text an operator typed carries no agent origin and is never checked.
+ */
+async function refuseIncomingAgentMessage(
+  check: CheckIncomingAgentMessageAccess | undefined,
+  request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    messageOrigin: AppServerThreadMessageOrigin | undefined;
+    requestedExecutionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+  },
+): Promise<string | undefined> {
+  if (!check || request.messageOrigin?.kind !== "agent") return undefined;
+  // A to-do card the operator approved is their decision, not the agent's.
+  if (request.messageOrigin.operatorApproved) return undefined;
+  return await check({
+    backend: request.backend,
+    threadId: request.threadId,
+    senderExecutionMode: request.messageOrigin.sourceThread?.executionMode,
+    ...(isThreadExecutionMode(request.requestedExecutionMode)
+      ? { requestedExecutionMode: request.requestedExecutionMode }
+      : {}),
+    ...(typeof request.approvalPolicy === "string"
+      ? { approvalPolicy: request.approvalPolicy }
+      : {}),
+    ...(typeof request.sandbox === "string" ? { sandbox: request.sandbox } : {}),
+  });
+}
 
 function authenticateScheduledTurnOrigin<
   T extends {
@@ -956,6 +1004,7 @@ export function registerFederationBackendHandlers(params: {
     targetInstanceId: string,
   ) => void;
   resolveTurnInput?: ResolveIncomingFederationTurnInput;
+  checkAgentMessageAccess?: CheckIncomingAgentMessageAccess;
 }): void {
   if (params.durableTurnRequests) {
     const service = params.durableTurnRequests;
@@ -1504,6 +1553,18 @@ export function registerFederationBackendHandlers(params: {
         resolveSourceInstance: params.resolveSourceInstance,
         sourceInstanceId: envelope.sourceInstanceId,
       });
+      const refusal = await refuseIncomingAgentMessage(
+        params.checkAgentMessageAccess,
+        {
+          backend: request.backend,
+          threadId: request.threadId,
+          messageOrigin,
+          requestedExecutionMode: request.executionMode,
+          approvalPolicy: request.approvalPolicy,
+          sandbox: request.sandbox,
+        },
+      );
+      if (refusal) throw new Error(refusal);
       const input = await resolveFederationTurnInput(
         params.resolveTurnInput,
         request.input,
@@ -1528,6 +1589,15 @@ export function registerFederationBackendHandlers(params: {
         resolveSourceInstance: params.resolveSourceInstance,
         sourceInstanceId: envelope.sourceInstanceId,
       });
+      const refusal = await refuseIncomingAgentMessage(
+        params.checkAgentMessageAccess,
+        {
+          backend: request.backend,
+          threadId: request.threadId,
+          messageOrigin,
+        },
+      );
+      if (refusal) throw new Error(refusal);
       const input = await resolveFederationTurnInput(
         params.resolveTurnInput,
         request.input,
@@ -1743,6 +1813,23 @@ export function registerFederationBackendHandlers(params: {
           resolveSourceInstance: params.resolveSourceInstance,
           sourceInstanceId: envelope.sourceInstanceId,
         });
+        // A steer delivers text to the running turn; a stop delivers none.
+        const refusal = request.operation === "steer"
+          ? await refuseIncomingAgentMessage(params.checkAgentMessageAccess, {
+              backend: request.backend,
+              threadId: request.threadId,
+              messageOrigin,
+            })
+          : undefined;
+        if (refusal) {
+          return {
+            ok: false,
+            backend: request.backend,
+            threadId: request.threadId,
+            requestId: request.requestId,
+            error: { code: "forbidden", message: refusal },
+          } satisfies ControlActiveTurnResponse;
+        }
         const input = wireInput
           ? await resolveFederationTurnInput(
               params.resolveTurnInput,

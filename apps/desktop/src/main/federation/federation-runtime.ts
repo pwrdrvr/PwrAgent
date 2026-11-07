@@ -4038,6 +4038,8 @@ export class DesktopFederationRuntime {
         ),
       resolveSourceInstance: (instanceId) =>
         this.resolveThreadMessageOriginInstance(instanceId),
+      checkAgentMessageAccess: async (request) =>
+        await getDesktopBackendRegistry().checkAgentMessageAccess(request),
       onEnvironmentSetupProgress: (event, targetInstanceId) => {
         this.sendEnvironmentSetupProgress(event, targetInstanceId);
       },

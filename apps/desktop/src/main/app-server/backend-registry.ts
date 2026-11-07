@@ -169,6 +169,10 @@ import {
   type ListProjectHeldWakeupsResponse,
   type SetProjectForgeAutomationRequest,
   type SetProjectForgeAutomationResponse,
+  agentMessageAccessRefusalMessage,
+  isAgentMessageAccessRefusal,
+  threadExecutionModeExceeds,
+  threadExecutionModeForRawPermissions,
 } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
@@ -11160,6 +11164,8 @@ export class DesktopBackendRegistry {
   private readonly resolveTaskMonitorModelsFn: () => Record<string, DesktopTaskMonitorModelChoice>;
   /** `general.pass_setup_variables_to_agents`, read at each agent start. */
   private readonly resolvePassSetupVariablesToAgentsFn: () => boolean;
+  /** `general.block_agent_messages_to_higher_access`, read at each message. */
+  private readonly resolveBlockAgentMessagesToHigherAccessFn: () => boolean;
   private readonly resolveUsageAccountGroupsFn: () => Record<string, string>;
   private readonly resolveProviderThreadModelMigrationsFn: () => Record<
     string,
@@ -11319,6 +11325,7 @@ export class DesktopBackendRegistry {
     resolveHelperModelSettings?: () => DesktopHelperModelSettings;
     resolveTaskMonitorModels?: () => Record<string, DesktopTaskMonitorModelChoice>;
     resolvePassSetupVariablesToAgents?: () => boolean;
+    resolveBlockAgentMessagesToHigherAccess?: () => boolean;
     resolveUsageAccountGroups?: () => Record<string, string>;
     resolveProviderThreadModelMigrations?: () => Record<
       string,
@@ -11519,6 +11526,9 @@ export class DesktopBackendRegistry {
     this.resolvePassSetupVariablesToAgentsFn =
       options?.resolvePassSetupVariablesToAgents ??
       (() => settingsService?.resolvePassSetupVariablesToAgents?.() ?? true);
+    this.resolveBlockAgentMessagesToHigherAccessFn =
+      options?.resolveBlockAgentMessagesToHigherAccess
+      ?? (() => settingsService?.resolveBlockAgentMessagesToHigherAccess?.() ?? true);
     this.resolveUsageAccountGroupsFn = options?.resolveUsageAccountGroups
       ?? (() => settingsService?.resolveUsageAccountGroups?.() ?? {});
     this.resolveProviderThreadModelMigrationsFn =
@@ -13160,6 +13170,48 @@ export class DesktopBackendRegistry {
           ? this.acpBackend.getSession(backend, threadId)?.executionMode ?? "default"
           : "default")
     );
+  }
+
+  /**
+   * Why an agent's message to a thread this instance owns must not go, or
+   * undefined when it may. With `general.block_agent_messages_to_higher_access`
+   * on, a target above the sender is refused: its agent would act on the
+   * sender's text with access the sender does not have. The target's level is
+   * the highest of its own (live turn included) and what the message asks its
+   * turn to run with, raw approval and sandbox overrides included. An older
+   * peer sends no mode and counts as Default Access. Only agent tool calls
+   * come here; operator-typed text never does.
+   */
+  async checkAgentMessageAccess(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    senderExecutionMode: ThreadExecutionMode | undefined;
+    requestedExecutionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+  }): Promise<string | undefined> {
+    if (!this.resolveBlockAgentMessagesToHigherAccessFn()) return undefined;
+    const target = { backend: params.backend, threadId: params.threadId };
+    const senderExecutionMode = params.senderExecutionMode ?? "default";
+    let targetExecutionMode = await this.resolveHandoffSourceExecutionMode({
+      ...target,
+      turnId: this.getActiveTurnForThread(target)?.turnId,
+      overlay: await this.overlayStore.getThreadOverlayState(target),
+    });
+    for (const requested of [
+      params.requestedExecutionMode,
+      threadExecutionModeForRawPermissions(params),
+    ]) {
+      if (requested && threadExecutionModeExceeds(requested, targetExecutionMode)) {
+        targetExecutionMode = requested;
+      }
+    }
+    return threadExecutionModeExceeds(targetExecutionMode, senderExecutionMode)
+      ? agentMessageAccessRefusalMessage({
+          senderExecutionMode,
+          targetExecutionMode,
+        })
+      : undefined;
   }
 
   /**
@@ -26343,11 +26395,19 @@ export class DesktopBackendRegistry {
       request.threadId,
       request.requestId,
     ].join("\u0000");
+    const origin = withoutTurnAttribution(request.messageOrigin);
     const signature = createHash("sha256")
       .update(JSON.stringify({
         expectedTurnId: request.expectedTurnId ?? null,
         input: request.input ?? [],
-        messageOrigin: withoutTurnAttribution(request.messageOrigin) ?? null,
+        // The sender's access is checked on its own, not part of what was
+        // asked: a retry after the sender's mode changed still replays.
+        messageOrigin: origin?.sourceThread
+          ? {
+              ...origin,
+              sourceThread: { ...origin.sourceThread, executionMode: undefined },
+            }
+          : origin ?? null,
         operation: request.operation,
       }))
       .digest("hex");
@@ -47059,6 +47119,12 @@ export class DesktopBackendRegistry {
     const sourceThread = await this.resolveThread(params).catch(() => undefined);
     const sourceTitle = sourceThread?.title.trim();
     const ancestry = await this.readDelegatedTurnAncestry(params);
+    // The sender's access travels with the message, so the target's owner
+    // can apply its own agent-message access setting.
+    const executionMode = await this.resolveHandoffSourceExecutionMode({
+      ...params,
+      overlay: await this.overlayStore.getThreadOverlayState(params),
+    });
     return {
       kind: "agent",
       ...causalContext,
@@ -47070,6 +47136,7 @@ export class DesktopBackendRegistry {
         ...(sourceTitle && sourceThread?.titleSource !== "fallback"
           ? { title: sourceTitle }
           : {}),
+        executionMode,
       },
     };
   }
@@ -47303,43 +47370,8 @@ export class DesktopBackendRegistry {
       }
       // A peer's paused project lets a to-do card's send through.
       if (options?.operatorApproved) messageOrigin.operatorApproved = true;
-      if (!request.args.replaceQueueEntryId) this.correspondenceStore.record({
-        id: correspondenceId,
-        source,
-        destination: { backend, threadId, ...(instanceId ? { instanceId } : {}) },
-        input,
-        createdAt: Date.now(),
-        state: "sending",
-        sourceTurnId: request.context.turnId ?? this.getActiveTurnForThread(source)?.turnId,
-        sourceItemId: request.context.callId,
-      });
-      let targetTitle: string | undefined;
-      let targetInstanceId: string | undefined;
-      let turn: {
-        backend: AppServerBackendKind;
-        threadId: string;
-        turnId: string;
-        queueStatus?: "queued";
-        queueEntryId?: string;
-        position?: number;
-      };
       let localResolutionError: unknown;
       let localThread: AppServerThreadSummary | undefined;
-      const remoteRequest = {
-        ...(request.args.delivery ? { delivery: request.args.delivery } : {}),
-        replaceQueueEntryId: request.args.replaceQueueEntryId,
-        backend,
-        threadId,
-        input,
-        messageOrigin,
-        executionMode: request.args.executionMode,
-        model: request.args.model,
-        reasoningEffort: request.args.reasoningEffort,
-        serviceTier: request.args.serviceTier,
-        fastMode: request.args.fastMode,
-        approvalPolicy: request.args.approvalPolicy,
-        sandbox: request.args.sandbox,
-      };
       // The provider listing is the same local ownership evidence used by
       // navigation. A remembered peer is only a fallback: two PwrAgent
       // profiles can share one harness profile and see the same thread UUID.
@@ -47364,6 +47396,56 @@ export class DesktopBackendRegistry {
           localResolutionError = error;
         }
       }
+      // A local target is checked before the sender's receipt is written, so
+      // a refused message leaves nothing behind. A remote owner checks its own.
+      // An operator-approved to-do dispatch is the operator's own decision,
+      // and the card is where a refused agent is sent, so it is never checked.
+      if (localThread && !options?.operatorApproved) {
+        const refusal = await this.checkAgentMessageAccess({
+          backend,
+          threadId,
+          senderExecutionMode: messageOrigin.sourceThread?.executionMode,
+          requestedExecutionMode: request.args.executionMode,
+          approvalPolicy: request.args.approvalPolicy,
+          sandbox: request.args.sandbox,
+        });
+        if (refusal) return threadOrchestrationFailure("forbidden", refusal);
+      }
+      if (!request.args.replaceQueueEntryId) this.correspondenceStore.record({
+        id: correspondenceId,
+        source,
+        destination: { backend, threadId, ...(instanceId ? { instanceId } : {}) },
+        input,
+        createdAt: Date.now(),
+        state: "sending",
+        sourceTurnId: request.context.turnId ?? this.getActiveTurnForThread(source)?.turnId,
+        sourceItemId: request.context.callId,
+      });
+      let targetTitle: string | undefined;
+      let targetInstanceId: string | undefined;
+      let turn: {
+        backend: AppServerBackendKind;
+        threadId: string;
+        turnId: string;
+        queueStatus?: "queued";
+        queueEntryId?: string;
+        position?: number;
+      };
+      const remoteRequest = {
+        ...(request.args.delivery ? { delivery: request.args.delivery } : {}),
+        replaceQueueEntryId: request.args.replaceQueueEntryId,
+        backend,
+        threadId,
+        input,
+        messageOrigin,
+        executionMode: request.args.executionMode,
+        model: request.args.model,
+        reasoningEffort: request.args.reasoningEffort,
+        serviceTier: request.args.serviceTier,
+        fastMode: request.args.fastMode,
+        approvalPolicy: request.args.approvalPolicy,
+        sandbox: request.args.sandbox,
+      };
       const rememberedRemoteTurn =
         !localThread && includeRemote && this.federatedThreadMessageHandler
         ? await this.federatedThreadMessageHandler({
@@ -47518,9 +47600,11 @@ export class DesktopBackendRegistry {
           ? PROJECT_PAUSED_ERROR_CODE
           : error instanceof PwrAgentFederatedThreadMessageError
             ? error.code
-            : /not found/i.test(message)
-              ? "not_found"
-              : "turn_start_failed",
+            : isAgentMessageAccessRefusal(message)
+              ? "forbidden"
+              : /not found/i.test(message)
+                ? "not_found"
+                : "turn_start_failed",
         message,
       );
     }
@@ -47771,6 +47855,19 @@ export class DesktopBackendRegistry {
         );
       } else {
         if (localThread) {
+          if (request.operation === "steer_thread") {
+            const refusal = await this.checkAgentMessageAccess({
+              backend,
+              threadId,
+              senderExecutionMode: messageOrigin.sourceThread?.executionMode,
+            });
+            if (refusal) {
+              return threadOrchestrationFailure("forbidden", refusal, {
+                backend,
+                threadId,
+              });
+            }
+          }
           const backendSummary = (
             await this.listBackends({ includeUnavailable: true })
           ).backends.find((candidate) => candidate.kind === backend);
