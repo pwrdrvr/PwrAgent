@@ -1,7 +1,9 @@
+import type { MessagingRequestSource, MessagingRequestStore } from "../messaging/core/messaging-storage";
+export type { MessagingRequestSource, MessagingRequestStore } from "../messaging/core/messaging-storage";
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type Database from "better-sqlite3";
-import type { AppServerBackendKind, MessagingCausalSourceRef, PwrAgentMessagingResponse } from "@pwragent/shared";
+import type { MessagingCausalSourceRef, PwrAgentMessagingResponse } from "@pwragent/shared";
 import type { MessagingChannelRef, MessagingInboundEvent } from "@pwragent/messaging-interface";
 
 export const MESSAGING_REQUEST_SCHEMA = `
@@ -21,20 +23,6 @@ CREATE TABLE IF NOT EXISTS messaging_attachment_operations (
   operation_id TEXT PRIMARY KEY, result TEXT
 );
 `;
-
-export type MessagingRequestSource = {
-  ref: MessagingCausalSourceRef;
-  selector: string;
-  principalScope: string;
-  agent: { backend: AppServerBackendKind; threadId: string };
-  bindingId?: string;
-  connectionId?: string;
-  route: "binding" | "default";
-  /** Only routing and admission identity, never message text, attachments or credentials. */
-  event: MessagingInboundEvent;
-};
-
-export type MessagingRequestStore = Pick<SqliteMessagingRequestStore, "remember" | "get" | "list" | "destination" | "claimAttachment" | "finishAttachment">;
 
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -68,7 +56,7 @@ function routingSnapshot(event: MessagingInboundEvent): MessagingInboundEvent {
 /** Immutable requests plus one latest-human pointer per actor/agent/surface.
  * No history replay, ancestry traversal, background writes or startup backfill.
  */
-export class SqliteMessagingRequestStore {
+export class SqliteMessagingRequestStore implements MessagingRequestStore {
   private readonly ownerId: string;
 
   constructor(private readonly db: Database.Database) {

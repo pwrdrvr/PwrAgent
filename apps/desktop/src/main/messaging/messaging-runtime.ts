@@ -11,7 +11,7 @@ import {
 } from "./core/messaging-controller";
 import { getRbacPolicyService } from "./rbac-policy-service";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
-import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
+import type { MessagingStoreLike } from "./core/messaging-storage";
 import type {
   MessagingAdapter,
   MessagingBackendBridge,

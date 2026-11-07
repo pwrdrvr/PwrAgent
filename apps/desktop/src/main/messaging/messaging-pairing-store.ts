@@ -1,3 +1,4 @@
+import type { MessagingPairingStorage } from "@pwragent/owner-core/messaging-pairing-storage";
 import {
   createHmac,
   randomBytes,
@@ -37,7 +38,7 @@ type PairingPayload = {
   approvedTargets?: MessagingPairingApprovalTarget[];
 };
 
-export class MessagingPairingStore {
+export class MessagingPairingStore implements MessagingPairingStorage {
   constructor(private readonly stateDb: StateDb) {}
 
   create(params: {

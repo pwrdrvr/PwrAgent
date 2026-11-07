@@ -98,7 +98,7 @@ import type {
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
-import type { MessagingRequestSource, MessagingRequestStore } from "../../state/messaging-request-store";
+import type { MessagingRequestSource, MessagingRequestStore } from "./messaging-storage";
 import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
@@ -183,7 +183,7 @@ import {
   defaultAgentScopeForChannel,
   type MessagingDefaultAgentScopeKind,
 } from "./messaging-default-agent.js";
-import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
+import type { MessagingStoreLike } from "./messaging-storage";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import type {
   MessagingAdapter,
