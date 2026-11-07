@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type {
@@ -12,9 +13,10 @@ import type {
   ThreadTodo,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoStatus,
+  ThreadReviewIdentity,
   TodoUnavailableInstance,
 } from "@pwragent/shared";
-import { applyThreadTodoFeedDelta, ThreadTodoFeedFollower, threadTodoThreadKey } from "@pwragent/shared";
+import { applyThreadTodoFeedDelta, compareThreadTodosNewestFirst, ThreadTodoFeedFollower, threadTodoThreadKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadTodoResolveOptions } from "./thread-todos-view";
 
@@ -55,6 +57,9 @@ type ThreadTodosApi = Pick<
   DesktopApi,
   | "snapshotThreadTodos"
   | "onThreadTodosDelta"
+  | "listThreadTodos"
+  | "onThreadTodosChanged"
+  | "onAgentEvent"
   | "resolveThreadTodo"
   | "runThreadTodoAction"
   | "setThreadTodoItemChecked"
@@ -82,14 +87,85 @@ function sameMergeMethods(
 export function useThreadTodos(
   desktopApi: ThreadTodosApi | undefined,
   mountedThreadKeys = "",
+  selectedRemoteThread?: ThreadReviewIdentity,
 ): ThreadTodosController {
   const api = desktopApi;
   const [error, setError] = useState<string>();
   const [unavailableInstances, setUnavailableInstances] = useState(EMPTY_UNAVAILABLE);
-  const [openTodos, setOpenTodos] = useState<ThreadTodo[]>(EMPTY_TODOS);
+  const [feedTodos, setOpenTodos] = useState<ThreadTodo[]>(EMPTY_TODOS);
+  const [selectedCards, setSelectedCards] = useState<{ key: string; todos: ThreadTodo[] }>();
+  const [selectedError, setSelectedError] = useState<{ key: string; message: string }>();
   const [revision, setRevision] = useState(0);
   const [mergeMethods, setMergeMethods] = useState<ThreadTodoMergeMethodPreferences>();
   const [runningIds, setRunningIds] = useState<ReadonlySet<string>>(EMPTY_SET);
+  const selectedRefresh = useRef<{ key: string; reload: () => Promise<void> } | undefined>(undefined);
+
+  const selectedBackend = selectedRemoteThread?.backend;
+  const selectedThreadId = selectedRemoteThread?.threadId;
+  const selectedInstanceId = selectedRemoteThread?.federationTarget?.instanceId;
+  const selectedKey = selectedBackend && selectedThreadId && selectedInstanceId
+    ? threadTodoThreadKey({ backend: selectedBackend, threadId: selectedThreadId,
+        federationTarget: { scope: "remote", instanceId: selectedInstanceId } })
+    : undefined;
+
+  // A project mount can expose a thread without pinning that thread. The
+  // main window's feed follows pins, so read the selected thread from its
+  // owner and follow its change markers while it is on screen.
+  useEffect(() => {
+    if (!selectedKey || !selectedBackend || !selectedThreadId || !selectedInstanceId || !api?.listThreadTodos) return;
+    let cancelled = false;
+    let loading = false;
+    let queued = false;
+    const reload = async (): Promise<void> => {
+      if (loading) { queued = true; return; }
+      loading = true;
+      do {
+        try {
+          queued = false;
+          const response = await api.listThreadTodos!({ backend: selectedBackend, threadId: selectedThreadId,
+            status: "open", federationTarget: { scope: "remote", instanceId: selectedInstanceId } });
+          if (!cancelled) {
+            setSelectedCards({ key: selectedKey, todos: response.todos });
+            setSelectedError(response.errors?.length ? { key: selectedKey, message: response.errors.join("\n") } : undefined);
+            setRevision((current) => current + 1);
+          }
+        } catch (failure) {
+          if (!cancelled) setSelectedError({ key: selectedKey,
+            message: failure instanceof Error ? failure.message : String(failure) });
+        }
+      } while (queued && !cancelled);
+      loading = false;
+    };
+    const unsubscribe = api.onThreadTodosChanged?.((event) => {
+      if (event.federationTarget && event.federationTarget.instanceId !== selectedInstanceId) return;
+      if (event.backend === undefined || (event.federationTarget?.instanceId === selectedInstanceId
+        && event.backend === selectedBackend && event.threadId === selectedThreadId)) void reload();
+    });
+    const unsubscribeAgent = api.onAgentEvent?.((event) => {
+      if (event.federationTarget?.scope !== "remote"
+        || event.federationTarget.instanceId !== selectedInstanceId || event.backend !== selectedBackend) return;
+      const { method, params } = event.notification;
+      if (method !== "thread/name/updated" && method !== "thread/modelSettings/updated") return;
+      if ((params as { threadId?: unknown } | undefined)?.threadId === selectedThreadId) void reload();
+    });
+    const refresh = { key: selectedKey, reload };
+    selectedRefresh.current = refresh;
+    void reload();
+    return () => {
+      cancelled = true;
+      if (selectedRefresh.current === refresh) selectedRefresh.current = undefined;
+      unsubscribe?.();
+      unsubscribeAgent?.();
+      setSelectedCards(undefined);
+      setSelectedError(undefined);
+    };
+  }, [api, selectedKey, selectedBackend, selectedThreadId, selectedInstanceId]);
+
+  const openTodos = useMemo(() => {
+    if (!selectedKey || selectedCards?.key !== selectedKey) return feedTodos;
+    return [...feedTodos.filter((todo) => threadTodoThreadKey(todo) !== selectedKey), ...selectedCards.todos]
+      .sort(compareThreadTodosNewestFirst);
+  }, [feedTodos, selectedCards, selectedKey]);
 
   useEffect(() => {
     const snapshot = api?.snapshotThreadTodos;
@@ -98,6 +174,11 @@ export function useThreadTodos(
     let todos = EMPTY_TODOS;
     const show = (next: ThreadTodo[]): void => {
       if (next === todos) return;
+      const refresh = selectedRefresh.current;
+      if (refresh) {
+        const forSelected = (cards: ThreadTodo[]) => cards.filter((todo) => threadTodoThreadKey(todo) === refresh.key);
+        if (JSON.stringify(forSelected(todos)) !== JSON.stringify(forSelected(next))) void refresh.reload();
+      }
       todos = next.length > 0 ? next : EMPTY_TODOS;
       setOpenTodos(todos);
     };
@@ -190,7 +271,7 @@ export function useThreadTodos(
 
   return useMemo(
     () => ({
-      error,
+      error: [error, selectedError && selectedError.key === selectedKey ? selectedError.message : undefined].filter(Boolean).join("\n") || undefined,
       unavailableInstances,
       openTodos,
       openByThreadKey,
@@ -203,6 +284,8 @@ export function useThreadTodos(
     }),
     [
       error,
+      selectedError,
+      selectedKey,
       unavailableInstances,
       openTodos,
       openByThreadKey,

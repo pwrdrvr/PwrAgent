@@ -46,6 +46,16 @@ afterEach(() => {
 });
 
 describe("review status controls", () => {
+  it("routes a mounted thread's review through its thread owner when file context has no target", async () => {
+    const api = installApi(review);
+    render(<TranscriptReview entry={entry} parentThreadId="owner"
+      threadLinkSource={{ backend: "codex", instanceId: "peer" }}
+      fileViewerContext={{ key: "remote-thread", title: "Remote thread", projectPath: "/owner/worktree" }} />);
+    await screen.findByRole("button", { name: "Dismiss review" });
+    expect(api.listThreadReviews).toHaveBeenCalledWith({ backend: "codex", threadId: "owner", status: "all",
+      federationTarget: { scope: "remote", instanceId: "peer" } });
+  });
+
   it("loads and updates tracked findings on a mounted remote thread", async () => {
     const target = { scope: "remote" as const, instanceId: "peer" };
     const api = installApi({ ...review, status: "handled" });

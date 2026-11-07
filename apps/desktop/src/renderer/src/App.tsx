@@ -2722,8 +2722,13 @@ function DesktopAppShell(props: {
     .map(threadSummaryIdentityKey).sort().join("\n"), [navigation.threads]);
   // A viewer window shows one owner and mounts nothing. Every row there is
   // the owner's, so a row change must not take a new To-do snapshot.
+  const selectedTodoThread = navigation.selectedThread;
+  const selectedTodoTarget = selectedTodoThread?.federation?.ref.target;
   const threadTodoController = useThreadTodos(desktopApi,
-    readRendererFederationTarget() ? "" : mountedTodoThreadKeys);
+    readRendererFederationTarget() ? "" : mountedTodoThreadKeys,
+    !readRendererFederationTarget() && selectedTodoThread && selectedTodoTarget?.scope === "remote"
+      ? { backend: selectedTodoThread.source, threadId: selectedTodoThread.id, federationTarget: selectedTodoTarget }
+      : undefined);
   const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
   // Providers with threads, from the directory index that counts them all.
   // Keyed by the joined list so a refreshed page keeps one array identity.
