@@ -1283,7 +1283,7 @@ function ProblemCard(props: {
 }
 
 /** Rows shown per reason before "Show all". */
-const ROWS_PER_REASON = 5;
+const ROWS_PER_REASON = 3;
 
 /** Rows that share a reason, under one heading with their count, so 22
  * rows with one reason read as one fact. */
@@ -1294,14 +1294,19 @@ function ProblemGroup(props: { reason: string; problems: ThreadMaintenanceProble
   const size = allocationTotal(props.problems.map((problem) => ({
     space: problem.bytes === undefined ? undefined : { allocatedBytes: problem.bytes },
   })));
+  // A detail every row shares is said once, in the heading.
+  const shared = props.problems.every((problem) => problem.detail === props.problems[0]!.detail)
+    ? props.problems[0]!.detail : undefined;
   return (
     <li className="thread-maintenance__problem-group">
       <p className="thread-maintenance__problem-why">
         <b>{props.reason}</b>{` · ${props.problems.length}`}{size ? ` · ${formatAllocation(size)} on disk` : ""}
+        {shared ? ` · ${shared}` : ""}
       </p>
       <ul id={rowsId} aria-label={props.reason}>
         {shown.map((problem, index) => (
-          <ProblemRow key={`${problem.object}:${index}`} problem={problem} onOpenThread={props.onOpenThread} />
+          <ProblemRow key={`${problem.object}:${index}`} problem={shared ? { ...problem, detail: undefined } : problem}
+            onOpenThread={props.onOpenThread} />
         ))}
       </ul>
       {props.problems.length > ROWS_PER_REASON ? (

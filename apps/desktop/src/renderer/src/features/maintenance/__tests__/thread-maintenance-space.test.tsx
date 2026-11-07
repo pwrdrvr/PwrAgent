@@ -239,7 +239,8 @@ describe("ThreadMaintenanceDialog sizes and progress", () => {
       ...Array.from({ length: 4 }, (_, index) => ({ step: "hibernate" as const, kind: "kept" as const,
         object: `Probe ${index}`, reason: "No worktree checkout", backend: "grok", threadId: `g-${index}` })),
       ...Array.from({ length: 18 }, (_, index) => ({ step: "hibernate" as const, kind: "kept" as const,
-        object: `Thread ${index}`, reason: "Checkout missing", backend: "codex", threadId: `c-${index}`, bytes: 1 * GB })),
+        object: `Thread ${index}`, reason: "Checkout missing", detail: "The folder was already gone.",
+        backend: "codex", threadId: `c-${index}`, bytes: 1 * GB })),
     ];
     emitRun({
       runId: "run-1", revision: 2, scanId: "scan-1", running: false, startedAt: NOW, finishedAt: NOW + 60_000,
@@ -250,11 +251,15 @@ describe("ThreadMaintenanceDialog sizes and progress", () => {
     const card = within(dialog).getByRole("region", { name: "22 checkouts kept" });
     const groups = within(card).getAllByRole("list").slice(1);
     expect(groups.map((list) => list.getAttribute("aria-label"))).toEqual(["Checkout missing", "No worktree checkout"]);
-    expect(card).toHaveTextContent("Checkout missing · 18 · 18 GB on disk");
-    // A long group shows five rows until asked for all of them.
-    expect(within(groups[0]!).getAllByRole("listitem")).toHaveLength(5);
+    // A detail every row in a group shares is said once, in its heading.
+    expect(card).toHaveTextContent("Checkout missing · 18 · 18 GB on disk · The folder was already gone.");
+    expect(within(card).getAllByText(/The folder was already gone/)).toHaveLength(1);
+    // A long group shows three rows until asked for all of them.
+    expect(within(groups[0]!).getAllByRole("listitem")).toHaveLength(3);
     fireEvent.click(within(card).getByRole("button", { name: "Show all 18" }));
     expect(within(groups[0]!).getAllByRole("listitem")).toHaveLength(18);
-    expect(within(groups[1]!).getAllByRole("listitem")).toHaveLength(4);
+    // Each group folds on its own.
+    expect(within(groups[1]!).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(card).getByRole("button", { name: "Show all 4" })).toHaveAttribute("aria-expanded", "false");
   });
 });

@@ -54090,7 +54090,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .thread-maintenance__problem-rows {
-  max-height: 180px;
+  max-height: 320px;
   margin: 0;
   padding: 0;
   overflow-y: auto;
@@ -54112,6 +54112,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .thread-maintenance__open-thread {
   flex: none;
+  /* Grouped rows sit close together; this keeps each target 24px tall. */
+  min-height: 24px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -54173,7 +54175,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 /* Rows inside a reason group sit under its heading, without their own rule. */
 .thread-maintenance__problem-rows .thread-maintenance__problem-group li {
-  padding: 3px 0;
+  align-items: center;
+  padding: 1px 0;
   border-top: 0;
 }
 
