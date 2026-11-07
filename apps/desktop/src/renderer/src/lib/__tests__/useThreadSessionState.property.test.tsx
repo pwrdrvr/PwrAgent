@@ -260,6 +260,52 @@ function initialModel(): Model {
   ] };
 }
 
+function openingCommands(time = 0, reverse = false) {
+  return [
+    new LedgerCommand("older"), new LedgerCommand("resolve"),
+    new LedgerCommand("send"), new LedgerCommand("start"),
+    new LedgerCommand("item", time), new LedgerCommand("item", time, true),
+    new LedgerCommand("item", time), new LedgerCommand("read"),
+    new LedgerCommand("item", time), new LedgerCommand("item", time, true),
+    new LedgerCommand("resolve", time, reverse),
+    new LedgerCommand("redeliver"),
+    new LedgerCommand("complete"), new LedgerCommand("resolve", time, reverse),
+    new LedgerCommand("compact"), new LedgerCommand("resolve"),
+  ];
+}
+
+it.each([
+  { name: "compaction followed by a reordered read", commands: [
+    new LedgerCommand("start"), new LedgerCommand("item"), new LedgerCommand("item"),
+    new LedgerCommand("complete"), new LedgerCommand("compact"), new LedgerCommand("resolve", 0, true),
+  ] },
+  { name: "an older page arriving during a later turn", commands: [
+    new LedgerCommand("read"), new LedgerCommand("start"), new LedgerCommand("item", 0, true),
+    new LedgerCommand("older"), new LedgerCommand("complete"), new LedgerCommand("start"),
+  ] },
+])("retains provider order after $name", async ({ commands }) => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  const model = initialModel();
+  const real = await mount(model);
+  try {
+    await fc.asyncModelRun(() => ({ model, real }), openingCommands());
+    await fc.asyncModelRun(() => ({ model, real }), commands);
+    if (model.active !== undefined) {
+      await new LedgerCommand("item").run(model, real);
+      await new LedgerCommand("complete").run(model, real);
+    }
+    await drain(model, real);
+    await new LedgerCommand("read").run(model, real);
+    await drain(model, real);
+    for (let page = 0; real.result.current.response?.replay.pagination.hasPreviousPage; page++) {
+      expect(page).toBeLessThan(20);
+      await new LedgerCommand("older").run(model, real);
+      await drain(model, real);
+    }
+    assertLedger(model, real);
+  } finally { real.unmount(); clock.mockRestore(); }
+});
+
 it("keeps a completed message's live sequence when a tied command row precedes it", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   const model: Model = { turn: 0, ledger: [] };
@@ -391,18 +437,7 @@ it("renders a subsequence of the provider ledger after every command and the who
         assertLedger(model, real);
         // Every run visits the live/read race; random commands then explore
         // other interleavings. This also keeps coverage useful at 25 runs.
-        const opening = [
-          new LedgerCommand("older"), new LedgerCommand("resolve"),
-          new LedgerCommand("send"), new LedgerCommand("start"),
-          new LedgerCommand("item", time), new LedgerCommand("item", time, true),
-          new LedgerCommand("item", time), new LedgerCommand("read"),
-          new LedgerCommand("item", time), new LedgerCommand("item", time, true),
-          new LedgerCommand("resolve", time, reverse),
-          new LedgerCommand("redeliver"),
-          new LedgerCommand("complete"), new LedgerCommand("resolve", time, reverse),
-          new LedgerCommand("compact"), new LedgerCommand("resolve"),
-        ];
-        await fc.asyncModelRun(() => ({ model, real }), opening);
+        await fc.asyncModelRun(() => ({ model, real }), openingCommands(time, reverse));
         await fc.asyncModelRun(() => ({ model, real }), commands);
         // A send is acknowledged before starting the next provider turn.
         if (model.optimistic) {
