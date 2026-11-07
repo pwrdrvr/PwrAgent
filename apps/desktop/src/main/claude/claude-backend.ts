@@ -478,13 +478,31 @@ function claudeAdditionalDirectories(session: ClaudeSession, attached: readonly 
     .filter((directory) => directory !== cwd).sort();
 }
 
+/** Project scratch belongs to the allocated workspace, even when Claude advertises its own scratchpad. */
+function claudeWorkspaceInstructions(session: ClaudeSession): string {
+  return [
+    "PwrAgent workspace ownership:",
+    `Authoritative workspace: ${JSON.stringify(session.cwd)}`,
+    `Project scratch: ${JSON.stringify(path.join(session.cwd, ".pwragent", "scratch", session.thread.id))}`,
+    "Use the authoritative workspace for project edits, builds, Git operations, and delegated project work. "
+      + "Linked directories remain available for their requested purpose; do not substitute another thread's worktree.",
+    "Put agent-created source snapshots, build trees, reproduction repositories, intermediate scripts, and project outputs "
+      + "in Project scratch, creating it only when needed. This project-work rule takes precedence over generic scratchpad guidance. "
+      + "Use an external path for project scratch only when the user explicitly authorizes it.",
+    "Leave CLI-managed scratch, task logs, tool-required temporary files, and TMPDIR to Claude Code and the tools.",
+    "Keep requested artifacts at their intended destination. Remove only disposable files you created in Project scratch "
+      + "once no running task needs them. If scratch must be retained, report its absolute path and purpose. "
+      + "Keep project scratch out of commits. Never clean another thread's scratch.",
+  ].join("\n");
+}
+
 function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): ClaudeSessionConfig {
   return {
     model: params.model ?? session.thread.model,
     effort: CLAUDE_EFFORTS.has(params.reasoningEffort ?? "") ? params.reasoningEffort as Options["effort"] : undefined,
     permissionMode: params.collaborationMode?.mode === "plan"
       ? "plan" : claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default"),
-    instructions: params.instructions,
+    instructions: [claudeWorkspaceInstructions(session), params.instructions].filter(Boolean).join("\n\n"),
     mcpServers: params.mcpServers,
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
     strictMcpConfig: params.strictMcpConfig,

@@ -1874,7 +1874,7 @@ describe("Claude SDK backend", () => {
     expect(f.queries[0]).toMatchObject({
       pathToClaudeCodeExecutable: "/fixture/claude",
       sessionId: threadId,
-      systemPrompt: { type: "preset", preset: "claude_code", append: "PwrAgent instructions" },
+      systemPrompt: { type: "preset", preset: "claude_code", append: expect.stringContaining("PwrAgent instructions") },
       settingSources: ["user", "project", "local"],
       permissionMode: "default",
       includePartialMessages: true,
@@ -2872,7 +2872,7 @@ describe("Claude SDK backend", () => {
       onSessionClosed: secondGrants });
     await f.waitForTurn();
     expect(f.run).toHaveBeenCalledTimes(2);
-    expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", systemPrompt: { append: "Be brief." } });
+    expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", systemPrompt: { append: expect.stringContaining("Be brief.") } });
     expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
     // The relaunching turn registered the same thread grants again, so the
     // old session must not revoke them out from under the new one.
@@ -3003,7 +3003,7 @@ describe("Claude SDK backend", () => {
     }> = [{
       name: "instructions",
       change: () => ({ instructions: "Be brief." }),
-      applied: () => ({ systemPrompt: { type: "preset", preset: "claude_code", append: "Be brief." } }),
+      applied: () => ({ systemPrompt: { type: "preset", preset: "claude_code", append: expect.stringContaining("Be brief.") } }),
     }, {
       name: "an attached directory",
       change: (root) => ({ attachedDirectories: [{ id: path.join(root, "attached"), kind: "local", label: "attached", path: path.join(root, "attached") }] }),

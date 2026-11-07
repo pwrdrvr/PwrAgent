@@ -78,6 +78,30 @@ PwrAgent creates a stable UUID for a new thread and passes it as `sessionId`.
 Once the SDK confirms initialization, the returned session ID is persisted and
 subsequent turns use `resume`, including after an application restart.
 
+Every project query also appends workspace ownership instructions to the
+`claude_code` preset, followed by the thread's configured instructions. The
+authoritative directory is the session's allocated `cwd`. Agent-created source
+snapshots, build trees, reproduction repositories, and intermediate project
+files go under `<cwd>/.pwragent/scratch/<pwragent-thread-id>/`, created by the
+agent only when needed. This makes retained project scratch attributable even
+when a fork or session restart changes the SDK session ID. A workspace move
+uses the new cwd; the directory holding the old conversation does not select
+the scratch location.
+
+Claude Code advertises a separate session scratchpad for temporary files.
+The project instructions give source/build scratch a workspace-local
+destination while leaving CLI-managed scratch, background task logs,
+tool-required temporary files, and `TMPDIR` alone. An output-file path under
+system temp therefore does not establish that Claude ran outside its workspace.
+Linked directories keep their requested purposes, and an explicit user
+authorization can select an external project scratch path.
+
+These are agent instructions, not a filesystem sandbox. The adapter creates
+and deletes no scratch directories and changes no permission rules. The agent
+is instructed to retain requested artifacts, remove only its own disposable
+project scratch after tasks stop using it, and report the absolute path and
+purpose of scratch it retains. Existing scratch is not migrated or cleaned up.
+
 SDK text deltas, assistant messages, tool calls, and tool results become normal
 timeline notifications. Permission requests use the existing approval UI;
 `AskUserQuestion` uses its questionnaire UI. Cancellation denies the pending
