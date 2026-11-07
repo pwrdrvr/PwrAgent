@@ -4,13 +4,12 @@ import type { ThreadMaintenanceRules, ThreadMaintenanceScan } from "@pwragent/sh
 /**
  * The longest a thread maintenance tool call waits before it answers.
  *
- * Claude Code aborts an MCP request that has no response after 60 seconds
- * (2.1.310: `MCP_TOOL_TIMEOUT`, floored at 60s, applied to each POST until
- * its response headers arrive). PwrAgent answers each call with one JSON
- * response, so that timer covers the whole call. A full scan read 594 active
- * and 2,352 archived threads in about two minutes on one machine, and the
- * archived-checkout audit grows with every archived thread, so a call never
- * waits for the scan to finish. It reports the scan as running instead.
+ * A full scan read 594 active and 2,352 archived threads in about two
+ * minutes on one machine, and the archived-checkout audit grows with every
+ * archived thread, so a call never waits for the scan to finish. It reports
+ * the scan as running instead. The agent-tool MCP server now keeps a long
+ * call open (see AGENT_TOOL_MCP_PROGRESS_INTERVAL_MS), but MCP clients other
+ * than Claude Code may still give up on a call that takes minutes.
  */
 export const THREAD_MAINTENANCE_TOOL_WAIT_MS = 40_000;
 
