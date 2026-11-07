@@ -96,7 +96,7 @@ beforeAll(async () => {
   const settingsTargets = ["overlay", "app-state", "nested/store"]
     .map(target => `apps/desktop/src/main/state/${target}.js`);
   source(settingsService, settingsTargets
-    .map(target => `import ${JSON.stringify(relative(dirname(settingsService), target))};`).join("\n"));
+    .map(target => `import ${JSON.stringify(relative(dirname(settingsService), target).replaceAll("\\", "/"))};`).join("\n"));
   for (const to of settingsTargets) ipcStateCases.push({ from: settingsService, to, forbidden: true });
 
   // dependency-cruiser normalizes entry paths against cwd, even with baseDir.
