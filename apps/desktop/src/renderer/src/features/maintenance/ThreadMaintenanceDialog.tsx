@@ -111,6 +111,8 @@ export function ThreadMaintenanceDialog(props: {
   const [mode, setMode] = useState<ThreadMaintenanceMode>("combined");
   const [plan, setPlan] = useState<ThreadMaintenancePlan>(DEFAULT_THREAD_MAINTENANCE_PLAN);
   const [rules, setRules] = useState<ThreadMaintenanceRules>(() => defaultThreadMaintenanceRules(policy));
+  // This scan's idle days for hibernation. Settings, and the hourly sweep, keep theirs.
+  const [hibernateIdleDays, setHibernateIdleDays] = useState(hibernationPolicy.idleDays);
   const [storedPhase, setPhase] = useState<ThreadMaintenanceStoredPhase>("plan");
   const [scan, setScan] = useState<ThreadMaintenanceScan>();
   const [scanProgress, setScanProgress] = useState<ThreadMaintenanceScanProgress>();
@@ -163,6 +165,7 @@ export function ThreadMaintenanceDialog(props: {
     try {
       const next = await api.scanThreadMaintenance({
         rules, steps, progressId, ...(props.projectKey ? { projectKey: props.projectKey } : {}),
+        ...(steps.includes("hibernate") ? { hibernateIdleDays: clampIdleDays(hibernateIdleDays, hibernationPolicy.idleDays) } : {}),
       });
       if (progressIdRef.current !== progressId) return;
       setScan(next);
@@ -178,7 +181,7 @@ export function ThreadMaintenanceDialog(props: {
         setScanProgress(undefined);
       }
     }
-  }, [api, props.projectKey, rules, steps]);
+  }, [api, hibernateIdleDays, hibernationPolicy.idleDays, props.projectKey, rules, steps]);
 
   const startRun = useCallback(async (chosen = selection) => {
     if (!api?.applyThreadMaintenance || !scan || !chosen) return;
@@ -239,6 +242,7 @@ export function ThreadMaintenanceDialog(props: {
         <div className="thread-maintenance__body">
           {phase === "plan" ? (
             <PlanView mode={mode} plan={plan} rules={rules} policy={policy} hibernationPolicy={hibernationPolicy}
+              hibernateIdleDays={hibernateIdleDays} onHibernateIdleDays={setHibernateIdleDays}
               onPlan={setPlan} onRules={setRules} />
           ) : null}
           {phase === "scanning" ? (
@@ -332,6 +336,8 @@ function PlanView(props: {
   rules: ThreadMaintenanceRules;
   policy: DesktopThreadArchivePolicy;
   hibernationPolicy: DesktopCheckoutHibernationPolicy;
+  hibernateIdleDays: number;
+  onHibernateIdleDays: (days: number) => void;
   onPlan: (plan: ThreadMaintenancePlan) => void;
   onRules: (rules: ThreadMaintenanceRules) => void;
 }) {
@@ -344,7 +350,7 @@ function PlanView(props: {
       case "threads":
         return "Threads past each project's keep count, or untouched for the chosen days. Their worktrees are removed after any changes are saved.";
       case "hibernate": {
-        const days = props.hibernationPolicy.idleDays;
+        const days = clampIdleDays(props.hibernateIdleDays, props.hibernationPolicy.idleDays);
         return `Threads idle ${days} ${days === 1 ? "day" : "days"}${steps.includes("threads") ? " that aren't being archived" : ""}. Their checkouts are removed after any changes are saved; each comes back when you send it a message.`;
       }
       case "checkouts":
@@ -407,6 +413,23 @@ function PlanView(props: {
                 </Checkbox>
               </div>
             ) : null}
+            {step === "hibernate" && on ? (
+              <div className="thread-maintenance__rules">
+                <div className="thread-maintenance__rule">
+                  <label className="thread-maintenance__number">
+                    <span>Idle for at least</span>
+                    <input aria-label="Days idle before a checkout can hibernate" className="settings-input" min={1} max={3650}
+                      type="number" value={props.hibernateIdleDays}
+                      onChange={(event) => props.onHibernateIdleDays(Number(event.target.value))} />
+                    <span>days</span>
+                  </label>
+                </div>
+                <span className="thread-maintenance__hint">
+                  {`For this scan only. The hourly sweep uses ${props.hibernationPolicy.idleDays} ${
+                    props.hibernationPolicy.idleDays === 1 ? "day" : "days"}, set in Settings → Worktrees.`}
+                </span>
+              </div>
+            ) : null}
           </section>
         );
       })}
@@ -435,6 +458,12 @@ function PlanView(props: {
       </div>
     </>
   );
+}
+
+/** The idle days a scan sends: a whole number from 1 to 3650, or Settings'
+ * value while the field is empty or invalid. */
+function clampIdleDays(days: number, fallback: number): number {
+  return Number.isFinite(days) && days >= 1 ? Math.min(3650, Math.floor(days)) : fallback;
 }
 
 /** What a scanning step is doing, in words. */
@@ -880,6 +909,10 @@ function HibernateReview(props: {
       </div>
     );
   }
+  const kept = keptTotal(section.kept);
+  // Rows the archive step already takes in this run.
+  const archiving = section.items.length - items.length;
+  const days = `${section.idleDays} ${section.idleDays === 1 ? "day" : "days"}`;
   return (
     <>
       <div className="thread-maintenance__summary">
@@ -890,10 +923,36 @@ function HibernateReview(props: {
               : "No idle checkouts to hibernate"}
           </p>
           <p className="thread-maintenance__summary-sub">
-            {`${section.checked} checked · ${items.length} can hibernate · ${keptTotal(section.kept)} kept`}
+            {`${section.checked} ${section.checked === 1 ? "checkout" : "checkouts"} on disk checked`}
             {section.skipped ? ` · ${section.skipped}` : ""}
           </p>
         </div>
+        <dl className="thread-maintenance__dispositions">
+          <div className="is-candidates">
+            <dt>Can hibernate</dt>
+            <dd>{items.length}</dd>
+            {archiving > 0 ? <dd className="thread-maintenance__disposition-note">{`${archiving} more being archived`}</dd> : null}
+          </div>
+          {section.notIdleYet !== undefined ? (
+            <div>
+              <dt>Not idle yet</dt>
+              <dd>{section.notIdleYet}</dd>
+              <dd className="thread-maintenance__disposition-note">{`active in the last ${days}`}</dd>
+            </div>
+          ) : null}
+          <div>
+            <dt>Kept</dt>
+            <dd>{kept}</dd>
+            <dd className="thread-maintenance__disposition-note">{kept ? "reasons below" : "none"}</dd>
+          </div>
+          {section.alreadyHibernated !== undefined ? (
+            <div className="is-aside">
+              <dt>Already hibernated</dt>
+              <dd>{section.alreadyHibernated}</dd>
+              <dd className="thread-maintenance__disposition-note">not counted above</dd>
+            </div>
+          ) : null}
+        </dl>
       </div>
       <div className="thread-maintenance__rules-strip">
         <span className="thread-maintenance__eyebrow">Rules</span>

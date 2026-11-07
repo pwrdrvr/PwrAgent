@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   CHECKOUT_HIBERNATION_CLAUDE_MAX_IDLE_DAYS,
+  toolWorktreeRootOwner,
   type DesktopCheckoutHibernationPolicy,
   type LinkedDirectorySummary,
   type WorktreeSnapshotSummary,
@@ -8,7 +9,6 @@ import {
 import {
   archiveCandidateLastActivity,
   archiveCandidateProtectionReason,
-  isPwrAgentWorktreePath,
   type ThreadArchiveCandidate,
 } from "./thread-archive-sweeper";
 import { primaryThreadWorktree } from "./missing-thread-workspace";
@@ -23,7 +23,7 @@ export const HIBERNATION_KEEP_REASONS = {
   keptAwake: "Kept awake",
   noWorktree: "No worktree checkout",
   borrowed: "Checkout not created by PwrAgent",
-  outsideRoot: "Checkout outside PwrAgent's worktrees",
+  outsideRoot: "Checkout outside PwrAgent's and Codex's worktrees",
   alreadyHibernated: "Already hibernated",
   archiveRestorePending: "Archive restore not finished",
   activityUnknown: "Activity unknown",
@@ -72,13 +72,14 @@ export function hibernatedSnapshotFor(candidate: Pick<ThreadArchiveCandidate, "t
 }
 
 /** The one checkout hibernation may remove: the thread's working worktree,
- * under PwrAgent's own root and not borrowed. */
+ * under PwrAgent's or Codex's worktree root and not borrowed. */
 export function hibernationTarget(candidate: Pick<ThreadArchiveCandidate, "thread" | "overlay">): HibernationTarget | { keep: string } {
   const directory = primaryThreadWorktree(candidate.thread);
   if (!directory) return { keep: HIBERNATION_KEEP_REASONS.noWorktree };
   if (directory.worktreeOwnership === "external") return { keep: HIBERNATION_KEEP_REASONS.borrowed };
-  // Codex's own ~/.codex/worktrees is cleaned by Codex itself.
-  if (!isPwrAgentWorktreePath(directory.worktreePath)) return { keep: HIBERNATION_KEEP_REASONS.outsideRoot };
+  // Codex never removes a checkout in ~/.codex/worktrees, so hibernation
+  // reclaims those too. Restore recreates the checkout at the same path.
+  if (!toolWorktreeRootOwner(directory.worktreePath)) return { keep: HIBERNATION_KEEP_REASONS.outsideRoot };
   return { directory, worktreePath: directory.worktreePath, repositoryPath: directory.path };
 }
 

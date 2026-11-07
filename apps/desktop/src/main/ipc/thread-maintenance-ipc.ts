@@ -26,6 +26,7 @@ type ScanRequest = {
   rules?: Partial<ThreadMaintenanceRules>;
   projectKey?: string;
   steps?: ThreadMaintenanceScanStep[];
+  hibernateIdleDays?: number;
 };
 
 /** Thread maintenance works on this machine's threads only, so a remote
@@ -103,6 +104,9 @@ function readScanRequest(value: unknown): ScanRequest {
   return {
     ...(typeof record.projectKey === "string" && record.projectKey ? { projectKey: record.projectKey } : {}),
     ...(steps?.length ? { steps } : {}),
+    ...(typeof record.hibernateIdleDays === "number" && Number.isInteger(record.hibernateIdleDays)
+      && record.hibernateIdleDays >= 1 && record.hibernateIdleDays <= 3650
+      ? { hibernateIdleDays: record.hibernateIdleDays } : {}),
     ...(rules ? { rules: {
       ...(rules.mode === "count" || rules.mode === "age" ? { mode: rules.mode } : {}),
       ...(typeof rules.keepPerProject === "number" ? { keepPerProject: rules.keepPerProject } : {}),

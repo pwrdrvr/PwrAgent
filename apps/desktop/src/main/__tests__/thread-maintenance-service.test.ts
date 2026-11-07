@@ -549,7 +549,7 @@ describe("hibernate idle checkouts", () => {
 
     expect(scan.threads.projects.flatMap((project) => project.idle).map((row) => row.threadId)).toEqual(["idle"]);
     expect(scan.hibernate).toEqual({
-      idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, checked: 3,
+      idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, checked: 3, notIdleYet: 0, alreadyHibernated: 0,
       items: [
         // The archive row offers it too; the dialog hides it once that row is chosen.
         expect.objectContaining({ threadId: "idle", archiveKey: "codex:idle" }),

@@ -53844,6 +53844,56 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   padding: 10px 14px;
 }
 
+/* Where every checked thread went, one count per disposition. The count
+   reads first; the label names it. */
+.thread-maintenance__dispositions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.thread-maintenance__dispositions > div {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.thread-maintenance__dispositions > div.is-candidates {
+  border-color: var(--accent-border);
+}
+
+.thread-maintenance__dispositions > div.is-aside {
+  border-style: dashed;
+  background: transparent;
+}
+
+.thread-maintenance__dispositions dt {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.thread-maintenance__dispositions dd {
+  order: -1;
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.thread-maintenance__dispositions dd.thread-maintenance__disposition-note {
+  order: 0;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 400;
+}
+
 .thread-maintenance__summary.is-failed {
   border-color: var(--danger-border);
   background: var(--danger-surface-faint);
@@ -53912,7 +53962,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   min-width: 0;
   margin: 1px 0 0;
   overflow: hidden;
-  color: var(--text-subtle);
+  /* --text-subtle fails AA contrast on the panel and the tinted cards. */
+  color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 10.5px;
   text-overflow: ellipsis;
@@ -54123,10 +54174,6 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   white-space: nowrap;
 }
 
-/* --text-subtle is too faint on the accent-tinted live cards. */
-:is(.thread-maintenance__scan-card, .thread-maintenance__progress-card) .thread-maintenance__path {
-  color: var(--text-muted);
-}
 
 .thread-maintenance__problem {
   overflow: hidden;

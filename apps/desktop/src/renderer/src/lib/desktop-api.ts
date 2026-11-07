@@ -1055,6 +1055,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     projectKey?: string;
     /** The steps to read. Absent: every step. */
     steps?: ThreadMaintenanceScanStep[];
+    /** Idle days for this scan's hibernate step only. Settings keep theirs. */
+    hibernateIdleDays?: number;
     /** Set to hear this scan's progress through onThreadMaintenanceScanProgress. */
     progressId?: string;
   }) => Promise<ThreadMaintenanceScan>;

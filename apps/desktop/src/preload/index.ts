@@ -1903,6 +1903,7 @@ const desktopApi = Object.freeze({
     rules?: Partial<ThreadMaintenanceRules>;
     projectKey?: string;
     steps?: ThreadMaintenanceScanStep[];
+    hibernateIdleDays?: number;
     progressId?: string;
   }): Promise<ThreadMaintenanceScan> =>
     await ipcRenderer.invoke(APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL, request),

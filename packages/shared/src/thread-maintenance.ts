@@ -178,12 +178,21 @@ export type ThreadMaintenanceScan = {
   /** Idle checkouts that can hibernate, from threads this scan does not
    * offer to archive. Absent from owners that predate the step. */
   hibernate?: {
-    /** Hibernation's own settings, as the review ran them. */
+    /** Hibernation's own settings, as the review ran them. `idleDays` is
+     * the dialog's choice for this scan when it made one. */
     idleDays: number;
     maxSnapshotMb: number;
     removeRebuildableOutput: boolean;
+    /** Threads with a PwrAgent checkout on disk:
+     * `items` + `notIdleYet` + every `kept` count. */
     checked: number;
     items: ThreadMaintenanceHibernateCheckout[];
+    /** Active within `idleDays`. Counted in `checked`, not in `kept`. */
+    notIdleYet?: number;
+    /** Checkouts already hibernated. Not counted in `checked`: there is
+     * nothing on disk to hibernate. Absent from owners that predate it,
+     * which count both in `kept`. */
+    alreadyHibernated?: number;
     kept: Record<string, number>;
     skipped?: string;
   };

@@ -75,11 +75,11 @@ async function git(cwd: string, args: string[]): Promise<string> {
     "-c", "commit.gpgsign=false", "-c", "protocol.file.allow=always", ...args])).stdout;
 }
 
-async function createFixture(options: { environment?: boolean } = {}) {
+async function createFixture(options: { environment?: boolean; worktreeRoot?: ".pwragent" | ".codex" } = {}) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-hibernate-")));
   roots.push(root);
   const repo = path.join(root, "repo");
-  const worktree = path.join(root, ".pwragent", "worktrees", "id", "repo");
+  const worktree = path.join(root, options.worktreeRoot ?? ".pwragent", "worktrees", "id", "repo");
   await mkdir(repo);
   await git(repo, ["init", "-b", "main"]);
   await git(repo, ["config", "core.autocrlf", "false"]);
@@ -308,6 +308,22 @@ describe("idle checkout hibernation and restore", () => {
     expect(await new WorktreeArchiveService().readCheckoutTree(fixture.worktree)).toBe(before);
     expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("untracked notes\n");
     expect(await snapshotOf(store)).toMatchObject({ state: "restored" });
+  });
+
+  // Codex never removes its own ~/.codex/worktrees checkouts, so they
+  // hibernate like PwrAgent's and come back on the same path.
+  it("hibernates and restores a checkout under Codex's worktree root", async () => {
+    const fixture = await createFixture({ worktreeRoot: ".codex" });
+    await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
+    const before = await new WorktreeArchiveService().readCheckoutTree(fixture.worktree);
+    const { registry, store } = fixture.open();
+    expect(await sweep(registry)).toMatchObject({ checked: 1, hibernated: 1 });
+    expect(await exists(fixture.worktree)).toBe(false);
+    const snapshot = await snapshotOf(store);
+    expect(snapshot).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
+    await registry.restoreWorktree({ ...identity, worktreePath: fixture.worktree, snapshotRef: snapshot!.snapshotRef });
+    expect((await git(fixture.worktree, ["symbolic-ref", "--short", "HEAD"])).trim()).toBe("owned");
+    expect(await new WorktreeArchiveService().readCheckoutTree(fixture.worktree)).toBe(before);
   });
 
   it("makes no commits across 24 sweeps with nothing to hibernate, or when it keeps a checkout", async () => {
@@ -638,6 +654,31 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
     // The sweep itself stays off.
     expect(await sweep(registry)).toMatchObject({ skipped: "Hibernation is off" });
+  });
+
+  // Oracle: the registry's own rules. Every thread with a checkout lands in
+  // exactly one count, the dialog's idle days decide "not idle yet" for the
+  // scan and its run, and a hibernated checkout is noted apart from them.
+  it("scans and runs with the dialog's idle days, and counts each thread once", async () => {
+    const fixture = await createFixture();
+    // Last active two days ago: Settings' 7 days keeps it, the dialog's 1 day does not.
+    ArchiveWorktreeTransport.threads[0]!.updatedAt = Math.floor(Date.now() / 1000) - 2 * 86_400;
+    const { registry } = fixture.open({ ...ON, enabled: false, idleDays: 7 });
+    const service = maintenance(registry);
+
+    const settings = await service.scan({ steps: ["hibernate"] });
+    expect(settings.hibernate).toMatchObject({ idleDays: 7, checked: 1, notIdleYet: 1, alreadyHibernated: 0, kept: {}, items: [] });
+
+    const reviewed = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 1 });
+    expect(reviewed.hibernate).toMatchObject({ idleDays: 1, checked: 1, notIdleYet: 0, alreadyHibernated: 0, kept: {} });
+    expect(reviewed.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
+    const run = await service.apply({ scanId: reviewed.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ ran: true, done: 1, kept: 0, failed: 0 });
+    expect(await exists(fixture.worktree)).toBe(false);
+
+    const after = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 1 });
+    expect(after.hibernate).toMatchObject({ checked: 0, notIdleYet: 0, alreadyHibernated: 1, kept: {}, items: [] });
   });
 
   it("keeps a reviewed checkout that changed since the scan", async () => {

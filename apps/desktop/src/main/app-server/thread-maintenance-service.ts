@@ -5,6 +5,7 @@ import {
   type AppServerBackendKind,
   defaultThreadMaintenanceRules,
   type DesktopCheckoutHibernationPolicy,
+  normalizeCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type ThreadMaintenanceApplyRequest,
   type ThreadMaintenanceArchivedCheckout,
@@ -38,6 +39,7 @@ import {
 } from "./thread-archive-sweeper";
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
 import { inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
+import { HIBERNATION_KEEP_REASONS } from "./checkout-hibernation";
 import { missingWorktreeRepository } from "./worktree-archive-service";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
@@ -199,6 +201,8 @@ export class ThreadMaintenanceService {
       projectKey?: string;
       scanId?: string;
       steps?: readonly ThreadMaintenanceScanStep[];
+      /** Idle days for this scan's hibernate step, in place of Settings'. */
+      hibernateIdleDays?: number;
     } = {},
     options: { onProgress?: (progress: ScanProgressSnapshot) => void } = {},
   ): Promise<ThreadMaintenanceScan> {
@@ -225,7 +229,7 @@ export class ThreadMaintenanceService {
       : { checked: 0, projects: [], kept: {} };
     // After archive, so each row can say which archive row also takes it.
     const hibernate = steps.includes("hibernate")
-      ? await this.scanHibernation(now, request.projectKey, retained, fail, progress)
+      ? await this.scanHibernation(now, request.projectKey, retained, fail, progress, request.hibernateIdleDays)
       : undefined;
     const checkouts = steps.includes("checkouts")
       ? await this.scanCheckouts(rules, request.projectKey, retained, fail, progress)
@@ -407,6 +411,7 @@ export class ThreadMaintenanceService {
     retained: RetainedScan,
     fail: (step: ThreadMaintenanceStep, error: unknown, details?: { path?: string; threadId?: string }) => void,
     progress: ScanProgress,
+    idleDaysOverride?: number,
   ): Promise<ThreadMaintenanceScan["hibernate"]> {
     const deps = this.deps.hibernation;
     if (!deps) return undefined;
@@ -416,11 +421,13 @@ export class ThreadMaintenanceService {
       fail("hibernate", error);
       return undefined;
     }
-    const policy = { ...settings, enabled: true };
+    // The run hibernates under this policy too, so it keeps the reviewed idle days.
+    const policy = normalizeCheckoutHibernationPolicy({ ...settings, enabled: true,
+      ...(idleDaysOverride !== undefined ? { idleDays: idleDaysOverride } : {}) });
     retained.hibernatePolicy = policy;
     const result: NonNullable<ThreadMaintenanceScan["hibernate"]> = {
       idleDays: policy.idleDays, maxSnapshotMb: policy.maxSnapshotMb, removeRebuildableOutput: policy.removeRebuildableOutput,
-      checked: 0, items: [], kept: {},
+      checked: 0, items: [], notIdleYet: 0, alreadyHibernated: 0, kept: {},
     };
     const candidates = retained.candidates;
     if (!candidates) return { ...result, skipped: "Threads could not be listed" };
@@ -469,7 +476,16 @@ export class ThreadMaintenanceService {
     }));
     for (const item of evaluated) {
       if (!item) continue;
+      // Already hibernated: nothing on disk, so it is noted apart, not checked.
+      if ("keep" in item && item.keep === HIBERNATION_KEEP_REASONS.alreadyHibernated) {
+        result.alreadyHibernated! += 1;
+        continue;
+      }
       result.checked += 1;
+      if ("keep" in item && item.keep === HIBERNATION_KEEP_REASONS.recentlyActive) {
+        result.notIdleYet! += 1;
+        continue;
+      }
       if ("keep" in item) {
         keep(item.keep!);
         continue;
