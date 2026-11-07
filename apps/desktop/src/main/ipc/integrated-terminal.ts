@@ -1,3 +1,4 @@
+import type { TerminalOutputSource } from "../terminal/terminal-output-reader";
 import { createHash } from "node:crypto";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import { app, BrowserWindow, ipcMain, Menu, type WebContents } from "electron";
@@ -38,6 +39,16 @@ import {
   FederationTerminalBridge,
   sortSessionsByCreatedAt,
 } from "./federation-terminal";
+
+/** Read-only owner adapter; it never needs a renderer or creates a terminal. */
+export function integratedTerminalOutputSource(ownerInstanceId: () => string): TerminalOutputSource {
+  return {
+    ownerInstanceId,
+    list: async (context) => await service?.listForOwnerThread(`${context.backend}:${context.threadId}`) ?? [],
+    replay: (context, terminalId) => service?.outputForThread(`${context.backend}:${context.threadId}`, terminalId),
+    snapshot: async (context, terminalId) => await service?.snapshotForThread(`${context.backend}:${context.threadId}`, terminalId),
+  };
+}
 
 let service: IntegratedTerminalService | undefined;
 let federationBridge: FederationTerminalBridge | undefined;

@@ -4,7 +4,7 @@ import { agentToolFailure, agentToolSuccess, type AgentToolDefinition } from "./
 import { AgentToolRouter } from "./agent-tool-router";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 
-export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
+export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search before using PwrAgent tools. Instructions and parameter schemas load on demand. Prefer PwrAgent tools when they cover the task.
 Search when the user wants to:
 - Find, read, inspect, open/mount/navigate to threads in the graphical UI, rename, pin, lock/unlock, archive/close, restore, or change settings on threads; mark projects read in bulk; clean up old threads and worktrees; check status, activity, usage, model, fast mode, or reasoning effort; list which threads need attention on every machine.
 - Delegate or hand off work to child threads, split work into parallel tasks, create a Job Monitor for a long command or repeated checks, collect results, send follow-ups, steer active work, or urgently stop a thread.
@@ -17,6 +17,7 @@ Search when the user wants to:
 - Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
 - Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
 - Read or navigate the Star Map, locate thread cards or project clouds, highlight threads, change the map lens or filters.
+- List/read terminal output.
 - Retrieve exact output preserved by Token Miser, including searching, reading lines, or reading grouped results.
 Use a short query describing the desired action, or exact tool names. Name every tool you need in one query: each exact tool name is always returned. Search separately for unrelated tasks. Otherwise returns up to 3 matching tools by default (maximum 5), with full usage instructions and JSON parameter schemas. Follow those instructions and existing permission requirements. Search itself performs no action.
 In Code Mode: text(await tools.pwragent__tool_search({query: "handoff child thread"})). Emit the returned string directly so schemas stay intact. Then call the returned codeModeName on tools with arguments matching inputSchema. Deferred tools remain callable. Prefer a bulk tool when available; otherwise batch repeated calls in one cell and print compact aggregate results. If no tools match, retry with a more specific action; do not invent a tool name.`;
@@ -51,6 +52,8 @@ const SEARCH_ALIASES: Record<string, string> = {
   create_issue: "github gitlab issue open create new file bug",
   update_issue: "github gitlab issue edit update close reopen labels",
   merge_pull_request: "github gitlab mr merge request pr pull request merge squash rebase land",
+  list_thread_terminals: "terminal shell console sessions tabs discover current output",
+  read_terminal_output: "terminal shell console output logs ansi raw screen snapshot cursor",
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
   watch_thread_pull_request: "wake notify stop cancel list watches watching",

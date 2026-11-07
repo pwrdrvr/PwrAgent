@@ -46,8 +46,9 @@ describe("PwrAgent task monitor agent tools", () => {
     // 65 with read_tool_guide, 66 with graphical open_thread,
     // 69 with the three Federation service tools, 87 with the 18 GitHub
     // pull request, issue and artifact tools, 90 with the two retained messaging tools,
-    // 91 with rerun_failed_ci_jobs, 92 with explicit merge holds, 95 with the three thread maintenance tools.
-    expect(dynamicTools).toHaveLength(95);
+    // 91 with rerun_failed_ci_jobs, 92 with explicit merge holds,
+    // 95 with the three thread maintenance tools, 97 with the two terminal read tools.
+    expect(dynamicTools).toHaveLength(97);
     for (const name of ["scan_thread_maintenance", "apply_thread_maintenance", "open_thread_maintenance"]) {
       expect(dynamicTools.map((tool) => tool.name)).toContain(name);
       expect(mcpTools.map((tool) => tool.name)).toContain(name);
