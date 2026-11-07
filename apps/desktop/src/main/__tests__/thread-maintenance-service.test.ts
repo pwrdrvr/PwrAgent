@@ -137,6 +137,15 @@ describe("ThreadMaintenanceService.scan", () => {
     expect(scan.failures).toEqual([{ step: "threads", message: "git worktree list failed", threadId: "broken" }]);
   });
 
+  // The agent tool names a scan before it finishes and reads it back later.
+  it("retains a scan under the scanId the caller chose", async () => {
+    const { service } = harness([]);
+    const scan = await service.scan({ scanId: "tool-scan" });
+    expect(scan.scanId).toBe("tool-scan");
+    expect(service.getScan("tool-scan")).toBe(scan);
+    expect((await service.scan()).scanId).toBe("id-1");
+  });
+
   it("still reports archived checkouts when threads cannot be listed", async () => {
     const root = await tempRoot();
     const { service } = harness([], {

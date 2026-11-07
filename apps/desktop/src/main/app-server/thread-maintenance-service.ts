@@ -186,7 +186,9 @@ export class ThreadMaintenanceService {
     this.abort.abort();
   }
 
-  async scan(request: { rules?: Partial<ThreadMaintenanceRules>; projectKey?: string } = {}): Promise<ThreadMaintenanceScan> {
+  /** `scanId` names the retained scan, so a caller can name a scan before it
+   * finishes. Omitted, the service picks one. */
+  async scan(request: { rules?: Partial<ThreadMaintenanceRules>; projectKey?: string; scanId?: string } = {}): Promise<ThreadMaintenanceScan> {
     const now = this.now();
     const policy = this.deps.getPolicy();
     const rules = normalizeRules({ ...defaultThreadMaintenanceRules(policy), ...request.rules });
@@ -208,7 +210,7 @@ export class ThreadMaintenanceService {
     const hibernate = await this.scanHibernation(now, request.projectKey, retained, fail);
     const checkouts = await this.scanCheckouts(rules, request.projectKey, retained, fail);
     const scan: ThreadMaintenanceScan = {
-      scanId: this.newId(),
+      scanId: request.scanId ?? this.newId(),
       startedAt: now,
       finishedAt: this.now(),
       rules,
