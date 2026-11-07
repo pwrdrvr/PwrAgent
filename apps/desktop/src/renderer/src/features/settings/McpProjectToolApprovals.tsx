@@ -1,18 +1,12 @@
 import {
-  forgeRuleRepositoryLabel,
   forgeRuleRepositoryMatchKey,
   type McpConnectionProjectToolApproval,
   type McpConnectionToolApproval,
-  type NavigationDirectoryRow,
 } from "@pwragent/shared";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
-import {
-  isNavigationPreviewCancelled,
-  useNavigationSettingsPreview,
-} from "../../lib/navigation-settings-preview";
-import { AddProjectForm, projectLabelsFromDirectories } from "./ForgeProjectRules";
+import { AddProjectForm, useDirectoryProjectLabels } from "./ForgeProjectRules";
 import "./mcp-project-tool-approvals.css";
 
 /**
@@ -38,36 +32,10 @@ export function McpProjectToolApprovals(props: {
   const [adding, setAdding] = useState(false);
   const addRef = useRef<HTMLButtonElement>(null);
 
-  const previews = useNavigationSettingsPreview(props.desktopApi);
-  const canReadDirectories = Boolean(
-    props.desktopApi?.getNavigationQueryPage && props.desktopApi?.releaseNavigationQuery,
+  const { projectLabels, projectLabel, loading } = useDirectoryProjectLabels(
+    props.desktopApi,
+    props.entries.length > 0 || adding,
   );
-  const [directoryRows, setDirectoryRows] = useState<NavigationDirectoryRow[]>();
-  const [directoryRead, setDirectoryRead] = useState<"idle" | "loading" | "done">("idle");
-  const readDirectories = previews.readDirectories;
-  const loadDirectories = useCallback(async () => {
-    setDirectoryRead("loading");
-    try {
-      setDirectoryRows(await readDirectories());
-    } catch (error) {
-      // Names are a nicety: without them a project shows as owner/repo.
-      if (isNavigationPreviewCancelled(error)) return;
-    } finally {
-      setDirectoryRead("done");
-    }
-  }, [readDirectories]);
-  const wantsDirectories = props.entries.length > 0 || adding;
-  useEffect(() => {
-    if (!wantsDirectories || !canReadDirectories || directoryRead !== "idle") return;
-    void loadDirectories();
-  }, [canReadDirectories, directoryRead, loadDirectories, wantsDirectories]);
-  const projectLabels = useMemo(
-    () => projectLabelsFromDirectories(directoryRows ?? []),
-    [directoryRows],
-  );
-  const projectLabel = (repository: string): string =>
-    projectLabels.get(forgeRuleRepositoryMatchKey(repository) ?? "")?.label
-    ?? forgeRuleRepositoryLabel(repository);
   const listed = new Set(props.entries.map((entry) => forgeRuleRepositoryMatchKey(entry.repository)));
   const knownProjects = [...projectLabels.entries()]
     .filter(([key]) => !listed.has(key))
@@ -135,12 +103,19 @@ export function McpProjectToolApprovals(props: {
       {adding ? (
         <AddProjectForm
           knownProjects={knownProjects}
-          loading={directoryRead === "loading"}
+          loading={loading}
           onAdd={(repository) => {
-            void props.onChange(repository, "approve", projectLabel(repository)).then((saved) => {
-              if (!saved) return;
+            const close = (): void => {
               setAdding(false);
               requestAnimationFrame(() => addRef.current?.focus());
+            };
+            // A listed project keeps the mode its own chip shows.
+            if (listed.has(forgeRuleRepositoryMatchKey(repository))) {
+              close();
+              return;
+            }
+            void props.onChange(repository, "approve", projectLabel(repository)).then((saved) => {
+              if (saved) close();
             });
           }}
           onCancel={() => {

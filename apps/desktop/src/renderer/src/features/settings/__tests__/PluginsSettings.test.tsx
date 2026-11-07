@@ -1478,6 +1478,21 @@ describe("PluginsSettings", () => {
       expect(api.setMcpConnectionToolApproval).not.toHaveBeenCalled();
     });
 
+    it("keeps a listed project's mode when Add project names it again", async () => {
+      const api = managedApi([managed({
+        projectToolApprovals: [{ repository: "github.com/pwrdrvr/pwrapps", toolApproval: "prompt" }],
+      })]);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const projects = within(within(await findRow("Datadog")).getByRole("group", { name: "Projects" }));
+      fireEvent.click(projects.getByRole("button", { name: "Add project" }));
+      fireEvent.change(projects.getByRole("textbox", { name: "Repository" }), {
+        target: { value: "https://github.com/pwrdrvr/PwrApps" },
+      });
+      fireEvent.click(projects.getByRole("button", { name: "Add project" }));
+      await waitFor(() => expect(projects.queryByRole("textbox", { name: "Repository" })).not.toBeInTheDocument());
+      expect(api.setMcpConnectionProjectToolApproval).not.toHaveBeenCalled();
+    });
+
     it("shows a connection an agent added without a manual refresh", async () => {
       const api = managedApi([managed()]);
       vi.mocked(api.listMcpConnections!)

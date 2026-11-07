@@ -10636,31 +10636,12 @@ export class DesktopBackendRegistry {
     };
   }
 
-  /**
-   * The project's name in the Directories lens, so a card names it as the
-   * sidebar and Settings do. Owner/repo when no row matches or the lookup is
-   * slow: a card must not wait on the directory inventory.
-   */
+  /** `ruleRepositoryProjectLabel` for a forge call's repository. */
   private async forgeProjectLabel(repository: ForgeRepository | undefined): Promise<string | undefined> {
     if (!repository) return undefined;
     const fallback = `${repository.owner}/${repository.repo}`;
     const key = normalizeForgeRuleRepository(repository);
-    if (!key || !this.forgeProjectLabelResolver) return fallback;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const label = await Promise.race([
-        this.forgeProjectLabelResolver(key),
-        new Promise<undefined>((resolve) => {
-          timer = setTimeout(() => resolve(undefined), FORGE_PROJECT_LABEL_TIMEOUT_MS);
-        }),
-      ]);
-      return label?.trim() || fallback;
-    } catch (error) {
-      backendRegistryLog.warn("could not read the project name for a forge card", { error: String(error) });
-      return fallback;
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+    return key ? await this.ruleRepositoryProjectLabel(key, fallback) : fallback;
   }
 
   /** Display names for rule wording: installed ACP agents and Codex model providers. */
@@ -13244,6 +13225,14 @@ export class DesktopBackendRegistry {
   }
 
   private threadPrimaryGitRepositoryReader?: (backend: AppServerBackendKind, threadId: string) => string | undefined;
+  private threadProjectRepositoryResolver?: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>;
+
+  /** Reads a thread's primary repository when the navigation cache has none yet. */
+  setThreadProjectRepositoryResolver(
+    resolver: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>,
+  ): void {
+    this.threadProjectRepositoryResolver = resolver;
+  }
 
   setThreadPrimaryGitRepositoryReader(
     reader: ((backend: AppServerBackendKind, threadId: string) => string | undefined) | undefined,
@@ -45029,12 +45018,17 @@ export class DesktopBackendRegistry {
     }
   }
 
-  /** The thread's project, as a forge rule names it: its primary repository. */
-  private threadProjectRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
+  /**
+   * The thread's project, as a forge rule names it: its primary repository.
+   * The resolver reads a thread no navigation refresh has listed yet.
+   */
+  private async threadProjectRepository(backend: AppServerBackendKind, threadId: string): Promise<string | undefined> {
     try {
-      const primary = this.threadPrimaryGitRepositoryReader?.(backend, threadId);
+      const primary = this.threadPrimaryGitRepositoryReader?.(backend, threadId)
+        ?? await this.threadProjectRepositoryResolver?.(backend, threadId);
       return primary ? normalizeForgeRuleRepository(primary) : undefined;
-    } catch {
+    } catch (error) {
+      backendRegistryLog.warn("could not read a thread's project for MCP tool approval", { threadId, error: String(error) });
       return undefined;
     }
   }
@@ -45061,9 +45055,15 @@ export class DesktopBackendRegistry {
     };
   }
 
-  /** `forgeProjectLabel` for a `host/owner/repo` key. */
-  private async ruleRepositoryProjectLabel(repository: string): Promise<string> {
-    const fallback = forgeRuleRepositoryLabel(repository);
+  /**
+   * The project's name in the Directories lens, so a card names it as the
+   * sidebar and Settings do. `fallback` when no row matches or the lookup is
+   * slow: a card must not wait on the directory inventory.
+   */
+  private async ruleRepositoryProjectLabel(
+    repository: string,
+    fallback = forgeRuleRepositoryLabel(repository),
+  ): Promise<string> {
     if (!this.forgeProjectLabelResolver) return fallback;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -45075,7 +45075,7 @@ export class DesktopBackendRegistry {
       ]);
       return label?.trim() || fallback;
     } catch (error) {
-      backendRegistryLog.warn("could not read the project name for an MCP card", { error: String(error) });
+      backendRegistryLog.warn("could not read the project name for an approval card", { error: String(error) });
       return fallback;
     } finally {
       if (timer) clearTimeout(timer);
@@ -45256,7 +45256,7 @@ export class DesktopBackendRegistry {
     // follows a change. By default Codex's rule applies: listing and
     // inspecting run, and a restart still asks.
     // A project's own mode wins for a thread in that project.
-    const repository = this.threadProjectRepository(approvalContext.backend, approvalContext.threadId);
+    const repository = await this.threadProjectRepository(approvalContext.backend, approvalContext.threadId);
     const { resolution, connection: approvalConnection } =
       await this.readMcpConnectionToolApproval(invocation.connectionId, repository);
     const toolApproval = resolution.toolApproval;
@@ -45494,7 +45494,7 @@ export class DesktopBackendRegistry {
         .find((entry) => entry.id === connectionId);
       if (!connection?.enabled || !connection.configured
         || connection.state === "disconnected" || connection.state === "reauthorization_required") return undefined;
-      const repository = this.threadProjectRepository("codex", threadId);
+      const repository = await this.threadProjectRepository("codex", threadId);
       const resolution = resolveMcpConnectionToolApproval(connection, repository);
       if (resolution.toolApproval !== "approve") {
         if (this.isTaskMonitorThread({ backend: "codex", threadId })) return undefined;

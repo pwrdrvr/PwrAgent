@@ -3165,6 +3165,16 @@ class DesktopAppServerService {
     });
   }
 
+  /**
+   * The thread's primary repository, read from the thread itself when no
+   * navigation refresh has listed it yet, as a new thread's first turn can
+   * run before one does.
+   */
+  async resolvePrimaryGitRepository(backend: AppServerBackendKind, threadId: string): Promise<string | undefined> {
+    return this.readPrimaryGitRepository(backend, threadId)
+      ?? this.canonicalPrimaryRepoKey(await this.resolveUncachedPrimaryRepoKey({ backend, threadId }));
+  }
+
   readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
     return this.canonicalPrimaryRepoKey(
       this.attachedPrsByThreadKey.get(buildThreadIdentityKey(backend, threadId))?.primaryRepoKey,

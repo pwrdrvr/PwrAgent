@@ -513,6 +513,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPrimaryGitRepositoryReader((backend, threadId) =>
     appServerService.readPrimaryGitRepository(backend, threadId)
   );
+  getDesktopBackendRegistry().setThreadProjectRepositoryResolver(async (backend, threadId) =>
+    await appServerService.resolvePrimaryGitRepository(backend, threadId)
+  );
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
     appServerService.isPullRequestLocallyMonitored(prKey)
   );

@@ -1804,6 +1804,18 @@ select_for_new_threads = true
       expect(save).toHaveBeenCalledWith("one", PROJECT, "approve");
     });
 
+    // A new thread's first call can arrive before any navigation refresh
+    // has listed it, so the cache knows no repository for it yet.
+    it("reads the project of a thread the navigation cache has not listed", async () => {
+      await createProjectRegistry({ toolApproval: "auto", projectToolApprovals: [{ repository: PROJECT, toolApproval: "approve" }] });
+      registry.setThreadProjectRepositoryResolver(async (_backend, threadId) =>
+        threadId === "thread-1" ? PROJECT : undefined);
+      const emitted = answerWith({ action: "decline", content: null, _meta: null });
+      expect(await internals.handleServerRequest("codex", nativeApproval("native-uncached")))
+        .toEqual({ action: "accept", content: {}, _meta: null });
+      expect(emitted).toHaveLength(0);
+    });
+
     it("drops an offer a request arrived with and ignores a choice it never offered", async () => {
       const save = await createProjectRegistry({ toolApproval: "auto" });
       const emitted = answerWith({ action: "accept", content: {}, _meta: { [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: true } });

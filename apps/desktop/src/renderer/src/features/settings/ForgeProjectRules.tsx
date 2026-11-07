@@ -221,6 +221,47 @@ export function projectLabelsFromDirectories(
   return labels;
 }
 
+/**
+ * Project names from the Directories lens, read once `wanted` turns true.
+ * Names are a nicety: until they arrive, or when the read fails, a project
+ * shows as owner/repo.
+ */
+export function useDirectoryProjectLabels(desktopApi: DesktopApi | undefined, wanted: boolean) {
+  const previews = useNavigationSettingsPreview(desktopApi);
+  const canReadDirectories = Boolean(
+    desktopApi?.getNavigationQueryPage && desktopApi?.releaseNavigationQuery,
+  );
+  const [directoryRows, setDirectoryRows] = useState<NavigationDirectoryRow[]>();
+  const [directoryRead, setDirectoryRead] = useState<"idle" | "loading" | "done">("idle");
+  const readDirectories = previews.readDirectories;
+  const loadDirectories = useCallback(async () => {
+    setDirectoryRead("loading");
+    try {
+      setDirectoryRows(await readDirectories());
+    } catch (error) {
+      // Without names the Add project form still takes a typed repository.
+      if (isNavigationPreviewCancelled(error)) return;
+    } finally {
+      setDirectoryRead("done");
+    }
+  }, [readDirectories]);
+  useEffect(() => {
+    if (!wanted || !canReadDirectories || directoryRead !== "idle") return;
+    void loadDirectories();
+  }, [canReadDirectories, directoryRead, loadDirectories, wanted]);
+  const projectLabels = useMemo(
+    () => projectLabelsFromDirectories(directoryRows ?? []),
+    [directoryRows],
+  );
+  const projectLabel = useCallback(
+    (repository: string) =>
+      projectLabels.get(forgeRuleRepositoryMatchKey(repository) ?? "")?.label
+      ?? forgeRuleRepositoryLabel(repository),
+    [projectLabels],
+  );
+  return { projectLabels, projectLabel, loading: directoryRead === "loading" };
+}
+
 function inheritDescription(
   resolution: ForgeAgentToolAccessResolution,
   names: ForgeAgentRuleNames,
@@ -291,39 +332,9 @@ export function ForgeProjectRules(props: {
     return list;
   }, [added, rules, unreadable]);
 
-  const previews = useNavigationSettingsPreview(props.desktopApi);
-  const canReadDirectories = Boolean(
-    props.desktopApi?.getNavigationQueryPage && props.desktopApi?.releaseNavigationQuery,
-  );
-  const [directoryRows, setDirectoryRows] = useState<NavigationDirectoryRow[]>();
-  const [directoryRead, setDirectoryRead] = useState<"idle" | "loading" | "done">("idle");
-  const readDirectories = previews.readDirectories;
-  const loadDirectories = useCallback(async () => {
-    setDirectoryRead("loading");
-    try {
-      setDirectoryRows(await readDirectories());
-    } catch (error) {
-      // Names are a nicety: without them a project shows as owner/repo and
-      // the Add project form takes a typed repository.
-      if (isNavigationPreviewCancelled(error)) return;
-    } finally {
-      setDirectoryRead("done");
-    }
-  }, [readDirectories]);
-  const wantsDirectories = repositories.length > 0 || addingProject;
-  useEffect(() => {
-    if (!wantsDirectories || !canReadDirectories || directoryRead !== "idle") return;
-    void loadDirectories();
-  }, [canReadDirectories, directoryRead, loadDirectories, wantsDirectories]);
-  const projectLabels = useMemo(
-    () => projectLabelsFromDirectories(directoryRows ?? []),
-    [directoryRows],
-  );
-  const projectLabel = useCallback(
-    (repository: string) =>
-      projectLabels.get(forgeRuleRepositoryMatchKey(repository) ?? "")?.label
-      ?? forgeRuleRepositoryLabel(repository),
-    [projectLabels],
+  const { projectLabels, projectLabel, loading: directoriesLoading } = useDirectoryProjectLabels(
+    props.desktopApi,
+    repositories.length > 0 || addingProject,
   );
 
   const names = useMemo<ForgeAgentRuleNames>(() => ({
@@ -449,7 +460,7 @@ export function ForgeProjectRules(props: {
       {addingProject ? (
         <AddProjectForm
           knownProjects={knownProjects}
-          loading={directoryRead === "loading"}
+          loading={directoriesLoading}
           onAdd={openProject}
           onCancel={closeAddProject}
         />
