@@ -40,7 +40,10 @@ apply. See [Claude provider](claude-provider.md).
 
 A Claude plan turn, the composer's Plan toggle, is read-only. Claude's `plan`
 mode asks for every `call_mcp_tool` call, so in a plan turn PwrAgent's
-permission handler passes the call to the gateway without a card. The gateway
+permission handler passes the call to the gateway without a card only when
+the SDK identifies the host-registered `pwragent` server (`source: "sdk"`)
+and no operator `ask` rule matched. Rule-forced asks, configured namesakes,
+and calls without origin metadata keep Claude's approval card. The gateway
 then runs an upstream tool marked read-only (`readOnlyHint` true and
 `destructiveHint` not true) under the connection's tool-approval policy, as in
 any other turn. It refuses any other tool before Full Access, automation

@@ -44,8 +44,9 @@ function claudePwragentToolName(operation: string): string {
  * when that server is attached. Claude still applies the operator's own
  * `ask` and `deny` rules for these tools. Its plan mode still asks for a
  * forge write and for any gateway call. A plan turn refuses the forge write
- * without a card and passes the gateway call to the gateway, which refuses
- * an upstream tool that is not read-only.
+ * without a card and passes a verified host gateway call to the gateway,
+ * which refuses an upstream tool that is not read-only. An explicit ask
+ * rule still gets Claude's card.
  */
 export function claudeAllowedTools(mcpServers: Options["mcpServers"]): string[] {
   return mcpServers && Object.hasOwn(mcpServers, PWRAGENT_TOOL_NAMESPACE)
@@ -153,8 +154,12 @@ export function createClaudePermissionHandler(options: {
     if (toolName === CLAUDE_EXIT_PLAN_TOOL && options.planTurn?.()) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
     const forgeWrite = CLAUDE_FORGE_WRITE_OPERATIONS.get(toolName);
     if (forgeWrite && options.planTurn?.()) return { behavior: "deny", message: claudePlanTurnRefusal(forgeWrite) };
-    // Only the gateway knows whether the upstream tool reads or writes.
-    if (toolName === CLAUDE_MCP_GATEWAY_TOOL && options.planTurn?.()) return { behavior: "allow", updatedInput: input };
+    // Only our host-registered gateway checks whether the upstream tool reads
+    // or writes. A configured namesake is untrusted, and an operator ask rule
+    // still requires a human decision even for our own gateway.
+    if (toolName === CLAUDE_MCP_GATEWAY_TOOL && options.planTurn?.()
+      && context.mcpServer?.source === "sdk" && context.mcpServer.name === PWRAGENT_TOOL_NAMESPACE
+      && !context.matchedAskRule) return { behavior: "allow", updatedInput: input };
     const requestId = randomUUID();
     const turnId = options.turnId();
     const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"

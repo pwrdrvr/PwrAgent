@@ -130,7 +130,8 @@ conversation approvals and automation allowlists. The forge card follows
 turns, `approve_merge` asks unless the turn has Full Access. Claude still
 applies the operator's own `ask` and `deny` rules for these tools, and its
 `plan` mode still asks for a forge write and for any gateway call; a plan
-turn decides both without Claude's card (below). The rules are fixed when
+turn normally decides both without Claude's card (below). Explicit gateway
+`ask` rules still show Claude's card. The rules are fixed when
 the process starts and do not depend on the forge levels, so a Settings
 change never relaunches Claude.
 A live session that lacks them relaunches for them, or keeps asking until
@@ -160,7 +161,11 @@ them without asking, and the forge policy decides them as in any other turn.
 A Claude plan turn does not change anything through an MCP connection
 either. Plan mode asks for every `call_mcp_tool` call because the wrapper is
 not read-only. The permission handler passes it to the gateway without a
-card, because only the gateway knows which upstream tool the call names.
+card only when the SDK identifies PwrAgent's host-registered server
+(`mcpServer.source` is `sdk` and its name is `pwragent`) and no explicit
+`ask` rule matched. Rule-forced asks, configured servers with the same name,
+and calls without server-origin metadata keep the ordinary approval card.
+Only the gateway knows which upstream tool the call names.
 An upstream tool marked read-only and not destructive follows the
 connection's Tool approval setting, as in any other turn. Every other tool
 is refused before Full Access, automation grants, or conversation approvals,

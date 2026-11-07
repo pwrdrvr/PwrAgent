@@ -3744,7 +3744,10 @@ describe("Claude permission bridge", () => {
   it("passes a plan turn's gateway call to the gateway without a card", async () => {
     const request = vi.fn().mockResolvedValue({ decision: "decline" });
     const input = { connectionId: "one", toolName: "lookup", schemaRevision: "r1", arguments: { id: "fixture" } };
-    const context = () => ({ signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
+    const context = () => ({
+      signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request",
+      mcpServer: { name: "pwragent", source: "sdk" },
+    });
     const planHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
     await expect(planHandler(CLAUDE_MCP_GATEWAY_TOOL, input, context())).resolves.toEqual({ behavior: "allow", updatedInput: input });
     expect(request).not.toHaveBeenCalled();
@@ -3752,6 +3755,33 @@ describe("Claude permission bridge", () => {
     const defaultHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => false, request, cancelRequest: async () => {} });
     await expect(defaultHandler(CLAUDE_MCP_GATEWAY_TOOL, input, context())).resolves.toMatchObject({ behavior: "deny" });
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an explicit gateway ask rule's card in a plan turn", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
+    const result = await handler(CLAUDE_MCP_GATEWAY_TOOL, {}, {
+      signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request",
+      mcpServer: { name: "pwragent", source: "sdk" },
+      matchedAskRule: { source: "user", toolName: CLAUDE_MCP_GATEWAY_TOOL },
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ behavior: "deny" });
+  });
+
+  it.each([
+    { name: "pwragent", source: "project" },
+    { name: "pwragent", source: "user" },
+    { name: "pwragent_crm", source: "sdk" },
+    undefined,
+  ])("keeps a plan turn's card for an unverified gateway origin %j", async (mcpServer) => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
+    const result = await handler(CLAUDE_MCP_GATEWAY_TOOL, {}, {
+      signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request", mcpServer,
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ behavior: "deny" });
   });
 
   it("asks the operator before Claude leaves a plan mode it entered on its own", async () => {
