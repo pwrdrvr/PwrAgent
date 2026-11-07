@@ -16950,8 +16950,12 @@ export class DesktopBackendRegistry {
       observation = this.acpWorktreeRepositoryResolver(cwd);
       observations.set(cwd, observation);
     }
-    const directory = await observation;
-    if (!directory) return thread;
+    const observed = await observation;
+    if (!observed) return thread;
+    // Git uses forward slashes on Windows; maintenance also receives native
+    // filesystem paths. Keep one spelling for review keys and coverage.
+    const directory = { ...observed, path: path.normalize(observed.path),
+      ...(observed.worktreePath ? { worktreePath: path.normalize(observed.worktreePath) } : {}) };
     // Explicit external ownership wins over filesystem classification.
     const external = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
       .some((item) => item.worktreeOwnership === "external"
@@ -40219,7 +40223,7 @@ export class DesktopBackendRegistry {
       try {
         const { stdout } = await runGitCommand(repository, ["worktree", "list", "--porcelain", "-z"], { timeout: 10_000 });
         for (const checkout of registeredWorktreePaths(stdout)) {
-          if (await nodeWorktreeRootReader.isLinkedWorktree(checkout)) paths.add(checkout);
+          if (await nodeWorktreeRootReader.isLinkedWorktree(checkout)) paths.add(path.normalize(checkout));
         }
       } catch (_error) {
         // Missing historical repositories have no additional registrations.

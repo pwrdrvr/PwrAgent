@@ -645,10 +645,19 @@ describe("Thread maintenance's hibernate step", () => {
       projectKey: fixture.worktree,
       linkedDirectories: [{ id: fixture.worktree, path: fixture.worktree, kind: "local", label: "repo" }],
     });
-    const refreshed = await registry.refreshArchiveCandidate(listed);
-    expect(refreshed.thread.linkedDirectories).toEqual([expect.objectContaining({
-      kind: "worktree", worktreePath: fixture.worktree, path: fixture.repo,
-    })]);
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 4 }), async (depth) => {
+      // Equivalent Git spellings must produce the same native review paths.
+      // Windows Git's forward slashes are covered by this real-Git oracle
+      // there; dot segments exercise the normalization on every platform.
+      const suffix = `${path.sep}.`.repeat(depth);
+      Object.assign(registry, { acpWorktreeRepositoryResolver: async () => ({
+        ...listed.thread.linkedDirectories[0]!, path: fixture.repo + suffix, worktreePath: fixture.worktree + suffix,
+      }) });
+      const refreshed = await registry.refreshArchiveCandidate(listed);
+      expect(refreshed.thread.linkedDirectories).toEqual([expect.objectContaining({
+        kind: "worktree", worktreePath: fixture.worktree, path: fixture.repo,
+      })]);
+    }), { numRuns: 8, examples: [[1]] });
   });
 
   function maintenance(registry: DesktopBackendRegistry) {

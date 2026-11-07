@@ -3639,7 +3639,9 @@ describe("DesktopBackendRegistry", () => {
   it("lists PwrAgent's Claude threads for the hourly sweep and Thread maintenance", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({}),
+      codexClient: Object.assign(new MockBackendClient({}), {
+        listArchiveCleanupThreadsPage: vi.fn(async () => ({ threads: [], nextCursor: undefined })),
+      }),
       overlayStore: createOverlayStoreMock(),
       pdfToolMcpServer: null,
       claudeBackendOptions: {
