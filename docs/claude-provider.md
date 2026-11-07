@@ -129,9 +129,10 @@ conversation approvals and automation allowlists. The forge card follows
 `[git.agent_tools]`, its project rules and the turn's mode. Outside plan
 turns, `approve_merge` asks unless the turn has Full Access. Claude still
 applies the operator's own `ask` and `deny` rules for these tools, and its
-`plan` mode still asks for a forge write; a plan turn refuses that write
-(below). The rules are fixed when the process starts and do not depend on the forge
-levels, so a Settings change never relaunches Claude.
+`plan` mode still asks for a forge write and for any gateway call; a plan
+turn decides both without Claude's card (below). The rules are fixed when
+the process starts and do not depend on the forge levels, so a Settings
+change never relaunches Claude.
 A live session that lacks them relaunches for them, or keeps asking until
 its next launch while a task runs. Other PwrAgent tools still ask through
 `canUseTool`.
@@ -155,6 +156,17 @@ This protects the forge even if a CLI version skips `canUseTool` for an
 allowed tool. Codex plan turns follow the same rule using their active
 collaboration mode. The forge reads are read-only tools, so plan mode runs
 them without asking, and the forge policy decides them as in any other turn.
+
+A Claude plan turn does not change anything through an MCP connection
+either. Plan mode asks for every `call_mcp_tool` call because the wrapper is
+not read-only. The permission handler passes it to the gateway without a
+card, because only the gateway knows which upstream tool the call names.
+An upstream tool marked read-only and not destructive follows the
+connection's Tool approval setting, as in any other turn. Every other tool
+is refused before Full Access, automation grants, or conversation approvals,
+with no card, and Claude is told to put the step in its plan. The gateway
+reads the open process's permission mode through `livePermissionMode`. See
+[MCP gateway tools](mcp-gateway-tools.md).
 
 A thread's linked directories other than its working directory, including
 directories attached later with `attach_thread_directory`, are passed as

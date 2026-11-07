@@ -3741,6 +3741,19 @@ describe("Claude permission bridge", () => {
     expect(refused.sort()).toEqual([...FORGE_PR_WRITE_OPERATIONS].sort());
   });
 
+  it("passes a plan turn's gateway call to the gateway without a card", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const input = { connectionId: "one", toolName: "lookup", schemaRevision: "r1", arguments: { id: "fixture" } };
+    const context = () => ({ signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
+    const planHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
+    await expect(planHandler(CLAUDE_MCP_GATEWAY_TOOL, input, context())).resolves.toEqual({ behavior: "allow", updatedInput: input });
+    expect(request).not.toHaveBeenCalled();
+    // Outside a plan turn, an operator's own ask rule still gets its card.
+    const defaultHandler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => false, request, cancelRequest: async () => {} });
+    await expect(defaultHandler(CLAUDE_MCP_GATEWAY_TOOL, input, context())).resolves.toMatchObject({ behavior: "deny" });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("asks the operator before Claude leaves a plan mode it entered on its own", async () => {
     const request = vi.fn().mockResolvedValue({ decision: "accept" });
     const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => false, request, cancelRequest: async () => {} });

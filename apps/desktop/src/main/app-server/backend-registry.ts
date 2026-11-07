@@ -12,6 +12,7 @@ import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from 
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import { openClaudeSessionReader } from "../claude/claude-session-reader";
+import { claudePlanTurnRefusal } from "../claude/claude-permissions";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { buildForgeToolDefinitions, type ForgePrToolHandler, type ForgePrToolPreflight, type ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-pr-agent-tools";
@@ -10681,8 +10682,7 @@ export class DesktopBackendRegistry {
     mergeMethods?: ForgePrToolPreflightResult["mergeMethods"],
   ): Promise<{ notes?: ForgeWriteApprovalNotes; mergeMethod?: ThreadTodoMergeMethod }> {
     if (this.isForgePlanTurn(context)) {
-      throw new ForgeReadError("plan_mode", `This is a plan turn, which is read-only, so PwrAgent did not run ${operation}. `
-        + "Put this step in your plan. The operator will reply when the plan should be implemented.");
+      throw new ForgeReadError("plan_mode", claudePlanTurnRefusal(operation));
     }
     const identity = await this.resolveForgeAgentIdentity(context);
     const resolution = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), group, repository, identity);
@@ -45160,7 +45160,14 @@ export class DesktopBackendRegistry {
     const sourceRevision = consentRevision ?? invocation.schemaRevision;
     const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
     const monitor = this.taskMonitorForThread(context);
-    if (monitor && (annotations?.readOnlyHint !== true || annotations.destructiveHint === true)) return false;
+    const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
+    if (monitor && !readOnlyCall) return false;
+    // Claude passes plan-turn gateway calls here without its generic card.
+    // The upstream hints decide whether the call can run in a read-only turn.
+    if (!readOnlyCall && context.backend === "claude"
+      && this.claudeBackend.livePermissionMode(context.threadId) === "plan") {
+      throw new Error(claudePlanTurnRefusal(`"${invocation.toolName}" on ${invocation.serverName}`));
+    }
     const selectionOwner = monitor?.mcpAccess?.selectionOwner ?? context;
     const approvalContext = monitor
       ? { backend: monitor.parentBackend, threadId: monitor.parentThreadId, turnId: monitor.parentTurnId }
@@ -45274,7 +45281,6 @@ export class DesktopBackendRegistry {
       });
       return true;
     }
-    const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
     if ((consent.approved && (!consent.readOnlyOnly || readOnlyCall))
       || (connectionConsent?.approved && (!connectionConsent.readOnlyOnly || readOnlyCall))) return true;
     // A Job Monitor's card approves reads only, so it offers no grant.
