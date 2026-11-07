@@ -306,7 +306,7 @@ Attention, because a finished task wakes Claude for a follow-up turn. A Codex
 background terminal never wakes the agent, so a Codex row shows a quiet `>_`
 mark instead and its turn ends normally. The registry publishes a Codex
 thread's terminals as `thread/backgroundTasks/updated` when their membership
-changes, since Codex announces none. The quit prompt and auto-archive count
+changes, since Codex announces none. The quit prompt and Thread Maintenance count
 both kinds as busy, and archiving refuses until the tasks are stopped. The tool row of a background call stays running until its
 notification, then shows the task's summary in the turn that made the call.
 A permission request or MCP elicitation from a task between turns belongs to

@@ -150,9 +150,6 @@ describe("checkout hibernation keep rules", () => {
 
 describe("checkout hibernation policy normalization", () => {
   const anything = fc.oneof(fc.double(), fc.integer({ min: -10, max: 10_000 }), fc.constant(undefined), fc.constant(Number.NaN));
-  const archive = fc.option(fc.record({
-    enabled: fc.boolean(), mode: fc.constantFrom("age" as const, "count" as const), inactivityDays: fc.integer({ min: 1, max: 3650 }),
-  }), { nil: undefined });
   const value = fc.record({
     enabled: fc.option(fc.boolean(), { nil: undefined }),
     idleDays: anything,
@@ -161,27 +158,25 @@ describe("checkout hibernation policy normalization", () => {
     restoreOn: fc.constantFrom("send", "open", "later", undefined),
   });
 
-  it("keeps idle days below the archive inactivity days in age mode, and every field in range", () => {
-    fc.assert(fc.property(value, archive, (raw, archivePolicy) => {
-      const policy = normalizeCheckoutHibernationPolicy(raw as Partial<DesktopCheckoutHibernationPolicy>, archivePolicy);
+  it("keeps every field in range, and is on unless set off", () => {
+    fc.assert(fc.property(value, (raw) => {
+      const policy = normalizeCheckoutHibernationPolicy(raw as Partial<DesktopCheckoutHibernationPolicy>);
       expect(Number.isInteger(policy.idleDays)).toBe(true);
       expect(policy.idleDays).toBeGreaterThanOrEqual(1);
       expect(policy.idleDays).toBeLessThanOrEqual(3650);
       expect(CHECKOUT_HIBERNATION_SNAPSHOT_MB_CHOICES).toContain(policy.maxSnapshotMb);
       expect(["send", "open"]).toContain(policy.restoreOn);
-      if (archivePolicy?.enabled && archivePolicy.mode === "age" && policy.enabled) {
-        expect(policy.idleDays).toBeLessThan(archivePolicy.inactivityDays);
-      }
-      // Off by default; on only when asked.
-      if (raw.enabled !== true) expect(policy.enabled).toBe(false);
+      // Hibernation is the automatic way to reclaim disk: on by default,
+      // upgrades included, and only an explicit `false` turns it off.
+      expect(policy.enabled).toBe(raw.enabled !== false);
       // Normalizing again changes nothing.
-      expect(normalizeCheckoutHibernationPolicy(policy, archivePolicy)).toEqual(policy);
+      expect(normalizeCheckoutHibernationPolicy(policy)).toEqual(policy);
     }), { numRuns: 1000 });
   });
 
-  it("defaults to off, 7 days, 100 MB, rebuildable output removed, restore on send", () => {
+  it("defaults to on, 7 days, 100 MB, rebuildable output removed, restore on send", () => {
     expect(normalizeCheckoutHibernationPolicy()).toEqual({
-      enabled: false, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send",
+      enabled: true, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send",
     });
   });
 });

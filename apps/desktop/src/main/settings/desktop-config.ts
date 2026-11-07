@@ -1,4 +1,4 @@
-import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchivePolicy, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
+import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchiveConfig, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
 import {
   FORGE_AGENT_TOOL_GROUPS,
   FORGE_AGENT_TOOL_RULE_GROUPS,
@@ -424,7 +424,7 @@ export type DesktopSettingsConfig = {
     };
   };
   worktrees?: {
-    archive?: Partial<DesktopThreadArchivePolicy>;
+    archive?: DesktopThreadArchiveConfig;
     hibernate?: Partial<DesktopCheckoutHibernationPolicy>;
     storage?: DesktopWorktreeStorageLocation;
   };
@@ -438,6 +438,8 @@ const LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION = "1.0.0-alpha.8";
 const LEGACY_BACKGROUND_PR_POLLING_LAST_VERSION = "1.0.0-beta.50";
 const LEGACY_FEDERATION_GATEWAY_URL_LAST_VERSION = "1.0.0-beta.50";
 const LEGACY_TOKEN_MISER_GENERAL_LAST_VERSION = "1.1.0-alpha.1";
+/** Last version whose hourly sweep archived threads by `[worktrees.archive] enabled`. */
+const LEGACY_AUTOMATIC_ARCHIVE_LAST_VERSION = "1.3.13";
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -2164,8 +2166,18 @@ export function desktopSettingsPatchToEdits(
 
   if (patch.worktrees?.archive) {
     const archive = patch.worktrees.archive;
+    // `enabled` was the automatic-archive switch. This version never writes or
+    // removes it, so an older build keeps its own behavior after a downgrade.
+    if (readBoolean(currentTables["worktrees.archive"]?.enabled) !== undefined) {
+      edits.push({
+        op: "ensureCommentBefore",
+        path: ["worktrees", "archive", "enabled"],
+        marker: LEGACY_SETTINGS_MARKER,
+        comment: legacyAutomaticArchiveComment(),
+      });
+    }
     for (const [property, key] of [
-      ["enabled", "enabled"], ["mode", "mode"],
+      ["mode", "mode"],
       ["inactivityDays", "inactivity_days"], ["keepPerProject", "keep_per_project"],
       ["retentionDays", "retention_days"],
     ] as const) {
@@ -2723,7 +2735,7 @@ function normalizeDesktopConfig(
     },
     worktrees: {
       archive: archive ? {
-        enabled: readBoolean(archive?.enabled),
+        legacyEnabled: readBoolean(archive?.enabled),
         mode: archive?.mode === "age" || archive?.mode === "count" ? archive.mode : undefined,
         inactivityDays: readNumber(archive?.inactivity_days),
         keepPerProject: readNumber(archive?.keep_per_project),
@@ -4097,6 +4109,17 @@ function legacyBackgroundPrPollingComment(): string {
     "key=background_pr_polling",
     "shape=boolean",
     `used_through=${LEGACY_BACKGROUND_PR_POLLING_LAST_VERSION}`,
+    "kept_for_older_clients",
+  ].join(" ");
+}
+
+function legacyAutomaticArchiveComment(): string {
+  return [
+    "#",
+    LEGACY_SETTINGS_MARKER,
+    "key=enabled",
+    "shape=boolean",
+    `used_through=${LEGACY_AUTOMATIC_ARCHIVE_LAST_VERSION}`,
     "kept_for_older_clients",
   ].join(" ");
 }

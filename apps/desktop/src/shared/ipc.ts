@@ -134,6 +134,11 @@ export const APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL =
   "app-server:run-thread-archive-sweep";
 export const THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL =
   "app-server:thread-archive-sweep-status-changed";
+/** The one-time notice that the hourly sweep no longer archives threads. */
+export const APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL =
+  "app-server:get-automatic-archive-retired-notice";
+export const APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL =
+  "app-server:dismiss-automatic-archive-retired-notice";
 /** Thread maintenance: a reviewed scan of idle threads and archived
  * checkouts, and a run of the operator's selections from one scan. */
 export const APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL =

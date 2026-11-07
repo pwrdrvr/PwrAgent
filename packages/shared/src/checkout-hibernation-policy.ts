@@ -1,4 +1,3 @@
-import type { DesktopThreadArchivePolicy } from "./thread-archive-policy";
 import type { LinkedDirectorySummary, WorktreeSnapshotSummary } from "./contracts/normalized-app-server";
 import { canonicalizeNavigationPath } from "./directory-navigation";
 
@@ -6,6 +5,8 @@ import { canonicalizeNavigationPath } from "./directory-navigation";
  * Settings → Worktrees → Hibernate idle checkouts, `[worktrees.hibernate]`.
  * Hibernation removes an idle thread's worktree checkout after saving its
  * uncommitted changes to a recovery snapshot. The thread stays in the lists.
+ * It is the automatic way to reclaim disk: on unless the profile set
+ * `enabled = false`, since nothing archives threads on a timer.
  */
 export type DesktopCheckoutHibernationPolicy = {
   enabled: boolean;
@@ -20,7 +21,7 @@ export type DesktopCheckoutHibernationPolicy = {
 export const CHECKOUT_HIBERNATION_SNAPSHOT_MB_CHOICES: readonly number[] = [5, 10, 25, 50, 100];
 
 export const DEFAULT_CHECKOUT_HIBERNATION_POLICY: DesktopCheckoutHibernationPolicy = {
-  enabled: false,
+  enabled: true,
   idleDays: 7,
   maxSnapshotMb: 100,
   removeRebuildableOutput: true,
@@ -30,32 +31,21 @@ export const DEFAULT_CHECKOUT_HIBERNATION_POLICY: DesktopCheckoutHibernationPoli
 /** A Claude session idle this long may be gone from Claude Code's own store. */
 export const CHECKOUT_HIBERNATION_CLAUDE_MAX_IDLE_DAYS = 30;
 
-/**
- * Fills defaults and clamps each field. A checkout must hibernate before its
- * thread would be archived, so while archive runs in "age" mode `idleDays`
- * stays below the archive's inactivity days. With a one-day archive there is
- * no such day, and hibernation is reported off.
- */
+/** Fills defaults and clamps each field. Only an explicit `false` turns
+ * hibernation off; a profile that never set it gets the default, on. */
 export function normalizeCheckoutHibernationPolicy(
   value?: Partial<DesktopCheckoutHibernationPolicy>,
-  archivePolicy?: Pick<DesktopThreadArchivePolicy, "enabled" | "mode" | "inactivityDays">,
 ): DesktopCheckoutHibernationPolicy {
   const finite = (input: unknown): input is number => typeof input === "number" && Number.isFinite(input);
-  let idleDays = finite(value?.idleDays)
+  const idleDays = finite(value?.idleDays)
     ? Math.min(3650, Math.max(1, Math.floor(value.idleDays)))
     : DEFAULT_CHECKOUT_HIBERNATION_POLICY.idleDays;
-  let enabled = value?.enabled === true;
-  if (archivePolicy?.enabled && archivePolicy.mode === "age") {
-    const ceiling = Math.floor(archivePolicy.inactivityDays) - 1;
-    if (ceiling < 1) enabled = false;
-    else idleDays = Math.min(idleDays, ceiling);
-  }
   const maxSnapshotMb = finite(value?.maxSnapshotMb)
     ? CHECKOUT_HIBERNATION_SNAPSHOT_MB_CHOICES.reduce((best, choice) => (choice <= value.maxSnapshotMb! ? choice : best),
       CHECKOUT_HIBERNATION_SNAPSHOT_MB_CHOICES[0]!)
     : DEFAULT_CHECKOUT_HIBERNATION_POLICY.maxSnapshotMb;
   return {
-    enabled,
+    enabled: value?.enabled !== false,
     idleDays,
     maxSnapshotMb,
     removeRebuildableOutput: value?.removeRebuildableOutput ?? DEFAULT_CHECKOUT_HIBERNATION_POLICY.removeRebuildableOutput,

@@ -842,7 +842,7 @@ import {
 import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "./checkout-hibernation-workspace";
 import { hasWorktreeTerminalsOpenIn } from "../terminal/worktree-terminals";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
-import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, archiveCandidateLastActivity, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
+import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, archiveCandidateLastActivity, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import { compareBindingsByCreation } from "../messaging/core/messaging-binding-thread-match";
 import { toMessagingThreadBindingSummary } from "../messaging/messaging-bindings-snapshot";
@@ -16952,7 +16952,6 @@ export class DesktopBackendRegistry {
 
   private getThreadArchiveSweeper(): ThreadArchiveSweeper {
     return this.threadArchiveSweeper ??= new ThreadArchiveSweeper({
-      getPolicy: () => this.readThreadArchivePolicy(),
       cleanupWorktrees: async ({ manual, onProgress, onFailure }) => {
         const publishProgress = (completed: number, report: ArchivedWorktreeRepairReport) => onProgress({
           candidates: report.candidates.length, protected: report.protectedWorktrees,
@@ -16978,12 +16977,7 @@ export class DesktopBackendRegistry {
         }
       },
       cleanupRetention: async (onFailure) => await this.sweepArchivedThreadRetention(onFailure),
-      resolveProject: async (candidate) => await this.resolveAutoArchiveProject(candidate),
       listCandidates: async () => await this.listAutoArchiveCandidates(),
-      refreshCandidate: async (candidate) => await this.refreshAutoArchiveCandidate(candidate),
-      isBusy: (candidate) => this.autoArchiveCandidateIsBusy(candidate),
-      canArchive: async (candidates) => await this.autoArchiveCandidatesAreEligible(candidates),
-      archive: async (_candidate, family) => await this.archiveInactiveThreadFamily(family),
       hibernation: {
         getPolicy: () => this.readCheckoutHibernationPolicy(),
         keepReason: (candidate, candidates, policy, now) => {
@@ -16997,7 +16991,7 @@ export class DesktopBackendRegistry {
         })).keep,
         hibernate: async (candidate, policy) => await this.hibernateIdleCheckout(candidate, policy),
       },
-      onError: (error, threadId) => backendRegistryLog.warn("inactive thread archive sweep failed", {
+      onError: (error, threadId) => backendRegistryLog.warn("hourly thread sweep failed", {
         threadId, error: error instanceof Error ? error.message : String(error),
       }),
       onStatus: (status) => {
@@ -17117,23 +17111,6 @@ export class DesktopBackendRegistry {
     finally { for (const key of keys) this.automaticArchiveReservations.delete(key); }
   }
 
-  private async autoArchiveCandidatesAreEligible(candidates: ThreadArchiveCandidate[]): Promise<boolean> {
-    for (const candidate of candidates) {
-      const current = await this.refreshAutoArchiveCandidate(candidate);
-      if (!isStaleArchiveCandidate(current, Date.now(), this.readThreadArchivePolicy()) || this.autoArchiveCandidateIsBusy(current)) return false;
-      if (this.readThreadArchivePolicy().mode === "count"
-        && archiveCandidateLastActivity(current) > archiveCandidateLastActivity(candidate)) return false;
-      const paths = (item: ThreadArchiveCandidate) => JSON.stringify(
-        [...item.thread.linkedDirectories, ...item.overlay?.extraLinkedDirectories ?? []]
-          .map((directory) => directory.worktreePath ?? directory.path).sort(),
-      );
-      // A moved workspace has not passed the Git probes from this sweep.
-      if (paths(current) !== paths(candidate)) return false;
-    }
-    return !this.closed && !this.stoppingRunningTurnsForShutdown
-      && candidates.every((candidate) => !this.autoArchiveCandidateIsBusy(candidate));
-  }
-
   private cancelAutomaticArchive(backend: AppServerBackendKind, threadId: string): void {
     const reservation = this.automaticArchiveReservations.get(buildThreadIdentityKey(backend, threadId));
     if (reservation) reservation.cancelled = true;
@@ -17199,45 +17176,6 @@ export class DesktopBackendRegistry {
       return result;
     } finally {
       finishMutation();
-    }
-  }
-
-  /** Resolves false when the archive was cancelled before its mutation. */
-  private async archiveInactiveThreadFamily(candidates: ThreadArchiveCandidate[]): Promise<boolean> {
-    const policy = JSON.stringify(this.readThreadArchivePolicy());
-    const reservation = { cancelled: false };
-    const keys = candidates.map(({ thread }) => buildThreadIdentityKey(thread.source, thread.id)).sort();
-    for (const key of keys) this.automaticArchiveReservations.set(key, reservation);
-    const beforeMutation = async () => {
-      if (reservation.cancelled || !await this.autoArchiveCandidatesAreEligible(candidates)
-        || reservation.cancelled || JSON.stringify(this.readThreadArchivePolicy()) !== policy) throw new AutomaticArchiveCancelledError();
-      // The awaited admission result itself yields. Check the reservation
-      // again synchronously at the call site that sends the mutation.
-      return () => {
-        if (reservation.cancelled || JSON.stringify(this.readThreadArchivePolicy()) !== policy
-          || candidates.some((candidate) => this.autoArchiveCandidateIsBusy(candidate))) {
-          throw new AutomaticArchiveCancelledError();
-        }
-      };
-    };
-    const withFamilyLocks = async (index: number): Promise<void> => {
-      if (index < keys.length) {
-        return await this.threadLifecycleLocks.run(keys[index]!, async () => await withFamilyLocks(index + 1));
-      }
-      const { thread } = candidates[0]!;
-      backendRegistryLog.info("thread archive requested", {
-        backend: thread.source, threadId: thread.id, runtimeInstanceId: this.runtimeInstanceId, requestedAt: Date.now(), automatic: true,
-      });
-      await this.archiveThreadWithoutLifecycleLock({ backend: thread.source, threadId: thread.id }, beforeMutation);
-    };
-    try {
-      await withFamilyLocks(0);
-      return true;
-    } catch (error) {
-      if (!(error instanceof AutomaticArchiveCancelledError)) throw error;
-      return false;
-    } finally {
-      for (const key of keys) this.automaticArchiveReservations.delete(key);
     }
   }
 

@@ -753,6 +753,8 @@ const LAUNCHPAD_AUTO_ACCESS_NOTICE_META_KEY = "launchpad_auto_access_notice";
  * commit per toggle.
  */
 const NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY = "navigation_pinned_group_collapsed";
+/** The one-time notice that the hourly sweep no longer archives threads. */
+const AUTOMATIC_ARCHIVE_RETIRED_NOTICE_META_KEY = "automatic_archive_retired_notice_seen";
 /**
  * The operator's recent short lock notes, offered as chips in the lock
  * dialog. Written only when the dialog saves a note or a chip is removed, and
@@ -9780,6 +9782,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return collapsed;
   }
 
+  getAutomaticArchiveRetiredNoticeSeenSync(): boolean {
+    return this.stateDb.getMeta(AUTOMATIC_ARCHIVE_RETIRED_NOTICE_META_KEY) === "1";
+  }
+
+  /** One commit, once per profile. */
+  async markAutomaticArchiveRetiredNoticeSeen(): Promise<void> {
+    if (!this.getAutomaticArchiveRetiredNoticeSeenSync()) {
+      this.stateDb.setMeta(AUTOMATIC_ARCHIVE_RETIRED_NOTICE_META_KEY, "1");
+    }
+  }
+
+  /** Whether any thread was ever archived in this profile. A new profile has
+   * none, so it is not told about a sweep it never ran. */
+  hasArchivedThreadsSync(): boolean {
+    return this.stateDb.raw.prepare(
+      `SELECT 1 FROM threads WHERE payload LIKE '%"archiveRetentionStartedAt"%' OR payload LIKE '%"archiveTombstonedAt"%' LIMIT 1`,
+    ).get() !== undefined;
+  }
+
   listRecentThreadLockNotes(): string[] {
     const raw = this.stateDb.getMeta(THREAD_LOCK_RECENT_NOTES_META_KEY);
     if (!raw) return [];
@@ -12622,6 +12643,9 @@ export type OverlayStoreLike = Pick<
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
   readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
   setPinnedGroupCollapsed?: SqliteOverlayStore["setPinnedGroupCollapsed"];
+  getAutomaticArchiveRetiredNoticeSeenSync?: SqliteOverlayStore["getAutomaticArchiveRetiredNoticeSeenSync"];
+  markAutomaticArchiveRetiredNoticeSeen?: SqliteOverlayStore["markAutomaticArchiveRetiredNoticeSeen"];
+  hasArchivedThreadsSync?: SqliteOverlayStore["hasArchivedThreadsSync"];
   setNavigationResumeState?: SqliteOverlayStore["setNavigationResumeState"];
   listRecentThreadLockNotes?: SqliteOverlayStore["listRecentThreadLockNotes"];
   rememberRecentThreadLockNote?: SqliteOverlayStore["rememberRecentThreadLockNote"];

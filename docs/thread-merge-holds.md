@@ -103,7 +103,7 @@ description tells an agent to `list` before reporting finished work.
 
 Holds live in the waiting thread's PwrAgent overlay, with up to 32 active
 holds per thread, 512 active holds per profile, and 100 retained terminal
-entries per thread. Active holds protect the thread from automatic archive,
+entries per thread. Active holds protect the thread from Thread Maintenance archiving,
 and archive cleanup retains the owner overlay until its holds are cleared.
 Mutations re-read under an immediate SQLite transaction. Duplicate actions
 and reads make no writes. There are no timer, per-turn, or streamed-event

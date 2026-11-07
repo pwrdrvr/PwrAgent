@@ -32,9 +32,10 @@ export type ThreadArchiveCandidate = {
 /** Card statuses that keep housekeeping away from a thread. */
 export const ARCHIVE_ACTIVE_SUB_AGENT_STATUSES: readonly string[] = ["running", "pending", "cancelling", "blocked"];
 
+/** The hourly sweep never archives a thread: archiving is the operator's
+ * call (a thread, a selection, or Thread maintenance). It cleans up after
+ * archives the operator made and hibernates idle checkouts. */
 type SweeperDeps = {
-  getPolicy?: () => DesktopThreadArchivePolicy;
-  resolveProject?: (candidate: ThreadArchiveCandidate) => Promise<string | undefined>;
   /** Resolves to the number of expired families deleted. A cleanup that
    * logs its own per-thread failures reports each through onFailure. */
   cleanupRetention?: (onFailure: (error: unknown, details?: SweepFailureDetails) => void) => Promise<number | void>;
@@ -44,18 +45,9 @@ type SweeperDeps = {
     onFailure: (error: unknown, details?: SweepFailureDetails) => void;
   }) => Promise<void>;
   listCandidates: () => Promise<ThreadArchiveCandidate[]>;
-  refreshCandidate: (candidate: ThreadArchiveCandidate) => Promise<ThreadArchiveCandidate>;
-  isBusy: (candidate: ThreadArchiveCandidate) => boolean;
-  canArchive: (candidates: ThreadArchiveCandidate[]) => Promise<boolean>;
-  /** Resolves false when the archive was cancelled at the mutation boundary. */
-  archive: (candidate: ThreadArchiveCandidate, family: ThreadArchiveCandidate[]) => Promise<unknown>;
-  workspaceIsSafe?: (cwd: string, signal: AbortSignal) => Promise<boolean>;
-  /** Why a workspace must be kept, or undefined when it is safe. Takes
-   * precedence over workspaceIsSafe, which can only say "changes". */
-  workspaceArchiveBlocker?: (cwd: string, signal: AbortSignal) => Promise<string | undefined>;
   onError: (error: unknown, threadId?: string) => void;
   onStatus?: (status: DesktopThreadArchiveSweepStatus) => void;
-  /** Idle checkout hibernation, after the archive pass. Absent: no phase. */
+  /** Idle checkout hibernation, the sweep's last phase. Absent: no phase. */
   hibernation?: CheckoutHibernationSweepDeps;
 };
 
@@ -72,7 +64,7 @@ export type CheckoutHibernationSweepDeps = {
   hibernate: (candidate: ThreadArchiveCandidate, policy: DesktopCheckoutHibernationPolicy) => Promise<boolean | string>;
 };
 
-type SweepTally = Pick<DesktopThreadArchiveSweepStatus, "archived" | "deleted" | "failed" | "error" | "failures" | "threads" | "hibernation">;
+type SweepTally = Pick<DesktopThreadArchiveSweepStatus, "deleted" | "failed" | "error" | "failures" | "hibernation">;
 type SweepFailureDetails = { path?: string; threadId?: string };
 type SweepPhase = DesktopThreadArchiveSweepFailure["phase"];
 
@@ -203,7 +195,6 @@ export function archiveCandidateKeepReason(
   policy: DesktopThreadArchivePolicy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" },
 ): string | undefined {
   const { thread, overlay } = candidate;
-  if (!policy.enabled) return "Automatic archiving is off";
   if (thread.archivedAt !== undefined || overlay?.archiveTombstonedAt !== undefined) return "Already archived";
   const protection = archiveCandidateProtectionReason(candidate);
   if (protection) return protection;
@@ -320,7 +311,7 @@ export class ThreadArchiveSweeper {
   private started = false;
   private running?: Promise<void>;
   private readonly abort = new AbortController();
-  private status: DesktopThreadArchiveSweepStatus = { running: false, archived: 0, deleted: 0, failed: 0 };
+  private status: DesktopThreadArchiveSweepStatus = { running: false, deleted: 0, failed: 0 };
 
   constructor(private readonly deps: SweeperDeps) {}
 
@@ -340,12 +331,12 @@ export class ThreadArchiveSweeper {
     if (this.abort.signal.aborted) return Promise.resolve();
     if (this.running) return this.running;
     clearTimeout(this.timer);
-    const tally: SweepTally = { archived: 0, deleted: 0, failed: 0 };
+    const tally: SweepTally = { deleted: 0, failed: 0 };
     this.publish({ ...tally, running: true, startedAt: Date.now() });
     this.running = withCodexRequestActivity(
       { countsAsActivity: false }, () => this.run(tally, options.manual === true),
     ).catch((error) => {
-      if (!this.abort.signal.aborted) this.fail(tally, "threads", error);
+      if (!this.abort.signal.aborted) this.fail(tally, "sweep", error);
     }).finally(() => {
       this.running = undefined;
       if (this.abort.signal.aborted) return;
@@ -358,7 +349,8 @@ export class ThreadArchiveSweeper {
   async stop(): Promise<void> {
     clearTimeout(this.timer);
     this.abort.abort();
-    // An archive already sent must settle before the registry closes its stores.
+    // A deletion or hibernation already sent must settle before the registry
+    // closes its stores.
     await this.running;
   }
 
@@ -400,10 +392,6 @@ export class ThreadArchiveSweeper {
     } catch (error) { if (!this.abort.signal.aborted) this.fail(tally, "worktrees", error); }
     try { tally.deleted += await this.deps.cleanupRetention?.((error, details) => this.count(tally, "retention", error, details)) || 0; }
     catch (error) { if (!this.abort.signal.aborted) this.fail(tally, "retention", error); }
-    if (this.abort.signal.aborted) return;
-    // Hibernation runs whether or not archiving is on, after it, so a thread
-    // archived this sweep is not hibernated first.
-    await this.archiveThreads(tally);
     if (this.abort.signal.aborted) return;
     await this.hibernateCheckouts(tally);
   }
@@ -459,169 +447,6 @@ export class ThreadArchiveSweeper {
           this.count(tally, "hibernation", error, { threadId: candidate.thread.id });
           this.deps.onError(error, candidate.thread.id);
         }
-      }
-    }
-  }
-
-  private async archiveThreads(tally: SweepTally): Promise<void> {
-    let policy: DesktopThreadArchivePolicy;
-    try { policy = this.deps.getPolicy?.() ?? { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" as const }; }
-    catch (error) {
-      this.fail(tally, "threads", error);
-      tally.threads = { checked: 0, eligible: 0, archived: 0, kept: {}, skipped: "The archive policy could not be read" };
-      return;
-    }
-    const threads: NonNullable<SweepTally["threads"]> = { checked: 0, eligible: 0, archived: 0, kept: {} };
-    tally.threads = threads;
-    if (!policy.enabled) {
-      threads.skipped = "Automatic archiving is off";
-      return;
-    }
-    const keep = (reason: string) => { threads.kept[reason] = (threads.kept[reason] ?? 0) + 1; };
-    let candidates: ThreadArchiveCandidate[];
-    try { candidates = await this.deps.listCandidates(); }
-    catch (error) {
-      if (!this.abort.signal.aborted) this.fail(tally, "threads", error);
-      threads.skipped = "Threads could not be listed";
-      return;
-    }
-    const groupFor = archiveFamilies(candidates);
-    /** The first reason any member of the family must stay, if one does. */
-    const familyKeepReason = (group: ThreadArchiveCandidate[]): string | undefined => {
-      const now = Date.now();
-      for (const item of group) {
-        const reason = archiveCandidateKeepReason(item, now, policy);
-        if (reason) return reason;
-      }
-      return group.some((item) => this.deps.isBusy(item)) ? "Busy" : undefined;
-    };
-    /** Undefined when every workspace is safe to archive. */
-    const workspaceKeepReason = async (group: ThreadArchiveCandidate[]): Promise<string | undefined> => {
-      const paths = new Set(group.flatMap(({ thread, overlay }) =>
-        [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
-          .map((directory) => directory.worktreePath ?? directory.path)));
-      for (const cwd of paths) {
-        if (!cwd.trim()) return "Workspace unknown";
-        const reason = this.deps.workspaceArchiveBlocker
-          ? await this.deps.workspaceArchiveBlocker(cwd, this.abort.signal)
-          : this.deps.workspaceIsSafe
-            ? await this.deps.workspaceIsSafe(cwd, this.abort.signal) ? undefined : WORKSPACE_KEEP_REASONS.changes
-            : await workspaceArchiveBlocker(cwd, this.abort.signal);
-        if (reason) return reason;
-      }
-      return undefined;
-    };
-    const eligibleRoots: ThreadArchiveCandidate[] = [];
-    for (const candidate of candidates) {
-      if (candidate.thread.codexNativeSubAgent) continue;
-      threads.checked += 1;
-      const reason = familyKeepReason(groupFor(candidate));
-      if (reason) keep(reason);
-      else eligibleRoots.push(candidate);
-    }
-    threads.eligible = eligibleRoots.length;
-    const selected = new Set<ThreadArchiveCandidate>();
-    if (policy.mode === "count") {
-      const projects = new Map<string, ThreadArchiveCandidate[]>();
-      for (const candidate of eligibleRoots) {
-        if (this.abort.signal.aborted) return;
-        // Workspaces that cannot be safely archived are kept in addition to
-        // the quota, just like pins and active work. A failure is reported for
-        // that thread alone and the rest of the project is still ranked.
-        let key: string | undefined;
-        try {
-          const reason = await workspaceKeepReason(groupFor(candidate));
-          if (reason) {
-            keep(reason);
-            continue;
-          }
-          key = this.deps.resolveProject
-            ? await this.deps.resolveProject(candidate)
-            : candidate.thread.projectKey ?? candidate.thread.linkedDirectories[0]?.path;
-        } catch (error) {
-          if (!this.abort.signal.aborted) this.fail(tally, "threads", error, candidate.thread.id);
-          continue;
-        }
-        // Unknown project identity must not combine unrelated worktrees into one quota.
-        if (!key) {
-          keep("Project unknown");
-          continue;
-        }
-        projects.set(key, [...projects.get(key) ?? [], candidate]);
-      }
-      for (const group of projects.values()) {
-        group.sort((a, b) => archiveCandidateLastActivity(b) - archiveCandidateLastActivity(a)
-          || a.thread.id.localeCompare(b.thread.id));
-        for (let index = 0; index < Math.min(group.length, policy.keepPerProject); index++) keep("Within the per-project limit");
-        for (const candidate of group.slice(policy.keepPerProject)) selected.add(candidate);
-      }
-    } else {
-      for (const candidate of eligibleRoots) selected.add(candidate);
-    }
-    // Never scatter a parent's sub-threads: a parent stays while archiving it
-    // would leave 3 or more of them behind.
-    const selectedKeys = new Set([...selected].map(({ thread }) => buildThreadIdentityKey(thread.source, thread.id)));
-    const subthreads = subthreadChildren(candidates);
-    const keptParents = new Set(keepSubthreadParents(selectedKeys, subthreads));
-    for (const candidate of [...selected]) {
-      if (!keptParents.has(buildThreadIdentityKey(candidate.thread.source, candidate.thread.id))) continue;
-      selected.delete(candidate);
-      keep(SUBTHREAD_PARENT_KEEP_REASON);
-    }
-    // Sub-threads go first, so a parent's own archive finds them archived
-    // rather than promoting them.
-    const archivedKeys = new Set<string>();
-    for (const candidate of subthreadsFirst(candidates)) {
-      if (this.abort.signal.aborted) return;
-      if (!selected.has(candidate)) continue;
-      const candidateKey = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
-      // A sub-thread kept during this run still needs its parent.
-      const left = (subthreads.get(candidateKey) ?? []).filter((child) => !archivedKeys.has(child)).length;
-      if (left > MAX_SUBTHREADS_LEFT_BY_ARCHIVE) {
-        keep(SUBTHREAD_PARENT_KEEP_REASON);
-        continue;
-      }
-      const group = groupFor(candidate);
-      const listed = familyKeepReason(group);
-      if (listed) {
-        keep(listed);
-        continue;
-      }
-      try {
-        const refreshed = await Promise.all(group.map((item) => this.deps.refreshCandidate(item)));
-        if (this.abort.signal.aborted) return;
-        if (policy.mode === "count" && archiveCandidateLastActivity(refreshed[0]!) > archiveCandidateLastActivity(candidate)) {
-          keep("Recently active");
-          continue;
-        }
-        const current = familyKeepReason(refreshed);
-        if (current) {
-          keep(current);
-          continue;
-        }
-        const workspace = await workspaceKeepReason(refreshed);
-        if (this.abort.signal.aborted) continue;
-        if (workspace) {
-          keep(workspace);
-          continue;
-        }
-        if (!refreshed.every((item) => !this.deps.isBusy(item))) {
-          keep("Busy");
-          continue;
-        }
-        if (!await this.deps.canArchive(refreshed)) {
-          keep("Not eligible when archiving");
-          continue;
-        }
-        if (this.abort.signal.aborted) return;
-        if (JSON.stringify(this.deps.getPolicy?.() ?? policy) !== JSON.stringify(policy)) return;
-        if (await this.deps.archive(refreshed[0]!, refreshed) !== false) {
-          tally.archived += 1;
-          threads.archived += 1;
-          archivedKeys.add(candidateKey);
-        } else keep("Archive cancelled");
-      } catch (error) {
-        if (!this.abort.signal.aborted) this.fail(tally, "threads", error, candidate.thread.id);
       }
     }
   }

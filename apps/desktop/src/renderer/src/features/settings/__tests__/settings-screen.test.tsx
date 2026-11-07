@@ -3268,7 +3268,7 @@ describe("SettingsScreen", () => {
       worktreeSnapshots: [createArchivedSnapshot("expiry-details", startedAt)],
     };
     const settings = createSettingsState();
-    settings.snapshot!.worktrees.archive = { enabled: true, mode: "count", inactivityDays: 7, keepPerProject: 20, retentionDays: 30 };
+    settings.snapshot!.worktrees.archive = { mode: "count", inactivityDays: 7, keepPerProject: 20, retentionDays: 30 };
     const listThreads = vi.fn(async () => ({ backend: "all" as const, fetchedAt: Date.now(), threads: [thread] }));
     render(<SettingsScreen desktopApi={{ listThreads }} settings={settings} initialSection="archived" onClose={() => undefined} />);
     expect(await screen.findByText("Archive with snapshot")).toBeInTheDocument();

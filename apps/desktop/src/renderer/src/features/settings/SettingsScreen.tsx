@@ -1594,6 +1594,7 @@ function SettingsSectionBody(props: {
           });
         }}
         onWriteConfig={props.settings.writeConfig}
+        desktopApi={props.desktopApi}
       />
     );
   }

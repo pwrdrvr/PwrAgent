@@ -27,21 +27,11 @@ function describeKept(kept: Record<string, number> | undefined): string {
   return `Kept ${total}: ${shown.join(", ")}${rest > 0 ? `, and ${rest} more ${rest === 1 ? "reason" : "reasons"}` : ""}.`;
 }
 
-/** One sentence per phase of a finished sweep: threads, retention, worktrees. */
+/** One sentence per phase of a finished sweep: hibernation, retention,
+ * worktrees. The sweep never archives a thread, so there is no threads line. */
 export function archiveSweepSummaryLines(status: DesktopThreadArchiveSweepStatus): string[] {
   const lines: string[] = [];
-  const threads = status.threads;
-  if (threads?.skipped) lines.push(`Threads: ${threads.skipped}.`);
-  else if (threads) {
-    lines.push([
-      `Checked ${threads.checked} ${threads.checked === 1 ? "thread" : "threads"}.`,
-      `Archived ${threads.archived}.`,
-      describeKept(threads.kept),
-    ].filter(Boolean).join(" "));
-  } else if (status.archived > 0) {
-    lines.push(`Archived ${status.archived} ${status.archived === 1 ? "thread" : "threads"}.`);
-  }
-  // A pass that is off says nothing here; its own setting lives in Worktrees.
+  // A pass that is off says nothing here; its switch is beside this row.
   const hibernation = status.hibernation;
   if (hibernation && !hibernation.skipped && hibernation.checked > 0) {
     lines.push([
@@ -67,13 +57,15 @@ export function ArchivePolicySettings(props: {
   value?: DesktopThreadArchivePolicy;
   onWriteConfig?: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
   desktopApi?: DesktopApi;
-  /** A finished sweep archived or deleted threads. */
+  /** A finished sweep deleted expired archives or cleaned their checkouts. */
   onSweepChanged?: () => void;
 }) {
   const [policy, setPolicy] = useState(() => normalizeThreadArchivePolicy(props.value));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => { setPolicy(normalizeThreadArchivePolicy(props.value)); }, [props.value]);
+  useThreadArchiveSweepStatus(props.desktopApi, props.onSweepChanged);
+  const openThreadMaintenance = useContext(ThreadMaintenanceLauncherContext);
   const save = async (patch: Partial<DesktopThreadArchivePolicy>) => {
     if (!props.onWriteConfig || pending) return;
     const next = normalizeThreadArchivePolicy({ ...policy, ...patch });
@@ -97,13 +89,12 @@ export function ArchivePolicySettings(props: {
       onBlur={(event) => { void save({ [key]: Number(event.target.value) }); }} />
   );
   return (
-    <SettingsSection sectionId="archive-policy" title="Automatic archiving" description="Pinned threads, Agent threads, active chats, and other protected work are always kept.">
-      <SettingsField label="Automatically archive threads" control={<SettingsSwitch label="Automatically archive threads"
-        checked={policy.enabled} disabled={disabled} pending={pending} onChange={(enabled) => { void save({ enabled }); }} />} />
-      <div className="settings-comp-opts" role="radiogroup" aria-label="Automatic archive mode">
-        <SettingsCompOption value="count" title="Keep a number per project" sub="Keep the newest eligible threads separately in each project. Protected threads are kept in addition to this number."
+    <SettingsSection sectionId="archive-policy" title="Suggest threads to archive"
+      description="Thread Maintenance starts from these settings. PwrAgent archives a thread only when you ask: from its menu, a selection, or the threads you leave ticked in Thread Maintenance.">
+      <div className="settings-comp-opts" role="radiogroup" aria-label="Archive suggestion mode">
+        <SettingsCompOption value="count" title="Keep a number per project" sub="Suggest the oldest eligible threads beyond this number in each project. Protected threads are kept in addition to this number."
           active={policy.mode === "count"} isDefault disabled={disabled} onSelect={(mode) => { void save({ mode }); }} />
-        <SettingsCompOption value="age" title="Archive after inactivity" sub="Archive eligible threads after they have been untouched for the selected number of days."
+        <SettingsCompOption value="age" title="Suggest after inactivity" sub="Suggest eligible threads untouched for the selected number of days."
           active={policy.mode === "age"} disabled={disabled} onSelect={(mode) => { void save({ mode }); }} />
       </div>
       {policy.mode === "count"
@@ -111,6 +102,11 @@ export function ArchivePolicySettings(props: {
           control={number("keepPerProject", "Eligible threads per project")} />
         : <SettingsField label="Days untouched" sub="Viewing or restoring a thread counts as activity."
           control={number("inactivityDays", "Days untouched")} />}
+      {openThreadMaintenance ? (
+        <SettingsField label="Review idle threads" sub="Shows which threads are idle and why each is kept. Nothing is archived until you choose Archive."
+          control={<button className="button button--ghost settings-section-controls__button" type="button"
+            onClick={() => openThreadMaintenance()}>Thread Maintenance…</button>} />
+      ) : null}
       <SettingsField label="Permanently delete expired archives" sub="Delete expired conversations and their retained recovery snapshots. This cannot be undone."
         control={<SettingsSwitch label="Permanently delete expired archives" checked={policy.retentionDays > 0}
           disabled={disabled} onChange={(enabled) => { void save({ retentionDays: enabled ? 30 : 0 }); }} />} />
@@ -119,20 +115,19 @@ export function ArchivePolicySettings(props: {
           control={number("retentionDays", "Keep archives for days")} />
         : <p className="settings-panel__hint">Archived threads and their recovery snapshots are kept until you choose an automatic deletion period.</p>}
       {policy.retentionDays > 0 ? <p className="settings-panel__hint">Protected or restored threads do not expire. Existing archives without a recorded archive date start their retention period when first discovered. For ACP providers, deletion removes PwrAgent’s stored conversation; the provider may retain its own history.</p> : null}
-      <ArchiveSweepField desktopApi={props.desktopApi} active={policy.enabled || policy.retentionDays > 0}
-        onSweepChanged={props.onSweepChanged} />
+      <p className="settings-panel__hint">The hourly sweep and its last run are in Settings → Worktrees.</p>
       {error ? <p className="settings-panel__hint" role="alert">{error}</p> : null}
     </SettingsSection>
   );
 }
 
-function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; onSweepChanged?: () => void }) {
-  const api = props.desktopApi;
+/** Follows the sweep's status. `onChanged` fires when a sweep that finished
+ * after the first status deleted archives or cleaned their checkouts. */
+function useThreadArchiveSweepStatus(api: DesktopApi | undefined, onChanged?: () => void) {
   const [status, setStatus] = useState<DesktopThreadArchiveSweepStatus>();
-  const [requesting, setRequesting] = useState(false);
-  const [requestError, setRequestError] = useState<string>();
-  const onSweepChangedRef = useRef(props.onSweepChanged);
-  useEffect(() => { onSweepChangedRef.current = props.onSweepChanged; }, [props.onSweepChanged]);
+  const [error, setError] = useState<string>();
+  const onChangedRef = useRef(onChanged);
+  useEffect(() => { onChangedRef.current = onChanged; }, [onChanged]);
   // Undefined until the first status arrives: the sweep that finished before
   // this pane mounted is already reflected in the list it loaded.
   const seenFinishedAtRef = useRef<number | null | undefined>(undefined);
@@ -142,7 +137,7 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
     const seen = seenFinishedAtRef.current;
     seenFinishedAtRef.current = next.finishedAt ?? null;
     if (seen !== undefined && next.finishedAt !== undefined && next.finishedAt !== seen
-      && next.archived + next.deleted + (next.worktrees?.removed ?? 0) + (next.worktrees?.removedContainers ?? 0) > 0) onSweepChangedRef.current?.();
+      && next.deleted + (next.worktrees?.removed ?? 0) + (next.worktrees?.removedContainers ?? 0) > 0) onChangedRef.current?.();
   }, []);
   useEffect(() => {
     if (!api?.getThreadArchiveSweepStatus) return;
@@ -150,10 +145,19 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
     const unsubscribe = api.onThreadArchiveSweepStatusChanged?.((next) => { if (!cancelled) receive(next); });
     api.getThreadArchiveSweepStatus().then(
       (next) => { if (!cancelled) receive(next); },
-      (error: unknown) => { if (!cancelled) setRequestError(error instanceof Error ? error.message : String(error)); },
+      (error: unknown) => { if (!cancelled) setError(error instanceof Error ? error.message : String(error)); },
     );
     return () => { cancelled = true; unsubscribe?.(); };
   }, [api, receive]);
+  return { status, error, setError, receive };
+}
+
+/** Settings → Worktrees → Last sweep. The hourly sweep hibernates idle
+ * checkouts and cleans up after archived threads; it never archives one. */
+export function ArchiveSweepField(props: { desktopApi?: DesktopApi }) {
+  const api = props.desktopApi;
+  const { status, error: requestError, setError: setRequestError, receive } = useThreadArchiveSweepStatus(api);
+  const [requesting, setRequesting] = useState(false);
   const openThreadMaintenance = useContext(ThreadMaintenanceLauncherContext);
   if (!api?.getThreadArchiveSweepStatus) return null;
 
@@ -167,11 +171,11 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
     finally { setRequesting(false); }
   };
   const time = (at: number) => sweepTimeFormatter.format(at);
-  const changed = (status?.archived ?? 0) + (status?.deleted ?? 0)
+  const changed = (status?.deleted ?? 0)
     + (status?.worktrees?.removed ?? 0) + (status?.worktrees?.removedContainers ?? 0);
   const finished = status !== undefined && !status.running && status.finishedAt !== undefined;
   const summaryLines = finished ? archiveSweepSummaryLines(status) : [];
-  if (finished && summaryLines.length === 0 && status.failed === 0) summaryLines.push("Nothing to archive.");
+  if (finished && summaryLines.length === 0 && status.failed === 0) summaryLines.push("Nothing to clean up.");
   // Every recorded failure, not only the first; `failed` counts any beyond the cap.
   const failures = finished
     ? status.failures?.map((failure) => failure.path && !failure.message.includes(failure.path)
@@ -181,9 +185,7 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
   const unlisted = finished ? Math.max(0, status.failed - failures.length) : 0;
   return (
     <SettingsField label="Last sweep"
-      sub={openThreadMaintenance
-        ? "Sweeps run hourly. Review shows which threads are idle and why each was kept."
-        : "Run now also retries archived worktree cleanup. Recovery snapshots exclude ignored files and keep oversized checkouts in place."}
+      sub="Sweeps run hourly. They hibernate idle checkouts and clean up after archived threads. They never archive a thread."
       control={
         <div className="settings-archive-sweep">
           <div className="settings-archive-sweep__line">
@@ -231,14 +233,11 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
               {unlisted > 0 ? <p className="settings-archive-sweep__error">and {unlisted} more</p> : null}
             </div>
           ) : null}
-          {props.active && status && !status.running && status.nextAt !== undefined ? (
+          {status && !status.running && status.nextAt !== undefined ? (
             <p className="settings-archive-sweep__next">
               {status.finishedAt === undefined ? "First" : "Next"} sweep about {time(status.nextAt)}
             </p>
           ) : null}
-          {props.active ? null : (
-            <p className="settings-archive-sweep__text">Automatic archiving and deletion are off. Run now can still clean up worktrees of already archived threads.</p>
-          )}
         </div>
       } />
   );

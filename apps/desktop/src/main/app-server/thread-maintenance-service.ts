@@ -257,9 +257,8 @@ export class ThreadMaintenanceService {
       return { ...result, skipped: "Threads could not be listed" };
     }
     retained.candidates = candidates;
-    // The dialog is an explicit request, so it runs whether or not the hourly
-    // sweep is on. Everything else about the keep rules is the same.
-    const reviewPolicy: DesktopThreadArchivePolicy = { ...policy, enabled: true,
+    // The dialog's own rules start from the archive settings.
+    const reviewPolicy: DesktopThreadArchivePolicy = { ...policy,
       mode: rules.mode, keepPerProject: rules.keepPerProject, inactivityDays: rules.inactivityDays };
     const groupFor = archiveFamilies(candidates);
     retained.subthreads = subthreadChildren(candidates);
@@ -792,7 +791,7 @@ export class ThreadMaintenanceService {
   ): Promise<true | string> {
     const refreshed = await Promise.all(entry.family.map((item) => this.deps.refreshCandidate(item)));
     if (archiveCandidateLastActivity(refreshed[0]!) > entry.row.lastActivityAt) return "New activity during the run";
-    const policy = { ...this.deps.getPolicy(), enabled: true, mode: "age" as const, inactivityDays: 0 };
+    const policy = { ...this.deps.getPolicy(), mode: "age" as const, inactivityDays: 0 };
     const reason = familyKeepReason(refreshed, this.now(), policy, this.deps.isBusy);
     if (reason) return reason;
     const inspection = await this.inspectFamily(refreshed, rules);

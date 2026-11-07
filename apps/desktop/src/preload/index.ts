@@ -252,6 +252,7 @@ import type {
   CodexAppServerRestartResult,
   CodexAppServerRestartStatus,
   DesktopThreadArchiveSweepStatus,
+  DesktopAutomaticArchiveRetiredNotice,
   ThreadMaintenanceApplyRequest,
   ThreadMaintenanceRules,
   ThreadMaintenanceRun,
@@ -837,6 +838,8 @@ import {
   RESTART_GATE_STATUS_CHANNEL,
   APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
   APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
+  APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL,
+  APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL,
   THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
   APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL,
   APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL,
@@ -1883,6 +1886,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL),
   runThreadArchiveSweep: async (): Promise<DesktopThreadArchiveSweepStatus> =>
     await ipcRenderer.invoke(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL),
+  getAutomaticArchiveRetiredNotice: async (): Promise<DesktopAutomaticArchiveRetiredNotice> =>
+    await ipcRenderer.invoke(APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL),
+  dismissAutomaticArchiveRetiredNotice: async (): Promise<void> =>
+    await ipcRenderer.invoke(APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL),
   scanThreadMaintenance: async (request?: {
     rules?: Partial<ThreadMaintenanceRules>;
     projectKey?: string;
