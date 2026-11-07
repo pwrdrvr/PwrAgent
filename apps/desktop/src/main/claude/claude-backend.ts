@@ -767,8 +767,13 @@ export class ClaudeBackend {
    * the saved mode does not. Undefined when no process is open.
    */
   liveExecutionMode(threadId: string): ThreadExecutionMode | undefined {
-    const live = this.sessions.get(threadId);
-    return live ? threadExecutionModeForClaudePermission(live.config.permissionMode) : undefined;
+    const mode = this.livePermissionMode(threadId);
+    return mode ? threadExecutionModeForClaudePermission(mode) : undefined;
+  }
+
+  /** Keep plan distinct for callers that must refuse writes rather than ask. */
+  livePermissionMode(threadId: string): Options["permissionMode"] {
+    return this.sessions.get(threadId)?.config.permissionMode;
   }
 
   /** See `ClaudeSessionStore.changeToken`. */

@@ -12,6 +12,7 @@ import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from 
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import { openClaudeSessionReader } from "../claude/claude-session-reader";
+import { claudePlanTurnRefusal } from "../claude/claude-permissions";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { buildForgeToolDefinitions, type ForgePrToolHandler, type ForgePrToolPreflight, type ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-pr-agent-tools";
@@ -9459,19 +9460,19 @@ const RUNNING_TURN_SHUTDOWN_STOP_TIMEOUT_MS = 2_000;
  * each turn it stopped to end, whichever terminal path removes it.
  */
 class ActiveTurnKeySet extends Set<string> {
-  private readonly deleteListeners = new Set<() => void>();
+  private readonly deleteListeners = new Set<(key: string) => void>();
 
   override delete(key: string): boolean {
     const deleted = super.delete(key);
     if (deleted) {
       for (const listener of this.deleteListeners) {
-        listener();
+        listener(key);
       }
     }
     return deleted;
   }
 
-  onDelete(listener: () => void): () => void {
+  onDelete(listener: (key: string) => void): () => void {
     this.deleteListeners.add(listener);
     return () => {
       this.deleteListeners.delete(listener);
@@ -9928,6 +9929,8 @@ export class DesktopBackendRegistry {
   /** Visible Codex thread count from the full list, for the operator notice. */
   private codexVisibleThreadCount = 0;
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
+  // Kept from the turn request: collaboration mode is independent of approval mode.
+  private readonly activeCodexTurnCollaborationModes = new Map<string, AppServerCollaborationModeRequest["mode"]>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
   private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
   private readonly pendingReviewTerminals = new Set<Map<string, ReviewTerminal>>();
@@ -10664,7 +10667,8 @@ export class DesktopBackendRegistry {
   /**
    * The operator's consent for one GitHub write. The level comes from the
    * most specific project rule for this repository and agent, else the
-   * group's setting. `allow` runs; `auto` follows the turn's approval mode
+   * group's setting. Plan turns refuse every write before considering the
+   * level. `allow` runs; `auto` follows the turn's approval mode
    * (see `forgeAutoRunsWithoutApproval`); otherwise the shipped MCP approval
    * card asks. Automations cannot answer, so they are refused with the
    * setting to change.
@@ -10677,6 +10681,9 @@ export class DesktopBackendRegistry {
     repository?: ForgeRepository,
     mergeMethods?: ForgePrToolPreflightResult["mergeMethods"],
   ): Promise<{ notes?: ForgeWriteApprovalNotes; mergeMethod?: ThreadTodoMergeMethod }> {
+    if (this.isForgePlanTurn(context)) {
+      throw new ForgeReadError("plan_mode", claudePlanTurnRefusal(operation));
+    }
     const identity = await this.resolveForgeAgentIdentity(context);
     const resolution = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), group, repository, identity);
     const access = resolution.level;
@@ -11371,6 +11378,7 @@ export class DesktopBackendRegistry {
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
+    this.activeTurnKeys.onDelete((key) => { this.activeCodexTurnCollaborationModes.delete(key); });
     this.readThreadArchivePolicy = options?.getThreadArchivePolicy ?? (() => {
       try { return getDesktopSettingsService().resolveThreadArchivePolicy(); }
       catch { return { ...DEFAULT_THREAD_ARCHIVE_POLICY }; }
@@ -24567,6 +24575,12 @@ export class DesktopBackendRegistry {
     // belt-and-suspenders guarantee. Idempotent — a no-op when no
     // queue is present.
     const syntheticStartedTurnId = `pending:${params.threadId}`;
+    if (reserveCodexStart) {
+      this.activeCodexTurnCollaborationModes.set(
+        buildActiveTurnKey("codex", params.threadId, syntheticStartedTurnId),
+        params.collaborationMode?.mode ?? "default",
+      );
+    }
     let overlay: ThreadOverlayState | undefined;
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
@@ -24677,6 +24691,9 @@ export class DesktopBackendRegistry {
         turnId: syntheticStartedTurnId,
         method: "turn/failed",
       });
+      this.activeCodexTurnCollaborationModes.delete(
+        buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
+      );
       this.activeCodexTurnModes.delete(
         buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
       );
@@ -24858,6 +24875,17 @@ export class DesktopBackendRegistry {
       }
       throw error;
     }
+    if (params.backend === "codex" && result.turnId === syntheticStartedTurnId) {
+      // turn/started can bind the real id before a reply that omitted it.
+      for (const key of this.activeTurnKeys) {
+        const active = parseActiveTurnKey(key);
+        if (active?.backend === "codex" && active.threadId === result.threadId
+          && !active.turnId.startsWith("pending:")) {
+          result = { threadId: result.threadId, turnId: active.turnId };
+          break;
+        }
+      }
+    }
     this.bindStartingTurnOrigin(startingOrigin, result);
     if (retryableCodexTurnStart) {
       retryableCodexTurnStart.turnId = result.turnId;
@@ -24878,12 +24906,20 @@ export class DesktopBackendRegistry {
       pendingTurnId: syntheticStartedTurnId,
       turnId: result.turnId,
     });
-    this.activeCodexTurnModes.delete(
-      buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
-    );
-    this.activeTurnKeys.delete(
-      buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
-    );
+    if (params.backend === "codex" && !retryableCodexTurnStart?.terminalObserved) {
+      this.activeCodexTurnCollaborationModes.set(
+        buildActiveTurnKey("codex", result.threadId, result.turnId),
+        params.collaborationMode?.mode ?? "default",
+      );
+    }
+    if (result.turnId !== syntheticStartedTurnId || retryableCodexTurnStart?.terminalObserved) {
+      this.activeCodexTurnModes.delete(
+        buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
+      );
+      this.activeTurnKeys.delete(
+        buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
+      );
+    }
     if (
       params.backend === "codex"
       && activeTurnMode
@@ -45124,7 +45160,14 @@ export class DesktopBackendRegistry {
     const sourceRevision = consentRevision ?? invocation.schemaRevision;
     const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
     const monitor = this.taskMonitorForThread(context);
-    if (monitor && (annotations?.readOnlyHint !== true || annotations.destructiveHint === true)) return false;
+    const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
+    if (monitor && !readOnlyCall) return false;
+    // Claude passes plan-turn gateway calls here without its generic card.
+    // The upstream hints decide whether the call can run in a read-only turn.
+    if (!readOnlyCall && context.backend === "claude"
+      && this.claudeBackend.livePermissionMode(context.threadId) === "plan") {
+      throw new Error(claudePlanTurnRefusal(`"${invocation.toolName}" on ${invocation.serverName}`));
+    }
     const selectionOwner = monitor?.mcpAccess?.selectionOwner ?? context;
     const approvalContext = monitor
       ? { backend: monitor.parentBackend, threadId: monitor.parentThreadId, turnId: monitor.parentTurnId }
@@ -45238,7 +45281,6 @@ export class DesktopBackendRegistry {
       });
       return true;
     }
-    const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
     if ((consent.approved && (!consent.readOnlyOnly || readOnlyCall))
       || (connectionConsent?.approved && (!connectionConsent.readOnlyOnly || readOnlyCall))) return true;
     // A Job Monitor's card approves reads only, so it offers no grant.
@@ -45508,6 +45550,19 @@ export class DesktopBackendRegistry {
       backendRegistryLog.warn("could not read MCP connection tool approval", { connectionId, error: String(error) });
       return { resolution: { toolApproval: "auto" } };
     }
+  }
+
+  /** The live turn's plan mode is independent of its saved approval mode. */
+  private isForgePlanTurn(context: AgentToolCallContext): boolean {
+    if (context.backend === "claude") return this.claudeBackend.livePermissionMode(context.threadId) === "plan";
+    if (context.backend !== "codex") return false;
+    const pendingKey = buildActiveTurnKey("codex", context.threadId, `pending:${context.threadId}`);
+    const turnId = context.turnId ?? this.getActiveTurnForThread(context)?.turnId;
+    const mode = turnId
+      ? this.activeCodexTurnCollaborationModes.get(buildActiveTurnKey("codex", context.threadId, turnId))
+      : undefined;
+    // A dynamic call can arrive before turn/start returns its real turn id.
+    return (mode ?? this.activeCodexTurnCollaborationModes.get(pendingKey)) === "plan";
   }
 
   /**
@@ -54768,6 +54823,18 @@ export class DesktopBackendRegistry {
         });
       }
       if (event.backend === "codex") {
+        const pendingTurnId = `pending:${notification.params.threadId}`;
+        const pendingActiveKey = buildActiveTurnKey("codex", notification.params.threadId, pendingTurnId);
+        const pendingModeKey = buildActiveTurnModeKey(notification.params.threadId, pendingTurnId);
+        const collaborationMode = this.activeCodexTurnCollaborationModes.get(
+          pendingActiveKey,
+        );
+        const pendingMode = collaborationMode ? this.activeCodexTurnModes.get(pendingModeKey) : undefined;
+        if (collaborationMode) {
+          this.activeCodexTurnCollaborationModes.set(
+            buildActiveTurnKey("codex", notification.params.threadId, turnId), collaborationMode,
+          );
+        }
         const key = buildActiveTurnModeKey(
           notification.params.threadId,
           turnId,
@@ -54781,10 +54848,16 @@ export class DesktopBackendRegistry {
         if (!this.activeCodexTurnModes.has(key)) {
           this.activeCodexTurnModes.set(
             key,
-            await this.resolveCodexThreadExecutionModeForActiveTurn(
+            pendingMode ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
               notification.params.threadId,
             ),
           );
+        }
+        if (collaborationMode && turnId !== pendingTurnId) {
+          // Transfer ownership before removing the placeholder and its guard.
+          this.activeCodexTurnModes.delete(pendingModeKey);
+          this.activeTurnKeys.delete(pendingActiveKey);
+          this.activeCodexTurnCollaborationModes.delete(pendingActiveKey);
         }
       }
     }
@@ -55039,6 +55112,10 @@ export class DesktopBackendRegistry {
           turnId,
         );
         this.activeCodexTurnModes.delete(activeTurnModeKey);
+        // The start response can register a turn whose started notification was absent.
+        this.activeCodexTurnCollaborationModes.delete(
+          buildActiveTurnKey("codex", notification.params.threadId, turnId),
+        );
         this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
         if (wasKnownActiveTurn) {
           await this.adoptThreadBranchChangeFromActiveTurn({
@@ -55273,6 +55350,9 @@ export class DesktopBackendRegistry {
             }
             this.activeCodexTurnModes.delete(key);
             if (parsed) {
+              this.activeCodexTurnCollaborationModes.delete(
+                buildActiveTurnKey("codex", parsed.threadId, parsed.turnId),
+              );
               this.clearAcceptedToolCallsForEndedTurn(event.backend, parsed.threadId, parsed.turnId);
             }
           }
