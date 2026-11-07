@@ -112,6 +112,7 @@ import {
   type CodexAppServerRestartResult,
   type CodexAppServerRestartStatus,
   type DesktopThreadArchiveSweepStatus,
+  type DesktopAutomaticArchiveRetiredNotice,
   type AddRemoteThreadPinRequest,
   type AddRemoteThreadPinResponse,
   type FederationJumpSearchRequest,
@@ -222,6 +223,8 @@ import {
   CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
   APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
   APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
+  APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL,
+  APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL,
   THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
@@ -728,7 +731,7 @@ export function registerAppServerIpcHandlers(): void {
     APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
     (event): DesktopThreadArchiveSweepStatus => {
       if (isFederationWindowWebContents(event?.sender)) {
-        throw new Error("A remote window cannot read this machine's archive sweep.");
+        throw new Error("A remote window cannot read this machine's hourly sweep.");
       }
       return getDesktopBackendRegistry().getThreadArchiveSweepStatus();
     },
@@ -738,11 +741,28 @@ export function registerAppServerIpcHandlers(): void {
     APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
     async (event): Promise<DesktopThreadArchiveSweepStatus> => {
       if (isFederationWindowWebContents(event?.sender)) {
-        throw new Error("A remote window cannot run this machine's archive sweep.");
+        throw new Error("A remote window cannot run this machine's hourly sweep.");
       }
       const registry = getDesktopBackendRegistry();
       await registry.sweepInactiveThreads();
       return registry.getThreadArchiveSweepStatus();
+    },
+  );
+  ipcMain.removeHandler(APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL,
+    (event): DesktopAutomaticArchiveRetiredNotice => {
+      // A remote window fronts another machine, whose sweep this notice is not about.
+      if (isFederationWindowWebContents(event?.sender)) return { show: false, hibernationOn: false };
+      return appServerService.readAutomaticArchiveRetiredNotice();
+    },
+  );
+  ipcMain.removeHandler(APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL,
+    async (event): Promise<void> => {
+      if (isFederationWindowWebContents(event?.sender)) return;
+      await appServerService.dismissAutomaticArchiveRetiredNotice();
     },
   );
   ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
@@ -2050,6 +2070,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadDependencyToolHandler(undefined);
   registry?.setThreadMergeHoldToolHandler(undefined);

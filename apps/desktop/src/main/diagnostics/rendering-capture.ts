@@ -209,7 +209,16 @@ class RenderingCapture {
       d.on("message", this.message);
       d.on("detach", this.detached);
       this.startedAt = performance.now();
-      this.timer = setTimeout(() => { void this.stop("duration").catch(() => {}); }, seconds * 1000);
+      // Node measures a timer from the event loop's cached clock, which trails
+      // performance.now() by the synchronous work above. Wait out the rest on
+      // the clock the duration is reported in, so a capture is never short.
+      const endsAt = this.startedAt + seconds * 1000;
+      const expire = () => {
+        const remaining = endsAt - performance.now();
+        if (remaining > 0) this.timer = setTimeout(expire, Math.ceil(remaining));
+        else void this.stop("duration").catch(() => {});
+      };
+      this.timer = setTimeout(expire, seconds * 1000);
       // contentTracing.startRecording resolves even when it did not start a
       // recording. CDP rejects conflicts; only this acknowledgement grants ownership.
       await this.bounded(d.sendCommand("Tracing.start", {

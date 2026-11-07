@@ -177,6 +177,7 @@ import type {
   CodexAppServerRestartResult,
   CodexAppServerRestartStatus,
   DesktopThreadArchiveSweepStatus,
+  DesktopAutomaticArchiveRetiredNotice,
   ThreadMaintenanceApplyRequest,
   ThreadMaintenanceRules,
   ThreadMaintenanceRun,
@@ -1043,6 +1044,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   getThreadArchiveSweepStatus?: () => Promise<DesktopThreadArchiveSweepStatus>;
   /** Resolves with the status of the finished sweep, joining a running one. */
   runThreadArchiveSweep?: () => Promise<DesktopThreadArchiveSweepStatus>;
+  /** Whether to tell this profile, once, that the hourly sweep no longer archives threads. */
+  getAutomaticArchiveRetiredNotice?: () => Promise<DesktopAutomaticArchiveRetiredNotice>;
+  dismissAutomaticArchiveRetiredNotice?: () => Promise<void>;
   /** Read-only scan for the Thread maintenance dialog. Changes nothing. */
   scanThreadMaintenance?: (request?: {
     rules?: Partial<ThreadMaintenanceRules>;

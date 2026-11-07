@@ -1,8 +1,8 @@
 import type { DesktopThreadArchivePolicy } from "./thread-archive-policy";
 
 /**
- * Thread maintenance: a reviewed, operator-driven version of the hourly
- * archive sweep. A scan never changes anything. An apply runs only the
+ * Thread maintenance: the reviewed, operator-driven way to archive idle
+ * threads. The hourly sweep never archives one. A scan never changes anything. An apply runs only the
  * selections the operator (or an agent acting for them) made from one scan,
  * and re-checks each one before it acts.
  */

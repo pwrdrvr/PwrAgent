@@ -16,11 +16,18 @@ describe("checkout hibernation configuration", () => {
     expect(normalizeCheckoutHibernationPolicy(parsed?.hibernate)).toEqual(policy);
   });
 
-  it("is off when the table is absent, and ignores values it cannot read", () => {
-    expect(parseDesktopSettingsToml('[worktrees]\nstorage = "in-repo"\n', "test.toml").worktrees?.hibernate).toBeUndefined();
+  it("is on when the table is absent, and ignores values it cannot read", () => {
+    const absent = parseDesktopSettingsToml('[worktrees]\nstorage = "in-repo"\n', "test.toml").worktrees?.hibernate;
+    expect(absent).toBeUndefined();
+    expect(normalizeCheckoutHibernationPolicy(absent).enabled).toBe(true);
     const parsed = parseDesktopSettingsToml('[worktrees.hibernate]\nenabled = "yes"\nrestore_on = "later"\nmax_snapshot_mb = "big"\n', "test.toml");
     expect(normalizeCheckoutHibernationPolicy(parsed.worktrees?.hibernate)).toEqual({
-      enabled: false, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send",
+      enabled: true, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send",
     });
+  });
+
+  it("stays off for a profile that turned it off", () => {
+    const parsed = parseDesktopSettingsToml("[worktrees.hibernate]\nenabled = false\n", "test.toml");
+    expect(normalizeCheckoutHibernationPolicy(parsed.worktrees?.hibernate).enabled).toBe(false);
   });
 });

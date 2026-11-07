@@ -104,8 +104,8 @@ export function ThreadMaintenanceDialog(props: {
   const api = props.desktopApi;
   const policy = useMemo(() => normalizeThreadArchivePolicy(props.policy), [props.policy]);
   const hibernationPolicy = useMemo(
-    () => normalizeCheckoutHibernationPolicy(props.hibernationPolicy, policy),
-    [props.hibernationPolicy, policy],
+    () => normalizeCheckoutHibernationPolicy(props.hibernationPolicy),
+    [props.hibernationPolicy],
   );
   const [mode, setMode] = useState<ThreadMaintenanceMode>("combined");
   const [rules, setRules] = useState<ThreadMaintenanceRules>(() => defaultThreadMaintenanceRules(policy));

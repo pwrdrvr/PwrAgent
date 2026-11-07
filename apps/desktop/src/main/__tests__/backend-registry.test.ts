@@ -62983,7 +62983,7 @@ script = "printf setup"
     });
     vi.spyOn(client, "listNativeSubAgentThreads").mockImplementation(async (params) => (params as { archived?: boolean })?.archived ? family.slice(1) : []);
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore,
-      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false, retentionDays: 30 }),
+      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: 30 }),
     });
     try {
       await registry.sweepInactiveThreads();
@@ -63015,7 +63015,7 @@ script = "printf setup"
       observeArchivedThreads: vi.fn(async () => {}),
       forgetThreadArchiveStates: vi.fn(async () => { states = []; }),
     });
-    const policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false, retentionDays: 30 };
+    const policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: 30 };
     let mutation: Promise<void> | undefined;
     let registry!: DesktopBackendRegistry;
     const deleteThread = vi.fn(async () => ({ threadId: thread.id }));
@@ -63055,204 +63055,29 @@ script = "printf setup"
       listThreadArchiveStates: async () => [overlay], observeArchivedThreads: vi.fn(async () => {}), forgetThreadArchiveStates: vi.fn(async () => {}),
     });
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore,
-      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false, retentionDays: 30 }) });
+      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: 30 }) });
     try { await registry.sweepInactiveThreads(); expect(deleteThread).not.toHaveBeenCalled(); }
     finally { await registry.close(); }
   });
 
-  it("sweeps inactive threads through the archive path and protects a subsequent restore", async () => {
-    const thread: AppServerThreadSummary = {
-      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
-      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
-    };
-    const client = Object.assign(new MockBackendClient({ threads: [thread], archivedThreads: [thread] }), {
-      readThreadSummary: vi.fn(async () => thread),
-    });
-    const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore });
-    const archive = vi.spyOn(client, "archiveThread");
-    const nativeDiscovery = vi.spyOn(client, "listNativeSubAgentThreads");
-    try {
-      await registry.sweepInactiveThreads();
-      expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
-      expect(nativeDiscovery).toHaveBeenCalledWith({ all: true }, { callerReason: "auto-archive" });
-      client.setThreads([]);
-      expect(await registry.listThreads({ backend: "codex", archived: true, forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining(thread)]));
-      await registry.restoreThread({ backend: "codex", threadId: thread.id });
-      client.setThreads([thread]);
-      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id }))?.archiveRestoredAt).toEqual(expect.any(Number));
-      await registry.sweepInactiveThreads();
-      expect(archive).toHaveBeenCalledTimes(1);
-    } finally { await registry.close(); }
-  });
-
-  it("keeps a thread that a PR watch will wake out of the inactive sweep", async () => {
-    const thread: AppServerThreadSummary = {
-      id: "watched-thread", title: "Waiting on CI", titleSource: "explicit", source: "codex",
-      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
-    };
-    const watch: ThreadPullRequestWatchSummary = {
-      watchId: "watch-1", backend: "codex", threadId: thread.id, prKey: "github.com/pwrdrvr/pwragent#3191",
-      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/3191", prNumber: 3191, headSha: "a".repeat(40),
-      notifyOn: ["success", "failure"], createdAt: 1, failureHandledByAutoFix: false, kind: "checks",
-    };
-    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
-      readThreadSummary: vi.fn(async () => thread),
-    });
-    const overlayStore = Object.assign(createOverlayStoreMock(), {
-      listAllActivePrStatusWatches: vi.fn(async () => [watch]),
-      listActiveThreadPrStatusWatches: vi.fn(async () => [watch]),
-    });
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore });
-    const archive = vi.spyOn(client, "archiveThread");
-    try {
-      await registry.sweepInactiveThreads();
-      expect(overlayStore.listAllActivePrStatusWatches).toHaveBeenCalled();
-      expect(archive).not.toHaveBeenCalled();
-      // Once the watch ends, the same thread is swept.
-      overlayStore.listAllActivePrStatusWatches.mockResolvedValue([]);
-      overlayStore.listActiveThreadPrStatusWatches.mockResolvedValue([]);
-      await registry.sweepInactiveThreads();
-      expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
-    } finally { await registry.close(); }
-  });
-
-  it("counts scratch projects against one shared project limit", async () => {
-    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-scratch-")));
-    const projects = path.join(root, ".pwragent", "profiles", "default", "projects");
-    const threads: AppServerThreadSummary[] = [];
-    for (const [index, suffix] of ["aaaaaa", "bbbbbb", "cccccc"].entries()) {
-      // Real directories outside any Git repository, like created scratch projects.
-      const cwd = path.join(projects, `2026-01-0${index + 1}-${suffix}`);
-      await mkdir(cwd, { recursive: true });
-      threads.push({
-        id: `scratch-${suffix}`, title: `Scratch ${suffix}`, titleSource: "explicit", source: "codex",
-        threadStatus: "notLoaded", updatedAt: Date.now() - (40 - index) * 86_400_000,
-        linkedDirectories: [{ id: cwd, kind: "local", label: path.basename(cwd), path: cwd }],
-      });
-    }
-    const client = Object.assign(new MockBackendClient({ threads, archivedThreads: [] }), {
-      readThreadSummary: vi.fn(async (threadId: string) => threads.find((thread) => thread.id === threadId)!),
-    });
-    const registry = new DesktopBackendRegistry({
-      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "count", keepPerProject: 1 }),
-      codexClient: client, overlayStore: createOverlayStoreMock(),
-    });
-    const archive = vi.spyOn(client, "archiveThread");
-    try {
-      await registry.sweepInactiveThreads({ manual: false });
-      expect(archive.mock.calls.map(([request]) => request.threadId).sort()).toEqual(["scratch-aaaaaa", "scratch-bbbbbb"]);
-      expect(registry.getThreadArchiveSweepStatus()).toEqual(expect.objectContaining({ archived: 2, failed: 0 }));
-    } finally {
-      await registry.close();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("auto archives a clean local branch worktree, retains its snapshot, and restores its files", async () => {
-    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-integration-")));
-    const repo = path.join(root, "repo");
-    const worktree = path.join(root, "worktree");
-    await mkdir(repo);
-    await git(repo, ["init", "-b", "main"]);
-    await git(repo, ["config", "user.name", "Test User"]);
-    await git(repo, ["config", "user.email", "test@example.com"]);
-    await git(repo, ["config", "core.autocrlf", "false"]);
-    await git(repo, ["config", "core.eol", "lf"]);
-    await writeFile(path.join(repo, "file.txt"), "base\n");
-    await writeFile(path.join(repo, ".gitignore"), ".env\n");
-    await git(repo, ["add", "."]);
-    await git(repo, ["-c", "commit.gpgsign=false", "commit", "-m", "initial"]);
-    await git(repo, ["worktree", "add", "-b", "local-work", worktree]);
-    const metricsEnv = process.env[SQLITE_WRITE_METRICS_ENV];
-    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const db = StateDb.open(path.join(root, "state.db"));
-    const overlayStore = new SqliteOverlayStore(db);
-    const thread: AppServerThreadSummary = {
-      id: "old-worktree", title: "Old worktree", titleSource: "explicit", source: "codex", threadStatus: "notLoaded",
-      updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
-      linkedDirectories: [{ id: "dir", label: "repo", path: repo, worktreePath: worktree, kind: "worktree" }],
-    };
-    const client = Object.assign(new MockBackendClient({ threads: [thread], archivedThreads: [thread] }), {
-      readThreadSummary: vi.fn(async () => thread),
-    });
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore, messagingStore: null });
-    try {
-      await writeFile(path.join(worktree, "file.txt"), "local work\n");
-      const { writes: dirtyWrites } = await measureSqliteWrites(async () => { await registry.sweepInactiveThreads(); });
-      expect(client.lastArchiveThreadParams).toBeUndefined();
-      expectSqliteWriteBudget({ scenario: "inactive-thread-sweep-dirty", note: "A stale dirty worktree is checked and kept, with no SQLite writes (0 MB/day).", writes: dirtyWrites });
-      await git(worktree, ["add", "."]);
-      await git(worktree, ["-c", "commit.gpgsign=false", "commit", "-m", "local work, no remote"]);
-      await writeFile(path.join(worktree, ".env"), "private local configuration\n");
-      await registry.sweepInactiveThreads();
-      expect(client.lastArchiveThreadParams).toBeUndefined();
-      expect(await readFile(path.join(worktree, ".env"), "utf8")).toBe("private local configuration\n");
-      await rm(path.join(worktree, ".env"));
-      const { writes } = await measureSqliteWrites(async () => { await registry.sweepInactiveThreads(); });
-      expect(client.lastArchiveThreadParams).toEqual({ threadId: thread.id });
-      await expect(stat(worktree)).rejects.toMatchObject({ code: "ENOENT" });
-      const snapshot = (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id }))?.worktreeSnapshots?.[0];
-      expect(snapshot?.state).toBe("archived");
-      expect(await git(repo, ["branch", "--list", "local-work"])).toContain("local-work");
-      expectSqliteWriteBudget({ scenario: "inactive-thread-worktree-archive", note: "One successful automatic worktree archive persists a recoverable snapshot at the archive boundary; no heartbeat writes.", writes });
-      await registry.restoreThread({ backend: "codex", threadId: thread.id });
-      expect(await readFile(path.join(worktree, "file.txt"), "utf8")).toBe("local work\n");
-      await registry.sweepInactiveThreads();
-      expect(await stat(worktree)).toBeDefined();
-    } finally {
-      await registry.close();
-      db.close();
-      if (metricsEnv === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
-      else process.env[SQLITE_WRITE_METRICS_ENV] = metricsEnv;
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("auto archives stale idle ACP sessions and keeps active, unknown and recent sessions", async () => {
-    const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
-    const sessions: AcpSessionMetadata[] = [
-      { backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" },
-      { backendId: "acp:kimi", sessionId: "old-active", title: "Old active", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "active" },
-      { backendId: "acp:kimi", sessionId: "old-unknown", title: "Old unknown", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "unknown" },
-      { backendId: "acp:kimi", sessionId: "recent", title: "Recent", createdAt: staleAt, updatedAt: Date.now(), executionMode: "default", status: "idle" },
-    ];
-    const { registry } = createKimiAcpRegistry({ sessions });
-    try {
-      await registry.sweepInactiveThreads();
-      expect(sessions.filter((session) => session.archivedAt).map((session) => session.sessionId)).toEqual(["old-idle"]);
-    } finally { await registry.close(); }
-  });
-
-  it("rejects auto archive when an ACP session becomes active during admission", async () => {
-    const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
-    const sessions: AcpSessionMetadata[] = [
-      { backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" },
-    ];
-    const overlayStore = createOverlayStoreMock();
-    const { registry } = createKimiAcpRegistry({ sessions, overlayStore });
-    const getOverlay = overlayStore.getThreadOverlayState.bind(overlayStore);
-    let reads = 0;
-    vi.spyOn(overlayStore, "getThreadOverlayState").mockImplementation(async (identity) => {
-      if (++reads === 2) sessions[0]!.status = "active";
-      return await getOverlay(identity);
-    });
-    try {
-      await registry.sweepInactiveThreads();
-      expect(sessions[0]!.archivedAt).toBeUndefined();
-    } finally { await registry.close(); }
-  });
-
-  it("budgets automatic ACP archive once and keeps subsequent hourly sweeps read-only", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-archive-budget-"));
+  it("never archives a stale thread in a day of hourly sweeps, and writes nothing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-hourly-sweep-"));
     const metricsEnv = process.env[SQLITE_WRITE_METRICS_ENV];
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const db = StateDb.open(path.join(root, "state.db"));
     const sessionStore = new AcpSessionStore(db);
-    const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
+    const staleAt = Date.now() - 400 * 24 * 60 * 60_000;
     sessionStore.upsertSession({ backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" });
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
-      codexClient: new MockBackendClient({ threads: [] }),
+    const thread: AppServerThreadSummary = {
+      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: staleAt,
+    };
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary: vi.fn(async () => thread) });
+    const archive = vi.spyOn(client, "archiveThread");
+    // An old config.toml can still hold the retired switch; it archives nothing.
+    const registry = new DesktopBackendRegistry({
+      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age", inactivityDays: 1, enabled: true } as typeof DEFAULT_THREAD_ARCHIVE_POLICY),
+      codexClient: client,
       overlayStore: new SqliteOverlayStore(db), messagingStore: null,
       acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord()]),
       acpSessionStore: sessionStore,
@@ -63261,8 +63086,9 @@ script = "printf setup"
       const { writes } = await measureSqliteWrites(async () => {
         for (let hour = 0; hour < 24; hour++) await registry.sweepInactiveThreads();
       });
-      expect(sessionStore.getSession("acp:kimi", "old-idle")?.archivedAt).toEqual(expect.any(Number));
-      expectSqliteWriteBudget({ scenario: "inactive-acp-thread-archive-day", note: "One stale ACP session archive followed by 23 idle hourly sweeps. Two boundary commits per archive (ACP metadata and retention observation); no heartbeat writes.", writes });
+      expect(archive).not.toHaveBeenCalled();
+      expect(sessionStore.getSession("acp:kimi", "old-idle")?.archivedAt).toBeUndefined();
+      expectSqliteWriteBudget({ scenario: "hourly-sweep-idle-day", note: "24 hourly sweeps over a stale Codex thread and a stale ACP session with nothing to hibernate or delete. The sweep archives nothing, so it commits nothing.", writes });
     } finally {
       await registry.close();
       db.close();
@@ -63270,180 +63096,6 @@ script = "printf setup"
       else process.env[SQLITE_WRITE_METRICS_ENV] = metricsEnv;
       await rm(root, { recursive: true, force: true });
     }
-  });
-
-  it("rejects auto archive when the provider reports new activity during admission", async () => {
-    const thread: AppServerThreadSummary = {
-      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
-      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
-    };
-    const readThreadSummary = vi.fn(async () => ({ ...thread, updatedAt: Date.now() }));
-    readThreadSummary.mockResolvedValueOnce({ ...thread, updatedAt: thread.updatedAt! });
-    const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary });
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
-    const archive = vi.spyOn(registry, "archiveThread");
-    try {
-      await registry.sweepInactiveThreads();
-      expect(readThreadSummary).toHaveBeenCalledTimes(2);
-      expect(archive).not.toHaveBeenCalled();
-    } finally { await registry.close(); }
-  });
-
-  it.each(["pin", "view", "provider activity"])("cancels automatic archive after %s during final provider admission", async (protection) => {
-    const thread: AppServerThreadSummary = {
-      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
-      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
-    };
-    const overlay: ThreadOverlayState = { backend: "codex", threadId: thread.id, extraLinkedDirectories: [] };
-    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
-      readThreadSummary: vi.fn(async () => thread),
-    });
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock({ overlays: { "codex:stale-thread": overlay } }) });
-    let release!: () => void;
-    let started!: () => void;
-    const cleanupBlocked = new Promise<void>((resolve) => { release = resolve; });
-    const cleanupStarted = new Promise<void>((resolve) => { started = resolve; });
-    client.readThreadSummary.mockImplementation(async () => {
-      if (client.readThreadSummary.mock.calls.length === 3) {
-        started();
-        await cleanupBlocked;
-      }
-      return thread;
-    });
-    const archive = vi.spyOn(client, "archiveThread");
-    let mutation: Promise<void> | undefined;
-    try {
-      const sweep = registry.sweepInactiveThreads();
-      await cleanupStarted;
-      if (protection === "provider activity") {
-        thread.updatedAt = Date.now();
-      } else {
-        mutation = registry.withThreadLifecycleMutation({ backend: "codex", threadId: thread.id }, async () => {
-          if (protection === "pin") overlay.pinnedRank = "a";
-          else overlay.lastSeenAt = Date.now();
-        });
-      }
-      release();
-      await sweep;
-      await mutation;
-      expect(archive).not.toHaveBeenCalled();
-    } finally { release(); await registry.close(); }
-  });
-
-  it("cancels automatic archive when a pin arrives during final provider admission", async () => {
-    const thread: AppServerThreadSummary = {
-      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
-      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
-    };
-    const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary: vi.fn(async () => thread) });
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
-    let pin: Promise<void> | undefined;
-    client.readThreadSummary.mockImplementation(async () => {
-      if (client.readThreadSummary.mock.calls.length === 3) {
-        pin = registry.withThreadLifecycleMutation({ backend: "codex", threadId: thread.id }, async () => {});
-      }
-      return thread;
-    });
-    const archive = vi.spyOn(client, "archiveThread");
-    try {
-      await registry.sweepInactiveThreads();
-      await pin;
-      expect(pin).toBeDefined();
-      expect(archive).not.toHaveBeenCalled();
-    } finally { await registry.close(); }
-  });
-
-  it("rechecks ACP activity at final archive admission", async () => {
-    const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
-    const sessions: AcpSessionMetadata[] = [
-      { backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" },
-    ];
-    const { registry } = createKimiAcpRegistry({ sessions });
-    const internals = registry as unknown as { autoArchiveCandidatesAreEligible: (...args: unknown[]) => Promise<boolean> };
-    const admission = internals.autoArchiveCandidatesAreEligible.bind(internals);
-    vi.spyOn(internals, "autoArchiveCandidatesAreEligible").mockImplementation(async (...args) => {
-      sessions[0]!.status = "active";
-      sessions[0]!.updatedAt = Date.now();
-      return await admission(...args);
-    });
-    try {
-      await registry.sweepInactiveThreads();
-      expect(sessions[0]!.archivedAt).toBeUndefined();
-      expect(sessions[0]!.status).toBe("active");
-    } finally { await registry.close(); }
-  });
-
-  it("serializes operator mutations behind an automatic archive already sent to the provider", async () => {
-    const thread: AppServerThreadSummary = {
-      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
-      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
-    };
-    let release!: () => void;
-    let started!: () => void;
-    const providerBlocked = new Promise<void>((resolve) => { release = resolve; });
-    const providerStarted = new Promise<void>((resolve) => { started = resolve; });
-    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
-      readThreadSummary: vi.fn(async () => thread),
-      archiveThread: vi.fn(async () => { started(); await providerBlocked; return { threadId: thread.id }; }),
-    });
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
-    try {
-      const sweep = registry.sweepInactiveThreads();
-      await providerStarted;
-      let mutated = false;
-      const mutation = registry.withThreadLifecycleMutation({ backend: "codex", threadId: thread.id }, async () => { mutated = true; });
-      await Promise.resolve();
-      expect(mutated).toBe(false);
-      release();
-      await sweep;
-      await mutation;
-      expect(mutated).toBe(true);
-    } finally { release(); await registry.close(); }
-  });
-
-  it("keeps nested lifecycle operations usable and protects their thread from housekeeping", async () => {
-    const thread: AppServerThreadSummary = {
-      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
-      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
-    };
-    const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary: vi.fn(async () => thread) });
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
-    const identity = { backend: "codex" as const, threadId: thread.id };
-    const archive = vi.spyOn(client, "archiveThread");
-    try {
-      await registry.withThreadLifecycleMutation(identity, async () => {
-        await registry.withThreadHandoff(thread.id, async () => {
-          await registry.sweepInactiveThreads();
-          expect(archive).not.toHaveBeenCalled();
-        });
-      });
-      await registry.sweepInactiveThreads();
-      expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
-    } finally { await registry.close(); }
-  });
-
-  it("keeps an inactive thread with a live background terminal out of automatic archival", async () => {
-    const thread: AppServerThreadSummary = {
-      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
-      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
-    };
-    let running = true;
-    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
-      readThreadSummary: vi.fn(async () => thread),
-      listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: running
-        ? [{ itemId: "item-1", processId: "session-1", command: "long-running command", cwd: "/repo" }] : [] })),
-    });
-    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
-    const archive = vi.spyOn(client, "archiveThread");
-    try {
-      await registry.listBackgroundTerminals({ backend: "codex", threadId: thread.id });
-      await registry.sweepInactiveThreads();
-      expect(archive).not.toHaveBeenCalled();
-      running = false;
-      await registry.listBackgroundTerminals({ backend: "codex", threadId: thread.id });
-      await registry.sweepInactiveThreads();
-      expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
-    } finally { await registry.close(); }
   });
 
   it("skips worktree cleanup when an active same-worktree child is recorded as local", async () => {

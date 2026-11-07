@@ -1812,8 +1812,7 @@ export class DesktopSettingsService {
       worktrees: {
         ...this.resolveWorktrees(config.worktrees?.storage),
         archive: normalizeThreadArchivePolicy(config.worktrees?.archive),
-        hibernate: normalizeCheckoutHibernationPolicy(config.worktrees?.hibernate,
-          normalizeThreadArchivePolicy(config.worktrees?.archive)),
+        hibernate: normalizeCheckoutHibernationPolicy(config.worktrees?.hibernate),
       },
     };
   }
@@ -1823,8 +1822,13 @@ export class DesktopSettingsService {
   }
 
   resolveCheckoutHibernationPolicy() {
-    const worktrees = this.configStore.read("worktrees");
-    return normalizeCheckoutHibernationPolicy(worktrees?.hibernate, normalizeThreadArchivePolicy(worktrees?.archive));
+    return normalizeCheckoutHibernationPolicy(this.configStore.read("worktrees")?.hibernate);
+  }
+
+  /** The retired automatic-archive switch was on: set to true, or never set,
+   * since it defaulted on. Only the one-time retirement notice reads it. */
+  resolveAutomaticArchiveWasOn(): boolean {
+    return this.configStore.read("worktrees")?.archive?.legacyEnabled !== false;
   }
 
   readMessagingConfig(): ConfigDomainMap["messaging"] {

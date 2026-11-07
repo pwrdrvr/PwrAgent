@@ -1,5 +1,10 @@
+/**
+ * `[worktrees.archive]`. Nothing archives a thread on a timer: the mode and
+ * numbers are where Thread maintenance starts its review, and retention
+ * deletes archives the operator already made. The old `enabled` key is read
+ * only as `DesktopThreadArchiveConfig.legacyEnabled`.
+ */
 export type DesktopThreadArchivePolicy = {
-  enabled: boolean;
   mode: "age" | "count";
   inactivityDays: number;
   keepPerProject: number;
@@ -8,7 +13,6 @@ export type DesktopThreadArchivePolicy = {
 };
 
 export const DEFAULT_THREAD_ARCHIVE_POLICY: DesktopThreadArchivePolicy = {
-  enabled: true,
   mode: "count",
   inactivityDays: 7,
   keepPerProject: 20,
@@ -23,13 +27,21 @@ export function normalizeThreadArchivePolicy(
       ? Math.min(maximum, Math.max(minimum, Math.floor(value)))
       : fallback;
   return {
-    enabled: value?.enabled ?? DEFAULT_THREAD_ARCHIVE_POLICY.enabled,
     mode: value?.mode === "age" ? "age" : "count",
     inactivityDays: integer(value?.inactivityDays, 7, 1, 3650),
     keepPerProject: integer(value?.keepPerProject, 20, 1, 10000),
     retentionDays: integer(value?.retentionDays, DEFAULT_THREAD_ARCHIVE_POLICY.retentionDays, 0, 3650),
   };
 }
+
+/** The archive table as read from config.toml. `legacyEnabled` is the
+ * retired automatic-archive switch (`enabled`, used through 1.3.13). It never
+ * archives anything now; it decides only who is told that it was retired. */
+export type DesktopThreadArchiveConfig = Partial<DesktopThreadArchivePolicy> & { legacyEnabled?: boolean };
+
+/** Whether to show the one-time notice that the hourly sweep no longer
+ * archives threads, and which way its hibernation sentence reads. */
+export type DesktopAutomaticArchiveRetiredNotice = { show: boolean; hibernationOn: boolean };
 
 /** Main-process memory only: an idle hourly sweep must make no SQLite commits,
  * so a relaunch starts again from "not run yet". */
@@ -40,7 +52,6 @@ export type DesktopThreadArchiveSweepStatus = {
   finishedAt?: number;
   /** When the scheduler next starts a sweep. Absent before start() and after stop(). */
   nextAt?: number;
-  archived: number;
   deleted: number;
   failed: number;
   /** Archived checkout repair, separate from archiving or deleting conversations. */
@@ -54,17 +65,6 @@ export type DesktopThreadArchiveSweepStatus = {
     removedContainers?: number;
     /** Checkouts left in place, counted by reason. */
     kept?: Record<string, number>;
-  };
-  /** The conversation archive pass. Absent while it has not started. */
-  threads?: {
-    /** Root threads read; native sub-agents travel with their root. */
-    checked: number;
-    eligible: number;
-    archived: number;
-    /** Threads left active, counted by reason. */
-    kept: Record<string, number>;
-    /** Why the pass did not run, for example when automatic archiving is off. */
-    skipped?: string;
   };
   /** The idle checkout hibernation pass. Absent while it has not started. */
   hibernation?: {
@@ -85,7 +85,7 @@ export type DesktopThreadArchiveSweepStatus = {
 export const THREAD_ARCHIVE_SWEEP_FAILURE_LIMIT = 20;
 
 export type DesktopThreadArchiveSweepFailure = {
-  phase: "worktrees" | "retention" | "threads" | "hibernation";
+  phase: "sweep" | "worktrees" | "retention" | "hibernation";
   message: string;
   path?: string;
   threadId?: string;

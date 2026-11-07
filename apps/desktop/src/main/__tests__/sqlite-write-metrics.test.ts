@@ -589,7 +589,7 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
-  it("budgets one automatic thread archive and its restore boundary", async () => {
+  it("budgets one operator thread archive and its restore boundary", async () => {
     const thread: AppServerThreadSummary = {
       id: "auto-archive-budget", title: "Stale thread", titleSource: "explicit", source: "codex", threadStatus: "notLoaded",
       linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
@@ -607,13 +607,13 @@ describe("sqlite write metrics", () => {
     });
     try {
       const { writes } = await measureSqliteWrites(async () => {
-        await registry.sweepInactiveThreads();
+        await registry.archiveThread({ backend: "codex", threadId: thread.id });
         expect(archived).toBe(true);
         await registry.restoreThread({ backend: "codex", threadId: thread.id });
         await registry.sweepInactiveThreads();
         expect(archived).toBe(false);
       });
-      expectSqliteWriteBudget({ scenario: "inactive-thread-archive-restore", note: "One age-eligible conversation archived and restored: two boundary commits for retention observation and restore; subsequent sweep writes nothing.", writes });
+      expectSqliteWriteBudget({ scenario: "thread-archive-restore", note: "One conversation the operator archived and restored: two boundary commits, retention observation and restore; the hourly sweep after it writes nothing.", writes });
     } finally { await registry.close(); }
   });
 

@@ -4,6 +4,20 @@
   "acp-worktree-archive": {"commits": 3, "note": "One ACP checkout snapshotted and removed at an archive boundary; no idle or timer writes.", "observedWalBytes": 37080, "rowsChanged": 3, "statements": 3},
   "acp-worktree-repair": {"commits": 1, "note": "One ACP checkout snapshotted and removed at an archive boundary; no idle or timer writes.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "acp-worktree-restore": {"commits": 6, "note": "Recreate one saved ACP checkout and load the original provider session before unarchiving; boundary writes only.", "observedWalBytes": 70040, "rowsChanged": 6, "statements": 6},
+  "automatic-archive-retired-notice": {
+    "commits": 1,
+    "note": "The one-time notice that the hourly sweep no longer archives threads, dismissed three times: one commit per profile, ever.",
+    "observedWalBytes": 8272,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "hourly-sweep-idle-day": {
+    "commits": 0,
+    "note": "24 hourly sweeps over a stale Codex thread and a stale ACP session with nothing to hibernate or delete. The sweep archives nothing, so it commits nothing.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "native-review-retirement": {"commits": 3, "note": "One native review start and terminal completion, retaining its parent result and archiving only the review helper; no timer or idle writes.", "observedWalBytes": 78312, "rowsChanged": 3, "statements": 3},
   "native-review-steer-follow-up": {"commits": 3, "note": "One refused native review steer persisted and queued: 3 commits, ~45 KB per admission, ~4.5 MB/day at 100 steers/day, plus the existing scheduler's lease renewals while queued. Retries add no commits.", "observedWalBytes": 45320, "rowsChanged": 3, "statements": 3},
   "native-review-steer-follow-up-waiting-minute": {"commits": 6, "note": "Six existing 10-second scheduler lease renewals: 6 commits, ~25 KB per waiting minute. Admission plus one minute of waiting per steer projects ~7 MB/day at 100 steers/day.", "observedWalBytes": 24720, "rowsChanged": 6, "statements": 6},
@@ -411,20 +425,6 @@
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
-  },
-  "inactive-acp-thread-archive-day": {
-    "commits": 2,
-    "note": "One stale ACP session archive followed by 23 idle hourly sweeps. Two boundary commits per archive (ACP metadata and retention observation); no heartbeat writes.",
-    "observedWalBytes": 28840,
-    "rowsChanged": 2,
-    "statements": 2
-  },
-  "inactive-thread-archive-restore": {
-    "commits": 2,
-    "note": "One age-eligible conversation archived and restored: two boundary commits for retention observation and restore; subsequent sweep writes nothing.",
-    "observedWalBytes": 32960,
-    "rowsChanged": 2,
-    "statements": 2
   },
   "inactive-thread-sweep-dirty": {
     "commits": 0,
@@ -1199,6 +1199,13 @@
     "commits": 1,
     "note": "one capped structured MCP result and its alert in one boundary",
     "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "thread-archive-restore": {
+    "commits": 2,
+    "note": "One conversation the operator archived and restored: two boundary commits, retention observation and restore; the hourly sweep after it writes nothing.",
+    "observedWalBytes": 28872,
     "rowsChanged": 2,
     "statements": 2
   },

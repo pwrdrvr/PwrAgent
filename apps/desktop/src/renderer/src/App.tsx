@@ -276,6 +276,10 @@ import {
   AUTO_ACCESS_UPGRADE_NOTICE_ID,
   buildAutoAccessUpgradeNotice,
 } from "./features/notifications/auto-access-upgrade-notice";
+import {
+  AUTOMATIC_ARCHIVE_RETIRED_NOTICE_ID,
+  buildAutomaticArchiveRetiredNotice,
+} from "./features/notifications/automatic-archive-retired-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
   buildToolAccountingNotice,
@@ -3409,6 +3413,46 @@ function DesktopAppShell(props: {
       setThreadMaintenance(request);
     });
   }, [canMaintainThreads, closeThreadJump, desktopApi]);
+  // The hourly sweep stopped archiving threads. A profile it used to archive
+  // in is told once; the state DB records the dismissal. A window fronting a
+  // peer shows the peer's threads, not this profile's.
+  const [automaticArchiveRetired, setAutomaticArchiveRetired] = useState<{ hibernationOn: boolean }>();
+  useEffect(() => {
+    if (readRendererFederationTarget()) return;
+    let cancelled = false;
+    void desktopApi?.getAutomaticArchiveRetiredNotice?.()
+      .then((notice) => {
+        if (!cancelled && notice.show) setAutomaticArchiveRetired({ hibernationOn: notice.hibernationOn });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopApi]);
+  const dismissAutomaticArchiveRetired = useCallback(() => {
+    dispatchAppNotice({ type: "dismiss", id: AUTOMATIC_ARCHIVE_RETIRED_NOTICE_ID });
+    setAutomaticArchiveRetired(undefined);
+    void desktopApi?.dismissAutomaticArchiveRetiredNotice?.().catch(() => undefined);
+  }, [desktopApi]);
+  const automaticArchiveRetiredNotice = useMemo(() => automaticArchiveRetired
+    ? buildAutomaticArchiveRetiredNotice({
+        hibernationOn: automaticArchiveRetired.hibernationOn,
+        onDismiss: dismissAutomaticArchiveRetired,
+        onOpenHibernation: () => {
+          dismissAutomaticArchiveRetired();
+          openSettingsSection("worktrees");
+        },
+        onOpenThreadMaintenance: canMaintainThreads
+          ? () => {
+              dismissAutomaticArchiveRetired();
+              openThreadMaintenance();
+            }
+          : undefined,
+      })
+    : undefined, [automaticArchiveRetired, canMaintainThreads, dismissAutomaticArchiveRetired, openSettingsSection, openThreadMaintenance]);
+  useEffect(() => {
+    if (automaticArchiveRetiredNotice) showAppNotice(automaticArchiveRetiredNotice);
+  }, [automaticArchiveRetiredNotice, showAppNotice]);
   const threadDependencyIndicators = useThreadDependencyIndicators(desktopApi);
   const canContinueAfter = Boolean(desktopApi?.manageThreadDependencies)
     && !readRendererFederationTarget();

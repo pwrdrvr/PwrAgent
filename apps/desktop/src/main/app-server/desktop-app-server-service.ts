@@ -6,6 +6,7 @@ import {
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
 import { type ManageThreadMergeHoldsRequest, type ManageThreadMergeHoldsResponse } from "@pwragent/shared";
+import type { DesktopAutomaticArchiveRetiredNotice } from "@pwragent/shared";
 import { appendMergeHoldDependents, assertNoMergeHolds, qualifyMergeHoldOwners, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
@@ -2478,6 +2479,21 @@ class DesktopAppServerService {
       request.collapsed === true,
     ) ?? request.collapsed === true;
     return { collapsed };
+  }
+
+  /** The hourly sweep stopped archiving threads. Tell a profile once when it
+   * had archived threads and had not turned automatic archiving off. */
+  readAutomaticArchiveRetiredNotice(): DesktopAutomaticArchiveRetiredNotice {
+    const store = this.getOverlayStore();
+    const settings = getDesktopSettingsService();
+    const show = store.getAutomaticArchiveRetiredNoticeSeenSync?.() === false
+      && store.hasArchivedThreadsSync?.() === true
+      && settings.resolveAutomaticArchiveWasOn();
+    return { show, hibernationOn: settings.resolveCheckoutHibernationPolicy().enabled };
+  }
+
+  async dismissAutomaticArchiveRetiredNotice(): Promise<void> {
+    await this.getOverlayStore().markAutomaticArchiveRetiredNoticeSeen?.();
   }
 
   async listRecentThreadLockNotes(): Promise<RecentThreadLockNotesResponse> {
