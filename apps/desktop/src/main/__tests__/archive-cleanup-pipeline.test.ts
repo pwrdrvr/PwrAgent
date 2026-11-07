@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stat } from "node:fs/promises";
 import path from "node:path";
@@ -1989,26 +1990,51 @@ describe("archive cleanup pipeline", () => {
 
   it("removes a shared worktree after the preceding missing-rollout owner is tombstoned", async () => {
     vi.useFakeTimers();
-    const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
-    const targets = ["first", "second"].map((id) => codexThread({ id, linkedDirectories: [directory] }));
-    const fixture = build(targets, targets[0]!);
-    fixture.client.archiveThread.mockImplementation(async ({ threadId }) => {
-      throw new Error(`json-rpc error (-32600): no rollout found for thread id ${threadId}`);
-    });
-    fixture.store.setThreadArchiveTombstone.mockImplementation(async ({ threadId, archivedAt }) => {
-      fixture.overlays.set(threadId, { backend: "codex", threadId, extraLinkedDirectories: [], archiveTombstonedAt: archivedAt });
-    });
-    const requests = Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id })));
-    const results = await drivePacer(fixture.registry, requests);
-
-    expect(results[0]?.cleanup[0]?.skippedReason).toContain("another active thread: second");
-    expect(results[1]?.cleanup[0]).toMatchObject({ removedWorktree: true });
-    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
-    expect(fixture.archiveWorktree).toHaveBeenCalledWith(expect.objectContaining({ threadId: "second" }));
-    expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledTimes(2);
-    // The tombstone rereads its identity's overlay; removal admission reads
-    // the fleet afresh because this provider cannot order by updated_at.
-    expect(fixture.counts.providerPages).toBe(4);
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (secondCompletesFirst) => {
+      const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+      const targets = ["first", "second"].map((id) => codexThread({ id, linkedDirectories: [directory] }));
+      const earlyIndex = Number(secondCompletesFirst);
+      const lateIndex = 1 - earlyIndex;
+      const earlyId = targets[earlyIndex]!.id;
+      const lateId = targets[lateIndex]!.id;
+      const fixture = build(targets, targets[0]!);
+      let releaseProvider!: () => void;
+      const providerReply = new Promise<void>((resolve) => { releaseProvider = resolve; });
+      fixture.client.archiveThread.mockImplementation(async ({ threadId }) => {
+        if (threadId === lateId) await providerReply;
+        throw new Error(`json-rpc error (-32600): no rollout found for thread id ${threadId}`);
+      });
+      fixture.store.setThreadArchiveTombstone.mockImplementation(async ({ threadId, archivedAt }) => {
+        fixture.overlays.set(threadId, { backend: "codex", threadId, extraLinkedDirectories: [], archiveTombstonedAt: archivedAt });
+      });
+      // Both requests start together. Provider replies can settle in either
+      // order; the four cleanup workers do not promise request-order results.
+      const requests = targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id }));
+      const results = Promise.all(requests);
+      try {
+        const early = await drivePacer(fixture.registry, requests[earlyIndex]!);
+        expect(early.cleanup[0]?.skippedReason).toContain(`another active thread: ${lateId}`);
+        expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+        expect(fixture.overlays.get(earlyId)?.archiveTombstonedAt).toBeDefined();
+        expect(fixture.overlays.get(lateId)?.archiveTombstonedAt).toBeUndefined();
+        expect(fixture.counts.providerPages).toBe(2);
+        releaseProvider();
+        const completed = await drivePacer(fixture.registry, results);
+        expect(completed[lateIndex]?.cleanup[0]).toMatchObject({ removedWorktree: true });
+        expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+        expect(fixture.archiveWorktree).toHaveBeenCalledWith(expect.objectContaining({ threadId: lateId }));
+        expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledTimes(2);
+        // The controlled replies make two batches, each reading both provider
+        // pages. Removal admission reads both afresh because this provider
+        // cannot order by updated_at. Tombstones reread only their own overlay.
+        expect(fixture.counts.providerPages).toBe(6);
+      } finally {
+        releaseProvider();
+        await drivePacer(fixture.registry, results).catch(() => {});
+        await fixture.registry.close();
+        registries.splice(registries.indexOf(fixture.registry), 1);
+      }
+    }), { numRuns: 25, examples: [[false], [true]] });
   });
 
   it("cancels missing-rollout recovery on genuine restore intent before removal", async () => {
