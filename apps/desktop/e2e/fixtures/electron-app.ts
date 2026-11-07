@@ -58,6 +58,7 @@ import {
 import { removeTempRoot } from "./temp-root-cleanup";
 import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 import { registerMainProcessTiming } from "./electron-test";
+import { configureReplayCodexDiscovery } from "./replay-codex-discovery";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -227,6 +228,10 @@ type LaunchElectronAppParams = {
    *  only need wizard / pre-thread UI (set `requiresReplayDriver:
    *  false` to skip the driver install wait too). */
   fixturePath?: string;
+  /** Replay selects its own version-only CLI for settings discovery. Use
+   * `host` to exercise ambient discovery. Explicit per-launch CLI env/config
+   * still wins, including an undefined env override for PATH-discovery tests. */
+  replayCodexDiscovery?: "fixture" | "host";
   env?: Record<string, string | undefined>;
   homeRoot?: string;
   windowSize?: {
@@ -416,6 +421,15 @@ export async function launchElectronApp(
     // checks reuse the production resolvers/parser, so they cannot
     // drift from what the launched process does with the same env.
     assertOnboardingSeedTook({ env, seedConfigPath });
+  }
+
+  if (env.PWRAGENT_REPLAY_FIXTURE_PATH && params.replayCodexDiscovery !== "host") {
+    await configureReplayCodexDiscovery({
+      env,
+      homeRoot,
+      configuredCommand: readDesktopSettingsConfig(seedConfigPath).models?.codex?.path,
+      explicitEnv: params.env,
+    });
   }
 
   const electronApp = await electron.launch({
