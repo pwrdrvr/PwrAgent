@@ -20126,6 +20126,68 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("keeps delivered text unchanged under arbitrary backend event redeliveries", async () => {
+    const turn = fc.array(fc.record({
+      text: fc.string({ maxLength: 24 }),
+      // Retry any previously seen event here, including after turn/completed.
+      retries: fc.array(fc.nat({ max: 100 }), { maxLength: 4 }),
+    }), { minLength: 1, maxLength: 4 });
+
+    await fc.assert(fc.asyncProperty(turn, fc.array(fc.nat({ max: 100 }), { maxLength: 6 }),
+      async (items, terminalRetries) => {
+        const texts = items.map((item, index) => `Reply ${index}: ${item.text.trim()}.`);
+        const events: AgentEvent[] = [{
+          backend: "codex",
+          notification: { method: "turn/started", params: {
+            threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" },
+          } },
+        }, ...texts.map((text, index): AgentEvent => ({
+          backend: "codex",
+          notification: { method: "item/completed", params: {
+            threadId: "thread-1", turnId: "turn-1",
+            item: { id: `item-${index}`, type: "agentMessage", phase: "final", text },
+          } },
+        })), {
+          backend: "codex",
+          notification: { method: "turn/completed", params: {
+            threadId: "thread-1", turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: texts.map((text) => ({ type: "text", text })) },
+          } },
+        }];
+
+        async function deliver(withRetries: boolean): Promise<string[]> {
+          const harness = await createHarness();
+          try {
+            await bindThread(harness);
+            harness.delivered.length = 0;
+            for (const [index, event] of events.entries()) {
+              await harness.controller.handleBackendEvent(event);
+              const retries = index === 0 ? []
+                : index === events.length - 1 ? terminalRetries : items[index - 1]!.retries;
+              if (withRetries) {
+                for (const retry of retries) {
+                  await harness.controller.handleBackendEvent(events[retry % (index + 1)]!);
+                }
+              }
+            }
+            return harness.delivered
+              .filter((intent): intent is Extract<MessagingSurfaceIntent, { kind: "message" }> =>
+                intent.kind === "message" && intent.role === "assistant")
+              .flatMap((intent) => intent.parts.flatMap((part) => "text" in part ? [part.text] : []));
+          } finally {
+            await settleHarnessWork();
+          }
+        }
+
+        const unique = await deliver(false);
+        expect(await deliver(true)).toEqual(unique);
+        // The differential oracle alone could agree on the same duplicate output.
+        // Each generated final item must also reach the recipient exactly once.
+        expect(unique).toEqual(texts);
+      },
+    ), { numRuns: 25 });
+  });
+
   it("posts one final response when turn completion repeats it with commentary", async () => {
     const harness = await createHarness();
     await bindThread(harness);
