@@ -40,7 +40,7 @@ test("Continue After holds merging until a thread is marked done, keeps the comp
     await expect(stack.getByRole("button", { name: "Squash merge", exact: true })).toBeVisible();
     await app.window.screenshot({ path: testInfo.outputPath("hold-merge-before.png") });
     await app.window.getByRole("button", { name: "Atlas: Windows MCP link", exact: true }).click({ button: "right" });
-    await app.window.getByRole("menuitem", { name: "Continue After", exact: true }).click();
+    await app.window.getByRole("menuitem", { name: "Continue After…", exact: true }).click();
     const dialog = app.window.getByRole("dialog", { name: "Continue After" });
     await dialog.getByRole("combobox", { name: "Find a thread to wait for" }).fill("validation");
     await dialog.getByRole("option", { name: /Atlas: Windows validation/ }).click();
