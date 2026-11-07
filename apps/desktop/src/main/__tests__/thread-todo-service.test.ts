@@ -13,7 +13,7 @@ import {
   ThreadTodoService,
   type ThreadTodoActionRunners,
 } from "../thread-todos/thread-todo-service";
-import { ThreadTodoStore } from "../thread-todos/thread-todo-store";
+import { ThreadTodoStore } from "../storage/thread-todo-store";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 

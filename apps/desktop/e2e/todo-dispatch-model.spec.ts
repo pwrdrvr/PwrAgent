@@ -8,7 +8,7 @@ import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { StateDb } from "../src/main/state/state-db";
 import { recordModelSettingsRecent } from "../src/main/state/model-settings-recents-store";
 import { ThreadTodoService } from "../src/main/thread-todos/thread-todo-service";
-import { ThreadTodoStore } from "../src/main/thread-todos/thread-todo-store";
+import { ThreadTodoStore } from "../src/main/storage/thread-todo-store";
 import { ROW_CHECK_INSET } from "../src/renderer/src/features/thread-todos/todo-model-menu-placement";
 
 /** Where the Model chip sits in its facts row, in CSS pixels. */

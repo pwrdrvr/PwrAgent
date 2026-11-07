@@ -6,7 +6,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { StateDb } from "../src/main/state/state-db";
 import { ThreadTodoService } from "../src/main/thread-todos/thread-todo-service";
-import { ThreadTodoStore } from "../src/main/thread-todos/thread-todo-store";
+import { ThreadTodoStore } from "../src/main/storage/thread-todo-store";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
 test("waits until done with merging held and the composer available, then reminds the operator", async ({ browserName: _browserName }, testInfo) => {

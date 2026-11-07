@@ -11,6 +11,12 @@ import type {
 } from "@pwragent/shared";
 import { isThreadTodoMergeMethod, isThreadTodoStatus, sameThreadTodoModelSettings } from "@pwragent/shared";
 import { recordModelSettingsRecent } from "../state/model-settings-recents-store";
+import type {
+  InsertThreadTodoRecord,
+  ReplaceThreadTodoContentRecord,
+  ThreadTodoResult,
+  ThreadTodoStorage,
+} from "@pwragent/owner-core/thread-todo-storage";
 import type { StateDb } from "../state/state-db.js";
 
 type ThreadTodoRow = {
@@ -35,44 +41,11 @@ type ThreadTodoRow = {
   dependency_id: string | null;
 };
 
-type ThreadTodoResult = Pick<ThreadTodo, "result" | "startedThread">;
-
 const ROW_COLUMNS = `
   todo_id, backend, thread_id, todo_key, kind, status, title, detail,
   action_json, cwd, result_json, error, created_at, updated_at, resolved_at,
   source_project_json, target_project_json, items_json, dependency_id
 `;
-
-export type InsertThreadTodoRecord = {
-  id: string;
-  backend: AppServerBackendKind;
-  threadId: string;
-  key?: string;
-  kind: ThreadTodoKind;
-  title: string;
-  detail?: string;
-  action?: ThreadTodoAction;
-  cwd?: string;
-  sourceProject?: ThreadTodoProject;
-  targetProject?: ThreadTodoProject;
-  items?: ThreadTodoItem[];
-  dependencyId?: string;
-  now: number;
-};
-
-export type ReplaceThreadTodoContentRecord = {
-  id: string;
-  kind: ThreadTodoKind;
-  title: string;
-  detail?: string;
-  /** The whole list as it should read; absent or empty clears it. */
-  items?: ThreadTodoItem[];
-  action?: ThreadTodoAction;
-  cwd?: string;
-  sourceProject?: ThreadTodoProject;
-  targetProject?: ThreadTodoProject;
-  now: number;
-};
 
 /**
  * Each mutation is a single statement in its own implicit transaction: one
@@ -80,7 +53,7 @@ export type ReplaceThreadTodoContentRecord = {
  * streamed event or on a timer. A read-modify-write, such as ticking one
  * step of a checklist, runs inside `transaction`, which is still one commit.
  */
-export class ThreadTodoStore {
+export class ThreadTodoStore implements ThreadTodoStorage {
   constructor(private readonly stateDb: StateDb) {}
 
   /**

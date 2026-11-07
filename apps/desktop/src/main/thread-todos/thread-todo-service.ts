@@ -31,7 +31,7 @@ import {
   threadTodoItemNoun,
   threadTodoSteps,
 } from "@pwragent/shared";
-import type { ThreadTodoStore } from "./thread-todo-store.js";
+import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
 import {
   THREAD_TODO_PLAN_DETAIL,
   THREAD_TODO_PLAN_KEY,
@@ -189,7 +189,7 @@ export class ThreadTodoError extends Error {
 }
 
 export type ThreadTodoServiceOptions = {
-  store: ThreadTodoStore;
+  store: ThreadTodoStorage;
   runners?: ThreadTodoActionRunners;
   onChanged?: (event: ThreadTodosChangedEvent) => void;
   /** `[git] default_merge_method`, read when it is needed. */
@@ -199,7 +199,7 @@ export type ThreadTodoServiceOptions = {
 };
 
 export class ThreadTodoService {
-  private readonly store: ThreadTodoStore;
+  private readonly store: ThreadTodoStorage;
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly running = new Set<string>();
