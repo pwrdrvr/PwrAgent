@@ -49,6 +49,22 @@ function fixture(projects: number[], parents: number[]) {
   return { rows, directories, resources, threadsByKey: new Map(rows.map((row) => [`codex:${row.id}`, row])) };
 }
 
+it("uses the owner's complete unpinned population even when no thread pages are loaded", () => {
+  fc.assert(fc.property(fc.integer({ min: 2, max: 1000 }), fc.integer({ min: 1, max: 100 }), (total, roots) => {
+    const data = fixture([0], [-1]);
+    const directory = { ...data.directories[0]!, directoryThreadsCollapsed: true,
+      unpinnedRootCount: Math.min(total - 1, roots), unpinnedThreadCount: total };
+    data.resources.clear();
+    const presentation = buildPagedDirectoryPresentation({ ...data, directory });
+    expect(presentation.directoryUnpinnedThreadCount).toBe(total);
+  }));
+});
+
+it("retains the root count when an older serving instance omits the descendant count", () => {
+  const data = fixture([0], [-1]);
+  expect(buildPagedDirectoryPresentation({ ...data, directory: data.directories[0]! }).directoryUnpinnedThreadCount).toBe(1);
+});
+
 // Oracle: the serving instance's directory and scoped-child pages. Global
 // relationship metadata and pages from another lens cannot change membership.
 it("renders each thread exactly once in the directory its pages assign", () => {

@@ -2225,6 +2225,10 @@ export type NavigationDirectoryRow = {
   counts: NavigationCounts;
   pinnedRootCount: number;
   unpinnedRootCount: number;
+  /** Ordinary threads under unpinned directory roots, including all descendants.
+   * Absent on older serving instances; independent of pagination/disclosure.
+   */
+  unpinnedThreadCount?: number;
   latestUpdatedAt?: number;
   pinnedRank?: string;
   directoryThreadsCollapsed?: boolean;

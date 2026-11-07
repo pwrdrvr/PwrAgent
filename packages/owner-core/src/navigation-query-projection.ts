@@ -461,8 +461,33 @@ function buildDirectoryRows(params: {
   return params.snapshot.directories.map((directory) => {
     const memberThreads = directoryMemberThreads(directory, params.threadsByLegacyKey);
     const parentOf = directoryParentResolver(memberThreads, params.parentCandidates);
-    const rootThreads = memberThreads.filter((thread) => !parentOf(thread));
+    const rootThreads: NavigationThreadSummary[] = [];
+    const children = new Map<string, NavigationThreadSummary[]>();
+    for (const thread of memberThreads) {
+      const parent = parentOf(thread);
+      if (!parent) {
+        rootThreads.push(thread);
+      } else {
+        const key = identityKey(parent);
+        const siblings = children.get(key) ?? [];
+        siblings.push(thread);
+        children.set(key, siblings);
+      }
+    }
     const pinnedRootCount = rootThreads.filter((thread) => thread.pinnedRank).length;
+    // Count the complete unpinned forest once, without loading child pages.
+    // A child's own pin does not move it out of its root's section.
+    const pending = rootThreads.filter((thread) => !thread.pinnedRank);
+    const visited = new Set<string>();
+    let unpinnedThreadCount = 0;
+    while (pending.length) {
+      const thread = pending.pop()!;
+      const key = threadKey(thread);
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (isOrdinaryThread(thread)) unpinnedThreadCount += 1;
+      for (const child of children.get(key) ?? []) pending.push(child);
+    }
     const gitStatus = projectDirectoryGitStatus(directory);
     // A checkout reads its own remotes; a placeholder carries the peer's.
     const repositoryKey = directory.gitStatus?.originRepository ?? directory.repositoryKey;
@@ -482,6 +507,7 @@ function buildDirectoryRows(params: {
       counts: countsForThreads(memberThreads),
       pinnedRootCount,
       unpinnedRootCount: rootThreads.length - pinnedRootCount,
+      unpinnedThreadCount,
       ...(directory.latestUpdatedAt !== undefined
         ? { latestUpdatedAt: directory.latestUpdatedAt }
         : {}),
