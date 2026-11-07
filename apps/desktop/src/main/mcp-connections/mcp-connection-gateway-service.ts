@@ -1633,6 +1633,29 @@ export class McpConnectionGatewayService {
   }
 
   /**
+   * Set or clear one project's Tool approval for a connection. Like the
+   * connection's own mode, the gateway reads it as each call reaches
+   * approval, so nothing live changes.
+   */
+  async setConnectionProjectToolApproval(
+    connectionId: string,
+    repository: string,
+    toolApproval: McpConnectionToolApproval | null,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/set-project-tool-approval",
+        { connectionId, repository, toolApproval },
+      ));
+    }
+    this.requireConnection(connectionId);
+    const connection = this.registry.setProjectToolApproval(connectionId, repository, toolApproval);
+    return this.announced(await this.connectionStatus(connection));
+  }
+
+  /**
    * The tools a managed connection publishes, read outside any thread.
    *
    * A managed connection is only ever opened on a thread's behalf, so
@@ -3571,6 +3594,20 @@ export class McpConnectionGatewayService {
       }
       return await this.setConnectionToolApproval(
         values.connectionId,
+        values.toolApproval,
+      );
+    }
+    if (operation === "broker/set-project-tool-approval") {
+      if (
+        typeof values.connectionId !== "string"
+        || typeof values.repository !== "string"
+        || (values.toolApproval !== null && !isMcpConnectionToolApproval(values.toolApproval))
+      ) {
+        throw new Error("Invalid MCP connection project tool approval request.");
+      }
+      return await this.setConnectionProjectToolApproval(
+        values.connectionId,
+        values.repository,
         values.toolApproval,
       );
     }

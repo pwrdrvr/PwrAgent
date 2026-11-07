@@ -3959,6 +3959,7 @@ export function ThreadView(props: ThreadViewProps) {
     persist?: McpApprovalPersistence,
     remember?: ForgeApprovalRememberOptionId,
     mergeMethod?: ThreadTodoMergeMethod,
+    projectGrant?: boolean,
   ): Promise<void> {
     if (!props.desktopApi?.submitServerRequest || !selectedThread) {
       setPendingRequestError("Desktop bridge is missing submitServerRequest().");
@@ -3979,7 +3980,7 @@ export function ThreadView(props: ThreadViewProps) {
             ? pendingMcpInteraction.turnId
             : undefined,
         requestId: pendingMcpInteraction.requestId,
-        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist, remember, mergeMethod),
+        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist, remember, mergeMethod, projectGrant),
       });
       props.clearPendingRequest(
         pendingMcpInteraction.requestId,

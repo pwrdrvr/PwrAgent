@@ -73,6 +73,7 @@ import {
   sandboxerCannotStart,
   sandboxerNeedsSetup,
 } from "./SandboxerConnectionSetup";
+import { McpProjectToolApprovals } from "./McpProjectToolApprovals";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 import { shortenCodexHome } from "./shorten-codex-home";
@@ -1336,6 +1337,50 @@ export function PluginsSettings(props: {
     }
   };
 
+  /** Resolves false when nothing was saved, so a form can stay open. */
+  const setConnectionProjectToolApproval = async (
+    connection: McpConnectionStatus,
+    repository: string,
+    toolApproval: McpConnectionToolApproval | null,
+    projectLabel: string,
+  ): Promise<boolean> => {
+    if (
+      connectionPending
+      || !props.desktopApi?.setMcpConnectionProjectToolApproval
+    ) return false;
+    setConnectionPending({
+      kind: "toolApproval",
+      connectionId: connection.id,
+    });
+    try {
+      await props.desktopApi.setMcpConnectionProjectToolApproval({
+        connectionId: connection.id,
+        repository,
+        toolApproval,
+      });
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: toolApproval === null
+          ? `Threads in ${projectLabel} follow ${connection.displayName}'s Tool approval again.`
+          : toolApproval === "approve"
+            ? `${connection.displayName} runs every tool without asking in ${projectLabel}.`
+            : toolApproval === "prompt"
+              ? `${connection.displayName} asks before every tool in ${projectLabel}.`
+              : `${connection.displayName} asks before tools that make changes in ${projectLabel}.`,
+      });
+      return true;
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
   const removeConnection = async () => {
     const connection = connectionRemoveCandidate;
     if (
@@ -1516,6 +1561,17 @@ export function PluginsSettings(props: {
                     props.desktopApi?.setMcpConnectionToolApproval
                       ? (toolApproval) =>
                           void setConnectionToolApproval(connection, toolApproval)
+                      : undefined
+                  }
+                  onProjectToolApprovalChange={
+                    props.desktopApi?.setMcpConnectionProjectToolApproval
+                      ? async (repository, toolApproval, projectLabel) =>
+                          await setConnectionProjectToolApproval(
+                            connection,
+                            repository,
+                            toolApproval,
+                            projectLabel,
+                          )
                       : undefined
                   }
                   onSandboxerCleanupOnPrCloseChange={
@@ -2307,6 +2363,11 @@ function ManagedMcpConnectionRow(props: {
   onAvailabilityChange?: (enabled: boolean) => void;
   onSelectForNewThreadsChange?: (selectForNewThreads: boolean) => void;
   onToolApprovalChange?: (toolApproval: McpConnectionToolApproval) => void;
+  onProjectToolApprovalChange?: (
+    repository: string,
+    toolApproval: McpConnectionToolApproval | null,
+    projectLabel: string,
+  ) => Promise<boolean>;
   /** Sandboxer only. */
   onSandboxerCleanupOnPrCloseChange?: (enabled: boolean) => void;
   onChanged: () => void;
@@ -2859,6 +2920,16 @@ function ManagedMcpConnectionRow(props: {
                     : TOOL_APPROVAL_OPTIONS.find((option) => option.value === toolApproval)?.description}
                   {" "}Full Access threads never ask.
                 </span>
+                {props.onProjectToolApprovalChange ? (
+                  <McpProjectToolApprovals
+                    connectionName={connection.displayName}
+                    desktopApi={props.desktopApi}
+                    disabled={disabled || !props.gatewayEnabled}
+                    entries={connection.projectToolApprovals ?? []}
+                    options={TOOL_APPROVAL_OPTIONS}
+                    onChange={props.onProjectToolApprovalChange}
+                  />
+                ) : null}
               </span>
             </div>
           ) : null}

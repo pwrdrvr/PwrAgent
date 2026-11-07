@@ -1,0 +1,86 @@
+/* Settings → Plugins → a connection's Tool approval → Projects
+   (McpProjectToolApprovals.tsx). One line per project under the
+   connection's own Tool approval field: its name, its repository, its own
+   mode and Remove. Colors come from the theme tokens only. */
+
+.settings-mcp-projects {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 560px;
+}
+
+.settings-mcp-projects__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-mcp-projects__add {
+  border-style: dashed;
+  /* .button inherits its font, and the section body is 16px. */
+  font-size: 12px;
+}
+
+.settings-mcp-projects__list {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.settings-mcp-projects__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 8px 6px 12px;
+}
+
+.settings-mcp-projects__row + .settings-mcp-projects__row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-mcp-projects__name {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-mcp-projects__label {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-mcp-projects__repository {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-mcp-projects__row .select-trigger {
+  flex: 0 0 auto;
+}
+
+.settings-mcp-projects__remove {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.settings-mcp-projects > .forge-rules__picker {
+  margin-top: 2px;
+}

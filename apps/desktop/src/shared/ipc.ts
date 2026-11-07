@@ -353,6 +353,8 @@ export const MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL =
   "mcp-connection:set-select-for-new-threads";
 export const MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL =
   "mcp-connection:set-tool-approval";
+export const MCP_CONNECTION_SET_PROJECT_TOOL_APPROVAL_CHANNEL =
+  "mcp-connection:set-project-tool-approval";
 export const MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL =
   "mcp-connection:set-sandboxer-transport";
 export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =

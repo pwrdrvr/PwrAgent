@@ -12,6 +12,7 @@ import {
   buildMcpElicitationResponse,
   readMcpApprovalPersistence,
   readMcpMergeMethods,
+  readMcpProjectApprovalOffer,
   readMcpRememberOptions,
   type McpApprovalPersistence,
 } from "../thread-detail/mcp-elicitation";
@@ -69,12 +70,13 @@ function mcpApprovalChoices(wait: OperatorWait): ApprovalChoices | undefined {
     persist?: McpApprovalPersistence,
     remember?: ForgeApprovalRememberOptionId,
     mergeMethod?: ThreadTodoMergeMethod,
+    projectGrant?: boolean,
   ): ApprovalChoice => ({
     id,
     label,
     effect: action === "accept" ? "allow" : action,
     busyLabel,
-    buildResponse: () => buildMcpElicitationResponse(mcp, action, persist, remember, mergeMethod),
+    buildResponse: () => buildMcpElicitationResponse(mcp, action, persist, remember, mergeMethod, projectGrant),
   });
   const decline = choice("decline", "Decline", "Declining…", "decline");
   if (mcp.url) return { decline, alternatives: [] };
@@ -101,6 +103,20 @@ function mcpApprovalChoices(wait: OperatorWait): ApprovalChoices | undefined {
   }
   if (persistence.includes("always")) {
     alternatives.push(choice("always", "Always allow", "Allowing…", "accept", "always"));
+  }
+  // Allow every tool on this server for the thread's project, in Settings.
+  const projectOffer = readMcpProjectApprovalOffer(mcp);
+  if (projectOffer) {
+    alternatives.push(choice(
+      "project",
+      projectOffer.label,
+      "Allowing…",
+      "accept",
+      undefined,
+      undefined,
+      undefined,
+      true,
+    ));
   }
   // A forge approval can save the answer as a project rule, as its card can.
   for (const option of readMcpRememberOptions(mcp)) {

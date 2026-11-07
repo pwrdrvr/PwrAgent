@@ -1,6 +1,7 @@
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationRemoteTarget } from "./federation";
 import { isAcpBackendId } from "./navigation";
+import { forgeRuleRepositoryMatchKey, normalizeForgeRuleRepository } from "./forge-agent-tools";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 export const PWRGIT_MCP_CONNECTION_ID = "pwrgit" as const;
@@ -236,6 +237,15 @@ export type McpConnectionRecord = {
    */
   toolApproval?: McpConnectionToolApproval;
   /**
+   * Projects whose threads use their own Tool approval for this connection
+   * instead of `toolApproval`. A thread belongs to the project of its
+   * primary repository; a thread with none uses `toolApproval`.
+   *
+   * Optional because an owner broker from an older build answers without it;
+   * absent reads as none.
+   */
+  projectToolApprovals?: McpConnectionProjectToolApproval[];
+  /**
    * Only the Sandboxer connection uses this. When true, PwrAgent stops or
    * deletes the sandboxes a thread created through this connection once
    * every PR attached to that thread has merged or closed.
@@ -265,6 +275,114 @@ export type McpConnectionToolApproval = (typeof MCP_CONNECTION_TOOL_APPROVALS)[n
 
 export function isMcpConnectionToolApproval(value: unknown): value is McpConnectionToolApproval {
   return MCP_CONNECTION_TOOL_APPROVALS.some((mode) => mode === value);
+}
+
+/**
+ * One project's Tool approval for one connection. `repository` is a
+ * `host/owner/repo` key from `normalizeForgeRuleRepository`, as a forge
+ * project rule's is.
+ */
+export type McpConnectionProjectToolApproval = {
+  repository: string;
+  toolApproval: McpConnectionToolApproval;
+};
+
+/** Where a thread's Tool approval for a connection came from. */
+export type McpConnectionToolApprovalResolution = {
+  toolApproval: McpConnectionToolApproval;
+  /** The project entry that decided it; absent when the connection did. */
+  repository?: string;
+};
+
+/**
+ * The Tool approval a thread in `repository` uses for this connection: the
+ * project's own entry when there is one, else the connection's. Repositories
+ * compare without regard to case, as forge project rules do.
+ */
+export function resolveMcpConnectionToolApproval(
+  connection: Pick<McpConnectionRecord, "toolApproval" | "projectToolApprovals">,
+  repository?: string,
+): McpConnectionToolApprovalResolution {
+  const key = repository ? forgeRuleRepositoryMatchKey(repository) : undefined;
+  const entry = key
+    ? connection.projectToolApprovals?.find((candidate) =>
+        forgeRuleRepositoryMatchKey(candidate.repository) === key
+        && isMcpConnectionToolApproval(candidate.toolApproval))
+    : undefined;
+  return entry
+    ? { toolApproval: entry.toolApproval, repository: entry.repository }
+    : { toolApproval: connection.toolApproval ?? "auto" };
+}
+
+/**
+ * Elicitation request `_meta` key on an MCP tool approval card: the project
+ * grant main offers (`McpProjectToolApprovalOffer`). Main adds it itself and
+ * removes any copy a request arrived with, so its presence is PwrAgent's.
+ */
+export const MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY = "pwragent_mcp_project_approval";
+
+/**
+ * Elicitation response `_meta` key: `true` when the operator chose the
+ * offered project grant. Main honors it only for the request it offered it
+ * on, and never forwards it to Codex.
+ */
+export const MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY = "pwragent_mcp_project_approval_choice";
+
+export type McpProjectToolApprovalOffer = {
+  /** The menu item, such as "Allow all Linear tools in PwrApps". */
+  label: string;
+  description: string;
+};
+
+export function buildMcpProjectToolApprovalOffer(input: {
+  serverLabel: string;
+  projectLabel: string;
+}): McpProjectToolApprovalOffer {
+  return {
+    label: `Allow all ${input.serverLabel} tools in ${input.projectLabel}`,
+    description: `Every thread in ${input.projectLabel} can call any ${input.serverLabel} tool without asking. `
+      + "Change it in Settings → Plugins.",
+  };
+}
+
+export function readMcpProjectToolApprovalOffer(
+  meta: Record<string, unknown> | null | undefined,
+): McpProjectToolApprovalOffer | undefined {
+  const value = meta?.[MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { label, description } = value as Record<string, unknown>;
+  if (typeof label !== "string" || !label.trim()) return undefined;
+  return { label, description: typeof description === "string" ? description : "" };
+}
+
+export function readMcpProjectToolApprovalChoice(
+  meta: Record<string, unknown> | null | undefined,
+): boolean {
+  return meta?.[MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY] === true;
+}
+
+/**
+ * Set or clear one project's entry, keeping every other entry in place.
+ * `toolApproval: null` clears it. Returns undefined when `repository` names
+ * no repository.
+ */
+export function upsertMcpConnectionProjectToolApproval(
+  entries: readonly McpConnectionProjectToolApproval[] | undefined,
+  repository: string,
+  toolApproval: McpConnectionToolApproval | null,
+): McpConnectionProjectToolApproval[] | undefined {
+  const canonical = normalizeForgeRuleRepository(repository);
+  const key = canonical?.toLowerCase();
+  if (!canonical || !key) return undefined;
+  const list = (entries ?? []).slice();
+  const index = list.findIndex((entry) => forgeRuleRepositoryMatchKey(entry.repository) === key);
+  if (toolApproval === null) {
+    if (index >= 0) list.splice(index, 1);
+    return list;
+  }
+  if (index >= 0) list[index] = { repository: list[index].repository, toolApproval };
+  else list.push({ repository: canonical, toolApproval });
+  return list;
 }
 
 export type McpConnectionRuntimeState =
@@ -455,6 +573,16 @@ export type FetchLinearPastedImagesResponse =
 export type SetMcpConnectionToolApprovalRequest = {
   connectionId: McpConnectionId;
   toolApproval: McpConnectionToolApproval;
+};
+
+/**
+ * See `McpConnectionRecord.projectToolApprovals`. `toolApproval: null`
+ * removes the project's entry, so its threads follow the connection again.
+ */
+export type SetMcpConnectionProjectToolApprovalRequest = {
+  connectionId: McpConnectionId;
+  repository: string;
+  toolApproval: McpConnectionToolApproval | null;
 };
 
 /**

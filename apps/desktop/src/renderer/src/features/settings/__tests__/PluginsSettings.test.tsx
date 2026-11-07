@@ -1054,6 +1054,7 @@ describe("PluginsSettings", () => {
       api.setMcpConnectionEnabled = vi.fn();
       api.setMcpConnectionSelectForNewThreads = vi.fn();
       api.setMcpConnectionToolApproval = vi.fn();
+      api.setMcpConnectionProjectToolApproval = vi.fn();
       return api;
     }
 
@@ -1432,6 +1433,64 @@ describe("PluginsSettings", () => {
         await screen.findByText("Datadog runs every tool without asking."),
       ).toBeInTheDocument();
       expect(api.setMcpConnectionSelectForNewThreads).not.toHaveBeenCalled();
+    });
+
+    it("gives a project its own tool approval and takes it away", async () => {
+      const api = managedApi([managed({
+        projectToolApprovals: [{ repository: "github.com/pwrdrvr/pwrapps", toolApproval: "approve" }],
+      })]);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const row = within(await findRow("Datadog"));
+      const projects = within(row.getByRole("group", { name: "Projects" }));
+      // Without the Directories lens a project shows as owner/repo.
+      const field = projects.getByRole("combobox", { name: "Tool approval in pwrdrvr/pwrapps" });
+      expect(field).toHaveTextContent("Allow all tools");
+      expect(projects.getByText("github.com/pwrdrvr/pwrapps")).toBeInTheDocument();
+
+      chooseSelectOption(field, "Ask for every tool");
+      await waitFor(() => {
+        expect(api.setMcpConnectionProjectToolApproval).toHaveBeenCalledWith({
+          connectionId: "datadog", repository: "github.com/pwrdrvr/pwrapps", toolApproval: "prompt",
+        });
+      });
+      expect(await screen.findByText("Datadog asks before every tool in pwrdrvr/pwrapps.")).toBeInTheDocument();
+
+      fireEvent.click(projects.getByRole("button", { name: "Remove pwrdrvr/pwrapps" }));
+      await waitFor(() => {
+        expect(api.setMcpConnectionProjectToolApproval).toHaveBeenLastCalledWith({
+          connectionId: "datadog", repository: "github.com/pwrdrvr/pwrapps", toolApproval: null,
+        });
+      });
+      expect(await screen.findByText("Threads in pwrdrvr/pwrapps follow Datadog's Tool approval again.")).toBeInTheDocument();
+
+      fireEvent.click(projects.getByRole("button", { name: "Add project" }));
+      fireEvent.change(projects.getByRole("textbox", { name: "Repository" }), {
+        target: { value: "github.com/pwrdrvr/PwrAgent" },
+      });
+      fireEvent.click(projects.getByRole("button", { name: "Add project" }));
+      await waitFor(() => {
+        expect(api.setMcpConnectionProjectToolApproval).toHaveBeenLastCalledWith({
+          connectionId: "datadog", repository: "github.com/pwrdrvr/pwragent", toolApproval: "approve",
+        });
+      });
+      // The connection's own mode never moved.
+      expect(api.setMcpConnectionToolApproval).not.toHaveBeenCalled();
+    });
+
+    it("keeps a listed project's mode when Add project names it again", async () => {
+      const api = managedApi([managed({
+        projectToolApprovals: [{ repository: "github.com/pwrdrvr/pwrapps", toolApproval: "prompt" }],
+      })]);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const projects = within(within(await findRow("Datadog")).getByRole("group", { name: "Projects" }));
+      fireEvent.click(projects.getByRole("button", { name: "Add project" }));
+      fireEvent.change(projects.getByRole("textbox", { name: "Repository" }), {
+        target: { value: "https://github.com/pwrdrvr/PwrApps" },
+      });
+      fireEvent.click(projects.getByRole("button", { name: "Add project" }));
+      await waitFor(() => expect(projects.queryByRole("textbox", { name: "Repository" })).not.toBeInTheDocument());
+      expect(api.setMcpConnectionProjectToolApproval).not.toHaveBeenCalled();
     });
 
     it("shows a connection an agent added without a manual refresh", async () => {
