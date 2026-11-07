@@ -2099,6 +2099,82 @@ select_for_new_threads = true
       if (prompts) expect(emitted[0].params._meta).not.toHaveProperty(MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY);
     });
 
+    it("applies the effective project policy before Auto review for every mode combination", async () => {
+      const modes: Mode[] = ["auto", "prompt", "approve"];
+      for (const globalMode of modes) {
+        for (const projectMode of [undefined, ...modes]) {
+          for (const executionMode of ["default", "auto"] as const) {
+            await createProjectRegistry({ toolApproval: globalMode, threadRepository: PROJECT,
+              ...(projectMode ? { projectToolApprovals: [{ repository: PROJECT, toolApproval: projectMode }] } : {}),
+            });
+            internals.activeCodexTurnModes.set("thread-1:turn-1", executionMode);
+            review.mockClear();
+            review.mockResolvedValue({ status: "ok", object: { decision: "approve", risk: "low",
+              authorizationQuote: "Look up fixture", rationale: "User requested this lookup." } });
+            const emitted = answerWith({ action: "decline", content: null, _meta: null });
+            // Independent finite policy model: the project's explicit choice
+            // wins; only Auto policy in an Auto turn consults the reviewer.
+            const effective = projectMode ?? globalMode;
+            const reviewed = effective === "auto" && executionMode === "auto";
+            const asks = effective !== "approve" && !reviewed;
+            const label = JSON.stringify({ globalMode, projectMode, executionMode });
+            const result = await internals.handleServerRequest("codex", request("call_mcp_tool", args));
+            expect(result.success, label).toBe(!asks);
+            expect(review.mock.calls, label).toHaveLength(reviewed ? 1 : 0);
+            expect(emitted, label).toHaveLength(asks ? 1 : 0);
+            expect(Boolean(emitted[0]?.params._meta?.[MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY]), label)
+              .toBe(asks && projectMode !== "prompt");
+          }
+        }
+      }
+    });
+
+    it.each(["label-first", "grant-first"] as const)("keeps matching connection consent across project-label completion: %s", async (order) => {
+      await createProjectRegistry({ toolApproval: "auto", threadRepository: PROJECT });
+      const labelEntered = Promise.withResolvers<void>();
+      const label = Promise.withResolvers<string>();
+      let labelReads = 0;
+      registry.setForgeProjectLabelResolver(async () => {
+        if (++labelReads === 2) {
+          labelEntered.resolve();
+          return await label.promise;
+        }
+        return "PwrApps";
+      });
+      const context: AgentToolCallContext = { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" };
+      const invocation = { ...args, serverName: "Fixture" };
+      const shown = approval();
+      const first = internals.approveGatewayInvocation(invocation, context, new AbortController().signal, undefined, "catalog-1");
+      const event = await shown;
+      const controller = new AbortController();
+      let secondApproved: boolean | undefined;
+      const second = internals.approveGatewayInvocation({ ...invocation, toolName: "write" }, context, controller.signal, undefined, "catalog-1")
+        .then((result) => { secondApproved = Boolean(result); return result; });
+      void second.catch(() => undefined);
+      try {
+        await labelEntered.promise;
+        await registry.submitServerRequest({ ...context, requestId: String(event.notification.params.requestId),
+          response: { action: "accept", content: {}, _meta: { persist: "server-session" } } });
+        const grant = await first;
+        expect(typeof grant).toBe("object");
+        if (order === "label-first") {
+          label.resolve("PwrApps");
+          await vi.waitFor(() => expect(internals.pendingServerRequests.size).toBe(1));
+        }
+        if (typeof grant === "object") await grant.onInvoked();
+        label.resolve("PwrApps");
+        // Model: once the owner establishes this exact connection grant,
+        // completion order cannot make an equivalent call require a click.
+        await vi.waitFor(() => expect(secondApproved).toBe(true));
+        expect(await second).toBe(true);
+        expect(internals.pendingServerRequests.size).toBe(0);
+      } finally {
+        label.resolve("PwrApps");
+        controller.abort();
+        await second.catch(() => undefined);
+      }
+    });
+
     it("saves the project grant chosen on a gateway card", async () => {
       const save = await createProjectRegistry({ toolApproval: "auto", threadRepository: PROJECT });
       const emitted = answerWith({ action: "accept", content: {}, _meta: { [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: true } });
