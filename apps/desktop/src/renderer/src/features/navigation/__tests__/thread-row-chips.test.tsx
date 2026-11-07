@@ -1154,6 +1154,28 @@ describe("ThreadRow chip flow", () => {
     expect(screen.queryByText("pwrdrvr/PwrAgent#1024")).not.toBeInTheDocument();
   });
 
+  it("shows #115 for PwrDisk when the owning checkout corrects the stale disktree origin", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        gitOriginUrl: "git@github.com:pwrdrvr/disktree.git",
+        primaryGitRepository: "github.com/pwrdrvr/pwrdisk",
+        prs: [{
+          provider: "github.com",
+          org: "pwrdrvr",
+          repo: "PwrDisk",
+          number: 115,
+          state: "passing",
+          lifecycleState: "merged",
+          url: "https://github.com/pwrdrvr/PwrDisk/pull/115",
+        }],
+      },
+    });
+
+    expect(screen.getByText("#115")).toBeInTheDocument();
+    expect(screen.queryByText("pwrdrvr/PwrDisk#115")).not.toBeInTheDocument();
+  });
+
   it("follows the owner's primary repository after a move to another project", () => {
     const pr = (org: string, repo: string, number: number): PrSummary => ({
       provider: "github.com",
