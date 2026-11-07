@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.15 - 2026-11-07
+
+- Thread Maintenance - Keep the dialog's size steady through scans, review, and cleanup, with visible scan steps and progress. Make archiving an explicit opt-in step in Combined mode and allow a scan-specific hibernation idle-day threshold without changing Settings or the automatic sweep.
+- Checkout Hibernation - Include eligible Codex-managed worktree checkouts as well as PwrAgent checkouts, while preserving externally owned checkouts. Restore hibernated checkouts at their original paths and distinguish not-yet-idle, kept, and already-hibernated results.
+- Claude Tool Calls - Keep long-running PwrAgent tool calls open with streamed responses and progress notifications instead of hitting Claude's response-header timeout. Maintenance scans can report that they are still running and be read again by scan ID without starting duplicate scans.
+- Plan Mode Safety - Block GitHub and GitLab writes during Codex and Claude plan turns. Keep Claude's managed MCP calls read-only in Plan mode while honoring connection policies and explicit approval rules.
+- PwrSnap Connections - Repair OAuth import and authorization-rejection handling for the PwrSnap MCP connection.
+- Projects and Archiving - Include descendant threads in directory counts and check sub-threads on connected machines before archiving a parent. Resolve a thread's primary PR repository from its current checkout after remote changes or workspace moves.
+- Minor - Isolate ACP, scheduled-action, search, Token Miser, To-do, review, and PR-status storage behind their owning services.
+
 ## v1.3.14 - 2026-11-06
 
 - Checkout Hibernation - Reclaim disk space from eligible idle PwrAgent worktree checkouts while keeping their threads visible. Save uncommitted changes to recovery snapshots and restore the checkout on the next send. Hibernation defaults to on after seven idle days unless explicitly disabled; ignored, rebuildable output such as node_modules may be removed. Use Restore now or Keep Checkout Awake from the thread.
