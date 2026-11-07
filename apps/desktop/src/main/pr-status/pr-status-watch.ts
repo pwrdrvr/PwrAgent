@@ -9,10 +9,10 @@ import type {
 } from "@pwragent/shared";
 import { buildPullRequestStatusKey } from "@pwragent/shared";
 import type {
-  OverlayStoreLike,
+  PrStatusWatchStorage,
   PrStatusWatchClaim,
   PrStatusWatchThreadRef,
-} from "../state/overlay-store-sqlite.js";
+} from "@pwragent/owner-core/pr-status-storage";
 import {
   fallbackTerminalDetails,
   formatTerminalDetailsLines,
@@ -22,18 +22,6 @@ import {
 export const PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS = 3;
 export const PR_STATUS_WATCH_LEASE_MS = 60_000;
 const PR_STATUS_WATCH_HEARTBEAT_MS = 20_000;
-
-type PrStatusWatchStore = Pick<
-  OverlayStoreLike,
-  | "claimThreadPrStatusWatches"
-  | "finishThreadPrStatusWatch"
-  | "releaseThreadPrStatusWatch"
-  | "renewThreadPrStatusWatchLease"
-  | "advanceThreadPrStatusWatches"
-  | "claimThreadPrTerminalWatches"
-  | "finishThreadPrTerminalWatch"
-  | "isThreadPrStatusWatchClaimActive"
->;
 
 type PrStatusWatchRegistry = {
   submitTurnIfIdle(params: {
@@ -56,7 +44,7 @@ export class PrStatusWatchCoordinator {
 
   constructor(
     private readonly options: {
-      store: PrStatusWatchStore;
+      store: PrStatusWatchStorage;
       registry: PrStatusWatchRegistry;
       isBackgroundPollingEnabled?: () => boolean;
       /**

@@ -1,3 +1,27 @@
+import type {
+  PrAutoDispatchPendingRecord,
+  PrAutoDispatchRecoveryResult,
+  PrAutoDispatchScheduleResult,
+  PrAutoDispatchBudgetReservationResult,
+  PrAutoDispatchBudgetCompletionResult,
+  PrStatusWatchClaim,
+  PrStatusWatchThreadRef,
+  PrStatusWatchAdvanceResult,
+  PrStatusWatchClaimResult,
+  PrAutoDispatchStorage,
+  PrStatusWatchStorage,
+} from "@pwragent/owner-core/pr-status-storage";
+export type {
+  PrAutoDispatchPendingRecord,
+  PrAutoDispatchRecoveryResult,
+  PrAutoDispatchScheduleResult,
+  PrAutoDispatchBudgetReservationResult,
+  PrAutoDispatchBudgetCompletionResult,
+  PrStatusWatchClaim,
+  PrStatusWatchThreadRef,
+  PrStatusWatchAdvanceResult,
+  PrStatusWatchClaimResult,
+} from "@pwragent/owner-core/pr-status-storage";
 import { canonicalizeDetachedPrKeys, normalizeDetachedPrKeys } from "../pr-status/detached-pr-keys";
 import type { ManageThreadMergeHoldsRequest, ThreadMergeHold } from "@pwragent/shared";
 import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
@@ -209,35 +233,6 @@ export type PrStatusCacheEntry = {
   pr: PrSummary;
 };
 
-export type PrAutoDispatchPendingRecord = {
-  dispatchLease?: {
-    expiresAt: number;
-    ownerId: string;
-  };
-  pending: ThreadPrAutoDispatchPending;
-  prompt: string;
-};
-
-export type PrAutoDispatchRecoveryResult = {
-  nextLeaseExpiresAt?: number;
-  recoveredCount: number;
-};
-
-export type PrAutoDispatchScheduleResult = {
-  status: "scheduled" | "disabled" | "duplicate" | "attempt-limit" | "pending";
-  pending?: ThreadPrAutoDispatchPending;
-};
-
-export type PrAutoDispatchBudgetReservationResult =
-  | {
-      budget: PrAutoDispatchBudgetStatus;
-      status: "reserved";
-    }
-  | {
-      budget: PrAutoDispatchBudgetStatus;
-      status: "empty" | "paused" | "stale";
-    };
-
 /** A viewer's own preferences for one of a peer's directories. */
 type RemoteDirectoryOverlayPayload = DirectoryOverlayState & {
   /** When this viewer settled the draft it kept under the owner's bare key. */
@@ -266,11 +261,6 @@ function remoteThreadTargetFromRow(
   };
 }
 
-export type PrAutoDispatchBudgetCompletionResult = {
-  budget: PrAutoDispatchBudgetStatus;
-  pausedNow: boolean;
-};
-
 export type PrAutoDispatchCandidate = {
   backend: ThreadOverlayState["backend"];
   eligibleSince: number;
@@ -291,23 +281,11 @@ function isPrAutoDispatchCandidateEligible(thread: ThreadOverlayState | undefine
 /** A thread's Auto-fix candidacy for one PR that a sync added or removed. */
 export type PrAutoDispatchCandidateChange = Omit<PrAutoDispatchCandidate, "eligibleSince">;
 
-export type PrStatusWatchClaim = {
-  attemptCount: number;
-  watch: ThreadPullRequestWatchSummary;
-};
-
 export type PrStatusWatchRegistrationResult = {
   status: "watching" | "duplicate";
   /** An active watch already covered this thread, PR and head. */
   existed: boolean;
   watch: ThreadPullRequestWatchSummary;
-};
-
-/** A thread whose PR watches changed, for `thread/prWatches/updated`. */
-export type PrStatusWatchThreadRef = {
-  backend: ThreadOverlayState["backend"];
-  threadId: string;
-  prKey: string;
 };
 
 /** Committed retirement changes the registry publishes through the thread-state bus. */
@@ -317,24 +295,6 @@ export type ArchivedThreadAutomationRetirement = {
   prWatchesChanged: boolean;
   autoFixChanged: boolean;
   dependencies: Array<Pick<ThreadDependency, "id" | "conditions">>;
-};
-
-export type PrStatusWatchAdvanceResult = {
-  /** CI watches copied to the new head; the old rows end as `moved`. */
-  moved: number;
-  /** CI watches ended because the thread already watched the new head. */
-  superseded: number;
-  baselinesCleared: number;
-  threads: PrStatusWatchThreadRef[];
-};
-
-export type PrStatusWatchClaimResult = {
-  claims: PrStatusWatchClaim[];
-  /**
-   * Threads whose watches the claim changed without claiming: a covered
-   * failure became a held watch's baseline, or ended a failure-only watch.
-   */
-  threads: PrStatusWatchThreadRef[];
 };
 
 type ThreadCompactionRow = {
@@ -839,7 +799,7 @@ function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | 
   return keys;
 }
 
-export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadRegistry {
+export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadRegistry, PrAutoDispatchStorage, PrStatusWatchStorage {
   private readonly codexEnvironmentLiveOutput = new CodexEnvironmentLiveOutput();
   private managedSubAgentThreadKeysCache?: { generation: number; keys: Set<string> };
   private navigationOverlayCache?: {
