@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MessagingPairingStore } from "../messaging/messaging-pairing-store";
+import { MessagingPairingStore } from "../storage/messaging-pairing-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 

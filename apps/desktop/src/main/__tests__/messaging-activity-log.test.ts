@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MessagingActivityLog } from "../messaging/messaging-activity-log";
+import { MessagingActivityLog } from "../storage/messaging-activity-log";
 import { StateDb } from "../state/state-db";
 import {
   measureSqliteWrites,

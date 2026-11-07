@@ -98,7 +98,7 @@ import type {
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
-import type { MessagingRequestSource, MessagingRequestStore } from "./messaging-storage";
+import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
 import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
@@ -183,7 +183,6 @@ import {
   defaultAgentScopeForChannel,
   type MessagingDefaultAgentScopeKind,
 } from "./messaging-default-agent.js";
-import type { MessagingStoreLike } from "./messaging-storage";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import type {
   MessagingAdapter,
@@ -192,7 +191,7 @@ import type {
   MessagingThreadAdmissionState,
 } from "./messaging-adapter.js";
 import { MessagingFederatedThreadTargetError } from "./messaging-adapter.js";
-import type { MessagingActivityLog } from "../messaging-activity-log.js";
+import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
 import {
   buildActivityIntent,
   buildApprovalIntent,
@@ -996,7 +995,7 @@ export type MessagingControllerOptions = {
   fullAccessPolicyRevision?: () => number;
   deliveryBudget?: MessagingDeliveryBudget;
   sleepUntil?: (retryAt: number, now: () => number) => Promise<void>;
-  activityLog?: () => MessagingActivityLog;
+  activityLog?: () => MessagingActivityStorage;
   onDeliveryBudgetEvent?: (event: MessagingControllerDeliveryBudgetEvent) => void;
   onFullAccessPolicyViolation?: (event: {
     actorId: string;
@@ -17804,7 +17803,7 @@ export class MessagingController {
     }
   }
 
-  private desktopActivityLog(): MessagingActivityLog | undefined {
+  private desktopActivityLog(): MessagingActivityStorage | undefined {
     return this.options.activityLog?.();
   }
 
