@@ -5,8 +5,10 @@ import {
   type ThreadMaintenanceHibernateCheckout,
   type ThreadMaintenanceIdleThread,
   type ThreadMaintenanceOverLimitChoice,
+  type ThreadMaintenanceProblem,
   type ThreadMaintenanceScan,
   type ThreadMaintenanceScanStep,
+  type ThreadMaintenanceSpace,
   type ThreadMaintenanceWorkspace,
 } from "@pwragent/shared";
 
@@ -181,4 +183,66 @@ export function keptEntries(kept: Record<string, number>): [string, number][] {
 
 export function keptTotal(kept: Record<string, number>): number {
   return Object.values(kept).reduce((sum, count) => sum + count, 0);
+}
+
+/** "42s", "2m 14s", "1h 3m". */
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** Measured rows by allocation, largest first; unmeasured rows after them,
+ * each group in scan order. */
+export function largestFirst<T extends { space?: ThreadMaintenanceSpace }>(items: readonly T[]): T[] {
+  return items
+    .map((item, index) => ({ item, index, bytes: item.space?.allocatedBytes }))
+    .sort((a, b) => a.bytes === undefined
+      ? b.bytes === undefined ? a.index - b.index : 1
+      : b.bytes === undefined ? -1 : b.bytes - a.bytes || a.index - b.index)
+    .map(({ item }) => item);
+}
+
+export type AllocationTotal = {
+  bytes: number;
+  /** Rows with a measured allocation. */
+  measured: number;
+  /** True when any measured row is a lower bound, or a row is unmeasured. */
+  lowerBound: boolean;
+};
+
+/** Summed allocation of rows, or undefined when none was measured. */
+export function allocationTotal(items: readonly { space?: ThreadMaintenanceSpace }[]): AllocationTotal | undefined {
+  let bytes = 0;
+  let measured = 0;
+  let lowerBound = false;
+  for (const item of items) {
+    if (item.space?.allocatedBytes === undefined) continue;
+    bytes += item.space.allocatedBytes;
+    measured += 1;
+    if (item.space.lowerBound) lowerBound = true;
+  }
+  if (!measured) return undefined;
+  return { bytes, measured, lowerBound: lowerBound || measured < items.length };
+}
+
+/** "≥ 12 GB" for a lower bound. */
+export function formatAllocation(total: Pick<AllocationTotal, "bytes" | "lowerBound">): string {
+  return `${total.lowerBound ? "≥ " : ""}${formatBytes(total.bytes)}`;
+}
+
+/** Outcome rows grouped by reason: the largest group first, ties in the
+ * order each reason first appears. Rows keep their order inside a group. */
+export function groupProblems(problems: readonly ThreadMaintenanceProblem[]): { reason: string; problems: ThreadMaintenanceProblem[] }[] {
+  const groups = new Map<string, ThreadMaintenanceProblem[]>();
+  for (const problem of problems) {
+    const group = groups.get(problem.reason);
+    if (group) group.push(problem);
+    else groups.set(problem.reason, [problem]);
+  }
+  return [...groups].map(([reason, rows], index) => ({ reason, problems: rows, index }))
+    .sort((a, b) => b.problems.length - a.problems.length || a.index - b.index)
+    .map(({ reason, problems: rows }) => ({ reason, problems: rows }));
 }

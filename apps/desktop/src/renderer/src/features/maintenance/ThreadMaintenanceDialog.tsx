@@ -7,6 +7,7 @@ import {
   type DesktopCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type ThreadMaintenanceArchivedCheckout,
+  type ThreadMaintenanceCoverage,
   type ThreadMaintenanceHibernateCheckout,
   type ThreadMaintenanceIdleThread,
   type ThreadMaintenanceProblem,
@@ -16,6 +17,7 @@ import {
   type ThreadMaintenanceScan,
   type ThreadMaintenanceScanProgress,
   type ThreadMaintenanceScanStep,
+  type ThreadMaintenanceSpace,
   type ThreadMaintenanceStep,
 } from "@pwragent/shared";
 import { PendingSpinner } from "../../components/PendingSpinner";
@@ -25,15 +27,20 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { useModalDialog } from "../../lib/useModalDialog";
 import {
   allIdleThreads,
+  allocationTotal,
   buildApplyRequest,
   DEFAULT_THREAD_MAINTENANCE_PLAN,
   defaultSelection,
   formatAge,
+  formatAllocation,
   formatBytes,
+  formatElapsed,
+  groupProblems,
   hibernateItems,
   idleThreadKey,
   keptEntries,
   keptTotal,
+  largestFirst,
   needsDecision,
   runSteps,
   workspaceLead,
@@ -119,6 +126,9 @@ export function ThreadMaintenanceDialog(props: {
   const [scan, setScan] = useState<ThreadMaintenanceScan>();
   const [scanProgress, setScanProgress] = useState<ThreadMaintenanceScanProgress>();
   const progressIdRef = useRef<string | undefined>(undefined);
+  // When this scan, and each step it reached, started. Read by the status
+  // card's elapsed time; set from events, never during render.
+  const [scanClock, setScanClock] = useState<{ startedAt: number; steps: Partial<Record<ReviewStep, number>> }>();
   const [selection, setSelection] = useState<ThreadMaintenanceSelection>();
   const [run, setRun] = useState<ThreadMaintenanceRun>();
   const [error, setError] = useState<string>();
@@ -154,7 +164,10 @@ export function ThreadMaintenanceDialog(props: {
 
   // Only this dialog's current scan moves the status card.
   useEffect(() => api?.onThreadMaintenanceScanProgress?.((next) => {
-    if (next.progressId === progressIdRef.current) setScanProgress(next);
+    if (next.progressId !== progressIdRef.current) return;
+    setScanProgress(next);
+    setScanClock((clock) => !clock || clock.steps[next.step] !== undefined ? clock
+      : { ...clock, steps: { ...clock.steps, [next.step]: Date.now() } });
   }), [api]);
 
   const startScan = useCallback(async () => {
@@ -162,6 +175,7 @@ export function ThreadMaintenanceDialog(props: {
     const progressId = `thread-maintenance-scan-${++nextProgressId}`;
     progressIdRef.current = progressId;
     setScanProgress(undefined);
+    setScanClock({ startedAt: Date.now(), steps: {} });
     setPhase("scanning");
     setError(undefined);
     try {
@@ -250,7 +264,8 @@ export function ThreadMaintenanceDialog(props: {
           {phase === "scanning" ? (
             <>
               <Rail steps={steps} phase={phase} scanning={scanProgress} />
-              <ScanStatus steps={steps} progress={scanProgress} />
+              <ScanStatus steps={steps} progress={scanProgress}
+                startedAt={(scanProgress && scanClock?.steps[scanProgress.step]) ?? scanClock?.startedAt} />
             </>
           ) : null}
           {(phase === "threads" || phase === "hibernate" || phase === "checkouts") && scan && selection ? (
@@ -482,12 +497,19 @@ function scanTitle(progress: ThreadMaintenanceScanProgress): string {
 
 /** The scan's live status: the step, how far it is, and what it is reading
  * now. Its height never changes, so the rows under it stay put. */
-function ScanStatus(props: { steps: readonly ReviewStep[]; progress?: ThreadMaintenanceScanProgress }) {
+function ScanStatus(props: { steps: readonly ReviewStep[]; progress?: ThreadMaintenanceScanProgress; startedAt?: number }) {
   const { progress } = props;
   const title = progress ? scanTitle(progress) : "Starting the scan…";
   const checking = progress?.stage === "checking";
   const fraction = checking ? progress.processed / Math.max(1, progress.total) : 0;
   const stepNumber = progress ? props.steps.indexOf(progress.step) + 1 : 1;
+  const count = checking ? `${progress.processed} of ${progress.total}`
+    : progress?.found !== undefined ? `${progress.found} found`
+      : `step ${stepNumber} of ${props.steps.length}`;
+  // What it reads now: the items in flight, else the listing's own words.
+  const now = progress?.inFlight.length ? `now: ${progress.inFlight.join(" · ")}`
+    : progress?.detail || progress?.root ? [progress.detail, progress.root].filter(Boolean).join(" · ")
+      : "\u00a0";
   return (
     <div className="thread-maintenance__scan-card">
       <div className="thread-maintenance__progress-top">
@@ -496,16 +518,87 @@ function ScanStatus(props: { steps: readonly ReviewStep[]; progress?: ThreadMain
           <span role="status">{title}</span>
         </span>
         <span className="thread-maintenance__mono">
-          {checking ? `${progress.processed} of ${progress.total}` : `step ${stepNumber} of ${props.steps.length}`}
+          <span>{count}</span>
+          {props.startedAt !== undefined ? <Elapsed since={props.startedAt} /> : null}
         </span>
       </div>
       <div aria-hidden="true" className={`thread-maintenance__bar${checking ? "" : " is-waiting"}`}>
         <span style={{ width: `${Math.round(100 * fraction)}%` }} />
       </div>
-      <p className="thread-maintenance__path thread-maintenance__scan-now">
-        {progress?.inFlight.length ? `now: ${progress.inFlight.join(" · ")}` : "\u00a0"}
-      </p>
+      <p className="thread-maintenance__path thread-maintenance__scan-now">{now}</p>
     </div>
+  );
+}
+
+/** Time since `since`, counting up once a second, so a long step reads as
+ * working rather than stuck. Outside the live region: it is not announced. */
+function Elapsed(props: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <span className="thread-maintenance__elapsed">{` · ${formatElapsed(now - props.since)}`}</span>;
+}
+
+/** What a step read: each root with its checkouts and allocation, the
+ * threads read per backend, and what it left out and why. */
+function Coverage(props: { coverage?: ThreadMaintenanceCoverage }) {
+  const coverage = props.coverage;
+  if (!coverage || (!coverage.roots.length && !coverage.providers?.length && !coverage.excluded?.length)) return null;
+  const roots = largestFirst(coverage.roots.map((root) => ({
+    ...root, space: root.allocatedBytes === undefined ? undefined : { allocatedBytes: root.allocatedBytes, lowerBound: root.lowerBound },
+  })));
+  const checkouts = coverage.roots.reduce((sum, root) => sum + root.checkouts, 0);
+  const total = allocationTotal(roots);
+  return (
+    <section className="thread-maintenance__coverage" aria-label="What the scan read">
+      <p className="thread-maintenance__eyebrow">
+        {`Scanned ${roots.length} ${roots.length === 1 ? "root" : "roots"} · ${checkouts} ${checkouts === 1 ? "checkout" : "checkouts"}`}
+        {total ? ` · ${formatAllocation(total)} on disk` : ""}
+      </p>
+      {roots.length ? (
+        <ul className="thread-maintenance__coverage-rows">
+          {roots.map((root) => (
+            <li key={root.path}>
+              <span className="thread-maintenance__path">{root.path}</span>
+              <span className="thread-maintenance__coverage-owner">{root.owner}</span>
+              <span className="thread-maintenance__mono">{root.checkouts}</span>
+              <span className="thread-maintenance__mono">{root.space ? formatAllocation({ bytes: root.space.allocatedBytes!, lowerBound: !!root.lowerBound }) : "—"}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {coverage.providers?.length ? (
+        <p className="thread-maintenance__coverage-line">
+          <span className="thread-maintenance__eyebrow">Threads read</span>
+          {coverage.providers.map((provider) => `${provider.backend} ${provider.threads}`).join(" · ")}
+        </p>
+      ) : null}
+      {coverage.excluded?.length ? (
+        <p className="thread-maintenance__coverage-line">
+          <span className="thread-maintenance__eyebrow">Not offered</span>
+          {[...coverage.excluded].sort((a, b) => (b.allocatedBytes ?? -1) - (a.allocatedBytes ?? -1) || b.count - a.count)
+            .map((item) => `${item.count} ${item.reason}${item.allocatedBytes !== undefined ? ` (${formatBytes(item.allocatedBytes)})` : ""}`)
+            .join(" · ")}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/** A row's allocation on disk, right-aligned; private allocation in the
+ * tooltip. Neither is space a removal is sure to free. */
+function SizeCell(props: { space?: ThreadMaintenanceSpace }) {
+  const space = props.space;
+  if (space?.allocatedBytes === undefined) return null;
+  const tip = space.privateBytes !== undefined
+    ? `${formatBytes(space.allocatedBytes)} on disk · ${formatBytes(space.privateBytes)} private allocation`
+    : `${formatBytes(space.allocatedBytes)} on disk`;
+  return (
+    <span className="thread-maintenance__size tooltip-target" data-tooltip={tip}>
+      {formatAllocation({ bytes: space.allocatedBytes, lowerBound: !!space.lowerBound })}
+    </span>
   );
 }
 
@@ -767,10 +860,12 @@ function CheckoutsReview(props: {
   onSelection: (selection: ThreadMaintenanceSelection) => void;
 }) {
   const { scan, selection } = props;
-  const owned = scan.checkouts.items.filter((item) => item.kind !== "unreferenced");
+  const items = largestFirst(scan.checkouts.items);
+  const owned = items.filter((item) => item.kind !== "unreferenced");
   const removable = owned.filter((item) => item.kind === "removable");
   const gone = owned.filter((item) => item.kind === "repositoryGone");
-  const unreferenced = scan.checkouts.items.filter((item) => item.kind === "unreferenced");
+  const unreferenced = items.filter((item) => item.kind === "unreferenced");
+  const total = allocationTotal(items);
   const toggle = (item: ThreadMaintenanceArchivedCheckout) => {
     const checkouts = new Set(selection.checkouts);
     if (checkouts.has(item.worktreePath)) checkouts.delete(item.worktreePath);
@@ -787,11 +882,13 @@ function CheckoutsReview(props: {
                 : "No archived checkouts to remove"}
           </p>
           <p className="thread-maintenance__summary-sub">
+            {total ? `${formatAllocation(total)} on disk · ` : ""}
             {`${keptTotal(scan.checkouts.kept)} kept · ${scan.checkouts.emptyFolders} empty ${scan.checkouts.emptyFolders === 1 ? "folder" : "folders"}`}
             {scan.checkouts.skipped ? ` · ${scan.checkouts.skipped}` : ""}
           </p>
         </div>
       </div>
+      <Coverage coverage={scan.checkouts.coverage} />
       {removable.length ? (
         <section className="thread-maintenance__group" aria-label="Still on disk">
           <div className="thread-maintenance__group-head">
@@ -808,6 +905,7 @@ function CheckoutsReview(props: {
                     {lead ? <p className="thread-maintenance__row-meta"><span className={`thread-maintenance__lead-text is-${lead.tone}`}>{lead.text}</span></p> : null}
                     <p className="thread-maintenance__path">{item.worktreePath}</p>
                   </div>
+                  <SizeCell space={item.space} />
                 </li>
               );
             })}
@@ -831,6 +929,7 @@ function CheckoutsReview(props: {
                     {` ${item.missingRepositoryPath ?? "unknown"}. Git cannot save anything from it. Selected checkouts go to the Trash.`}
                   </p>
                 </div>
+                <SizeCell space={item.space} />
               </li>
             ))}
           </ul>
@@ -854,6 +953,7 @@ function CheckoutsReview(props: {
                       {" · No thread refers to this checkout. Git saves its changes to a recovery snapshot before it is removed."}
                     </p>
                   </div>
+                  <SizeCell space={item.space} />
                 </li>
               );
             })}
@@ -884,7 +984,8 @@ function HibernateReview(props: {
 }) {
   const { scan, selection } = props;
   const section = scan.hibernate;
-  const items = hibernateItems(scan, selection, props.steps);
+  const items = largestFirst(hibernateItems(scan, selection, props.steps));
+  const total = allocationTotal(items);
   const chosen = items.filter((item) => selection.hibernate.has(idleThreadKey(item))).length;
   const toggle = (item: ThreadMaintenanceHibernateCheckout) => {
     const hibernate = new Set(selection.hibernate);
@@ -926,6 +1027,7 @@ function HibernateReview(props: {
           </p>
           <p className="thread-maintenance__summary-sub">
             {`${section.checked} ${section.checked === 1 ? "checkout" : "checkouts"} on disk checked`}
+            {total ? ` · candidates hold ${formatAllocation(total)} on disk` : ""}
             {section.skipped ? ` · ${section.skipped}` : ""}
           </p>
         </div>
@@ -965,6 +1067,7 @@ function HibernateReview(props: {
         <span className="thread-maintenance__eyebrow">Never</span>
         <span className="thread-maintenance__never-inline">kept awake · Agent · running or blocked · watching a PR · shared checkouts</span>
       </div>
+      <Coverage coverage={section.coverage} />
       {items.length > 1 ? (
         <Checkbox checked={chosen === items.length} mixed={chosen > 0 && chosen < items.length}
           label="Select every idle checkout" onChange={selectAll}>
@@ -975,6 +1078,7 @@ function HibernateReview(props: {
         <section className="thread-maintenance__group" aria-label="Can hibernate">
           <div className="thread-maintenance__group-head">
             <span className="thread-maintenance__eyebrow">Can hibernate · {items.length}</span>
+            {total ? <span className="thread-maintenance__eyebrow thread-maintenance__group-aside">Largest first · on disk</span> : null}
           </div>
           <ul className="thread-maintenance__rows">
             {items.map((item) => {
@@ -998,6 +1102,7 @@ function HibernateReview(props: {
                     </p>
                     <p className="thread-maintenance__path">{item.worktreePath}</p>
                   </div>
+                  <SizeCell space={item.space} />
                 </li>
               );
             })}
@@ -1071,7 +1176,10 @@ function RunView(props: {
         <div className="thread-maintenance__progress-card" role="status">
           <div className="thread-maintenance__progress-top">
             <span>{STEP_PROGRESS[run.current.step]}</span>
-            <span className="thread-maintenance__mono">{`${run.current.processed} of ${run.current.total}`}</span>
+            <span className="thread-maintenance__mono">
+              <span>{`${run.current.processed} of ${run.current.total}`}</span>
+              <Elapsed since={run.startedAt} />
+            </span>
           </div>
           <div aria-hidden="true" className="thread-maintenance__bar">
             <span style={{ width: `${Math.round(100 * run.current.processed / Math.max(1, run.current.total))}%` }} />
@@ -1109,9 +1217,15 @@ function receiptLine(run: ThreadMaintenanceRun): string {
   const checkouts = run.steps.find((step) => step.step === "checkouts");
   return [
     threads?.ran ? `${threads.done} ${threads.done === 1 ? "thread" : "threads"} archived` : undefined,
-    hibernate?.ran ? `${hibernate.done} ${hibernate.done === 1 ? "checkout" : "checkouts"} hibernated` : undefined,
-    checkouts?.ran ? `${checkouts.done} ${checkouts.done === 1 ? "checkout or folder" : "checkouts and folders"} removed` : undefined,
+    hibernate?.ran ? `${hibernate.done} ${hibernate.done === 1 ? "checkout" : "checkouts"} hibernated${removedAllocation(hibernate)}` : undefined,
+    checkouts?.ran ? `${checkouts.done} ${checkouts.done === 1 ? "checkout or folder" : "checkouts and folders"} removed${removedAllocation(checkouts)}` : undefined,
   ].filter(Boolean).join(" · ") || "No steps ran";
+}
+
+/** " (18 GB allocation removed)". Summed checkout sizes, not space freed:
+ * shared extents can stay allocated. */
+function removedAllocation(step: ThreadMaintenanceRun["steps"][number]): string {
+  return step.allocatedBytesRemoved ? ` (${formatBytes(step.allocatedBytesRemoved)} allocation removed)` : "";
 }
 
 /** One red card for what failed and one blue card for what was kept on
@@ -1160,23 +1274,70 @@ function ProblemCard(props: {
         </div>
       </div>
       <ul className="thread-maintenance__problem-rows" tabIndex={props.problems.length > 4 ? 0 : undefined}>
-        {props.problems.map((problem, index) => (
-          <li key={`${problem.object}:${index}`}>
-            <div className="thread-maintenance__problem-text">
-              <p className="thread-maintenance__problem-object">{problem.object}</p>
-              <p className="thread-maintenance__problem-why"><b>{problem.reason}.</b>{problem.detail ? ` ${problem.detail}` : ""}</p>
-            </div>
-            {props.onOpenThread && problem.backend && problem.threadId ? (
-              <button className="thread-maintenance__open-thread" type="button"
-                aria-label={`Open thread ${problem.object}`}
-                onClick={() => props.onOpenThread!({ backend: problem.backend!, threadId: problem.threadId! })}>
-                Open thread
-              </button>
-            ) : null}
-          </li>
-        ))}
+        {groupProblems(props.problems).map((group) => group.problems.length === 1
+          ? <ProblemRow key={group.reason} problem={group.problems[0]!} showReason onOpenThread={props.onOpenThread} />
+          : <ProblemGroup key={group.reason} reason={group.reason} problems={group.problems} onOpenThread={props.onOpenThread} />)}
       </ul>
     </section>
+  );
+}
+
+/** Rows shown per reason before "Show all". */
+const ROWS_PER_REASON = 5;
+
+/** Rows that share a reason, under one heading with their count, so 22
+ * rows with one reason read as one fact. */
+function ProblemGroup(props: { reason: string; problems: ThreadMaintenanceProblem[]; onOpenThread?: OpenThread }) {
+  const [open, setOpen] = useState(false);
+  const rowsId = useId();
+  const shown = open ? props.problems : props.problems.slice(0, ROWS_PER_REASON);
+  const size = allocationTotal(props.problems.map((problem) => ({
+    space: problem.bytes === undefined ? undefined : { allocatedBytes: problem.bytes },
+  })));
+  return (
+    <li className="thread-maintenance__problem-group">
+      <p className="thread-maintenance__problem-why">
+        <b>{props.reason}</b>{` · ${props.problems.length}`}{size ? ` · ${formatAllocation(size)} on disk` : ""}
+      </p>
+      <ul id={rowsId} aria-label={props.reason}>
+        {shown.map((problem, index) => (
+          <ProblemRow key={`${problem.object}:${index}`} problem={problem} onOpenThread={props.onOpenThread} />
+        ))}
+      </ul>
+      {props.problems.length > ROWS_PER_REASON ? (
+        <button aria-controls={rowsId} aria-expanded={open} className="thread-maintenance__kept-toggle" type="button"
+          onClick={() => setOpen(!open)}>
+          {open ? "Show fewer" : `Show all ${props.problems.length}`}
+        </button>
+      ) : null}
+    </li>
+  );
+}
+
+function ProblemRow(props: { problem: ThreadMaintenanceProblem; showReason?: boolean; onOpenThread?: OpenThread }) {
+  const { problem } = props;
+  const why = [
+    problem.detail,
+    problem.bytes !== undefined ? `${formatBytes(problem.bytes)} on disk.` : undefined,
+  ].filter(Boolean).join(" ");
+  return (
+    <li>
+      <div className="thread-maintenance__problem-text">
+        <p className="thread-maintenance__problem-object">{problem.object}</p>
+        {props.showReason || why ? (
+          <p className="thread-maintenance__problem-why">
+            {props.showReason ? <b>{problem.reason}.</b> : null}{why ? `${props.showReason ? " " : ""}${why}` : ""}
+          </p>
+        ) : null}
+      </div>
+      {props.onOpenThread && problem.backend && problem.threadId ? (
+        <button className="thread-maintenance__open-thread" type="button"
+          aria-label={`Open thread ${problem.object}`}
+          onClick={() => props.onOpenThread!({ backend: problem.backend!, threadId: problem.threadId! })}>
+          Open thread
+        </button>
+      ) : null}
+    </li>
   );
 }
 
@@ -1229,6 +1390,10 @@ function Footer(props: {
     const step = props.phase;
     const request = buildApplyRequest(scan, selection, step);
     const count = step === "threads" ? request.archive.length : request.hibernate?.length ?? 0;
+    const chosenKeys = new Set((request.hibernate ?? []).map(idleThreadKey));
+    const size = step === "hibernate"
+      ? allocationTotal((scan.hibernate?.items ?? []).filter((item) => chosenKeys.has(idleThreadKey(item))))
+      : undefined;
     const next = nextReview(steps, step);
     const [verb, one, many, skip] = step === "threads"
       ? ["Archive", "thread", "threads", "Skip idle threads"]
@@ -1236,7 +1401,7 @@ function Footer(props: {
     return (
       <>
         <span className="thread-maintenance__footnote">
-          <b>{count} selected</b>{next ? ` · then ${STEP_TITLES[next].toLowerCase()}` : ""}
+          <b>{count} selected</b>{size ? ` · ${formatAllocation(size)} on disk` : ""}{next ? ` · then ${STEP_TITLES[next].toLowerCase()}` : ""}
         </span>
         <span className="thread-maintenance__actions">
           {steps[0] === step ? (
@@ -1259,10 +1424,14 @@ function Footer(props: {
     const checkouts = request.removeCheckouts.length + request.trashCheckouts.length + (request.removeUnreferenced?.length ?? 0);
     const hibernate = request.hibernate?.length ?? 0;
     const nothing = isEmptyRequest(request);
+    const paths = new Set([...request.removeCheckouts, ...request.trashCheckouts, ...request.removeUnreferenced ?? []]
+      .map((item) => item.worktreePath));
+    const size = allocationTotal(scan.checkouts.items.filter((item) => paths.has(item.worktreePath)));
     return (
       <>
         <span className="thread-maintenance__footnote">
           <b>{checkouts} selected</b>
+          {size ? ` · ${formatAllocation(size)} on disk` : ""}
           {request.archive.length ? ` · ${request.archive.length} ${request.archive.length === 1 ? "thread" : "threads"} to archive first` : ""}
           {hibernate ? ` · ${hibernate} to hibernate first` : ""}
         </span>
