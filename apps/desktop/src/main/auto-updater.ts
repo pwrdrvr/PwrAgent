@@ -62,7 +62,8 @@ const SQUIRREL_STAGE_TIMEOUT_MS = 5 * 60 * 1_000;
  * `electron` without it, and a missing export on a mock throws on access.
  */
 function optionalNativeUpdater():
-  | Pick<NodeJS.EventEmitter, "once" | "removeListener">
+  | (Pick<NodeJS.EventEmitter, "once" | "removeListener">
+    & Pick<typeof electronNativeUpdater, "checkForUpdates">)
   | undefined {
   try {
     return typeof electronNativeUpdater?.once === "function"
@@ -843,6 +844,20 @@ function awaitSquirrelStage(next: HeldDownloadedUpdate): void {
   timer.unref?.();
   native.once("update-downloaded", onStaged);
   native.once("error", onFailed);
+  if (!autoUpdater.autoInstallOnAppQuit) {
+    // A held update on another track must stay disarmed. MacUpdater only
+    // starts Squirrel after this event when auto-install is enabled, so
+    // request staging directly without rearming the unselected installer.
+    try {
+      native.checkForUpdates();
+    } catch (err) {
+      log.warn("failed to start Squirrel.Mac staging", {
+        message: err instanceof Error ? err.message : String(err),
+        version: next.version,
+      });
+      onFailed();
+    }
+  }
 }
 
 type UpdateCheckTrigger = "startup" | "periodic" | "manual" | "menu" | "selection" | "discovery";
@@ -1087,10 +1102,13 @@ async function runAppUpdateCheck(
       };
       activeDownload = download;
       lastDownloadReleaseTag = download.releaseTag;
-      if (downloadedResult) {
+      // The pending installer cache belongs to electron-updater, not to a
+      // selected track. A different track's download deletes the held file
+      // too, even though downloadedResult only matches the selected track.
+      if (heldDownloadedUpdate && heldDownloadedUpdate.version !== selectedVersion) {
         supersedingDownload = {
-          selection: updateSelection,
-          version: downloadedResult.version,
+          selection: heldDownloadedUpdate.selection,
+          version: heldDownloadedUpdate.version,
         };
         syncAutoInstallOnAppQuit(updateSelection);
       }
