@@ -38,14 +38,37 @@ export type ThreadMaintenanceWorkspace =
   /** The folder no longer exists. */
   | { kind: "missing" };
 
-/** Reserved for the space-first view: filled only by a disk accounting
- * provider (PwrDisk). Electron never measures checkouts itself. */
+/** What a checkout takes on disk. Neither figure is a promise of space
+ * recovered: APFS clones, snapshots and open files can keep extents
+ * allocated after removal. Only a volume's measured free-space change says
+ * what was actually freed. Separate from snapshot bytes, which count what a
+ * recovery snapshot stores. */
 export type ThreadMaintenanceSpace = {
-  /** Bytes freed if this item alone is removed. */
-  privateBytes: number;
-  /** True when measurement stopped early and privateBytes is a lower bound. */
+  /** Blocks allocated under the checkout (du-style), shared extents included. */
+  allocatedBytes?: number;
+  /** Allocation no other file shares (APFS private allocation). Removing
+   * the checkout may still not free it. */
+  privateBytes?: number;
+  /** True when measurement stopped early and the figures are lower bounds. */
   lowerBound?: boolean;
   largest?: { name: string; bytes: number }[];
+};
+
+/** Which roots and threads a scan step read, so the review can say what it
+ * covered and what it left out. */
+export type ThreadMaintenanceCoverage = {
+  roots: {
+    path: string;
+    owner: "pwragent" | "codex" | "claude" | "other";
+    checkouts: number;
+    allocatedBytes?: number;
+    lowerBound?: boolean;
+  }[];
+  /** Checkouts the step saw but did not offer, by reason. */
+  excluded?: { reason: string; count: number; allocatedBytes?: number }[];
+  /** Threads read per backend (codex, claude, an ACP agent…). */
+  providers?: { backend: string; threads: number }[];
+  measuredAt?: number;
 };
 
 export type ThreadMaintenanceIdleThread = {
@@ -128,6 +151,12 @@ export type ThreadMaintenanceScanProgress = {
   total: number;
   /** What is being checked now: thread titles, or checkout paths. */
   inFlight: string[];
+  /** What the step is doing now, in words, e.g. "Listing worktrees". */
+  detail?: string;
+  /** Items found so far while the stage is "listing". */
+  found?: number;
+  /** The root being read now. */
+  root?: string;
 };
 
 /** An idle thread whose checkout can hibernate: removed after its changes
@@ -148,6 +177,8 @@ export type ThreadMaintenanceHibernateCheckout = {
   /** The idle-thread key (`backend:threadId`) of the archive row that also
    * takes this thread. Archiving it in the same run keeps this row. */
   archiveKey?: string;
+  /** The checkout's allocation on disk, when measured. */
+  space?: ThreadMaintenanceSpace;
 };
 
 export type ThreadMaintenanceScan = {
@@ -174,6 +205,7 @@ export type ThreadMaintenanceScan = {
     kept: Record<string, number>;
     emptyFolders: number;
     skipped?: string;
+    coverage?: ThreadMaintenanceCoverage;
   };
   /** Idle checkouts that can hibernate, from threads this scan does not
    * offer to archive. Absent from owners that predate the step. */
@@ -195,6 +227,7 @@ export type ThreadMaintenanceScan = {
     alreadyHibernated?: number;
     kept: Record<string, number>;
     skipped?: string;
+    coverage?: ThreadMaintenanceCoverage;
   };
   expired: {
     enabled: boolean;
@@ -232,6 +265,8 @@ export type ThreadMaintenanceProblem = {
   backend?: string;
   threadId?: string;
   path?: string;
+  /** The checkout's allocated bytes, when measured. */
+  bytes?: number;
 };
 
 export type ThreadMaintenanceStepResult = {
@@ -240,6 +275,9 @@ export type ThreadMaintenanceStepResult = {
   done: number;
   kept: number;
   failed: number;
+  /** Summed allocation of the checkouts this step removed. Shared extents
+   * may stay allocated, so this is not space freed. */
+  allocatedBytesRemoved?: number;
 };
 
 export type ThreadMaintenanceRun = {

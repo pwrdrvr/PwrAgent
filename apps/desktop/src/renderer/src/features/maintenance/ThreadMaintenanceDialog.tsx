@@ -754,8 +754,8 @@ function IdleRow(props: {
           </p>
         ) : null}
       </div>
-      {props.showSpace && row.space ? (
-        <span className="thread-maintenance__size">{row.space.lowerBound ? "≥ " : ""}{formatBytes(row.space.privateBytes)}</span>
+      {props.showSpace && row.space?.allocatedBytes !== undefined ? (
+        <span className="thread-maintenance__size">{row.space.lowerBound ? "≥ " : ""}{formatBytes(row.space.allocatedBytes)}</span>
       ) : null}
     </li>
   );
