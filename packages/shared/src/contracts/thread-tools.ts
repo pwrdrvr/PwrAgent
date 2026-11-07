@@ -245,16 +245,18 @@ export type ThreadMaintenanceScanToolResult = {
         changedBytes?: number;
         worktreePath?: string;
         subThreads: number;
+        space?: import("../thread-maintenance").ThreadMaintenanceSpace;
       }>;
     }>;
     /** True when idle rows were cut to fit. idleCount stays exact. */
     truncated: boolean;
   };
   checkouts: {
-    removable: Array<{ backend: string; threadId: ThreadIdentifier; worktreePath: string; workspace?: string }>;
-    repositoryGone: Array<{ worktreePath: string; missingRepositoryPath?: string }>;
+    removable: Array<{ backend: string; threadId: ThreadIdentifier; worktreePath: string; workspace?: string; space?: import("../thread-maintenance").ThreadMaintenanceSpace }>;
+    repositoryGone: Array<{ worktreePath: string; missingRepositoryPath?: string; space?: import("../thread-maintenance").ThreadMaintenanceSpace }>;
     /** PwrAgent checkouts no thread refers to. Review them in the dialog. */
-    unreferenced: Array<{ worktreePath: string; workspace: string }>;
+    unreferenced: Array<{ worktreePath: string; workspace: string; space?: import("../thread-maintenance").ThreadMaintenanceSpace }>;
+    coverage?: import("../thread-maintenance").ThreadMaintenanceCoverage;
     kept: Record<string, number>;
     emptyFolders: number;
     skipped?: string;
@@ -273,6 +275,7 @@ export type ThreadMaintenanceScanToolResult = {
       lastActivityAt: number;
       changedFiles: number;
       changedBytes: number;
+      space?: import("../thread-maintenance").ThreadMaintenanceSpace;
       /** The archive list offers this thread too. Pick one, not both. */
       offeredForArchive?: boolean;
     }>;
@@ -280,6 +283,7 @@ export type ThreadMaintenanceScanToolResult = {
     notIdleYet?: number;
     /** Already hibernated; not counted in `checked`. */
     alreadyHibernated?: number;
+    coverage?: import("../thread-maintenance").ThreadMaintenanceCoverage;
     kept: Record<string, number>;
     skipped?: string;
     truncated: boolean;

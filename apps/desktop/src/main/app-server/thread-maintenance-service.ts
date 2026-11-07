@@ -60,7 +60,8 @@ export type ArchivedCheckoutAudit = {
   unreferenced?: string[];
   unreferencedUnavailable?: string;
   unreferencedTruncated?: boolean;
-  inventory?: { roots: string[]; paths: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]> };
+  inventory?: { roots: string[]; paths: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
+    keptPaths?: { path: string; reason: string }[] };
 };
 
 export type UnreferencedCheckoutRemoval = {
@@ -94,6 +95,7 @@ export type ThreadMaintenanceDeps = {
   auditArchivedCheckouts: (onProgress?: (progress: MaintenanceDiscoveryProgress) => void) => Promise<ArchivedCheckoutAudit>;
   /** Allocation only, never snapshot size or predicted space recovery. */
   measureAllocation?: (checkout: string, signal: AbortSignal) => Promise<ThreadMaintenanceSpace | undefined>;
+  isCheckoutOnDisk?: (checkout: string) => Promise<boolean>;
   /** Archive one reviewed family as an operator archive. Resolves false when cancelled. */
   archiveFamily: (family: ThreadArchiveCandidate[], options: {
     preserveWorktrees: boolean;
@@ -469,6 +471,14 @@ export class ThreadMaintenanceService {
         }
         const listed = deps.keepReason(candidate, candidates, policy, now);
         if (!listed.target) { exclude(listed.keep ?? "No linked worktree checkout"); return undefined; }
+        if (hibernatedSnapshotFor(candidate) || listed.keep === HIBERNATION_KEEP_REASONS.alreadyHibernated) {
+          exclude(HIBERNATION_KEEP_REASONS.alreadyHibernated);
+          return { keep: HIBERNATION_KEEP_REASONS.alreadyHibernated, hibernated: true };
+        }
+        if (this.deps.isCheckoutOnDisk && !await this.deps.isCheckoutOnDisk(listed.target)) {
+          exclude("Checkout missing");
+          return undefined;
+        }
         const space = await this.allocation(listed.target, retained);
         measuredPaths.set(listed.target, space);
         // A hibernated checkout has nothing on disk, whichever reason keeps it.
@@ -575,6 +585,7 @@ export class ThreadMaintenanceService {
     }));
     const inspect = this.deps.inspectWorkspace ?? inspectMaintenanceWorkspace;
     const kept = { ...audit.kept };
+    const excludedReasons = new Map(audit.inventory?.keptPaths?.map((item) => [item.path, item.reason]));
     progress.check("checkouts", audit.candidates.length + (audit.unreferenced?.length ?? 0));
     const items = await mapLimit(audit.candidates, INSPECT_CONCURRENCY, progress.track((candidate) => candidate.worktreePath, async (candidate): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
       if (this.abort.signal.aborted) return undefined;
@@ -590,10 +601,12 @@ export class ThreadMaintenanceService {
         });
         if (inspection.keep !== undefined) {
           kept[inspection.keep] = (kept[inspection.keep] ?? 0) + 1;
+          excludedReasons.set(candidate.worktreePath, inspection.keep);
           return undefined;
         }
         if (inspection.workspace.kind === "overLimit") {
           kept["Changes over the snapshot limit"] = (kept["Changes over the snapshot limit"] ?? 0) + 1;
+          excludedReasons.set(candidate.worktreePath, "Changes over the snapshot limit");
           return undefined;
         }
         return { ...candidate, kind: "removable" as const, workspace: inspection.workspace };
@@ -623,6 +636,7 @@ export class ThreadMaintenanceService {
         }));
         if (typeof reason === "string") {
           keepUnreferenced(reason);
+          excludedReasons.set(worktreePath, reason);
           return undefined;
         }
         return { kind: "unreferenced", worktreePath, workspace: reason };
@@ -638,10 +652,15 @@ export class ThreadMaintenanceService {
       retained.checkouts.set(item.worktreePath, item);
     }
     const offered = new Set(result.map((item) => item.worktreePath));
+    const excluded = new Map<string, string[]>();
+    for (const target of paths) {
+      if (offered.has(target)) continue;
+      const reason = excludedReasons.get(target) ?? "Protected, referenced, recent or not safe to snapshot";
+      excluded.set(reason, [...excluded.get(reason) ?? [], target]);
+    }
     return { items: result, kept, emptyFolders: audit.emptyFolders,
       coverage: allocationCoverage(measuredPaths, audit.inventory?.providers ?? [], audit.inventory?.roots,
-        [{ reason: "Protected, referenced, recent or not safe to snapshot", count: paths.filter((target) => !offered.has(target)).length,
-          paths: paths.filter((target) => !offered.has(target)) }], this.now()) };
+        [...excluded].map(([reason, paths]) => ({ reason, paths, count: paths.length })), this.now()) };
   }
 
   private allocation(target: string, retained: RetainedScan): Promise<ThreadMaintenanceSpace | undefined> {
@@ -1067,7 +1086,13 @@ function allocationCoverage(
     if (space?.allocatedBytes !== undefined) row.allocatedBytes = (row.allocatedBytes ?? 0) + space.allocatedBytes;
     if (space?.allocatedBytes === undefined || space.lowerBound) row.lowerBound = true;
   }
+  const largestKept = new Map<string, { path: string; reason: string; allocatedBytes?: number }>();
+  for (const item of exclusions) for (const target of item.paths) {
+    if (!largestKept.has(target)) largestKept.set(target, { path: target, reason: item.reason,
+      ...(paths.get(target)?.allocatedBytes !== undefined ? { allocatedBytes: paths.get(target)!.allocatedBytes } : {}) });
+  }
   return { roots: [...roots.values()], providers, measuredAt,
+    largestKept: [...largestKept.values()].sort((a, b) => (b.allocatedBytes ?? -1) - (a.allocatedBytes ?? -1)).slice(0, 10),
     excluded: exclusions.filter((item) => item.count > 0).map((item) => {
       const measured = item.paths.map((target) => paths.get(target)?.allocatedBytes);
       return { reason: item.reason, count: item.count,

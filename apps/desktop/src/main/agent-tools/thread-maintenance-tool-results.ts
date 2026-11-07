@@ -40,6 +40,7 @@ export function summarizeThreadMaintenanceScan(
         ...("files" in row.workspace ? { changedFiles: row.workspace.files, changedBytes: row.workspace.bytes } : {}),
         ...(row.worktreePath ? { worktreePath: row.worktreePath } : {}),
         subThreads: row.subThreads,
+        ...(row.space ? { space: row.space } : {}),
       })),
     };
   });
@@ -64,17 +65,21 @@ export function summarizeThreadMaintenanceScan(
       removable: removable.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
         backend: item.backend, threadId: item.threadId, worktreePath: item.worktreePath,
         ...(item.workspace ? { workspace: item.workspace.kind } : {}),
+        ...(item.space ? { space: item.space } : {}),
       })),
       repositoryGone: gone.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
         worktreePath: item.worktreePath,
         ...(item.missingRepositoryPath ? { missingRepositoryPath: item.missingRepositoryPath } : {}),
+        ...(item.space ? { space: item.space } : {}),
       })),
       // Listed so an agent can tell the operator; only the dialog removes them.
       unreferenced: unreferenced.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
         worktreePath: item.worktreePath, workspace: item.workspace.kind,
+        ...(item.space ? { space: item.space } : {}),
       })),
       kept: scan.checkouts.kept,
       emptyFolders: scan.checkouts.emptyFolders,
+      ...(scan.checkouts.coverage ? { coverage: scan.checkouts.coverage } : {}),
       ...(scan.checkouts.skipped ? { skipped: scan.checkouts.skipped } : {}),
       truncated: [removable, gone, unreferenced].some((items) => items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT),
     },
@@ -86,11 +91,13 @@ export function summarizeThreadMaintenanceScan(
         items: scan.hibernate.items.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
           backend: item.backend, threadId: item.threadId, title: item.title, worktreePath: item.worktreePath,
           lastActivityAt: item.lastActivityAt, changedFiles: item.files, changedBytes: item.bytes,
+          ...(item.space ? { space: item.space } : {}),
           ...(item.archiveKey ? { offeredForArchive: true } : {}),
         })),
         ...(scan.hibernate.notIdleYet !== undefined ? { notIdleYet: scan.hibernate.notIdleYet } : {}),
         ...(scan.hibernate.alreadyHibernated !== undefined ? { alreadyHibernated: scan.hibernate.alreadyHibernated } : {}),
         kept: scan.hibernate.kept,
+        ...(scan.hibernate.coverage ? { coverage: scan.hibernate.coverage } : {}),
         ...(scan.hibernate.skipped ? { skipped: scan.hibernate.skipped } : {}),
         truncated: scan.hibernate.items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT,
       },

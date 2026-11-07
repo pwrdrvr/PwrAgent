@@ -24,6 +24,7 @@ import {
   type ThreadMaintenanceDeps,
 } from "../app-server/thread-maintenance-service";
 import { inspectMaintenanceWorkspace, rebuildableOutputFolder } from "../app-server/thread-maintenance-workspace";
+import { summarizeThreadMaintenanceScan } from "../agent-tools/thread-maintenance-tool-results";
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
@@ -93,6 +94,32 @@ function harness(candidates: ThreadArchiveCandidate[], overrides: Partial<Thread
 }
 
 describe("ThreadMaintenanceService.scan", () => {
+  it("keeps measured allocation and coverage in bounded agent tool results", async () => {
+    const scan = await harness([]).service.scan({ steps: ["checkouts"] });
+    fc.assert(fc.property(fc.array(fc.nat({ max: 1_000_000 }), { maxLength: 140 }), (sizes) => {
+      scan.hibernate = { idleDays: 3, maxSnapshotMb: 100, removeRebuildableOutput: true, checked: sizes.length, kept: {},
+        coverage: { roots: [], providers: [{ backend: "codex", threads: sizes.length }] },
+        items: sizes.map((bytes, index) => ({ backend: "codex", threadId: String(index), title: "Fixture",
+          worktreePath: `/fixture/${index}`, lastActivityAt: NOW, files: 0, bytes: 0, space: { allocatedBytes: bytes } })) };
+      const summary = summarizeThreadMaintenanceScan(scan);
+      expect(summary.hibernate?.coverage).toEqual(scan.hibernate.coverage);
+      expect(summary.hibernate?.items.map((item) => item.space)).toEqual(scan.hibernate.items.slice(0, 100).map((item) => item.space));
+    }));
+  });
+
+  it("never counts a confirmed missing checkout as space on disk", async () => {
+    const measureAllocation = vi.fn(async () => ({ allocatedBytes: 1_000_000 }));
+    const { service } = harness([candidate("gone", { cwd: "/gone/checkout" })], {
+      isCheckoutOnDisk: async () => false,
+      measureAllocation,
+      hibernation: { getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+        keepReason: () => ({ target: "/gone/checkout" }), inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true },
+    });
+    const scan = await service.scan({ steps: ["hibernate"] });
+    expect(scan.hibernate).toMatchObject({ checked: 0, items: [], coverage: { roots: [], excluded: [{ reason: "Checkout missing", count: 1 }] } });
+    expect(measureAllocation).not.toHaveBeenCalled();
+  });
+
   it("publishes provider discovery while the archived audit is still pending", async () => {
     await fc.assert(fc.asyncProperty(fc.nat({ max: 5000 }), async (found) => {
       let release!: () => void;

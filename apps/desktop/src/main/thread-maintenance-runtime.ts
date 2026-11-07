@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stat } from "node:fs/promises";
 import { shell } from "electron";
 import { isToolManagedWorktreePath, type ThreadMaintenanceRun } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
@@ -26,6 +27,13 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
     isBusy: (candidate) => getDesktopBackendRegistry().isArchiveCandidateBusy(candidate),
     auditArchivedCheckouts: async (onProgress) => await getDesktopBackendRegistry().auditArchivedCheckouts(onProgress),
     measureAllocation: measureMaintenanceAllocation,
+    isCheckoutOnDisk: async (checkout) => {
+      try { return (await stat(checkout)).isDirectory(); }
+      catch (error) {
+        if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+        throw error;
+      }
+    },
     archiveFamily: async (family, options) => {
       const { thread } = family[0]!;
       const registry = getDesktopBackendRegistry();
