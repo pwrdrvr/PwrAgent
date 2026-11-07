@@ -541,16 +541,25 @@ function Elapsed(props: { since: number }) {
   return <span className="thread-maintenance__elapsed">{` · ${formatElapsed(now - props.since)}`}</span>;
 }
 
+/** Roots listed before "N more roots". */
+const COVERAGE_ROOTS = 5;
+
 /** What a step read: each root with its checkouts and allocation, the
  * threads read per backend, and what it left out and why. */
 function Coverage(props: { coverage?: ThreadMaintenanceCoverage }) {
   const coverage = props.coverage;
+  // Any registered repository's worktrees can be a root, so the list folds.
+  const [allRoots, setAllRoots] = useState(false);
+  const rootsId = useId();
   if (!coverage || (!coverage.roots.length && !coverage.providers?.length && !coverage.excluded?.length)) return null;
   const roots = largestFirst(coverage.roots.map((root) => ({
     ...root, space: root.allocatedBytes === undefined ? undefined : { allocatedBytes: root.allocatedBytes, lowerBound: root.lowerBound },
   })));
   const checkouts = coverage.roots.reduce((sum, root) => sum + root.checkouts, 0);
   const total = allocationTotal(roots);
+  const shownRoots = allRoots ? roots : roots.slice(0, COVERAGE_ROOTS);
+  const hidden = roots.slice(COVERAGE_ROOTS);
+  const hiddenTotal = allocationTotal(hidden);
   return (
     <section className="thread-maintenance__coverage" aria-label="What the scan read">
       <p className="thread-maintenance__eyebrow">
@@ -558,8 +567,8 @@ function Coverage(props: { coverage?: ThreadMaintenanceCoverage }) {
         {total ? ` · ${formatAllocation(total)} on disk` : ""}
       </p>
       {roots.length ? (
-        <ul className="thread-maintenance__coverage-rows">
-          {roots.map((root) => (
+        <ul className="thread-maintenance__coverage-rows" id={rootsId}>
+          {shownRoots.map((root) => (
             <li key={root.path}>
               <span className="thread-maintenance__path">{root.path}</span>
               <span className="thread-maintenance__coverage-owner">{root.owner}</span>
@@ -568,6 +577,13 @@ function Coverage(props: { coverage?: ThreadMaintenanceCoverage }) {
             </li>
           ))}
         </ul>
+      ) : null}
+      {hidden.length ? (
+        <button aria-controls={rootsId} aria-expanded={allRoots} className="thread-maintenance__kept-toggle" type="button"
+          onClick={() => setAllRoots(!allRoots)}>
+          {allRoots ? "Show fewer roots"
+            : `${hidden.length} more ${hidden.length === 1 ? "root" : "roots"}${hiddenTotal ? ` · ${formatAllocation(hiddenTotal)}` : ""}`}
+        </button>
       ) : null}
       {coverage.providers?.length ? (
         <p className="thread-maintenance__coverage-line">

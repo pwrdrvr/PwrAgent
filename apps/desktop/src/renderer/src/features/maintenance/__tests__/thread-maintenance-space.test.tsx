@@ -67,6 +67,23 @@ describe("thread maintenance sizes, as properties", () => {
     }));
   });
 
+  it("counts a checkout two rows share once in a total", () => {
+    const row = fc.record({
+      worktreePath: fc.constantFrom("/w/a", "/w/b", "/w/c"),
+      space: fc.option(fc.record({ allocatedBytes: fc.nat({ max: 2 ** 40 }) }), { nil: undefined }),
+    });
+    fc.assert(fc.property(fc.array(row, { maxLength: 30 }), (rows) => {
+      // Oracle: keep each path's first row, then total those.
+      const firsts = rows.filter((item, index) => rows.findIndex((other) => other.worktreePath === item.worktreePath) === index);
+      const measured = firsts.filter((item) => item.space !== undefined);
+      expect(allocationTotal(rows)).toEqual(measured.length ? {
+        bytes: measured.reduce((sum, item) => sum + item.space!.allocatedBytes, 0),
+        measured: measured.length,
+        lowerBound: measured.length < firsts.length,
+      } : undefined);
+    }));
+  });
+
   it("groups outcome rows into one group per reason, losing and reordering none", () => {
     const problem = fc.record({
       step: fc.constant("hibernate" as const),
@@ -226,6 +243,23 @@ describe("ThreadMaintenanceDialog sizes and progress", () => {
     expect(roots).toEqual(["/home/.codex/worktreescodex61≥ 120 GB", "/home/.pwragent/worktreespwragent1240 GB"]);
     expect(coverage).toHaveTextContent("codex 70 · claude 3");
     expect(coverage).toHaveTextContent("2 outside a worktree root (3.0 GB)");
+  });
+
+  it("folds a long root list after the five largest roots", async () => {
+    const many = sizedScan();
+    many.hibernate!.coverage!.roots = Array.from({ length: 7 }, (_, index) => ({
+      path: `/repos/project-${index}/.worktrees`, owner: "other" as const, checkouts: 1, allocatedBytes: (index + 1) * GB,
+    }));
+    const { api: desktopApi } = api({ scanThreadMaintenance: vi.fn(async () => many) });
+    render(<ThreadMaintenanceDialog desktopApi={desktopApi} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    const coverage = await within(dialog).findByRole("region", { name: "What the scan read" });
+    expect(coverage).toHaveTextContent("Scanned 7 roots · 7 checkouts · 28 GB on disk");
+    const paths = () => within(coverage).getAllByRole("listitem").map((row) => row.firstElementChild?.textContent);
+    expect(paths()).toEqual([6, 5, 4, 3, 2].map((index) => `/repos/project-${index}/.worktrees`));
+    fireEvent.click(within(coverage).getByRole("button", { name: "2 more roots · 3.0 GB" }));
+    expect(paths()).toHaveLength(7);
   });
 
   it("finishes with kept rows grouped by reason, largest group first", async () => {

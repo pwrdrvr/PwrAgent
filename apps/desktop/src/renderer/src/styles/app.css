@@ -54229,6 +54229,12 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   color: var(--text-secondary);
 }
 
+.thread-maintenance__coverage > .thread-maintenance__kept-toggle {
+  justify-self: start;
+  min-height: 24px;
+  font-size: 11.5px;
+}
+
 .thread-maintenance__coverage-line {
   display: flex;
   flex-wrap: wrap;

@@ -213,19 +213,30 @@ export type AllocationTotal = {
   lowerBound: boolean;
 };
 
-/** Summed allocation of rows, or undefined when none was measured. */
-export function allocationTotal(items: readonly { space?: ThreadMaintenanceSpace }[]): AllocationTotal | undefined {
+/** Summed allocation of rows, or undefined when none was measured. Rows
+ * that name the same checkout path count once: a parent and its sub-thread
+ * can share one checkout. */
+export function allocationTotal(
+  items: readonly { space?: ThreadMaintenanceSpace; worktreePath?: string }[],
+): AllocationTotal | undefined {
+  const seen = new Set<string>();
+  let rows = 0;
   let bytes = 0;
   let measured = 0;
   let lowerBound = false;
   for (const item of items) {
+    if (item.worktreePath !== undefined) {
+      if (seen.has(item.worktreePath)) continue;
+      seen.add(item.worktreePath);
+    }
+    rows += 1;
     if (item.space?.allocatedBytes === undefined) continue;
     bytes += item.space.allocatedBytes;
     measured += 1;
     if (item.space.lowerBound) lowerBound = true;
   }
   if (!measured) return undefined;
-  return { bytes, measured, lowerBound: lowerBound || measured < items.length };
+  return { bytes, measured, lowerBound: lowerBound || measured < rows };
 }
 
 /** "≥ 12 GB" for a lower bound. */
