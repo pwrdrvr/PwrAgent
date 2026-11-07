@@ -19,9 +19,15 @@ export type MarkDoneWait = {
 const isOpen = (dependency: ThreadDependency): boolean =>
   dependency.status === "waiting" || dependency.status === "ready";
 
-/** This thread's open waits that hold its merge. */
+/**
+ * The open waits that hold this thread's merge. Prefers the owner's own
+ * merge check (`mergeHolds`, asked for with `pullRequest`), which also counts
+ * holds on other threads with the PR attached. An owner that predates it
+ * leaves only this thread's waits to go on.
+ */
 export function mergeHoldingDependencies(response: ManageThreadDependenciesResponse | undefined): ThreadDependency[] {
-  return (response?.dependencies ?? []).filter((dependency) => dependency.holdMerge && isOpen(dependency));
+  return response?.mergeHolds
+    ?? (response?.dependencies ?? []).filter((dependency) => dependency.holdMerge && isOpen(dependency));
 }
 
 /**
@@ -64,9 +70,11 @@ export function useThreadDependencyList(
   federationTarget: FederationTarget | undefined,
   api: DesktopApi | undefined,
   enabled = true,
+  /** A PR this thread would merge; the owner then answers `mergeHolds`. */
+  pullRequest?: string,
 ) {
   const instanceId = federationTarget?.scope === "remote" ? federationTarget.instanceId : undefined;
-  const key = JSON.stringify([backend, threadId, instanceId]);
+  const key = JSON.stringify([backend, threadId, instanceId, pullRequest]);
   const [revision, setRevision] = useState(0);
   const [state, setState] = useState<{ key: string; data?: ManageThreadDependenciesResponse; error?: string }>({ key });
   useEffect(() => {
@@ -79,6 +87,7 @@ export function useThreadDependencyList(
       try {
         const data = await api.manageThreadDependencies!({
           action: "list", backend, threadId,
+          ...(pullRequest ? { pullRequest } : {}),
           ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
         });
         if (!disposed && current === sequence) setState({ key, data });
@@ -103,7 +112,7 @@ export function useThreadDependencyList(
       unsubscribe?.();
       window.removeEventListener("focus", focus);
     };
-  }, [api, enabled, backend, threadId, instanceId, key, revision]);
+  }, [api, enabled, backend, threadId, instanceId, pullRequest, key, revision]);
   const current = state.key === key ? state : undefined;
   return {
     refresh: () => setRevision((value) => value + 1),

@@ -23,7 +23,7 @@ export type ThreadDependenciesFederationRuntime = {
 
 const FIELDS = [
   "action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff",
-  "steps", "holdMerge", "dependencyId", "conditionIndex", "note",
+  "steps", "holdMerge", "dependencyId", "conditionIndex", "note", "pullRequest",
 ] as const;
 
 /**
