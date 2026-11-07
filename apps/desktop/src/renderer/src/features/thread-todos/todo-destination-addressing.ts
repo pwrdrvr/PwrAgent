@@ -1,4 +1,5 @@
 import type { NavigationThreadSummary, ThreadTodo, ThreadTodoMessageTarget } from "@pwragent/shared";
+import { threadMachineFrom } from "../thread-search/thread-address";
 import type { ThreadTodoLocalMachine } from "./thread-todos-view";
 
 export type TodoDestinationCandidate = {
@@ -22,16 +23,12 @@ export function todoDestination(
   todo: ThreadTodo,
   localMachine: ThreadTodoLocalMachine | undefined,
 ): ThreadTodoMessageTarget | undefined {
-  const owner = todo.federationTarget?.instanceId;
-  const ref = thread.federation?.ref.target;
-  const resultIsRemote = ref?.scope === "remote";
-  const instanceId = ref?.scope === "remote" ? ref.instanceId : localMachine?.instanceId;
-  if (owner && !instanceId) return undefined;
-  const remote = instanceId !== owner && (owner !== undefined || resultIsRemote);
-  if (!remote && thread.source === todo.backend && thread.id === todo.threadId) return undefined;
+  const machine = threadMachineFrom(thread, todo.federationTarget?.instanceId, localMachine?.instanceId);
+  if (!machine) return undefined;
+  if (!machine.instanceId && thread.source === todo.backend && thread.id === todo.threadId) return undefined;
   return {
     backend: thread.source, threadId: thread.id, title: thread.title,
-    ...(remote && instanceId ? { instanceId } : {}),
+    ...machine,
     ...(thread.federation?.instanceLabel ? { instanceLabel: thread.federation.instanceLabel }
       : localMachine?.label ? { instanceLabel: localMachine.label } : {}),
   };

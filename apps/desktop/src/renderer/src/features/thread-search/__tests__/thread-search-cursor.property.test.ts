@@ -7,7 +7,7 @@ import {
   settleDestinationCursor,
   stepDestinationCursor,
   type DestinationCursor,
-} from "../todo-destination-cursor";
+} from "../thread-search-cursor";
 
 // Model: the row the operator sees highlighted, and the row they last chose.
 // Each command states the picker's promise in those terms:
