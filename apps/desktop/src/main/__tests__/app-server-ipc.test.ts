@@ -6676,6 +6676,41 @@ describe("app server ipc", () => {
     });
   });
 
+  it("publishes PwrDisk for PR #115 despite the session's old disktree origin", async () => {
+    const worktreePath = "/Users/fixture/.codex/worktrees/mw2h6pqb/disktree";
+    listThreads.mockResolvedValueOnce([{
+      id: "thread-1",
+      title: "Order-independent partial estimates",
+      titleSource: "explicit",
+      source: "codex",
+      gitOriginUrl: "git@github.com:pwrdrvr/disktree.git",
+      linkedDirectories: [{
+        id: "/Users/fixture/github/disktree",
+        kind: "worktree",
+        label: "disktree",
+        path: "/Users/fixture/github/disktree",
+        worktreePath,
+      }],
+      prs: [githubPr({ org: "pwrdrvr", repo: "PwrDisk", number: 115, state: "passing",
+        url: "https://github.com/pwrdrvr/PwrDisk/pull/115" })],
+      updatedAt: 2000,
+    }] as never);
+    resolveGitHubRepoForDirectory.mockResolvedValue({
+      host: "github.com", owner: "pwrdrvr", repo: "PwrDisk",
+    });
+
+    registerAppServerIpcHandlers();
+    const response = await readLegacyOwnerMaterialization?.({}, {});
+
+    expect(resolveGitHubRepoForDirectory).toHaveBeenCalledWith(worktreePath);
+    expect(response).toMatchObject({ threads: [{
+      id: "thread-1", primaryGitRepository: "github.com/pwrdrvr/pwrdisk",
+    }] });
+    const { appServerService } = await import("../ipc/app-server");
+    expect(appServerService.readPrimaryGitRepository("codex", "thread-1"))
+      .toBe("github.com/pwrdrvr/pwrdisk");
+  });
+
   it("invalidates unchanged snapshots when primary repository resolution recovers", async () => {
     const thread = {
       id: "thread-1",

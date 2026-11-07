@@ -123,7 +123,6 @@ import {
   type GlabStatus,
   type GhStatus,
   type LinkedDirectorySummary,
-  isWorkspaceHandoffDirectory,
   type ListModelSettingsRecentsRequest,
   type ListModelSettingsRecentsResponse,
   type ListRecentFileReferencesRequest,
@@ -381,11 +380,8 @@ import {
   branchRefKey,
 } from "../pr-status/github-graphql-client";
 import type { BranchRef } from "../pr-status/github-graphql-client";
-import {
-  parseForgeRemote,
-  resolveGitHubRepoForDirectory,
-  resolveGitHubReposForDirectory,
-} from "../pr-status/git-remote";
+import { resolveGitHubReposForDirectory } from "../pr-status/git-remote";
+import { resolvePrimaryThreadRepoKey, resolvePullRequestDirectoryPath } from "../pr-status/primary-thread-repository";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import { TranscriptPrSubscriptions } from "../pr-status/transcript-pr-subscriptions";
 import { PrThreadIndex } from "../pr-status/pr-thread-index";
@@ -393,7 +389,6 @@ import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
 import { PrPollingFocusTracker } from "../pr-status/pr-polling-focus";
 import {
   PrAutoDispatchCoordinator,
-  buildPrRepositoryKey,
   getPrAutoDispatchEventKinds,
   pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
@@ -10471,39 +10466,6 @@ class DesktopAppServerService {
   }
 }
 
-async function resolvePrimaryThreadRepoKey(
-  thread: Pick<
-    NavigationSnapshot["threads"][number],
-    "gitOriginUrl" | "linkedDirectories"
-  >,
-  resolutionByPath = new Map<string, Promise<string | undefined>>(),
-): Promise<string | undefined> {
-  // A workspace move (move_thread_workspace) is the thread's primary
-  // workspace. The provider's origin describes the checkout the session
-  // started in, which can be another project after a to-project move.
-  const movedWorkspace = thread.linkedDirectories.findLast(
-    isWorkspaceHandoffDirectory,
-  );
-  const origin = !movedWorkspace && thread.gitOriginUrl
-    ? parseForgeRemote(thread.gitOriginUrl)
-    : undefined;
-  if (origin) return buildPrRepositoryKey(origin.host, origin.owner, origin.repo);
-
-  const primaryDirectory = movedWorkspace ?? thread.linkedDirectories[0];
-  const primaryPath = primaryDirectory
-    ? resolvePullRequestDirectoryPath(primaryDirectory)
-    : undefined;
-  if (!primaryPath) return undefined;
-  const existing = resolutionByPath.get(primaryPath);
-  if (existing) return await existing;
-  const resolution = resolveGitHubRepoForDirectory(primaryPath)
-    .then((resolved) => resolved
-      ? buildPrRepositoryKey(resolved.host, resolved.owner, resolved.repo)
-      : undefined);
-  resolutionByPath.set(primaryPath, resolution);
-  return await resolution;
-}
-
 function resolveThreadPullRequestContexts(
   thread: Pick<
     NavigationSnapshot["threads"][number],
@@ -10589,16 +10551,6 @@ function resolveThreadPullRequestDirectoryPaths(
     paths.push(normalized);
   }
   return paths;
-}
-
-function resolvePullRequestDirectoryPath(
-  directory: AppServerThreadSummary["linkedDirectories"][number],
-): string | undefined {
-  const candidate =
-    directory.kind === "worktree"
-      ? directory.worktreePath ?? directory.path
-      : directory.path;
-  return candidate?.trim() || undefined;
 }
 
 /**
