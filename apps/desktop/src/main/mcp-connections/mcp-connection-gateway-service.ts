@@ -74,7 +74,7 @@ import {
   PWRSNAP_MCP_CONNECTION_ID,
   isMcpIpcUrl,
   PWRGIT_MCP_CONNECTION_ID,
-  PWRSNAP_SESSION_REVOKED_DETAIL,
+  PWRSNAP_SESSION_REJECTED_DETAIL,
   SANDBOXER_MCP_CONNECTION_ID,
   isAcpBackendId,
   isBuiltInMcpConnectionId,
@@ -153,10 +153,11 @@ const PWRSNAP_SCOPES = [
   "sizzle.compose",
   "sizzle.preview.read",
   "sizzle.full.read",
+  "sizzle.assets.import",
 ].join(" ");
 /** Returned to agents through the bridge, where no Connect button is visible. */
-export const PWRSNAP_SESSION_REVOKED_ERROR =
-  "PwrSnap revoked this connection. PwrSnap tools stay unavailable until the operator chooses Connect to PwrSnap on New thread in PwrAgent.";
+export const PWRSNAP_SESSION_REJECTED_ERROR =
+  "PwrSnap rejected this connection's authorization. PwrSnap tools stay unavailable until the operator chooses Connect to PwrSnap on New thread in PwrAgent.";
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
 const MAX_RPC_CONNECTIONS = 32;
@@ -676,7 +677,7 @@ export class McpConnectionGatewayService {
   private readonly initializations = new WeakMap<Client, InitializeResult>();
   private readonly disconnectedStdioGrants = new Set<string>();
   private connectPromise?: Promise<ConnectPwrSnapResponse>;
-  private sessionRevoked = false;
+  private sessionRejected = false;
   private leaseHeld = false;
   private brokerToken?: string;
   private nonOwnerHolder?: RuntimeLeaseHolder;
@@ -785,8 +786,8 @@ export class McpConnectionGatewayService {
     ]);
     const installed = endpointAvailable || Boolean(this.findInstalledPath());
     const details: string[] = [];
-    if (!configured && this.sessionRevoked) {
-      details.push(PWRSNAP_SESSION_REVOKED_DETAIL);
+    if (!configured && this.sessionRejected) {
+      details.push(PWRSNAP_SESSION_REJECTED_DETAIL);
     }
     if (!endpointAvailable && installed) {
       details.push("Open PwrSnap and enable Local Agent Access to connect agents.");
@@ -1199,7 +1200,7 @@ export class McpConnectionGatewayService {
         waitForCode: callback.waitForCode,
       });
       if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
-        this.sessionRevoked = false;
+        this.sessionRejected = false;
         await this.settings.clearPwrSnapMcpCredential();
       }
       // A different account can see a different set of tools.
@@ -1447,7 +1448,7 @@ export class McpConnectionGatewayService {
     if (connection.authMode === "oauth") await this.coordinatorFor(connection).disconnect();
     this.invalidateConnectionTools(connectionId);
     if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
-      this.sessionRevoked = false;
+      this.sessionRejected = false;
       await this.settings.clearPwrSnapMcpCredential();
     }
     return this.announced(await this.connectionStatus(connection));
@@ -1841,7 +1842,7 @@ export class McpConnectionGatewayService {
     signal?.throwIfAborted();
     if (
       !configured
-      && !(connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked)
+      && !(connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRejected)
     ) {
       throw new Error(
         connection.authMode === "local_cli" || connection.kind === "stdio" ? status.detail
@@ -2516,7 +2517,7 @@ export class McpConnectionGatewayService {
           ? {
               discardRejectedCredentials: true,
               onCredentialRejected: async () => {
-                this.sessionRevoked = true;
+                this.sessionRejected = true;
                 await this.settings.clearPwrSnapMcpCredential();
               },
             }
@@ -2739,7 +2740,7 @@ export class McpConnectionGatewayService {
    * Open an authorized MCP client for a connection.
    *
    * Shared by the per-thread proxy sessions and the Settings tool listing, so
-   * both get the same credential check and the same PwrSnap revocation
+   * both get the same credential check and the same PwrSnap credential rejection
    * handling rather than two copies that drift.
    */
   private async connectUpstreamClient(
@@ -2768,8 +2769,8 @@ export class McpConnectionGatewayService {
       const coordinator = this.coordinatorFor(connection);
       if (!(await coordinator.configured())) {
         throw new Error(
-          connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked
-            ? PWRSNAP_SESSION_REVOKED_ERROR
+          connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRejected
+            ? PWRSNAP_SESSION_REJECTED_ERROR
             : `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
         );
       }
@@ -2797,10 +2798,10 @@ export class McpConnectionGatewayService {
       await transport.close().catch(() => undefined);
       if (
         connection.id === PWRSNAP_MCP_CONNECTION_ID
-        && (this.sessionRevoked
+        && (this.sessionRejected
           || error instanceof McpReauthorizationRequiredError)
       ) {
-        throw new Error(PWRSNAP_SESSION_REVOKED_ERROR, { cause: error });
+        throw new Error(PWRSNAP_SESSION_REJECTED_ERROR, { cause: error });
       }
       throw error;
     } finally {

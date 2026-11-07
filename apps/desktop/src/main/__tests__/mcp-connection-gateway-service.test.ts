@@ -4,11 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PWRSNAP_SESSION_REVOKED_DETAIL } from "@pwragent/shared";
+import { PWRSNAP_SESSION_REJECTED_DETAIL } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   McpConnectionGatewayService,
-  PWRSNAP_SESSION_REVOKED_ERROR,
+  PWRSNAP_SESSION_REJECTED_ERROR,
 } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import * as appState from "../state/app-state";
@@ -40,7 +40,7 @@ function createSettings(initial?: string) {
   };
 }
 
-function createAuthorizedCredential(accessToken = "revoked-by-pwrsnap"): string {
+function createAuthorizedCredential(accessToken = "fixture-rejected-access"): string {
   return JSON.stringify({
     clientInformation: { client_id: "pwragent-client" },
     discoveryState: {
@@ -119,6 +119,48 @@ describe("McpConnectionGatewayService", () => {
     expect(await settings.resolveMcpConnectionCredentials()).toBeUndefined();
     await expect(service.createConnection({ displayName: "Network", serverUrl: "https://example.org/mcp", ipcBearerToken: "secret" })).rejects.toThrow("local IPC");
   });
+
+  it("requests local asset import only through a new PwrSnap approval", async () => {
+    const settings = createSettings(createAuthorizedCredential("fixture-existing-access"));
+    const opened: URL[] = [];
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      registry: temporaryRegistry(),
+      settings,
+      leaseManager: null,
+      fetchFn: vi.fn(async () => { throw new Error("Unexpected OAuth request"); }),
+      openExternal: async (url) => { opened.push(new URL(url)); },
+    });
+    services.push(service);
+
+    const authorization = service.authorizeConnection("pwrsnap").catch((error: unknown) => error);
+    await vi.waitFor(() => expect(opened).toHaveLength(1));
+    await service.cancelAuthorization("pwrsnap");
+    expect(await authorization).toBeInstanceOf(Error);
+
+    expect(opened[0]!.searchParams.get("scope")?.split(" ")).toEqual([
+      "library.read",
+      "capture.composite.read",
+      "capture.original.read",
+      "capture.export",
+      "capture.edit",
+      "trash.write",
+      "sizzle.compose",
+      "sizzle.preview.read",
+      "sizzle.full.read",
+      "sizzle.assets.import",
+    ]);
+    expect(opened[0]!.searchParams.get("code_challenge_method")).toBe("S256");
+    // Asking for broader consent must not change the stored authorization.
+    expect(settings.saveMcpConnectionCredentials).toHaveBeenCalledOnce();
+    const envelope = JSON.parse((await settings.resolveMcpConnectionCredentials())!);
+    expect(envelope.credentials.pwrsnap.tokens).toEqual({
+      access_token: "fixture-existing-access",
+      token_type: "bearer",
+    });
+    expect(settings.clearPwrSnapMcpCredential).not.toHaveBeenCalled();
+  });
+
   it("serves a changing full catalog and validates calls over the revocable socket", async () => {
     const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
     services.push(service);
@@ -524,11 +566,12 @@ describe("McpConnectionGatewayService", () => {
     });
   });
 
-  it("clears a PwrSnap credential rejected by the MCP endpoint", async () => {
+  it.each(["unauthorized", JSON.stringify({ error: "builtin_role_drift" })])("clears a rejected PwrSnap credential without inferring revocation (%s)", async (body) => {
     const settings = createSettings(createAuthorizedCredential());
+    const fetchFn = vi.fn(async () => new Response(body, { status: 401 }));
     const service = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
-      fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
+      fetchFn,
       resolveInstallPaths: () => [],
       settings,
       leaseManager: null,
@@ -553,19 +596,83 @@ describe("McpConnectionGatewayService", () => {
       { connectionId: "pwrsnap", threadId: "thread-1" },
       "tools/list",
       {},
-    )).rejects.toThrow(PWRSNAP_SESSION_REVOKED_ERROR);
+    )).rejects.toThrow("PwrSnap rejected this connection's authorization.");
 
     expect(settings.clearMcpConnectionCredentials).toHaveBeenCalledOnce();
     expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalledOnce();
     await expect(service.readStatus()).resolves.toMatchObject({
       availability: "running",
       configured: false,
-      detail: PWRSNAP_SESSION_REVOKED_DETAIL,
+      detail: PWRSNAP_SESSION_REJECTED_DETAIL,
     });
+    expect(PWRSNAP_SESSION_REJECTED_DETAIL).toContain("rejected");
+    expect(PWRSNAP_SESSION_REJECTED_DETAIL).not.toMatch(/revok/i);
 
-    // Existing threads keep starting; only PwrSnap calls report the revoke.
+    const requests = fetchFn.mock.calls.length;
+    await expect(service.listConnectionTools({ connectionId: "pwrsnap" }))
+      .rejects.toThrow("PwrSnap rejected this connection's authorization.");
+    expect(fetchFn).toHaveBeenCalledTimes(requests);
+
+    // Existing threads keep starting; only PwrSnap calls report the rejection.
     await expect(service.registerBridge("pwrsnap", "thread-1"))
       .resolves.toBeTruthy();
+  });
+
+  it("refreshes an existing PwrSnap token without requesting broader scopes", async () => {
+    const credential = JSON.parse(createAuthorizedCredential("fixture-old-access"));
+    credential.tokens = {
+      ...credential.tokens,
+      refresh_token: "fixture-refresh",
+      scope: "sizzle.compose",
+    };
+    const settings = createSettings(JSON.stringify(credential));
+    const refreshRequests: URLSearchParams[] = [];
+    const openExternal = vi.fn(async () => undefined);
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      registry: temporaryRegistry(),
+      settings,
+      leaseManager: null,
+      openExternal,
+      fetchFn: vi.fn(async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/oauth/token") {
+          refreshRequests.push(new URLSearchParams(String(init?.body)));
+          return Response.json({
+            access_token: "fixture-refreshed-access",
+            refresh_token: "fixture-rotated-refresh",
+            token_type: "bearer",
+            scope: "sizzle.compose",
+          });
+        }
+        if (url.pathname !== "/mcp") throw new Error("Unexpected fixture request");
+        if (new Headers(init?.headers).get("authorization") === "Bearer fixture-old-access") {
+          return new Response("unauthorized", { status: 401 });
+        }
+        if (init?.method !== "POST") return new Response(null, { status: 405 });
+        const request = JSON.parse(String(init.body));
+        if (request.id === undefined) return new Response(null, { status: 202 });
+        return Response.json({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: request.method === "initialize" ? {
+            protocolVersion: request.params.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: "PwrSnap fixture", version: "1.2.5" },
+          } : { tools: [] },
+        });
+      }),
+    });
+    services.push(service);
+
+    await expect(service.listConnectionTools({ connectionId: "pwrsnap" }))
+      .resolves.toMatchObject({ tools: [] });
+    expect(refreshRequests).toHaveLength(1);
+    expect(refreshRequests[0]!.get("grant_type")).toBe("refresh_token");
+    expect(refreshRequests[0]!.has("scope")).toBe(false);
+    expect(openExternal).not.toHaveBeenCalled();
+    const envelope = JSON.parse((await settings.resolveMcpConnectionCredentials())!);
+    expect(envelope.credentials.pwrsnap.tokens.scope).toBe("sizzle.compose");
   });
   /**
    * The OAuth round trip belongs to the browser, so "cancel" can only mean
@@ -936,7 +1043,7 @@ describe("McpConnectionGatewayService", () => {
       expect(upstream.connect).toHaveBeenCalledTimes(2);
     });
 
-    it("reports PwrSnap's revocation through the same session opener threads use", async () => {
+    it("reports PwrSnap's authorization rejection through the same session opener threads use", async () => {
       const settings = createSettings(createAuthorizedCredential());
       const service = new McpConnectionGatewayService({
         sandboxer: sandboxerStub(),
@@ -949,7 +1056,7 @@ describe("McpConnectionGatewayService", () => {
 
       await expect(
         service.listConnectionTools({ connectionId: "pwrsnap" }),
-      ).rejects.toThrow(PWRSNAP_SESSION_REVOKED_ERROR);
+      ).rejects.toThrow(PWRSNAP_SESSION_REJECTED_ERROR);
       expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalled();
     });
 
