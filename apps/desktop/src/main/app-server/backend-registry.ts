@@ -19,7 +19,7 @@ import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
-import { isSettledWorktree, listManagedWorktrees, nodeWorktreeRootReader, unreferencedWorktrees } from "./unreferenced-worktrees";
+import { isSettledWorktree, listManagedWorktrees, maintenanceWorktreeRoots, nodeWorktreeRootReader, registeredWorktreePaths, unreferencedWorktrees, type MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { ArchiveFleetIndex, type FleetChange, type FleetRow } from "./archive-cleanup-fleet-index";
 import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
@@ -522,6 +522,7 @@ import {
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
   type ThreadMaintenanceApplyRequest,
+  type ThreadMaintenanceCoverage,
   type ThreadMaintenanceRules,
   type ThreadMaintenanceRun,
   type ThreadMaintenanceScan,
@@ -2541,6 +2542,7 @@ type ArchiveCleanupDiscoveryRequest = {
   removalAdmission?: ArchiveWorkspaceAdmission;
   /** Collects each identity row before overlay merging, for the fleet index. */
   fleetRows?: Array<{ backend: AppServerBackendKind; base: AppServerThreadSummary; overlay?: ThreadOverlayState; archived: boolean }>;
+  onDiscoveryProgress?: (progress: MaintenanceDiscoveryProgress) => void;
 };
 
 type ArchiveWorktreeRemovalAdmission = {
@@ -2583,6 +2585,7 @@ export type ArchivedWorktreeRepairReport = {
   unreferencedTruncated?: boolean;
   /** Why unreferenced checkouts could not be listed this time. */
   unreferencedUnavailable?: string;
+  inventory?: { roots: string[]; paths: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]> };
 };
 
 /** Checkouts left in place by a repair pass, counted by a short reason. A
@@ -16847,26 +16850,45 @@ export class DesktopBackendRegistry {
   /** Every provider PwrAgent runs, for the hourly sweep and Thread
    * maintenance alike. Claude threads come from PwrAgent's own session store,
    * and one outside a PwrAgent worktree is kept by the shared keep rules. */
-  async listAutoArchiveCandidates(): Promise<ThreadArchiveCandidate[]> {
+  async listAutoArchiveCandidates(onProgress?: (progress: MaintenanceDiscoveryProgress) => void): Promise<ThreadArchiveCandidate[]> {
     await this.subAgentStartupReconciliation;
     if (this.closed || this.isBootstrapModeFn()) return [];
     // Use complete provider reads without navigation projection or display
     // persistence. An idle hourly sweep must make no SQLite commits.
-    const codexThreads = this.isCodexBootstrapDeferredFn() || !this.codexClient.listNativeSubAgentThreads ? [] : (await Promise.all([
-      this.codexClient.listThreads({
-        archived: false, enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true,
-      }, { callerReason: "auto-archive" }),
-      this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
-    ])).flat();
-    const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
-    // Only sessions PwrAgent started: its store, never ~/.claude.
-    try {
-      threads.push(...await this.claudeBackend.listThreads({ archived: false }));
-    } catch (error) {
-      backendRegistryLog.warn("auto-archive Claude thread read failed; Claude threads are kept", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+    onProgress?.({ detail: "Reading Codex threads and native children" });
+    const codexThreads: AppServerThreadSummary[] = [];
+    if (!this.isCodexBootstrapDeferredFn()) {
+      if (!this.codexClient.listArchiveCleanupThreadsPage) throw new Error("Complete Codex maintenance discovery is unavailable.");
+      const cursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await this.codexClient.listArchiveCleanupThreadsPage({
+          archived: false, cursor, limit: 100, checkpoint: async () => {}, directoryFilter: async () => false,
+        });
+        codexThreads.push(...page.threads);
+        onProgress?.({ detail: "Reading Codex checkout owners, including native children", found: codexThreads.length });
+        cursor = page.nextCursor?.trim();
+        if (cursor && cursors.has(cursor)) throw new Error("Codex maintenance discovery returned a repeated cursor.");
+        if (cursor) cursors.add(cursor);
+      } while (cursor);
     }
+    // Read provider membership without navigation enrichment or its durable
+    // caches. A failed provider is an incomplete safety inventory, not zero
+    // checkout users. Include children regardless of their parent's machine.
+    const threads = [...codexThreads];
+    for (const backendId of await this.acpBackend.archiveCleanupBackendIds()) {
+      onProgress?.({ detail: `Reading ${backendId} threads`, found: threads.length });
+      let after: string | undefined;
+      do {
+        const page = this.acpBackend.listArchiveCleanupSessionsPage(backendId, { archived: false, after, limit: 100 });
+        threads.push(...page.sessions.map((session) => this.acpBackend.sessionToThreadSummary(session)));
+        if (page.nextCursor && after && page.nextCursor <= after) throw new Error("ACP maintenance discovery did not advance.");
+        after = page.nextCursor;
+      } while (after);
+    }
+    onProgress?.({ detail: "Reading Claude threads", found: threads.length });
+    threads.push(...await this.claudeBackend.listThreads({ archived: false }));
+    const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
     // One read for every thread a PR watch will wake.
     const watchedThreadKeys = new Set(
       (await this.overlayStore.listAllActivePrStatusWatches()).map((watch) =>
@@ -16889,6 +16911,7 @@ export class DesktopBackendRegistry {
         });
       } catch (error) { unreadable(error, backend); }
       for (const thread of backendThreads) {
+        onProgress?.({ detail: `Resolving ${backend} checkout ownership`, found: candidates.length, root: thread.projectKey });
         const activePrWatch = watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
         const mergeHeld = mergeHeldThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
         if (!overlays) {
@@ -16897,7 +16920,7 @@ export class DesktopBackendRegistry {
         }
         try {
           candidates.push({
-            thread, overlay: overlays[thread.id],
+            thread: await this.maintenanceThreadWorkspace(thread, overlays[thread.id], workspaceObservations), overlay: overlays[thread.id],
             activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
             activePrWatch,
             mergeHeld,
@@ -16909,6 +16932,35 @@ export class DesktopBackendRegistry {
       }
     }
     return candidates;
+  }
+
+  /** Provider cwd summaries are intentionally minimal. Resolve their current
+   * checkout from Git metadata on every maintenance read, independently of
+   * which threads navigation has previously opened. Never persists a cache. */
+  private async maintenanceThreadWorkspace(
+    thread: AppServerThreadSummary,
+    overlay: ThreadOverlayState | undefined,
+    observations = new Map<string, Promise<LinkedDirectorySummary | undefined>>(),
+  ): Promise<AppServerThreadSummary> {
+    const cwd = resolveThreadWorkspaceCwd(thread, overlay?.extraLinkedDirectories ?? []);
+    if (!cwd) return thread;
+    let observation = observations.get(cwd);
+    if (!observation) {
+      observation = this.acpWorktreeRepositoryResolver(cwd);
+      observations.set(cwd, observation);
+    }
+    const directory = await observation;
+    if (!directory) return thread;
+    // Explicit external ownership wins over filesystem classification.
+    const external = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
+      .some((item) => item.worktreeOwnership === "external"
+        && [cwd, directory.worktreePath!].some((target) =>
+          normalizeWorktreePathForComparison(item.worktreePath ?? item.path) === normalizeWorktreePathForComparison(target)));
+    const resolvedPaths = new Set([cwd, directory.worktreePath!].map(normalizeWorktreePathForComparison));
+    return { ...thread, linkedDirectories: [
+      { ...directory, ...(external ? { worktreeOwnership: "external" as const } : {}) },
+      ...thread.linkedDirectories.filter((item) => !resolvedPaths.has(normalizeWorktreePathForComparison(item.worktreePath ?? item.path))),
+    ] };
   }
 
   /** Threads a Continue After wait holds from merging; auto-archive keeps them. */
@@ -17549,13 +17601,14 @@ export class DesktopBackendRegistry {
             return await client.readThreadSummary(threadId);
           });
     if (!thread) throw new Error(`Thread metadata was not found: ${threadId}`);
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
+    const resolved = await this.maintenanceThreadWorkspace(thread, overlay);
     return {
       thread: {
         ...candidate.thread,
-        ...thread,
-        linkedDirectories: thread.linkedDirectories.length > 0 ? thread.linkedDirectories : candidate.thread.linkedDirectories,
+        ...resolved,
       },
-      overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
+      overlay,
       activeSubAgent: await this.hasArchiveActiveSubAgent(backend, threadId),
       activePrWatch: (await this.overlayStore.listActiveThreadPrStatusWatches({ backend, threadId })).length > 0,
       mergeHeld: this.readMergeHeldThreadKeys().has(buildThreadIdentityKey(backend, threadId)),
@@ -40121,15 +40174,16 @@ export class DesktopBackendRegistry {
   }
 
   /** Read-only list of archived threads' checkouts still on disk, for review. */
-  async auditArchivedCheckouts(): Promise<{
+  async auditArchivedCheckouts(onProgress?: (progress: MaintenanceDiscoveryProgress) => void): Promise<{
     candidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string }>;
     kept: Record<string, number>;
     emptyFolders: number;
     unreferenced: string[];
     unreferencedUnavailable?: string;
     unreferencedTruncated?: boolean;
+    inventory?: ArchivedWorktreeRepairReport["inventory"];
   }> {
-    const report = await this.repairArchivedThreadWorktrees({ dryRun: true, includeUnreferenced: true });
+    const report = await this.runArchivedThreadWorktreeRepair({ dryRun: true, includeUnreferenced: true, onDiscoveryProgress: onProgress });
     return {
       candidates: report.candidates,
       kept: archivedWorktreeKeptReasons(report),
@@ -40137,15 +40191,48 @@ export class DesktopBackendRegistry {
       unreferenced: report.unreferencedWorktrees ?? [],
       ...(report.unreferencedUnavailable ? { unreferencedUnavailable: report.unreferencedUnavailable } : {}),
       ...(report.unreferencedTruncated ? { unreferencedTruncated: true } : {}),
+      ...(report.inventory ? { inventory: report.inventory } : {}),
     };
   }
 
   /** PwrAgent's worktree roots: `~/.pwragent/worktrees` and each profile's. */
   private async managedWorktreeRoots(): Promise<string[]> {
     if (this.managedWorktreeRootsOverride) return this.managedWorktreeRootsOverride();
-    const root = userHomeWorktreesRoot();
-    const profiles = path.join(path.dirname(root), "profiles");
-    return [root, ...(await nodeWorktreeRootReader.listDirectories(profiles)).map((name) => path.join(profiles, name, "worktrees"))];
+    return await maintenanceWorktreeRoots(userHomeWorktreesRoot(), await this.readActiveCodexMcpHome(), os.homedir());
+  }
+
+  /** Include Git-registered linked checkouts in any location. The returned
+   * set is discovery only; fresh provider ownership and snapshots still gate
+   * every selected removal. A failed repository listing keeps its checkouts. */
+  private async discoverMaintenanceWorktrees(
+    inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
+    onProgress?: (progress: MaintenanceDiscoveryProgress) => void,
+  ): Promise<{ roots: string[]; paths: string[]; truncated: boolean; unavailable?: string }> {
+    const roots = await this.managedWorktreeRoots();
+    const found = await listManagedWorktrees(roots, nodeWorktreeRootReader, undefined, onProgress);
+    const paths = new Set(found.paths);
+    // One registration read per repository, including repositories known only
+    // through an archived or a child thread. No directory-name allowlist.
+    const repositories = new Set<string>();
+    for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) {
+      for (const directory of thread.linkedDirectories) repositories.add(directory.path);
+    }
+    let unavailable: string | undefined;
+    for (const repository of repositories) {
+      onProgress?.({ detail: "Reading Git worktree registrations", root: repository, found: paths.size });
+      try {
+        const { stdout } = await runGitCommand(repository, ["worktree", "list", "--porcelain", "-z"], { timeout: 10_000 });
+        for (const checkout of registeredWorktreePaths(stdout)) {
+          if (await nodeWorktreeRootReader.isLinkedWorktree(checkout)) paths.add(checkout);
+        }
+      } catch (_error) {
+        // Missing historical repositories have no additional registrations.
+        // Existing but unreadable ones make the reported coverage incomplete.
+        try { await stat(repository); unavailable = "Some Git worktree registrations could not be read"; }
+        catch (missing) { if ((missing as NodeJS.ErrnoException).code !== "ENOENT") unavailable = "Some repositories could not be read"; }
+      }
+    }
+    return { roots, paths: [...paths], truncated: found.truncated, ...(unavailable ? { unavailable } : {}) };
   }
 
   /** Canonical paths every active and archived thread refers to, or
@@ -40169,13 +40256,18 @@ export class DesktopBackendRegistry {
   private async listUnreferencedWorktrees(
     inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
     report: ArchivedWorktreeRepairReport,
+    onProgress?: (progress: MaintenanceDiscoveryProgress) => void,
   ): Promise<void> {
+    const found = await this.discoverMaintenanceWorktrees(inventory, onProgress);
+    const providers = new Map<string, number>();
+    for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) providers.set(thread.source, (providers.get(thread.source) ?? 0) + 1);
+    report.inventory = { roots: found.roots, paths: found.paths, providers: [...providers].map(([backend, threads]) => ({ backend, threads })) };
+    if (found.unavailable) report.unreferencedUnavailable = found.unavailable;
     const references = await this.worktreeReferences(inventory);
     if (!references) {
       report.unreferencedUnavailable = "A thread's folder could not be resolved";
       return;
     }
-    const found = await listManagedWorktrees(await this.managedWorktreeRoots());
     const canonical = canonicalWorktreePaths();
     const byKey = new Map<string, string>();
     for (const value of found.paths) {
@@ -40222,11 +40314,12 @@ export class DesktopBackendRegistry {
         } catch (error) { recordError(worktreePath, error); }
       }
       const remove = async (): Promise<ArchiveThreadResponse> => {
-        const read = async () => await this.worktreeReferences(await this.readPacedArchiveCleanupInventory({ backend: "codex", threadId: "", context }));
-        const references = context.withInventory ? await context.withInventory(read) : await read();
+        const read = async () => await this.readPacedArchiveCleanupInventory({ backend: "codex", threadId: "", context });
+        const inventory = context.withInventory ? await context.withInventory(read) : await read();
+        const references = await this.worktreeReferences(inventory);
         const canonical = canonicalWorktreePaths();
         const managed = new Set<string>();
-        for (const value of (await listManagedWorktrees(await this.managedWorktreeRoots())).paths) {
+        for (const value of (await this.discoverMaintenanceWorktrees(inventory)).paths) {
           try { managed.add(await canonical(value)); } catch { /* gone */ }
         }
         for (const worktreePath of candidates) {
@@ -40235,7 +40328,7 @@ export class DesktopBackendRegistry {
           try {
             const key = await canonical(worktreePath);
             const reason = !references ? "Thread folders could not be checked"
-              : !managed.has(key) ? "Not a PwrAgent checkout"
+              : !managed.has(key) ? "Checkout is no longer registered"
                 : unreferencedWorktrees([key], references).length === 0 ? "A thread uses it now"
                   : !await isSettledWorktree(worktreePath) ? "Created recently"
                     : undefined;
@@ -40372,6 +40465,7 @@ export class DesktopBackendRegistry {
     includeUnreferenced?: boolean;
     select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
+    onDiscoveryProgress?: (progress: MaintenanceDiscoveryProgress) => void;
   } = {}): Promise<ArchivedWorktreeRepairReport> {
     await this.subAgentStartupReconciliation;
     if (this.isBootstrapModeFn() || this.isCodexBootstrapDeferredFn() || !this.codexClient.listArchiveCleanupThreadsPage) {
@@ -40384,6 +40478,7 @@ export class DesktopBackendRegistry {
     let report!: ArchivedWorktreeRepairReport;
     const ownersByPath = new Map<string, { thread: AppServerThreadSummary; worktreePath: string }>();
     const canonicalKeys = new Map<string, string>();
+    options.onDiscoveryProgress?.({ detail: "Waiting for checkout ownership audit" });
     await this.archiveCleanupQueue.enqueue(`archive-repair-read:${++this.archiveWorkspaceWriteSequence}`, async (context) => {
       const checkpoint = async () => { await context.checkpoint(); };
       const canonical = canonicalWorktreePaths();
@@ -40401,7 +40496,26 @@ export class DesktopBackendRegistry {
       };
       inventory = await this.readPacedArchiveCleanupInventory({
         backend: "codex", threadId: "", context,
+        ...(options.dryRun ? { identityOnly: true } : {}),
+        onDiscoveryProgress: options.onDiscoveryProgress,
       });
+      if (options.dryRun) {
+        // Identity pages are read at the provider's maximum page size with
+        // no per-row Git subprocess. Resolve cwd metadata once per checkout
+        // in bounded slices instead of serially enriching thousands of rows.
+        const observations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
+        let found = 0;
+        for (const rows of [inventory.activeThreads, inventory.archivedThreads]) {
+          for (let offset = 0; offset < rows.length; offset += ARCHIVE_CLEANUP_SLICE_SIZE) {
+            await checkpoint();
+            options.onDiscoveryProgress?.({ detail: "Resolving checkout ownership from Git metadata", found });
+            const resolved = await Promise.all(rows.slice(offset, offset + ARCHIVE_CLEANUP_SLICE_SIZE).map(async (thread) =>
+              await this.maintenanceThreadWorkspace(thread, inventory.overlaysByThreadKey?.get(buildThreadIdentityKey(thread.source, thread.id)), observations)));
+            rows.splice(offset, resolved.length, ...resolved);
+            found += resolved.length;
+          }
+        }
+      }
       report = {
         archivedThreads: inventory.archivedThreads.length, discoveredWorktrees: 0,
         missingWorktrees: 0, protectedWorktrees: 0, protectedWorktreeDetails: [], candidates: [], cleanup: [],
@@ -40428,6 +40542,7 @@ export class DesktopBackendRegistry {
       const seenContainers = new Set<string>();
       for (const [canonicalKey, { worktreePath, thread }] of ownersByPath) {
         await checkpoint();
+        options.onDiscoveryProgress?.({ detail: "Checking archived checkout owners", root: worktreePath, found: report.candidates.length });
         // One unreadable checkout records its own error; the rest are still read.
         try {
           try {
@@ -40482,7 +40597,7 @@ export class DesktopBackendRegistry {
       }
       if (options.dryRun && options.includeUnreferenced) {
         await checkpoint();
-        await this.listUnreferencedWorktrees(inventory, report);
+        await this.listUnreferencedWorktrees(inventory, report, options.onDiscoveryProgress);
       }
       backendRegistryLog.info("archived worktree repair discovered", {
         archivedThreads: report.archivedThreads, discoveredWorktrees: report.discoveredWorktrees,
@@ -40658,7 +40773,7 @@ export class DesktopBackendRegistry {
     let activeTarget: AppServerThreadSummary | undefined;
     let targetIsActive = false;
     const overlaysByThreadKey = new Map<string, ThreadOverlayState | undefined>();
-    const agents = await this.acpBackend.listAvailableAgents();
+    const agents = (await this.acpBackend.archiveCleanupBackendIds()).map((backendId) => ({ backendId }));
     const directoryObservations = new Map<string, Promise<ThreadDirectoryEnrichment>>();
     const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
     // Admission never uses the preliminary inventory. Larger metadata pages
@@ -40678,6 +40793,7 @@ export class DesktopBackendRegistry {
       for (let offset = 0; offset < rows.length; offset += ARCHIVE_CLEANUP_SLICE_SIZE) {
         await context?.checkpoint();
         const slice = rows.slice(offset, offset + ARCHIVE_CLEANUP_SLICE_SIZE);
+        params.onDiscoveryProgress?.({ detail: `Reading ${archived ? "archived" : "active"} ${backend} threads`, found: activeThreads.length + archivedThreads.length });
         const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
         const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: slice.map((thread) => thread.id) });
         for (const row of slice) {
@@ -40753,6 +40869,7 @@ export class DesktopBackendRegistry {
         let cursor: string | undefined;
         do {
           await context?.checkpoint();
+          params.onDiscoveryProgress?.({ detail: `Reading ${archived ? "archived" : "active"} Codex page ${providerPages + 1}`, found: activeThreads.length + archivedThreads.length });
           const page = await this.codexClient.listArchiveCleanupThreadsPage!({
             archived, cursor, limit: providerPageSize,
             checkpoint: async () => { await context?.checkpoint(); },

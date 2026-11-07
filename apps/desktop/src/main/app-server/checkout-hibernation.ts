@@ -1,7 +1,6 @@
 import path from "node:path";
 import {
   CHECKOUT_HIBERNATION_CLAUDE_MAX_IDLE_DAYS,
-  toolWorktreeRootOwner,
   type DesktopCheckoutHibernationPolicy,
   type LinkedDirectorySummary,
   type WorktreeSnapshotSummary,
@@ -71,15 +70,12 @@ export function hibernatedSnapshotFor(candidate: Pick<ThreadArchiveCandidate, "t
   return snapshot?.state === "hibernated" ? snapshot : undefined;
 }
 
-/** The one checkout hibernation may remove: the thread's working worktree,
- * under PwrAgent's or Codex's worktree root and not borrowed. */
+/** The thread's working worktree. Location is not an ownership signal; the
+ * subsequent Git probe must establish a linked checkout, never a primary. */
 export function hibernationTarget(candidate: Pick<ThreadArchiveCandidate, "thread" | "overlay">): HibernationTarget | { keep: string } {
   const directory = primaryThreadWorktree(candidate.thread);
   if (!directory) return { keep: HIBERNATION_KEEP_REASONS.noWorktree };
   if (directory.worktreeOwnership === "external") return { keep: HIBERNATION_KEEP_REASONS.borrowed };
-  // Codex never removes a checkout in ~/.codex/worktrees, so hibernation
-  // reclaims those too. Restore recreates the checkout at the same path.
-  if (!toolWorktreeRootOwner(directory.worktreePath)) return { keep: HIBERNATION_KEEP_REASONS.outsideRoot };
   return { directory, worktreePath: directory.worktreePath, repositoryPath: directory.path };
 }
 
@@ -103,7 +99,7 @@ export function hibernationKeepReason(
     || overlay?.archiveRetentionStartedAt !== undefined) return HIBERNATION_KEEP_REASONS.archived;
   // Keep it awake: the operator's own exemption, until they turn it off.
   if (overlay?.keepCheckoutAwake) return HIBERNATION_KEEP_REASONS.keptAwake;
-  const protection = archiveCandidateProtectionReason(candidate, { allowPinned: true });
+  const protection = archiveCandidateProtectionReason(candidate, { allowPinned: true, allowOwnedClaudeWorktree: true });
   if (protection) return protection;
   const target = hibernationTarget(candidate);
   if ("keep" in target) return target.keep;

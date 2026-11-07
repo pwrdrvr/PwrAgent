@@ -9,6 +9,7 @@ import {
   type DesktopThreadArchivePolicy,
   type ThreadMaintenanceApplyRequest,
   type ThreadMaintenanceArchivedCheckout,
+  type ThreadMaintenanceCoverage,
   type ThreadMaintenanceFailure,
   type ThreadMaintenanceHibernateCheckout,
   type ThreadMaintenanceIdleThread,
@@ -22,6 +23,7 @@ import {
   type ThreadMaintenanceStep,
   type ThreadMaintenanceStepResult,
   type ThreadMaintenanceWorkspace,
+  type ThreadMaintenanceSpace,
   THREAD_MAINTENANCE_SCAN_STEPS,
 } from "@pwragent/shared";
 import {
@@ -41,6 +43,7 @@ import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from
 import { inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
 import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor } from "./checkout-hibernation";
 import { missingWorktreeRepository } from "./worktree-archive-service";
+import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
 const FAILURE_LIMIT = 50;
@@ -57,6 +60,7 @@ export type ArchivedCheckoutAudit = {
   unreferenced?: string[];
   unreferencedUnavailable?: string;
   unreferencedTruncated?: boolean;
+  inventory?: { roots: string[]; paths: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]> };
 };
 
 export type UnreferencedCheckoutRemoval = {
@@ -80,14 +84,16 @@ export type ArchivedCheckoutRemoval = {
 export type ThreadMaintenanceDeps = {
   getPolicy: () => DesktopThreadArchivePolicy;
   snapshotLimitBytes: number;
-  listCandidates: () => Promise<ThreadArchiveCandidate[]>;
+  listCandidates: (onProgress?: (progress: MaintenanceDiscoveryProgress) => void) => Promise<ThreadArchiveCandidate[]>;
   /** This machine's threads' sub-threads on peers, by parent identity key. */
   listPeerSubthreads?: () => Promise<ReadonlyMap<string, readonly string[]>>;
   resolveProject: (candidate: ThreadArchiveCandidate) => Promise<string | undefined>;
   refreshCandidate: (candidate: ThreadArchiveCandidate) => Promise<ThreadArchiveCandidate>;
   isBusy: (candidate: ThreadArchiveCandidate) => boolean;
   /** Read-only discovery of archived threads' checkouts still on disk. */
-  auditArchivedCheckouts: () => Promise<ArchivedCheckoutAudit>;
+  auditArchivedCheckouts: (onProgress?: (progress: MaintenanceDiscoveryProgress) => void) => Promise<ArchivedCheckoutAudit>;
+  /** Allocation only, never snapshot size or predicted space recovery. */
+  measureAllocation?: (checkout: string, signal: AbortSignal) => Promise<ThreadMaintenanceSpace | undefined>;
   /** Archive one reviewed family as an operator archive. Resolves false when cancelled. */
   archiveFamily: (family: ThreadArchiveCandidate[], options: {
     preserveWorktrees: boolean;
@@ -158,6 +164,7 @@ type RetainedScan = {
   subthreads: Map<string, string[]>;
   families: Map<string, { family: ThreadArchiveCandidate[]; row: ThreadMaintenanceIdleThread }>;
   checkouts: Map<string, ThreadMaintenanceArchivedCheckout>;
+  allocation: Map<string, Promise<ThreadMaintenanceSpace | undefined>>;
 };
 
 /**
@@ -223,6 +230,7 @@ export class ThreadMaintenanceService {
       subthreads: new Map(),
       projects: new Map(),
       hibernate: new Map(),
+      allocation: new Map(),
     };
     const threads = steps.includes("threads") || steps.includes("hibernate")
       ? await this.scanThreads(rules, policy, now, request.projectKey, retained, fail, progress, steps.includes("threads"))
@@ -241,7 +249,7 @@ export class ThreadMaintenanceService {
       rules,
       ...(request.projectKey ? { projectKey: request.projectKey } : {}),
       ...(request.steps ? { steps } : {}),
-      spaceSource: "none",
+      spaceSource: this.deps.measureAllocation ? "filesystem" : "none",
       threads,
       ...(hibernate ? { hibernate } : {}),
       checkouts,
@@ -287,7 +295,7 @@ export class ThreadMaintenanceService {
     const result: ThreadMaintenanceScan["threads"] = { checked: 0, projects: [], kept: {} };
     let candidates: ThreadArchiveCandidate[];
     progress.list(evaluate ? "threads" : "hibernate");
-    try { candidates = await this.deps.listCandidates(); }
+    try { candidates = await this.deps.listCandidates((update) => progress.discovery(update)); }
     catch (error) {
       fail("threads", error);
       return { ...result, skipped: "Threads could not be listed" };
@@ -439,7 +447,17 @@ export class ThreadMaintenanceService {
     for (const [rootKey, { family }] of retained.families) {
       for (const member of family) archivedWith.set(buildThreadIdentityKey(member.thread.source, member.thread.id), rootKey);
     }
-    const roots = candidates.filter((candidate) => !candidate.thread.codexNativeSubAgent);
+    // A native child can own an independent checkout even when its parent
+    // lives elsewhere. Shared-checkout protection decides whether it stays.
+    const roots = candidates;
+    const measuredPaths = new Map<string, ThreadMaintenanceSpace | undefined>();
+    const excluded = new Map<string, { count: number; paths: Set<string> }>();
+    const exclude = (reason: string, target?: string) => {
+      const item = excluded.get(reason) ?? { count: 0, paths: new Set<string>() };
+      if (!target || !item.paths.has(target)) item.count += 1;
+      if (target) item.paths.add(target);
+      excluded.set(reason, item);
+    };
     progress.check("hibernate", roots.length);
     const evaluated = await mapLimit(roots, INSPECT_CONCURRENCY, progress.track((candidate) => candidate.thread.title, async (candidate) => {
       if (this.abort.signal.aborted) return undefined;
@@ -450,11 +468,13 @@ export class ThreadMaintenanceService {
           if (!project || path.resolve(project) !== path.resolve(projectFilter)) return undefined;
         }
         const listed = deps.keepReason(candidate, candidates, policy, now);
-        if (!listed.target) return undefined;
+        if (!listed.target) { exclude(listed.keep ?? "No linked worktree checkout"); return undefined; }
+        const space = await this.allocation(listed.target, retained);
+        measuredPaths.set(listed.target, space);
         // A hibernated checkout has nothing on disk, whichever reason keeps it.
-        if (listed.keep) return { keep: listed.keep, hibernated: !!hibernatedSnapshotFor(candidate) };
+        if (listed.keep) { exclude(listed.keep, listed.target); return { keep: listed.keep, hibernated: !!hibernatedSnapshotFor(candidate) }; }
         const inspection = await deps.inspect(listed.target, policy, this.abort.signal);
-        if (inspection.keep !== undefined) return { keep: inspection.keep, hibernated: false };
+        if (inspection.keep !== undefined) { exclude(inspection.keep, listed.target); return { keep: inspection.keep, hibernated: false }; }
         const directory = candidate.thread.linkedDirectories.find((item) => item.worktreePath === listed.target);
         const row: ThreadMaintenanceHibernateCheckout = {
           backend: candidate.thread.source,
@@ -465,6 +485,7 @@ export class ThreadMaintenanceService {
           lastActivityAt: archiveCandidateLastActivity(candidate),
           files: inspection.files,
           bytes: inspection.bytes,
+          ...(space ? { space } : {}),
           ...(inspection.removedOutput?.length ? { removedOutput: inspection.removedOutput } : {}),
         };
         const archiveKey = archivedWith.get(buildThreadIdentityKey(candidate.thread.source, candidate.thread.id));
@@ -498,6 +519,8 @@ export class ThreadMaintenanceService {
     }
     result.notIdleYet = notIdleYet;
     result.alreadyHibernated = alreadyHibernated;
+    result.coverage = allocationCoverage(measuredPaths, providerCounts(candidates.map((item) => item.thread.source)), undefined,
+      [...excluded].map(([reason, item]) => ({ reason, count: item.count, paths: [...item.paths] })), now);
     // Longest idle first, as the archive review lists its rows.
     result.items.sort((a, b) => a.lastActivityAt - b.lastActivityAt);
     return result;
@@ -538,11 +561,18 @@ export class ThreadMaintenanceService {
   ): Promise<ThreadMaintenanceScan["checkouts"]> {
     let audit: ArchivedCheckoutAudit;
     progress.list("checkouts");
-    try { audit = await this.deps.auditArchivedCheckouts(); }
+    try { audit = await this.deps.auditArchivedCheckouts((update) => progress.discovery(update)); }
     catch (error) {
       fail("checkouts", error);
       return { items: [], kept: {}, emptyFolders: 0, skipped: "Archived checkouts could not be read" };
     }
+    const measuredPaths = new Map<string, ThreadMaintenanceSpace | undefined>();
+    const paths = [...new Set(audit.inventory?.paths ?? [...audit.candidates.map((item) => item.worktreePath), ...audit.unreferenced ?? []])];
+    progress.check("checkouts", paths.length);
+    progress.discovery({ detail: "Measuring checkout allocation on disk", found: paths.length });
+    await mapLimit(paths, INSPECT_CONCURRENCY, progress.track((target) => target, async (target) => {
+      measuredPaths.set(target, await this.allocation(target, retained));
+    }));
     const inspect = this.deps.inspectWorkspace ?? inspectMaintenanceWorkspace;
     const kept = { ...audit.kept };
     progress.check("checkouts", audit.candidates.length + (audit.unreferenced?.length ?? 0));
@@ -602,8 +632,25 @@ export class ThreadMaintenanceService {
       }
     }));
     result.push(...unreferenced.filter((item) => item !== undefined));
-    for (const item of result) retained.checkouts.set(item.worktreePath, item);
-    return { items: result, kept, emptyFolders: audit.emptyFolders };
+    for (const item of result) {
+      const space = measuredPaths.get(item.worktreePath);
+      if (space) item.space = space;
+      retained.checkouts.set(item.worktreePath, item);
+    }
+    const offered = new Set(result.map((item) => item.worktreePath));
+    return { items: result, kept, emptyFolders: audit.emptyFolders,
+      coverage: allocationCoverage(measuredPaths, audit.inventory?.providers ?? [], audit.inventory?.roots,
+        [{ reason: "Protected, referenced, recent or not safe to snapshot", count: paths.filter((target) => !offered.has(target)).length,
+          paths: paths.filter((target) => !offered.has(target)) }], this.now()) };
+  }
+
+  private allocation(target: string, retained: RetainedScan): Promise<ThreadMaintenanceSpace | undefined> {
+    let measured = retained.allocation.get(target);
+    if (!measured) {
+      measured = this.deps.measureAllocation?.(target, this.abort.signal) ?? Promise.resolve(undefined);
+      retained.allocation.set(target, measured);
+    }
+    return measured;
   }
 
   private async execute(request: ThreadMaintenanceApplyRequest, retained: RetainedScan): Promise<ThreadMaintenanceRun> {
@@ -690,7 +737,8 @@ export class ThreadMaintenanceService {
     for (const [index, item] of hibernateItems.entries()) {
       const entry = retained.hibernate.get(keyOf(item));
       const object = entry?.row.title ?? item.threadId;
-      const ids = { backend: item.backend, threadId: item.threadId, ...(entry ? { path: entry.row.worktreePath } : {}) };
+      const ids = { backend: item.backend, threadId: item.threadId, ...(entry ? { path: entry.row.worktreePath } : {}),
+        ...(entry?.row.space?.allocatedBytes !== undefined ? { bytes: entry.row.space.allocatedBytes } : {}) };
       const keepIt = (reason: string, detail?: string) => {
         hibernateStep.kept += 1;
         addProblem({ step: "hibernate", kind: "kept", object, reason, ...(detail ? { detail } : {}), ...ids });
@@ -717,7 +765,10 @@ export class ThreadMaintenanceService {
         }
         const outcome = await this.deps.hibernation.hibernate(refreshed,
           retained.hibernatePolicy ?? { ...this.deps.hibernation.getPolicy(), enabled: true });
-        if (outcome === true) hibernateStep.done += 1;
+        if (outcome === true) {
+          hibernateStep.done += 1;
+          if (entry.row.space?.allocatedBytes !== undefined) hibernateStep.allocatedBytesRemoved = (hibernateStep.allocatedBytesRemoved ?? 0) + entry.row.space.allocatedBytes;
+        }
         else keepIt(outcome === false ? "Hibernation cancelled" : outcome);
       } catch (error) {
         hibernateStep.failed += 1;
@@ -974,6 +1025,57 @@ async function checkoutProjectPath(worktreePath: string): Promise<string | undef
 /** A scan's position, without the window's progress id. */
 export type ScanProgressSnapshot = Omit<ThreadMaintenanceScanProgress, "progressId">;
 
+function providerCounts(backends: string[]): NonNullable<ThreadMaintenanceCoverage["providers"]> {
+  const counts = new Map<string, number>();
+  for (const backend of backends) counts.set(backend, (counts.get(backend) ?? 0) + 1);
+  return [...counts].map(([backend, threads]) => ({ backend, threads }));
+}
+
+/** Counts each checkout once, independently of how many threads share it.
+ * Unknown allocation stays unknown; partial sums are explicitly lower bounds. */
+function allocationCoverage(
+  paths: ReadonlyMap<string, ThreadMaintenanceSpace | undefined>,
+  providers: NonNullable<ThreadMaintenanceCoverage["providers"]>,
+  scannedRoots: string[] = [],
+  exclusions: { reason: string; count: number; paths: string[] }[] = [],
+  measuredAt: number,
+): ThreadMaintenanceCoverage {
+  const roots = new Map<string, ThreadMaintenanceCoverage["roots"][number]>();
+  const rootFor = (target: string) => {
+    const explicit = scannedRoots.filter((root) => target === root || target.startsWith(root + path.sep))
+      .sort((a, b) => b.length - a.length)[0];
+    if (explicit) return explicit;
+    const marker = path.sep + "worktrees" + path.sep;
+    const index = target.lastIndexOf(marker);
+    return index >= 0 ? target.slice(0, index + marker.length - 1) : path.dirname(target);
+  };
+  const rootRow = (root: string) => {
+    let row = roots.get(root);
+    if (!row) {
+      const normalized = root.replace(/\\/g, "/");
+      const owner = /\/\.codex(?:\/|$)/.test(normalized) ? "codex"
+        : /\/\.pwrag(?:ent|nt)(?:\/|$)/.test(normalized) ? "pwragent" : "other";
+      row = { path: root, owner, checkouts: 0 };
+      roots.set(root, row);
+    }
+    return row;
+  };
+  for (const root of scannedRoots) rootRow(root);
+  for (const [target, space] of paths) {
+    const row = rootRow(rootFor(target));
+    row.checkouts += 1;
+    if (space?.allocatedBytes !== undefined) row.allocatedBytes = (row.allocatedBytes ?? 0) + space.allocatedBytes;
+    if (space?.allocatedBytes === undefined || space.lowerBound) row.lowerBound = true;
+  }
+  return { roots: [...roots.values()], providers, measuredAt,
+    excluded: exclusions.filter((item) => item.count > 0).map((item) => {
+      const measured = item.paths.map((target) => paths.get(target)?.allocatedBytes);
+      return { reason: item.reason, count: item.count,
+        ...(measured.some((value) => value !== undefined)
+          ? { allocatedBytes: measured.reduce<number>((sum, value) => sum + (value ?? 0), 0) } : {}) };
+    }) };
+}
+
 /** Tracks where a scan is and tells the listener on every change. A step
  * starts "listing" while it reads what to check, then counts items as they
  * finish. Items in flight are named, in the order they started. */
@@ -983,6 +1085,7 @@ class ScanProgress {
   private processed = 0;
   private total = 0;
   private readonly inFlight: string[] = [];
+  private discoveryState: MaintenanceDiscoveryProgress = {};
 
   constructor(private readonly steps: ThreadMaintenanceScanStep[], private readonly listener?: (progress: ScanProgressSnapshot) => void) {
     this.step = steps[0] ?? "threads";
@@ -994,6 +1097,11 @@ class ScanProgress {
 
   check(step: ThreadMaintenanceScanStep, total: number): void {
     this.reset(step, "checking", total);
+  }
+
+  discovery(update: MaintenanceDiscoveryProgress): void {
+    this.discoveryState = update;
+    this.emit();
   }
 
   /** Wraps one item's work so it is named while it runs and counted when it ends. */
@@ -1019,6 +1127,7 @@ class ScanProgress {
     this.processed = 0;
     this.total = total;
     this.inFlight.length = 0;
+    this.discoveryState = {};
     this.emit();
   }
 
@@ -1026,6 +1135,7 @@ class ScanProgress {
     this.listener?.({
       steps: [...this.steps], step: this.step, stage: this.stage,
       processed: this.processed, total: this.total, inFlight: [...this.inFlight],
+      ...this.discoveryState,
     });
   }
 }

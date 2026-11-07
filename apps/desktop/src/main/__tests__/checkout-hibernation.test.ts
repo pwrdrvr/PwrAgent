@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -618,6 +619,38 @@ describe("Restore now and Keep it awake", () => {
 });
 
 describe("Thread maintenance's hibernate step", () => {
+  // Provider inventory is the oracle, independently of navigation's source
+  // and companion-app filters. A hidden row can still hold real disk space.
+  it("includes every provider checkout owner even when navigation hides it", async () => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open();
+    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.constantFrom("cli", "vscode", "exec", "appServer"), { minLength: 1 }), async (sources) => {
+      ArchiveWorktreeTransport.threads = sources.map((source, index) => ({
+        id: `owner-${index}`, cwd: fixture.worktree, source, name: "PwrSnap Capture Metadata Worker", status: { type: "notLoaded" },
+      }));
+      const found = await registry.listAutoArchiveCandidates();
+      expect(found.map((row) => row.thread.id).sort()).toEqual(ArchiveWorktreeTransport.threads.map((row) => row.id).sort());
+    }), { numRuns: 12 });
+  });
+
+  // Git is the oracle for workspace kind. A provider's minimal cwd summary
+  // must not turn a real linked checkout into a plain directory on recheck.
+  it("revalidates provider cwd summaries against Git instead of losing their checkout", async () => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open();
+    const listed = (await registry.listAutoArchiveCandidates())[0]!;
+    const client = (registry as unknown as { codexClient: CodexAppServerClient }).codexClient;
+    vi.spyOn(client, "readThreadSummary").mockResolvedValue({
+      ...listed.thread,
+      projectKey: fixture.worktree,
+      linkedDirectories: [{ id: fixture.worktree, path: fixture.worktree, kind: "local", label: "repo" }],
+    });
+    const refreshed = await registry.refreshArchiveCandidate(listed);
+    expect(refreshed.thread.linkedDirectories).toEqual([expect.objectContaining({
+      kind: "worktree", worktreePath: fixture.worktree, path: fixture.repo,
+    })]);
+  });
+
   function maintenance(registry: DesktopBackendRegistry) {
     return new ThreadMaintenanceService({
       getPolicy: () => registry.getThreadArchivePolicy(),

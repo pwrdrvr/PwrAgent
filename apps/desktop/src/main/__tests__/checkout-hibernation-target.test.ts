@@ -14,10 +14,9 @@ function candidate(directory: Partial<LinkedDirectorySummary> & { worktreePath: 
 }
 
 describe("hibernationTarget", () => {
-  // Model: hibernation may take a thread's own worktree when it sits under
-  // PwrAgent's or Codex's worktree root (optionally per profile) and is not
-  // borrowed. Codex never cleans ~/.codex/worktrees itself.
-  it("takes a checkout under PwrAgent's or Codex's worktree root, and nothing else", () => {
+  // Property: location does not decide eligibility. The Git inspection proves
+  // it is a linked checkout; explicit external ownership still protects it.
+  it("considers owned worktrees independently of their directory layout", () => {
     const segment = fc.stringMatching(/^[a-z0-9-]{1,8}$/);
     fc.assert(fc.property(
       fc.constantFrom(".codex", ".pwragent", ".pwragnt", ".cache", "worktrees", "src"),
@@ -26,9 +25,7 @@ describe("hibernationTarget", () => {
       (rootName, profile, id, name, external) => {
         const worktreePath = ["/Users/someone", rootName, ...(profile ? ["profiles", profile] : []), "worktrees", id, name].join("/");
         const target = hibernationTarget(candidate({ worktreePath, ...(external ? { worktreeOwnership: "external" as const } : {}) }));
-        const managed = [".codex", ".pwragent", ".pwragnt"].includes(rootName);
         if (external) expect(target).toEqual({ keep: HIBERNATION_KEEP_REASONS.borrowed });
-        else if (!managed) expect(target).toEqual({ keep: HIBERNATION_KEEP_REASONS.outsideRoot });
         else expect(target).toMatchObject({ worktreePath, repositoryPath: "/src/repo" });
       },
     ), { numRuns: 300 });

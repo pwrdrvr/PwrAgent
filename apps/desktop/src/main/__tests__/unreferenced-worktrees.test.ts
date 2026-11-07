@@ -25,7 +25,7 @@ function readerFor(folders: ReadonlyMap<string, boolean>): WorktreeRootReader {
 const segment = fc.constantFrom("a", "b", "k3m9", "repo", "web");
 
 describe("unreferenced worktree discovery", () => {
-  it("lists exactly the linked worktrees two levels under each root, up to the limit", async () => {
+  it("lists linked checkouts at either supported depth without walking inside one", async () => {
     await fc.assert(fc.asyncProperty(
       fc.array(fc.tuple(fc.array(segment, { minLength: 1, maxLength: 4 }), fc.boolean()), { maxLength: 24 }),
       fc.integer({ min: 0, max: 30 }),
@@ -41,8 +41,10 @@ describe("unreferenced worktree discovery", () => {
             folders.set(folder, (folders.get(folder) ?? false) || (isLeaf && linked));
           }
         }
-        const expected = [...folders].filter(([folder, linked]) =>
-          linked && path.relative(root, folder).split(path.sep).length === 2).map(([folder]) => folder).sort();
+        const expected = [...folders].filter(([folder, linked]) => {
+          const relative = path.relative(root, folder).split(path.sep);
+          return linked && (relative.length === 1 || (relative.length === 2 && folders.get(path.dirname(folder)) !== true));
+        }).map(([folder]) => folder).sort();
         const found = await listManagedWorktrees([root], readerFor(folders), limit);
         expect(found.paths.length).toBe(Math.min(limit, expected.length));
         if (limit >= expected.length) expect([...found.paths].sort()).toEqual(expected);

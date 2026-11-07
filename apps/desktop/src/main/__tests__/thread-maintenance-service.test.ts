@@ -93,6 +93,51 @@ function harness(candidates: ThreadArchiveCandidate[], overrides: Partial<Thread
 }
 
 describe("ThreadMaintenanceService.scan", () => {
+  it("publishes provider discovery while the archived audit is still pending", async () => {
+    await fc.assert(fc.asyncProperty(fc.nat({ max: 5000 }), async (found) => {
+      let release!: () => void;
+      let listed!: () => void;
+      const pending = new Promise<void>((resolve) => { release = resolve; });
+      const started = new Promise<void>((resolve) => { listed = resolve; });
+      const updates: ScanProgressSnapshot[] = [];
+      const { service } = harness([], { auditArchivedCheckouts: async (report) => {
+        report?.({ detail: "Reading archived Codex page", found, root: "/arbitrary/checkouts" });
+        listed();
+        await pending;
+        return { candidates: [], kept: {}, emptyFolders: 0 };
+      } });
+      const scan = service.scan({ steps: ["checkouts"] }, { onProgress: (update) => updates.push(update) });
+      await started;
+      expect(updates.at(-1)).toMatchObject({ stage: "listing", detail: "Reading archived Codex page", found, root: "/arbitrary/checkouts" });
+      release();
+      await scan;
+    }));
+  });
+
+  it("accounts for independent child checkouts across providers and remote-parent links", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("codex", "claude", "acp:grok"), { minLength: 1, maxLength: 12 }), async (backends) => {
+      const rows = backends.map((backend, index) => {
+        const row = candidate(String(index), { cwd: `/outside/checkout-${index}`, parent: `parent-${index}` });
+        row.thread.source = backend as typeof row.thread.source;
+        row.overlay = { parentThreadId: `remote-${index}`, parentThreadInstanceId: "peer-machine" } as ThreadArchiveCandidate["overlay"];
+        return row;
+      });
+      const { service } = harness(rows, {
+        measureAllocation: async () => ({ allocatedBytes: 4096 }),
+        hibernation: {
+          getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+          keepReason: (row) => ({ target: row.thread.linkedDirectories[0]?.worktreePath }),
+          inspect: async () => ({ files: 0, bytes: 0 }),
+          hibernate: async () => true,
+        },
+      });
+      const scan = await service.scan({ steps: ["hibernate"] });
+      expect(scan.hibernate?.items.map((row) => row.threadId).sort()).toEqual(rows.map((row) => row.thread.id).sort());
+      expect(scan.hibernate?.coverage?.roots.reduce((sum, root) => sum + (root.allocatedBytes ?? 0), 0)).toBe(backends.length * 4096);
+      expect(scan.hibernate?.items.every((row) => row.space?.allocatedBytes === 4096 && row.bytes === 0)).toBe(true);
+    }));
+  });
+
   it("keeps the newest per project, lists the rest as idle oldest first, and counts every keep reason", async () => {
     const { service, workspaces } = harness([
       candidate("newest", { daysIdle: 1, cwd: "/w/newest" }),
@@ -556,6 +601,7 @@ describe("hibernate idle checkouts", () => {
         expect.objectContaining({ threadId: "newest", worktreePath: "/w/newest", files: 2, bytes: 900, removedOutput: ["node_modules"] }),
       ],
       kept: { "Rebase in progress": 1 },
+      coverage: expect.objectContaining({ providers: [{ backend: "codex", threads: 4 }] }),
     });
     expect(scan.hibernate?.items[1]).not.toHaveProperty("archiveKey");
     // The review runs the rules as if the setting were on.

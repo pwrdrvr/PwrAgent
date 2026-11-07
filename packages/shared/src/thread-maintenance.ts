@@ -191,8 +191,9 @@ export type ThreadMaintenanceScan = {
   /** The steps this scan read. Absent: every step. A step it did not read
    * comes back empty. */
   steps?: ThreadMaintenanceScanStep[];
-  /** "none" until a disk accounting provider is connected. */
-  spaceSource: "none" | "pwrdisk";
+  /** Native filesystem allocation is distinct from PwrDisk's private and
+   * shared-block accounting. Neither is observed recovered space. */
+  spaceSource: "none" | "filesystem" | "pwrdisk";
   threads: {
     checked: number;
     projects: ThreadMaintenanceProject[];

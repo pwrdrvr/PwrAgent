@@ -6,6 +6,7 @@ import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "./app-s
 import { MAX_WORKTREE_SNAPSHOT_BYTES } from "./app-server/worktree-archive-service";
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getMainLogger } from "./log";
+import { measureMaintenanceAllocation } from "./app-server/maintenance-disk-usage";
 
 const maintenanceLog = getMainLogger("pwragent:thread-maintenance");
 
@@ -18,12 +19,13 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
   return service ??= new ThreadMaintenanceService({
     getPolicy: () => getDesktopBackendRegistry().getThreadArchivePolicy(),
     snapshotLimitBytes: MAX_WORKTREE_SNAPSHOT_BYTES,
-    listCandidates: async () => await getDesktopBackendRegistry().listAutoArchiveCandidates(),
+    listCandidates: async (onProgress) => await getDesktopBackendRegistry().listAutoArchiveCandidates(onProgress),
     listPeerSubthreads: async () => await getDesktopFederationRuntime().peerSubthreadsOfLocalThreads(),
     resolveProject: async (candidate) => await getDesktopBackendRegistry().resolveAutoArchiveProject(candidate),
     refreshCandidate: async (candidate) => await getDesktopBackendRegistry().refreshArchiveCandidate(candidate),
     isBusy: (candidate) => getDesktopBackendRegistry().isArchiveCandidateBusy(candidate),
-    auditArchivedCheckouts: async () => await getDesktopBackendRegistry().auditArchivedCheckouts(),
+    auditArchivedCheckouts: async (onProgress) => await getDesktopBackendRegistry().auditArchivedCheckouts(onProgress),
+    measureAllocation: measureMaintenanceAllocation,
     archiveFamily: async (family, options) => {
       const { thread } = family[0]!;
       const registry = getDesktopBackendRegistry();
@@ -66,10 +68,11 @@ export function disposeThreadMaintenanceService(): void {
   service = undefined;
 }
 
-/** A checkout folder itself, directly under a PwrAgent or Codex worktree
- * root (`…/worktrees/<id>/<name>`), never a path inside one or the root. */
+/** A checkout folder itself at either supported tool-root depth. Git's
+ * missing-repository probe still proves it is a checkout before Trash. */
 export function isManagedCheckoutRoot(worktreePath: string): boolean {
   const resolved = path.resolve(worktreePath);
-  return isToolManagedWorktreePath(resolved)
-    && path.basename(path.dirname(path.dirname(resolved))) === "worktrees";
+  return (isToolManagedWorktreePath(resolved) || isToolManagedWorktreePath(path.join(resolved, "checkout")))
+    && (path.basename(path.dirname(path.dirname(resolved))) === "worktrees"
+      || path.basename(path.dirname(resolved)) === "worktrees");
 }

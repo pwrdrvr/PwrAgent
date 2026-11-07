@@ -2,7 +2,9 @@ import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 
 /** Discovery reads at most this many checkouts, so a huge root cannot stall a scan. */
-export const MAX_DISCOVERED_WORKTREES = 1_000;
+export const MAX_DISCOVERED_WORKTREES = 10_000;
+
+export type MaintenanceDiscoveryProgress = { detail?: string; found?: number; root?: string };
 
 /** A checkout created this recently may belong to a thread that is still
  * starting: the worktree exists before the thread does while its project
@@ -48,25 +50,57 @@ export const nodeWorktreeRootReader: WorktreeRootReader = {
   },
 };
 
-/** Linked worktrees at `<root>/<id>/<name>`, the shape PwrAgent creates. Only
- * these two levels are read, never deeper, and never through a symlink. */
+/** Linked worktrees at `<root>/<name>` or `<root>/<id>/<name>`. Once a
+ * checkout is found its contents are never searched for more checkouts.
+ * Only these two levels are read, never through a symlink. */
 export async function listManagedWorktrees(
   roots: readonly string[],
   reader: WorktreeRootReader = nodeWorktreeRootReader,
   limit = MAX_DISCOVERED_WORKTREES,
+  onProgress?: (progress: MaintenanceDiscoveryProgress) => void,
 ): Promise<{ paths: string[]; truncated: boolean }> {
   const paths: string[] = [];
   for (const root of roots) {
+    onProgress?.({ detail: "Listing checkout folders", root, found: paths.length });
     for (const id of await reader.listDirectories(root)) {
-      for (const name of await reader.listDirectories(path.join(root, id))) {
-        const checkout = path.join(root, id, name);
+      const container = path.join(root, id);
+      const flat = await reader.isLinkedWorktree(container);
+      const checkouts = flat ? [container] : (await reader.listDirectories(container)).map((name) => path.join(container, name));
+      for (const checkout of checkouts) {
         if (!await reader.isLinkedWorktree(checkout)) continue;
         if (paths.length >= limit) return { paths, truncated: true };
         paths.push(checkout);
+        onProgress?.({ detail: "Listing checkout folders", root, found: paths.length });
       }
     }
   }
   return { paths, truncated: false };
+}
+
+/** Enumerate tool roots, including profile roots, without inspecting any
+ * provider-owned session or database file. Custom CODEX_HOME comes from the
+ * App Server protocol. Git's registrations supply checkouts elsewhere. */
+export async function maintenanceWorktreeRoots(
+  pwragentRoot: string,
+  codexHome: string,
+  home: string,
+  reader: WorktreeRootReader = nodeWorktreeRootReader,
+): Promise<string[]> {
+  const homes = new Set([path.dirname(pwragentRoot), codexHome, path.join(home, ".codex")]);
+  const roots = new Set([pwragentRoot]);
+  for (const toolHome of homes) {
+    roots.add(path.join(toolHome, "worktrees"));
+    const profiles = path.join(toolHome, "profiles");
+    for (const name of await reader.listDirectories(profiles)) roots.add(path.join(profiles, name, "worktrees"));
+  }
+  return [...roots];
+}
+
+/** Git is the authority for worktrees outside tool roots. NUL-delimited
+ * porcelain preserves spaces, newlines and non-ASCII paths. */
+export function registeredWorktreePaths(porcelain: string): string[] {
+  return porcelain.split("\0").filter((field) => field.startsWith("worktree "))
+    .map((field) => field.slice("worktree ".length));
 }
 
 /** Checkouts no reference covers. A reference covers the checkout itself, a

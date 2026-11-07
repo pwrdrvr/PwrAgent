@@ -104,7 +104,7 @@ export function isPwrAgentClaudeCheckout({ thread, overlay }: Pick<ThreadArchive
 /** `allowPinned` is for checkout hibernation, which keeps the thread listed. */
 export function archiveCandidateProtectionReason(
   { thread, overlay, activeSubAgent, activePrWatch, mergeHeld, unreadable }: ThreadArchiveCandidate,
-  options: { allowPinned?: boolean } = {},
+  options: { allowPinned?: boolean; allowOwnedClaudeWorktree?: boolean } = {},
 ): string | undefined {
   if (unreadable) return "Thread state unreadable";
   if (!options.allowPinned && (thread.isPinned || overlay?.pinnedRank !== undefined)) return "Pinned thread";
@@ -117,7 +117,12 @@ export function archiveCandidateProtectionReason(
   if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";
   // Claude threads are cleaned up only in a worktree PwrAgent created. A
   // Claude session can also run in a checkout the operator or Claude Code made.
-  if (thread.source === "claude" && !isPwrAgentClaudeCheckout({ thread, overlay })) return CLAUDE_CHECKOUT_KEEP_REASON;
+  if (thread.source === "claude" && !isPwrAgentClaudeCheckout({ thread, overlay })
+    && !(options.allowOwnedClaudeWorktree
+      && thread.linkedDirectories.some((directory) => directory.kind === "worktree" && directory.worktreePath)
+      && [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []].every((directory) => directory.worktreeOwnership !== "external"))) {
+    return CLAUDE_CHECKOUT_KEEP_REASON;
+  }
   // The Codex app owns its chat folders' threads; housekeeping leaves them alone.
   if ([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []].some(isCodexChatsDirectory)) return "Codex chat folder";
   if (activeSubAgent) return "Active subagent";
@@ -385,8 +390,8 @@ export class ThreadArchiveSweeper {
     }
     for (const candidate of candidates) {
       if (this.abort.signal.aborted) return;
-      // Native sub-agents share their root's checkout.
-      if (candidate.thread.codexNativeSubAgent) continue;
+      // Native children may own an independent checkout. Shared-path rules
+      // protect inherited checkouts, regardless of where the parent lives.
       try {
         const listed = deps.keepReason(candidate, candidates, policy, Date.now());
         if (!listed.target) continue;
