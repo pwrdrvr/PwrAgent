@@ -7,10 +7,14 @@ import type {
   ScheduledThreadActionKind,
   ScheduledThreadActionOrigin,
   ScheduledThreadActionStatus,
-  ScheduledThreadReviewPayload,
-  ScheduledThreadTurnPayload,
   PendingWakeScheduledActions,
 } from "@pwragent/shared";
+import type {
+  CreateScheduledThreadActionRecord,
+  ScheduledThreadActionClaim as ClaimParams,
+  ScheduledThreadActionStorage,
+  UpdateScheduledThreadActionRecord,
+} from "@pwragent/owner-core/scheduled-thread-action-storage";
 import type { StateDb } from "../state/state-db.js";
 import {
   FileScheduledThreadActionPayloadStore,
@@ -37,38 +41,6 @@ type ScheduledThreadActionRow = {
   updated_at: number;
 };
 
-type CreateScheduledThreadActionRecord = {
-  id: string;
-  backend: ScheduledThreadAction["backend"];
-  threadId: string;
-  kind: ScheduledThreadActionKind;
-  origin: ScheduledThreadActionOrigin;
-  scheduledFor: number;
-  displayText: string;
-  imageAttachments?: ScheduledThreadAction["imageAttachments"];
-  fileAttachments?: ScheduledThreadAction["fileAttachments"];
-  manualReleaseRequired?: boolean;
-  turn?: ScheduledThreadTurnPayload;
-  review?: ScheduledThreadReviewPayload;
-  now: number;
-};
-
-type UpdateScheduledThreadActionRecord = {
-  scheduledFor?: number;
-  displayText?: string;
-  imageAttachments?: ScheduledThreadAction["imageAttachments"];
-  fileAttachments?: ScheduledThreadAction["fileAttachments"];
-  turn?: ScheduledThreadTurnPayload;
-  review?: ScheduledThreadReviewPayload;
-  now: number;
-};
-
-type ClaimParams = {
-  now: number;
-  ownerId: string;
-  leaseExpiresAt: number;
-};
-
 const ACTIVE_STATUSES: readonly ScheduledThreadActionStatus[] = [
   "held",
   "scheduled",
@@ -81,7 +53,7 @@ const ROW_COLUMNS = `
   claim_expires_at, created_at, updated_at
 `;
 
-export class ScheduledThreadActionStore {
+export class ScheduledThreadActionStore implements ScheduledThreadActionStorage {
   private readonly payloadStore: ScheduledThreadActionPayloadStore;
   private readonly hasLegacyPayloadColumn: boolean;
   // Payload refs are immutable. Retain only compact text, never execution inputs.

@@ -3659,7 +3659,7 @@ describe("app server ipc", () => {
 
   it("reads pending wakes from initialized stores without starting the scheduler or listing unrelated PRs", async () => {
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
-    const { ScheduledThreadActionStore } = await import("../scheduled-actions/scheduled-thread-action-store");
+    const { ScheduledThreadActionStore } = await import("../storage/scheduled-thread-action-store");
     const scheduler = await import("../scheduled-actions/scheduled-thread-action-service");
     const { appServerService } = await import("../ipc/app-server");
     const appState = await import("../state/app-state");

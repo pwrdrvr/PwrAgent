@@ -1,4 +1,5 @@
-import { getAppStateDb, getAppStateMode, isAppStateInitialized, getAppScheduledThreadActionStore } from "../state/app-state";
+import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
+import { getAppStateDb, getAppStateMode, isAppStateInitialized, getAppScheduledThreadActionStore as getScheduledThreadActionStore } from "../state/app-state";
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
 import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
 import { RestartContinuationStore } from "../state/restart-continuation-store";
@@ -24,7 +25,10 @@ export type ThreadDependencyStorage = Pick<ThreadDependencyStore, keyof ThreadDe
 
 // Bind each store at its existing construction boundary, without caching a
 // database in this module or giving callers access to its handle.
-export { getAppStateMode, isAppStateInitialized, getAppScheduledThreadActionStore };
+export { getAppStateMode, isAppStateInitialized };
+export function getAppScheduledThreadActionStore(): ScheduledThreadActionStorage {
+  return getScheduledThreadActionStore();
+}
 export function createArchiveCleanupCheckpointStorage(): ArchiveCleanupCheckpointStorage {
   return new ArchiveCleanupCheckpointStore(getAppStateDb().raw);
 }
