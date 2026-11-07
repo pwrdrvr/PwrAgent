@@ -10753,11 +10753,30 @@ export class CodexAppServerClient {
     }
     if (asRecord(thread.status)?.type === "active") throw new Error("Wait for the source turn to finish before handoff.");
     const replay = await this.readThread({ threadId });
-    const file = asRecord(await this.connection.request("fs/readFile", { path: thread.path },
-      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
-    if (typeof file?.dataBase64 !== "string") throw new Error("Codex does not support exporting thread bytes through fs/readFile.");
+    let rolloutBase64: string;
+    try {
+      const exported = asRecord(await this.connection.request("thread/export", { threadId, maxBytes: 64 * 1024 * 1024 },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
+      if (exported?.threadId !== threadId || exported.format !== "legacy-rollout-v1"
+        || typeof exported.dataBase64 !== "string" || !exported.dataBase64) {
+        throw new Error("Codex returned an invalid portable thread export.");
+      }
+      rolloutBase64 = exported.dataBase64;
+    } catch (error) {
+      if (!isMethodUnavailableError(error, "thread/export")) throw error;
+      // A legacy rollout is self-contained. A paginated file can refer to
+      // history on the sender, so only Codex may flatten it for transport.
+      if (thread.historyMode !== undefined && thread.historyMode !== "legacy") {
+        throw new Error("This thread uses Codex paginated history. Update the managed Codex runtime on the sending machine to a build supporting portable thread export, then retry.");
+      }
+      const file = asRecord(await this.connection.request("fs/readFile", { path: thread.path },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
+      if (typeof file?.dataBase64 !== "string") throw new Error("Codex does not support exporting thread bytes through fs/readFile.");
+      rolloutBase64 = file.dataBase64;
+    }
     return {
-      rolloutBase64: file.dataBase64,
+      historyMode: "legacy",
+      rolloutBase64,
       replay,
       ...(typeof thread.cwd === "string" ? { cwd: thread.cwd } : {}),
       ...(typeof thread.name === "string" ? { title: thread.name } : {}),

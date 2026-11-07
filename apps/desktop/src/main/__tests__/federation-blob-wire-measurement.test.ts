@@ -26,7 +26,7 @@ it.runIf(process.env.PWRAGENT_MEASURE_BLOB_WIRE === "1")("measures both wire enc
   const corpus = Buffer.concat(buffers);
   const size = Math.floor(8.8 * 1024 * 1024);
   const raw = Buffer.concat(Array.from({ length: Math.ceil(size / corpus.length) }, () => corpus)).subarray(0, size);
-  const pkg: ThreadHandoffPackage = { version: 2, handoffId: "00000000-0000-0000-0000-000000000000",
+  const pkg: ThreadHandoffPackage = { version: 2, historyMode: "legacy", handoffId: "00000000-0000-0000-0000-000000000000",
     sourceThreadId: "fixture", historyDigest: "0".repeat(64), rolloutBase64: raw.toString("base64") };
   const oldPackage = await encodeThreadHandoff(pkg, false);
   const binaryPackage = await encodeThreadHandoff(pkg);

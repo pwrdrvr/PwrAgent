@@ -75,6 +75,8 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       assert.equal(params.sandboxPolicy.networkAccess, false);
       assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const prompt = params.input[0].text;
+      if (prompt === "paginated history") threads[params.threadId].historyMode = "paginated";
+      if (prompt === "portable paginated history") Object.assign(threads[params.threadId], { historyMode: "paginated", portableExport: true });
       // Codex reports the first user message as the thread's preview.
       if (threads[params.threadId] && threads[params.threadId].preview === undefined) {
         threads[params.threadId].preview = prompt;
@@ -134,6 +136,11 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       persist();
       reply({});
       send({ method: "thread/name/updated", params: { threadId: params.threadId, threadName: params.name } });
+    } else if (method === "thread/export") {
+      const thread = threads[params.threadId];
+      if (thread?.portableExport) reply({ threadId: params.threadId, format: "legacy-rollout-v1",
+        dataBase64: Buffer.from(JSON.stringify({ ...thread, historyMode: "legacy" })).toString("base64") });
+      else send({ id, error: { code: -32600, message: "unknown variant `thread/export`" } });
     } else if (method === "fs/readFile") {
       const thread = threads[path.basename(params.path)];
       assert.ok(thread);

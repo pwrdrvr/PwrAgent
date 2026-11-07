@@ -110,7 +110,8 @@ export async function decodeThreadHandoff(bytes: Buffer): Promise<ThreadHandoffP
   } else {
     value = JSON.parse((await decompress(bytes, { maxOutputLength: THREAD_HANDOFF_MAX_BYTES })).toString("utf8")) as ThreadHandoffPackage;
   }
-  if (!value || value.version !== 2 || typeof value.handoffId !== "string" || !/^[0-9a-f-]{36}$/.test(value.handoffId)
+  if (!value || value.version !== 2 || value.historyMode !== "legacy"
+    || typeof value.handoffId !== "string" || !/^[0-9a-f-]{36}$/.test(value.handoffId)
     || typeof value.sourceThreadId !== "string" || !value.sourceThreadId
     || typeof value.historyDigest !== "string" || !/^[0-9a-f]{64}$/.test(value.historyDigest)
     || (value.title !== undefined && (typeof value.title !== "string" || value.title.length > 1000))) {
