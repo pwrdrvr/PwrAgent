@@ -49,9 +49,9 @@ export class SqliteThreadReviewStorage implements ThreadReviewStorage {
       .run(review.id, review.backend, review.threadId, review.status, review.updatedAt, JSON.stringify(review));
   }
 
-  enrollReview(review: ThreadReview): void {
+  enrollReview(id: string, review: ThreadReview): void {
     this.db.raw.prepare("UPDATE thread_reviews SET payload = ? WHERE review_id = ?")
-      .run(JSON.stringify(review), review.id);
+      .run(JSON.stringify(review), id);
   }
 
   update(review: ThreadReview): void {

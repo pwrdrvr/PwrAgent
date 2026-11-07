@@ -131,7 +131,7 @@ export class ThreadReviewService {
         // replacing findings, ids, timestamps, or documented resolutions.
         if (enroll(existing)) {
           existing.origin = "explicit";
-          this.storage.enrollReview(existing);
+          this.storage.enrollReview(id, existing);
           changed = true;
         }
         return existing;
