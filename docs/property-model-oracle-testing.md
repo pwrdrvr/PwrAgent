@@ -190,12 +190,17 @@ release replaces.
 [PwrGit#554](https://github.com/pwrdrvr/PwrGit/pull/554) added properties for
 `selectChannelReleases` and an `fc.commands` model of its held update. The
 port is in `apps/desktop/src/main/__tests__/auto-updater.property.test.ts`,
-with PwrAgent's event-driven completion and cancellation flow. Keep the two
-sets in step. The rules are the same in every Pwr app:
+with PwrAgent's event-driven completion and cancellation flow. PwrGit's
+request-budget invariant (I5) is in
+`apps/desktop/src/main/__tests__/auto-updater.request-budget.property.test.ts`,
+against the real on-disk release cache. Keep the two sets in step. The rules
+are the same in every Pwr app:
 
 - No channel offers less than Stable's latest release.
 - The result doesn't depend on GitHub's list order.
 - A Restart offer always names an update that is still on disk.
+- Automatic release-list requests keep their budget across restarts, and no
+  request goes out before a rate limit resets.
 
 ## Dependency and licensing
 
