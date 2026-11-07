@@ -597,13 +597,16 @@ function describeDependencyTitle(
   const { conditions, deliver } = wake.dependency;
   const lead = deliver === "operator" ? "Remind you after" : "Continue after";
   if (conditions.length !== 1) {
+    // "Something else" is not a thread.
+    const threads = conditions.every((condition) => condition.subject === undefined);
     return wake.dependency.mode === "any"
-      ? `${lead} any of ${conditions.length} threads`
-      : `${lead} ${conditions.length} threads finish`;
+      ? `${lead} any of ${conditions.length} ${threads ? "threads" : "prerequisites"}`
+      : threads ? `${lead} ${conditions.length} threads finish` : `${lead} ${conditions.length} prerequisites`;
   }
   const condition = conditions[0]!;
-  const self = condition.backend === thread.source && condition.threadId === thread.id;
-  const name = self ? "this thread" : condition.title?.trim() || "another thread";
+  const self = condition.subject === undefined && !condition.target
+    && condition.backend === thread.source && condition.threadId === thread.id;
+  const name = self ? "this thread" : condition.subject?.trim() || condition.title?.trim() || "another thread";
   return `${lead} ${name} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`;
 }
 
@@ -624,7 +627,7 @@ function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now:
               ? slot : undefined;
             const met = evidence?.state === "satisfied";
             const failed = evidence?.state === "failed";
-            const name = condition.title?.trim() || "Another thread";
+            const name = condition.subject?.trim() || condition.title?.trim() || "Another thread";
             return (
               <span className={`waiting-for-panel__cond${met ? " is-met" : ""}${failed ? " is-failed" : ""}`} key={`${condition.threadId}:${condition.when}:${index}`}>
                 <span className="waiting-for-panel__cond-dot" aria-hidden="true" />

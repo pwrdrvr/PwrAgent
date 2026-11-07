@@ -1,4 +1,4 @@
-import { ThreadMergeHoldStatus } from "../thread-merge-holds/ThreadMergeHoldStatus";
+import { ContinueAfterStatus } from "../thread-dependencies/ContinueAfterStatus";
 import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
 import { StartupTiming } from "../composer/StartupTiming";
 import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
@@ -4993,7 +4993,7 @@ export function ThreadView(props: ThreadViewProps) {
               ownerLabel={props.activeFederationOwnerLabel}
               onOpenFederationSettings={props.starMap?.onOpenFederationSettings}
             /> : null}
-            {selectedThread ? <ThreadMergeHoldStatus thread={selectedThread} api={props.desktopApi} /> : null}
+            {selectedThread ? <ContinueAfterStatus thread={selectedThread} api={props.desktopApi} /> : null}
             {primaryContent}
             {composerSlotElement}
             {threadLock ? (

@@ -1,4 +1,3 @@
-import { THREAD_MERGE_HOLDS_CHANNEL, type ManageThreadMergeHoldsRequest } from "@pwragent/shared";
 import { type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
@@ -8,7 +7,6 @@ import { THREAD_PENDING_WAKES_CHANNEL, type ThreadPendingWakesRequest, type Thre
 import {
   stopRemoteThreadPendingWake,
 } from "../app-server/thread-pending-wakes";
-import { getThreadTodoService, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../shared/ipc";
@@ -522,17 +520,6 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
     appServerService.isPullRequestLocallyMonitored(prKey)
   );
-  getDesktopBackendRegistry().setThreadMergeHoldToolHandler(async (request, actor) => await appServerService.manageThreadMergeHolds(request, actor));
-  getDesktopBackendRegistry().setMergeHoldReminderDelivery({
-    prepare: (thread) => readThreadTodoPlacement(getDesktopBackendRegistry(), thread),
-    raise: (card, placement) => getThreadTodoService().raiseForDependency({ ...card, ...placement }).todo,
-    publish: (todo) => getThreadTodoService().publish(todo),
-  });
-  ipcMain.removeHandler(THREAD_MERGE_HOLDS_CHANNEL);
-  ipcMain.handle(THREAD_MERGE_HOLDS_CHANNEL, async (event, request: ManageThreadMergeHoldsRequest) => {
-    const federationTarget = federationWindowTargetForWebContents(event.sender);
-    return await appServerService.manageThreadMergeHolds({ ...request, ...(!request.federationTarget && federationTarget ? { federationTarget } : {}) });
-  });
   getDesktopBackendRegistry().setThreadMaintenanceToolHandler({
     scan: async (request) => await getThreadMaintenanceService().scan(request),
     getScan: (scanId) => getThreadMaintenanceService().getScan(scanId),
@@ -540,9 +527,9 @@ export function registerAppServerIpcHandlers(): void {
     start: (request) => getThreadMaintenanceService().start(request),
     open: (request) => requestOpenThreadMaintenance(request),
   });
-  getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request, provenance) => {
+  getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request, provenance, actor) => {
     try {
-      const threadDependencies = await appServerService.manageThreadDependencies(request, provenance);
+      const threadDependencies = await appServerService.manageThreadDependencies(request, provenance, actor);
       const projectNotice = appServerService.dependencyProjectNotice(request);
       return { ok: true, data: { threadDependencies, ...(projectNotice ? { projectNotice } : {}) } };
     } catch (error) {
@@ -551,10 +538,14 @@ export function registerAppServerIpcHandlers(): void {
   });
   ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
   ipcMain.handle(THREAD_DEPENDENCIES_CHANNEL, async (event, request: ManageThreadDependenciesRequest) => {
-    if (isFederationWindowWebContents(event.sender)) throw new Error("Thread dependencies currently require a local window.");
-    if (request?.action === "active") return appServerService.listActiveThreadDependencies();
-    return await appServerService.manageThreadDependencies(request);
+    // A federation window manages its instance's threads on that instance.
+    const federationTarget = federationWindowTargetForWebContents(event.sender);
+    const routed = !request?.federationTarget && federationTarget ? { ...request, federationTarget } : request;
+    if (routed?.action === "active" && !routed.federationTarget) return await appServerService.listActiveThreadDependencies();
+    return await appServerService.manageThreadDependencies(routed);
   });
+  getDesktopBackendRegistry().setThreadDependenciesPeerHandler(async (request, requesterInstanceId) =>
+    await appServerService.manageThreadDependenciesForPeer(request, requesterInstanceId));
   ipcMain.removeHandler(THREAD_PR_WATCHES_CHANNEL);
   ipcMain.handle(THREAD_PR_WATCHES_CHANNEL, async (event, request: ThreadPrWatchesRequest): Promise<ThreadPrWatchesResponse> => {
     // A peer's thread is managed on its owner, from any window.
@@ -2074,8 +2065,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadDependencyToolHandler(undefined);
-  registry?.setThreadMergeHoldToolHandler(undefined);
-  registry?.setMergeHoldReminderDelivery(undefined);
+  registry?.setThreadDependenciesPeerHandler(undefined);
   registry?.setThreadMaintenanceToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);

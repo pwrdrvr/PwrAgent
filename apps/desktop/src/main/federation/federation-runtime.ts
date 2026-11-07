@@ -1,5 +1,5 @@
+import { readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
-import { appendMergeHoldDependents } from "../thread-merge-holds/thread-merge-holds";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
@@ -665,6 +665,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "operator_requests",
   "thread_display_bulk_reads",
   "thread_pr_watch_control_v1",
+  "thread_dependencies_v1",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -769,7 +770,6 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/executionMode/queued",
   "thread/executionMode/updated",
   "thread/lock/updated",
-  "thread/mergeHolds/updated",
   "thread/modelSettings/updated",
   "thread/name/updated",
   "thread/parent/cleared",
@@ -7510,11 +7510,17 @@ function localBackendOperations(): FederationBackendOperations {
         pinnedRank: overlay.pinnedRank,
       };
     },
-    async manageThreadMergeHolds(request: import("@pwragent/shared").ManageThreadMergeHoldsRequest, options?: { requesterInstanceId?: string }): Promise<import("@pwragent/shared").ManageThreadMergeHoldsResponse> {
-      const response = await getDesktopBackendRegistry().manageThreadMergeHolds(
-        { ...request, federationTarget: undefined }, `peer:${options?.requesterInstanceId ?? "unknown"}`,
-      );
-      return await appendMergeHoldDependents(response, request, getDesktopFederationRuntime());
+    async legacyManageThreadMergeHolds(request: unknown): Promise<{ holds: []; dependents: [] }> {
+      // 1.3.13 and 1.3.14 viewers still ask here. Their reads see nothing;
+      // anything else is told where Wait Until Done went.
+      const action = request && typeof request === "object" ? (request as { action?: unknown }).action : undefined;
+      if (action === "list" || action === "active") return { holds: [], dependents: [] };
+      throw new Error("Wait Until Done moved into Continue After. Update PwrAgent on this machine.");
+    },
+    async manageThreadDependencies(request: unknown, options?: { requesterInstanceId?: string }): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> {
+      const owned = readFederationThreadDependenciesRequest(request);
+      if (!owned) throw new Error("Unknown Continue After action.");
+      return await getDesktopBackendRegistry().manageThreadDependenciesForPeer(owned, options?.requesterInstanceId);
     },
     async setThreadLock(
       request: SetThreadLockRequest,

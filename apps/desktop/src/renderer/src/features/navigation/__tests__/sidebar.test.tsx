@@ -7829,7 +7829,7 @@ describe("Sidebar", () => {
     const onContinueAfter = vi.fn();
     render(
       <ThreadDependencyIndicatorsContext.Provider value={{
-        byThreadKey: new Map([[threadSummaryIdentityKey(sharedThread), { count: 2, label: "2 waiting", alert: false, tooltip: "" }]]),
+        byThreadKey: new Map([[threadSummaryIdentityKey(sharedThread), { count: 2, label: "2 waiting", alert: false, tooltip: "", mergeHeld: false }]]),
       }}>
         <Sidebar
           backends={backends}
@@ -7864,7 +7864,7 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("omits Continue After without a dialog to open or for a peer's thread", () => {
+  it("omits Continue After without a dialog to open, and offers it for a peer's thread", () => {
     const peerThread: NavigationThreadSummary = {
       ...sharedThread,
       id: "thread-peer",
@@ -7919,7 +7919,8 @@ describe("Sidebar", () => {
     );
     fireEvent.contextMenu(screen.getByRole("button", { name: "Peer thread" }));
     expect(screen.getByRole("menu")).toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: /Continue After/ })).toBeNull();
+    // The owner keeps the wait; this window asks it.
+    expect(screen.getByRole("menuitem", { name: "Continue After…" })).toBeInTheDocument();
   });
 
   it("flips the thread actions menu above the overflow button near the viewport bottom", () => {

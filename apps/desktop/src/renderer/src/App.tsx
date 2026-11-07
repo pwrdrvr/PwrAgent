@@ -1,5 +1,3 @@
-import { ThreadMergeHoldsContext } from "./features/thread-merge-holds/useThreadMergeHolds";
-import { ThreadMergeHoldsDialog } from "./features/thread-merge-holds/ThreadMergeHoldsDialog";
 import { TodoDispatchProvider } from "./features/thread-todos/TodoDispatchProvider";
 import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared";
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
@@ -3398,8 +3396,6 @@ function DesktopAppShell(props: {
   }>({});
   // Continue After, from the thread menu or a row's dependency chip.
   // Dependencies run on the owning machine, so a federation window has none.
-  const [mergeHoldsThread, setMergeHoldsThread] = useState<NavigationThreadSummary>();
-  const mergeHoldsContext = useMemo(() => ({ open: (thread: NavigationThreadSummary) => setMergeHoldsThread(thread) }), []);
   const [continueAfter, setContinueAfter] = useState<{
     thread: NavigationThreadSummary;
     returnFocus?: RefObject<HTMLElement | null>;
@@ -3459,8 +3455,8 @@ function DesktopAppShell(props: {
     if (automaticArchiveRetiredNotice) showAppNotice(automaticArchiveRetiredNotice);
   }, [automaticArchiveRetiredNotice, showAppNotice]);
   const threadDependencyIndicators = useThreadDependencyIndicators(desktopApi);
-  const canContinueAfter = Boolean(desktopApi?.manageThreadDependencies)
-    && !readRendererFederationTarget();
+  // A peer's thread is managed on its owner, from any window.
+  const canContinueAfter = Boolean(desktopApi?.manageThreadDependencies);
   const threadDependencyContext = useMemo(
     () => ({
       byThreadKey: threadDependencyIndicators,
@@ -4701,7 +4697,6 @@ function DesktopAppShell(props: {
       localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
     >
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
-    <ThreadMergeHoldsContext.Provider value={mergeHoldsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
     <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
@@ -4742,11 +4737,11 @@ function DesktopAppShell(props: {
           )}
         </LiveThreadHandoff>
       ) : null}
-      {mergeHoldsThread ? <ThreadMergeHoldsDialog key={`${mergeHoldsThread.federation?.ref.target.scope === "remote" ? mergeHoldsThread.federation.ref.target.instanceId : "local"}:${mergeHoldsThread.source}:${mergeHoldsThread.id}`} thread={mergeHoldsThread} api={desktopApi} onClose={() => setMergeHoldsThread(undefined)} /> : null}
       {continueAfter ? (
         <ContinueAfterDialog
-          key={`${continueAfter.thread.source}:${continueAfter.thread.id}`}
+          key={`${continueAfter.thread.federation?.ref.target.scope === "remote" ? continueAfter.thread.federation.ref.target.instanceId : "local"}:${continueAfter.thread.source}:${continueAfter.thread.id}`}
           desktopApi={desktopApi}
+          {...(todoLocalMachine.instanceId ? { localInstanceId: todoLocalMachine.instanceId } : {})}
           thread={continueAfter.thread}
           {...(continueAfter.returnFocus ? { returnFocus: continueAfter.returnFocus } : {})}
           onClose={() => setContinueAfter(undefined)}
@@ -5415,7 +5410,6 @@ function DesktopAppShell(props: {
     </ThreadProvidersContext.Provider>
     </ThreadPrWatchIndicatorsContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
-    </ThreadMergeHoldsContext.Provider>
     </OperatorWaitsContext.Provider>
     </TodoDispatchProvider>
     </ThreadTodoRevealContext.Provider>

@@ -9,11 +9,11 @@ import { ThreadTodoService } from "../src/main/thread-todos/thread-todo-service"
 import { ThreadTodoStore } from "../src/main/storage/thread-todo-store";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
-test("waits until done with merging held and the composer available, then reminds the operator", async ({ browserName: _browserName }, testInfo) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-merge-holds-"));
+test("Continue After holds merging until a thread is marked done, keeps the composer available, then reminds the operator", async ({ browserName: _browserName }, testInfo) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-continue-after-hold-"));
   const fixturePath = path.join(root, "replay.fixture.json");
   await writeFile(fixturePath, JSON.stringify({
-    metadata: { backend: "codex", scenario: "merge-holds", threadId: "atlas-link" },
+    metadata: { backend: "codex", scenario: "continue-after-hold-merge", threadId: "atlas-link" },
     steps: [
       { id: "initialize", kind: "response", method: "initialize", result: { serverInfo: { name: "Replay Codex", version: "1.0.0" }, methods: ["thread/list", "thread/read", "skills/list", "turn/start"] } },
       { id: "threads", kind: "response", method: "thread/list", result: [
@@ -38,21 +38,29 @@ test("waits until done with merging held and the composer available, then remind
     await app.window.getByRole("button", { name: "Atlas: Windows MCP link", exact: true }).click();
     const stack = app.window.getByRole("region", { name: "To-dos for this thread" });
     await expect(stack.getByRole("button", { name: "Squash merge", exact: true })).toBeVisible();
-    await app.window.screenshot({ path: testInfo.outputPath("merge-hold-before.png") });
+    await app.window.screenshot({ path: testInfo.outputPath("hold-merge-before.png") });
     await app.window.getByRole("button", { name: "Atlas: Windows MCP link", exact: true }).click({ button: "right" });
-    await app.window.getByRole("menuitem", { name: "Wait Until Done…", exact: true }).click();
-    const dialog = app.window.getByRole("dialog", { name: "Wait Until Done" });
-    await dialog.getByRole("textbox", { name: "Waiting for", exact: true }).fill("Windows validation");
-    await dialog.getByRole("textbox", { name: "Waiting on (optional thread link)" }).fill("pwragent://thread/atlas-validation?backend=codex");
-    await dialog.getByRole("textbox", { name: "When it’s done, remind me to" }).fill("Rebase onto the validation fix\nMerge PR #17");
-    await dialog.getByRole("button", { name: "Start Waiting", exact: true }).click();
-    await expect(dialog.getByRole("button", { name: "Mark Done…" })).toBeVisible();
+    await app.window.getByRole("menuitem", { name: "Continue After…", exact: true }).click();
+    const dialog = app.window.getByRole("dialog", { name: "Continue After" });
+    await dialog.getByRole("combobox", { name: "Find a thread to wait for" }).fill("validation");
+    await dialog.getByRole("option", { name: /Atlas: Windows validation/ }).click();
+    await expect(dialog.getByRole("button", { name: "Remove Atlas: Windows validation", exact: true })).toBeVisible();
+    await dialog.getByRole("combobox", { name: "Continue when Atlas: Windows validation" }).click();
+    await app.window.getByRole("option", { name: "Is marked done", exact: true }).click();
+    // Waiting for something to be marked done holds merging unless unticked.
+    await expect(dialog.getByRole("checkbox", { name: "Hold merging until then" })).toBeChecked();
+    await dialog.getByRole("group", { name: "When met" }).getByRole("button", { name: "Remind me", exact: true }).click();
+    await dialog.getByRole("textbox", { name: "Remind me to" }).fill("Rebase onto the validation fix\nMerge PR #17");
+    await app.window.screenshot({ path: testInfo.outputPath("hold-merge-form.png") });
+    await dialog.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "Mark Done… Atlas: Windows validation" })).toBeVisible();
+    await expect(dialog).toContainText("Merge held");
     await expect(dialog).toContainText("Rebase onto the validation fix");
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
-    await expect(app.window.locator(".thread-merge-holds__status")).toContainText("Waiting for Windows validation · Merge held · 2 steps");
-    await expect(app.window.getByLabel("Waiting for Windows validation. Merge held.", { exact: true })).toBeVisible();
+    await expect(app.window.locator(".continue-after-status")).toContainText("Merge held until Atlas: Windows validation");
+    await expect(app.window.getByRole("button", { name: "Continue after: Merge held", exact: true })).toBeVisible();
     await expect(stack.getByRole("button", { name: "Squash merge", exact: true })).toHaveCount(0);
-    await expect(stack).toContainText("Merge waits for Windows validation");
+    await expect(stack).toContainText("Merge waits for Atlas: Windows validation");
     const reply = app.window.getByRole("textbox", { name: "Reply", exact: true });
     await expect(reply).toBeEditable();
     await reply.fill("Rebase the branch and repair CI while validation continues.");
@@ -62,20 +70,21 @@ test("waits until done with merging held and the composer available, then remind
       catch (error) { return String(error); }
     });
     expect(refusal).toContain("Merge held");
-    await app.window.screenshot({ path: testInfo.outputPath("merge-hold-after.png") });
-    await app.window.getByRole("button", { name: "Manage…", exact: true }).click();
-    await dialog.getByRole("button", { name: "Mark Done…" }).click();
-    await dialog.getByRole("textbox", { name: "What finished, or why you stopped waiting" }).fill("Windows validation passed on the fix.");
-    await app.window.screenshot({ path: testInfo.outputPath("merge-hold-resolve.png") });
+    await app.window.screenshot({ path: testInfo.outputPath("hold-merge-held.png") });
+    await app.window.locator(".continue-after-status").getByRole("button", { name: "Continue After…", exact: true }).click();
+    await dialog.getByRole("button", { name: "Mark Done… Atlas: Windows validation" }).click();
+    await dialog.getByRole("textbox", { name: "What finished (optional)" }).fill("Windows validation passed on the fix.");
+    await app.window.screenshot({ path: testInfo.outputPath("hold-merge-mark-done.png") });
     await dialog.getByRole("button", { name: "Mark Done", exact: true }).click();
-    await expect(dialog.getByRole("button", { name: "Show History" })).toBeVisible();
+    // The toggle's CSS caret is part of its accessible name ("▸ History (1)").
+    await expect(dialog.getByRole("button", { name: /History \(1\)$/ })).toBeVisible();
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
-    await expect(app.window.locator(".thread-merge-holds__status")).toHaveCount(0);
+    await expect(app.window.locator(".continue-after-status")).toHaveCount(0);
     // Marking it done reminds the operator of the steps; it starts no turn.
     await expect(stack).toContainText(/done: Rebase onto the validation fix \(\+1 more\)/);
-    await expect(stack).toContainText("Done: Windows validation passed on the fix.");
+    await expect(stack).toContainText("Windows validation passed on the fix.");
     await expect(stack).toContainText("Merge PR #17");
-    await app.window.screenshot({ path: testInfo.outputPath("merge-hold-reminder.png") });
+    await app.window.screenshot({ path: testInfo.outputPath("hold-merge-reminder.png") });
     await expect(stack.getByRole("checkbox", { name: "Merge PR #17" })).not.toBeChecked();
     // The merge card is the next page of the stack, and it can merge again.
     await stack.getByRole("button", { name: "Next to-do" }).click();

@@ -1,5 +1,6 @@
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
-import { assertNoMergeHolds } from "../thread-merge-holds/thread-merge-holds";
+import { assertMergeNotHeld } from "../app-server/thread-dependency-merge-hold";
+import { createThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import type {
   AgentEvent,
   AppServerBackendKind,
@@ -633,14 +634,12 @@ export function createThreadTodoRunners(params: {
       return { summary: `Sent to ${request.target.title ?? request.target.threadId}` };
     },
     mergePullRequest: async (request) => {
-      assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
-        backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest: request.pullRequest,
-      });
-      return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: (pullRequest) => {
-        assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
-          backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest,
-        });
-      } });
+      const overlay = getDesktopOverlayStore();
+      const assertNotHeld = (pullRequest: string) => assertMergeNotHeld(createThreadDependencyStorage().active(), {
+        backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest,
+      }, (thread) => overlay.readThreadPullRequestUrls(thread));
+      assertNotHeld(request.pullRequest);
+      return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: assertNotHeld });
     },
     startThread: async ({
       sourceBackend, sourceThreadId, cwd, crossProject, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,

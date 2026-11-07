@@ -1,13 +1,7 @@
 # Durable thread dependencies
 
-For work that is done only when someone says so, use
-[Wait Until Done](thread-merge-holds.md). It holds merging while work
-continues and reminds the operator when the work is marked done. A completed
-turn is a scheduling event; it does not establish that another thread has
-finished its work.
-
-`manage_thread_dependencies` registers one-shot prerequisites for a local
-thread. The thread ends its turn after registration; PwrAgent evaluates
+`manage_thread_dependencies` (**Continue After…**) registers one-shot
+prerequisites for a thread. The thread ends its turn after registration; PwrAgent evaluates
 prerequisites from provider turn boundaries and its existing PR status bus.
 There is no Job Monitor, model-driven polling, or new timer.
 
@@ -31,6 +25,33 @@ the follow-up, but do not merge the PRs or enforce their merge order.
 Reserve `create_monitor_delegation` for long jobs that PR watches and local
 thread dependencies cannot cover. Confirm a wait was registered, finish any
 unrelated work, and end the turn.
+
+## Waiting until work is done
+
+A completed turn is a scheduling event; it does not establish that another
+thread has finished its work. For work that is done only when someone says
+so, use a `marked_done` condition. It names a thread on this instance, a
+thread on a connected peer (`target: { scope: "remote", instanceId }`), or
+work outside PwrAgent (`threadId: ""` with a `subject`). It is met only by
+`action: "mark_done"`, from the operator's **Mark Done…** or an agent, with
+an optional note. A finished turn, idle state, archive, or disconnection
+never marks it done. A peer's thread can only be `marked_done`; turn and PR
+milestones stay on the waiting thread's own instance.
+
+`holdMerge: true` refuses merging the waiting thread's PRs, and any PR
+attached to it, while the wait is waiting or ready. Merge cards and the
+`merge_pull_request` tool both check it just before the provider write.
+Rebase, CI repair, review, and conversation continue. With
+`deliver: "operator"`, `steps` (up to twelve) become the reminder card's
+checklist. This replaced Wait Until Done (v1.3.13–14); waits made there were
+not carried over.
+
+A waiting thread on a peer is managed on its owner: the request carries
+`federationTarget` and crosses as `backend.manageThreadDependencies`, gated
+on the `thread_dependencies_v1` capability and `turn_control`. `list` also
+returns `peerDependents`, the waits connected peers keep on this thread, so
+the prerequisite's side can mark them done. Peers that do not answer are
+left out.
 
 ## Registering a dependency
 
@@ -160,6 +181,7 @@ idle consumer, because it starts no turn.
 | `pr_attached` | A reviewable primary-workspace PR exists. Drafts remain pending. |
 | `ci_passed` | Fresh status for the current head reports passing checks with no checks still running, no conflict, and no draft. A merge alone does not prove CI passed. |
 | `pr_merged` | The selected PR merged. Closure without merging reports failure. |
+| `marked_done` | Someone sent `mark_done` for this condition. Nothing else satisfies it. |
 
 A prerequisite can be registered before its PR exists. Omitted `prUrl`
 selects the first unambiguous primary-workspace PR and retains that identity.
@@ -181,7 +203,8 @@ PwrAgent profile's state database. Registration runs in an immediate SQLite
 transaction: identical active requests deduplicate and new edges must not
 create cycles. Dependencies are limited to sixteen conditions, thirty-two
 active registrations per consumer, and 512 per profile. Completed edges no
-longer constrain the graph. Federation dependencies are not supported yet.
+longer constrain the graph. Only local thread conditions join the graph;
+a peer's thread or a subject cannot form a cycle here.
 
 The coordinator serializes local events and uses a SQLite compare-and-swap
 to claim delivery across instances sharing a profile. Busy consumers retain
@@ -212,7 +235,9 @@ setup: five boundary commits and approximately 49 KB of WAL for registration
 through successful delivery (~4.9 MB/day at 100 dependencies). Operator
 delivery costs four commits and approximately 62 KB for registration through
 its card (~6.2 MB/day at 100 reminders). The card and the delivered claim
-share one commit. One hundred
+share one commit. A marked-done wait costs five commits and approximately
+70 KB from registration through Mark Done and its card (~3.5 MB/day at 50
+waits); only the operator's or an agent's Mark Done writes. One hundred
 unchanged PR observations plus one hundred thread events make zero commits,
 including when the consumer is busy. Evidence timestamps alone never cause
 a write. No dependency means no per-turn persistence.

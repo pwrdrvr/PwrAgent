@@ -25,9 +25,12 @@ describe("Continue After dialog layout contract", () => {
   it.each([
     ".continue-after-dialog__pick, .continue-after-dialog__setup",
     ".thread-dependencies__row",
-    ".thread-dependencies__results",
   ])("lets %s shrink below an unbreakable title", (selector) => {
     expect(cssRuleBody(selector)).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+  });
+
+  it("lets the thread search's results shrink with the column", () => {
+    expect(cssRuleBody(".thread-search-picker__results")).toMatch(/min-width:\s*0;/);
   });
 
   it("pads the scroll box by the focus ring's reach on every side", () => {

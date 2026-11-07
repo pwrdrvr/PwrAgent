@@ -22,6 +22,8 @@ export type ThreadArchiveCandidate = {
   activeSubAgent?: boolean;
   /** A PR watch (watching or dispatching) will wake the thread. */
   activePrWatch?: boolean;
+  /** A Continue After wait holds this thread's merge. */
+  mergeHeld?: boolean;
   /** Its overlay or sub-agent state could not be read; fail closed. */
   unreadable?: boolean;
 };
@@ -101,13 +103,13 @@ export function isPwrAgentClaudeCheckout({ thread, overlay }: Pick<ThreadArchive
 
 /** `allowPinned` is for checkout hibernation, which keeps the thread listed. */
 export function archiveCandidateProtectionReason(
-  { thread, overlay, activeSubAgent, activePrWatch, unreadable }: ThreadArchiveCandidate,
+  { thread, overlay, activeSubAgent, activePrWatch, mergeHeld, unreadable }: ThreadArchiveCandidate,
   options: { allowPinned?: boolean } = {},
 ): string | undefined {
   if (unreadable) return "Thread state unreadable";
   if (!options.allowPinned && (thread.isPinned || overlay?.pinnedRank !== undefined)) return "Pinned thread";
   if (overlay?.agent) return "Agent thread";
-  if (overlay?.mergeHolds?.some((hold) => hold.status === "waiting")) return "Merge held";
+  if (mergeHeld) return "Merge held";
   if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
   // The agent asked to be woken by its PR; archiving would strand the wake.
   if (activePrWatch) return "Watching a PR";

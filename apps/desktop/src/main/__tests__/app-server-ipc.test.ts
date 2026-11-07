@@ -761,8 +761,7 @@ const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadDependencyToolHandler = vi.fn();
-const setThreadMergeHoldToolHandler = vi.fn();
-const setMergeHoldReminderDelivery = vi.fn();
+const setThreadDependenciesPeerHandler = vi.fn();
 const setThreadMaintenanceToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
@@ -1266,8 +1265,7 @@ vi.mock("../app-server/backend-registry", () => {
     setLocalPullRequestAuthorityResolver,
     setThreadPullRequestWatchToolHandler,
     setThreadDependencyToolHandler,
-    setThreadMergeHoldToolHandler,
-    setMergeHoldReminderDelivery,
+    setThreadDependenciesPeerHandler,
     setThreadMaintenanceToolHandler,
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
@@ -1581,8 +1579,7 @@ describe("app server ipc", () => {
     setLocalPullRequestAuthorityResolver.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadDependencyToolHandler.mockClear();
-    setThreadMergeHoldToolHandler.mockClear();
-    setMergeHoldReminderDelivery.mockClear();
+    setThreadDependenciesPeerHandler.mockClear();
     setThreadMaintenanceToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
@@ -1941,10 +1938,9 @@ describe("app server ipc", () => {
     );
   });
 
-  it("guards dependency IPC against remote windows and malformed consumers", async () => {
+  it("guards dependency IPC against malformed consumers", async () => {
     registerAppServerIpcHandlers();
     const handler = handlers.get("thread:dependencies")!;
-    await expect(handler({ sender: { id: 999 } }, { action: "list", backend: "codex", threadId: "waiting" })).rejects.toThrow("local window");
     await expect(handler({ sender: { id: 1 } }, { action: "create", backend: "codex", threadId: "" })).rejects.toThrow("waiting threadId");
     // The operator's dialog must write the plan down too, not only agents.
     await expect(handler({ sender: { id: 1 } }, {
@@ -1955,7 +1951,7 @@ describe("app server ipc", () => {
     await expect(tool({ action: "create", backend: "codex", threadId: "" })).resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
   });
 
-  it("lists every active registration for sidebar status, to local windows only", async () => {
+  it("lists every active registration for sidebar status", async () => {
     const { appServerService } = await import("../ipc/app-server");
     const appState = await import("../state/app-state");
     registerAppServerIpcHandlers();
@@ -1971,7 +1967,6 @@ describe("app server ipc", () => {
     const coordinator = vi.spyOn(service, "getThreadDependencyCoordinator").mockReturnValue(agent);
     try {
       await expect(handler({ sender: { id: 1 } }, { action: "active" })).resolves.toEqual({ dependencies: [waiting] });
-      await expect(handler({ sender: { id: 999 } }, { action: "active" })).rejects.toThrow("local window");
     } finally {
       coordinator.mockRestore(); mode.mockRestore();
     }

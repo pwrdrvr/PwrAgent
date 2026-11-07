@@ -96,12 +96,11 @@ function build(input: Scenario): { candidate: ThreadArchiveCandidate; policy: De
     ...(input.archived === "tombstone" ? { archiveTombstonedAt: 1 } : {}),
     ...(input.archived === "retention" ? { archiveRetentionStartedAt: 1 } : {}),
     ...(input.agent ? { agent: {} as ThreadOverlayState["agent"] } : {}),
-    ...(input.mergeHeld ? { mergeHolds: [{ status: "waiting" }] as ThreadOverlayState["mergeHolds"] } : {}),
     ...(input.pendingWork ? { prAutoDispatchPending: {} as ThreadOverlayState["prAutoDispatchPending"] } : {}),
     ...(input.scheduled ? { scheduledStart: { state: "scheduled" } as ThreadOverlayState["scheduledStart"] } : {}),
   } as ThreadOverlayState;
   return {
-    candidate: { thread, overlay, activeSubAgent: input.activeSubAgent, activePrWatch: input.prWatch, unreadable: input.unreadable },
+    candidate: { thread, overlay, activeSubAgent: input.activeSubAgent, activePrWatch: input.prWatch, mergeHeld: input.mergeHeld, unreadable: input.unreadable },
     policy: { enabled: input.enabled, idleDays: input.idleDays, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" },
   };
 }
