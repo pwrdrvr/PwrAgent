@@ -6,7 +6,7 @@ import {
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
 import type { DesktopAutomaticArchiveRetiredNotice } from "@pwragent/shared";
-import { assertMergeNotHeld, blockingMergeDependencies } from "./thread-dependency-merge-hold";
+import { assertMergeNotHeld, blockingMergeDependencies, resolveMergePullRequest } from "./thread-dependency-merge-hold";
 import {
   appendPeerDependents, collectPeerActiveDependencies, manageRemoteThreadDependencies, readFederationThreadDependenciesRequest,
 } from "./thread-dependencies-federation";
@@ -10347,18 +10347,20 @@ class DesktopAppServerService {
     }
     const { pullRequest, ...managed } = request;
     if (pullRequest !== undefined && (managed.action !== "list" || typeof pullRequest !== "string" || !pullRequest.trim())) {
-      throw new Error("pullRequest is a PR URL, and only list takes it.");
+      throw new Error("pullRequest is a PR number or URL, and only list takes it.");
     }
     const threadId = managed.threadId!.trim();
     const response = await this.getThreadDependencyCoordinator().manage({ ...managed, backend: request.backend, threadId }, provenance, actor);
     if (pullRequest === undefined) return response;
     // The same check a merge from this thread runs, so the card agrees with it.
     const overlay = this.getOverlayStore();
+    const readUrls = (thread: { backend: string; threadId: string }) => overlay.readThreadPullRequestUrls(thread as { backend: AppServerBackendKind; threadId: string });
     return {
       ...response,
       mergeHolds: blockingMergeDependencies(createThreadDependencyStorage().active(), {
-        backend: request.backend, threadId, pullRequest: pullRequest.trim(),
-      }, (thread) => overlay.readThreadPullRequestUrls(thread)),
+        backend: request.backend, threadId,
+        pullRequest: resolveMergePullRequest(pullRequest, readUrls({ backend: request.backend, threadId })),
+      }, readUrls),
     };
   }
 

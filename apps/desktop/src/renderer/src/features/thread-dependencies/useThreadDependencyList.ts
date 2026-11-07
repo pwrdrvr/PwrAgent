@@ -61,7 +61,8 @@ const REFRESH_DEBOUNCE_MS = 150;
 
 /**
  * One thread's Continue After list from its owner. Refreshes on
- * `thread/dependencies/updated` and on focus, never on a timer. A failed
+ * `thread/dependencies/updated`, on `thread/pullRequests/updated` when it
+ * asks about a merge, and on focus, never on a timer. A failed
  * refresh keeps the last list.
  */
 export function useThreadDependencyList(
@@ -100,7 +101,9 @@ export function useThreadDependencyList(
     };
     void refresh();
     const unsubscribe = api.onAgentEvent?.((event) => {
-      if (event.notification.method !== "thread/dependencies/updated") return;
+      // A merge's holds also follow which threads have its PR attached.
+      if (event.notification.method !== "thread/dependencies/updated"
+        && !(pullRequest && event.notification.method === "thread/pullRequests/updated")) return;
       clearTimeout(timer);
       timer = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
     });

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ManageThreadDependenciesRequest, ManageThreadDependenciesResponse, ThreadDependency, ThreadTodo } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -17,6 +17,7 @@ const PR_URL = "https://github.com/acme/atlas/pull/17";
 
 afterEach(() => {
   cleanup();
+  listeners.clear();
   delete (window as Window & { pwragent?: DesktopApi }).pwragent;
 });
 
@@ -36,9 +37,16 @@ function mergeCard(): ThreadTodo {
   } as ThreadTodo;
 }
 
+type AgentEventListener = (event: { notification: { method: string } }) => void;
+const listeners = new Set<AgentEventListener>();
+
 function install(answer: (request: ManageThreadDependenciesRequest) => ManageThreadDependenciesResponse) {
   const manageThreadDependencies = vi.fn(async (request: ManageThreadDependenciesRequest) => answer(request));
-  (window as Window & { pwragent?: DesktopApi }).pwragent = { manageThreadDependencies } as unknown as DesktopApi;
+  const onAgentEvent = (listener: AgentEventListener) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
+  (window as Window & { pwragent?: DesktopApi }).pwragent = { manageThreadDependencies, onAgentEvent } as unknown as DesktopApi;
   return manageThreadDependencies;
 }
 
@@ -68,6 +76,26 @@ describe("merge card holds", () => {
 
     expect(await screen.findByRole("button", { name: /Merge/ })).toBeInTheDocument();
     expect(screen.queryByText(/Merge waits for/)).toBeNull();
+  });
+
+  it("asks again when a thread's PRs change, since that moves a shared-PR hold", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let attached = false;
+      install(() => ({ dependencies: [], mergeHolds: attached ? [hold("thread-b", "Lab validation")] : [] }));
+      renderCard();
+      expect(await screen.findByRole("button", { name: /Merge/ })).toBeInTheDocument();
+
+      attached = true;
+      await act(async () => {
+        for (const listener of listeners) listener({ notification: { method: "thread/pullRequests/updated" } });
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(await screen.findByText("Merge waits for Lab validation")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to the thread's own holds when the owner predates mergeHolds", async () => {

@@ -10792,7 +10792,7 @@ describe("app server ipc", () => {
       const { appServerService, restore } = await renamedRepositoryService();
       const stateDb = vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
       const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
-      const pr = githubPr({ number: 17, org: "pwrdrvr", repo: "PwrAgent", state: "pending", url: RENAMED_PR_URL });
+      const pr = githubPr({ number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending", url: RENAMED_PR_URL });
       try {
         await store.setThreadPullRequests({
           backend: "codex", threadId: "holder", prs: [pr], fetchedAt: Date.now(), refreshKey: "holder",
@@ -10815,6 +10815,14 @@ describe("app server ipc", () => {
           backend: "codex", threadId: "merger", pullRequest: RENAMED_PR_URL,
         }, (thread) => store.readThreadPullRequestUrls(thread as { backend: "codex"; threadId: string }));
         expect(response.mergeHolds).toEqual(enforced);
+        // A card that names the PR by number, as gh accepts it, sees the
+        // same hold once the merging thread has the PR attached.
+        await store.setThreadPullRequests({
+          backend: "codex", threadId: "merger", prs: [pr], fetchedAt: Date.now(), refreshKey: "merger",
+        });
+        expect((await appServerService.manageThreadDependencies({
+          action: "list", backend: "codex", threadId: "merger", pullRequest: "3179",
+        })).mergeHolds?.map((item) => item.id)).toEqual(["hold-17"]);
         // A plain list asks no merge question.
         expect((await appServerService.manageThreadDependencies({
           action: "list", backend: "codex", threadId: "merger",
