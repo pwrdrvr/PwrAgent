@@ -16,9 +16,12 @@ import {
   type ThreadMaintenanceRules,
   type ThreadMaintenanceRun,
   type ThreadMaintenanceScan,
+  type ThreadMaintenanceScanProgress,
+  type ThreadMaintenanceScanStep,
   type ThreadMaintenanceStep,
   type ThreadMaintenanceStepResult,
   type ThreadMaintenanceWorkspace,
+  THREAD_MAINTENANCE_SCAN_STEPS,
 } from "@pwragent/shared";
 import {
   archiveCandidateKeepReason,
@@ -186,8 +189,15 @@ export class ThreadMaintenanceService {
     this.abort.abort();
   }
 
-  async scan(request: { rules?: Partial<ThreadMaintenanceRules>; projectKey?: string } = {}): Promise<ThreadMaintenanceScan> {
+  /** Reads the requested steps, or every step. `onProgress` hears where the
+   * scan is as it goes; a step the scan does not read comes back empty. */
+  async scan(
+    request: { rules?: Partial<ThreadMaintenanceRules>; projectKey?: string; steps?: readonly ThreadMaintenanceScanStep[] } = {},
+    options: { onProgress?: (progress: ScanProgressSnapshot) => void } = {},
+  ): Promise<ThreadMaintenanceScan> {
     const now = this.now();
+    const steps = THREAD_MAINTENANCE_SCAN_STEPS.filter((step) => !request.steps || request.steps.includes(step));
+    const progress = new ScanProgress(steps, options.onProgress);
     const policy = this.deps.getPolicy();
     const rules = normalizeRules({ ...defaultThreadMaintenanceRules(policy), ...request.rules });
     const failures: ThreadMaintenanceFailure[] = [];
@@ -203,16 +213,23 @@ export class ThreadMaintenanceService {
       projects: new Map(),
       hibernate: new Map(),
     };
-    const threads = await this.scanThreads(rules, policy, now, request.projectKey, retained, fail);
+    const threads = steps.includes("threads") || steps.includes("hibernate")
+      ? await this.scanThreads(rules, policy, now, request.projectKey, retained, fail, progress, steps.includes("threads"))
+      : { checked: 0, projects: [], kept: {} };
     // After archive, so each row can say which archive row also takes it.
-    const hibernate = await this.scanHibernation(now, request.projectKey, retained, fail);
-    const checkouts = await this.scanCheckouts(rules, request.projectKey, retained, fail);
+    const hibernate = steps.includes("hibernate")
+      ? await this.scanHibernation(now, request.projectKey, retained, fail, progress)
+      : undefined;
+    const checkouts = steps.includes("checkouts")
+      ? await this.scanCheckouts(rules, request.projectKey, retained, fail, progress)
+      : { items: [], kept: {}, emptyFolders: 0 };
     const scan: ThreadMaintenanceScan = {
       scanId: this.newId(),
       startedAt: now,
       finishedAt: this.now(),
       rules,
       ...(request.projectKey ? { projectKey: request.projectKey } : {}),
+      ...(request.steps ? { steps } : {}),
       spaceSource: "none",
       threads,
       ...(hibernate ? { hibernate } : {}),
@@ -252,15 +269,20 @@ export class ThreadMaintenanceService {
     projectFilter: string | undefined,
     retained: RetainedScan,
     fail: (step: ThreadMaintenanceStep, error: unknown, details?: { path?: string; threadId?: string }) => void,
+    progress: ScanProgress,
+    /** False when only the hibernate step needs the thread list. */
+    evaluate: boolean,
   ): Promise<ThreadMaintenanceScan["threads"]> {
     const result: ThreadMaintenanceScan["threads"] = { checked: 0, projects: [], kept: {} };
     let candidates: ThreadArchiveCandidate[];
+    progress.list(evaluate ? "threads" : "hibernate");
     try { candidates = await this.deps.listCandidates(); }
     catch (error) {
       fail("threads", error);
       return { ...result, skipped: "Threads could not be listed" };
     }
     retained.candidates = candidates;
+    if (!evaluate) return result;
     // Unread peer sub-threads could belong to any parent, so offer nothing.
     let peerSubthreads: ReadonlyMap<string, readonly string[]> | undefined;
     try { peerSubthreads = await this.deps.listPeerSubthreads?.(); }
@@ -289,7 +311,8 @@ export class ThreadMaintenanceService {
     const roots = candidates.filter((candidate) => !candidate.thread.codexNativeSubAgent);
     type Evaluated = { root: ThreadArchiveCandidate; family: ThreadArchiveCandidate[]; project?: string;
       reason?: string; workspace?: ThreadMaintenanceWorkspace; worktreePath?: string };
-    const evaluated = await mapLimit(roots, INSPECT_CONCURRENCY, async (root): Promise<Evaluated | undefined> => {
+    progress.check("threads", roots.length);
+    const evaluated = await mapLimit(roots, INSPECT_CONCURRENCY, progress.track((root) => root.thread.title, async (root): Promise<Evaluated | undefined> => {
       if (this.abort.signal.aborted) return undefined;
       const family = groupFor(root);
       let project: string | undefined;
@@ -311,7 +334,7 @@ export class ThreadMaintenanceService {
         fail("threads", error, { threadId: root.thread.id });
         return undefined;
       }
-    });
+    }));
     const eligible = new Map<string, Evaluated[]>();
     for (const item of evaluated) {
       if (!item) continue;
@@ -376,6 +399,7 @@ export class ThreadMaintenanceService {
     projectFilter: string | undefined,
     retained: RetainedScan,
     fail: (step: ThreadMaintenanceStep, error: unknown, details?: { path?: string; threadId?: string }) => void,
+    progress: ScanProgress,
   ): Promise<ThreadMaintenanceScan["hibernate"]> {
     const deps = this.deps.hibernation;
     if (!deps) return undefined;
@@ -402,7 +426,8 @@ export class ThreadMaintenanceService {
       for (const member of family) archivedWith.set(buildThreadIdentityKey(member.thread.source, member.thread.id), rootKey);
     }
     const roots = candidates.filter((candidate) => !candidate.thread.codexNativeSubAgent);
-    const evaluated = await mapLimit(roots, INSPECT_CONCURRENCY, async (candidate) => {
+    progress.check("hibernate", roots.length);
+    const evaluated = await mapLimit(roots, INSPECT_CONCURRENCY, progress.track((candidate) => candidate.thread.title, async (candidate) => {
       if (this.abort.signal.aborted) return undefined;
       try {
         if (projectFilter) {
@@ -434,7 +459,7 @@ export class ThreadMaintenanceService {
         fail("hibernate", error, { threadId: candidate.thread.id });
         return undefined;
       }
-    });
+    }));
     for (const item of evaluated) {
       if (!item) continue;
       result.checked += 1;
@@ -481,8 +506,10 @@ export class ThreadMaintenanceService {
     projectFilter: string | undefined,
     retained: RetainedScan,
     fail: (step: ThreadMaintenanceStep, error: unknown, details?: { path?: string; threadId?: string }) => void,
+    progress: ScanProgress,
   ): Promise<ThreadMaintenanceScan["checkouts"]> {
     let audit: ArchivedCheckoutAudit;
+    progress.list("checkouts");
     try { audit = await this.deps.auditArchivedCheckouts(); }
     catch (error) {
       fail("checkouts", error);
@@ -490,7 +517,8 @@ export class ThreadMaintenanceService {
     }
     const inspect = this.deps.inspectWorkspace ?? inspectMaintenanceWorkspace;
     const kept = { ...audit.kept };
-    const items = await mapLimit(audit.candidates, INSPECT_CONCURRENCY, async (candidate): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
+    progress.check("checkouts", audit.candidates.length + (audit.unreferenced?.length ?? 0));
+    const items = await mapLimit(audit.candidates, INSPECT_CONCURRENCY, progress.track((candidate) => candidate.worktreePath, async (candidate): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
       if (this.abort.signal.aborted) return undefined;
       if (projectFilter && await checkoutProjectPath(candidate.worktreePath) !== path.resolve(projectFilter)) return undefined;
       try {
@@ -515,7 +543,7 @@ export class ThreadMaintenanceService {
         fail("checkouts", error, { path: candidate.worktreePath, threadId: candidate.threadId });
         return undefined;
       }
-    });
+    }));
     const result: ThreadMaintenanceArchivedCheckout[] = items.filter((item) => item !== undefined);
     const keepUnreferenced = (reason: string) => {
       const key = UNREFERENCED_KEEP_PREFIX + reason;
@@ -523,7 +551,7 @@ export class ThreadMaintenanceService {
     };
     if (audit.unreferencedUnavailable) keepUnreferenced(`not checked: ${audit.unreferencedUnavailable}`);
     if (audit.unreferencedTruncated) keepUnreferenced("more than could be listed");
-    const unreferenced = await mapLimit(audit.unreferenced ?? [], INSPECT_CONCURRENCY, async (worktreePath): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
+    const unreferenced = await mapLimit(audit.unreferenced ?? [], INSPECT_CONCURRENCY, progress.track((worktreePath) => worktreePath, async (worktreePath): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
       if (this.abort.signal.aborted) return undefined;
       if (projectFilter && await checkoutProjectPath(worktreePath) !== path.resolve(projectFilter)) return undefined;
       try {
@@ -544,7 +572,7 @@ export class ThreadMaintenanceService {
         fail("checkouts", error, { path: worktreePath });
         return undefined;
       }
-    });
+    }));
     result.push(...unreferenced.filter((item) => item !== undefined));
     for (const item of result) retained.checkouts.set(item.worktreePath, item);
     return { items: result, kept, emptyFolders: audit.emptyFolders };
@@ -913,6 +941,65 @@ async function checkoutProjectPath(worktreePath: string): Promise<string | undef
   if (path.basename(path.dirname(gitDirectory)) !== "worktrees") return undefined;
   const commonDirectory = path.dirname(path.dirname(gitDirectory));
   return path.basename(commonDirectory) === ".git" ? path.dirname(commonDirectory) : commonDirectory;
+}
+
+/** A scan's position, without the window's progress id. */
+export type ScanProgressSnapshot = Omit<ThreadMaintenanceScanProgress, "progressId">;
+
+/** Tracks where a scan is and tells the listener on every change. A step
+ * starts "listing" while it reads what to check, then counts items as they
+ * finish. Items in flight are named, in the order they started. */
+class ScanProgress {
+  private step: ThreadMaintenanceScanStep;
+  private stage: ScanProgressSnapshot["stage"] = "listing";
+  private processed = 0;
+  private total = 0;
+  private readonly inFlight: string[] = [];
+
+  constructor(private readonly steps: ThreadMaintenanceScanStep[], private readonly listener?: (progress: ScanProgressSnapshot) => void) {
+    this.step = steps[0] ?? "threads";
+  }
+
+  list(step: ThreadMaintenanceScanStep): void {
+    this.reset(step, "listing", 0);
+  }
+
+  check(step: ThreadMaintenanceScanStep, total: number): void {
+    this.reset(step, "checking", total);
+  }
+
+  /** Wraps one item's work so it is named while it runs and counted when it ends. */
+  track<T, R>(label: (item: T) => string, work: (item: T) => Promise<R>): (item: T) => Promise<R> {
+    return async (item) => {
+      const name = label(item);
+      this.inFlight.push(name);
+      this.emit();
+      try {
+        return await work(item);
+      } finally {
+        const index = this.inFlight.indexOf(name);
+        if (index >= 0) this.inFlight.splice(index, 1);
+        this.processed += 1;
+        this.emit();
+      }
+    };
+  }
+
+  private reset(step: ThreadMaintenanceScanStep, stage: ScanProgressSnapshot["stage"], total: number): void {
+    this.step = step;
+    this.stage = stage;
+    this.processed = 0;
+    this.total = total;
+    this.inFlight.length = 0;
+    this.emit();
+  }
+
+  private emit(): void {
+    this.listener?.({
+      steps: [...this.steps], step: this.step, stage: this.stage,
+      processed: this.processed, total: this.total, inFlight: [...this.inFlight],
+    });
+  }
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {

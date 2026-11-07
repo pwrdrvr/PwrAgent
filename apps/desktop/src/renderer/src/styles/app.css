@@ -53434,14 +53434,18 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 /* Thread maintenance dialog. Geometry follows .workspace-handoff-dialog;
    it sits above Settings (120) and below portalled Select lists (150). */
+/* The dialog keeps one size and one place from open to close, as PwrGit's
+   Repository maintenance does: it hangs from a fixed top and has a fixed
+   height, so a tab, a scan, a review or a run never moves it. Only the body
+   scrolls. */
 .thread-maintenance-modal {
   position: fixed;
   z-index: 130;
   inset: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 24px;
+  padding: 8vh 24px 24px;
   background: var(--scrim-medium);
 }
 
@@ -53449,7 +53453,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   display: flex;
   flex-direction: column;
   width: min(860px, 100%);
-  max-height: min(860px, 100%);
+  height: min(760px, 100%);
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -53498,8 +53502,13 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  padding: 14px 16px 16px;
+  padding: 12px 16px 16px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.thread-maintenance__body > * {
+  flex-shrink: 0;
 }
 
 .thread-maintenance__foot {
@@ -53556,8 +53565,10 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .thread-maintenance__tabs {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   gap: 6px;
+  padding: 14px 16px 0;
 }
 
 .thread-maintenance__tab {
@@ -53609,7 +53620,11 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .thread-maintenance__plan.is-off {
   border-style: dashed;
-  opacity: 0.7;
+  background: transparent;
+}
+
+.thread-maintenance__plan.is-off h3 {
+  color: var(--text-secondary);
 }
 
 .thread-maintenance__plan-top {
@@ -53617,6 +53632,19 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   grid-template-columns: 22px 1fr auto;
   align-items: start;
   gap: 10px;
+}
+
+/* Combined's steps lead with a checkbox, as PwrGit's plan does. */
+.thread-maintenance__plan-top.has-check {
+  grid-template-columns: 16px 22px 1fr auto;
+}
+
+.thread-maintenance__plan-top.has-check > .thread-maintenance__check {
+  margin-top: 2px;
+}
+
+.thread-maintenance__plan-top.has-check + .thread-maintenance__rules {
+  margin-left: 58px;
 }
 
 .thread-maintenance__plan h3 {
@@ -53760,14 +53788,6 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .thread-maintenance__never dd {
   margin: 0;
-}
-
-.thread-maintenance__progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
-  font-size: 12.5px;
 }
 
 .thread-maintenance__rail {
@@ -54080,6 +54100,32 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   display: block;
   height: 100%;
   background: var(--accent);
+}
+
+/* The scan's live status. It keeps one height whatever it says. */
+.thread-maintenance__scan-card {
+  padding: 10px 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--bg-row-active);
+}
+
+.thread-maintenance__scan-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.thread-maintenance__scan-now {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --text-subtle is too faint on the accent-tinted live cards. */
+:is(.thread-maintenance__scan-card, .thread-maintenance__progress-card) .thread-maintenance__path {
+  color: var(--text-muted);
 }
 
 .thread-maintenance__problem {

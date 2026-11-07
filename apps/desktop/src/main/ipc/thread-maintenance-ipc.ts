@@ -1,9 +1,11 @@
 import { ipcMain } from "electron";
-import type {
-  ThreadMaintenanceApplyRequest,
-  ThreadMaintenanceRules,
-  ThreadMaintenanceRun,
-  ThreadMaintenanceScan,
+import {
+  THREAD_MAINTENANCE_SCAN_STEPS,
+  type ThreadMaintenanceApplyRequest,
+  type ThreadMaintenanceRules,
+  type ThreadMaintenanceRun,
+  type ThreadMaintenanceScan,
+  type ThreadMaintenanceScanStep,
 } from "@pwragent/shared";
 import {
   APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL,
@@ -11,12 +13,20 @@ import {
   APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL,
   APP_SERVER_STOP_THREAD_MAINTENANCE_CHANNEL,
   THREAD_MAINTENANCE_RUN_CHANGED_EVENT_CHANNEL,
+  THREAD_MAINTENANCE_SCAN_PROGRESS_EVENT_CHANNEL,
 } from "../../shared/ipc";
 import { getThreadMaintenanceService, onThreadMaintenanceRun } from "../thread-maintenance-runtime";
+import { createScanProgressSender } from "../thread-maintenance-scan-progress";
 import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 
 let unsubscribeRun: (() => void) | undefined;
+
+type ScanRequest = {
+  rules?: Partial<ThreadMaintenanceRules>;
+  projectKey?: string;
+  steps?: ThreadMaintenanceScanStep[];
+};
 
 /** Thread maintenance works on this machine's threads only, so a remote
  * (federation) window is refused on every channel. */
@@ -34,9 +44,18 @@ export function registerThreadMaintenanceIpc(): void {
   };
   ipcMain.removeHandler(APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL);
   ipcMain.handle(APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL,
-    async (event, request?: { rules?: Partial<ThreadMaintenanceRules>; projectKey?: string }): Promise<ThreadMaintenanceScan> => {
+    async (event, request?: unknown): Promise<ThreadMaintenanceScan> => {
       local(event);
-      return await getThreadMaintenanceService().scan(readScanRequest(request));
+      const progressId = readProgressId(request);
+      const reporter = progressId
+        ? createScanProgressSender(event.sender, THREAD_MAINTENANCE_SCAN_PROGRESS_EVENT_CHANNEL, progressId)
+        : undefined;
+      try {
+        return await getThreadMaintenanceService().scan(readScanRequest(request),
+          reporter ? { onProgress: reporter.report } : {});
+      } finally {
+        reporter?.close();
+      }
     });
   ipcMain.removeHandler(APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL);
   ipcMain.handle(APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL,
@@ -68,12 +87,22 @@ export function unregisterThreadMaintenanceIpc(): void {
   ipcMain.removeHandler(APP_SERVER_STOP_THREAD_MAINTENANCE_CHANNEL);
 }
 
-function readScanRequest(value: unknown): { rules?: Partial<ThreadMaintenanceRules>; projectKey?: string } {
+function readProgressId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const id = (value as Record<string, unknown>).progressId;
+  return typeof id === "string" && id.length > 0 && id.length <= 128 ? id : undefined;
+}
+
+function readScanRequest(value: unknown): ScanRequest {
   if (!value || typeof value !== "object") return {};
   const record = value as Record<string, unknown>;
   const rules = record.rules && typeof record.rules === "object" ? record.rules as Record<string, unknown> : undefined;
+  const steps = Array.isArray(record.steps)
+    ? THREAD_MAINTENANCE_SCAN_STEPS.filter((step) => (record.steps as unknown[]).includes(step))
+    : undefined;
   return {
     ...(typeof record.projectKey === "string" && record.projectKey ? { projectKey: record.projectKey } : {}),
+    ...(steps?.length ? { steps } : {}),
     ...(rules ? { rules: {
       ...(rules.mode === "count" || rules.mode === "age" ? { mode: rules.mode } : {}),
       ...(typeof rules.keepPerProject === "number" ? { keepPerProject: rules.keepPerProject } : {}),

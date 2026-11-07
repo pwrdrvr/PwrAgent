@@ -9,6 +9,7 @@ import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
   REBUILDABLE_OUTPUT_NAMES,
   type ThreadMaintenanceRun,
+  type ThreadMaintenanceScanStep,
   type ThreadMaintenanceWorkspace,
 } from "@pwragent/shared";
 import { PEER_SUBTHREADS_UNREADABLE, peerSubthreadKey, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
@@ -19,6 +20,7 @@ import {
   type ArchivedCheckoutAudit,
   type ArchivedCheckoutRemoval,
   type CheckoutHibernationReviewDeps,
+  type ScanProgressSnapshot,
   type ThreadMaintenanceDeps,
 } from "../app-server/thread-maintenance-service";
 import { inspectMaintenanceWorkspace, rebuildableOutputFolder } from "../app-server/thread-maintenance-workspace";
@@ -629,6 +631,83 @@ describe("hibernate idle checkouts", () => {
 
 /** A linked worktree of a fresh repository, on its own branch. Archive
  * removes only linked worktrees, so that is what most cases inspect. */
+describe("scan steps and progress", () => {
+  const threadPaths = ["/w/a", "/w/b", "/w/c"];
+  const checkoutPaths = ["/w/x", "/w/u"];
+  const policy = { enabled: false, idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, restoreOn: "send" as const };
+
+  function setup() {
+    const hibernation: CheckoutHibernationReviewDeps = {
+      getPolicy: () => policy,
+      keepReason: vi.fn((item: ThreadArchiveCandidate) => ({ target: item.thread.linkedDirectories[0]!.worktreePath! })),
+      inspect: vi.fn(async () => ({ files: 0, bytes: 0 })),
+      hibernate: vi.fn(async () => true),
+    };
+    return {
+      hibernation,
+      ...harness(threadPaths.map((cwd) => candidate(cwd.slice(3), { cwd })), {
+        hibernation,
+        auditArchivedCheckouts: vi.fn(async (): Promise<ArchivedCheckoutAudit> => ({
+          candidates: [{ backend: "codex", threadId: "x", worktreePath: "/w/x" }],
+          kept: {}, emptyFolders: 0, unreferenced: ["/w/u"],
+        })),
+      }),
+    };
+  }
+
+  // Model: a scan reads exactly the steps it is asked for. A step it was not
+  // asked for costs no Git inspection and comes back empty. Progress names
+  // only those steps, in run order, and each step ends with every item
+  // counted and nothing in flight.
+  it("reads only the requested steps and reports each one through its last item", async () => {
+    const all: ThreadMaintenanceScanStep[] = ["threads", "hibernate", "checkouts"];
+    await fc.assert(fc.asyncProperty(fc.subarray(all, { minLength: 1 }), async (steps) => {
+      const { service, deps, hibernation } = setup();
+      const progress: ScanProgressSnapshot[] = [];
+      const scan = await service.scan({ steps }, { onProgress: (next) => progress.push(next) });
+      expect(scan.steps).toEqual(steps);
+
+      const inspected = vi.mocked(deps.inspectWorkspace!).mock.calls.map(([cwd]) => cwd);
+      expect(inspected.some((cwd) => threadPaths.includes(cwd))).toBe(steps.includes("threads"));
+      expect(inspected.some((cwd) => checkoutPaths.includes(cwd))).toBe(steps.includes("checkouts"));
+      expect(vi.mocked(hibernation.inspect).mock.calls.length > 0).toBe(steps.includes("hibernate"));
+      expect(vi.mocked(deps.auditArchivedCheckouts).mock.calls).toHaveLength(steps.includes("checkouts") ? 1 : 0);
+      if (!steps.includes("threads")) expect(scan.threads.projects).toEqual([]);
+      if (!steps.includes("hibernate")) expect(scan.hibernate).toBeUndefined();
+      if (!steps.includes("checkouts")) expect(scan.checkouts.items).toEqual([]);
+
+      expect(progress.every((item) => item.steps.join() === steps.join())).toBe(true);
+      expect([...new Set(progress.map((item) => item.step))]).toEqual(steps);
+      for (const step of steps) {
+        const checking = progress.filter((item) => item.step === step && item.stage === "checking");
+        expect(checking.every((item) => item.processed <= item.total && item.inFlight.length <= 6)).toBe(true);
+        const last = checking.at(-1)!;
+        expect(last.processed).toBe(last.total);
+        expect(last.inFlight).toEqual([]);
+        expect(last.total).toBe(step === "checkouts" ? checkoutPaths.length : threadPaths.length);
+      }
+    }), { numRuns: 20 });
+  });
+
+  it("names what it is checking while it checks it", async () => {
+    const { service } = setup();
+    const progress: ScanProgressSnapshot[] = [];
+    await service.scan({ steps: ["threads", "checkouts"] }, { onProgress: (next) => progress.push(next) });
+    expect(progress[0]).toEqual({ steps: ["threads", "checkouts"], step: "threads", stage: "listing", processed: 0, total: 0, inFlight: [] });
+    const named = new Set(progress.flatMap((item) => item.inFlight));
+    expect(named).toEqual(new Set(["Thread a", "Thread b", "Thread c", "/w/x", "/w/u"]));
+  });
+
+  it("reads every step when none are named, as the agent tool asks", async () => {
+    const { service, deps } = setup();
+    const scan = await service.scan();
+    expect(scan.steps).toBeUndefined();
+    expect(scan.threads.checked).toBe(3);
+    expect(scan.hibernate?.checked).toBe(3);
+    expect(deps.auditArchivedCheckouts).toHaveBeenCalledOnce();
+  });
+});
+
 async function linkedWorktree(root: string): Promise<{ repo: string; worktree: string; git: (...args: string[]) => Promise<unknown> }> {
   const { repo, git: repoGit } = await gitRepo(root);
   const worktree = path.join(root, "worktrees", "abc123", "repo");
