@@ -35,8 +35,8 @@ describe("backend forge tool dispatch", () => {
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<DynamicResult>;
     handleAttachThreadPullRequestInspectionRequest: (args: unknown) => Promise<unknown>;
   };
-  const request = (tool: string, args: Record<string, unknown>, callId: string): AppServerPendingRequestNotification => ({
-    method: "item/tool/call", params: { threadId: "thread-1", turnId: "turn-1", requestId: callId, callId, namespace: "pwragent", tool, arguments: args },
+  const request = (tool: string, args: Record<string, unknown>, callId: string, flat = false): AppServerPendingRequestNotification => ({
+    method: "item/tool/call", params: { threadId: "thread-1", turnId: "turn-1", requestId: callId, callId, namespace: flat ? null : "pwragent", tool: flat ? `pwragent__${tool}` : tool, arguments: args },
   });
   const text = (result: DynamicResult) => result.contentItems.map((item) => item.text ?? "").join("");
 
@@ -91,8 +91,8 @@ describe("backend forge tool dispatch", () => {
     });
   }
 
-  it("routes Codex calls to the forge read tools instead of failing with no handler", async () => {
-    const result = await internals.handleServerRequest("codex", request("get_forge_status", {}, "call-read"));
+  it.each([false, true])("routes Codex forge reads with flat=%s", async (flat) => {
+    const result = await internals.handleServerRequest("codex", request("get_forge_status", {}, "call-read", flat));
     expect(text(result)).not.toContain("No PwrAgent handler");
     expect(result.success).toBe(true);
     expect(forgeRead).toHaveBeenCalledWith("get_forge_status", {}, expect.objectContaining({ threadId: "thread-1", turnId: "turn-1" }));
@@ -164,9 +164,9 @@ describe("backend forge tool dispatch", () => {
     expect(prompts).not.toHaveBeenCalled();
   });
 
-  it("asks before opening a pull request, then links it to the thread", async () => {
+  it.each([false, true])("asks before opening a pull request, then links it to the thread with flat=%s", async (flat) => {
     const prompt = nextApproval();
-    const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-pr"));
+    const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-pr", flat));
     const notification = await prompt;
     expect(notification.params.message).toBe("Allow the agent to open a pull request on GitHub?");
     expect(notification.params._meta).toMatchObject({ pwragent_approval_kind: "mcp_tool_call", tool_params_display: [{ name: "title", value: "fix: tests" }, { name: "head", value: "fix/tests" }, { name: "draft", value: "true" }] });
