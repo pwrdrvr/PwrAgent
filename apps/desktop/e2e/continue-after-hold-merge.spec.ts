@@ -76,7 +76,8 @@ test("Continue After holds merging until a thread is marked done, keeps the comp
     await dialog.getByRole("textbox", { name: "What finished (optional)" }).fill("Windows validation passed on the fix.");
     await app.window.screenshot({ path: testInfo.outputPath("hold-merge-mark-done.png") });
     await dialog.getByRole("button", { name: "Mark Done", exact: true }).click();
-    await expect(dialog.getByRole("button", { name: /^History/ })).toBeVisible();
+    // The toggle's CSS caret is part of its accessible name ("▸ History (1)").
+    await expect(dialog.getByRole("button", { name: /History \(1\)$/ })).toBeVisible();
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
     await expect(app.window.locator(".continue-after-status")).toHaveCount(0);
     // Marking it done reminds the operator of the steps; it starts no turn.
