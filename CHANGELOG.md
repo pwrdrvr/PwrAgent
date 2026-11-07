@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.3.14 - 2026-11-06
+
+- Checkout Hibernation - Reclaim disk space from eligible idle PwrAgent worktree checkouts while keeping their threads visible. Save uncommitted changes to recovery snapshots and restore the checkout on the next send. Hibernation defaults to on after seven idle days unless explicitly disabled; ignored, rebuildable output such as node_modules may be removed. Use Restore now or Keep Checkout Awake from the thread.
+- Archiving and Maintenance - Stop automatically archiving threads: archiving now requires an explicit request. Thread maintenance can review idle checkouts for hibernation, include Claude threads, and list unreferenced PwrAgent checkouts without selecting them by default. Add Clean Up Project, protect sub-thread parents, and show bounded cleanup progress and Open thread links.
+- Review Auto-fix - Let a finished review queue the thread's agent to fix, defer, or decline its findings. Configure the default in Settings or change it for an individual review, including from messaging. Show whether Auto-fix is armed or running, and clear stale failures when someone takes over.
+- Claude Session Recovery - Continue a thread in a new Claude session after Claude Code has deleted the old session. Seed the new session with PwrAgent's retained user and assistant conversation, not tool output, and explain the rewind boundary. Offer recovery in desktop and messaging, and support rewind with a custom CLAUDE_CONFIG_DIR.
+- Project MCP Approvals - Give each project its own tool-approval policy for an MCP connection. Allow a connection's tools for the current project from an approval card or manage project rules in Settings.
+- Merge Approvals - Show the proposed merge method and let the operator choose another method when approving an agent's merge request, with a project-specific remembered choice.
+- Claude Commands - Display slash commands as composer chips with argument hints.
+- Reviews and Pull Requests - Show reviews on mounted remote threads, keep already-viewed open reviews from becoming unread again after retention cleanup, order PR rollups newest first, keep rollups open during transcript updates, and allow detaching PRs from Minimal's PR chip and list.
+- Navigation and Workspaces - Fold Recents beneath Pinned, preserve directory pins during pending writes, and keep cross-project sub-threads in their own directories.
+- Message Safety - Reject sends to archived threads, queue steering messages during native Codex reviews, and prevent submitted content from returning as a startup draft.
+- Minor - Improve shutdown discovery ownership, profile-scoped settings, and internal state-service boundaries.
+
 ## v1.3.13 - 2026-11-05
 
 - Wait Until Done - Hold a thread's merge while replies, rebases, and CI repairs continue. Record prerequisite work and follow-up steps, including work on another machine, then receive a reminder when it is marked done without automatically starting a new turn.
