@@ -273,6 +273,19 @@ it("keeps a completed message's live sequence when a tied command row precedes i
   } finally { real.unmount(); clock.mockRestore(); }
 });
 
+it("keeps a hydrated message before later live tools when its completion is redelivered", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  const model: Model = { turn: 0, ledger: [] };
+  const real = await mount(model);
+  try {
+    await fc.asyncModelRun(() => ({ model, real }), [
+      new LedgerCommand("start"), new LedgerCommand("item"), new LedgerCommand("read"),
+      new LedgerCommand("item", 0, true), new LedgerCommand("resolve"), new LedgerCommand("redeliver"),
+    ]);
+    expect(logicalKeys(real.result.current.entries)).toEqual(model.ledger.map(key));
+  } finally { real.unmount(); clock.mockRestore(); }
+});
+
 it("retains the cursor bridge when a newest-page read lands before an older page", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   const model = initialModel();
@@ -383,7 +396,9 @@ it("renders a subsequence of the provider ledger after every command and the who
           new LedgerCommand("send"), new LedgerCommand("start"),
           new LedgerCommand("item", time), new LedgerCommand("item", time, true),
           new LedgerCommand("item", time), new LedgerCommand("read"),
-          new LedgerCommand("item", time), new LedgerCommand("resolve", time, reverse),
+          new LedgerCommand("item", time), new LedgerCommand("item", time, true),
+          new LedgerCommand("resolve", time, reverse),
+          new LedgerCommand("redeliver"),
           new LedgerCommand("complete"), new LedgerCommand("resolve", time, reverse),
           new LedgerCommand("compact"), new LedgerCommand("resolve"),
         ];

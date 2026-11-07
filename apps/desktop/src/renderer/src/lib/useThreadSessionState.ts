@@ -2165,18 +2165,28 @@ function carryForwardTranscriptEntryOrder(
     const createdAt = source.createdAt !== entry.createdAt
       ? source.createdAt
       : undefined;
-    if (!origin && !turn && createdAt === undefined) {
+    // Acknowledging a live row must keep its observed position. A later
+    // redelivery reuses this sequence instead of placing the row after newer
+    // optimistic work that the read has not acknowledged yet.
+    const sequence = readRendererSequence(source);
+    if (
+      !origin && !turn && createdAt === undefined
+      && (sequence === undefined || sequence === readRendererSequence(entry))
+    ) {
       sourceByHydratedEntry.set(entry, source);
       return entry;
     }
 
     changed = true;
-    const hydratedEntry = {
+    let hydratedEntry = {
       ...entry,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(turn ? { turn } : {}),
       ...(origin ? { origin } : {}),
     };
+    if (sequence !== undefined) {
+      hydratedEntry = withRendererSequence(hydratedEntry, sequence);
+    }
     sourceByHydratedEntry.set(hydratedEntry, source);
     return hydratedEntry;
   });
