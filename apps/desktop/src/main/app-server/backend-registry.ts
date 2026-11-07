@@ -24875,6 +24875,17 @@ export class DesktopBackendRegistry {
       }
       throw error;
     }
+    if (params.backend === "codex" && result.turnId === syntheticStartedTurnId) {
+      // turn/started can bind the real id before a reply that omitted it.
+      for (const key of this.activeTurnKeys) {
+        const active = parseActiveTurnKey(key);
+        if (active?.backend === "codex" && active.threadId === result.threadId
+          && !active.turnId.startsWith("pending:")) {
+          result = { threadId: result.threadId, turnId: active.turnId };
+          break;
+        }
+      }
+    }
     this.bindStartingTurnOrigin(startingOrigin, result);
     if (retryableCodexTurnStart) {
       retryableCodexTurnStart.turnId = result.turnId;
@@ -24901,12 +24912,14 @@ export class DesktopBackendRegistry {
         params.collaborationMode?.mode ?? "default",
       );
     }
-    this.activeCodexTurnModes.delete(
-      buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
-    );
-    this.activeTurnKeys.delete(
-      buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
-    );
+    if (result.turnId !== syntheticStartedTurnId || retryableCodexTurnStart?.terminalObserved) {
+      this.activeCodexTurnModes.delete(
+        buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
+      );
+      this.activeTurnKeys.delete(
+        buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
+      );
+    }
     if (
       params.backend === "codex"
       && activeTurnMode
@@ -54804,9 +54817,13 @@ export class DesktopBackendRegistry {
         });
       }
       if (event.backend === "codex") {
+        const pendingTurnId = `pending:${notification.params.threadId}`;
+        const pendingActiveKey = buildActiveTurnKey("codex", notification.params.threadId, pendingTurnId);
+        const pendingModeKey = buildActiveTurnModeKey(notification.params.threadId, pendingTurnId);
         const collaborationMode = this.activeCodexTurnCollaborationModes.get(
-          buildActiveTurnKey("codex", notification.params.threadId, `pending:${notification.params.threadId}`),
+          pendingActiveKey,
         );
+        const pendingMode = collaborationMode ? this.activeCodexTurnModes.get(pendingModeKey) : undefined;
         if (collaborationMode) {
           this.activeCodexTurnCollaborationModes.set(
             buildActiveTurnKey("codex", notification.params.threadId, turnId), collaborationMode,
@@ -54825,10 +54842,16 @@ export class DesktopBackendRegistry {
         if (!this.activeCodexTurnModes.has(key)) {
           this.activeCodexTurnModes.set(
             key,
-            await this.resolveCodexThreadExecutionModeForActiveTurn(
+            pendingMode ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
               notification.params.threadId,
             ),
           );
+        }
+        if (collaborationMode && turnId !== pendingTurnId) {
+          // Transfer ownership before removing the placeholder and its guard.
+          this.activeCodexTurnModes.delete(pendingModeKey);
+          this.activeTurnKeys.delete(pendingActiveKey);
+          this.activeCodexTurnCollaborationModes.delete(pendingActiveKey);
         }
       }
     }
