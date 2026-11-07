@@ -675,11 +675,13 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     && (!messageTarget.instanceId || messageTarget.instanceId === todo.federationTarget?.instanceId);
   const canSendMessage = !todo.federationTarget
     || props.instances?.some((instance) => instance.instanceId === todo.federationTarget?.instanceId && instance.messageTarget);
-  // Continue After waits that hold this thread's merges. Main refuses the
-  // merge either way; the card says why before it is tried.
+  // Continue After waits that hold this merge, from the owner's own merge
+  // check: this thread's, and those on other threads with the PR attached.
+  // Main refuses the merge either way; the card says why before it is tried.
   const mergeHolds = useThreadDependencyList(
     todo.backend, todo.threadId, todo.federationTarget, getDesktopApi(),
     action?.type === "merge_pull_request" && todo.status === "open",
+    action?.type === "merge_pull_request" ? action.pullRequest : undefined,
   );
   const blockingMergeHolds = mergeHoldingDependencies(mergeHolds.data);
   const mergeHeld = blockingMergeHolds.length > 0;

@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { ThreadDependency } from "@pwragent/shared";
-import { assertMergeNotHeld, blockingMergeDependencies } from "../app-server/thread-dependency-merge-hold";
+import { assertMergeNotHeld, blockingMergeDependencies, resolveMergePullRequest } from "../app-server/thread-dependency-merge-hold";
 
 // Oracle: a merge is held exactly when an active (waiting or ready) wait with
 // holdMerge belongs to the merging thread, or to a thread that has the same
@@ -59,5 +59,25 @@ describe("Continue After merge holds", () => {
       if (expected.length) expect(() => assertMergeNotHeld(dependencies, target, read)).toThrow("Merge held");
       else expect(() => assertMergeNotHeld(dependencies, target, read)).not.toThrow();
     }));
+  });
+
+  // Oracle: a bare number names the thread's one attached PR with that
+  // number, so a card that names it holds exactly as its URL would. With no
+  // such PR, or that number in two repositories, the number stays as given.
+  it("resolves a PR number through the thread's attached PRs", () => {
+    fc.assert(fc.property(fc.array(fc.tuple(pr, casing), { maxLength: 3 }), pr, fc.boolean(),
+      (attached, named, hash) => {
+        const urls = attached.map(([value, upper]) => url(value, upper));
+        const given = `${hash ? "#" : ""}${named.number}`;
+        const same = attached.filter(([value]) => value.number === named.number);
+        const distinct = same.filter(([value], index) => same.findIndex(([other]) => samePr(other, value)) === index);
+        const resolved = resolveMergePullRequest(given, urls);
+        if (distinct.length === 1) {
+          expect(urls.filter((_, index) => samePr(attached[index]![0], distinct[0]![0]))).toContain(resolved);
+        } else {
+          expect(resolved).toBe(given);
+        }
+        expect(resolveMergePullRequest(url(named, false), urls)).toBe(url(named, false));
+      }));
   });
 });

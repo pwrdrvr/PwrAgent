@@ -6,7 +6,7 @@ import {
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
 import type { DesktopAutomaticArchiveRetiredNotice } from "@pwragent/shared";
-import { assertMergeNotHeld } from "./thread-dependency-merge-hold";
+import { assertMergeNotHeld, blockingMergeDependencies, resolveMergePullRequest } from "./thread-dependency-merge-hold";
 import {
   appendPeerDependents, collectPeerActiveDependencies, manageRemoteThreadDependencies, readFederationThreadDependenciesRequest,
 } from "./thread-dependencies-federation";
@@ -507,6 +507,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
     DesktopOwnerStorage,
     | "readDetachedThreadPullRequests"
+    | "readThreadPullRequestUrls"
     | "initializeNavigationUnreadBaseline"
     | "readDirectoryGitStatusCache"
     | "writeDirectoryGitStatusCacheEntry"
@@ -10289,7 +10290,7 @@ class DesktopAppServerService {
     }
     if (Object.keys(request).some((key) => ![
       "action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff",
-      "steps", "holdMerge", "dependencyId", "conditionIndex", "note", "federationTarget",
+      "steps", "holdMerge", "dependencyId", "conditionIndex", "note", "pullRequest", "federationTarget",
     ].includes(key))) throw new Error("Unknown dependency request field.");
     const { federationTarget, ...owned } = request;
     const runtime = getDesktopFederationRuntime();
@@ -10344,7 +10345,23 @@ class DesktopAppServerService {
         throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
       }
     }
-    return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() }, provenance, actor);
+    const { pullRequest, ...managed } = request;
+    if (pullRequest !== undefined && (managed.action !== "list" || typeof pullRequest !== "string" || !pullRequest.trim())) {
+      throw new Error("pullRequest is a PR number or URL, and only list takes it.");
+    }
+    const threadId = managed.threadId!.trim();
+    const response = await this.getThreadDependencyCoordinator().manage({ ...managed, backend: request.backend, threadId }, provenance, actor);
+    if (pullRequest === undefined) return response;
+    // The same check a merge from this thread runs, so the card agrees with it.
+    const overlay = this.getOverlayStore();
+    const readUrls = (thread: { backend: string; threadId: string }) => overlay.readThreadPullRequestUrls(thread as { backend: AppServerBackendKind; threadId: string });
+    return {
+      ...response,
+      mergeHolds: blockingMergeDependencies(createThreadDependencyStorage().active(), {
+        backend: request.backend, threadId,
+        pullRequest: resolveMergePullRequest(pullRequest, readUrls({ backend: request.backend, threadId })),
+      }, readUrls),
+    };
   }
 
   /**

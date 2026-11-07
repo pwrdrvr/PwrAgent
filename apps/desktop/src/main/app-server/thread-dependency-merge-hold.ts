@@ -26,6 +26,26 @@ export function blockingMergeDependencies(
       || (key !== undefined && readPullRequestUrls(dependency).some((url) => prKey(url) === key))));
 }
 
+/**
+ * A merge names its PR by number or URL. A merge resolves a number against
+ * the thread's checkout before it checks holds; here the thread's one
+ * attached PR with that number stands in for it. With none, or with that
+ * number in two repositories, the number is returned and only the thread's
+ * own holds can match it.
+ */
+export function resolveMergePullRequest(pullRequest: string, attachedUrls: readonly string[]): string {
+  const value = pullRequest.trim();
+  const number = /^#?(\d+)$/.exec(value)?.[1];
+  if (!number) return value;
+  const matches = new Map<string, string>();
+  for (const url of attachedUrls) {
+    const ref = parsePullRequestReferenceUrl(url);
+    const key = prKey(url);
+    if (ref && key && String(ref.number) === number) matches.set(key, url);
+  }
+  return matches.size === 1 ? [...matches.values()][0]! : value;
+}
+
 function describe(dependency: ThreadDependency): string {
   const names = dependency.conditions.map((condition) => condition.subject?.trim() || condition.title?.trim() || condition.threadId);
   return `${names.join(dependency.mode === "any" ? " or " : " and ")} (Continue After ${dependency.id})`;

@@ -10781,6 +10781,63 @@ describe("app server ipc", () => {
     });
   });
 
+  it("lists the merge holds main enforces for a PR, including another thread's", async () => {
+    // Oracle: a merge card's list answers exactly what assertMergeNotHeld
+    // would refuse the merge for, so a hold on any thread with the PR
+    // attached shows on the card instead of failing the click.
+    const appState = await import("../state/app-state");
+    const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
+    const { blockingMergeDependencies } = await import("../app-server/thread-dependency-merge-hold");
+    await withRenamedRepositoryStore("merge-card-shared-pr-hold-", async ({ store, db }) => {
+      const { appServerService, restore } = await renamedRepositoryService();
+      const stateDb = vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+      const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+      const pr = githubPr({ number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending", url: RENAMED_PR_URL });
+      try {
+        await store.setThreadPullRequests({
+          backend: "codex", threadId: "holder", prs: [pr], fetchedAt: Date.now(), refreshKey: "holder",
+        });
+        const dependencies = new ThreadDependencyStore(db.raw);
+        dependencies.register({
+          id: "hold-17", backend: "codex", threadId: "holder", holdMerge: true,
+          conditions: [{ backend: "codex", threadId: "", when: "marked_done", subject: "Validation" }],
+          mode: "all", onFailure: "notify", deliver: "operator",
+          status: "waiting", evidence: [], createdAt: Date.now(), updatedAt: Date.now(),
+        });
+
+        const response = await appServerService.manageThreadDependencies({
+          action: "list", backend: "codex", threadId: "merger", pullRequest: RENAMED_PR_URL,
+        });
+
+        expect(response.dependencies).toEqual([]);
+        expect(response.mergeHolds?.map((item) => item.id)).toEqual(["hold-17"]);
+        const enforced = blockingMergeDependencies(dependencies.active(), {
+          backend: "codex", threadId: "merger", pullRequest: RENAMED_PR_URL,
+        }, (thread) => store.readThreadPullRequestUrls(thread as { backend: "codex"; threadId: string }));
+        expect(response.mergeHolds).toEqual(enforced);
+        // A card that names the PR by number, as gh accepts it, sees the
+        // same hold once the merging thread has the PR attached.
+        await store.setThreadPullRequests({
+          backend: "codex", threadId: "merger", prs: [pr], fetchedAt: Date.now(), refreshKey: "merger",
+        });
+        expect((await appServerService.manageThreadDependencies({
+          action: "list", backend: "codex", threadId: "merger", pullRequest: "3179",
+        })).mergeHolds?.map((item) => item.id)).toEqual(["hold-17"]);
+        // A plain list asks no merge question.
+        expect((await appServerService.manageThreadDependencies({
+          action: "list", backend: "codex", threadId: "merger",
+        })).mergeHolds).toBeUndefined();
+        await expect(appServerService.manageThreadDependencies({
+          action: "cancel", backend: "codex", threadId: "merger", dependencyId: "x", pullRequest: RENAMED_PR_URL,
+        })).rejects.toThrow("only list takes it");
+      } finally {
+        stateDb.mockRestore();
+        mode.mockRestore();
+        restore();
+      }
+    });
+  });
+
   it("does not publish PR update events when retained PR status is unchanged", async () => {
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
