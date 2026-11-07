@@ -7,6 +7,7 @@ import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { AcpLiveToolUpdateResolver, acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
+import type { ClaudeBackend } from "../claude/claude-backend";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { threadLockRefusalMessage } from "@pwragent/shared";
 import {
@@ -62948,6 +62949,117 @@ script = "printf setup"
     ]);
 
     await registry.close();
+  });
+
+  it.each(["expired", "fresh", "unobserved", "disabled", "active", "pinned", "Agent", "external", "unreadable", "failed-delete", "shared-ref", "missing"])(
+    "applies archived Claude retention through its own store: %s", async (scenario) => {
+      const day = 86_400_000;
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-retention-"));
+      const store = new ClaudeSessionStore(path.join(root, "sessions"));
+      const id = "a3333333-3333-4333-8333-333333333333";
+      const cwd = scenario === "external" ? "/fixture/operator-checkout" : "/fixture/.pwragent/worktrees/retention/repo";
+      const thread: AppServerThreadSummary = { id, title: "Claude archive", titleSource: "explicit", source: "claude",
+        threadStatus: "idle", linkedDirectories: [], projectKey: cwd, updatedAt: Date.now() - 40 * day,
+        ...(scenario === "active" ? {} : { archivedAt: Date.now() - 31 * day }),
+      };
+      const snapshot: WorktreeSnapshotSummary = { id: "retention-snapshot", backend: "claude", threadId: id,
+        worktreePath: cwd, repositoryPath: "/fixture/repo", snapshotRef: "refs/pwragent/snapshots/retention",
+        snapshotCommit: "abc", createdAt: 1, state: "archived", ignoredFilesExcluded: true };
+      const overlay: ThreadOverlayState = { backend: "claude", threadId: id, extraLinkedDirectories: [],
+        archiveRetentionStartedAt: scenario === "unobserved" ? undefined : Date.now() - (scenario === "fresh" ? 29 : 31) * day,
+        worktreeSnapshots: [snapshot],
+        ...(scenario === "pinned" ? { pinnedRank: "a" } : {}),
+        ...(scenario === "Agent" ? { agent: {} as never } : {}),
+      };
+      let states = [overlay];
+      if (scenario === "shared-ref") states.push({ ...overlay, backend: "codex", threadId: "retained", archiveRetentionStartedAt: undefined });
+      const overlays = Object.fromEntries(states.map((state) => [buildThreadIdentityKey(state.backend, state.threadId), state]));
+      const history = path.join(root, "sessions", `${id}.jsonl`);
+      const metadata = path.join(root, "sessions", `${id}.json`);
+      const backup = path.join(store.rewindBackupDirectory(id), "before.txt");
+      const image = path.join(root, "sessions", "images", id, "image.png");
+      const deletion = vi.spyOn(store, "delete");
+      const deleteSnapshot = vi.fn(async () => {
+        await expect(stat(metadata)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(stat(history)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+      const overlayStore = Object.assign(createOverlayStoreMock({ overlays }), {
+        listThreadArchiveStates: vi.fn(async () => states),
+        observeArchivedThreads: vi.fn(async (records: Array<{ backend: AppServerBackendKind; threadId: string }>, now: number) => {
+          for (const record of records) {
+            const state = states.find((state) => state.backend === record.backend && state.threadId === record.threadId);
+            if (state) state.archiveRetentionStartedAt ??= now;
+          }
+        }),
+        forgetThreadArchiveStates: vi.fn(async (victims: ThreadOverlayState[]) => {
+          states = states.filter((state) => !victims.includes(state));
+        }),
+      });
+      const codex = Object.assign(new MockBackendClient({ threads: [] }), {
+        deleteThread: vi.fn(async () => ({ threadId: id })),
+        readThreadSummary: vi.fn(async () => { throw new Error(`Thread not found: ${id}`); }),
+      });
+      const registry = new DesktopBackendRegistry({ codexClient: codex, overlayStore, claudeBackendOptions: { store },
+        worktreeArchiveService: { deleteSnapshot } as unknown as WorktreeArchiveService,
+        getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: scenario === "disabled" ? 0 : 30 }),
+      });
+      try {
+        await store.save({ cwd, thread });
+        await store.append(id, [{ type: "message", id: "message", role: "user", text: "Fixture history" }]);
+        for (const file of [backup, image]) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, "fixture"); }
+        if (scenario === "unreadable") await writeFile(metadata, "invalid metadata");
+        if (scenario === "missing") await rm(metadata);
+        if (scenario === "failed-delete") deletion.mockRejectedValue(new Error("Fixture store unavailable"));
+        await registry.sweepInactiveThreads();
+        const removed = ["expired", "shared-ref", "missing"].includes(scenario);
+        expect(deletion).toHaveBeenCalledTimes(removed || scenario === "failed-delete" ? 1 : 0);
+        expect(codex.deleteThread).not.toHaveBeenCalled();
+        expect(codex.readThreadSummary).not.toHaveBeenCalled();
+        expect(deleteSnapshot).toHaveBeenCalledTimes(removed && scenario !== "shared-ref" ? 1 : 0);
+        expect(overlayStore.forgetThreadArchiveStates).toHaveBeenCalledTimes(removed ? 1 : 0);
+        for (const file of [history, backup, image]) {
+          if (removed) await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+          else await expect(stat(file)).resolves.toBeDefined();
+        }
+        if (scenario === "unobserved") expect(overlay.archiveRetentionStartedAt).toBeGreaterThan(Date.now() - day);
+      } finally { await registry.close(); await rm(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it.each(["restore", "view", "policy", "live"])("revalidates Claude retention at deletion: %s", async (action) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-retention-race-"));
+    const store = new ClaudeSessionStore(root);
+    const id = "b3333333-3333-4333-8333-333333333333";
+    const cwd = "/fixture/.pwragent/worktrees/retention/repo";
+    const overlay: ThreadOverlayState = { backend: "claude", threadId: id, extraLinkedDirectories: [], archiveRetentionStartedAt: 1 };
+    const overlayStore = Object.assign(createOverlayStoreMock({ overlays: { [`claude:${id}`]: overlay } }), {
+      listThreadArchiveStates: async () => [overlay], observeArchivedThreads: vi.fn(async () => {}), forgetThreadArchiveStates: vi.fn(async () => {}),
+    });
+    const policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: 30 };
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore,
+      claudeBackendOptions: { store }, getThreadArchivePolicy: () => ({ ...policy }) });
+    let mutation: Promise<void> | undefined;
+    const deletion = vi.spyOn(store, "delete");
+    const backend = (registry as unknown as { claudeBackend: ClaudeBackend }).claudeBackend;
+    const originalRead = backend.readThreadSummary.bind(backend);
+    vi.spyOn(backend, "readThreadSummary").mockImplementation(async (threadId) => {
+      if (action === "restore") {
+        const session = await store.read(threadId);
+        session.thread.archivedAt = undefined;
+        await store.save(session);
+      }
+      if (action === "live") vi.spyOn(backend, "hasLiveSession").mockReturnValue(true);
+      if (action === "policy") policy.retentionDays = 0;
+      if (action === "view") mutation = registry.withThreadLifecycleMutation({ backend: "claude", threadId: id }, async () => {});
+      return await originalRead(threadId);
+    });
+    try {
+      await store.save({ cwd, thread: { id, source: "claude", title: "Archive", titleSource: "explicit", linkedDirectories: [], archivedAt: 1 } });
+      await registry.sweepInactiveThreads();
+      await mutation;
+      expect(deletion).not.toHaveBeenCalled();
+      expect(overlayStore.forgetThreadArchiveStates).not.toHaveBeenCalled();
+    } finally { await registry.close(); await rm(root, { recursive: true, force: true }); }
   });
 
   it.each([true, false])("cleans every deleted descendant before forgetting family archive states: provider success=%s", async (succeeds) => {

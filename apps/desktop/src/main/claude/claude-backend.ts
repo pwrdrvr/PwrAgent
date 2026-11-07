@@ -781,9 +781,9 @@ export class ClaudeBackend {
     return await this.store.changeToken();
   }
 
-  async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {
+  async listThreads(params: { archived?: boolean; filter?: string; requireComplete?: boolean } = {}): Promise<AppServerThreadSummary[]> {
     const filter = params.filter?.toLowerCase();
-    return (await this.store.list()).map((session) => this.threadSummary(session))
+    return (await this.store.list({ requireComplete: params.requireComplete })).map((session) => this.threadSummary(session))
       .filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
         && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
   }
@@ -796,6 +796,33 @@ export class ClaudeBackend {
     } catch {
       return undefined;
     }
+  }
+
+  private threadDeletionBusy(threadId: string): boolean {
+    return this.sessions.has(threadId) || this.starting.has(threadId)
+      || this.rewinding.has(threadId) || this.rewindQueries.has(threadId);
+  }
+
+  /** Only a missing metadata file confirms absence; unreadable state retains recovery material. */
+  async confirmThreadAbsent(threadId: string): Promise<boolean> {
+    if (this.threadDeletionBusy(threadId)) return false;
+    try { await this.store.read(threadId); return false; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (this.threadDeletionBusy(threadId)) return false;
+    await this.store.delete(threadId);
+    return true;
+  }
+
+  /** The registry owns retention, checkout ownership and lifecycle admission. */
+  async deleteThread(threadId: string): Promise<void> {
+    if (this.threadDeletionBusy(threadId)) throw new Error("Claude is still using this thread.");
+    const session = await this.store.read(threadId);
+    if (session.thread.archivedAt === undefined) throw new Error("Archive this Claude thread before deleting it.");
+    if (this.threadDeletionBusy(threadId)) throw new Error("Claude is still using this thread.");
+    await this.store.delete(threadId);
+    await this.emit({ method: "thread/deleted", params: { threadId } });
   }
 
   // Metadata from builds that could not move a Claude thread still carries

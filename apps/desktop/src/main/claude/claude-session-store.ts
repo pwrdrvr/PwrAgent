@@ -310,7 +310,7 @@ export class ClaudeSessionStore {
     }
   }
 
-  async list(): Promise<ClaudeSession[]> {
+  async list(options: { requireComplete?: boolean } = {}): Promise<ClaudeSession[]> {
     let names: string[];
     try {
       names = await readdir(this.root);
@@ -321,7 +321,20 @@ export class ClaudeSessionStore {
     // One unreadable metadata file must not hide every other Claude thread.
     const sessions = await Promise.allSettled(names.filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
       .map((name) => this.read(name.slice(0, -5))));
+    if (options.requireComplete) {
+      const failed = sessions.find((session) => session.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+    }
     return sessions.flatMap((session) => session.status === "fulfilled" ? [session.value] : []);
+  }
+
+  /** Delete only PwrAgent's files. Metadata goes last so failed cleanup is retried. */
+  async delete(id: string): Promise<void> {
+    const metadata = this.file(id, "json");
+    await rm(this.file(id, "jsonl"), { force: true });
+    await rm(this.rewindBackupDirectory(id), { recursive: true, force: true });
+    await rm(path.join(this.imageRoot, id), { recursive: true, force: true });
+    await rm(metadata, { force: true });
   }
 
   /**
