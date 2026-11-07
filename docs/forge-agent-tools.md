@@ -27,13 +27,22 @@ Agent forge tools**:
 | `ci` | same | `auto` | `rerun_failed_ci_jobs` |
 | `approve_merge` | same | `ask` | `merge_pull_request`, an `APPROVE` or `REQUEST_CHANGES` review |
 
-- `allow` runs without asking. `ask` always asks. `off` removes the tools.
-- `auto` follows the thread's own approval mode:
+- Outside plan turns, `allow` runs without asking and `ask` always asks.
+  `off` removes the tools.
+- `auto` follows the active turn's mode:
+  - A Codex or Claude plan turn refuses every write without a card.
   - Full Access runs every group. For Claude, that is bypass permissions.
   - A Codex or Claude Auto turn runs every group except `approve_merge`.
-  - Any other mode asks, including Claude's plan and accept-edits modes.
+  - Other modes ask, including Claude's accept-edits mode.
   - A Claude thread's mode is read from its open Claude process, so a change
     during the turn applies to the next call.
+- A plan turn runs no forge write at `allow`, `auto`, or `ask`, including
+  project rules and conversation grants. The forge gate checks the active
+  Codex turn's collaboration mode or the live Claude process's `plan`
+  permission mode before considering the level. It returns `plan_mode`,
+  shows no approval card, and tells the agent to put the step in its plan.
+  Claude's `canUseTool` also refuses the write, so Claude shows no generic
+  card. Reads run as in any other turn.
 - A group that is off, or the family switched off, is not advertised to new
   turns. The main process also checks the policy on every call, so a turn that
   still holds an older schema gets `tools_disabled` naming the setting.
@@ -50,12 +59,15 @@ Agent forge tools**:
   Before that, a Claude Default turn showed Claude's generic card for an
   `ask` write and then this card, and an `allow` group still got Claude's
   card. In Claude's Auto mode the classifier no longer reviews these calls;
-  `auto` groups run as they do in a Codex Auto turn. `approve_merge` keeps
-  this card in every mode but Full Access. The list covers the whole family,
-  not the levels in effect at launch, so a Settings change applies to the
-  next call without relaunching Claude, and `off` tools stay unadvertised.
-  Claude's `plan` mode and the operator's own Claude `ask` and `deny` rules
-  still apply. See [Claude provider](claude-provider.md).
+  `auto` groups run as they do in a Codex Auto turn. Outside plan turns,
+  `approve_merge` keeps this card unless the turn has Full Access. The list
+  covers the whole family, not the levels in effect at launch, so a Settings
+  change applies to the next call without relaunching Claude, and `off` tools
+  stay unadvertised.
+  The operator's own Claude `ask` and `deny` rules still apply. Claude's
+  `plan` mode still calls `canUseTool` for a write, so a plan turn declines
+  the write there instead of showing Claude's card and then this one. See
+  [Claude provider](claude-provider.md).
 - Automations cannot answer a prompt. An `auto` or `ask` write in an
   automation fails with `approval_required` unless the automation runs in
   Full Access and the level is `auto`.
