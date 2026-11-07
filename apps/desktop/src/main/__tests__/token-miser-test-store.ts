@@ -1,3 +1,4 @@
+import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
 import path from "node:path";
 import { afterEach } from "vitest";
 import { StateDb } from "../state/state-db";
@@ -16,7 +17,7 @@ afterEach(() => {
 /** File-backed connections exercise visibility and restart semantics. */
 export class TestTokenMiserStore extends TokenMiserStore {
   readonly stateDb: StateDb;
-  constructor(root: string, options: Omit<TokenMiserStoreOptions, "stateDb"> = {}) {
+  constructor(root: string, options: Omit<TokenMiserStoreOptions, "storage"> = {}) {
     // Nested suite hooks can remove caller directories before our hook runs.
     // Own the database directory so Windows always sees close before deletion.
     const key = path.resolve(root);
@@ -29,7 +30,7 @@ export class TestTokenMiserStore extends TokenMiserStore {
     }
     const stateDb = StateDb.open(dbPath);
     databases.push(stateDb);
-    super(root, { ...options, stateDb });
+    super(root, { ...options, storage: new SqliteTokenMiserStorage(stateDb) });
     this.stateDb = stateDb;
   }
 }

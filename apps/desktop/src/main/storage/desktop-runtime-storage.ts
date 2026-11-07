@@ -1,3 +1,4 @@
+import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { getAppStateDb, getAppStateMode, isAppStateInitialized, getAppScheduledThreadActionStore as getScheduledThreadActionStore } from "../state/app-state";
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
@@ -9,7 +10,8 @@ import { runOneTimeArchivedWorktreeRepair as runRepair } from "../state/archived
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { AcpSessionStore } from "../acp/acp-session-store";
 import { AcpAvailableCommandsStore } from "../acp/acp-available-commands-store";
-import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { ThreadSearchStore } from "./thread-search-store";
+import { SqliteTokenMiserStorage } from "./token-miser-storage-sqlite";
 import { TokenMiserStore, type TokenMiserStoreOptions } from "../token-miser/token-miser-store";
 import { ProviderThreadSnapshotStore } from "./provider-thread-snapshot-store";
 import { CodexEnvironmentHydrationStore } from "./codex-environment-hydration-store";
@@ -53,9 +55,9 @@ export function createCodexEnvironmentHydrationStorage() {
 export function createAcpAgentStorage() { return new AcpAgentStore(getAppStateDb()); }
 export function createAcpSessionStorage() { return new AcpSessionStore(getAppStateDb()); }
 export function createAcpAvailableCommandsStorage() { return new AcpAvailableCommandsStore(getAppStateDb()); }
-export function createThreadSearchStorage() { return new ThreadSearchStore(getAppStateDb()); }
-export function createTokenMiserStorage(directory: string, options: Omit<TokenMiserStoreOptions, "stateDb">) {
-  return new TokenMiserStore(directory, { ...options, stateDb: getAppStateDb() });
+export function createThreadSearchStorage(): ThreadSearchStorage { return new ThreadSearchStore(getAppStateDb()); }
+export function createTokenMiserStorage(directory: string, options: Omit<TokenMiserStoreOptions, "storage">) {
+  return new TokenMiserStore(directory, { ...options, storage: new SqliteTokenMiserStorage(getAppStateDb()) });
 }
 export function runOneTimeArchivedWorktreeRepair(options: Omit<Parameters<typeof runRepair>[0], "db">) {
   return runRepair({ ...options, db: getAppStateDb().raw });
