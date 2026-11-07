@@ -107,8 +107,8 @@ export type OpenSandboxerLinkResponse = { opened: boolean; error?: string };
  * Shown on the New thread PwrSnap band next to the Connect to PwrSnap button
  * after PwrSnap rejected the stored session.
  */
-export const PWRSNAP_SESSION_REVOKED_DETAIL =
-  "PwrSnap revoked this connection. Choose Connect to PwrSnap to connect again.";
+export const PWRSNAP_SESSION_REJECTED_DETAIL =
+  "PwrSnap rejected this connection's authorization. Choose Connect to PwrSnap to connect again.";
 
 export const MCP_CONNECTION_IDS = [
   PWRSNAP_MCP_CONNECTION_ID,

@@ -1581,7 +1581,7 @@ export function PluginsSettings(props: {
                           void setSandboxerCleanupOnPrClose(connection, enabled)
                       : undefined
                   }
-                  onChanged={() => void loadConnections()}
+                  onChanged={loadConnections}
                   onDisconnect={() => void disconnectConnection(connection)}
                   onEdit={() =>
                     setConnectionEdit({
@@ -2265,12 +2265,14 @@ function useManagedConnectionTools(params: {
   autoRead?: boolean;
   /** Completed sign-ins; a change forces a fresh read past any cache. */
   signIns: number;
+  /** A failed request may have caused the backend to discard credentials. */
+  onFailure: () => void;
 }): {
   inventory: ManagedMcpToolInventory | undefined;
   test: () => void;
   testResult?: ManagedConnectionTestResult;
 } {
-  const { connectionId, identity, listable, signIns, autoRead = true } = params;
+  const { connectionId, identity, listable, signIns, onFailure, autoRead = true } = params;
   const list = params.desktopApi?.listMcpConnectionTools;
   const [inventory, setInventory] = useState<ManagedMcpToolInventory>();
   const [testResult, setTestResult] = useState<ManagedConnectionTestResult>();
@@ -2309,8 +2311,9 @@ function useManagedConnectionTools(params: {
         error: cause instanceof Error ? cause.message : String(cause),
       });
       if (testing) setTestResult({ status: "failed", elapsedMs: performance.now() - startedAt });
+      onFailure();
     }
-  }, [connectionId, list]);
+  }, [connectionId, list, onFailure]);
 
   useEffect(() => {
     if (!listable || !list || !autoRead) {
@@ -2393,6 +2396,11 @@ function ManagedMcpConnectionRow(props: {
     : connection.kind === "pwrsnap" ? "PwrSnap" : undefined;
   const { status: localStatus, refresh: refreshLocal } =
     useLocalConnectionStatus(app, props.desktopApi);
+  const onChanged = props.onChanged;
+  const refreshStatus = useCallback(() => {
+    void refreshLocal();
+    onChanged();
+  }, [onChanged, refreshLocal]);
   const setup = resolveMcpConnectionSetup({
     connection,
     gatewayEnabled: props.gatewayEnabled,
@@ -2410,6 +2418,7 @@ function ManagedMcpConnectionRow(props: {
     // Only an explicit test or a selected thread may do that for IPC.
     autoRead: !ipc,
     signIns: props.signIns,
+    onFailure: refreshStatus,
   });
   const inventory = reconcileManagedMcpInventory(fetchedInventory, connection.discovery);
   const health = readManagedMcpConnectionHealth(setup, inventory);
@@ -2609,10 +2618,7 @@ function ManagedMcpConnectionRow(props: {
                   disabled={props.disabled}
                   status={localStatus}
                   onAuthorize={props.onAuthorize}
-                  onChanged={() => {
-                    void refreshLocal();
-                    props.onChanged();
-                  }}
+                  onChanged={refreshStatus}
                   onNotice={props.onNotice}
                 />
               ) : stdio || ipc ? null : (

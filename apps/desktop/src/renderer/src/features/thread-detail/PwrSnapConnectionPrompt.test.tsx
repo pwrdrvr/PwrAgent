@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
-  PWRSNAP_SESSION_REVOKED_DETAIL,
+  PWRSNAP_SESSION_REJECTED_DETAIL,
   type ConnectPwrSnapResponse,
   type PwrSnapConnectionStatus,
 } from "@pwragent/shared";
@@ -135,8 +135,8 @@ describe("PwrSnapConnectionPrompt", () => {
     await waitFor(() => expect(onEnabledChange).toHaveBeenCalledWith(true));
   });
 
-  it("offers to reconnect and explains why after PwrSnap revoked the session", async () => {
-    const detail = PWRSNAP_SESSION_REVOKED_DETAIL;
+  it("offers to reconnect and explains why after PwrSnap rejected the session", async () => {
+    const detail = PWRSNAP_SESSION_REJECTED_DETAIL;
     render(
       <PwrSnapConnectionPrompt
         backend="codex"
