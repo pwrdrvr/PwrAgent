@@ -316,6 +316,33 @@ describe("ThreadMaintenanceDialog", () => {
     ]);
   });
 
+  it("follows Settings' idle days until the field is edited, even when Settings load after open", async () => {
+    const { api } = fixtureApi();
+    const policy = (idleDays: number) => ({ enabled: true, idleDays, maxSnapshotMb: 25, removeRebuildableOutput: true, restoreOn: "send" as const });
+    const { rerender } = render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+    const days = within(dialog).getByRole("spinbutton", { name: "Days idle before a checkout can hibernate" });
+    rerender(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} hibernationPolicy={policy(14)} />);
+    expect(days).toHaveValue(14);
+    fireEvent.change(days, { target: { value: "3" } });
+    rerender(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} hibernationPolicy={policy(21)} />);
+    expect(days).toHaveValue(3);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    expect(vi.mocked(api.scanThreadMaintenance!).mock.calls[0]![0]).toMatchObject({ hibernateIdleDays: 3 });
+    await within(dialog).findByText("2 idle checkouts can hibernate");
+  });
+
+  it("words a run's footnote by the steps it runs, not the dialog's plan", async () => {
+    const { api } = fixtureApi({
+      getThreadMaintenanceRun: vi.fn(async (): Promise<ThreadMaintenanceRun> => ({
+        runId: "agent-run", revision: REV(), scanId: "scan-9", running: true, startedAt: NOW, steps: [], problems: [],
+        current: { step: "hibernate", processed: 1, total: 2, object: "/home/.pwragent/worktrees/x/y" },
+      })),
+    } as Partial<DesktopApi>);
+    render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
+    expect(await screen.findByText("Each checkout comes back when its thread gets a message")).toBeInTheDocument();
+  });
+
   it("never sends idle days for a scan without the idle checkouts step", async () => {
     const { api } = fixtureApi();
     render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);

@@ -574,6 +574,28 @@ describe("hibernate idle checkouts", () => {
     expect(run.problems).toEqual([expect.objectContaining({ step: "hibernate", kind: "failed", reason: "Not in this scan" })]);
   });
 
+  // Oracle: a hibernated checkout has nothing on disk, so it counts as already
+  // hibernated whichever keep reason the rules reach first.
+  it("counts a hibernated checkout apart even when another reason keeps it", async () => {
+    const hibernated = (id: string, keep: string) => {
+      const item = candidate(id, { daysIdle: 30, cwd: `/w/${id}` });
+      item.overlay = { worktreeSnapshots: [{ id: `s-${id}`, backend: "codex", threadId: id, worktreePath: `/w/${id}`,
+        repositoryPath: "/projects/app", snapshotRef: `refs/pwragent/snapshots/${id}`, snapshotCommit: "c", createdAt: 1,
+        state: "hibernated", ignoredFilesExcluded: true }] } as ThreadArchiveCandidate["overlay"];
+      return { item, keep };
+    };
+    const rows = [hibernated("awake", "Kept awake"), hibernated("merge-held", "Merge hold"), hibernated("plain", "Already hibernated")];
+    const keeps = new Map(rows.map(({ item, keep }) => [item.thread.id, keep]));
+    const items = [...rows.map(({ item }) => item), candidate("on-disk", { daysIdle: 30, cwd: "/w/on-disk" })];
+    const { service } = harness(items, { hibernation: hibernation({
+      keepReason: (item: ThreadArchiveCandidate) => ({ target: `/w/${item.thread.id}`,
+        ...(item.thread.id === "on-disk" ? { keep: "Kept awake" } : { keep: keeps.get(item.thread.id) }) }),
+    }) });
+    expect((await service.scan({ steps: ["hibernate"] })).hibernate).toEqual(expect.objectContaining({
+      checked: 1, alreadyHibernated: 3, notIdleYet: 0, kept: { "Kept awake": 1 }, items: [],
+    }));
+  });
+
   it("hibernates after archiving, re-checks each one, and keeps going after a failure", async () => {
     const items = [
       candidate("newest", { daysIdle: 30, cwd: "/w/newest" }),

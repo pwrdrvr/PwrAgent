@@ -103,7 +103,8 @@ function readScanRequest(value: unknown): ScanRequest {
     : undefined;
   return {
     ...(typeof record.projectKey === "string" && record.projectKey ? { projectKey: record.projectKey } : {}),
-    ...(steps?.length ? { steps } : {}),
+    // An empty list asks for no step, never for every step.
+    ...(steps ? { steps } : {}),
     ...(typeof record.hibernateIdleDays === "number" && Number.isInteger(record.hibernateIdleDays)
       && record.hibernateIdleDays >= 1 && record.hibernateIdleDays <= 3650
       ? { hibernateIdleDays: record.hibernateIdleDays } : {}),

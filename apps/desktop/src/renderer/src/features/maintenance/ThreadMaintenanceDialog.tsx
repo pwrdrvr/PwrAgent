@@ -111,8 +111,10 @@ export function ThreadMaintenanceDialog(props: {
   const [mode, setMode] = useState<ThreadMaintenanceMode>("combined");
   const [plan, setPlan] = useState<ThreadMaintenancePlan>(DEFAULT_THREAD_MAINTENANCE_PLAN);
   const [rules, setRules] = useState<ThreadMaintenanceRules>(() => defaultThreadMaintenanceRules(policy));
-  // This scan's idle days for hibernation. Settings, and the hourly sweep, keep theirs.
-  const [hibernateIdleDays, setHibernateIdleDays] = useState(hibernationPolicy.idleDays);
+  // This scan's idle days for hibernation. Settings, and the hourly sweep, keep
+  // theirs. Until edited, the field follows Settings, which can load after open.
+  const [editedIdleDays, setHibernateIdleDays] = useState<number>();
+  const hibernateIdleDays = editedIdleDays ?? hibernationPolicy.idleDays;
   const [storedPhase, setPhase] = useState<ThreadMaintenanceStoredPhase>("plan");
   const [scan, setScan] = useState<ThreadMaintenanceScan>();
   const [scanProgress, setScanProgress] = useState<ThreadMaintenanceScanProgress>();
@@ -1007,9 +1009,6 @@ function HibernateReview(props: {
   );
 }
 
-/** Review steps in run order. */
-const REVIEW_STEPS: readonly ReviewStep[] = THREAD_MAINTENANCE_SCAN_STEPS;
-
 const STEP_TITLES: Record<ThreadMaintenanceStep, string> = {
   threads: "Idle threads",
   hibernate: "Idle checkouts",
@@ -1045,7 +1044,7 @@ function RunView(props: {
 }) {
   const { run, mode } = props;
   // A run an agent started may include steps this dialog's plan does not.
-  const railSteps = REVIEW_STEPS.filter((step) => props.steps.includes(step) || run.current?.step === step
+  const railSteps = THREAD_MAINTENANCE_SCAN_STEPS.filter((step) => props.steps.includes(step) || run.current?.step === step
     || run.steps.some((result) => result.step === step && result.ran));
   const failed = run.problems.filter((problem) => problem.kind === "failed");
   const done = run.steps.reduce((sum, step) => sum + step.done, 0);
@@ -1064,7 +1063,7 @@ function RunView(props: {
         </div>
       )}
       {run.running ? <Rail steps={railSteps} phase="running" run={run} /> : null}
-      {REVIEW_STEPS.map((step) => (
+      {THREAD_MAINTENANCE_SCAN_STEPS.map((step) => (
         <ProblemCards key={step} step={step} problems={run.problems.filter((problem) => problem.step === step)} run={run}
           onOpenThread={props.onOpenThread} />
       ))}
@@ -1181,8 +1180,15 @@ function ProblemCard(props: {
   );
 }
 
-function runFootnote(steps: readonly ReviewStep[]): string {
-  return !steps.includes("threads") && !steps.includes("checkouts")
+/** A run's footnote follows the steps it runs; a run an agent started may
+ * not match this dialog's plan. */
+function runFootnote(steps: readonly ReviewStep[], run?: ThreadMaintenanceRun): string {
+  const ran = run
+    ? THREAD_MAINTENANCE_SCAN_STEPS.filter((step) => run.current?.step === step
+      || run.steps.some((result) => result.step === step && result.ran))
+    : [];
+  const shown = ran.length ? ran : steps;
+  return !shown.includes("threads") && !shown.includes("checkouts")
     ? "Each checkout comes back when its thread gets a message"
     : "Archived threads can be restored from Settings → Archived Threads";
 }
@@ -1274,7 +1280,7 @@ function Footer(props: {
   if (props.phase === "running") {
     return (
       <>
-        <span className="thread-maintenance__footnote">{runFootnote(steps)}</span>
+        <span className="thread-maintenance__footnote">{runFootnote(steps, props.run)}</span>
         <span className="thread-maintenance__actions">
           <button className="button button--ghost thread-maintenance__button" type="button"
             aria-disabled={props.run?.stopRequested || undefined}
@@ -1287,7 +1293,7 @@ function Footer(props: {
   }
   return (
     <>
-      <span className="thread-maintenance__footnote">{runFootnote(steps)}</span>
+      <span className="thread-maintenance__footnote">{runFootnote(steps, props.run)}</span>
       <span className="thread-maintenance__actions">
         <button className="button button--ghost thread-maintenance__button" type="button" onClick={props.onClose}>Close</button>
         <button className="button button--ghost thread-maintenance__button" type="button" onClick={props.onNewScan}>New scan</button>

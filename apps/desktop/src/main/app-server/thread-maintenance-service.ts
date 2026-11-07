@@ -39,7 +39,7 @@ import {
 } from "./thread-archive-sweeper";
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
 import { inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
-import { HIBERNATION_KEEP_REASONS } from "./checkout-hibernation";
+import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor } from "./checkout-hibernation";
 import { missingWorktreeRepository } from "./worktree-archive-service";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
@@ -451,9 +451,10 @@ export class ThreadMaintenanceService {
         }
         const listed = deps.keepReason(candidate, candidates, policy, now);
         if (!listed.target) return undefined;
-        if (listed.keep) return { keep: listed.keep };
+        // A hibernated checkout has nothing on disk, whichever reason keeps it.
+        if (listed.keep) return { keep: listed.keep, hibernated: !!hibernatedSnapshotFor(candidate) };
         const inspection = await deps.inspect(listed.target, policy, this.abort.signal);
-        if (inspection.keep !== undefined) return { keep: inspection.keep };
+        if (inspection.keep !== undefined) return { keep: inspection.keep, hibernated: false };
         const directory = candidate.thread.linkedDirectories.find((item) => item.worktreePath === listed.target);
         const row: ThreadMaintenanceHibernateCheckout = {
           backend: candidate.thread.source,
@@ -474,16 +475,18 @@ export class ThreadMaintenanceService {
         return undefined;
       }
     }));
+    let notIdleYet = 0;
+    let alreadyHibernated = 0;
     for (const item of evaluated) {
       if (!item) continue;
       // Already hibernated: nothing on disk, so it is noted apart, not checked.
-      if ("keep" in item && item.keep === HIBERNATION_KEEP_REASONS.alreadyHibernated) {
-        result.alreadyHibernated! += 1;
+      if ("keep" in item && (item.hibernated || item.keep === HIBERNATION_KEEP_REASONS.alreadyHibernated)) {
+        alreadyHibernated += 1;
         continue;
       }
       result.checked += 1;
       if ("keep" in item && item.keep === HIBERNATION_KEEP_REASONS.recentlyActive) {
-        result.notIdleYet! += 1;
+        notIdleYet += 1;
         continue;
       }
       if ("keep" in item) {
@@ -493,6 +496,8 @@ export class ThreadMaintenanceService {
       result.items.push(item.row);
       retained.hibernate.set(buildThreadIdentityKey(item.candidate.thread.source, item.candidate.thread.id), item);
     }
+    result.notIdleYet = notIdleYet;
+    result.alreadyHibernated = alreadyHibernated;
     // Longest idle first, as the archive review lists its rows.
     result.items.sort((a, b) => a.lastActivityAt - b.lastActivityAt);
     return result;
