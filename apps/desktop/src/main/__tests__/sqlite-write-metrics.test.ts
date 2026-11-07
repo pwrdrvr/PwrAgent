@@ -24,7 +24,7 @@ import { AutomationStore } from "../automations/automation-store";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
-import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
+import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { McpCredentialVault } from "../mcp-connections/mcp-credential-vault";
 import { McpConnectionBrokerDiscovery } from "../mcp-connections/mcp-connection-broker-discovery";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";

@@ -180,7 +180,7 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-w
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
-import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
+import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../storage/provider-thread-snapshot-store";
 import { GitWorkingStateService } from "../app-server/git-working-state-service";

@@ -20,7 +20,7 @@ import {
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
+import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";

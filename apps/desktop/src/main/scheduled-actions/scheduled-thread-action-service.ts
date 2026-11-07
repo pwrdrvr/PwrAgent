@@ -13,8 +13,8 @@ import { isThreadLockRefusal } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
-import { getAppScheduledThreadActionStore } from "../state/app-state.js";
-import type { ScheduledThreadActionStore } from "./scheduled-thread-action-store.js";
+import { getAppScheduledThreadActionStore } from "../storage/desktop-runtime-storage.js";
+import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
 
 const scheduledActionLog = getMainLogger("pwragent:scheduled-actions");
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
@@ -29,7 +29,7 @@ const activeSchedulerOwnerIds = new Set<string>();
 
 export type ScheduledThreadActionServiceOptions = {
   registry: DesktopBackendRegistry;
-  store: ScheduledThreadActionStore;
+  store: ScheduledThreadActionStorage;
   now?: () => number;
   setTimer?: (
     callback: () => void,

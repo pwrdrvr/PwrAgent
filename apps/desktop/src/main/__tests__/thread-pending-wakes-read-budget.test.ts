@@ -5,8 +5,8 @@ import { buildThreadPendingWakes, type ThreadPendingWakeReaders } from "../app-s
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
-import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
-import { FileScheduledThreadActionPayloadStore } from "../scheduled-actions/scheduled-thread-action-payload-store";
+import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
+import { FileScheduledThreadActionPayloadStore } from "../storage/scheduled-thread-action-payload-store";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
 

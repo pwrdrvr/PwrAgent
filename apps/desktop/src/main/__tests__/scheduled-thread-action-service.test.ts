@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ReleaseQueuedTurnResponse } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
-import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
+import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
