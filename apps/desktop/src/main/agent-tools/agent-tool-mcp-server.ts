@@ -331,6 +331,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       sessionIdGenerator: undefined,
     });
     const toolCalls: Promise<unknown>[] = [];
+    const clientGone = new AbortController();
     const toolNames = this.resolveMcpTools(params.clientContext).map((tool) => tool.name);
     const hasToolGuide = toolNames.includes("read_tool_guide");
     // The PDF-only MCP surface shares this server but has no workflow tools.
@@ -397,12 +398,16 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           }).catch(() => undefined);
         }, this.options.progressIntervalMs ?? AGENT_TOOL_MCP_PROGRESS_INTERVAL_MS);
         heartbeat?.unref?.();
+        // A client that stopped reading no longer needs progress.
+        const stopHeartbeat = () => clearInterval(heartbeat);
+        clientGone.signal.addEventListener("abort", stopHeartbeat, { once: true });
         const call = this.callTool(request, extra);
         toolCalls.push(call.catch(() => undefined));
         try {
           return await call;
         } finally {
-          clearInterval(heartbeat);
+          clientGone.signal.removeEventListener("abort", stopHeartbeat);
+          stopHeartbeat();
         }
       },
     );
@@ -430,7 +435,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       await close();
       return response;
     }
-    return new Response(closeWhenDone(response.body, close), {
+    return new Response(closeWhenDone(response.body, close, () => clientGone.abort()), {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
@@ -576,27 +581,38 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       token,
       clientContext,
     });
-    response.writeHead(
-      webResponse.status,
-      Object.fromEntries(webResponse.headers.entries()),
-    );
     if (!webResponse.body) {
+      response.writeHead(
+        webResponse.status,
+        Object.fromEntries(webResponse.headers.entries()),
+      );
       response.end();
       return;
     }
-    // Send the headers now: a client times the wait for them, not the call.
-    response.flushHeaders();
+    // The body must be read or cancelled on every path: its end is what
+    // closes the request's MCP server.
     const reader = webResponse.body.getReader();
     let finished = false;
-    response.on("close", () => {
+    const cancel = () => {
       if (!finished) void reader.cancel().catch(() => undefined);
-    });
+    };
+    response.on("close", cancel);
     try {
+      if (response.destroyed) cancel();
+      response.writeHead(
+        webResponse.status,
+        Object.fromEntries(webResponse.headers.entries()),
+      );
+      // Send the headers now: a client times the wait for them, not the call.
+      response.flushHeaders();
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         response.write(value);
       }
+    } catch (error) {
+      cancel();
+      throw error;
     } finally {
       finished = true;
       response.end();
@@ -617,10 +633,12 @@ async function isToolCallRequest(request: Request): Promise<boolean> {
   }
 }
 
-/** The same stream, calling `close` once it ends or its reader cancels. */
+/** The same stream, calling `close` once it ends or its reader cancels, and
+ * `onCancel` when its reader cancels. */
 function closeWhenDone(
   body: ReadableStream<Uint8Array>,
   close: () => Promise<void>,
+  onCancel: () => void,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let closed = false;
@@ -645,6 +663,7 @@ function closeWhenDone(
       }
     },
     async cancel(reason) {
+      onCancel();
       await reader.cancel(reason).catch(() => undefined);
       closeOnce();
     },
