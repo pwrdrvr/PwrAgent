@@ -12,6 +12,7 @@ import {
 import {
   WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -21,6 +22,8 @@ import {
   McpError,
   ReadResourceRequestSchema,
   RequestSchema,
+  type ServerNotification,
+  type ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
@@ -71,8 +74,24 @@ export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): stri
       : "");
 }
 
+type CallToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+
 const LOOPBACK_HOST = "127.0.0.1";
 const MCP_PATH = "/mcp";
+
+/**
+ * How often a running tool call reports progress.
+ *
+ * A tool call is answered as an SSE stream whose headers are sent at once.
+ * Claude Code 2.1.310 aborts a POST whose response headers have not arrived
+ * after 60 seconds, so a JSON response limited every call to 60 seconds.
+ * Once the headers arrive, it aborts a call only after 300 seconds with no
+ * response and no progress notification (CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT),
+ * then after `MCP_TOOL_TIMEOUT` (about 27.8 hours by default). A progress
+ * notification at this interval keeps a call that waits for the operator,
+ * a renderer or long work open until it finishes.
+ */
+export const AGENT_TOOL_MCP_PROGRESS_INTERVAL_MS = 30_000;
 const agentToolMcpLog = getMainLogger("pwragent:agent-tool-mcp");
 
 export type AgentToolMcpClientContext = {
@@ -138,6 +157,8 @@ export type AgentToolMcpServerOptions = {
   resolveToolResultReminder?: (
     context: ResolvedAgentToolMcpCallContext,
   ) => Promise<string | undefined>;
+  /** Overrides AGENT_TOOL_MCP_PROGRESS_INTERVAL_MS. */
+  progressIntervalMs?: number;
 };
 
 export class AgentToolMcpServer implements AgentToolMcpServerLike {
@@ -301,10 +322,16 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     token: string;
     clientContext: AgentToolMcpClientContext;
   }): Promise<Response> {
+    // A tool call can wait for the operator, a renderer or long work, so it
+    // is answered as a stream whose headers go out at once. Every other
+    // request answers at once and stays a single JSON response.
+    const streamed = await isToolCallRequest(params.request);
     const transport = new WebStandardStreamableHTTPServerTransport({
-      enableJsonResponse: true,
+      enableJsonResponse: !streamed,
       sessionIdGenerator: undefined,
     });
+    const toolCalls: Promise<unknown>[] = [];
+    const clientGone = new AbortController();
     const toolNames = this.resolveMcpTools(params.clientContext).map((tool) => tool.name);
     const hasToolGuide = toolNames.includes("read_tool_guide");
     // The PDF-only MCP surface shares this server but has no workflow tools.
@@ -361,95 +388,139 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     mcpServer.setRequestHandler(
       CallToolRequestSchema,
       async (request, extra) => {
-        const token = extra.authInfo?.token;
-        const clientContext = token
-          ? this.contextsByToken.get(token)
-          : undefined;
-        if (!clientContext) {
-          return forbiddenMcpResponse("Unknown PwrAgent MCP client.");
-        }
-        if (!clientContext.threadId) {
-          return forbiddenMcpResponse(
-            "PwrAgent MCP tools are callable only after the client is bound to a thread.",
-          );
-        }
-        const callContext = await this.options.resolveCallContext(clientContext);
-        if (!callContext) {
-          agentToolMcpLog.warn("MCP tool rejected: no unique active turn", {
-            backend: clientContext.backend,
-            threadId: clientContext.threadId,
-            tool: request.params.name,
-          });
-          return forbiddenMcpResponse(
-            "PwrAgent MCP tools are callable only during an active turn on the registered thread.",
-          );
-        }
-        const catalog = this.options
-          .resolveCatalogs(clientContext)
-          .find((candidate) =>
-            candidate.router.acceptsMcpToolCall({
-              tool: request.params.name,
-            }),
-          );
-        if (!catalog) {
-          return toMcpToolResponse(
-            agentToolFailure({
-              code: "unsupported_operation",
-              message: "Unsupported PwrAgent MCP tool.",
-            }),
-          );
-        }
-        const deniedPermission = await this.options.authorizeToolCall?.({
-          backend: callContext.backend,
-          catalogId: catalog.id,
-          threadId: callContext.threadId,
-          tool: request.params.name,
-          turnId: callContext.turnId,
-          arguments: request.params.arguments,
-        });
-        if (deniedPermission) {
-          return toMcpToolResponse(
-            agentToolFailure({
-              code: "forbidden",
-              message:
-                `The messaging user who started this turn lacks permission for this tool (${deniedPermission}).`,
-            }),
-          );
-        }
-        const result = await catalog.router.handleMcpToolCall({
-          backend: callContext.backend,
-          threadId: callContext.threadId,
-          turnId: callContext.turnId,
-          callId: String(extra.requestId),
-          tool: request.params.name,
-          args: request.params.arguments,
-          signal: extra.signal,
-        });
+        const progressToken = request.params._meta?.progressToken;
+        let progress = 0;
+        const heartbeat = progressToken === undefined ? undefined : setInterval(() => {
+          progress += 1;
+          void extra.sendNotification({
+            method: "notifications/progress",
+            params: { progressToken, progress, message: "PwrAgent is still working on this call." },
+          }).catch(() => undefined);
+        }, this.options.progressIntervalMs ?? AGENT_TOOL_MCP_PROGRESS_INTERVAL_MS);
+        heartbeat?.unref?.();
+        // A client that stopped reading no longer needs progress.
+        const stopHeartbeat = () => clearInterval(heartbeat);
+        clientGone.signal.addEventListener("abort", stopHeartbeat, { once: true });
+        const call = this.callTool(request, extra);
+        toolCalls.push(call.catch(() => undefined));
         try {
-          // Resolve after dispatch using the original turn identity. A reminder
-          // can only ride this response; it must never enqueue another turn.
-          const reminder = await this.options.resolveToolResultReminder?.(callContext);
-          if (reminder) {
-            return { ...result, content: [...result.content, { type: "text", text: reminder }] };
-          }
-        } catch (error) {
-          agentToolMcpLog.warn("MCP tool result reminder failed open", { error: String(error) });
+          return await call;
+        } finally {
+          clientGone.signal.removeEventListener("abort", stopHeartbeat);
+          stopHeartbeat();
         }
-        return result;
       },
     );
     await mcpServer.connect(transport);
+    const close = async () => {
+      // Never close before a call settles: closing aborts it, and a call that
+      // already raised a card or started work must finish as it would have.
+      await Promise.all(toolCalls);
+      await mcpServer.close().catch(() => undefined);
+    };
+    let response: Response;
     try {
-      return await transport.handleRequest(params.request, {
+      response = await transport.handleRequest(params.request, {
         authInfo: {
           token: params.token,
           clientId: `${PWRAGENT_TOOL_NAMESPACE}:${params.clientContext.backend}`,
           scopes: ["tools"],
         },
       });
-    } finally {
-      await mcpServer.close().catch(() => undefined);
+    } catch (error) {
+      await close();
+      throw error;
     }
+    if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
+      await close();
+      return response;
+    }
+    return new Response(closeWhenDone(response.body, close, () => clientGone.abort()), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+
+  private async callTool(
+    request: z.infer<typeof CallToolRequestSchema>,
+    extra: CallToolExtra,
+  ): Promise<AgentMcpToolCallResponse> {
+    const token = extra.authInfo?.token;
+    const clientContext = token
+      ? this.contextsByToken.get(token)
+      : undefined;
+    if (!clientContext) {
+      return forbiddenMcpResponse("Unknown PwrAgent MCP client.");
+    }
+    if (!clientContext.threadId) {
+      return forbiddenMcpResponse(
+        "PwrAgent MCP tools are callable only after the client is bound to a thread.",
+      );
+    }
+    const callContext = await this.options.resolveCallContext(clientContext);
+    if (!callContext) {
+      agentToolMcpLog.warn("MCP tool rejected: no unique active turn", {
+        backend: clientContext.backend,
+        threadId: clientContext.threadId,
+        tool: request.params.name,
+      });
+      return forbiddenMcpResponse(
+        "PwrAgent MCP tools are callable only during an active turn on the registered thread.",
+      );
+    }
+    const catalog = this.options
+      .resolveCatalogs(clientContext)
+      .find((candidate) =>
+        candidate.router.acceptsMcpToolCall({
+          tool: request.params.name,
+        }),
+      );
+    if (!catalog) {
+      return toMcpToolResponse(
+        agentToolFailure({
+          code: "unsupported_operation",
+          message: "Unsupported PwrAgent MCP tool.",
+        }),
+      );
+    }
+    const deniedPermission = await this.options.authorizeToolCall?.({
+      backend: callContext.backend,
+      catalogId: catalog.id,
+      threadId: callContext.threadId,
+      tool: request.params.name,
+      turnId: callContext.turnId,
+      arguments: request.params.arguments,
+    });
+    if (deniedPermission) {
+      return toMcpToolResponse(
+        agentToolFailure({
+          code: "forbidden",
+          message:
+            `The messaging user who started this turn lacks permission for this tool (${deniedPermission}).`,
+        }),
+      );
+    }
+    const result = await catalog.router.handleMcpToolCall({
+      backend: callContext.backend,
+      threadId: callContext.threadId,
+      turnId: callContext.turnId,
+      callId: String(extra.requestId),
+      tool: request.params.name,
+      args: request.params.arguments,
+      signal: extra.signal,
+    });
+    try {
+      // Resolve after dispatch using the original turn identity. A reminder
+      // can only ride this response; it must never enqueue another turn.
+      const reminder = await this.options.resolveToolResultReminder?.(callContext);
+      if (reminder) {
+        return { ...result, content: [...result.content, { type: "text", text: reminder }] };
+      }
+    } catch (error) {
+      agentToolMcpLog.warn("MCP tool result reminder failed open", { error: String(error) });
+    }
+    return result;
   }
 
   private resolveMcpTools(context: AgentToolMcpClientContext): AgentMcpTool[] {
@@ -510,13 +581,93 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       token,
       clientContext,
     });
-    response.writeHead(
-      webResponse.status,
-      Object.fromEntries(webResponse.headers.entries()),
-    );
-    const body = Buffer.from(await webResponse.arrayBuffer());
-    response.end(body);
+    if (!webResponse.body) {
+      response.writeHead(
+        webResponse.status,
+        Object.fromEntries(webResponse.headers.entries()),
+      );
+      response.end();
+      return;
+    }
+    // The body must be read or cancelled on every path: its end is what
+    // closes the request's MCP server.
+    const reader = webResponse.body.getReader();
+    let finished = false;
+    const cancel = () => {
+      if (!finished) void reader.cancel().catch(() => undefined);
+    };
+    response.on("close", cancel);
+    try {
+      if (response.destroyed) cancel();
+      response.writeHead(
+        webResponse.status,
+        Object.fromEntries(webResponse.headers.entries()),
+      );
+      // Send the headers now: a client times the wait for them, not the call.
+      response.flushHeaders();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        response.write(value);
+      }
+    } catch (error) {
+      cancel();
+      throw error;
+    } finally {
+      finished = true;
+      response.end();
+    }
   }
+}
+
+/** True when the request is a tools/call, or a batch holding one. */
+async function isToolCallRequest(request: Request): Promise<boolean> {
+  if (request.method !== "POST") return false;
+  try {
+    const body: unknown = await request.clone().json();
+    const messages = Array.isArray(body) ? body : [body];
+    return messages.some((message) =>
+      !!message && typeof message === "object" && (message as { method?: unknown }).method === "tools/call");
+  } catch {
+    return false;
+  }
+}
+
+/** The same stream, calling `close` once it ends or its reader cancels, and
+ * `onCancel` when its reader cancels. */
+function closeWhenDone(
+  body: ReadableStream<Uint8Array>,
+  close: () => Promise<void>,
+  onCancel: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let closed = false;
+  const closeOnce = () => {
+    if (closed) return;
+    closed = true;
+    void close();
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          closeOnce();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
+        closeOnce();
+      }
+    },
+    async cancel(reason) {
+      onCancel();
+      await reader.cancel(reason).catch(() => undefined);
+      closeOnce();
+    },
+  });
 }
 
 function rejectSkillCursor(cursor: unknown): void {
