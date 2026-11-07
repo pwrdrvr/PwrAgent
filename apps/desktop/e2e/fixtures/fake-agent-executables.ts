@@ -1,8 +1,8 @@
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AcpBackendId } from "@pwragent/shared";
-import { AcpAgentStore } from "../../src/main/acp/acp-agent-store";
-import { AcpSessionStore } from "../../src/main/acp/acp-session-store";
+import { AcpAgentStore } from "../../src/main/storage/acp-agent-store";
+import { AcpSessionStore } from "../../src/main/storage/acp-session-store";
 import { StateDb } from "../../src/main/state/state-db";
 
 /**

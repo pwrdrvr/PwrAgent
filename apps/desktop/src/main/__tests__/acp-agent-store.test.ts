@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AcpAgentStore } from "../acp/acp-agent-store";
+import { AcpAgentStore } from "../storage/acp-agent-store";
 import type {
   AcpInstalledAgentRecord,
   AcpRegistrySnapshot,

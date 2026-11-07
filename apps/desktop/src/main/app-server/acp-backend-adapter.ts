@@ -32,9 +32,7 @@ import {
   isAcpBackendId,
   usageLimitProviderForBackend,
 } from "@pwragent/shared";
-import {
-  type AcpAgentStore as AcpAgentStoreLike,
-} from "../acp/acp-agent-store";
+import type { AcpAgentStorage } from "@pwragent/owner-core/acp-storage";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import {
   acpAgentCapabilitiesForRegistryId,
@@ -95,15 +93,12 @@ import {
   AcpRolloutStore,
   isPwrAgentSyntheticAcpUpdate,
 } from "../acp/acp-rollout-store";
-import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
+import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "../acp/acp-registry-types";
 import {
   acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
 } from "../acp/acp-runtime-capabilities";
-import {
-  type AcpSessionMetadata,
-  type AcpSessionStore as AcpSessionStoreContract,
-} from "../acp/acp-session-store";
+import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import {
   AcpSessionReplayNormalizer,
   inferAcpReplayTurns,
@@ -276,9 +271,11 @@ export function createLocalAcpAgentDiscovery(params: {
  */
 export const noLocalAcpAgentDiscovery: LocalAcpDiscovery = async () => [];
 
+type AcpAgentStoreLike = AcpAgentStorage<AcpRegistrySnapshot, AcpInstalledAgentRecord>;
+
 export type AcpSessionStoreLike =
-  Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
-  Partial<Pick<AcpSessionStoreContract, "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage">>;
+  Pick<AcpSessionStorage, "getSession" | "listSessions"> &
+  Partial<Pick<AcpSessionStorage, "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage">>;
 
 type AcpClientEntry = {
   client: AcpRuntimeClient;
@@ -3011,7 +3008,7 @@ export class AcpBackendAdapter {
       initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
       supportsTurnSteering: effectiveAcpAgentCapabilities(agent).steerTurn,
       rolloutStore: this.acpRolloutStore,
-      store: this.acpSessionStore as AcpSessionStoreContract,
+      store: this.acpSessionStore as AcpSessionStorage,
       transport:
         this.createAcpTransport?.(agent) ??
         new AcpStdioJsonRpcTransport({

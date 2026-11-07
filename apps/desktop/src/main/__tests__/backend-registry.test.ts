@@ -162,7 +162,7 @@ import { managedCodexRoot } from "../codex-build-channel";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
-import type { AcpAvailableCommandsRecord } from "../acp/acp-available-commands-store";
+import type { AcpAvailableCommandsRecord } from "@pwragent/owner-core/acp-storage";
 import {
   CodexEnvironmentCommandError,
   type CodexEnvironmentCommandRunner,
@@ -195,7 +195,8 @@ import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
-import { AcpSessionStore, type AcpSessionMetadata } from "../acp/acp-session-store";
+import type { AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
+import { AcpSessionStore } from "../storage/acp-session-store";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";

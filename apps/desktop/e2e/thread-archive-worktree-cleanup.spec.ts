@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures/electron-test";
-import { AcpAgentStore } from "../src/main/acp/acp-agent-store";
-import { AcpSessionStore } from "../src/main/acp/acp-session-store";
+import { AcpAgentStore } from "../src/main/storage/acp-agent-store";
+import { AcpSessionStore } from "../src/main/storage/acp-session-store";
 import { StateDb } from "../src/main/state/state-db";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { launchElectronApp } from "./fixtures/electron-app";

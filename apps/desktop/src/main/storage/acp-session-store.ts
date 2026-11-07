@@ -1,44 +1,13 @@
-import type {
-  AcpBackendId,
-  AppServerAvailableCommandSummary,
-  AppServerThreadTitleSource,
-  BackendAcpSessionRuntimeState,
-  ThreadExecutionMode,
-} from "@pwragent/shared";
+import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import type { AcpBackendId } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db.js";
-
-export type AcpSessionMetadata = {
-  backendId: AcpBackendId;
-  /**
-   * Stable PwrAgent thread id. For ACP agents whose session ids are scoped to
-   * immutable project directories, this can differ from the protocol session id.
-   */
-  sessionId: string;
-  agentSessionId?: string;
-  title: string;
-  titleSource?: AppServerThreadTitleSource;
-  cwd?: string;
-  createdAt: number;
-  updatedAt: number;
-  executionMode: ThreadExecutionMode;
-  /** Host-enforced policy for helpers that must never request user approval. */
-  approvalPolicy?: "deny-all";
-  acpRuntime?: BackendAcpSessionRuntimeState;
-  availableCommands?: AppServerAvailableCommandSummary[];
-  status: "active" | "idle" | "failed" | "unknown";
-  hidden?: boolean;
-  hasConversationHistory?: boolean;
-  requiresAgentSessionRebind?: boolean;
-  archivedAt?: number;
-  lastError?: string;
-};
 
 type AcpPersistedTranscriptUpdate = {
   receivedAt: number;
   update: Record<string, unknown>;
 };
 
-export class AcpSessionStore {
+export class AcpSessionStore implements AcpSessionStorage {
   constructor(private readonly stateDb: StateDb) {}
 
   upsertSession(metadata: AcpSessionMetadata): void {

@@ -4,7 +4,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { AcpAgentClient, acpSafeMcpServerName, type AcpJsonRpcTransport } from "../acp/acp-client";
-import { AcpSessionStore } from "../acp/acp-session-store";
+import { AcpSessionStore } from "../storage/acp-session-store";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import type { McpCredentialVault } from "../mcp-connections/mcp-credential-vault";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AcpSessionStore } from "../acp/acp-session-store";
+import { AcpSessionStore } from "../storage/acp-session-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

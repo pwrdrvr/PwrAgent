@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppServerAvailableCommandSummary } from "@pwragent/shared";
-import { AcpAvailableCommandsStore } from "../acp/acp-available-commands-store";
+import { AcpAvailableCommandsStore } from "../storage/acp-available-commands-store";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 

@@ -1,34 +1,11 @@
+import type { AcpAvailableCommandsRecord, AcpAvailableCommandsStorage } from "@pwragent/owner-core/acp-storage";
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
 } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db.js";
 
-export type AcpAvailableCommandsRecord = {
-  backendId: AcpBackendId;
-  repositoryPath: string;
-  commands: AppServerAvailableCommandSummary[];
-  observedAt: number;
-};
-
-/**
- * Durable last-observed slash-command list per (ACP agent, repository root).
- *
- * ACP advertises `availableCommands` only through `session/update` on a live
- * session, so a launchpad draft — no thread, no session — cannot ask for them.
- * Live sessions write through here as they report, and launchpad requests read
- * back the repo's last-known list. Rows are keyed by repository root rather
- * than by cwd so every worktree of a checkout shares one entry.
- */
-export type AcpAvailableCommandsStoreLike = {
-  get(
-    backendId: AcpBackendId,
-    repositoryPath: string,
-  ): AcpAvailableCommandsRecord | undefined;
-  upsert(record: AcpAvailableCommandsRecord): void;
-};
-
-export class AcpAvailableCommandsStore implements AcpAvailableCommandsStoreLike {
+export class AcpAvailableCommandsStore implements AcpAvailableCommandsStorage {
   constructor(private readonly stateDb: StateDb) {}
 
   get(

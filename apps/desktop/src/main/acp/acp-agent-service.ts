@@ -1,6 +1,6 @@
 import type { AcpBackendId } from "@pwragent/shared";
 import { getAppStateDb } from "../state/app-state";
-import { AcpAgentStore } from "./acp-agent-store";
+import { AcpAgentStore } from "../storage/acp-agent-store";
 import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "./acp-registry-types";
 
 /** Installed-agent state and registry cache for desktop settings. */

@@ -14,12 +14,12 @@ import { runOneTimeArchivedWorktreeRepair } from "../state/archived-worktree-rep
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { AcpAgentStore } from "../acp/acp-agent-store";
+import { AcpAgentStore } from "../storage/acp-agent-store";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import type { AcpTransportFactory } from "../app-server/acp-backend-adapter";
-import { AcpSessionStore } from "../acp/acp-session-store";
+import { AcpSessionStore } from "../storage/acp-session-store";
 import { ArchiveWorktreeTransport, type ArchiveWorktreeThread } from "./fixtures/archive-worktree-transport";
 
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));

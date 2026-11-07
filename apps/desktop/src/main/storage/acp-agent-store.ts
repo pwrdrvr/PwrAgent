@@ -1,13 +1,14 @@
+import type { AcpAgentStorage } from "@pwragent/owner-core/acp-storage";
 import type { AcpBackendId } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db.js";
 import type {
   AcpInstalledAgentRecord,
   AcpRegistrySnapshot,
-} from "./acp-registry-types.js";
+} from "../acp/acp-registry-types.js";
 
 const REGISTRY_CACHE_KEY = "latest";
 
-export class AcpAgentStore {
+export class AcpAgentStore implements AcpAgentStorage<AcpRegistrySnapshot, AcpInstalledAgentRecord> {
   constructor(private readonly stateDb: StateDb) {}
 
   saveRegistrySnapshot(snapshot: AcpRegistrySnapshot): void {
