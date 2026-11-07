@@ -1,4 +1,4 @@
-import { readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
+import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
@@ -1830,6 +1830,7 @@ export class DesktopFederationRuntime {
     this.endpointStatuses.clear();
     this.rpcByPeer.clear();
     this.remotePeerDirectory.clear();
+    invalidatePeerActiveDependencies(this);
     this.publishedPeerStatuses.clear();
     this.incomingEventSubscriptions.clear();
     this.syncDirectorySetWatchers();
@@ -6798,6 +6799,8 @@ export class DesktopFederationRuntime {
     // has no reason to retry it until another navigation event arrives.
     this.remoteThreadSummaryCache?.invalidate(instanceId);
 
+    invalidatePeerActiveDependencies(this, instanceId);
+
     if (status === "connected") {
       // Hooked to the status TRANSITION (this method already de-dupes
       // repeats) rather than to a specific enrollment call site, so every
@@ -7034,6 +7037,11 @@ export class DesktopFederationRuntime {
   }
 
   private publishReceivedBackendEvent(event: AgentEvent): void {
+    if (event.federationTarget?.scope === "remote"
+      && (event.notification.method === "thread/dependencies/updated"
+        || event.notification.method === "federation/eventStream/changed")) {
+      invalidatePeerActiveDependencies(this, event.federationTarget.instanceId);
+    }
     this.publishAgentEvent?.(event);
     this.notifyRemoteBackendEventListeners(event);
   }

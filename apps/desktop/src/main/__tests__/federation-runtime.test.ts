@@ -65,6 +65,7 @@ import { FederationRouter } from "../federation/federation-router";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
 import { replacementPages } from "../federation/federation-replacement-pages";
 import { FEDERATION_EVENT_STREAM_METHOD } from "../federation/federation-event-stream";
+import { collectPeerActiveDependencies } from "../app-server/thread-dependencies-federation";
 import * as appState from "../state/app-state";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
 import * as directoryRegistration from "../app-server/directory-registration-service";
@@ -1447,6 +1448,48 @@ describe("DesktopFederationRuntime", () => {
     runtime.publishPeerStatus("owner_one", "connected");
 
     expect(invalidated).toEqual(["owner_one", "owner_one"]);
+  });
+
+  it.each(["thread/dependencies/updated", "federation/eventStream/changed"] as const)(
+    "invalidates a peer's Continue After snapshot before publishing %s to windows",
+    async (method) => {
+      const runtime = new DesktopFederationRuntime();
+      const target = { scope: "remote", instanceId: "owner_one" } as const;
+      vi.spyOn(runtime, "connectedPeerTargets").mockReturnValue([
+        { target, label: "Owner", capabilities: ["thread_dependencies_v1", "turn_control"] },
+      ]);
+      vi.spyOn(runtime, "remoteTargetSupportsCapability").mockReturnValue(true);
+      const manage = vi.fn(async () => ({ dependencies: [] }));
+      vi.spyOn(runtime, "remoteBackend").mockReturnValue({ manageThreadDependencies: manage } as never);
+      await collectPeerActiveDependencies(runtime);
+      expect(manage).toHaveBeenCalledOnce();
+      let refreshed: ReturnType<typeof collectPeerActiveDependencies> | undefined;
+      runtime.setAgentEventPublisher(() => { refreshed = collectPeerActiveDependencies(runtime); });
+      const harness = runtime as unknown as { publishReceivedBackendEvent: (event: AgentEvent) => void };
+      harness.publishReceivedBackendEvent({
+        backend: "codex", federationTarget: target,
+        notification: method === "thread/dependencies/updated"
+          ? { method, params: { threadId: "prereq", dependencyId: "wait" } }
+          : { method, params: { instanceId: target.instanceId, epoch: "reconnected" } },
+      });
+      await refreshed;
+      expect(manage).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("invalidates Continue After snapshots on peer status transitions", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const target = { scope: "remote", instanceId: "owner_one" } as const;
+    vi.spyOn(runtime, "connectedPeerTargets").mockReturnValue([
+      { target, label: "Owner", capabilities: ["thread_dependencies_v1", "turn_control"] },
+    ]);
+    vi.spyOn(runtime, "remoteTargetSupportsCapability").mockReturnValue(true);
+    const manage = vi.fn(async () => ({ dependencies: [] }));
+    vi.spyOn(runtime, "remoteBackend").mockReturnValue({ manageThreadDependencies: manage } as never);
+    await collectPeerActiveDependencies(runtime);
+    (runtime as unknown as RuntimeHarness).publishPeerStatus("owner_one", "disconnected");
+    await collectPeerActiveDependencies(runtime);
+    expect(manage).toHaveBeenCalledTimes(2);
   });
 
   it("propagates advertised viewer disconnects and reconnects to remote PTY sessions", () => {
