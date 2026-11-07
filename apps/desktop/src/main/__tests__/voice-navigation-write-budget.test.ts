@@ -11,7 +11,7 @@ import { createTempStateDb } from "./sqlite-test-utils";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
-import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { ThreadSearchStore } from "../storage/thread-search-store";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 vi.mock("../primary-main-window", () => ({ primaryMainWindowWebContents: () => undefined }));

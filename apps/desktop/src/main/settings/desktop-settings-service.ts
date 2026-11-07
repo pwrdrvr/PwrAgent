@@ -17,7 +17,7 @@ import {
 } from "@pwragent/shared";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
-import { getAppStateDb } from "../state/app-state";
+import { createTokenMiserStorage } from "../storage/desktop-runtime-storage";
 import {
   DESKTOP_UI_LAYOUT_DEFAULTS,
   FORGE_PRODUCTS,
@@ -245,7 +245,7 @@ import {
   TOKEN_MISER_DIAGNOSTICS_DIRNAME,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
   discoverCodexAuthProfiles,
   resolveCodexHomeForProfile,
@@ -758,9 +758,9 @@ export class DesktopSettingsService {
 
   async readTokenMiserUsage() {
     // Explicit usage requests query SQLite; ordinary settings reads do no accounting I/O.
-    this.tokenMiserUsageStore ??= this.options.tokenMiserStore ?? new TokenMiserStore(
+    this.tokenMiserUsageStore ??= this.options.tokenMiserStore ?? createTokenMiserStorage(
       path.join(path.dirname(this.configPath), "state", "token-miser", "objects"),
-      { stateDb: getAppStateDb() },
+      {},
     );
     return await this.tokenMiserUsageStore.summarizeUsage();
   }

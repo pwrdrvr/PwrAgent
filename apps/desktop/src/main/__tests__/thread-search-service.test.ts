@@ -3,7 +3,7 @@ import type { AppServerReadThreadResponse, AppServerThreadSummary } from "@pwrag
 import { StateDb } from "../state/state-db";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
-import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { ThreadSearchStore } from "../storage/thread-search-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;

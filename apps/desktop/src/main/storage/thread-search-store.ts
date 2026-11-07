@@ -9,17 +9,9 @@ import {
   type ThreadSearchFilters,
   type ThreadSearchResult,
 } from "@pwragent/shared";
+import type { ThreadSearchProjectionSearchRequest, ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { StateDb } from "../state/state-db";
-import { buildThreadSearchFtsQuery } from "./thread-search-fts-query";
-
-export type ThreadSearchProjectionSearchRequest = {
-  query?: string;
-  identityKeys?: string[];
-  backend?: AppServerBackendKind;
-  includeArchived?: boolean;
-  filters?: ThreadSearchFilters;
-  limit: number;
-};
+import { buildThreadSearchFtsQuery } from "../thread-search/thread-search-fts-query";
 
 type ThreadSearchDocumentRow = {
   identity_key: string;
@@ -42,7 +34,7 @@ type ThreadSearchFtsRow = ThreadSearchDocumentRow & {
   snippet_text?: string | null;
 };
 
-export class ThreadSearchStore {
+export class ThreadSearchStore implements ThreadSearchStorage {
   private readonly db: BetterSqlite3.Database;
 
   constructor(stateDb: StateDb) {

@@ -13,7 +13,7 @@ import {
   StateDb,
 } from "../state/state-db";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { ThreadSearchStore } from "../storage/thread-search-store";
 import {
   openInMemoryStateDb,
   removeTempStateDbDir,

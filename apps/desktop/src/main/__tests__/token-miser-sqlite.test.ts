@@ -1,3 +1,4 @@
+import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -26,7 +27,7 @@ async function fixture() {
   const stateDb = StateDb.open(path.join(root, "state.db"));
   databases.push(stateDb);
   const legacy = path.join(root, "objects");
-  return { root, legacy, stateDb, store: new TokenMiserStore(legacy, { stateDb }) };
+  return { root, legacy, stateDb, store: new TokenMiserStore(legacy, { storage: new SqliteTokenMiserStorage(stateDb) }) };
 }
 it("stores accounting in the profile database without creating per-result files", async () => {
   const { store, legacy, stateDb } = await fixture();
@@ -40,7 +41,7 @@ it("reads committed accounting across connections without touching legacy files"
   const { store, root, legacy } = await fixture();
   const stateDb = StateDb.open(path.join(root, "state.db"));
   databases.push(stateDb);
-  const reader = new TokenMiserStore(legacy, { stateDb });
+  const reader = new TokenMiserStore(legacy, { storage: new SqliteTokenMiserStorage(stateDb) });
   const entry = await store.store(params);
   const read = vi.spyOn(fs, "readFile");
   const list = vi.spyOn(fs, "readdir");

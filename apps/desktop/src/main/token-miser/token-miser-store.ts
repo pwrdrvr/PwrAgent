@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { mapTokenMiserFiles, withTokenMiserFileOperation } from "./token-miser-file-io";
 import { TokenMiserOutputCache } from "./token-miser-output-cache";
-import type { StateDb } from "../state/state-db";
+import type { TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
 import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   estimateTokenCount,
@@ -204,7 +204,7 @@ export type TokenMiserMetadataUpdateReason =
   | "flushed";
 
 export type TokenMiserStoreOptions = {
-  stateDb: StateDb;
+  storage: TokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>;
   onMetadataUpdated?: (
     metadata: TokenMiserObjectMetadata,
     reason: TokenMiserMetadataUpdateReason,
@@ -304,7 +304,7 @@ export class TokenMiserStore {
     return path.join(this.rootDir, "threads", key);
   }
 
-  private get db() { return this.options.stateDb.raw; }
+  private get storage() { return this.options.storage; }
 
   async store(params: TokenMiserStoreParams): Promise<TokenMiserObjectMetadata> {
     const staged = await this.stage(params);
@@ -446,11 +446,7 @@ export class TokenMiserStore {
 
   private readMetadataRow(objectId: string, threadId?: string): TokenMiserObjectMetadata | undefined {
     if (!isSafeObjectId(objectId)) return undefined;
-    const row = (threadId === undefined
-      ? this.db.prepare("SELECT payload FROM token_miser_objects WHERE object_id = ?").get(objectId)
-      : this.db.prepare("SELECT payload FROM token_miser_objects WHERE object_id = ? AND thread_id = ?").get(objectId, threadId)
-    ) as { payload: string } | undefined;
-    return row ? JSON.parse(row.payload) as TokenMiserObjectMetadata : undefined;
+    return this.storage.readMetadata(objectId, threadId);
   }
 
   /** Internal read: no delivery marker and no parent retrieval accounting. */
@@ -803,14 +799,8 @@ export class TokenMiserStore {
   }
 
   async listMetadata(threadId?: string): Promise<TokenMiserObjectMetadata[]> {
-    const rows = (threadId === undefined
-      ? this.db.prepare("SELECT payload FROM token_miser_objects ORDER BY created_at DESC").all()
-      : this.db.prepare("SELECT payload FROM token_miser_objects WHERE thread_id = ? ORDER BY created_at DESC").all(threadId)
-    ) as Array<{ payload: string }>;
-    return rows.map(({ payload }) => {
-      const entry = JSON.parse(payload) as TokenMiserObjectMetadata;
-      return mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId));
-    });
+    return this.storage.listMetadata(threadId).map((entry) =>
+      mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
   }
 
   async recordCodeModeObservation(params: Omit<
@@ -846,11 +836,7 @@ export class TokenMiserStore {
         ? {}
         : { capturedOtherInvocationCount: params.capturedOtherInvocationCount }),
     };
-    this.db.prepare(`INSERT INTO token_miser_observations (observation_id, thread_id, created_at, payload)
-      VALUES (?, ?, ?, ?) ON CONFLICT(observation_id) DO UPDATE SET payload = excluded.payload, created_at = excluded.created_at
-      WHERE token_miser_observations.payload != excluded.payload`).run(
-      observationId, observation.threadId, observation.createdAt, JSON.stringify(observation),
-    );
+    this.storage.recordObservation(observation);
     if (publish) await this.options.onCodeModeObservationUpdated?.(observation);
     return observation;
   }
@@ -858,11 +844,7 @@ export class TokenMiserStore {
   async listCodeModeObservations(
     threadId?: string,
   ): Promise<TokenMiserCodeModeObservation[]> {
-    const rows = (threadId === undefined
-      ? this.db.prepare("SELECT payload FROM token_miser_observations ORDER BY created_at").all()
-      : this.db.prepare("SELECT payload FROM token_miser_observations WHERE thread_id = ? ORDER BY created_at").all(threadId)
-    ) as Array<{ payload: string }>;
-    return rows.map(({ payload }) => JSON.parse(payload) as TokenMiserCodeModeObservation);
+    return this.storage.listObservations(threadId);
   }
 
   async summarizeUsage(params?: {
@@ -1019,7 +1001,7 @@ export class TokenMiserStore {
   private async flushEntries(ids: string[]): Promise<void> {
     if (!ids.length) return;
     const committed: TokenMiserObjectMetadata[] = [];
-    this.db.transaction(() => {
+    this.storage.runExclusive(() => {
       for (const id of ids) {
         const current = this.readMetadataRow(id);
         const pending = this.replayUpdates.get(id);
@@ -1028,7 +1010,7 @@ export class TokenMiserStore {
         this.writeMetadata(merged);
         committed.push(merged);
       }
-    }).immediate();
+    });
     for (const entry of committed) this.replayUpdates.delete(entry.objectId);
     for (const entry of committed) await this.options.onMetadataUpdated?.(entry, "flushed");
   }
@@ -1038,13 +1020,11 @@ export class TokenMiserStore {
   }
 
   private async hasArchiveMarker(threadId: string): Promise<boolean> {
-    return (this.db.prepare("SELECT archived FROM token_miser_retention WHERE thread_key = ?")
-      .get(this.threadKey(threadId)) as { archived: number } | undefined)?.archived === 1;
+    return this.storage.isArchived(this.threadKey(threadId));
   }
 
   private async readRetentionGeneration(threadId: string): Promise<string> {
-    return (this.db.prepare("SELECT generation FROM token_miser_retention WHERE thread_key = ?")
-      .get(this.threadKey(threadId)) as { generation: string } | undefined)?.generation ?? "";
+    return this.storage.readRetentionGeneration(this.threadKey(threadId));
   }
 
   private async isCurrentRetention(threadId: string, generation: string | undefined): Promise<boolean> {
@@ -1054,8 +1034,7 @@ export class TokenMiserStore {
   }
 
   async restoreThread(threadId: string): Promise<void> {
-    this.db.prepare("UPDATE token_miser_retention SET archived = 0 WHERE thread_key = ? AND archived = 1")
-      .run(this.threadKey(threadId));
+    this.storage.restoreThread(this.threadKey(threadId));
     this.archivedThreads.delete(threadId);
   }
 
@@ -1072,16 +1051,14 @@ export class TokenMiserStore {
     for (const [id, pending] of this.pendingRetrievalDeliveries) {
       if (pending.threadId === threadId) this.abandonRetrievalDelivery(id);
     }
-    this.db.prepare(`INSERT INTO token_miser_retention (thread_key, generation, archived)
-      VALUES (?, ?, 1) ON CONFLICT(thread_key) DO UPDATE SET generation = excluded.generation, archived = 1
-      WHERE token_miser_retention.archived = 0`).run(key, randomUUID());
+    this.storage.archiveThread(key, randomUUID());
     this.archivedThreads.delete(threadId);
     await this.flushThread(threadId);
   }
 
   async prune(_params: { maxAgeMs: number; maxBytes: number; now?: number }): Promise<void> {
     const migrationKey = `token_miser_files_migrated:${createHash("sha256").update(this.rootDir).digest("hex")}`;
-    if (this.db.prepare("SELECT value FROM meta WHERE key = ?").get(migrationKey)) return;
+    if (this.storage.hasLegacyMigration(migrationKey)) return;
     const metadata: TokenMiserObjectMetadata[] = [];
     const observations: TokenMiserCodeModeObservation[] = [];
     const retention: Array<{ key: string; generation: string; archived: number }> = [];
@@ -1139,15 +1116,7 @@ export class TokenMiserStore {
     await scan(path.join(this.rootDir, OBSERVATION_DIRECTORY), "observations");
     // Commit all imported accounting before deleting any legacy content. A retry
     // never replaces counters that the SQLite writer has advanced since import.
-    this.db.transaction(() => {
-      const object = this.db.prepare("INSERT OR IGNORE INTO token_miser_objects (object_id, thread_id, created_at, payload) VALUES (?, ?, ?, ?)");
-      const observation = this.db.prepare("INSERT OR IGNORE INTO token_miser_observations (observation_id, thread_id, created_at, payload) VALUES (?, ?, ?, ?)");
-      const marker = this.db.prepare("INSERT OR IGNORE INTO token_miser_retention (thread_key, generation, archived) VALUES (?, ?, ?)");
-      for (const entry of metadata) object.run(entry.objectId, entry.threadId, entry.createdAt, JSON.stringify(entry));
-      for (const entry of observations) observation.run(entry.observationId, entry.threadId, entry.createdAt, JSON.stringify(entry));
-      // An archive marker wins when a legacy directory also has a generation.
-      for (const entry of retention.sort((a, b) => b.archived - a.archived)) marker.run(entry.key, entry.generation, entry.archived);
-    }).immediate();
+    this.storage.importLegacyRecords({ metadata, observations, retention });
     await mapTokenMiserFiles(files, async (file) => {
       await withTokenMiserFileOperation(() => fs.rm(file, { force: true })).catch(async (error: NodeJS.ErrnoException) => {
         // Concurrent Windows unlink can report EPERM after another importer
@@ -1184,7 +1153,7 @@ export class TokenMiserStore {
         throw error;
       });
     }
-    this.db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, 'complete')").run(migrationKey);
+    this.storage.completeLegacyMigration(migrationKey);
   }
 
   private async readAuthorizedObject(
@@ -1348,7 +1317,7 @@ export class TokenMiserStore {
       // Keep read/modify/write under one cross-connection write lock. Replay
       // request events only update RAM and do not open a SQLite transaction.
       if (reason === "replay") apply();
-      else this.db.transaction(apply).immediate();
+      else this.storage.runExclusive(apply);
       if (updated) {
         if (reason !== "replay") this.replayUpdates.delete(objectId);
         await this.options.onMetadataUpdated?.(updated, reason);
@@ -1368,16 +1337,12 @@ export class TokenMiserStore {
   private async remove(objectId: string): Promise<void> {
     this.outputTurns.delete(objectId);
     this.outputs.remove(objectId);
-    this.db.prepare("DELETE FROM token_miser_objects WHERE object_id = ?").run(objectId);
+    this.storage.removeMetadata(objectId);
   }
 
   private writeMetadata(metadata: TokenMiserObjectMetadata): void {
     this.owners.set(metadata.objectId, this.threadKey(metadata.threadId));
-    this.db.prepare(`INSERT INTO token_miser_objects (object_id, thread_id, created_at, payload)
-      VALUES (?, ?, ?, ?) ON CONFLICT(object_id) DO UPDATE SET payload = excluded.payload
-      WHERE token_miser_objects.payload != excluded.payload`).run(
-      metadata.objectId, metadata.threadId, metadata.createdAt, JSON.stringify(safeMetadata(metadata)),
-    );
+    this.storage.writeMetadata(safeMetadata(metadata));
   }
 }
 
