@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { buildThreadSearchFtsQuery } from "../thread-search/thread-search-fts-query";
-import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { ThreadSearchStore } from "../storage/thread-search-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;

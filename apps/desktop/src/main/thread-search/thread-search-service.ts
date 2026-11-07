@@ -15,7 +15,7 @@ import {
   normalizeThreadSearchLimit,
   normalizeThreadSearchSemanticMode,
 } from "@pwragent/shared";
-import type { ThreadSearchStore } from "./thread-search-store";
+import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import { awaitThreadSearchRead } from "./thread-search-cancellation";
 import type {
   ThreadContentSearchResponse,
@@ -31,7 +31,7 @@ export type ThreadSearchThreadLister = (request: {
 
 export class ThreadSearchService {
   constructor(
-    private readonly store: ThreadSearchStore,
+    private readonly store: ThreadSearchStorage,
     private readonly listThreads: ThreadSearchThreadLister,
     private readonly contentAdapter?: ProviderTranscriptThreadSearchAdapter,
   ) {}
@@ -192,7 +192,7 @@ function buildContentCandidates(params: {
   filters: ThreadSearchFilters;
   identityKeys?: string[];
   metadataResults: ThreadSearchResponse["results"];
-  store: ThreadSearchStore;
+  store: ThreadSearchStorage;
 }): ThreadSearchResponse["results"] {
   const recentResults = params.store
     .search({

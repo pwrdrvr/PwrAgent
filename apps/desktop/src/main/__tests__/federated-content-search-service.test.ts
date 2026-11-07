@@ -4,7 +4,7 @@ import { searchFederatedContent, type ContentSearchPeer } from "../federation/fe
 import { OwnerContentSearch } from "../thread-search/owner-content-search";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
-import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { ThreadSearchStore } from "../storage/thread-search-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb, createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

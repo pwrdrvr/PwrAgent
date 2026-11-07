@@ -1,3 +1,4 @@
+import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
 import { bundledGitEnvironment } from "../bundled-git";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -337,7 +338,7 @@ describe("settings ipc", () => {
     stateDbs.push(stateDb);
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
-      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { stateDb }),
+      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { storage: new SqliteTokenMiserStorage(stateDb) }),
       env: {},
       secretStore,
       now: () => 20,
@@ -478,7 +479,7 @@ describe("settings ipc", () => {
     stateDbs.push(stateDb);
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
-      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { stateDb }),
+      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { storage: new SqliteTokenMiserStorage(stateDb) }),
       env: {},
       secretStore: new MemoryDesktopSecretStore(),
       now: () => 20,
