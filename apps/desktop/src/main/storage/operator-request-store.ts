@@ -184,7 +184,8 @@ export class OperatorRequestStore implements OperatorRequestStorage {
    */
   prune(now: number): void {
     const cutoff = now - OPERATOR_REQUEST_RETENTION_MS;
-    // The keys built here are operatorQuestionItemKey and operatorTodoItemKey.
+    // The keys built here are operatorQuestionItemKey and operatorTodoItemKey,
+    // including the review:<id> cards projected by threadReviewTodo.
     const staleSeen = `FROM operator_seen_items
       WHERE seen_at < ?
         AND item_key NOT IN (
@@ -193,6 +194,9 @@ export class OperatorRequestStore implements OperatorRequestStorage {
         )
         AND item_key NOT IN (
           SELECT 'todo:' || todo_id FROM thread_todos WHERE status = 'open'
+        )
+        AND item_key NOT IN (
+          SELECT 'todo:review:' || review_id FROM thread_reviews WHERE status = 'open'
         )`;
     const stale = this.stateDb.raw
       .prepare(

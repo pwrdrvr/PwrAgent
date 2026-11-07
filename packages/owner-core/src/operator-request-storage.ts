@@ -38,6 +38,6 @@ export interface OperatorRequestStorage {
   listTodoItemKeys(filter: ListOperatorRequestsRequest): string[];
   /** Record only unseen keys in one commit; preserve their first seen time. */
   markSeen(keys: readonly string[], now: number): number;
-  /** Retain open questions and seen marks for open questions and to-dos. */
+  /** Retain open questions and seen marks for open questions, to-dos and reviews. */
   prune(now: number): void;
 }

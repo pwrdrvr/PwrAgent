@@ -856,6 +856,9 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "operator-review-retention-closed": {"commits": 1, "note": "One startup transaction removes three expired seen marks for handled, dismissed and missing reviews; about 0.0082 MB/day at one dirty startup/day, 0 MB/day idle", "observedWalBytes": 8240, "rowsChanged": 3, "statements": 2},
+  "operator-review-retention-open": {"commits": 0, "note": "Startup retains an old seen mark for a still-open review without a write; 0 MB/day at any startup cadence", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "operator-review-retention-repeat": {"commits": 0, "note": "Repeated startup after cleanup retains the open review mark without writes; 0 MB/day", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "overlay-row-update-11000": {"commits": 1, "note": "one seen-watermark write on an existing 11000-byte overlay; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 12392, "rowsChanged": 1, "statements": 1},
   "overlay-row-update-11000-pending": {"commits": 1, "note": "one seen-watermark write on an existing 11000-byte overlay with a pending spend alert; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1},
   "overlay-row-update-25000": {"commits": 1, "note": "one seen-watermark write on an existing 25000-byte overlay; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 12392, "rowsChanged": 1, "statements": 1},
