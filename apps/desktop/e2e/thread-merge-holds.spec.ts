@@ -43,7 +43,10 @@ test("waits until done with merging held and the composer available, then remind
     await app.window.getByRole("menuitem", { name: "Wait Until Done…", exact: true }).click();
     const dialog = app.window.getByRole("dialog", { name: "Wait Until Done" });
     await dialog.getByRole("textbox", { name: "Waiting for", exact: true }).fill("Windows validation");
-    await dialog.getByRole("textbox", { name: "Waiting on (optional thread link)" }).fill("pwragent://thread/atlas-validation?backend=codex");
+    await dialog.getByRole("button", { name: "Choose Thread…", exact: true }).click();
+    await dialog.getByRole("combobox", { name: "Find the thread to wait on" }).fill("validation");
+    await dialog.getByRole("option", { name: /Atlas: Windows validation/ }).click();
+    await expect(dialog.getByRole("button", { name: "Change", exact: true })).toBeVisible();
     await dialog.getByRole("textbox", { name: "When it’s done, remind me to" }).fill("Rebase onto the validation fix\nMerge PR #17");
     await dialog.getByRole("button", { name: "Start Waiting", exact: true }).click();
     await expect(dialog.getByRole("button", { name: "Mark Done…" })).toBeVisible();
