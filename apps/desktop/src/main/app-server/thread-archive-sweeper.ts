@@ -1,4 +1,3 @@
-import { stat } from "node:fs/promises";
 import type { AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
@@ -11,10 +10,8 @@ import {
   isCodexChatsDirectory,
   toolWorktreeRootOwner,
 } from "@pwragent/shared";
-import { runGitCommand } from "./git-executable";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 
-export const THREAD_AUTO_ARCHIVE_AGE_MS = 7 * 24 * 60 * 60_000;
 export const THREAD_ARCHIVE_SWEEP_INTERVAL_MS = 60 * 60_000;
 export const THREAD_ARCHIVE_SWEEP_START_DELAY_MS = 60_000;
 
@@ -68,60 +65,12 @@ type SweepTally = Pick<DesktopThreadArchiveSweepStatus, "deleted" | "failed" | "
 type SweepFailureDetails = { path?: string; threadId?: string };
 type SweepPhase = DesktopThreadArchiveSweepFailure["phase"];
 
-/** Keep reasons reported for workspaces that fail the archive safety check. */
+/** Keep reasons Thread Maintenance and hibernation report for a checkout that must stay. */
 export const WORKSPACE_KEEP_REASONS = {
   changes: "Uncommitted changes",
   ignored: "Ignored files only",
   unretained: "Commits on no branch",
 } as const;
-
-/** Reads live Git state, including ignored files, untracked files and dirty submodules. A
- * detached tip is safe only when a local or remote branch retains it. No fetch
- * is needed: committed work on an unpushed local branch is eligible too. */
-export async function workspaceIsSafeForAutoArchive(
-  cwd: string,
-  signal: AbortSignal,
-): Promise<boolean> {
-  return await workspaceArchiveBlocker(cwd, signal) === undefined;
-}
-
-/** The same check as workspaceIsSafeForAutoArchive, naming what keeps the
- * workspace. Ignored files alone (for example node_modules) are reported
- * separately so the operator can see why a clean checkout was kept. */
-export async function workspaceArchiveBlocker(
-  cwd: string,
-  signal: AbortSignal,
-): Promise<string | undefined> {
-  try {
-    await stat(cwd);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  const options = { signal, timeout: 10_000 };
-  let status: { stdout: string };
-  try {
-    status = await runGitCommand(cwd, [
-      "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none",
-    ], options);
-  } catch (error) {
-    // Archive removes only registered Git worktrees, so a directory with no
-    // repository at or above it (a scratch project) is left in place. A broken
-    // worktree link reports a different message and still fails closed.
-    if (isOutsideAnyGitRepository(error)) return undefined;
-    throw error;
-  }
-  const lines = status.stdout.split("\n").filter((line) => line.trim());
-  if (lines.length) {
-    return lines.every((line) => line.startsWith("!! "))
-      ? WORKSPACE_KEEP_REASONS.ignored
-      : WORKSPACE_KEEP_REASONS.changes;
-  }
-  const retained = await runGitCommand(cwd, [
-    "rev-list", "--count", "HEAD", "--not", "--branches", "--remotes",
-  ], options);
-  return retained.stdout.trim() === "0" ? undefined : WORKSPACE_KEEP_REASONS.unretained;
-}
 
 export function isOutsideAnyGitRepository(error: unknown): boolean {
   const stderr = (error as { stderr?: unknown })?.stderr;
@@ -178,14 +127,6 @@ export function archiveCandidateProtectionReason(
 
 export function isProtectedArchiveCandidate(candidate: ThreadArchiveCandidate): boolean {
   return archiveCandidateProtectionReason(candidate) !== undefined;
-}
-
-export function isStaleArchiveCandidate(
-  candidate: ThreadArchiveCandidate,
-  now: number,
-  policy: DesktopThreadArchivePolicy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" },
-): boolean {
-  return archiveCandidateKeepReason(candidate, now, policy) === undefined;
 }
 
 /** Why the policy keeps a candidate, or undefined when it is stale. */

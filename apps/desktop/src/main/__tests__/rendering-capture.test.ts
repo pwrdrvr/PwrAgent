@@ -110,18 +110,21 @@ describe("opt-in rendering capture", () => {
         lagging = false;
         return value;
       });
-      let settled = false;
-      const pending = captureRenderingDiagnostics(root, seconds).finally(() => { settled = true; });
-      await started();
-      // Step the clock as the capture's own sampling and transfer timers ask.
-      for (let step = 0; !settled && step < 200; step++) await vi.advanceTimersByTimeAsync(250);
-      const result = await pending;
-      const summary = JSON.parse(await readFile(result.summaryPath, "utf8"));
-      expect(summary.reason).toBe("duration");
-      expect(summary.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
-      expect(result.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
-      now.mockRestore();
-      vi.useRealTimers();
+      try {
+        let settled = false;
+        const pending = captureRenderingDiagnostics(root, seconds).finally(() => { settled = true; });
+        await started();
+        // Step the clock as the capture's own sampling and transfer timers ask.
+        for (let step = 0; !settled && step < 200; step++) await vi.advanceTimersByTimeAsync(250);
+        const result = await pending;
+        const summary = JSON.parse(await readFile(result.summaryPath, "utf8"));
+        expect(summary.reason).toBe("duration");
+        expect(summary.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
+        expect(result.durationMs).toBeGreaterThanOrEqual(seconds * 1000);
+      } finally {
+        now.mockRestore();
+        vi.useRealTimers();
+      }
     }
   });
 

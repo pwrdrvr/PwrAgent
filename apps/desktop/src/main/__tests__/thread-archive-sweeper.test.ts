@@ -1,40 +1,29 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import {
+  archiveCandidateKeepReason,
   archiveCandidateProtectionReason,
   CLAUDE_CHECKOUT_KEEP_REASON,
   keepSubthreadParents,
   subthreadChildren,
   subthreadsFirst,
   isProtectedArchiveCandidate,
-  isStaleArchiveCandidate,
   ThreadArchiveSweeper,
-  THREAD_AUTO_ARCHIVE_AGE_MS,
   THREAD_ARCHIVE_SWEEP_INTERVAL_MS,
   THREAD_ARCHIVE_SWEEP_START_DELAY_MS,
-  workspaceArchiveBlocker,
-  workspaceIsSafeForAutoArchive,
   type ThreadArchiveCandidate,
 } from "../app-server/thread-archive-sweeper";
 
-const execFileAsync = promisify(execFile);
-const tempDirs: string[] = [];
-
-afterEach(async () => {
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60_000;
+afterEach(() => {
   vi.useRealTimers();
-  await Promise.all(tempDirs.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 function candidate(id = "old"): ThreadArchiveCandidate {
   return {
     thread: {
       id, title: id, titleSource: "explicit", source: "codex", threadStatus: "notLoaded",
-      updatedAt: Date.now() - THREAD_AUTO_ARCHIVE_AGE_MS - 1,
+      updatedAt: Date.now() - SEVEN_DAYS_MS - 1,
       linkedDirectories: [],
     },
   };
@@ -231,21 +220,21 @@ describe("ThreadArchiveSweeper", () => {
     expect(isProtectedArchiveCandidate(lookalike)).toBe(false);
     const watched = { ...candidate("watched"), activePrWatch: true };
     expect(archiveCandidateProtectionReason(watched)).toBe("Watching a PR");
-    expect(isStaleArchiveCandidate(watched, Date.now())).toBe(false);
+    expect(archiveCandidateKeepReason(watched, Date.now())).toBeDefined();
   });
 
   it("uses the 30-day boundary and protects recent views and restores", () => {
     const item = candidate();
-    item.thread.updatedAt = Date.now() - THREAD_AUTO_ARCHIVE_AGE_MS;
-    expect(isStaleArchiveCandidate(item, Date.now())).toBe(true);
+    item.thread.updatedAt = Date.now() - SEVEN_DAYS_MS;
+    expect(archiveCandidateKeepReason(item, Date.now())).toBeUndefined();
     item.overlay = { backend: "codex", threadId: "old", extraLinkedDirectories: [], lastSeenAt: Date.now() };
-    expect(isStaleArchiveCandidate(item, Date.now())).toBe(false);
+    expect(archiveCandidateKeepReason(item, Date.now())).toBeDefined();
     item.overlay.lastSeenAt = undefined;
     item.overlay.archiveRestoredAt = Date.now();
-    expect(isStaleArchiveCandidate(item, Date.now())).toBe(false);
+    expect(archiveCandidateKeepReason(item, Date.now())).toBeDefined();
     item.overlay.archiveRestoredAt = undefined;
     item.overlay.agent = { name: "Agent", updatedAt: 1, instructionLineCount: 0, instructionsTooLong: false };
-    expect(isStaleArchiveCandidate(item, Date.now())).toBe(false);
+    expect(archiveCandidateKeepReason(item, Date.now())).toBeDefined();
   });
 
   it("coalesces overlapping sweeps and drains an in-flight hibernation before stopping", async () => {
@@ -266,88 +255,6 @@ describe("ThreadArchiveSweeper", () => {
     expect(hibernate).toHaveBeenCalledTimes(1);
   });
 });
-
-describe("workspaceIsSafeForAutoArchive", () => {
-  it("accepts unpushed local branches and retained detached tips, but rejects loose commits and uncommitted files", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-"));
-    tempDirs.push(root);
-    const repo = path.join(root, "repo");
-    await mkdir(repo);
-    const git = async (...args: string[]) => await execFileAsync("git", ["-C", repo, ...args]);
-    await git("init", "-b", "main");
-    await git("config", "user.email", "test@example.com");
-    await git("config", "user.name", "Test User");
-    await writeFile(path.join(repo, "file.txt"), "committed\n");
-    await writeFile(path.join(repo, ".gitignore"), ".env\nlocal-data/\n");
-    await git("add", ".");
-    await git("-c", "commit.gpgsign=false", "commit", "-m", "initial");
-    const signal = new AbortController().signal;
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
-    await writeFile(path.join(repo, ".env"), "private local configuration\n");
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(false);
-    await rm(path.join(repo, ".env"));
-    await mkdir(path.join(repo, "local-data"));
-    await writeFile(path.join(repo, "local-data", "data.txt"), "local data\n");
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(false);
-    await rm(path.join(repo, "local-data"), { recursive: true });
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
-    await writeFile(path.join(repo, "file.txt"), "dirty\n");
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(false);
-    await git("add", ".");
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(false);
-    await git("-c", "commit.gpgsign=false", "commit", "-m", "local only");
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
-    await writeFile(path.join(repo, "untracked.txt"), "unsaved work\n");
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(false);
-    await rm(path.join(repo, "untracked.txt"));
-    await git("checkout", "--detach");
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
-    await writeFile(path.join(repo, "file.txt"), "detached commit\n");
-    await git("add", ".");
-    await git("-c", "commit.gpgsign=false", "commit", "-m", "detached only");
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(false);
-    await git("branch", "retained-local-work");
-    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
-    expect(await workspaceIsSafeForAutoArchive(path.join(root, "deleted-worktree"), signal)).toBe(true);
-  });
-
-  it("accepts a directory outside any repository, but rejects a broken worktree link", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-"));
-    tempDirs.push(root);
-    const signal = new AbortController().signal;
-    const scratch = path.join(root, "scratch-project");
-    await mkdir(scratch);
-    await writeFile(path.join(scratch, "notes.txt"), "scratch work\n");
-    expect(await workspaceIsSafeForAutoArchive(scratch, signal)).toBe(true);
-    const broken = path.join(root, "broken-worktree");
-    await mkdir(broken);
-    await writeFile(path.join(broken, ".git"), `gitdir: ${path.join(root, "missing", ".git", "worktrees", "x")}\n`);
-    await expect(workspaceIsSafeForAutoArchive(broken, signal)).rejects.toThrow(
-      /not a git repository|gitfile does not point to a valid repository/,
-    );
-  });
-
-  it("names ignored-only checkouts separately from uncommitted changes", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-"));
-    tempDirs.push(root);
-    const signal = new AbortController().signal;
-    const git = (...args: string[]) => execFileAsync("git", ["-C", root, ...args]);
-    await git("init", "-q", "-b", "main");
-    await git("config", "user.email", "test@example.com");
-    await git("config", "user.name", "Test");
-    await writeFile(path.join(root, ".gitignore"), "node_modules/\n");
-    await git("add", ".gitignore");
-    await git("commit", "-q", "-m", "init");
-    expect(await workspaceArchiveBlocker(root, signal)).toBeUndefined();
-    await mkdir(path.join(root, "node_modules"));
-    await writeFile(path.join(root, "node_modules", "dep.js"), "x\n");
-    expect(await workspaceArchiveBlocker(root, signal)).toBe("Ignored files only");
-    expect(await workspaceIsSafeForAutoArchive(root, signal)).toBe(false);
-    await writeFile(path.join(root, "notes.txt"), "work\n");
-    expect(await workspaceArchiveBlocker(root, signal)).toBe("Uncommitted changes");
-  });
-});
-
 
 describe("sub-thread parents", () => {
   it("keeps a selected parent only while it would leave more than 2 sub-threads, repeating as parents drop out", () => {

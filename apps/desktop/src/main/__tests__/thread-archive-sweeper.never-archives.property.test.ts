@@ -2,7 +2,6 @@ import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import {
-  THREAD_AUTO_ARCHIVE_AGE_MS,
   ThreadArchiveSweeper,
   type ThreadArchiveCandidate,
 } from "../app-server/thread-archive-sweeper";
@@ -98,7 +97,7 @@ describe("ThreadArchiveSweeper never archives a thread", () => {
   it("fixes the regression: 21 idle threads in one project, defaults from before 1.3.14", async () => {
     const now = Date.now();
     const list = candidates(Array.from({ length: 21 }, () => ({
-      ageDays: Math.ceil(THREAD_AUTO_ARCHIVE_AGE_MS / 86_400_000) + 1,
+      ageDays: 8,
       pinned: false, status: "notLoaded", project: "~/src/harbor-web", parent: undefined,
     })), now);
     const archive = vi.fn(async () => true);
