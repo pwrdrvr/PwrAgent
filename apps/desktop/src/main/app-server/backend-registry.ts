@@ -21,6 +21,7 @@ import { runGitCommand } from "./git-executable";
 import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
 import { isSettledWorktree, listManagedWorktrees, maintenanceWorktreeRoots, nodeWorktreeRootReader, registeredWorktreePaths, unreferencedWorktrees, type MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { maintenanceRepositoryHints, resolveMaintenanceRepositories } from "./maintenance-repositories";
+import { mapMaintenanceAudit } from "./maintenance-audit-pool";
 import { ArchiveFleetIndex, type FleetChange, type FleetRow } from "./archive-cleanup-fleet-index";
 import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
@@ -40570,10 +40571,22 @@ export class DesktopBackendRegistry {
         }
       }
       report.discoveredWorktrees = ownersByPath.size;
-      const seenContainers = new Set<string>();
-      for (const [canonicalKey, { worktreePath, thread }] of ownersByPath) {
-        await checkpoint();
-        options.onDiscoveryProgress?.({ detail: "Checking archived checkout owners", root: worktreePath, found: report.candidates.length });
+      const owners = [...ownersByPath];
+      const summary = report;
+      const containerInspections = new Map<string, Promise<WorktreeContainerCleanup | undefined>>();
+      let activeChecks = 0, checked = 0, foundCandidates = 0;
+      const progress = (root: string) => options.onDiscoveryProgress?.({
+        detail: `Checking archived checkout owners · ${checked}/${owners.length} checked · ${activeChecks} in flight`,
+        root, found: foundCandidates,
+      });
+      const inspectOwner = async ([canonicalKey, { worktreePath, thread }]: typeof owners[number]) => {
+        if (!options.dryRun) await checkpoint();
+        assertCurrent();
+        const report: ArchivedWorktreeRepairReport = { ...summary, missingWorktrees: 0, protectedWorktrees: 0,
+          protectedWorktreeDetails: [], candidates: [], cleanup: [], emptyContainerCandidates: [], containerCleanup: [] };
+        let checkedContainerPath: string | undefined;
+        activeChecks += 1;
+        progress(worktreePath);
         // One unreadable checkout records its own error; the rest are still read.
         try {
           try {
@@ -40582,26 +40595,31 @@ export class DesktopBackendRegistry {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
               report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
                 error: error instanceof Error ? error.message : String(error) });
-              continue;
+              return { report, containerPath: checkedContainerPath };
             }
             report.missingWorktrees += 1;
             const containerPath = thread.source === "codex" ? await this.worktreeContainerService.containerPath(worktreePath) : undefined;
-            if (containerPath && !seenContainers.has(containerPath)) {
-              seenContainers.add(containerPath);
-              const inspection = await this.worktreeContainerService.inspect(worktreePath);
+            if (containerPath) {
+              checkedContainerPath = containerPath;
+              let inspectionPending = containerInspections.get(containerPath);
+              if (!inspectionPending) {
+                inspectionPending = this.worktreeContainerService.inspect(worktreePath);
+                containerInspections.set(containerPath, inspectionPending);
+              }
+              const inspection = await inspectionPending;
               if (inspection?.identity && !inspection.skippedReason && !inspection.error
                 && !this.isWorktreeContainerProtected(containerPath, inventory)) {
                 report.emptyContainerCandidates.push({ backend: thread.source, threadId: thread.id, worktreePath, containerIdentity: inspection.identity });
               } else if (inspection?.error) report.containerCleanup.push(inspection);
             }
-            continue;
+            return { report, containerPath: checkedContainerPath };
           }
           const acpBlocker = this.archivedAcpWorktreeBlocker(worktreePath, inventory);
           if (acpBlocker) {
             report.protectedWorktrees += 1;
             report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
               skippedReason: acpBlocker });
-            continue;
+            return { report, containerPath: checkedContainerPath };
           }
           const ownership = await this.readCanonicalArchiveOwnership(inventory, worktreePath);
           if (ownership.external || ownership.users.length) {
@@ -40617,13 +40635,39 @@ export class DesktopBackendRegistry {
               await this.retainDeferredArchiveWorktree({ backend: thread.source, thread, activeThreads: inventory.activeThreads },
                 { worktreePath, repositoryPath: directory?.path }, ownership.users.map((owner) => buildThreadIdentityKey(owner.source, owner.id)));
             }
-            continue;
+            return { report, containerPath: checkedContainerPath };
           }
           report.candidates.push({ backend: thread.source, threadId: thread.id, worktreePath });
         } catch (error) {
           if (error instanceof ArchiveCleanupCancelledError || this.closed || this.stoppingRunningTurnsForShutdown) throw error;
           report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
             error: error instanceof Error ? error.message : String(error) });
+        } finally {
+          activeChecks -= 1;
+          checked += 1;
+          foundCandidates += report.candidates.length;
+          progress(worktreePath);
+        }
+        return { report, containerPath: checkedContainerPath };
+      };
+      const results = options.dryRun
+        ? await mapMaintenanceAudit(owners, context, inspectOwner)
+        : await (async () => {
+            const rows: Awaited<ReturnType<typeof inspectOwner>>[] = [];
+            for (const owner of owners) rows.push(await inspectOwner(owner));
+            return rows;
+          })();
+      const seenContainers = new Set<string>();
+      for (const { report: row, containerPath } of results) {
+        report.missingWorktrees += row.missingWorktrees;
+        report.protectedWorktrees += row.protectedWorktrees;
+        report.protectedWorktreeDetails.push(...row.protectedWorktreeDetails);
+        report.candidates.push(...row.candidates);
+        report.cleanup.push(...row.cleanup);
+        if (!containerPath || !seenContainers.has(containerPath)) {
+          if (containerPath) seenContainers.add(containerPath);
+          report.emptyContainerCandidates.push(...row.emptyContainerCandidates);
+          report.containerCleanup.push(...row.containerCleanup);
         }
       }
       if (options.dryRun && options.includeUnreferenced) {

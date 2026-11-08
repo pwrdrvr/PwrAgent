@@ -19,6 +19,9 @@ import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import type { AcpTransportFactory } from "../app-server/acp-backend-adapter";
+import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { ArchiveCleanupContext } from "../app-server/archive-cleanup-queue";
+import type { MaintenanceDiscoveryProgress } from "../app-server/unreferenced-worktrees";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { ArchiveWorktreeTransport, type ArchiveWorktreeThread } from "./fixtures/archive-worktree-transport";
 
@@ -500,6 +503,65 @@ describe("checkouts no thread refers to", () => {
     expect(refs).toHaveLength(1);
     expect(await fixture.git(fixture.repo, ["show", `${refs[0]}:notes.txt`])).toBe("left behind\n");
   });
+});
+
+it("checks archived owners concurrently with bounded work, ordered results and batch pacing", async () => {
+  const fixture = await createFixture("claude");
+  const { registry } = fixture.reopen();
+  const threads: AppServerThreadSummary[] = Array.from({ length: 13 }, (_, index) => ({
+    id: String(index), source: "claude", title: String(index), titleSource: "explicit",
+    linkedDirectories: [{ ...fixture.directory, worktreePath: path.join(fixture.root, `audit-${index}`) }],
+  }));
+  await Promise.all(threads.map((thread) => mkdir(thread.linkedDirectories[0]!.worktreePath!)));
+  type Ownership = { users: AppServerThreadSummary[]; external: boolean };
+  const boundary = registry as unknown as {
+    readPacedArchiveCleanupInventory: () => Promise<{ activeThreads: AppServerThreadSummary[]; archivedThreads: AppServerThreadSummary[] }>;
+    maintenanceThreadWorkspace: (thread: AppServerThreadSummary) => Promise<AppServerThreadSummary>;
+    readCanonicalArchiveOwnership: (_inventory: unknown, target: string) => Promise<Ownership>;
+    listUnreferencedWorktrees: () => Promise<void>;
+    archiveCleanupQueue: { enqueue: (_key: string, work: (context: ArchiveCleanupContext) => Promise<unknown>) => Promise<unknown> };
+  };
+  vi.spyOn(boundary, "readPacedArchiveCleanupInventory").mockResolvedValue({ activeThreads: [], archivedThreads: threads });
+  vi.spyOn(boundary, "maintenanceThreadWorkspace").mockImplementation(async (thread) => thread);
+  vi.spyOn(boundary, "listUnreferencedWorktrees").mockResolvedValue();
+  const checkpoint = vi.fn(async () => {});
+  vi.spyOn(boundary.archiveCleanupQueue, "enqueue").mockImplementation(async (_key, work) => await work({
+    checkpoint, assertCurrent() {}, settleCheckpoint: async () => {},
+  }));
+  let active = 0, peak = 0, completed = 0, drain = false;
+  const pending: (() => void)[] = [];
+  vi.spyOn(boundary, "readCanonicalArchiveOwnership").mockImplementation(async (_inventory, target) => {
+    active += 1; peak = Math.max(peak, active);
+    try {
+      if (!drain) await new Promise<void>((resolve) => pending.push(resolve));
+      const index = Number(path.basename(target).slice("audit-".length));
+      if (index % 3 === 2) throw new Error("Fixture unreadable checkout");
+      return { users: index % 3 === 1 ? [threads[index]!] : [], external: false };
+    } finally { active -= 1; completed += 1; }
+  });
+  const progress: MaintenanceDiscoveryProgress[] = [];
+  const audit = registry.auditArchivedCheckouts((update) => progress.push(update));
+  try {
+    // The model holds six independent reads in flight, then completes each
+    // wave backwards. Eligibility and scan order must be timing-independent.
+    while (completed < threads.length) {
+      const before = completed;
+      const expected = Math.min(6, threads.length - completed);
+      await vi.waitFor(() => expect(pending).toHaveLength(expected));
+      for (const release of pending.splice(0).reverse()) release();
+      await vi.waitFor(() => expect(completed).toBe(before + expected));
+    }
+    const result = await audit;
+    expect(peak).toBe(6);
+    expect(active).toBe(0);
+    expect(result.candidates.map((row) => row.threadId)).toEqual(threads.filter((_, index) => index % 3 === 0).map((row) => row.id));
+    expect(checkpoint).toHaveBeenCalledTimes(3);
+    expect(progress.some((row) => row.detail?.includes("13/13 checked"))).toBe(true);
+  } finally {
+    drain = true;
+    for (const release of pending.splice(0)) release();
+    await audit;
+  }
 });
 
 describe("archive worktrees across a desktop restart", () => {
