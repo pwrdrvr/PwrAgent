@@ -18,6 +18,113 @@ const acpFinalization = ["origin", "review-contexts", "pdf", "title", "context",
   "forget-context", "dispose-origin", "release"] as const;
 const acpPreparation = ["reserve", "prepare", "register", "begin-origin", "submit"] as const;
 
+// The provider owns acceptance and session-close timing. Preparation owns
+// grants only until invocation, including when a live session refuses a turn.
+it("preserves Claude outcomes and one-shot grant ownership across independent host failures", async () => {
+  const stages = ["origin", "persist-origin", "dispose-origin", "revoke-connections"] as const;
+  await fc.assert(fc.asyncProperty(fc.constantFrom("none", "prepare", "begin-origin", "submit"),
+    fc.subarray([...stages]), fc.constantFrom("submit", "persist", "later"), fc.boolean(),
+    async (rejection, failures, closeAt, reportingFails) => {
+      const lifecycle = new ThreadTurnStartLifecycle(noEffects);
+      const effects: string[] = [];
+      const reports: string[] = [];
+      const origin = {};
+      const accepted = { threadId: "claude:thread", turnId: "provider:turn" };
+      const refused = new Error(rejection);
+      let close: (() => void) | undefined;
+      const step = (name: string) => {
+        effects.push(name);
+        if (name === rejection) throw refused;
+        if (failures.includes(name as typeof stages[number])) throw new Error(name);
+      };
+      const pending = lifecycle.startClaude({
+        prepare: async () => { step("prepare"); },
+        beginOrigin: () => { step("begin-origin"); return origin; },
+        submit: async (release) => {
+          close = release;
+          if (closeAt === "submit") { close(); close(); }
+          step("submit");
+          return accepted;
+        },
+        bindOrigin: (value, turn) => { expect(value).toBe(origin); expect(turn).toBe(accepted); step("origin"); },
+        persistOrigin: async (value) => {
+          expect(value).toBe(origin);
+          if (closeAt === "persist") { close!(); close!(); }
+          step("persist-origin");
+        },
+        disposeOrigin: (value) => {
+          expect(value).toBe(["none", "submit"].includes(rejection) ? origin : undefined);
+          step("dispose-origin");
+        },
+        revokeConnections: () => { step("revoke-connections"); },
+        failed: (stage, error, turn) => {
+          expect((error as Error).message).toBe(stage);
+          expect(turn).toBe(effects.includes("origin") ? accepted : undefined);
+          reports.push(stage);
+          if (reportingFails) throw new Error("reporting");
+        },
+      });
+      if (rejection === "none") expect(await pending).toBe(accepted);
+      else await expect(pending).rejects.toBe(refused);
+      const preparation = ["prepare", "begin-origin", "submit"];
+      const expected = rejection === "none"
+        ? [...preparation, "origin", "persist-origin", "dispose-origin"]
+        : [...preparation.slice(0, preparation.indexOf(rejection) + 1), "dispose-origin"];
+      expect(effects.filter((effect) => effect !== "revoke-connections")).toEqual(expected);
+      const submitted = effects.includes("submit");
+      const alreadyClosed = !submitted || closeAt === "submit" || (rejection === "none" && closeAt === "persist");
+      expect(effects.filter((effect) => effect === "revoke-connections")).toHaveLength(alreadyClosed ? 1 : 0);
+      close?.(); close?.();
+      expect(effects.filter((effect) => effect === "revoke-connections")).toHaveLength(1);
+      expect(reports).toEqual(effects.filter((effect) => failures.includes(effect as typeof stages[number])));
+    }));
+});
+
+it("keeps overlapping Claude session releases independent of start completion and identity collisions", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.record({ identity, refuses: fc.boolean() }), { minLength: 2, maxLength: 8 }),
+    fc.scheduler(), async (commands, scheduler) => {
+      const lifecycle = new ThreadTurnStartLifecycle(noEffects);
+      const releases: Array<() => void> = [];
+      const grants = commands.map(() => ({ held: true }));
+      const disposed = new Set<object>();
+      const runs = commands.map((command, index) => {
+        const grant = grants[index];
+        const accepted = { ...command.identity, turnId: `${index}` };
+        return lifecycle.run(command.identity, () => lifecycle.startClaude({
+          prepare: async () => { await scheduler.schedule(Promise.resolve()); },
+          beginOrigin: () => grant,
+          submit: async (release) => {
+            releases[index] = release;
+            await scheduler.schedule(Promise.resolve());
+            if (command.refuses) throw new Error("Provider refused");
+            return accepted;
+          },
+          bindOrigin: (origin, turn) => { expect(origin).toBe(grant); expect(turn).toBe(accepted); },
+          persistOrigin: async () => { await scheduler.schedule(Promise.resolve()); },
+          disposeOrigin: (origin) => { expect(origin).toBe(grant); disposed.add(grant); },
+          revokeConnections: () => { expect(grant.held).toBe(true); grant.held = false; },
+          failed: (_stage, error) => { throw error; },
+        })).then((turn) => {
+          expect(command.refuses).toBe(false); expect(turn).toBe(accepted);
+        }, (error: Error) => {
+          expect(command.refuses).toBe(true); expect(error.message).toBe("Provider refused");
+        });
+      });
+      await scheduler.waitFor(Promise.all(runs));
+      expect(disposed.size).toBe(commands.length);
+      expect(grants.every((grant) => grant.held)).toBe(true);
+      for (const command of commands) expect(lifecycle.hasPending(command.identity)).toBe(false);
+      // Provider sessions can close in any order, after successful or refused
+      // starts; neither another start nor its origin disposal owns these grants.
+      await scheduler.waitFor(Promise.all(releases.map(async (release, index) => {
+        await scheduler.schedule(Promise.resolve());
+        release(); release();
+        expect(grants[index].held).toBe(false);
+      })));
+      expect(grants.every((grant) => !grant.held)).toBe(true);
+    }));
+});
+
 // The provider's return value is the outcome oracle. Host metadata failures
 // cannot change it; preparation/submission failures never run accepted effects.
 it("preserves the ACP provider outcome and ordered resource protocol across independent host failures", async () => {

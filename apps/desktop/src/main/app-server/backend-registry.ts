@@ -24068,64 +24068,61 @@ export class DesktopBackendRegistry {
         privateStorageRoots: this.localFilePrivateStorageRoots,
       }), params, this.localFilePrivateStorageRoots);
       const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId, params.backend);
-      // Once handed over, the Claude session revokes them when it closes.
-      let handedOver = false;
-      let startingOrigin: StartingTurnOrigin | undefined;
-      let revoked = false;
-      const revokeConnections = () => {
-        if (revoked) return;
-        revoked = true;
-        for (const registration of registrations) registration.revoke();
-      };
-      try {
-        for (const registration of registrations) registration.bindThread(params.threadId);
-        // As for ACP, PwrAgent's own tools are optional: a server that cannot
-        // start must not block the operator's turn.
-        const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId })
-          .catch((error: unknown) => {
-            backendRegistryLog.warn("agent_tool_mcp_start_failed", {
-              backend: "claude",
-              error: error instanceof Error ? error.message : String(error),
-              threadId: params.threadId,
+      let prepared!: Parameters<ClaudeBackend["startTurn"]>[0];
+      return await this.threadStarts.startClaude({
+        prepare: async () => {
+          for (const registration of registrations) registration.bindThread(params.threadId);
+          // As for ACP, PwrAgent's own tools are optional: a server that cannot
+          // start must not block the operator's turn.
+          const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId })
+            .catch((error: unknown) => {
+              backendRegistryLog.warn("agent_tool_mcp_start_failed", {
+                backend: "claude",
+                error: error instanceof Error ? error.message : String(error),
+                threadId: params.threadId,
+              });
+              return undefined;
             });
-            return undefined;
-          });
-        const servers = [...registrations.map((registration) => ({
-          ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
-        })), ...(owned ? [owned.server] : [])];
-        const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
-          ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
-          : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
-        const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
-        handedOver = true;
-        const messageOrigin = resolveThreadMessageOrigin(params);
-        startingOrigin = this.beginStartingTurnOrigin({ backend: "claude", threadId: params.threadId, origin: messageOrigin });
-        const result = await this.claudeBackend.startTurn({
-          ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
-          messageOrigin,
-          executionMode: params.executionMode ?? overlay?.executionMode,
-          instructions,
-          mcpServers,
-          ...(this.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
-          // Directories attached to the thread, so Claude can work in them too.
-          attachedDirectories: overlay?.extraLinkedDirectories,
-          shellEnvironment: setupVariablesForAgent(
-            overlay?.codexEnvironmentRuntime,
-            this.resolvePassSetupVariablesToAgentsFn(),
-          ),
-          onSessionClosed: revokeConnections,
-        });
-        this.bindStartingTurnOrigin(startingOrigin, { threadId: params.threadId, turnId: result.turnId });
-        await this.persistStartingTurnOrigin(startingOrigin);
-        return result;
-      } catch (error) {
-        // A live session shares the thread's grants, so it alone revokes them.
-        if (!handedOver) revokeConnections();
-        if (error instanceof ClaudeTurnActiveError) throw new ThreadAlreadyActiveError(error.message);
-        throw error;
-      } finally {
-        this.dropStartingTurnOrigin(startingOrigin);
-      }
+          const servers = [...registrations.map((registration) => ({
+            ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
+          })), ...(owned ? [owned.server] : [])];
+          const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
+            ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
+            : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
+          const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
+          const messageOrigin = resolveThreadMessageOrigin(params);
+          prepared = {
+            ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
+            messageOrigin,
+            executionMode: params.executionMode ?? overlay?.executionMode,
+            instructions,
+            mcpServers,
+            ...(this.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
+            // Directories attached to the thread, so Claude can work in them too.
+            attachedDirectories: overlay?.extraLinkedDirectories,
+            shellEnvironment: setupVariablesForAgent(
+              overlay?.codexEnvironmentRuntime,
+              this.resolvePassSetupVariablesToAgentsFn(),
+            ),
+          };
+        },
+        beginOrigin: () => this.beginStartingTurnOrigin({ ...params, origin: prepared.messageOrigin }),
+        submit: async (onSessionClosed) => {
+          try { return await this.claudeBackend.startTurn({ ...prepared, onSessionClosed }); }
+          catch (error) {
+            if (error instanceof ClaudeTurnActiveError) throw new ThreadAlreadyActiveError(error.message);
+            throw error;
+          }
+        },
+        bindOrigin: (origin, result) => this.bindStartingTurnOrigin(origin, result),
+        persistOrigin: (origin) => this.persistStartingTurnOrigin(origin),
+        disposeOrigin: (origin) => this.dropStartingTurnOrigin(origin),
+        revokeConnections: () => { for (const registration of registrations) registration.revoke(); },
+        failed: (stage, error, turn) => backendRegistryLog.warn("claude_turn_start_finalization_failed", {
+          backend: params.backend, threadId: params.threadId, turnId: turn?.turnId, stage,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      });
     }
     // A selection already in flight must finish before this turn reads its runtime.
     await this.withCodexEnvironmentRuntimeLock(

@@ -5382,9 +5382,9 @@ describe("DesktopBackendRegistry", () => {
       bindThread: vi.fn(), revoke };
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock({ overlays: { [`claude:${threadId}`]: {
-        backend: "claude", threadId, mcpConnectionIds: ["fixture"],
+        backend: "claude", threadId, extraLinkedDirectories: [], mcpConnectionIds: ["fixture"],
       } } }), mcpConnectionService: { registerBridge: vi.fn(async () => registration) },
-      pdfToolMcpServer: null, claudeAgentToolMcpServer: null,
+      pdfToolMcpServer: null, agentToolMcpServer: null,
     });
     const internal = registry as unknown as {
       claudeBackend: { startTurn: (params: { onSessionClosed?: () => void }) => Promise<{ backend: "claude"; threadId: string; turnId: string }> };
