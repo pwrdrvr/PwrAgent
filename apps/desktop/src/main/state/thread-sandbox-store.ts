@@ -1,4 +1,6 @@
 import type Database from "better-sqlite3";
+import type { ThreadSandboxRecord, ThreadSandboxStorage } from "@pwragent/owner-core/mcp-connection-storage";
+export type { ThreadSandboxRecord, ThreadSandboxStatus } from "@pwragent/owner-core/mcp-connection-storage";
 
 /**
  * Sandboxes a thread created through PwrAgent's Sandboxer connection, so
@@ -35,20 +37,6 @@ CREATE INDEX IF NOT EXISTS idx_thread_sandboxes_pending
   ON thread_sandboxes(thread_id) WHERE status IN ('active', 'stopped');
 `;
 
-export type ThreadSandboxStatus = "active" | "stopped";
-
-export type ThreadSandboxRecord = {
-  connectionId: string;
-  sandboxId: string;
-  backend?: string;
-  threadId: string;
-  name?: string;
-  status: ThreadSandboxStatus;
-  note?: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
 type Row = {
   connection_id: string;
   sandbox_id: string;
@@ -75,7 +63,7 @@ function decode(row: Row): ThreadSandboxRecord {
   };
 }
 
-export class ThreadSandboxStore {
+export class ThreadSandboxStore implements ThreadSandboxStorage {
   constructor(private readonly db: Database.Database) {}
 
   /**
