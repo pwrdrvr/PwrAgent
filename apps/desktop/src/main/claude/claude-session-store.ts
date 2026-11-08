@@ -1,7 +1,9 @@
 import type { ClaudeUsageTotals } from "./claude-usage";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { lock } from "proper-lockfile";
 import type {
   AppServerThreadEntry, AppServerThreadSummary, AppServerThreadTurnMetadata, BackendRateLimitSummary,
 } from "@pwragent/shared";
@@ -9,6 +11,11 @@ import { persistTranscriptEntryImages } from "../transcript-image-protocol";
 
 /** Not a thread id, so list() never reads it as session metadata. */
 const RATE_LIMITS_FILE = "rate-limits.json";
+const sessionWrites = new Map<string, {
+  writers: number;
+  ready: Promise<() => Promise<void>>;
+  closing?: Promise<void>;
+}>();
 
 export type ClaudeSession = {
   thread: AppServerThreadSummary;
@@ -176,6 +183,7 @@ export class ClaudeSessionStore {
   private readonly memory = new Map<string, { session: string; lines: ClaudeHistoryLine[] }>();
   /** Ended ephemeral threads. A late write for one must not create a file. */
   private readonly forgotten = new Set<string>();
+  private readonly mutationContext = new AsyncLocalStorage<{ id: string; active: boolean }>();
 
   constructor(
     private readonly root: string,
@@ -205,6 +213,60 @@ export class ClaudeSessionStore {
     return path.join(this.root, `${id}.${suffix}`);
   }
 
+  /** One thread mutation across profile-sharing instances. Contention fails
+   * closed. The directory lock works even when
+   * metadata is absent and is released after the complete read/check/write. */
+  async withMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const file = this.file(id, "json");
+    const current = this.mutationContext.getStore();
+    if ((current?.id === id && current.active) || this.memory.has(id)) return await work();
+    const release = await this.acquireMutationLock(file);
+    const scope = { id, active: true };
+    try { return await this.mutationContext.run(scope, work); }
+    finally { scope.active = false; await release(); }
+  }
+
+  private async acquireMutationLock(file: string): Promise<() => Promise<void>> {
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    try { return await lock(file, { realpath: false, retries: 0, stale: 60_000, update: 10_000 }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ELOCKED") {
+        throw new Error("Claude thread is being changed in another PwrAgent instance. Try again when it finishes.", { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  /** Concurrent publishers in this process share admission until all writes
+   * finish, preserving image-publication coalescing across store objects. */
+  private async withWrite<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const current = this.mutationContext.getStore();
+    if (current?.id === id && current.active) return await work();
+    const file = path.resolve(this.file(id, "json"));
+    let admission = sessionWrites.get(file);
+    if (!admission || admission.closing) {
+      const closing = admission?.closing;
+      admission = { writers: 0, ready: closing
+        ? closing.then(async () => await this.acquireMutationLock(file))
+        : this.acquireMutationLock(file) };
+      sessionWrites.set(file, admission);
+    }
+    admission.writers += 1;
+    const scope = { id, active: true };
+    let release: (() => Promise<void>) | undefined;
+    try {
+      release = await admission.ready;
+      return await this.mutationContext.run(scope, work);
+    } finally {
+      scope.active = false;
+      if (--admission.writers === 0) {
+        admission.closing = release?.() ?? Promise.resolve();
+        try { await admission.closing; }
+        finally { if (sessionWrites.get(file) === admission) sessionWrites.delete(file); }
+      }
+    }
+  }
+
   async read(id: string): Promise<ClaudeSession> {
     const held = this.memory.get(id);
     if (held) return JSON.parse(held.session) as ClaudeSession;
@@ -221,15 +283,16 @@ export class ClaudeSessionStore {
       if (held) held.session = JSON.stringify(session);
       return;
     }
-    await mkdir(this.root, { recursive: true, mode: 0o700 });
-    const destination = this.file(session.thread.id, "json");
-    const temporary = `${destination}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temporary, JSON.stringify(session), { mode: 0o600 });
-      await rename(temporary, destination);
-    } finally {
-      await rm(temporary, { force: true });
-    }
+    await this.withWrite(session.thread.id, async () => {
+      const destination = this.file(session.thread.id, "json");
+      const temporary = `${destination}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, JSON.stringify(session), { mode: 0o600 });
+        await rename(temporary, destination);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    });
   }
 
   /** Account-wide limits last reported by Claude, so a restart does not start blank. */
@@ -330,11 +393,13 @@ export class ClaudeSessionStore {
 
   /** Delete only PwrAgent's files. Metadata goes last so failed cleanup is retried. */
   async delete(id: string): Promise<void> {
-    const metadata = this.file(id, "json");
-    await rm(this.file(id, "jsonl"), { force: true });
-    await rm(this.rewindBackupDirectory(id), { recursive: true, force: true });
-    await rm(path.join(this.imageRoot, id), { recursive: true, force: true });
-    await rm(metadata, { force: true });
+    await this.withMutation(id, async () => {
+      const metadata = this.file(id, "json");
+      await rm(this.file(id, "jsonl"), { force: true });
+      await rm(this.rewindBackupDirectory(id), { recursive: true, force: true });
+      await rm(path.join(this.imageRoot, id), { recursive: true, force: true });
+      await rm(metadata, { force: true });
+    });
   }
 
   /**
@@ -352,12 +417,13 @@ export class ClaudeSessionStore {
       held.lines.push(...[...entries, ...record].map((line) => JSON.parse(JSON.stringify(line)) as ClaudeHistoryLine));
       return;
     }
-    const destination = this.file(id, "jsonl");
-    const retained = await persistTranscriptEntryImages(
-      entries, path.join(this.imageRoot, id),
-    );
-    await mkdir(this.root, { recursive: true, mode: 0o700 });
-    await appendFile(destination, [...retained, ...record].map((line) => JSON.stringify(line)).join("\n") + "\n", { mode: 0o600 });
+    await this.withWrite(id, async () => {
+      const destination = this.file(id, "jsonl");
+      const retained = await persistTranscriptEntryImages(
+        entries, path.join(this.imageRoot, id),
+      );
+      await appendFile(destination, [...retained, ...record].map((line) => JSON.stringify(line)).join("\n") + "\n", { mode: 0o600 });
+    });
   }
 
   /** Drop `beforeEntryId` and every entry recorded after it; returns the truncation's id. */
@@ -365,8 +431,9 @@ export class ClaudeSessionStore {
     const record: ClaudeTruncationRecord = {
       type: "pwragent_truncation", id: `truncation:${randomUUID()}`, beforeEntryId, createdAt: Date.now(),
     };
-    await mkdir(this.root, { recursive: true, mode: 0o700 });
-    await appendFile(this.file(id, "jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 });
+    await this.withWrite(id, async () => {
+      await appendFile(this.file(id, "jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 });
+    });
     return record.id;
   }
 
@@ -398,8 +465,9 @@ export class ClaudeSessionStore {
     const record: ClaudeTruncationUndoRecord = {
       type: "pwragent_truncation_undo", truncationId, createdAt: Date.now(),
     };
-    await mkdir(this.root, { recursive: true, mode: 0o700 });
-    await appendFile(this.file(id, "jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 });
+    await this.withWrite(id, async () => {
+      await appendFile(this.file(id, "jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 });
+    });
   }
 
   /**

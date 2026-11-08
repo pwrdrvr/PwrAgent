@@ -805,23 +805,27 @@ export class ClaudeBackend {
 
   /** Only a missing metadata file confirms absence; unreadable state retains recovery material. */
   async confirmThreadAbsent(threadId: string): Promise<boolean> {
-    if (this.threadDeletionBusy(threadId)) return false;
-    try { await this.store.read(threadId); return false; }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (this.threadDeletionBusy(threadId)) return false;
-    await this.store.delete(threadId);
-    return true;
+    return await this.store.withMutation(threadId, async () => {
+      if (this.threadDeletionBusy(threadId)) return false;
+      try { await this.store.read(threadId); return false; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (this.threadDeletionBusy(threadId)) return false;
+      await this.store.delete(threadId);
+      return true;
+    });
   }
 
   /** The registry owns retention, checkout ownership and lifecycle admission. */
   async deleteThread(threadId: string): Promise<void> {
-    if (this.threadDeletionBusy(threadId)) throw new Error("Claude is still using this thread.");
-    const session = await this.store.read(threadId);
-    if (session.thread.archivedAt === undefined) throw new Error("Archive this Claude thread before deleting it.");
-    if (this.threadDeletionBusy(threadId)) throw new Error("Claude is still using this thread.");
-    await this.store.delete(threadId);
+    await this.store.withMutation(threadId, async () => {
+      if (this.threadDeletionBusy(threadId)) throw new Error("Claude is still using this thread.");
+      const session = await this.store.read(threadId);
+      if (session.thread.archivedAt === undefined) throw new Error("Archive this Claude thread before deleting it.");
+      if (this.threadDeletionBusy(threadId)) throw new Error("Claude is still using this thread.");
+      await this.store.delete(threadId);
+    });
     await this.emit({ method: "thread/deleted", params: { threadId } });
   }
 
@@ -888,9 +892,11 @@ export class ClaudeBackend {
     }
     // Only Claude's own scheduled wakes keep this process; archiving ends them.
     if (live) await this.closeSession(live);
-    const session = await this.store.read(threadId);
-    session.thread.archivedAt = archived ? Date.now() : undefined;
-    await this.store.save(session);
+    await this.store.withMutation(threadId, async () => {
+      const session = await this.store.read(threadId);
+      session.thread.archivedAt = archived ? Date.now() : undefined;
+      await this.store.save(session);
+    });
   }
 
   /**
