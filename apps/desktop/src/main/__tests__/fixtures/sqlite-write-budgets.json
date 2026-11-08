@@ -575,6 +575,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "messaging-owner-queue-lifecycle": {"commits": 3, "note": "One queued reply through preparation activity, queue notice, and owner-start retirement: 3 commits, ~54 KB WAL; ~5.36 MB/day at 100 replies/day, no idle/timer writes.", "observedWalBytes": 53560, "rowsChanged": 3, "statements": 3},
   "messaging-review-auto-fix-toggle": {"commits": 2, "note": "One Auto-fix toggle: 2 boundary commits, 28840 WAL bytes; 0.577 MB/day at 20 toggles/day; no idle/timer writes.", "observedWalBytes": 28840, "rowsChanged": 2, "statements": 2},
   "messaging-agent-conversation-rename": {
     "commits": 5,

@@ -11497,6 +11497,41 @@ describe("Composer", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("removes optimistic transcript input when the owner queues a reply (remote=%s)", async (remote) => {
+    const addOptimisticUserMessage = vi.fn(() => "optimistic-queued-reply");
+    const removeOptimisticMessage = vi.fn();
+    const onPendingStatusChange = vi.fn();
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", turnId: "owner-entry",
+      queueStatus: "queued" as const, queueEntryId: "owner-entry",
+    }));
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+      addOptimisticUserMessage={addOptimisticUserMessage}
+      removeOptimisticMessage={removeOptimisticMessage}
+      onPendingStatusChange={onPendingStatusChange}
+      disabled={false}
+      skills={[]}
+      thread={{
+        id: "thread-1", title: "Fixture", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false },
+        ...(remote ? { federation: { instanceLabel: "Fixture owner", ref: buildFederatedThreadRef({
+          backend: "codex", threadId: "thread-1", instanceId: "fixture-owner",
+        }) } } : {}),
+      }}
+    />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "did this finish?" },
+    });
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    // The owning FIFO is the oracle: a queued response has no user item in
+    // the provider transcript and cannot establish a new thinking state.
+    await waitFor(() => expect(removeOptimisticMessage).toHaveBeenCalledWith("optimistic-queued-reply"));
+    expect(onPendingStatusChange).toHaveBeenLastCalledWith(undefined);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("did this finish?");
+  });
+
   it("submits a busy-thread queued reply to the backend before navigation", async () => {
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,

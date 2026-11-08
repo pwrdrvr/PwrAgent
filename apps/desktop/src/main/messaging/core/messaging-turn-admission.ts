@@ -33,6 +33,7 @@ export type MessagingQueuedTurnEntry = {
   event?: MessagingInboundEvent;
   id: string;
   input: AppServerTurnInputItem[];
+  ownerQueueEntryId?: string;
   pdfAttachments?: PendingPdfAttachment[];
   privateResponseRequested?: boolean;
   preview: string;

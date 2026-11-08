@@ -7858,6 +7858,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       // purpose is to not lose work silently.
       props.onUserRepliedToThread?.(props.thread);
       if (response.queueStatus === "queued") {
+        if (optimisticMessageId) {
+          props.removeOptimisticMessage?.(optimisticMessageId);
+          setActiveOptimisticMessageId(undefined);
+        }
+        if (!backendQueueSubmission && submittedScopeIsVisible()) {
+          props.onPendingStatusChange?.(undefined);
+        }
         const queueEntryId = response.queueEntryId ?? response.turnId;
         if (backendQueueSubmission) {
           updateQueuedTurnInScope(

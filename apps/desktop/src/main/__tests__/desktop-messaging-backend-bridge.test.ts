@@ -89,6 +89,28 @@ vi.mock("../app-server/codex-environment-config", () => ({
 }));
 
 describe("DesktopMessagingBackendBridge", () => {
+  it.each([false, true])("routes shared queue reads and hash-checked cancellation to the owner (remote=%s)", async (remote) => {
+    const content = { queueEntryId: "entry", contentHash: "current-hash", input: [{ type: "text", text: "current owner input" }] };
+    const readQueuedTurn = vi.fn(async () => content);
+    const cancelQueuedTurn = vi.fn(async () => ({ queueEntryId: "entry", cancelled: false, disposition: "already_admitted" as const }));
+    const cancelQueuedTurnWithDisposition = vi.fn(() => ({ queueEntryId: "entry", cancelled: false, disposition: "already_admitted" as const }));
+    const registry = { readQueuedTurn, cancelQueuedTurnWithDisposition } as unknown as DesktopBackendRegistry;
+    const federation = { connectedPeerTargets: () => [], remoteBackend: () => ({ readQueuedTurn, cancelQueuedTurn }) } as unknown as DesktopMessagingFederationBridge;
+    const bridge = new DesktopMessagingBackendBridge(registry, federation);
+    const federationTarget = remote ? { scope: "remote" as const, instanceId: "owner" } : undefined;
+    expect(bridge.ownsTurnQueue).toBe(true);
+    await expect(bridge.readQueuedTurn({ backend: "codex", threadId: "thread", queueEntryId: "entry", federationTarget })).resolves.toEqual(content);
+    await expect(bridge.cancelQueuedTurn({ queueEntryId: "entry", expectedContentHash: "current-hash", federationTarget }))
+      .resolves.toMatchObject({ cancelled: false, disposition: "already_admitted" });
+    if (remote) {
+      expect(cancelQueuedTurn).toHaveBeenCalledWith({ queueEntryId: "entry", expectedContentHash: "current-hash" });
+      expect(cancelQueuedTurnWithDisposition).not.toHaveBeenCalled();
+    } else {
+      expect(cancelQueuedTurnWithDisposition).toHaveBeenCalledWith("entry", "Cancelled from messaging.", "current-hash");
+      expect(cancelQueuedTurn).not.toHaveBeenCalled();
+    }
+  });
+
   it("continues a local Claude thread through the registry and rejects remote recovery", async () => {
     const recover = vi.fn(async (request: { threadId: string }) => request);
     const bridge = new DesktopMessagingBackendBridge({ continueClaudeThreadInNewSession: recover } as unknown as DesktopBackendRegistry);

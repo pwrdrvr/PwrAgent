@@ -1,4 +1,5 @@
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
+import { ThreadTurnQueue } from "../app-server/thread-turn-queue";
 import { currentMessagingModels, messagingModelCatalog, otherMessagingModels } from "./fixtures/messaging-model-catalog";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -6738,7 +6739,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
     await expect(
       harness.controller.handlePwrAgentMessagingRequest({
         operation: "get_current_messaging_surface",
@@ -17283,6 +17284,188 @@ describe("MessagingController", () => {
     );
   });
 
+  it("budgets shared queue notice admission and owner-start retirement", async () => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const { tempDir, dbPath } = createTempStateDb("pwragent-shared-queue-writes-");
+    tempDirs.push(tempDir);
+    const db = StateDb.open(dbPath);
+    let controller: MessagingController | undefined;
+    try {
+      let calls = 0;
+      const harness = await createHarness({ store: new SqliteMessagingStore(db),
+        backendOverrides: { ownsTurnQueue: true },
+        startTurn: async () => ++calls === 1
+          ? { backend: "codex", threadId: "thread-1", turnId: "turn-1" }
+          : { backend: "codex", threadId: "thread-1", turnId: "owner-entry", queueEntryId: "owner-entry", queueStatus: "queued" },
+      });
+      controller = harness.controller;
+      await bindThread(harness);
+      await controller.handleInboundEvent(buildTextEvent("first"));
+      const { writes } = await measureSqliteWrites(async () => {
+        await harness.controller.handleInboundEvent(buildTextEvent("follow-up"));
+        await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+          method: "thread/turnQueue/updated", params: { threadId: "thread-1", queueEntryId: "owner-entry", origin: "messaging", status: "started", turnId: "turn-2" },
+        } });
+      });
+      expectSqliteWriteBudget({ scenario: "messaging-owner-queue-lifecycle",
+        note: "One queued reply through preparation activity, queue notice, and owner-start retirement: 3 commits, ~54 KB WAL; ~5.36 MB/day at 100 replies/day, no idle/timer writes.", writes });
+    } finally {
+      controller?.dispose();
+      await controller?.whenToolUpdatesSettled();
+      db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
+  });
+
+  it("admits busy-thread messaging input to the owner's FIFO in arrival order", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("follow up", "same message", "check status"), {
+      minLength: 1, maxLength: 4,
+    }), async (messages) => {
+      const started: string[] = [];
+      const owner = new ThreadTurnQueue({ startTurn: async (entry) => {
+        started.push(entry.input.map((part) => part.type === "text" ? part.text : "").join(""));
+        return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${started.length}` };
+      } });
+      const harness = await createHarness({
+        backendOverrides: { ownsTurnQueue: true },
+        startTurn: async (request) => {
+          const result = await owner.submit({ ...request, origin: "messaging" });
+          return { backend: request.backend, threadId: request.threadId,
+            turnId: result.status === "started" ? result.turnId : result.entry.id,
+            queueStatus: result.status, queueEntryId: result.entry.id };
+        },
+      });
+      try {
+        await bindThread(harness);
+        await harness.controller.handleInboundEvent(buildTextEvent("first"));
+        for (const text of messages) await harness.controller.handleInboundEvent(buildTextEvent(text));
+        // The owner is the oracle for every viewer's queue. No accepted
+        // follow-up may live only in a messaging controller's local FIFO.
+        expect(owner.getQueuedEntries({ backend: "codex", threadId: "thread-1" })
+          .map((entry) => entry.input)).toEqual(messages.map((text) => [{ type: "text", text }]));
+        expect(started).toEqual(["first"]);
+        for (let index = 0; index <= messages.length; index += 1) {
+          await owner.releaseThread({ backend: "codex", threadId: "thread-1",
+            turnId: `turn-${index + 1}`, status: "turn/completed" });
+        }
+        expect(started).toEqual(["first", ...messages]);
+        expect(harness.startTurn).toHaveBeenCalledTimes(messages.length + 1);
+      } finally { harness.controller.dispose(); }
+    }), { numRuns: 8 });
+  });
+
+  it.each(["cancel", "steer", "edited"] as const)("uses owner content and cancellation disposition for shared queue action %s", async (action) => {
+    const cancelQueuedTurn = vi.fn(async () => ({ queueEntryId: "owner-entry", cancelled: action !== "edited" }));
+    const readQueuedTurn = vi.fn(async () => ({ queueEntryId: "owner-entry", contentHash: "owner-hash",
+      input: [{ type: "text" as const, text: "edited in desktop" }] }));
+    let calls = 0;
+    const harness = await createHarness({
+      backendOverrides: { ownsTurnQueue: true, cancelQueuedTurn, readQueuedTurn },
+      startTurn: async () => ++calls === 1
+        ? { backend: "codex", threadId: "thread-1", turnId: "turn-1" }
+        : { backend: "codex", threadId: "thread-1", turnId: "owner-entry", queueEntryId: "owner-entry", queueStatus: "queued" },
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("first"));
+    await harness.controller.handleInboundEvent(buildTextEvent("original follow-up"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: `queued-turn:${action === "cancel" ? "cancel" : "steer"}:owner-entry`,
+    }));
+    expect(cancelQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({ queueEntryId: "owner-entry", expectedContentHash: "owner-hash" }));
+    if (action === "steer") expect(harness.steerTurn).toHaveBeenCalledWith(expect.objectContaining({ input: [{ type: "text", text: "edited in desktop" }] }));
+    else expect(harness.steerTurn).not.toHaveBeenCalled();
+    if (action === "edited") expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("changed or has already been admitted") });
+  });
+
+  it.each([false, true])("keeps owner acceptance authoritative when queue notice fails=%s", async (failNotice) => {
+    let calls = 0;
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      backendOverrides: { ownsTurnQueue: true },
+      deliver: async (intent) => {
+        delivered.push(intent);
+        if (failNotice && intent.kind === "confirmation" && intent.title === "Message queued") throw new Error("Fixture notice failure");
+        return { channel: "telegram", deliveredAt: 1_000, outcome: "presented" };
+      },
+      startTurn: async () => ++calls === 1
+        ? { backend: "codex", threadId: "thread-1", turnId: "turn-1" }
+        : { backend: "codex", threadId: "thread-1", turnId: "owner-entry", queueEntryId: "owner-entry", queueStatus: "queued" },
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("first"));
+    await harness.controller.handleInboundEvent(buildTextEvent("follow-up"));
+    expect(delivered.some((intent) => intent.kind === "error" && intent.title === "Turn could not start")).toBe(false);
+    await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+      method: "thread/turnQueue/updated", params: { threadId: "thread-1", queueEntryId: "owner-entry", origin: "messaging", status: "started", turnId: "turn-2" },
+    } });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "queued-turn:cancel:owner-entry" }));
+    expect(delivered.at(-1)).toMatchObject({ kind: "error", body: "That queued message is no longer waiting." });
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])("retires shared queue notices when owner start overtakes acknowledgement=%s", async (early) => {
+    let calls = 0;
+    const event: AgentEvent = { backend: "codex", notification: {
+      method: "thread/turnQueue/updated", params: { threadId: "thread-1", queueEntryId: "owner-entry", origin: "messaging", status: "started", turnId: "turn-2" },
+    } };
+    const harness = await createHarness({
+      backendOverrides: { ownsTurnQueue: true },
+      startTurn: async () => {
+        if (++calls === 1) return { backend: "codex", threadId: "thread-1", turnId: "turn-1" };
+        if (early) await harness.controller.handleBackendEvent(event);
+        return { backend: "codex", threadId: "thread-1", turnId: "owner-entry", queueEntryId: "owner-entry", queueStatus: "queued" };
+      },
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("first"));
+    await harness.controller.handleInboundEvent(buildTextEvent("follow-up"));
+    if (!early) await harness.controller.handleBackendEvent(event);
+    expect(harness.delivered).toContainEqual(expect.objectContaining({ kind: "confirmation", body: "Queued message sent as the next turn." }));
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("delivers terminal and idle events independently of the next queued start acknowledgement", async () => {
+    // Oracle: the owner must finish delivering the ended turn before a new
+    // turn's ordered start can acknowledge. Awaiting that start from inside
+    // the event listener creates a cycle, even for a text-only final message.
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (idleFirst) => {
+      const harness = await createHarness();
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildTextEvent("first"));
+      await harness.controller.handleInboundEvent(buildTextEvent("follow-up"));
+      let acknowledge!: () => void;
+      const acknowledgement = new Promise<void>((resolve) => { acknowledge = resolve; });
+      harness.startTurn.mockImplementationOnce(async (request) => {
+        await acknowledgement;
+        return { backend: request.backend, threadId: request.threadId, turnId: "turn-2" };
+      });
+      const terminal: AgentEvent = { backend: "codex", notification: {
+        method: "turn/completed", params: { threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] } },
+      } };
+      const idle: AgentEvent = { backend: "codex", notification: {
+        method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+      } };
+      let delivered = false;
+      const delivery = (async () => {
+        for (const event of idleFirst ? [idle, terminal] : [terminal, idle]) {
+          await harness.controller.handleBackendEvent(event);
+        }
+        delivered = true;
+      })();
+      try {
+        await vi.waitFor(() => expect(delivered).toBe(true));
+        await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+      } finally {
+        acknowledge();
+        await delivery;
+        harness.controller.dispose();
+      }
+    }), { numRuns: 4 });
+  });
+
   it("queues follow-up text while a turn is active and starts it after completion", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -17322,7 +17505,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         input: [
@@ -17453,7 +17636,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         backend: "codex",
@@ -17506,7 +17689,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
         kind: "error",
@@ -17695,7 +17878,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         input: [
@@ -28233,6 +28416,7 @@ function setHandoffDetailFixture(
 async function createHarness<
   Store extends MessagingControllerOptions["store"] = MessagingStore,
 >(options?: {
+  backendOverrides?: Partial<MessagingBackendBridge>;
   requestStore?: MessagingControllerOptions["requestStore"];
   authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
   deliveryBudget?: MessagingDeliveryBudget;
@@ -28896,6 +29080,7 @@ async function createHarness<
     submitServerRequest,
     updateDirectoryLaunchpad,
     updateScheduledThreadAction,
+    ...options?.backendOverrides,
   };
 
   const onBindingChanged = vi.fn();
