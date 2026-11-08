@@ -311,6 +311,7 @@ import {
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
+import { setLocalDirectoryPin, reorderLocalDirectoryPins } from "../app-server/local-directory-pins";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
@@ -7519,6 +7520,12 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
       };
+    },
+    async setDirectoryPin(request) {
+      return await setLocalDirectoryPin(request);
+    },
+    async reorderDirectoryPins(request) {
+      return await reorderLocalDirectoryPins(request);
     },
     async legacyManageThreadMergeHolds(request: unknown): Promise<{ holds: []; dependents: [] }> {
       // 1.3.13 and 1.3.14 viewers still ask here. Their reads see nothing;

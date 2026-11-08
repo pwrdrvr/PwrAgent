@@ -98,7 +98,7 @@ class SqliteWriteMetricsCollector {
       label,
       rowsChanged: this.rowsChanged,
       statements: this.statements,
-      tables: [...this.tables.values()].sort(
+      tables: [...this.tables.values()].map((table) => ({ ...table })).sort(
         (left, right) => right.commits - left.commits,
       ),
       walBytes: this.walBytes,

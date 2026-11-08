@@ -2964,6 +2964,8 @@ export type SetSubthreadsCollapsedResponse = {
  * be pinned).
  */
 export type SetDirectoryPinRequest = {
+  /** A remote-viewer window edits the selected owner's pins. */
+  federationTarget?: FederationTarget;
   directoryKey: string;
   /** Rank within the pinned section. Null/undefined removes the pin. */
   pinnedRank?: string | null;
@@ -2977,6 +2979,8 @@ export type SetDirectoryPinResponse = {
 };
 
 export type ReorderDirectoryPinsRequest = {
+  /** A remote-viewer window edits the selected owner's complete pin order. */
+  federationTarget?: FederationTarget;
   /** Complete pinned order, first item at the top. */
   directoryKeys?: string[];
   /** Owner-revalidated move preserving every unloaded pin. Exclusive with directoryKeys. */

@@ -160,6 +160,10 @@ import type {
   SendThreadPrAutoDispatchNowResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
+  SetDirectoryPinRequest,
+  SetDirectoryPinResponse,
+  ReorderDirectoryPinsRequest,
+  ReorderDirectoryPinsResponse,
   NavigationQueryPage,
   NavigationQueryRequest,
   NavigationQueueProjection,
@@ -690,6 +694,8 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse>;
+  setDirectoryPin?(request: Omit<SetDirectoryPinRequest, "federationTarget">): Promise<SetDirectoryPinResponse>;
+  reorderDirectoryPins?(request: Omit<ReorderDirectoryPinsRequest, "federationTarget">): Promise<ReorderDirectoryPinsResponse>;
   mountRemoteChild(
     request: FederationMountRemoteChildRequest,
   ): Promise<FederationMountRemoteChildResponse>;
@@ -1302,6 +1308,22 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as ReorderThreadPinsRequest,
       ),
   );
+  if (params.backend.setDirectoryPin) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.setDirectoryPin, async (envelope) => {
+      const request = envelope.params as SetDirectoryPinRequest;
+      return await params.backend.setDirectoryPin!({
+        directoryKey: request.directoryKey,
+        pinned: request.pinned,
+        pinnedRank: request.pinnedRank,
+      });
+    });
+  }
+  if (params.backend.reorderDirectoryPins) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.reorderDirectoryPins, async (envelope) => {
+      const request = envelope.params as ReorderDirectoryPinsRequest;
+      return await params.backend.reorderDirectoryPins!({ directoryKeys: request.directoryKeys, move: request.move });
+    });
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.mountRemoteChild,
     async (envelope) =>
@@ -2509,6 +2531,29 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.reorderThreadPins,
       params: request,
     });
+  }
+
+  async setDirectoryPin(
+    request: Omit<SetDirectoryPinRequest, "federationTarget">,
+  ): Promise<SetDirectoryPinResponse> {
+    return await this.requestDirectoryPins(FEDERATION_BACKEND_METHODS.setDirectoryPin, request);
+  }
+
+  async reorderDirectoryPins(
+    request: Omit<ReorderDirectoryPinsRequest, "federationTarget">,
+  ): Promise<ReorderDirectoryPinsResponse> {
+    return await this.requestDirectoryPins(FEDERATION_BACKEND_METHODS.reorderDirectoryPins, request);
+  }
+
+  private async requestDirectoryPins<T>(method: FederationBackendMethod, params: unknown): Promise<T> {
+    try {
+      return await this.rpc.request<T>({ method, params });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error("Update PwrAgent on the owning instance to change project pins from this window.");
+      }
+      throw error;
+    }
   }
 
   async mountRemoteChild(

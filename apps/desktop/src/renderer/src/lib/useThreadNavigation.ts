@@ -9701,6 +9701,7 @@ export function useThreadNavigation(
         const result = await setDirectoryPinRequest({
           directoryKey: directory.key,
           pinned,
+          federationTarget: readRendererFederationTarget(),
         });
         noteDirectoryPatch([result.directoryKey]);
         setState((current) => ({
@@ -9738,7 +9739,7 @@ export function useThreadNavigation(
       }
 
       try {
-        const result = await reorderDirectoryPinsRequest({ move });
+        const result = await reorderDirectoryPinsRequest({ move, federationTarget: readRendererFederationTarget() });
         invalidateNavigation();
         noteDirectoryPatch(Object.keys(result.pinnedRanks));
         setState((current) => ({
