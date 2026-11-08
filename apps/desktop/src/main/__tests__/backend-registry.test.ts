@@ -5169,6 +5169,71 @@ describe("DesktopBackendRegistry", () => {
     await assertFailedTurnPreparationRetires("preparing", "Continue", "idle");
   });
 
+  async function assertFailedTurnSubmissionRetires(threadId: string, notificationRejects: boolean, providerActive: boolean): Promise<void> {
+    const client = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const internal = registry as unknown as {
+      emit: (event: AgentEvent) => Promise<void>;
+      reconcileCodexThreadListStatus: (thread: AppServerThreadSummary) => AppServerThreadSummary;
+      threadHasActiveTurn: (threadId: string, backend: AppServerBackendKind) => boolean;
+      reservedCodexStartThreadIds: Set<string>;
+      codexRetryableOperations: Map<string, unknown>;
+      activeTurnKeys: Set<string>;
+      activeCodexTurnCollaborationModes: Map<string, unknown>;
+      registerPendingThreadMessageContext: () => Promise<string | undefined>;
+      forgetPendingThreadMessageContext: (id: string | undefined) => void;
+    };
+    const emit = internal.emit.bind(registry);
+    const project = () => internal.reconcileCodexThreadListStatus({ id: threadId, source: "codex", title: "Fixture", titleSource: "explicit", linkedDirectories: [], updatedAt: 1, threadStatus: "idle" });
+    const forgotten = vi.spyOn(internal, "forgetPendingThreadMessageContext");
+    vi.spyOn(internal, "registerPendingThreadMessageContext").mockResolvedValueOnce("submission-context");
+    vi.spyOn(internal, "emit").mockImplementation(async (event) => {
+      if (event.notification.method !== "turn/failed") return await emit(event);
+      if (notificationRejects) throw new Error("notification rejected");
+      await emit(event);
+      // Terminal delivery can itself trigger navigation while reserved.
+      project();
+    });
+    const submit = vi.spyOn(client, "startTurn").mockImplementationOnce(async () => {
+      await emit({ backend: "codex", notification: {
+        method: "thread/status/changed", params: { threadId, status: { type: "idle" } },
+      } });
+      project();
+      if (providerActive) await emit({ backend: "codex", notification: {
+        method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: [] } },
+      } });
+      throw new Error("provider rejected");
+    });
+    const request = { backend: "codex" as const, threadId, input: [{ type: "text" as const, text: "Continue" }] };
+    try {
+      await expect(registry.startTurn(request)).rejects.toThrow(notificationRejects ? "notification rejected" : "provider rejected");
+      expect(internal.reservedCodexStartThreadIds.has(threadId)).toBe(false);
+      expect(internal.codexRetryableOperations.has(threadId)).toBe(false);
+      expect(forgotten).toHaveBeenCalledWith("submission-context");
+      expect([...internal.activeTurnKeys].some((key) => key.includes(`pending:${threadId}`))).toBe(false);
+      expect([...internal.activeCodexTurnCollaborationModes.keys()].some((key) => key.includes(`pending:${threadId}`))).toBe(false);
+      expect(internal.threadHasActiveTurn(threadId, "codex")).toBe(providerActive);
+      if (providerActive) await expect(registry.startTurn(request)).rejects.toThrow("already active");
+      else await expect(registry.startTurn(request)).resolves.toMatchObject({ backend: "codex", threadId, turnId: "turn-1" });
+      expect(submit).toHaveBeenCalledTimes(providerActive ? 1 : 2);
+    } finally {
+      await registry.close();
+    }
+  }
+
+  it("retires failed submissions through notification rejection and navigation projection", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("submitting", "same:thread", "pending:source"), fc.boolean(), fc.boolean(),
+      assertFailedTurnSubmissionRetires), { numRuns: 12 });
+  });
+
+  it("releases the failed submission when terminal delivery rejects", async () => {
+    await assertFailedTurnSubmissionRetires("submitting", true, false);
+  });
+
+  it("releases idle navigation activity projected during submission failure", async () => {
+    await assertFailedTurnSubmissionRetires("submitting", false, false);
+  });
+
   it("rejects handoff while a turn start is awaiting its provider", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
