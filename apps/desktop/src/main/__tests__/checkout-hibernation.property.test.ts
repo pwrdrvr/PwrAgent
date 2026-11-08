@@ -9,7 +9,7 @@ import {
   type WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import { hibernationKeepReason } from "../app-server/checkout-hibernation";
-import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
+import { archiveCandidateKeepReason, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 
 /**
  * Model test. `eligible` below restates the approved design (section 10 of
@@ -51,7 +51,7 @@ const scenario = fc.record({
   unreadable: rarely,
   threadStatus: usually<AppServerThreadSummary["threadStatus"] | undefined>("notLoaded", "idle", "active", undefined),
   idleFor: fc.integer({ min: 0, max: 90 * DAY }),
-  seenLater: fc.integer({ min: 0, max: 10 * DAY }),
+  viewedAgo: fc.integer({ min: 0, max: 10 * DAY }),
   snapshot: usually("none", "hibernated", "archivedPending", "archivedRestored", "restored"),
   keepAwake: rarely,
   busy: rarely,
@@ -89,7 +89,7 @@ function build(input: Scenario): { candidate: ThreadArchiveCandidate; policy: De
     ...(input.remote ? { codexEnvironmentRuntime: { executionTarget: "remote" } as AppServerThreadSummary["codexEnvironmentRuntime"] } : {}),
   };
   const overlay: ThreadOverlayState = {
-    lastSeenAt: updatedAt - input.seenLater,
+    lastSeenAt: NOW - input.viewedAgo,
     worktreeSnapshots: snapshots,
     ...(input.pinned === "rank" ? { pinnedRank: 1 } : {}),
     ...(input.keepAwake ? { keepCheckoutAwake: true } : {}),
@@ -126,6 +126,33 @@ function eligible(input: Scenario): boolean {
 }
 
 describe("checkout hibernation keep rules", () => {
+  it("does not turn inspection of an idle thread into checkout work, while real work and restores still protect it", () => {
+    fc.assert(fc.property(fc.integer({ min: 1, max: 20 }), fc.integer({ min: 0, max: DAY - 1 }), (idleDays, viewedAgo) => {
+      const old = NOW - (idleDays + 1) * DAY;
+      const candidate: ThreadArchiveCandidate = { thread: {
+        id: "inspection", title: "Inspect a watched checkout", titleSource: "explicit", source: "codex", threadStatus: "idle", updatedAt: old,
+        linkedDirectories: [{ id: "repo", label: "repo", kind: "worktree", path: "/fixture/repo", worktreePath: "/fixture/worktree" }],
+      }, overlay: { backend: "codex", threadId: "inspection", extraLinkedDirectories: [], lastSeenAt: NOW - viewedAgo } };
+      const policy = normalizeCheckoutHibernationPolicy({ enabled: true, idleDays });
+      const context = { busy: false, sharedPath: false };
+      // Viewing is still relevant when archiving the conversation itself.
+      expect(archiveCandidateKeepReason(candidate, NOW, { mode: "age", inactivityDays: idleDays, keepPerProject: 1, retentionDays: 30 }))
+        .toBe("Recently active");
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBeUndefined();
+      candidate.thread.updatedAt = NOW;
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Recently active");
+      candidate.thread.updatedAt = old;
+      candidate.overlay!.archiveRestoredAt = NOW;
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Recently active");
+      delete candidate.overlay!.archiveRestoredAt;
+      expect(hibernationKeepReason(candidate, NOW, policy, { busy: true, sharedPath: false })).toBe("Busy");
+      candidate.activePrWatch = true;
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Watching a PR");
+      candidate.activePrWatch = false;
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBeUndefined();
+    }));
+  });
+
   it("agree with the design for every candidate, pinned or not", () => {
     fc.assert(fc.property(scenario, (input) => {
       const { candidate, policy } = build(input);

@@ -1,14 +1,14 @@
 import path from "node:path";
 import type { ThreadMaintenanceKeptThread } from "@pwragent/shared";
 import { archiveCandidateLastActivity, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
+import { checkoutHibernationLastActivity } from "./checkout-hibernation";
 
 /** Display metadata only. A PR association or a known owner never grants
  * permission to remove a checkout. No provider or forge requests are made. */
-export function maintenanceKeptThread(candidate: ThreadArchiveCandidate): ThreadMaintenanceKeptThread {
+export function maintenanceKeptThread(candidate: ThreadArchiveCandidate, lastActivityAt = archiveCandidateLastActivity(candidate)): ThreadMaintenanceKeptThread {
   const { thread, overlay } = candidate;
   const branch = overlay?.gitBranch?.trim() || thread.gitBranch?.trim()
     || thread.linkedDirectories.find((directory) => directory.gitBranch)?.gitBranch;
-  const lastActivityAt = archiveCandidateLastActivity(candidate);
   const pullRequests = new Map<string, NonNullable<ThreadMaintenanceKeptThread["pullRequests"]>[number]>();
   const known = [
     ...candidate.activePrWatches?.map((watch) => ({ url: watch.prUrl, title: watch.prTitle, number: watch.prNumber })) ?? [],
@@ -61,7 +61,7 @@ export class MaintenanceCheckoutOwners {
   static fromCandidates(candidates: readonly ThreadArchiveCandidate[]): MaintenanceCheckoutOwners {
     const index = new MaintenanceCheckoutOwners();
     for (const candidate of candidates) {
-      const owner = maintenanceKeptThread(candidate);
+      const owner = maintenanceKeptThread(candidate, checkoutHibernationLastActivity(candidate));
       const directories = [...candidate.thread.linkedDirectories, ...candidate.overlay?.extraLinkedDirectories ?? [],
         ...candidate.overlay?.retainedWorktrees ?? []];
       const paths = [candidate.thread.projectKey, ...directories.map((directory) => directory.worktreePath ?? directory.path)];

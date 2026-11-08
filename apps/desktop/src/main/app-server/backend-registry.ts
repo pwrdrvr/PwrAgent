@@ -844,6 +844,7 @@ import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primar
 import {
   HIBERNATION_KEEP_REASONS,
   hibernationKeepReason,
+  checkoutHibernationLastActivity,
   hibernationTarget,
   otherThreadsUsingPath,
   type HibernationContext,
@@ -851,7 +852,7 @@ import {
 import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "./checkout-hibernation-workspace";
 import { hasWorktreeTerminalsOpenIn } from "../terminal/worktree-terminals";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
-import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, archiveCandidateLastActivity, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
+import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { MaintenanceCheckoutOwners, maintenanceKeptThread } from "./maintenance-checkout-owners";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import { compareBindingsByCreation } from "../messaging/core/messaging-binding-thread-match";
@@ -17297,7 +17298,7 @@ export class DesktopBackendRegistry {
                 }
                 const reason = hibernationKeepReason(current, Date.now(), policy, this.checkoutHibernationContext(current, all));
                 if (reason) throw new CheckoutHibernationKeptError(reason);
-                if (archiveCandidateLastActivity(current) > archiveCandidateLastActivity(candidate)) {
+                if (checkoutHibernationLastActivity(current) > checkoutHibernationLastActivity(candidate)) {
                   throw new CheckoutHibernationKeptError(HIBERNATION_KEEP_REASONS.recentlyActive);
                 }
                 if (paths(current) !== paths(candidate)) throw new CheckoutHibernationKeptError("Workspace moved");

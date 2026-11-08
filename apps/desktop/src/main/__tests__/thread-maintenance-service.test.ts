@@ -94,6 +94,30 @@ function harness(candidates: ThreadArchiveCandidate[], overrides: Partial<Thread
 }
 
 describe("ThreadMaintenanceService.scan", () => {
+  it("rechecks work activity rather than view acknowledgements between hibernation review and apply", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("view", "work", "restore"), async (change) => {
+      const original = candidate("reviewed", { cwd: "/fixture/reviewed" });
+      const refreshed = { ...original, thread: { ...original.thread },
+        overlay: { backend: "codex" as const, threadId: "reviewed", extraLinkedDirectories: [],
+          ...(change === "view" ? { lastSeenAt: NOW } : {}),
+          ...(change === "restore" ? { archiveRestoredAt: NOW } : {}),
+        } };
+      if (change === "work") refreshed.thread.updatedAt = NOW;
+      const hibernate = vi.fn(async () => true);
+      const { service } = harness([original], { refreshCandidate: async () => refreshed,
+        hibernation: {
+          getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+          keepReason: () => ({ target: "/fixture/reviewed" }), inspect: async () => ({ files: 0, bytes: 0 }), hibernate,
+        },
+      });
+      const scan = await service.scan({ steps: ["hibernate"] });
+      const run = await service.apply({ scanId: scan.scanId, archive: [], hibernate: [{ backend: "codex", threadId: "reviewed" }],
+        removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+      expect(run.steps.find((row) => row.step === "hibernate")).toMatchObject({ done: change === "view" ? 1 : 0, kept: change === "view" ? 0 : 1 });
+      expect(hibernate).toHaveBeenCalledTimes(change === "view" ? 1 : 0);
+    }), { numRuns: 15 });
+  });
+
   it("preserves every kept path's real owners and watch links without offering it for hibernation", async () => {
     await fc.assert(fc.asyncProperty(fc.array(fc.record({
       owners: fc.integer({ min: 1, max: 3 }),
@@ -134,7 +158,7 @@ describe("ThreadMaintenanceService.scan", () => {
         if (!model[index]!.measured) expect(row.allocatedBytes).toBeUndefined();
         expect(row.threads).toEqual(rows.filter((owner) => owner.thread.linkedDirectories[0]!.worktreePath === row.path).map((owner) => ({
           backend: owner.thread.source, threadId: owner.thread.id, title: owner.thread.title,
-          branch: owner.overlay!.gitBranch, lastActivityAt: NOW - DAY,
+          branch: owner.overlay!.gitBranch, lastActivityAt: owner.thread.updatedAt,
           pullRequests: [{ url: owner.activePrWatches[0]!.prUrl, number: index + 1, title: `Project ${index} fix` }],
         })));
         expect(scan.hibernate!.items.some((item) => item.worktreePath === row.path)).toBe(false);

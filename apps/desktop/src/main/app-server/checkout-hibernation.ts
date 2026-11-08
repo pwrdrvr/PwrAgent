@@ -6,13 +6,20 @@ import {
   type WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
-  archiveCandidateLastActivity,
   archiveCandidateProtectionReason,
   type ThreadArchiveCandidate,
 } from "./thread-archive-sweeper";
 import { primaryThreadWorktree } from "./missing-thread-workspace";
 
 const DAY_MS = 86_400_000;
+
+/** A view acknowledgement is conversation activity for archiving, but does
+ * not use the checkout. Inspecting a kept thread must not postpone its
+ * hibernation again. Actual work and restores still restart the idle clock. */
+export function checkoutHibernationLastActivity({ thread, overlay }: ThreadArchiveCandidate): number {
+  return Math.max(thread.updatedAt ?? 0, overlay?.archiveRestoredAt ?? 0,
+    ...(overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? []).map((snapshot) => snapshot.restoredAt ?? 0));
+}
 
 /** Keep reasons the hibernation pass reports. Tests and the sweep summary
  * share these strings. */
@@ -109,7 +116,7 @@ export function hibernationKeepReason(
   // finished is the only copy of that work; never overwrite it.
   if (snapshot?.state === "archived" && snapshot.restoredAt === undefined) return HIBERNATION_KEEP_REASONS.archiveRestorePending;
   if (!Number.isFinite(thread.updatedAt) || (thread.updatedAt ?? 0) <= 0) return HIBERNATION_KEEP_REASONS.activityUnknown;
-  const idle = now - archiveCandidateLastActivity(candidate);
+  const idle = now - checkoutHibernationLastActivity(candidate);
   // Claude Code may have deleted an old session, and restoring its checkout
   // would not bring the conversation back.
   if (thread.source === "claude" && idle > CHECKOUT_HIBERNATION_CLAUDE_MAX_IDLE_DAYS * DAY_MS) {

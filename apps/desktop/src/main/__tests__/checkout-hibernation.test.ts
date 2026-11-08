@@ -619,6 +619,16 @@ describe("Restore now and Keep it awake", () => {
 });
 
 describe("Thread maintenance's hibernate step", () => {
+  it("allows inspecting a reviewed thread through the final snapshot admission without restarting its idle clock", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open();
+    const candidate = (await registry.listAutoArchiveCandidates())[0]!;
+    await store.markThreadSeen({ ...identity, seenUpdatedAt: candidate.thread.updatedAt });
+    expect(await registry.hibernateReviewedCheckout(candidate, ON)).toBe(true);
+    expect(await exists(fixture.worktree)).toBe(false);
+    expect(await snapshotOf(store)).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
+  });
+
   it("carries the protecting watch's PR into the kept checkout even before a PR chip was cached", async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open();

@@ -43,7 +43,7 @@ import {
 } from "./thread-archive-sweeper";
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
 import { inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
-import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor } from "./checkout-hibernation";
+import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor, checkoutHibernationLastActivity } from "./checkout-hibernation";
 import { missingWorktreeRepository } from "./worktree-archive-service";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import type { CargoBuildOutputCandidate, scanCargoBuildOutputs, removeCargoBuildOutput } from "./maintenance-cargo-output";
@@ -500,7 +500,7 @@ export class ThreadMaintenanceService {
           title: candidate.thread.title,
           ...(directory?.gitBranch ? { branch: directory.gitBranch } : {}),
           worktreePath: listed.target,
-          lastActivityAt: archiveCandidateLastActivity(candidate),
+          lastActivityAt: checkoutHibernationLastActivity(candidate),
           files: inspection.files,
           bytes: inspection.bytes,
           ...(space ? { space } : {}),
@@ -804,7 +804,7 @@ export class ThreadMaintenanceService {
       }
       try {
         const refreshed = await this.deps.refreshCandidate(entry.candidate);
-        if (archiveCandidateLastActivity(refreshed) > entry.row.lastActivityAt) {
+        if (checkoutHibernationLastActivity(refreshed) > entry.row.lastActivityAt) {
           keepIt("New activity during the run");
           continue;
         }
