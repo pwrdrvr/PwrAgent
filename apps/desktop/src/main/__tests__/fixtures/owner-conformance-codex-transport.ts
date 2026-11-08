@@ -31,6 +31,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   static requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   private static sequence = 0;
   private handler: (message: string) => void = () => {};
+  private readonly activeTurns = new Map<string, FixtureTurn>();
 
   static reset(): void {
     OwnerConformanceCodexTransport.threads = new Map();
@@ -39,7 +40,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   }
 
   async connect(): Promise<void> {}
-  async close(): Promise<void> {}
+  async close(): Promise<void> { this.activeTurns.clear(); }
   setCloseHandler(_handler: (error?: Error) => void): void {}
   setMessageHandler(handler: (message: string) => void): void { this.handler = handler; }
 
@@ -54,7 +55,8 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     OwnerConformanceCodexTransport.requests.push({ method: request.method, params });
     const threads = OwnerConformanceCodexTransport.threads;
     const wire = (thread: FixtureThread) => ({
-      ...thread, sessionId: thread.id, status: { type: "idle" }, source: "cli", modelProvider: "openai",
+      ...thread, sessionId: thread.id, status: this.activeTurns.has(thread.id)
+        ? { type: "active", activeFlags: [] } : { type: "idle" }, source: "cli", modelProvider: "openai",
       ephemeral: false, path: null, cliVersion: "0.159.2", gitInfo: null,
     });
     let result: unknown = {};
@@ -99,7 +101,13 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       if (thread && !thread.preview) thread.preview = prompt;
       const turnId = `turn-${++OwnerConformanceCodexTransport.sequence}`;
       result = { turn: { id: turnId, status: "inProgress", items: [], error: null } };
-      if (thread) {
+      if (thread && prompt === "slow") {
+        // Match the Outpost fixture's held turn, released by turn/interrupt.
+        const turn = { id: turnId, status: "inProgress", items: [], error: null };
+        this.activeTurns.set(thread.id, turn);
+        thread.turns.push(turn);
+        followUp = { method: "turn/started", params: { threadId: thread.id, turn } };
+      } else if (thread) {
         setTimeout(() => {
           // The same turn the Outpost fixture records: one agent message.
           const turn = { id: turnId, status: "completed", items: [{ type: "agentMessage", text: "Fixture result" }], error: null };
@@ -109,6 +117,20 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
           thread.updatedAt = Math.max(Math.floor(Date.now() / 1000), thread.updatedAt + 1);
           this.notify("turn/completed", { threadId: thread.id, turn });
         }, 100);
+      }
+    } else if (request.method === "turn/steer" || request.method === "turn/interrupt") {
+      const turn = this.activeTurns.get(String(params.threadId));
+      const expected = request.method === "turn/steer" ? params.expectedTurnId : params.turnId;
+      if (!turn || turn.id !== expected) {
+        this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id,
+          error: { code: -32600, message: "Active turn changed" } }));
+        return;
+      }
+      if (request.method === "turn/steer") result = { turnId: turn.id };
+      else {
+        turn.status = "interrupted";
+        this.activeTurns.delete(String(params.threadId));
+        followUp = { method: "turn/completed", params: { threadId: params.threadId, turn } };
       }
     }
     this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
