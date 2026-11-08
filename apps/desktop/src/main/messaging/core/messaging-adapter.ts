@@ -7,6 +7,10 @@ import type {
   AppServerThreadStatus,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
+  CancelQueuedTurnRequest,
+  CancelQueuedTurnResponse,
+  ReadQueuedTurnRequest,
+  ReadQueuedTurnResponse,
   CompactThreadRequest,
   CompactThreadResponse,
   CreateScheduledThreadActionRequest,
@@ -268,6 +272,10 @@ export type MessagingBackendBridge = {
   startTurn(
     request: StartTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
   ): Promise<StartTurnResponse>;
+  /** The owner admits busy-thread input to the same FIFO desktop viewers read. */
+  ownsTurnQueue?: boolean;
+  readQueuedTurn?(request: ReadQueuedTurnRequest): Promise<ReadQueuedTurnResponse>;
+  cancelQueuedTurn?(request: CancelQueuedTurnRequest): Promise<CancelQueuedTurnResponse>;
   listScheduledThreadActions?(
     request?: ListScheduledThreadActionsRequest,
   ): Promise<ListScheduledThreadActionsResponse>;

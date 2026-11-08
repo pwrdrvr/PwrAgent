@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AppServerTurnInputItem,
+  MessagingCausalSourceRef,
 } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
@@ -33,7 +34,10 @@ export type MessagingQueuedTurnEntry = {
   event?: MessagingInboundEvent;
   id: string;
   input: AppServerTurnInputItem[];
+  ownerQueueEntryId?: string;
+  manualRetryRequired?: boolean;
   pdfAttachments?: PendingPdfAttachment[];
+  pdfSourceRequest?: MessagingCausalSourceRef;
   privateResponseRequested?: boolean;
   preview: string;
   status: "queued" | "steered" | "cancelled" | "submitted" | "failed";
