@@ -47,7 +47,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
-import { getAppAutomationStore } from "../state/app-state.js";
+import { getAutomationStorage } from "../storage/desktop-automation-storage.js";
 import { AutomationInspectionBus } from "./automation-inspection-bus.js";
 import {
   buildPendingDeliveryActionResults,
@@ -58,7 +58,7 @@ import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { parseAutomationOutputDecision } from "./automation-output-decision.js";
 import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler } from "./automation-scheduler.js";
-import type { AutomationRecord, AutomationStore } from "./automation-store.js";
+import type { AutomationRecord, AutomationStorage } from "@pwragent/owner-core/automation-storage";
 import {
   anyAutomationInboundMatch,
   buildAutomationReplayCandidates,
@@ -127,13 +127,13 @@ function replayUnsupportedReason(
 }
 
 let service: DesktopAutomationService | null = null;
-let storeOverride: AutomationStore | null = null;
+let storeOverride: AutomationStorage | null = null;
 
-export function getDesktopAutomationStore(): AutomationStore {
-  return storeOverride ?? getAppAutomationStore();
+export function getDesktopAutomationStore(): AutomationStorage {
+  return storeOverride ?? getAutomationStorage();
 }
 
-export function setDesktopAutomationStoreForTests(store: AutomationStore | null): void {
+export function setDesktopAutomationStoreForTests(store: AutomationStorage | null): void {
   storeOverride = store;
 }
 
@@ -194,7 +194,7 @@ export class DesktopAutomationService {
         disabled?: boolean;
         disabledReason?: string;
       };
-      store: AutomationStore;
+      store: AutomationStorage;
     },
   ) {
     this.scheduler = new AutomationScheduler({

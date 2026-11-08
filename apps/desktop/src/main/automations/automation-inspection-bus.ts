@@ -22,7 +22,7 @@ import {
   normalizeAutomationInspectionRunLimit,
   normalizeAutomationInspectionTextLimitChars,
 } from "@pwragent/shared";
-import type { AutomationRecord, AutomationStore } from "./automation-store.js";
+import type { AutomationRecord, AutomationStorage } from "@pwragent/owner-core/automation-storage";
 
 export class AutomationInspectionBus {
   private readonly readRunArtifact: (
@@ -30,7 +30,7 @@ export class AutomationInspectionBus {
   ) => AutomationRunArtifact | undefined;
 
   constructor(
-    private readonly store: AutomationStore,
+    private readonly store: AutomationStorage,
     options: {
       readRunArtifact?: (runId: string) => AutomationRunArtifact | undefined;
     } = {},
