@@ -29,6 +29,7 @@ type FixtureThread = {
 export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   static threads = new Map<string, FixtureThread>();
   static requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  static refusedStarts = 0;
   private static sequence = 0;
   private handler: (message: string) => void = () => {};
   private readonly activeTurns = new Map<string, FixtureTurn>();
@@ -37,6 +38,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     OwnerConformanceCodexTransport.threads = new Map();
     OwnerConformanceCodexTransport.requests = [];
     OwnerConformanceCodexTransport.sequence = 0;
+    OwnerConformanceCodexTransport.refusedStarts = 0;
   }
 
   async connect(): Promise<void> {}
@@ -95,6 +97,12 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
         followUp = { method: "thread/name/updated", params: { threadId: thread.id, threadName: thread.name } };
       }
     } else if (request.method === "turn/start") {
+      if (OwnerConformanceCodexTransport.refusedStarts > 0) {
+        OwnerConformanceCodexTransport.refusedStarts -= 1;
+        this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id,
+          error: { code: -32600, message: "Fixture provider refused submission" } }));
+        return;
+      }
       const thread = threads.get(String(params.threadId));
       const input = params.input as Array<{ type: string; text?: string }> | undefined;
       const prompt = input?.find((item) => item.type === "text")?.text ?? "";

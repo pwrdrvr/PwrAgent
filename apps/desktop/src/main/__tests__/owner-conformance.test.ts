@@ -433,6 +433,63 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   }, 120_000);
 
+  it("retires protocol-refused desktop submissions through notification rejection before matching Outpost", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      const hosts = [desktop, outpost];
+      const identities = await Promise.all(hosts.map((host) => host.client.startThread({
+        backend: "codex", cwd: host.workspace, executionMode: "auto",
+      })));
+      await Promise.all(hosts.map(settle));
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const internal = registry as unknown as { emit: (event: AgentEvent, sequence?: number) => Promise<void> };
+      const emit = internal.emit.bind(registry);
+      let rejectTerminal = false;
+      vi.spyOn(internal, "emit").mockImplementation(async (event, sequence) => {
+        if (rejectTerminal && event.notification.method === "turn/failed") {
+          rejectTerminal = false;
+          throw new Error("Fixture terminal delivery rejected");
+        }
+        return await emit(event, sequence);
+      });
+      const commands = [{ failures: 1, reject: true }, ...fc.sample(fc.record({
+        failures: fc.integer({ min: 1, max: 3 }), reject: fc.boolean(),
+      }), 4)];
+      for (const command of commands) {
+        const before = OwnerConformanceCodexTransport.requests.filter((request) => request.method === "turn/start").length;
+        OwnerConformanceCodexTransport.refusedStarts = command.failures;
+        for (let i = 0; i < command.failures; i += 1) {
+          rejectTerminal = command.reject;
+          const { writes } = await measureSqliteWrites(async () => {
+            await expect(desktop.client.startTurn({ backend: "codex", threadId: identities[0].threadId,
+              input: [{ type: "text", text: "slow" }] })).rejects.toThrow(command.reject
+                ? "Fixture terminal delivery rejected" : "Fixture provider refused submission");
+          });
+          // A rejected notification reaches no existing terminal persistence.
+          // Ownership cleanup adds no compensating database write.
+          if (command.reject) expect(writes, JSON.stringify(writes)).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0 });
+          expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "turn/start")).toHaveLength(before + i + 1);
+        }
+        const turns = await Promise.all(hosts.map((host, index) => host.client.startTurn({
+          backend: "codex", threadId: identities[index].threadId, input: [{ type: "text", text: "slow" }],
+        })));
+        expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "turn/start"), JSON.stringify(turns)).toHaveLength(before + command.failures + 1);
+        for (const [index, turn] of turns.entries()) expect(turn).toMatchObject({
+          backend: "codex", threadId: identities[index].threadId, turnId: turns[0].turnId,
+        });
+        await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
+        await Promise.all(hosts.map(settle));
+      }
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+      vi.unstubAllEnvs();
+    }
+  }, 120_000);
+
   it("interrupts generated live turns through both real owners and preserves provider terminal order", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
