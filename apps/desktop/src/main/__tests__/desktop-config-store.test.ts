@@ -11,6 +11,7 @@ import {
   resolveToolOutputAlertPolicy,
 } from "../settings/config-store/config-domains";
 import { StateDb } from "../state/state-db";
+import { DurableConfigSnapshotStore } from "../storage/durable-config-snapshot-store";
 import {
   measureSqliteWrites,
   resetSqliteWriteMetrics,
@@ -687,7 +688,7 @@ describe("DesktopConfigStore write cost", () => {
     fs.writeFileSync(configPath, "[messaging]\nenabled = false\n", "utf8");
     // A write budget records WAL growth, which only a real file has.
     const db = StateDb.open(path.join(root, "state.db"));
-    const store = new DesktopConfigStore({ configPath, stateDb: db });
+    const store = new DesktopConfigStore({ configPath, storage: new DurableConfigSnapshotStore(db) });
     try {
       resetSqliteWriteMetrics();
       const { writes } = await measureSqliteWrites(async () => {
@@ -717,7 +718,7 @@ describe("DesktopConfigStore write cost", () => {
     const db = StateDb.open(path.join(root, "state.db"));
     const store = new DesktopConfigStore({
       configPath,
-      stateDb: db,
+      storage: new DurableConfigSnapshotStore(db),
       discoverProvider: async () => ({
         candidates: [],
         selectedCommand: "/opt/pwragent/codex",
@@ -784,7 +785,7 @@ function createFixture(initialConfig: string): {
     createStore: (options) => {
       const store = new DesktopConfigStore({
         configPath,
-        stateDb: db,
+        storage: new DurableConfigSnapshotStore(db),
         ...options,
       });
       stores.push(store);

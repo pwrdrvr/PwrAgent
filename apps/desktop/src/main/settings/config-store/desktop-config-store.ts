@@ -3,7 +3,6 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretState,
 } from "@pwragent/shared";
-import type { StateDb } from "../../state/state-db";
 import {
   watchConfigFile,
   type ConfigFileWatcher,
@@ -21,7 +20,7 @@ import {
   type ProviderProjection,
   type SecretPresence,
 } from "./config-domains";
-import { DurableConfigSnapshotStore } from "./durable-config-snapshot";
+import type { DesktopConfigSnapshotStorage } from "./durable-config-snapshot";
 import {
   ProviderRefreshCoordinator,
   type ProviderDiscoveryResult,
@@ -84,7 +83,7 @@ type Subscription = Readonly<{
 
 export class DesktopConfigStore {
   private snapshot: ConfigStoreSnapshot;
-  private readonly durable?: DurableConfigSnapshotStore;
+  private readonly durable?: DesktopConfigSnapshotStorage;
   private readonly now: () => number;
   private readonly subscriptions = new Set<Subscription>();
   private readonly updateSubscriptions = new Set<
@@ -109,7 +108,7 @@ export class DesktopConfigStore {
   constructor(private readonly options: {
     configPath: string;
     createFileWatcher?: ConfigFileWatcherFactory;
-    stateDb?: StateDb;
+    storage?: DesktopConfigSnapshotStorage;
     discoverProvider?: ProviderDiscoverer;
     now?: () => number;
     onDiagnostic?: (event: ConfigStoreDiagnosticEvent) => void;
@@ -118,9 +117,7 @@ export class DesktopConfigStore {
     >;
   }) {
     this.now = options.now ?? Date.now;
-    this.durable = options.stateDb
-      ? new DurableConfigSnapshotStore(options.stateDb)
-      : undefined;
+    this.durable = options.storage;
 
     const durableStartedAt = this.now();
     const durableConfig = this.durable?.readConfig();

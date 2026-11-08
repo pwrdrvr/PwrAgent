@@ -1,6 +1,7 @@
 import { getMainLogger } from "../../log";
 import { resolveBootstrapProfilePath } from "../../profile";
-import { getAppStateDb, getAppStateMode } from "../../state/app-state";
+import { getAppStateMode } from "../../storage/desktop-runtime-storage";
+import { createDesktopConfigSnapshotStorage } from "../../storage/desktop-settings-storage";
 import { resolveDesktopConfigPath } from "../desktop-config";
 import { DesktopConfigStore } from "./desktop-config-store";
 
@@ -15,7 +16,7 @@ export function getDesktopConfigStore(): DesktopConfigStore {
     const log = getMainLogger("pwragent:config-store");
     desktopConfigStore = new DesktopConfigStore({
       configPath,
-      stateDb: getAppStateDb(),
+      storage: createDesktopConfigSnapshotStorage(),
       onDiagnostic: (event) => {
         log.debug("config-store-operation", event);
       },
