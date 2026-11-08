@@ -34586,6 +34586,55 @@ command = "pnpm dev"
     }
   });
 
+  describe("managed review interruption routing", () => {
+    // The real startReview path establishes ownership. Interrupting the visible
+    // parent must reach that child, even when the parent is a Claude thread.
+    async function interruptClaudeReview(parentId: string, childId: string): Promise<void> {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-review-interrupt-"));
+      const store = new ClaudeSessionStore(path.join(root, "sessions"));
+      await store.save({ cwd: "/repo", thread: {
+        id: parentId, title: "Review parent", titleSource: "explicit", source: "claude", updatedAt: 1,
+      } });
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "turn/start", "turn/interrupt"] },
+        startThreadResult: { threadId: childId },
+        interruptEndsTurn: true,
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), pdfToolMcpServer: null,
+        claudeBackendOptions: {
+          store,
+          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [],
+        },
+      });
+      let review: Awaited<ReturnType<DesktopBackendRegistry["startReview"]>> | undefined;
+      try {
+        review = await registry.startReview({ backend: "claude", threadId: parentId,
+          reviewBackend: "codex", runMode: "pwragent-sub-agent", target: { type: "uncommittedChanges" } });
+        const request = { backend: "claude" as const, threadId: parentId, turnId: review.turnId };
+        expect(await registry.interruptTurn(request)).toEqual(request);
+        expect(codexClient.lastInterruptTurnParams).toEqual({ threadId: childId, turnId: review.turnId });
+        expect(codexClient.interruptTurnCallCount).toBe(1);
+      } finally {
+        if (review) await codexClient.emit({ method: "turn/cancelled", params: {
+          threadId: childId, turnId: review.turnId,
+          turn: { id: review.turnId, status: "cancelled", completedAt: 1_000 },
+        } });
+        await registry.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+
+    it("interrupts the owning review child across generated Claude parent identities", async () => {
+      await fc.assert(fc.asyncProperty(fc.uuid(), fc.uuid(), interruptClaudeReview), { numRuns: 8 });
+    });
+
+    it("interrupts a Codex reviewer rather than its idle Claude parent", async () => {
+      await interruptClaudeReview("00000000-0000-4000-8000-000000000000", "codex-review-child");
+    });
+  });
+
   it("runs a Claude thread's start_review tool call on a provider that can review", async () => {
     // Claude cannot run reviews. The tool used to answer "scheduled" with
     // Claude as the reviewer, and the start then failed in a log line when
