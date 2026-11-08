@@ -1,7 +1,9 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
+import type { StartThreadRequest, StartThreadResponse } from "@pwragent/shared";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
@@ -417,6 +419,42 @@ async function createNewThreadFocusFixture(): Promise<{
     },
   };
 }
+
+test("removes a prepared worktree after creation isolation refuses admission", async () => {
+  const fixture = await createNewThreadTranscriptFixture();
+  const repo = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-creation-refusal-")));
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  git("init", "-b", "main");
+  git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture repository");
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+  try {
+    const before = git("worktree", "list", "--porcelain");
+    const error = await app.window.evaluate(async (cwd) => {
+      try {
+        const api = (window as typeof window & { pwragent: { startThread(request: StartThreadRequest): Promise<StartThreadResponse> } }).pwragent;
+        await api.startThread({ backend: "codex", cwd, workMode: "worktree", mcpProviderServersEnabled: false });
+        return "accepted";
+      } catch (failure) { return failure instanceof Error ? failure.message : String(failure); }
+    }, repo);
+    expect(error).toContain("cannot report its configured MCP servers");
+    expect(git("worktree", "list", "--porcelain")).toBe(before);
+    // The refusal precedes the fixture's single-use thread/start response.
+    // A later ordinary send must still create and complete that thread.
+    await mastheadAction(app.window, "New thread").click();
+    await app.window.getByRole("textbox", { name: "New thread" }).fill("Let's test creating a new thread again");
+    await app.window.getByRole("button", { name: "Start thread" }).click();
+    await expect.poll(async () => await app.getLastStartTurn()).toMatchObject({ threadId: "thread-new" });
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "turn-completed-1" });
+    await expect(app.window.getByRole("region", { name: "Transcript" }).getByText("The assistant reply finally showed up.")).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+    await rm(repo, { recursive: true, force: true });
+  }
+});
 
 test("reveals a new root in a collapsed directory when SQLite refuses its parent relationship", async () => {
   const fixture = await createNewThreadTranscriptFixture();
