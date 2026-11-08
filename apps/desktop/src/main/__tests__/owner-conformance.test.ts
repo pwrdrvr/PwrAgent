@@ -1,3 +1,4 @@
+import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -43,6 +44,13 @@ vi.mock("../app-server/backend-registry", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../app-server/backend-registry")>()),
   getDesktopBackendRegistry: () => desktopOwner.registry,
 }));
+// Each test replaces the fixture owner. Its detail service must follow that owner,
+// rather than retaining the first registry in the production process singleton.
+vi.mock("../app-server/navigation-detail-service", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../app-server/navigation-detail-service")>();
+  return { ...original, getDesktopNavigationDetailService: () =>
+    new original.NavigationDetailService(desktopOwner.registry as DesktopBackendRegistry) };
+});
 vi.mock("../acp/acp-instance-discovery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../acp/acp-instance-discovery")>()),
   discoverLocalAcpAgentRecords: vi.fn(async () => []),
@@ -65,6 +73,7 @@ type OwnerHost = {
   methods: Set<string>;
   events: AgentEvent[];
   workspace: string;
+  local?: LocalOwnerNavigationTransport;
   close(): Promise<void>;
 };
 
@@ -117,11 +126,13 @@ async function startDesktopOwner(): Promise<OwnerHost> {
   let rpc: FederationRpcEndpoint;
   router.registerConnection({ peerId: "viewer", capabilities: VIEWER_CAPABILITIES,
     sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
-  registerFederationBackendHandlers({ router, backend: new DesktopFederationRuntime().localBackend() });
+  const backend = new DesktopFederationRuntime().localBackend();
+  registerFederationBackendHandlers({ router, backend });
   rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "desktop-owner", defaultTimeoutMs: 5000,
     sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
   return {
     name: "desktop", client: new FederationRemoteBackendClient(rpc), methods, events, workspace,
+    local: new LocalOwnerNavigationTransport(backend),
     close: async () => {
       stopEvents();
       await registry.close();
@@ -240,6 +251,28 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("serves native and remote navigation from the real desktop owner with the same bounded results", async () => {
+    const desktop = await startDesktopOwner();
+    try {
+      const thread = await desktop.client.startThread({ backend: "codex", cwd: desktop.workspace });
+      const ref = { backend: "codex" as const, threadId: thread.threadId };
+      const query = { protocol: 2 as const, consumer: "main-sidebar" as const, inventory: "owner" as const,
+        query: { kind: "lens" as const, lens: "inbox" as const } };
+      const page = await desktop.client.getNavigationQueryPage(query);
+      const native = await desktop.local!.request({ method: "backend.getNavigationQueryPage", params: query }, "sidebar");
+      // Cursors are scoped to the caller. Compare the owner data, never another caller's cursor.
+      expect(native).toMatchObject({ entries: page.entries, counts: page.counts });
+      const detail = { protocol: 2 as const, ref };
+      expect(await desktop.local!.request({ method: "backend.getNavigationSelectedDetail", params: detail }, "detail"))
+        .toEqual(await desktop.client.getNavigationSelectedDetail(detail));
+      expect(await desktop.local!.request({ method: "backend.getNavigationQueueProjection", params: detail }, "queue"))
+        .toEqual(await desktop.client.getNavigationQueueProjection(detail));
+      const launchpad = { protocol: 2 as const };
+      expect(await desktop.local!.request({ method: "backend.getNavigationLaunchpadConfig", params: launchpad }, "launchpad"))
+        .toEqual(await desktop.client.getNavigationLaunchpadConfig(launchpad));
+    } finally { await desktop.close(); }
+  });
+
   it("answer a thread's life the same way, or the baseline records the difference", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
