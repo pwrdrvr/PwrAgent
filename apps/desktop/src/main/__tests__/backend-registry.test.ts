@@ -5376,6 +5376,74 @@ describe("DesktopBackendRegistry", () => {
     await assertAcceptedAcpTurnSurvivesFinalizationFailure("acp:kimi" as AcpBackendId, "accepted", "review");
   });
 
+  async function assertClaudeStartOutcome(threadId: string, failure: "bind" | "persist" | "dispose" | "begin") {
+    const revoke = vi.fn();
+    const registration = { server: { name: "fixture", command: "/fixture/mcp", args: [], env: {} },
+      bindThread: vi.fn(), revoke };
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock({ overlays: { [`claude:${threadId}`]: {
+        backend: "claude", threadId, mcpConnectionIds: ["fixture"],
+      } } }), mcpConnectionService: { registerBridge: vi.fn(async () => registration) },
+      pdfToolMcpServer: null, claudeAgentToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      claudeBackend: { startTurn: (params: { onSessionClosed?: () => void }) => Promise<{ backend: "claude"; threadId: string; turnId: string }> };
+      beginStartingTurnOrigin: () => unknown;
+      bindStartingTurnOrigin: () => void;
+      persistStartingTurnOrigin: () => Promise<void>;
+      dropStartingTurnOrigin: (origin: unknown) => void;
+      startingTurnOrigins: Set<unknown>;
+    };
+    const accepted = { backend: "claude" as const, threadId, turnId: "accepted-claude" };
+    const provider = vi.spyOn(internal.claudeBackend, "startTurn").mockResolvedValue(accepted);
+    const refused = new Error(`Claude host ${failure}`);
+    const begin = vi.spyOn(internal, "beginStartingTurnOrigin");
+    const bind = vi.spyOn(internal, "bindStartingTurnOrigin");
+    const persist = vi.spyOn(internal, "persistStartingTurnOrigin").mockResolvedValue();
+    const drop = internal.dropStartingTurnOrigin.bind(registry);
+    const dispose = vi.spyOn(internal, "dropStartingTurnOrigin");
+    if (failure === "begin") begin.mockImplementationOnce(() => { throw refused; });
+    if (failure === "bind") bind.mockImplementationOnce(() => { throw refused; });
+    if (failure === "persist") persist.mockRejectedValueOnce(refused);
+    // Dispose the real resource before injecting a disposer failure.
+    if (failure === "dispose") {
+      dispose.mockImplementationOnce((origin) => { drop(origin); throw refused; });
+    }
+    try {
+      const pending = registry.startTurn({ backend: "claude", threadId,
+        input: [{ type: "text", text: "Continue Claude" }], messageOrigin: { kind: "messaging" } });
+      if (failure === "begin") {
+        await expect(pending).rejects.toBe(refused);
+        expect(provider).not.toHaveBeenCalled();
+        expect(revoke).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).resolves.toBe(accepted);
+        expect(provider).toHaveBeenCalledOnce();
+        expect(bind).toHaveBeenCalledOnce();
+        expect(persist).toHaveBeenCalledOnce();
+        expect(revoke).not.toHaveBeenCalled();
+        provider.mock.calls[0][0].onSessionClosed!();
+        provider.mock.calls[0][0].onSessionClosed!();
+        expect(revoke).toHaveBeenCalledOnce();
+      }
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(internal.startingTurnOrigins.size).toBe(0);
+    } finally { await registry.close(); }
+  }
+
+  it("preserves Claude acceptance and grant ownership through generated host failures", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("accepted", "same:thread", "pending:source"),
+      fc.constantFrom("bind" as const, "persist" as const, "dispose" as const, "begin" as const), assertClaudeStartOutcome), { numRuns: 12 });
+  });
+
+  it("returns an accepted Claude turn when origin persistence rejects", async () => {
+    await assertClaudeStartOutcome("accepted", "persist");
+  });
+
+  it("revokes Claude grants when origin preparation rejects before provider invocation", async () => {
+    await assertClaudeStartOutcome("accepted", "begin");
+  });
+
   it("rejects handoff while a turn start is awaiting its provider", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
