@@ -840,12 +840,15 @@ import type { AcpAvailableCommandsStorage } from "@pwragent/owner-core/acp-stora
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
+import { isInManagedWorktreeRoot } from "./managed-worktree-ownership";
+import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
 import {
   HIBERNATION_KEEP_REASONS,
   hibernationKeepReason,
   checkoutHibernationLastActivity,
   hibernationTarget,
+  isArchivedCheckoutCandidate,
   otherThreadsUsingPath,
   type HibernationContext,
 } from "./checkout-hibernation";
@@ -10172,6 +10175,7 @@ export class DesktopBackendRegistry {
   private readonly threadArchiveSweepStatusListeners = new Set<(status: DesktopThreadArchiveSweepStatus) => void>();
   private readonly readThreadArchivePolicy: () => DesktopThreadArchivePolicy;
   private readonly readCheckoutHibernationPolicy: () => DesktopCheckoutHibernationPolicy;
+  private readonly managedMaintenanceRoots: () => Promise<string[]>;
   /** Single-flight restores of hibernated checkouts. Concurrent sends share
    * one, and the turn queue treats the thread as busy until it settles. */
   private readonly checkoutRestores = new Map<string, Promise<void>>();
@@ -11376,6 +11380,8 @@ export class DesktopBackendRegistry {
     ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
     this.activeTurnKeys.onDelete((key) => { this.activeCodexTurnCollaborationModes.delete(key); });
+    this.managedMaintenanceRoots = options?.managedWorktreeRoots
+      ?? (async () => [userHomeWorktreesRoot(), resolveActiveProfilePath("worktrees")]);
     this.readThreadArchivePolicy = options?.getThreadArchivePolicy ?? (() => {
       try { return getDesktopSettingsService().resolveThreadArchivePolicy(); }
       catch { return { ...DEFAULT_THREAD_ARCHIVE_POLICY }; }
@@ -16863,18 +16869,20 @@ export class DesktopBackendRegistry {
     const codexThreads: AppServerThreadSummary[] = [];
     if (!this.isCodexBootstrapDeferredFn()) {
       if (!this.codexClient.listArchiveCleanupThreadsPage) throw new Error("Complete Codex maintenance discovery is unavailable.");
-      const cursors = new Set<string>();
-      let cursor: string | undefined;
-      do {
-        const page = await this.codexClient.listArchiveCleanupThreadsPage({
-          archived: false, cursor, limit: 100, checkpoint: async () => {}, directoryFilter: async () => false,
-        });
-        codexThreads.push(...page.threads);
-        onProgress?.({ detail: "Reading Codex checkout owners, including native children", found: codexThreads.length });
-        cursor = page.nextCursor?.trim();
-        if (cursor && cursors.has(cursor)) throw new Error("Codex maintenance discovery returned a repeated cursor.");
-        if (cursor) cursors.add(cursor);
-      } while (cursor);
+      for (const archived of [false, true]) {
+        const cursors = new Set<string>();
+        let cursor: string | undefined;
+        do {
+          const page = await this.codexClient.listArchiveCleanupThreadsPage({
+            archived, cursor, limit: 100, checkpoint: async () => {}, directoryFilter: async () => false,
+          });
+          codexThreads.push(...page.threads);
+          onProgress?.({ detail: "Reading Codex checkout owners, including archived threads and native children", found: codexThreads.length });
+          cursor = page.nextCursor?.trim();
+          if (cursor && cursors.has(cursor)) throw new Error("Codex maintenance discovery returned a repeated cursor.");
+          if (cursor) cursors.add(cursor);
+        } while (cursor);
+      }
     }
     // Read provider membership without navigation enrichment or its durable
     // caches. A failed provider is an incomplete safety inventory, not zero
@@ -16882,16 +16890,18 @@ export class DesktopBackendRegistry {
     const threads = [...codexThreads];
     for (const backendId of await this.acpBackend.archiveCleanupBackendIds()) {
       onProgress?.({ detail: `Reading ${backendId} threads`, found: threads.length });
-      let after: string | undefined;
-      do {
-        const page = this.acpBackend.listArchiveCleanupSessionsPage(backendId, { archived: false, after, limit: 100 });
-        threads.push(...page.sessions.map((session) => this.acpBackend.sessionToThreadSummary(session)));
-        if (page.nextCursor && after && page.nextCursor <= after) throw new Error("ACP maintenance discovery did not advance.");
-        after = page.nextCursor;
-      } while (after);
+      for (const archived of [false, true]) {
+        let after: string | undefined;
+        do {
+          const page = this.acpBackend.listArchiveCleanupSessionsPage(backendId, { archived, after, limit: 100 });
+          threads.push(...page.sessions.map((session) => this.acpBackend.sessionToThreadSummary(session)));
+          if (page.nextCursor && after && page.nextCursor <= after) throw new Error("ACP maintenance discovery did not advance.");
+          after = page.nextCursor;
+        } while (after);
+      }
     }
     onProgress?.({ detail: "Reading Claude threads", found: threads.length });
-    threads.push(...await this.claudeBackend.listThreads({ archived: false }));
+    threads.push(...await this.claudeBackend.listThreads({ archived: false }), ...await this.claudeBackend.listThreads({ archived: true }));
     const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
     // One read for every thread a PR watch will wake.
     const activePrWatches = await this.overlayStore.listAllActivePrStatusWatches();
@@ -16908,7 +16918,8 @@ export class DesktopBackendRegistry {
       });
     };
     for (const backend of new Set(threads.map((thread) => thread.source))) {
-      const backendThreads = threads.filter((thread) => thread.source === backend);
+      const backendThreads = [...new Map(threads.filter((thread) => thread.source === backend)
+        .map((thread) => [thread.id, thread])).values()];
       let overlays: Record<string, ThreadOverlayState | undefined> | undefined;
       try {
         overlays = await this.overlayStore.getThreadOverlayStates({
@@ -16925,8 +16936,10 @@ export class DesktopBackendRegistry {
           continue;
         }
         try {
+          const resolved = await this.maintenanceThreadWorkspace(thread, overlays[thread.id], workspaceObservations);
           candidates.push({
-            thread: await this.maintenanceThreadWorkspace(thread, overlays[thread.id], workspaceObservations), overlay: overlays[thread.id],
+            thread: resolved, overlay: overlays[thread.id],
+            managedWorktreePath: await this.managedMaintenanceCheckout(resolved),
             activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
             activePrWatch,
             activePrWatches: watches,
@@ -16972,6 +16985,18 @@ export class DesktopBackendRegistry {
       { ...directory, ...(external ? { worktreeOwnership: "external" as const } : {}) },
       ...thread.linkedDirectories.filter((item) => !resolvedPaths.has(normalizeWorktreePathForComparison(item.worktreePath ?? item.path))),
     ] };
+  }
+
+  private async isManagedMaintenanceCheckout(worktreePath: string): Promise<boolean> {
+    return await isInManagedWorktreeRoot(worktreePath, await this.managedMaintenanceRoots());
+  }
+
+  /** The resolver above established a linked checkout and this thread's
+   * attachment. A legacy external flag cannot veto our canonical root. */
+  private async managedMaintenanceCheckout(thread: AppServerThreadSummary): Promise<string | undefined> {
+    const directory = primaryThreadWorktree(thread);
+    if (!directory || directory.worktreeOwnership !== "external") return undefined;
+    return await this.isManagedMaintenanceCheckout(directory.worktreePath) ? directory.worktreePath : undefined;
   }
 
   /** Threads a Continue After wait holds from merging; auto-archive keeps them. */
@@ -17615,6 +17640,7 @@ export class DesktopBackendRegistry {
         ...resolved,
       },
       overlay,
+      managedWorktreePath: await this.managedMaintenanceCheckout(resolved),
       activeSubAgent: await this.hasArchiveActiveSubAgent(backend, threadId),
       activePrWatch: (await this.overlayStore.listActiveThreadPrStatusWatches({ backend, threadId })).length > 0,
       mergeHeld: this.readMergeHeldThreadKeys().has(buildThreadIdentityKey(backend, threadId)),
@@ -17627,7 +17653,8 @@ export class DesktopBackendRegistry {
     return active.some((agent) => ARCHIVE_ACTIVE_SUB_AGENT_STATUSES.includes(agent.status));
   }
 
-  private autoArchiveCandidateIsBusy({ thread }: ThreadArchiveCandidate): boolean {
+  private autoArchiveCandidateIsBusy(candidate: ThreadArchiveCandidate): boolean {
+    const { thread } = candidate;
     const identity = { backend: thread.source, threadId: thread.id };
     const info = this.threadInfoStore.get(identity);
     return this.closed || this.stoppingRunningTurnsForShutdown
@@ -17639,7 +17666,7 @@ export class DesktopBackendRegistry {
       || this.threadHasActiveTurn(thread.id, thread.source)
       || this.threadHasBlockingWorkspaceMove(identity)
       || this.threadTurnQueue.getQueuedEntries(identity).length > 0
-      || (info?.archived === true && thread.archivedAt === undefined)
+      || (info?.archived === true && !isArchivedCheckoutCandidate(candidate))
       || (thread.archivedAt === undefined && (info?.updatedAt ?? 0) > (thread.updatedAt ?? 0))
       || [...this.pendingServerRequests.values()].some((pending) =>
         pending.backend === thread.source && pending.notification.params.threadId === thread.id,
@@ -41622,7 +41649,8 @@ export class DesktopBackendRegistry {
           return { worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
             skippedReason: acpBlocker };
         }
-        if (externalWorktreePaths.has(normalizeWorktreePathForComparison(candidate.worktreePath))) {
+        if (externalWorktreePaths.has(normalizeWorktreePathForComparison(candidate.worktreePath))
+          && !await this.isManagedMaintenanceCheckout(candidate.worktreePath)) {
           return {
             worktreePath: candidate.worktreePath,
             removedWorktree: false,
@@ -41692,6 +41720,7 @@ export class DesktopBackendRegistry {
             removalSiblings = await this.archivedWorktreeSiblings({ archivedThreadId: params.thread.id, archivedThreads: current.archivedThreads,
               ownershipPaths: current.ownershipPaths, backend: params.backend, worktreePath: candidate.worktreePath });
             const ownership = await this.readCanonicalArchiveOwnership(current, candidate.worktreePath);
+            const managedCheckout = await this.isManagedMaintenanceCheckout(candidate.worktreePath);
             if (ownership.users.some((owner) => owner.id !== params.thread.id || owner.source !== params.backend)) {
               await this.retainDeferredArchiveWorktree({ ...params, activeThreads: current.activeThreads }, candidate,
                 ownership.users.filter((owner) => owner.id !== params.thread.id || owner.source !== params.backend)
@@ -41709,10 +41738,11 @@ export class DesktopBackendRegistry {
                 const worktreePath = linkedDirectoryWorktreePath(directory);
                 return worktreePath && normalizeWorktreePathForComparison(worktreePath) === key;
               })) throw new Error("The archived thread no longer owns this worktree; the checkout was kept.");
-              if (current.worktreeEvidence?.externalPaths.has(key) || (!current.worktreeEvidence && [current.thread, ...current.activeThreads, ...current.archivedThreads].some((thread) =>
+              if (!managedCheckout
+                && (current.worktreeEvidence?.externalPaths.has(key) || (!current.worktreeEvidence && [current.thread, ...current.activeThreads, ...current.archivedThreads].some((thread) =>
                 thread.linkedDirectories.some((directory) => directory.worktreeOwnership === "external"
                   && normalizeWorktreePathForComparison(linkedDirectoryWorktreePath(directory) ?? "") === key),
-              ))) throw new Error("Externally managed worktree; thread archive leaves this checkout in place.");
+              )))) throw new Error("Externally managed worktree; thread archive leaves this checkout in place.");
               if (ownership.external) throw new Error("Externally managed worktree; the checkout was kept.");
               const users = ownership.users.filter((thread) => thread.id !== params.thread.id || thread.source !== params.backend);
               if (users.length) throw new Error("Worktree is still used by another active thread; the checkout was kept.");
@@ -41992,7 +42022,8 @@ export class DesktopBackendRegistry {
     const key = await canonicalWorktreePaths()(worktreePath);
     const users = new Set([...active.get(key) ?? [], ...unknown]);
     for (const [value, owners] of active) if (value.startsWith(key + path.sep)) for (const owner of owners) users.add(owner);
-    return { users: [...users], external: external.has(key) || external.has("*") };
+    return { users: [...users], external: (external.has(key) || external.has("*"))
+      && !await this.isManagedMaintenanceCheckout(worktreePath) };
   }
 
   /** Archived threads other than the owner that use this checkout. Resolve

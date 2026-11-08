@@ -75,9 +75,8 @@ export function keptGuidance(reason: string, context: KeptGuidanceContext): stri
     }
     case "Already archived":
       return context.step === "hibernate"
-        ? context.checkoutsStep
-          ? "The thread is archived, so its checkout is reviewed in the Archived checkouts step, not hibernated."
-          : "The thread is archived, so its checkout is reviewed under Archived checkouts, not hibernated. Scan that tab to review it."
+        ? "An older PwrAgent kept this because its thread was archived. Archived status no longer keeps a checkout. "
+          + "The scan's idle threshold and other protections still apply. Re-scan with an updated PwrAgent."
         : "Already archived.";
     // Sent only by an older owner. Ignored files no longer keep a checkout.
     case "Other ignored files":
@@ -109,7 +108,11 @@ export function keptGuidance(reason: string, context: KeptGuidanceContext): stri
       return "A thread that is not archived still uses this checkout. It may be one this scan did not read, such as "
         + "another profile's. The checkout stays while that thread uses it.";
     case "Externally managed":
+    case "Checkout ownership not registered":
     case "Checkout not created by PwrAgent":
+      return "An attached linked checkout inside PwrAgent's worktree folder no longer stays external because of an old "
+        + "flag. Outside that folder, a checkout recorded as externally managed stays protected. Re-scan with an updated "
+        + "PwrAgent, or open the thread to inspect its checkout.";
     case "Checkout outside PwrAgent's and Codex's worktrees":
     case "Codex chat folder":
       return "PwrAgent did not create this checkout, so maintenance leaves it to you or the app that made it.";

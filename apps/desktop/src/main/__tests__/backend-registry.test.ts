@@ -3636,8 +3636,9 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("lists PwrAgent's Claude threads for the hourly sweep and Thread maintenance", async () => {
+  it("lists active and archived PwrAgent Claude threads for checkout maintenance", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
+    const claudeStore = new ClaudeSessionStore(path.join(root, "sessions"));
     const registry = new DesktopBackendRegistry({
       codexClient: Object.assign(new MockBackendClient({}), {
         listArchiveCleanupThreadsPage: vi.fn(async () => ({ threads: [], nextCursor: undefined })),
@@ -3645,7 +3646,7 @@ describe("DesktopBackendRegistry", () => {
       overlayStore: createOverlayStoreMock(),
       pdfToolMcpServer: null,
       claudeBackendOptions: {
-        store: new ClaudeSessionStore(path.join(root, "sessions")),
+        store: claudeStore,
         getSessionInfo: vi.fn().mockResolvedValue(undefined),
         inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
         discoverModels: async () => [],
@@ -3658,6 +3659,12 @@ describe("DesktopBackendRegistry", () => {
       // The run's recheck reads the same store, not the Codex client.
       const refreshed = await registry.refreshArchiveCandidate(claude!);
       expect(refreshed.thread).toMatchObject({ id: threadId, source: "claude", projectKey: root });
+      // The provider's persisted archive is the oracle, not navigation state.
+      const session = await claudeStore.read(threadId);
+      session.thread.archivedAt = Date.now();
+      await claudeStore.save(session);
+      const archived = (await registry.listAutoArchiveCandidates()).find(({ thread }) => thread.id === threadId);
+      expect(archived?.thread.archivedAt).toBe(session.thread.archivedAt);
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true });

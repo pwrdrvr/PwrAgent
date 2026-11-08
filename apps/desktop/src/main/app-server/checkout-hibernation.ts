@@ -7,11 +7,17 @@ import {
 } from "@pwragent/shared";
 import {
   archiveCandidateProtectionReason,
+  CLAUDE_CHECKOUT_KEEP_REASON,
   type ThreadArchiveCandidate,
 } from "./thread-archive-sweeper";
 import { primaryThreadWorktree } from "./missing-thread-workspace";
 
 const DAY_MS = 86_400_000;
+
+export function isArchivedCheckoutCandidate({ thread, overlay }: Pick<ThreadArchiveCandidate, "thread" | "overlay">): boolean {
+  return thread.archivedAt !== undefined || overlay?.archiveTombstonedAt !== undefined
+    || overlay?.archiveRetentionStartedAt !== undefined;
+}
 
 /** A view acknowledgement is conversation activity for archiving, but does
  * not use the checkout. Inspecting a kept thread must not postpone its
@@ -25,10 +31,9 @@ export function checkoutHibernationLastActivity({ thread, overlay }: ThreadArchi
  * share these strings. */
 export const HIBERNATION_KEEP_REASONS = {
   off: "Hibernation is off",
-  archived: "Already archived",
   keptAwake: "Kept awake",
   noWorktree: "No worktree checkout",
-  borrowed: "Checkout not created by PwrAgent",
+  borrowed: CLAUDE_CHECKOUT_KEEP_REASON,
   outsideRoot: "Checkout outside PwrAgent's and Codex's worktrees",
   alreadyHibernated: "Already hibernated",
   archiveRestorePending: "Archive restore not finished",
@@ -79,10 +84,13 @@ export function hibernatedSnapshotFor(candidate: Pick<ThreadArchiveCandidate, "t
 
 /** The thread's working worktree. Location is not an ownership signal; the
  * subsequent Git probe must establish a linked checkout, never a primary. */
-export function hibernationTarget(candidate: Pick<ThreadArchiveCandidate, "thread" | "overlay">): HibernationTarget | { keep: string } {
+export function hibernationTarget(candidate: Pick<ThreadArchiveCandidate, "thread" | "overlay" | "managedWorktreePath">): HibernationTarget | { keep: string } {
   const directory = primaryThreadWorktree(candidate.thread);
   if (!directory) return { keep: HIBERNATION_KEEP_REASONS.noWorktree };
-  if (directory.worktreeOwnership === "external") return { keep: HIBERNATION_KEEP_REASONS.borrowed };
+  if (directory.worktreeOwnership === "external"
+    && (!candidate.managedWorktreePath || !samePath(directory.worktreePath, candidate.managedWorktreePath))) {
+    return { keep: HIBERNATION_KEEP_REASONS.borrowed };
+  }
   return { directory, worktreePath: directory.worktreePath, repositoryPath: directory.path };
 }
 
@@ -102,8 +110,7 @@ export function hibernationKeepReason(
 ): string | undefined {
   const { thread, overlay } = candidate;
   if (!policy.enabled) return HIBERNATION_KEEP_REASONS.off;
-  if (thread.archivedAt !== undefined || overlay?.archiveTombstonedAt !== undefined
-    || overlay?.archiveRetentionStartedAt !== undefined) return HIBERNATION_KEEP_REASONS.archived;
+  const archived = isArchivedCheckoutCandidate(candidate);
   // Keep it awake: the operator's own exemption, until they turn it off.
   if (overlay?.keepCheckoutAwake) return HIBERNATION_KEEP_REASONS.keptAwake;
   const protection = archiveCandidateProtectionReason(candidate, { allowPinned: true, allowOwnedClaudeWorktree: true });
@@ -118,8 +125,10 @@ export function hibernationKeepReason(
   if (!Number.isFinite(thread.updatedAt) || (thread.updatedAt ?? 0) <= 0) return HIBERNATION_KEEP_REASONS.activityUnknown;
   const idle = now - checkoutHibernationLastActivity(candidate);
   // Claude Code may have deleted an old session, and restoring its checkout
-  // would not bring the conversation back.
-  if (thread.source === "claude" && idle > CHECKOUT_HIBERNATION_CLAUDE_MAX_IDLE_DAYS * DAY_MS) {
+  // would not bring an active conversation back. An archived conversation
+  // already has that lifecycle state; it does not require a live SDK session
+  // to reclaim its idle checkout.
+  if (!archived && thread.source === "claude" && idle > CHECKOUT_HIBERNATION_CLAUDE_MAX_IDLE_DAYS * DAY_MS) {
     return HIBERNATION_KEEP_REASONS.claudeSessionAge;
   }
   if (idle < policy.idleDays * DAY_MS) return HIBERNATION_KEEP_REASONS.recentlyActive;

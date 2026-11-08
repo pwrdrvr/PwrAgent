@@ -313,7 +313,7 @@ describe("ACP snapshot archive and restoration", () => {
   });
 
   it.each(["primary", "external", "active owner", "unknown capability", "no load", "rebind"])("retains protected ACP checkouts (%s)", async (scenario) => {
-    const fixture = await createFixture("claude");
+    const fixture = await createFixture(scenario === "external" ? false : "claude");
     const instance = fixture.reopen();
     const cwd = scenario === "primary" ? fixture.repo : fixture.worktree;
     seedAcpOwner(instance, cwd);
@@ -330,6 +330,20 @@ describe("ACP snapshot archive and restoration", () => {
     expect(result.cleanup.every((item) => !item.removedWorktree)).toBe(true);
     expect((await stat(cwd)).isDirectory()).toBe(true);
     expect((await instance.store.getThreadOverlayState(acpOwner))?.worktreeSnapshots ?? []).toHaveLength(0);
+  });
+
+  it("snapshots and restores an attached ACP checkout inside the managed root despite its external marker", async () => {
+    const fixture = await createFixture("claude");
+    const instance = fixture.reopen(fixture.directory, false, () => new ArchiveAcpTransport());
+    seedAcpOwner(instance, fixture.worktree);
+    await instance.store.addLinkedDirectory({ ...acpOwner, directory: { ...fixture.directory, worktreeOwnership: "external" } });
+    await writeFile(path.join(fixture.worktree, "file.txt"), "saved managed checkout work\n");
+    const result = await instance.registry.archiveThread(acpOwner);
+    expect(result.cleanup.some((item) => item.removedWorktree)).toBe(true);
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+    await instance.registry.restoreThread(acpOwner);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("saved managed checkout work\n");
   });
 
   it.each(["checkout", "load", "unsupported", "unadvertised", "partial"])("keeps the session archived and recovery available on %s failure", async (failure) => {

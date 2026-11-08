@@ -15,7 +15,8 @@ function candidate(directory: Partial<LinkedDirectorySummary> & { worktreePath: 
 
 describe("hibernationTarget", () => {
   // Property: location does not decide eligibility. The Git inspection proves
-  // it is a linked checkout; explicit external ownership still protects it.
+  // it is a linked checkout. Without fresh managed-root evidence, explicit
+  // external ownership still protects it.
   it("considers owned worktrees independently of their directory layout", () => {
     const segment = fc.stringMatching(/^[a-z0-9-]{1,8}$/);
     fc.assert(fc.property(

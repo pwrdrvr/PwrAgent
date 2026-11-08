@@ -12,8 +12,8 @@ import { hibernationKeepReason } from "../app-server/checkout-hibernation";
 import { archiveCandidateKeepReason, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 
 /**
- * Model test. `eligible` below restates the approved design (section 10 of
- * the Thread Maintenance UX review) as one predicate, written apart from the
+ * Model test. `eligible` below states checkout eligibility as one predicate,
+ * independently of the conversation's archived state and apart from the
  * implementation's ordered keep reasons. Every generated candidate must get
  * the same yes/no from both, and pinning must never change the answer.
  */
@@ -109,7 +109,6 @@ function build(input: Scenario): { candidate: ThreadArchiveCandidate; policy: De
 function eligible(input: Scenario): boolean {
   const idleDays = input.idleFor / DAY;
   return input.enabled
-    && input.archived === "no"
     // Keep it awake exempts the thread until the operator turns it off.
     && !input.keepAwake
     && !input.unreadable
@@ -120,12 +119,31 @@ function eligible(input: Scenario): boolean {
     // A resolved linked checkout, independently of path or provider.
     && input.root !== "none" && !input.external
     && input.snapshot !== "hibernated" && input.snapshot !== "archivedPending"
-    && !(input.source === "claude" && idleDays > 30)
+    && !(input.archived === "no" && input.source === "claude" && idleDays > 30)
     && idleDays >= input.idleDays
     && !input.busy && !input.sharedPath;
 }
 
 describe("checkout hibernation keep rules", () => {
+  it("uses the idle window and protections, not archived status, for archived checkout cleanup", () => {
+    fc.assert(fc.property(fc.constantFrom("provider", "tombstone", "retention"),
+      fc.constantFrom("codex", "claude", "acp:kimi"), fc.integer({ min: 1, max: 60 }), (archived, source, idleDays) => {
+        const { candidate, policy } = build({ enabled: true, idleDays, source, root: "pwragent", external: false,
+          archived, pinned: "no", agent: false, mergeHeld: false, pendingWork: false, prWatch: false, scheduled: false,
+          remote: false, activeSubAgent: false, unreadable: false, threadStatus: "notLoaded", idleFor: (idleDays + 1) * DAY,
+          viewedAgo: 0, snapshot: "none", keepAwake: false, busy: false, sharedPath: false });
+        const context = { busy: false, sharedPath: false };
+        expect(hibernationKeepReason(candidate, NOW, policy, context)).toBeUndefined();
+        candidate.thread.updatedAt = NOW - (idleDays - 1) * DAY;
+        expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Recently active");
+        candidate.thread.updatedAt = NOW - (idleDays + 1) * DAY;
+        candidate.activePrWatch = true;
+        expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Watching a PR");
+        candidate.activePrWatch = false;
+        expect(hibernationKeepReason(candidate, NOW, policy, { ...context, sharedPath: true })).toBe("Shared with another thread");
+      }));
+  });
+
   it("does not turn inspection of an idle thread into checkout work, while real work and restores still protect it", () => {
     fc.assert(fc.property(fc.integer({ min: 1, max: 20 }), fc.integer({ min: 0, max: DAY - 1 }), (idleDays, viewedAgo) => {
       const old = NOW - (idleDays + 1) * DAY;

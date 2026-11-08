@@ -78,11 +78,23 @@ describe("kept guidance", () => {
     for (const step of ["hibernate", "checkouts"] as const) {
       expect(keptGuidance("Changes over the snapshot limit", { step })).not.toMatch(/in the plan/);
     }
-    expect(keptGuidance("Already archived", { step: "hibernate", checkoutsStep: true })).toContain("Archived checkouts step");
-    expect(keptGuidance("Already archived", { step: "hibernate", checkoutsStep: false })).toContain("Scan that tab");
+    for (const checkoutsStep of [true, false]) {
+      const guidance = keptGuidance("Already archived", { step: "hibernate", checkoutsStep })!;
+      expect(guidance).toContain("Archived status no longer keeps a checkout");
+      expect(guidance).toContain("idle threshold");
+      expect(guidance).toContain("Re-scan");
+    }
     // Pushing alone does not resolve uncommitted work.
     expect(keptGuidance("Uncommitted changes", { step: "hibernate" })).not.toMatch(/push/i);
     expect(keptGuidance("Used by an active thread", { step: "checkouts" })).toContain("this scan did not read");
+  });
+
+  it("describes recorded external ownership without guessing who created the checkout", () => {
+    for (const reason of ["Checkout ownership not registered", "Checkout not created by PwrAgent", "Externally managed"]) {
+      const guidance = keptGuidance(reason, { step: "hibernate" })!;
+      expect(guidance).toContain("recorded as externally managed");
+      expect(guidance).not.toMatch(/PwrAgent did not create|app that made/i);
+    }
   });
 
   it("has guidance for every reason the scans send", () => {
