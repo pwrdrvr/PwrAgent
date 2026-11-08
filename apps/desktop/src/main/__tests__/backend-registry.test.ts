@@ -86,7 +86,6 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
-  AppServerThreadTitleSource,
   AppServerReviewTarget,
   AppServerTurnInputItem,
   AttachThreadPullRequestToolArgs,
@@ -12700,16 +12699,12 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await registry.listThreads({ backend: acpBackendId });
-    await (registry as unknown as {
-      applyGeneratedThreadTitle(params: {
-        backend: AppServerBackendKind;
-        threadId: string;
-        title: string;
-      }): Promise<void>;
-    }).applyGeneratedThreadTitle({
+    await registry["applyGeneratedThreadTitle"]({
       backend: acpBackendId,
       threadId: "session-1",
       title: "Investigate the flaky federation handshake test",
+      prompt: "Investigate the flaky federation handshake test",
+      namingAttempt: registry["threadNaming"].beginTitleGeneration({ backend: acpBackendId, threadId: "session-1" }),
     });
 
     // This reads the information store, not the thread-list cache: the
@@ -12755,16 +12750,12 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await registry.listThreads({ backend: "codex" });
-    await (registry as unknown as {
-      applyGeneratedThreadTitle(params: {
-        backend: AppServerBackendKind;
-        threadId: string;
-        title: string;
-      }): Promise<void>;
-    }).applyGeneratedThreadTitle({
+    await registry["applyGeneratedThreadTitle"]({
       backend: "codex",
       threadId: "thread-1",
       title: "Ship the release runbook",
+      prompt: "Ship the release runbook",
+      namingAttempt: registry["threadNaming"].beginTitleGeneration({ backend: "codex", threadId: "thread-1" }),
     });
 
     expect(
@@ -12829,19 +12820,12 @@ describe("DesktopBackendRegistry", () => {
     // "this thread has no name", and every consumer — thread chips, the quit
     // dialog, the federated summary cache — would discard the name being
     // announced.
-    await (registry as unknown as {
-      renameAcpSession(
-        backend: AcpBackendId,
-        threadId: string,
-        name: string,
-        options?: { titleSource?: AppServerThreadTitleSource },
-      ): Promise<{ threadId: string }>;
-    }).renameAcpSession(
-      acpBackendId,
-      "session-1",
-      "Investigate the flaky federation handshake test",
-      { titleSource: "fallback" },
-    );
+    await registry["threadNaming"].applyGeneratedTitle({
+      attempt: registry["threadNaming"].beginTitleGeneration({ backend: acpBackendId, threadId: "session-1" }),
+      prompt: "Investigate the flaky federation handshake test",
+      title: "Investigate the flaky federation handshake test",
+      titleSource: "fallback",
+    });
 
     expect(
       events.filter(

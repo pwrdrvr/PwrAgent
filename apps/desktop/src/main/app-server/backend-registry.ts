@@ -1,3 +1,4 @@
+import { ThreadNamingLifecycle, isEligibleForGeneratedTitle, isPromptPlaceholderTitle, isInjectedContextPlaceholderTitle, type ThreadNamingAttempt, type ThreadTitleApplication, type ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
@@ -41,7 +42,6 @@ import {
   FORGE_AGENT_TOOL_GROUP_LABELS,
   isTokenMiserSubAgent,
   totalTokenMiserGateAccountings,
-  RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
   finalTurnOutputText,
   readUuidV7Timestamp,
@@ -341,7 +341,6 @@ import {
   type AppServerRenamedTitleSource,
   type AppServerThreadStatus,
   type AppServerThreadSummary,
-  type AppServerThreadTitleSource,
   type CodexNativeSubAgentSummary,
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
   type AppServerTurnInputItem,
@@ -8009,68 +8008,6 @@ function buildPromptHash(prompt: string): string {
   return prompt.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-function isEligibleForGeneratedTitle(
-  thread: AppServerThreadSummary | undefined,
-  prompt: string,
-  options?: { systemPlaceholder?: boolean },
-): boolean {
-  if (!thread) {
-    return true;
-  }
-  if (isPromptPlaceholderTitle(thread.title, prompt)) {
-    return true;
-  }
-  if (thread.titleSource === "explicit") {
-    return Boolean(
-      options?.systemPlaceholder
-      && isGenericPlaceholderTitle(thread.title),
-    );
-  }
-  if (isInjectedContextPlaceholderTitle(thread.title)) {
-    return true;
-  }
-  if (thread.titleSource === "fallback") {
-    return (
-      !isAcpBackendId(thread.source) ||
-      isAcpFallbackPlaceholderTitle(thread.title)
-    );
-  }
-  const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
-  return normalizeTitleForComparison(thread.title) === normalizeTitleForComparison(derivedTitle);
-}
-
-function normalizeTitleForComparison(value: string): string {
-  return value.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-function isPromptPlaceholderTitle(title: string, prompt: string): boolean {
-  const normalizedTitle = normalizeTitleForComparison(title);
-  const normalizedPrompt = normalizeTitleForComparison(prompt);
-  const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
-  return (
-    normalizedTitle === normalizedPrompt ||
-    normalizedTitle === normalizeTitleForComparison(derivedTitle)
-  );
-}
-
-function isInjectedContextPlaceholderTitle(title: string): boolean {
-  const normalizedTitle = normalizeTitleForComparison(title);
-  return (
-    normalizedTitle.startsWith("# agents.md instructions") ||
-    normalizedTitle.startsWith("agents.md instructions for")
-  );
-}
-
-function isAcpFallbackPlaceholderTitle(title: string): boolean {
-  const normalizedTitle = normalizeTitleForComparison(title);
-  return normalizedTitle === "acp session";
-}
-
-function isGenericPlaceholderTitle(title: string): boolean {
-  const normalizedTitle = normalizeTitleForComparison(title);
-  return normalizedTitle === "untitled thread";
-}
-
 function truncateLogValue(value: string | undefined): string | null {
   const normalized = value?.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -9603,12 +9540,6 @@ function readProviderRuntimeFingerprints(
   ) as Record<ProviderId, string>;
 }
 
-type ThreadRenameOptions = {
-  titleSource?: AppServerRenamedTitleSource;
-  renameOrigin?: "agent_tool";
-  previousThreadName?: string;
-};
-
 export class DesktopBackendRegistry {
   private readonly launchpadCreationOperations = new LaunchpadCreationOperations();
   private readonly codexClient: BackendClient;
@@ -10296,7 +10227,6 @@ export class DesktopBackendRegistry {
     string,
     { title: string; titleSource: AppServerRenamedTitleSource }
   >();
-  private readonly threadRenameQueues = new Map<string, Promise<void>>();
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private readonly queuedMessageTitler: QueuedMessageTitler;
@@ -11135,8 +11065,6 @@ export class DesktopBackendRegistry {
    */
   private readonly codexEnvironmentRuntimeLocks = new PerKeyAsyncLock();
   private readonly attemptedTitleGenerations = new Set<string>();
-  /** Launch placeholders stay helper-eligible until renamed or attempted. */
-  private readonly systemPlaceholderTitleThreadKeys = new Set<string>();
   private readonly pendingDirectoryRepairs = new Map<string, Promise<void>>();
   private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
   private readonly pendingCodexWorkspaceCwdSyncs = new Map<
@@ -18964,157 +18892,44 @@ export class DesktopBackendRegistry {
     });
   }
 
-  async renameThread(
-    request: RenameThreadRequest,
-    // Not on `RenameThreadRequest`: that type crosses IPC, and an operator
-    // rename must never be able to claim it was generated. Only this class's
-    // own title generator supplies a source.
-    options?: ThreadRenameOptions,
-  ): Promise<RenameThreadResponse> {
-    const backend = request.backend ?? "codex";
-    const key = buildThreadIdentityKey(backend, request.threadId);
-    // Clear helper eligibility before this rename waits on earlier requests or
-    // metadata, so a late title helper cannot enqueue after an operator rename.
-    this.systemPlaceholderTitleThreadKeys.delete(key);
-    const previous = this.threadRenameQueues.get(key) ?? Promise.resolve();
-    const operation = previous.then(() => this.applyThreadRename(request, options));
-    const settled = operation.then(() => {}, () => {});
-    this.threadRenameQueues.set(key, settled);
-    try {
-      return await operation;
-    } finally {
-      if (this.threadRenameQueues.get(key) === settled) this.threadRenameQueues.delete(key);
-    }
+  async renameThread(request: RenameThreadRequest, options?: ThreadRenameOptions): Promise<RenameThreadResponse> {
+    return await this.threadNaming.renameThread(request, options);
   }
 
-  private async applyThreadRename(
-    request: RenameThreadRequest,
-    options?: ThreadRenameOptions,
-  ): Promise<RenameThreadResponse> {
-    const backend = request.backend ?? "codex";
-    if (request.expectedName !== undefined || options?.renameOrigin === "agent_tool") {
-      const namePromise = backend === "codex"
-        ? this.withCodexThreadClient(request.threadId, async (client) => {
-            if (!client.readThreadName) throw new Error("Persisted thread names are unavailable.");
-            return await client.readThreadName(request.threadId);
-          })
-        : this.readThreadInspectionSummaryForMutation({ backend, threadId: request.threadId, fresh: true }).then((summary) => summary?.title);
-      const name = await namePromise.catch((error: unknown) => {
-        // The prior title is optional notice metadata. A failed metadata read
-        // must not prevent a requested rename; Undo must still fail closed.
-        if (request.expectedName !== undefined) throw error;
-        return undefined;
-      });
-      if (request.expectedName !== undefined && name !== request.expectedName) {
-        throw new Error(RENAME_THREAD_EXPECTED_NAME_MISMATCH);
+  private readonly threadNaming = new ThreadNamingLifecycle({
+    readName: async ({ backend, threadId }) => backend === "codex"
+      ? await this.withCodexThreadClient(threadId, async (client) => {
+          if (!client.readThreadName) throw new Error("Persisted thread names are unavailable.");
+          return await client.readThreadName(threadId);
+        })
+      : (await this.readThreadInspectionSummaryForMutation({ backend, threadId, fresh: true }))?.title,
+    readTitle: async (identity) => await this.findThreadForTitleGeneration(identity),
+    renameProvider: async (request, titleSource) => {
+      const backend = request.backend ?? "codex";
+      if (isAcpBackendId(backend)) {
+        const nextName = request.name.trim();
+        if (!nextName) throw new Error("Thread name cannot be blank.");
+        const session = this.acpBackend.getSession(backend, request.threadId);
+        if (!session) throw new Error("Selected ACP thread was not found.");
+        this.acpBackend.upsertSession({
+          ...session,
+          title: nextName,
+          titleSource,
+          updatedAt: Math.max(session.updatedAt, Date.now()),
+        });
+        return { threadId: request.threadId };
       }
-      if (options?.renameOrigin === "agent_tool") {
-        options = { ...options, previousThreadName: name };
-      }
-    }
-    let result: { threadId: string };
-    if (isAcpBackendId(backend)) {
-      result = await this.renameAcpSession(
-        backend,
-        request.threadId,
-        request.name,
-        options,
-      );
-    } else if (backend === "claude") {
-      result = await this.claudeBackend.renameThread(request.threadId, request.name);
-    } else if (backend === "codex") {
-      result = await this.withCodexThreadClient(request.threadId, async (client) =>
-        await this.renameWithClient(client, request.threadId, request.name),
-      );
-    } else {
+      if (backend === "claude") return await this.claudeBackend.renameThread(request.threadId, request.name);
+      if (backend === "codex") return await this.withCodexThreadClient(request.threadId, async (client) =>
+        await this.renameWithClient(client, request.threadId, request.name));
       throw new Error(`Unsupported backend: ${backend}`);
-    }
-    const agent = await this.getThreadAgentMetadata({
-      backend,
-      threadId: result.threadId,
-    });
-    if (agent) {
-      await this.overlayStore.setThreadAgent({
-        backend,
-        threadId: result.threadId,
-        agent: {
-          name: request.name.trim(),
-          ...(agent.instructions ? { instructions: agent.instructions } : {}),
-        },
-      });
-    }
-    this.invalidateThreadListCache(backend);
-    if (!isAcpBackendId(backend)) {
-      await this.emit({
-        backend,
-        notification: {
-          method: "thread/name/updated",
-          params: {
-            threadId: result.threadId,
-            threadName: request.name.trim(),
-            // Only this class's title generator passes a source; any other
-            // rename was requested by the operator or an agent.
-            titleSource: options?.titleSource ?? "explicit",
-            ...(options?.renameOrigin ? { renameOrigin: options.renameOrigin } : {}),
-            ...(options?.previousThreadName ? { previousThreadName: options.previousThreadName } : {}),
-          },
-        },
-      });
-    }
-
-    return {
-      backend,
-      threadId: result.threadId,
-      renamedAt: Date.now(),
-    };
-  }
-
-  private async renameAcpSession(
-    backend: AcpBackendId,
-    threadId: string,
-    name: string,
-    options?: Omit<ThreadRenameOptions, "titleSource"> & { titleSource?: AppServerThreadTitleSource },
-  ): Promise<{ threadId: string }> {
-    const nextName = name.trim();
-    if (!nextName) {
-      throw new Error("Thread name cannot be blank.");
-    }
-    const session = this.acpBackend.getSession(backend, threadId);
-    if (!session) {
-      throw new Error("Selected ACP thread was not found.");
-    }
-    const updatedAt = Date.now();
-    const titleSource = options?.titleSource ?? "explicit";
-    this.acpBackend.upsertSession({
-      ...session,
-      title: nextName,
-      titleSource,
-      updatedAt: Math.max(session.updatedAt, updatedAt),
-    });
-    // The session store and the notification ask different questions of the
-    // same word. `fallback` there means "a better title may still replace
-    // this", which is how the prompt-derived stopgap keeps its name open to
-    // the agent's own (see updateSessionTitleFromAcpUpdate). On the wire it
-    // would mean "this thread has no name", and every consumer would discard
-    // the name being announced. The stopgap's title is real, so the rename
-    // announces the only two things a rename can be.
-    const announcedTitleSource: AppServerRenamedTitleSource | undefined =
-      titleSource === "fallback" ? undefined : titleSource;
-    await this.emit({
-      backend,
-      notification: {
-        method: "thread/name/updated",
-        params: {
-          threadId,
-          threadName: nextName,
-          ...(announcedTitleSource ? { titleSource: announcedTitleSource } : {}),
-          ...(options?.renameOrigin ? { renameOrigin: options.renameOrigin } : {}),
-          ...(options?.previousThreadName ? { previousThreadName: options.previousThreadName } : {}),
-        },
-      },
-    });
-    return { threadId };
-  }
+    },
+    getAgent: async (identity) => await this.getThreadAgentMetadata(identity),
+    setAgent: async (identity, agent) => { await this.overlayStore.setThreadAgent({ ...identity, agent }); },
+    invalidate: (backend) => this.invalidateThreadListCache(backend),
+    emit: async (event) => { await this.emit(event); },
+    now: () => Date.now(),
+  });
 
   async readSelectedWorkspaceGitStatus(path: string): Promise<NavigationDirectoryGitStatus | undefined> {
     return this.gitDirectoryService.readDirectoryStatus({ path });
@@ -21579,7 +21394,7 @@ export class DesktopBackendRegistry {
       },
     );
     if (!agentName) {
-      this.systemPlaceholderTitleThreadKeys.add(pendingThreadKey);
+      this.threadNaming.markSystemPlaceholder({ backend, threadId: result.threadId });
     }
     if (effectiveWorkMode === "worktree") {
       await this.recordCodexWorktreeOwnerThread({
@@ -42766,7 +42581,9 @@ export class DesktopBackendRegistry {
       token,
     });
 
+    const namingAttempt = this.threadNaming.beginTitleGeneration(params);
     const work = this.generateAndApplyThreadTitle({
+      namingAttempt,
       backend: params.backend,
       threadId: params.threadId,
       prompt,
@@ -42797,6 +42614,7 @@ export class DesktopBackendRegistry {
   }
 
   private async generateAndApplyThreadTitle(params: {
+    namingAttempt: ThreadNamingAttempt;
     backend: AppServerBackendKind;
     threadId: string;
     prompt: string;
@@ -42812,7 +42630,7 @@ export class DesktopBackendRegistry {
       });
       if (
         !isEligibleForGeneratedTitle(currentThread, params.prompt, {
-          systemPlaceholder: this.systemPlaceholderTitleThreadKeys.has(params.key),
+          systemPlaceholder: this.threadNaming.hasSystemPlaceholder(params),
         })
       ) {
         this.logThreadTitleGeneration(
@@ -42834,7 +42652,7 @@ export class DesktopBackendRegistry {
       // fallback eligible for session_info_update, without another model call.
       if (params.backend === "acp:claude") {
         if (currentThread?.titleSource !== "explicit") await this.applyPromptDerivedAcpThreadTitle({
-          backend: params.backend, threadId: params.threadId, prompt: params.prompt,
+          backend: params.backend, threadId: params.threadId, prompt: params.prompt, namingAttempt: params.namingAttempt,
         });
         return;
       }
@@ -42878,6 +42696,7 @@ export class DesktopBackendRegistry {
             backend: params.backend,
             threadId: params.threadId,
             prompt: params.prompt,
+            namingAttempt: params.namingAttempt,
           });
         }
         return;
@@ -42903,41 +42722,28 @@ export class DesktopBackendRegistry {
         return;
       }
 
-      const latestThread = await this.findThreadForTitleGeneration({
+      const application = await this.applyGeneratedThreadTitle({
+        namingAttempt: params.namingAttempt,
+        prompt: params.prompt,
         backend: params.backend,
-        callerReason: "title-generation",
         threadId: params.threadId,
+        title: result.title,
       });
-      if (
-        latestThread
-        && !isEligibleForGeneratedTitle(latestThread, params.prompt, {
-          systemPlaceholder: this.systemPlaceholderTitleThreadKeys.has(params.key),
-        })
-      ) {
-        this.logThreadTitleGeneration(
-          "skipped",
-          params,
-          "latest_title_not_eligible",
-          buildTitleEligibilityLogDetails(latestThread, params.prompt)
-        );
+      if (!application.applied) {
+        this.logThreadTitleGeneration("skipped", params,
+          application.reason === "superseded" ? "stale_generation" : "latest_title_not_eligible",
+          buildTitleEligibilityLogDetails(application.thread, params.prompt));
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
           result,
           status: "success",
-          reason: buildLateTitleCancellationReason(
-            params.backend,
-            latestThread,
-          ),
+          reason: application.thread
+            ? buildLateTitleCancellationReason(params.backend, application.thread)
+            : "The thread was renamed before title application.",
         });
         return;
       }
-
-      await this.applyGeneratedThreadTitle({
-        backend: params.backend,
-        threadId: params.threadId,
-        title: result.title,
-      });
       await this.safePersistTitleHelperSubAgent({
         backend: params.backend,
         threadId: params.threadId,
@@ -42975,7 +42781,7 @@ export class DesktopBackendRegistry {
       if (pending?.token === params.token) {
         this.pendingTitleGenerations.delete(params.key);
       }
-      this.systemPlaceholderTitleThreadKeys.delete(params.key);
+      this.threadNaming.finishTitleGeneration(params.namingAttempt);
     }
   }
 
@@ -43036,30 +42842,14 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
     prompt: string;
+    namingAttempt: ThreadNamingAttempt;
   }): Promise<void> {
     const title = shortenDerivedThreadTitle(params.prompt);
-    if (!title) {
-      return;
-    }
-    const latestThread = await this.findThreadForTitleGeneration({
-      backend: params.backend,
-      callerReason: "title-generation",
-      threadId: params.threadId,
+    if (!title) return;
+    const applied = await this.threadNaming.applyGeneratedTitle({
+      attempt: params.namingAttempt, prompt: params.prompt, title, titleSource: "fallback",
     });
-    if (
-      latestThread
-      && !isEligibleForGeneratedTitle(latestThread, params.prompt, {
-        systemPlaceholder: this.systemPlaceholderTitleThreadKeys.has(
-          buildTitleGenerationKey(params.backend, params.threadId),
-        ),
-      })
-    ) {
-      return;
-    }
-    await this.renameAcpSession(params.backend, params.threadId, title, {
-      titleSource: "fallback",
-    });
-    this.logThreadTitleGeneration("applied", params, "prompt_derived_fallback", {
+    if (applied.applied) this.logThreadTitleGeneration("applied", params, "prompt_derived_fallback", {
       generatedTitle: truncateLogValue(title),
     });
   }
@@ -44452,26 +44242,12 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     title: string;
-  }): Promise<void> {
-    // Both backends announce the same provenance. PwrAgent generated this
-    // title and knows that; the branch is only about which rename path stores
-    // it. Letting the Codex side stay silent would make it read as an operator
-    // rename, which is what this provenance exists to stop — and would make
-    // the behavior depend on the backend.
-    if (isAcpBackendId(params.backend)) {
-      await this.renameAcpSession(params.backend, params.threadId, params.title, {
-        titleSource: "derived",
-      });
-    } else {
-      await this.renameThread(
-        {
-          backend: params.backend,
-          threadId: params.threadId,
-          name: params.title,
-        },
-        { titleSource: "derived" },
-      );
-    }
+    prompt: string;
+    namingAttempt: ThreadNamingAttempt;
+  }): Promise<ThreadTitleApplication> {
+    return await this.threadNaming.applyGeneratedTitle({
+      attempt: params.namingAttempt, prompt: params.prompt, title: params.title,
+    });
   }
 
   private async findThreadForTitleGeneration(params: {
