@@ -1,12 +1,16 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 import { expect, test } from "./fixtures/electron-test";
 import type { AcpBackendId } from "@pwragent/shared";
 import { AcpAgentStore } from "../src/main/storage/acp-agent-store";
 import { AcpSessionStore } from "../src/main/storage/acp-session-store";
 import { StateDb } from "../src/main/state/state-db";
+import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -720,6 +724,62 @@ test("shows ACP tool progress while a turn is still running", async () => {
       }),
     ).toBeVisible();
   } finally {
+    await app.close();
+  }
+});
+
+test("completes an accepted ACP turn after managed-review context persistence rejects", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/acp-runtime-modes/replay.fixture.json"),
+    preLaunchHook: async (homeRoot) => {
+      await seedAcpGeminiLiveToolProgress(homeRoot);
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      try {
+        await new SqliteOverlayStore(db).upsertManagedReviewEntry({
+          backend: geminiBackendId, threadId: "acp-live-tool-thread", pendingContext: true,
+          entry: { type: "review", id: "fixture-review", review: "Check the fixture README.", createdAt: 1779400000000 },
+        });
+      } finally {
+        db.close();
+      }
+    },
+  });
+  const output: string[] = [];
+  const collect = (chunk: Buffer) => { output.push(chunk.toString()); };
+  app.electronApp.process().stderr?.on("data", collect);
+  app.electronApp.process().stdout?.on("data", collect);
+  const db = new Database(stateDbPathForHomeRoot(app.homeRoot));
+  try {
+    await app.window.getByRole("button", { name: /ACP Live Tool Thread/i }).click();
+    // Reject only the consumption write, after the real ACP client accepts.
+    // Other profile metadata remains writable throughout the running turn.
+    db.exec(`CREATE TRIGGER reject_accepted_acp_review BEFORE UPDATE OF payload ON threads
+      WHEN json_extract(OLD.payload, '$.threadId') = 'acp-live-tool-thread'
+        AND json_array_length(json_extract(OLD.payload, '$.pendingManagedReviewContextEntryIds')) = 1
+        AND json_extract(NEW.payload, '$.pendingManagedReviewContextEntryIds') IS NULL
+      BEGIN SELECT RAISE(ABORT, 'Fixture accepted ACP review rejected'); END`);
+    const accepted = await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return await api.startTurn!({ backend: "acp:gemini", threadId: "acp-live-tool-thread",
+        input: [{ type: "text", text: "Inspect the project README." }] });
+    });
+    expect(accepted).toMatchObject({ backend: geminiBackendId, threadId: "acp-live-tool-thread", turnId: expect.any(String) });
+    await expect.poll(() => output.join("")).toContain("Fixture accepted ACP review rejected");
+    expect(output.join("")).toContain("acp_turn_start_finalization_failed");
+    expect(output.join("")).toContain("stage=review-contexts");
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await expect(app.window.getByRole("button", { name: "Read README.md", exact: true })).toBeVisible();
+    await expect(app.window.getByRole("region", { name: "Transcript" }).getByText("Done inspecting README.md.", { exact: true })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+    db.exec("DROP TRIGGER reject_accepted_acp_review");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Inspect it again.");
+    await app.window.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+    const row = db.prepare("SELECT payload FROM threads WHERE json_extract(payload, '$.threadId') = ?").get("acp-live-tool-thread") as { payload: string };
+    expect(JSON.parse(row.payload).pendingManagedReviewContextEntryIds).toBeUndefined();
+  } finally {
+    db.close();
     await app.close();
   }
 });
