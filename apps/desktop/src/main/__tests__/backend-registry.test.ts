@@ -15986,6 +15986,55 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  async function assertAcceptedThreadCreationSurvives(backend: AppServerBackendKind, failure: "pr" | "parent" | "event"): Promise<void> {
+    const client = new MockBackendClient({ threads: [], startThreadResult: { threadId: "same:thread" } });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, threadTitleGenerationService: null });
+    const internal = registry as unknown as {
+      claudeBackend: { startThread: () => Promise<{ threadId: string }> };
+      startAcpSession: () => Promise<{ threadId: string }>;
+      emit: (event: AgentEvent) => Promise<void>;
+      pendingStartedThreads: Map<string, AppServerThreadSummary>;
+    };
+    const submit = backend === "claude"
+      ? vi.spyOn(internal.claudeBackend, "startThread").mockResolvedValue({ threadId: "same:thread" })
+      : backend.startsWith("acp:")
+      ? vi.spyOn(internal, "startAcpSession").mockResolvedValue({ threadId: "same:thread" })
+      : vi.spyOn(client, "startThread");
+    const parent = vi.spyOn(overlayStore, "setThreadParent");
+    const agent = vi.spyOn(overlayStore, "setThreadAgent");
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    if (failure === "pr") vi.spyOn(overlayStore, "setThreadPrAutoDispatchEnabled").mockRejectedValueOnce(new Error("creation metadata rejected"));
+    if (failure === "parent") parent.mockRejectedValueOnce(new Error("creation parent rejected"));
+    if (failure === "event") {
+      const emit = internal.emit.bind(registry);
+      vi.spyOn(internal, "emit").mockImplementation(async (event) => {
+        if (event.notification.method === "thread/parent/set") throw new Error("creation event rejected");
+        await emit(event);
+      });
+    }
+    try {
+      // A provider-created identity remains accepted; unrelated finalizers still run.
+      await expect(registry.startThread({ backend, cwd: process.cwd(), parentThreadId: "parent", agent: { name: "Fixture" } }))
+        .resolves.toMatchObject({ backend, threadId: "same:thread", executionMode: "default" });
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(agent).toHaveBeenCalledOnce();
+      expect(parent).toHaveBeenCalledOnce();
+      expect(internal.pendingStartedThreads.has(buildThreadIdentityKey(backend, "same:thread"))).toBe(true);
+      if (backend !== "codex") expect(events.filter((event) => event.notification.method === "thread/started")).toHaveLength(1);
+    } finally { await registry.close(); }
+  }
+
+  it("preserves every accepted thread creation through independent host failures", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi"),
+      fc.constantFrom("pr" as const, "parent" as const, "event" as const), assertAcceptedThreadCreationSurvives), { numRuns: 12 });
+  });
+
+  it("returns a created Codex thread when its PR metadata write rejects", async () => {
+    await assertAcceptedThreadCreationSurvives("codex", "pr");
+  });
+
   it.each([true, false])("uses a directory disclosure changed after its navigation snapshot (collapsed: %s)", async (collapsed) => {
     const directoryPath = expectedDir(
       path.join(os.tmpdir(), "pwragent-auto-pin-disclosure-project"),
