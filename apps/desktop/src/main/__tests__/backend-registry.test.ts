@@ -15997,7 +15997,7 @@ describe("DesktopBackendRegistry", () => {
       buildSupportedCodexTokenMiserConfig: () => Promise<undefined>;
     };
     const registrations = failingRevokes.map((reject, i) => ({
-      server: { name: `fixture-${i}`, url: "http://127.0.0.1:1/mcp", headers: {} },
+      server: { name: `fixture-${i}`, command: "/fixture/mcp", args: [], env: {} },
       bindThread: vi.fn(),
       revoke: vi.fn(() => { effects.push(`revoke:${i}`); if (reject) throw new Error("fixture revoke refused"); }),
     }));
@@ -16043,6 +16043,38 @@ describe("DesktopBackendRegistry", () => {
 
   it("revokes a late MCP grant before rolling back an isolated creation refusal", async () => {
     await assertRejectedCreationPreparationCleansUp([true, false], "isolation");
+  });
+
+  it("drains admitted runtime work after synchronous creation preparation refuses", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (runtimeRejects) => {
+      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore: createOverlayStoreMock() });
+      const internal = registry as unknown as {
+        gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
+        prepareTokenMiserRuntime: () => Promise<void>;
+        resolveTokenMiserEnabledForOverride: () => boolean;
+        resolveForgeToolPolicy: () => undefined;
+      };
+      const runtime = createDeferred<void>();
+      const rollback = vi.fn(async () => {});
+      vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockResolvedValue({ cwd: process.cwd(), workMode: "worktree", rollback });
+      vi.spyOn(internal, "resolveTokenMiserEnabledForOverride").mockReturnValue(true);
+      const prepareRuntime = vi.spyOn(internal, "prepareTokenMiserRuntime").mockReturnValue(runtime.promise);
+      const refusal = new Error("fixture catalog preparation refused");
+      const catalog = vi.spyOn(internal, "resolveForgeToolPolicy").mockImplementation(() => { throw refusal; });
+      let settled = false;
+      try {
+        const outcome = registry.startThread({ backend: "codex", cwd: process.cwd(), workMode: "worktree", tokenMiserEnabled: true })
+          .then(() => undefined, (error: unknown) => { settled = true; return error; });
+        await waitForCondition(() => catalog.mock.calls.length === 1);
+        expect(prepareRuntime).toHaveBeenCalledOnce();
+        expect(settled).toBe(false);
+        expect(rollback).not.toHaveBeenCalled();
+        if (runtimeRejects) runtime.reject(new Error("fixture runtime refused"));
+        else runtime.resolve();
+        expect(await outcome).toBe(refusal);
+        expect(rollback).toHaveBeenCalledOnce();
+      } finally { await registry.close(); }
+    }), { numRuns: 4 });
   });
 
   async function assertAcceptedThreadCreationSurvives(backend: AppServerBackendKind, failure: "pr" | "parent" | "event" | "workspace"): Promise<void> {

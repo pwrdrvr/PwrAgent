@@ -364,6 +364,16 @@ retains workspace/environment/model/MCP preparation, provider execution, pending
 summary construction and all existing storage sites. No request identity or
 retry state is introduced.
 
+Creation preparation uses that lifecycle's invocation-local resource scope.
+It owns the prepared workspace rollback and acquired connection grants until
+provider creation takes ownership. A preparation refusal drains every admitted
+branch, including work admitted before a synchronous host failure, then revokes
+all acquired grants before rolling back the workspace once. Cleanup and reporting
+failures do not replace the preparation refusal. Provider rejection uses the
+existing creation cleanup; accepted threads retain their resources. Runtime,
+environment, model and MCP construction remain desktop host effects. This
+coordination adds no persistence.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or

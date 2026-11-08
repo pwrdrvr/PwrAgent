@@ -1,4 +1,4 @@
-import { ThreadCreationLifecycle } from "@pwragent/owner-core/thread-creation-lifecycle";
+import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
 import { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
 import { ThreadSteeringLifecycle, type ThreadSteeringSubmission } from "@pwragent/owner-core/thread-steering-lifecycle";
@@ -21124,6 +21124,14 @@ export class DesktopBackendRegistry {
   }
 
   private async startThreadPrepared(params: Parameters<DesktopBackendRegistry["startThread"]>[0]): Promise<StartThreadResponse> {
+    return await new ThreadCreationLifecycle().prepare(async (resources) => await this.prepareThreadCreation(params, resources), (stage, error) => {
+      backendRegistryLog.warn("thread creation preparation cleanup failed", {
+        backend: params.backend, stage, error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation): Promise<PreparedThreadCreation<Pick<StartThreadResponse, "executionMode" | "codexEnvironmentRuntime" | "codexEnvironmentStartupFailure">>> {
     this.assertNotBootstrap("startThread");
     const {
       backend,
@@ -21161,7 +21169,6 @@ export class DesktopBackendRegistry {
         : request.cwd;
     let resolvedLinkedDirectories = linkedDirectories;
     let effectiveWorkMode = workMode;
-    let preparedWorkspaceRollback: (() => Promise<void>) | undefined;
     if (workMode === "worktree" && request.cwd?.trim()) {
       const preparedWorkspace =
         await this.gitDirectoryService.prepareLaunchpadWorkspace({
@@ -21173,7 +21180,7 @@ export class DesktopBackendRegistry {
           workMode: "worktree",
           ...(worktreeBase ? { worktreeBase } : {}),
         });
-      preparedWorkspaceRollback = preparedWorkspace.rollback;
+      resources.setWorkspaceRollback(preparedWorkspace.rollback);
       cwd = preparedWorkspace.cwd;
       effectiveWorkMode = preparedWorkspace.workMode;
       resolvedLinkedDirectories =
@@ -21189,7 +21196,7 @@ export class DesktopBackendRegistry {
       await refuseResolvedWorkMode({
         required: requiredWorkMode,
         resolved: effectiveWorkMode,
-        rollback: preparedWorkspaceRollback,
+        rollback: undefined,
         backend,
       });
     }
@@ -21214,15 +21221,6 @@ export class DesktopBackendRegistry {
             worktreeCleanupAvailable: effectiveWorkMode === "worktree",
           };
         } else {
-          await preparedWorkspaceRollback?.().catch((rollbackError) => {
-            backendRegistryLog.warn("startThread workspace rollback failed", {
-              backend,
-              error:
-                rollbackError instanceof Error
-                  ? rollbackError.message
-                  : String(rollbackError),
-            });
-          });
           throw error;
         }
       }
@@ -21272,7 +21270,7 @@ export class DesktopBackendRegistry {
       : undefined;
     const tokenMiserEnabled = backend === "codex"
       && this.resolveTokenMiserEnabledForOverride(tokenMiserOverride);
-    const runtimePreparation = tokenMiserEnabled ? this.prepareTokenMiserRuntime() : Promise.resolve();
+    const runtimePreparation = resources.track(tokenMiserEnabled ? this.prepareTokenMiserRuntime() : Promise.resolve());
     const agentToolCatalogs = resolveAgentToolCatalogs({
       appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
@@ -21296,17 +21294,17 @@ export class DesktopBackendRegistry {
       starMapHandler: this.starMapHandler,
       threadTodoHandler: this.threadTodoHandler,
     });
-    const pdfMcpPreparation =
+    const pdfMcpPreparation = resources.track(
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
         ? this.registerPdfMcpClient({})
-        : Promise.resolve(undefined);
-    const connectionPreparation = backend === "codex" || isAcpBackendId(backend)
+        : Promise.resolve(undefined));
+    const connectionPreparation = resources.registerConnections(backend === "codex" || isAcpBackendId(backend)
       ? this.registerMcpConnections(mcpConnectionIds, undefined, backend)
-      : Promise.resolve([]);
+      : Promise.resolve([]));
     const isolateFromInherited = backend === "codex" && mcpProviderServersEnabled === false;
-    const inventoryPreparation = backend === "codex" && (mcpConnectionIds?.length || isolateFromInherited)
+    const inventoryPreparation = resources.track(backend === "codex" && (mcpConnectionIds?.length || isolateFromInherited)
       ? this.readConfiguredCodexMcpServerNames(cwd)
-      : Promise.resolve(undefined);
+      : Promise.resolve(undefined));
     const resolvedDynamicTools =
       backend === "codex"
         ? withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(agentToolCatalogs), this.resolveCodexToolDiscoveryFn())
@@ -21382,7 +21380,7 @@ export class DesktopBackendRegistry {
     const agentName = request.agent?.name?.trim();
     let gitBranch: string | undefined;
     let currentMigration: DesktopProviderThreadModelMigration | undefined;
-    const result = await new ThreadCreationLifecycle().start({
+    return { options: {
       backend,
       systemPlaceholder: !agentName,
       worktree: effectiveWorkMode === "worktree",
@@ -21393,7 +21391,7 @@ export class DesktopBackendRegistry {
       environment: Boolean(codexEnvironmentRuntime),
       modelSettings,
       parent: Boolean(parentThreadId?.trim()),
-    }, {
+    }, host: {
       providers: {
         claude: async () => await this.claudeBackend.startThread({ cwd: cwd!, executionMode: effectiveExecutionMode, model: modelSettings.model, linkedDirectories: resolvedLinkedDirectories }),
         acp: async () => await this.startAcpSession({
@@ -21431,8 +21429,6 @@ export class DesktopBackendRegistry {
       withWorkspaceWrite: async (submit) => await this.withArchiveWorkspaceWrite(
         [cwd ?? "", ...(resolvedLinkedDirectories ?? []).map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], submit,
       ),
-      connections: mcpConnectionRegistrations,
-      rollbackWorkspace: async () => { await preparedWorkspaceRollback?.(); },
       rejection: (error) => userActionableMcpConnectionConfigError(error, mcpConnectionRegistrations),
       bindPdf: ({ threadId }) => { pdfMcpRegistration?.bindThread(threadId); },
       rememberPending: async ({ threadId }) => {
@@ -21523,8 +21519,7 @@ export class DesktopBackendRegistry {
           error: error instanceof Error ? error.message : String(error),
         });
       },
-    });
-    return { ...result, executionMode: effectiveExecutionMode, codexEnvironmentRuntime, codexEnvironmentStartupFailure };
+    }, metadata: { executionMode: effectiveExecutionMode, codexEnvironmentRuntime, codexEnvironmentStartupFailure } };
   }
 
   private async buildForkedCodexEnvironmentRuntime(params: {
