@@ -195,9 +195,9 @@ export class PrStatusWatchCoordinator {
           const newlyObserved = retired.some((thread) =>
             thread.backend === claim.watch.backend && thread.threadId === claim.watch.threadId
           );
-          read = options.fromSavedObservation || !newlyObserved
-            ? Promise.resolve(fallbackTerminalDetails(observation.pr, "Using the saved terminal observation."))
-            : this.resolveTerminalDetails(observation.pr);
+          read = this.resolveTerminalDetails(observation.pr, {
+            cachedOnly: options.fromSavedObservation || !newlyObserved,
+          });
           detailReads.set(key, read);
         }
         const details = await read;
@@ -217,6 +217,7 @@ export class PrStatusWatchCoordinator {
   /** Forge details when available, else what cached status can say. */
   async resolveTerminalDetails(
     pr: PrSummary,
+    options: { cachedOnly?: boolean } = {},
   ): Promise<PullRequestTerminalDetails | undefined> {
     const prKey = buildPullRequestStatusKey(pr);
     const outcome = terminalOutcomeOf(pr);
@@ -225,6 +226,9 @@ export class PrStatusWatchCoordinator {
     const cacheKey = JSON.stringify([prKey, outcome, pr.mergedAt ?? pr.closedAt ?? null]);
     const cached = this.terminalDetailsCache.get(cacheKey);
     if (cached) return cached;
+    if (options.cachedOnly) {
+      return fallbackTerminalDetails(pr, "Using the saved terminal observation.");
+    }
     if (!this.options.fetchTerminalDetails) {
       return fallbackTerminalDetails(pr, "No forge lookup is configured.");
     }

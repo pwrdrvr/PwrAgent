@@ -8957,8 +8957,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }): Promise<number> {
     const select = `SELECT watch_id, backend, thread_id, pr_key, head_sha, status, payload
        FROM pr_status_watches
-       WHERE status = 'watching'
-         OR (status = 'dispatching' AND COALESCE(lease_expires_at, 0) <= ?)
+       WHERE status IN ('watching', 'pending_terminal')
+         OR (status IN ('dispatching', 'notifying_terminal') AND COALESCE(lease_expires_at, 0) <= ?)
        ORDER BY created_at ASC, watch_id ASC`;
     type Row = {
       watch_id: string;
@@ -9006,6 +9006,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         const watch = parsePrStatusWatchSummary(row.payload);
         if (!watch) continue;
         const prKey = params.canonicalizePrKey(row.pr_key);
+        if (row.status === "pending_terminal" || row.status === "notifying_terminal") {
+          // Events belong to their original observation, independently of a
+          // reopened PR's new subscription at the destination key.
+          const payload = JSON.parse(row.payload) as ThreadPullRequestWatchSummary & {
+            terminalObservation: PrTerminalWatchObservation;
+          };
+          const observation = payload.terminalObservation;
+          const url = params.canonicalizePrUrl(observation.pr.url);
+          const identity = resolvePullRequestIdentity({ ...observation.pr, org: "", repo: "", url });
+          this.stateDb.raw.prepare(`UPDATE pr_status_watches SET pr_key = ?, updated_at = ?, payload = ? WHERE watch_id = ?`)
+            .run(prKey, params.now, JSON.stringify({
+              ...payload,
+              prKey,
+              prUrl: params.canonicalizePrUrl(watch.prUrl),
+              terminalObservation: { ...observation, pr: { ...observation.pr, ...identity, url } },
+            }), row.watch_id);
+          moved += 1;
+          continue;
+        }
         const target = findTarget.get(row.backend, row.thread_id, prKey, row.head_sha) as
           | { watch_id: string; payload: string }
           | undefined;
