@@ -936,13 +936,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
-  "pr-terminal-watch-deliver": {
-    "commits": 2,
-    "note": "claim and finish one merge/close wake: 2 commits/~24.7 KB WAL per merged PR; ~1.2 MB/day at 50 merges/day, zero idle writes",
-    "observedWalBytes": 24720,
-    "rowsChanged": 2,
-    "statements": 3
-  },
+  "pr-terminal-watch-deliver": {"commits": 3, "note": "observe, claim and finish one merge/close wake: 3 commits/~29 KB WAL per merged PR; ~1.5 MB/day at 50 merges/day, zero idle writes", "observedWalBytes": 28840, "rowsChanged": 3, "statements": 4},
   "pr-terminal-watch-open-polls": {
     "commits": 0,
     "note": "ten polls of an open PR that has a merge/close watch: 0 commits, 0 rows and 0 WAL; the per-poll head/baseline advance only reads when nothing moved, so the watch adds 0 MB/day",
@@ -957,6 +951,8 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "pr-terminal-watch-rename": {"commits": 1, "note": "one pending event renamed and nine unchanged syncs: 1 commit/~8.2 KB WAL per rename, 0 idle writes; ~0.4 MB/day at 50 renames/day", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "pr-terminal-watch-retire": {"commits": 1, "note": "one retirement plus nine duplicate observations: 1 commit/~12.4 KB WAL; ~0.6 MB/day at 50 terminal events/day, zero idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 2},
   "pr-watch-agent-cancel": {
     "commits": 1,
     "note": "an agent stops one PR watch through watch_thread_pull_request: 1 commit per call, 0 idle writes",
