@@ -283,6 +283,11 @@ it.each([
     new LedgerCommand("read"), new LedgerCommand("start"), new LedgerCommand("item", 0, true),
     new LedgerCommand("older"), new LedgerCommand("complete"), new LedgerCommand("start"),
   ] },
+  { name: "an optimistic send follows a completed tool turn", commands: [
+    new LedgerCommand("start"), new LedgerCommand("item"), new LedgerCommand("item", 0, true),
+    new LedgerCommand("complete"), new LedgerCommand("send"), new LedgerCommand("start"),
+    new LedgerCommand("complete"),
+  ] },
 ])("retains provider order after $name", async ({ commands }) => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   const model = initialModel();
@@ -304,6 +309,28 @@ it.each([
     }
     assertLedger(model, real);
   } finally { real.unmount(); clock.mockRestore(); }
+});
+
+it("keeps completed live tool turns before subsequent acknowledged sends for generated clocks", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await fc.assert(fc.asyncProperty(fc.array(fc.integer({ min: 0, max: 2 }), { minLength: 1, maxLength: 5 }),
+      async (clocks) => {
+        const model = initialModel();
+        const real = await mount(model);
+        try {
+          await fc.asyncModelRun(() => ({ model, real }), openingCommands());
+          for (const time of clocks) {
+            await fc.asyncModelRun(() => ({ model, real }), [
+              new LedgerCommand("start"), new LedgerCommand("item", time), new LedgerCommand("item", time, true),
+              new LedgerCommand("complete"), new LedgerCommand("send"), new LedgerCommand("start"),
+              new LedgerCommand("complete"),
+            ]);
+          }
+          await drain(model, real);
+        } finally { real.unmount(); }
+      }), { numRuns: 25 });
+  } finally { clock.mockRestore(); }
 });
 
 it("keeps a completed message's live sequence when a tied command row precedes it", async () => {
