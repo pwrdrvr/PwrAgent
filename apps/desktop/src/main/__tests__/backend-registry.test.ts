@@ -5095,7 +5095,7 @@ describe("DesktopBackendRegistry", () => {
     expect(await overlayStore.getThreadOverlayState(thread)).not.toHaveProperty("lock");
   });
 
-  async function assertFailedTurnPreparationRetires(threadId: string, text: string): Promise<void> {
+  async function assertFailedTurnPreparationRetires(threadId: string, text: string, discovery: "none" | "idle" | "provider-active" = "none"): Promise<void> {
     const client = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const events: AgentEvent[] = [];
@@ -5103,10 +5103,24 @@ describe("DesktopBackendRegistry", () => {
     const internal = registry as unknown as {
       registerPendingThreadMessageContext: () => Promise<string | undefined>;
       threadHasActiveTurn: (threadId: string, backend: AppServerBackendKind) => boolean;
+      emit: (event: AgentEvent) => Promise<void>;
+      reconcileCodexThreadListStatus: (thread: AppServerThreadSummary) => AppServerThreadSummary;
     };
-    // Inject a host-port rejection after the optimistic start. Ordinary
+    // Inject a host-port rejection during context preparation. Ordinary
     // attachment helpers retain their existing best-effort I/O handling.
-    vi.spyOn(internal, "registerPendingThreadMessageContext").mockRejectedValueOnce(new Error("context rejected"));
+    vi.spyOn(internal, "registerPendingThreadMessageContext").mockImplementationOnce(async () => {
+      if (discovery !== "none") {
+        await internal.emit({ backend: "codex", notification: {
+          method: "thread/status/changed", params: { threadId, status: { type: "idle" } },
+        } });
+        // A navigation read can project the still-reserved start as active.
+        internal.reconcileCodexThreadListStatus({ id: threadId, source: "codex", title: "Fixture", titleSource: "explicit", linkedDirectories: [], updatedAt: 1, threadStatus: "idle" });
+        if (discovery === "provider-active") await internal.emit({ backend: "codex", notification: {
+          method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: [] } },
+        } });
+      }
+      throw new Error("context rejected");
+    });
     const request = { backend: "codex" as const, threadId, input: [{ type: "text" as const, text }] };
     try {
       await expect(registry.startTurn(request)).rejects.toThrow("context rejected");
@@ -5114,25 +5128,36 @@ describe("DesktopBackendRegistry", () => {
       expect(events.filter((event) => event.notification.method.startsWith("turn/")).map((event) => ({
         method: event.notification.method,
         turnId: (event.notification.params as { turnId: string }).turnId,
-      }))).toEqual([
-        { method: "turn/started", turnId: `pending:${threadId}` },
-        { method: "turn/failed", turnId: `pending:${threadId}` },
-      ]);
-      expect(internal.threadHasActiveTurn(threadId, "codex")).toBe(false);
-      await expect(registry.startTurn(request)).resolves.toMatchObject({ backend: "codex", threadId, turnId: "turn-1" });
-      expect(client.startTurnCallCount).toBe(1);
+      }))).toEqual([]);
+      expect(internal.threadHasActiveTurn(threadId, "codex")).toBe(discovery === "provider-active");
+      if (discovery === "provider-active") {
+        await expect(registry.startTurn(request)).rejects.toThrow("already active");
+        expect(client.startTurnCallCount).toBe(0);
+      } else {
+        await expect(registry.startTurn(request)).resolves.toMatchObject({ backend: "codex", threadId, turnId: "turn-1" });
+        expect(client.startTurnCallCount).toBe(1);
+      }
     } finally {
       await registry.close();
     }
   }
 
-  it("retires every announced start whose pending context preparation rejects", async () => {
+  it("retires every start whose pending context preparation rejects", async () => {
     await fc.assert(fc.asyncProperty(fc.constantFrom("preparing", "same:thread", "pending:source"), fc.string({ minLength: 1, maxLength: 24 }),
-      assertFailedTurnPreparationRetires), { numRuns: 8 });
+      (threadId, text) => assertFailedTurnPreparationRetires(threadId, text)), { numRuns: 8 });
   });
 
-  it("allows another turn after the announced start's context registration rejects", async () => {
+  it("allows another turn after context registration rejects", async () => {
     await assertFailedTurnPreparationRetires("preparing", "Continue");
+  });
+
+  it("releases projected preparation activity while preserving newer provider observations", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("preparing", "same:thread"), fc.constantFrom("idle" as const, "provider-active" as const),
+      (threadId, discovery) => assertFailedTurnPreparationRetires(threadId, "Continue", discovery)), { numRuns: 12 });
+  });
+
+  it("releases an idle status reprojected during start preparation", async () => {
+    await assertFailedTurnPreparationRetires("preparing", "Continue", "idle");
   });
 
   it("rejects handoff while a turn start is awaiting its provider", async () => {
