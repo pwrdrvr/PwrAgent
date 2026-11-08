@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DesktopCheckoutHibernationPolicy, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type { DesktopCheckoutHibernationPolicy, PrSummary, ThreadPullRequestWatchSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "../app-server/thread-maintenance-service";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
@@ -615,6 +615,45 @@ describe("Restore now and Keep it awake", () => {
 });
 
 describe("Thread maintenance's hibernate step", () => {
+  it.each(["merged", "closed"] as const)("uses the latest saved PR lifecycle for a locked thread's stale %s watch", async (lifecycleState) => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    const watch: ThreadPullRequestWatchSummary = { ...identity, watchId: "terminal-watch", prKey: "github.com/example/project#12",
+      prUrl: "https://github.com/example/project/pull/12", prNumber: 12, headSha: "head", kind: "terminal",
+      createdAt: 1, notifyOn: ["merged", "closed"], failureHandledByAutoFix: false };
+    const pr: PrSummary = { provider: "github.com", org: "example", repo: "project", number: 12,
+      state: "passing", lifecycleState, headSha: "head", url: watch.prUrl };
+    await store.registerThreadPrStatusWatch({ watch, now: 1 });
+    await store.setThreadLock({ ...identity, lock: { source: "operator", lockedAt: 1, note: "Handed off" } });
+    await store.setThreadPullRequests({ ...identity, prs: [pr], fetchedAt: 2 });
+    const remember = async (value: PrSummary, fetchedAt: number) => await store.writePrStatusCacheEntries([
+      { prKey: watch.prKey, provider: value.provider, pr: value, fetchedAt },
+    ]);
+    await remember(pr, 2);
+    const service = maintenance(registry);
+    const measured = await measureSqliteWrites(async () => await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 }));
+    expect(measured.writes.commits).toBe(0);
+    let scan = measured.result;
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
+    const apply = async () => await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    if (lifecycleState === "closed") {
+      // A later cached reopening wins over the older attached terminal row.
+      await remember({ ...pr, lifecycleState: "open" }, 3);
+      const kept = await apply();
+      expect(kept.problems).toContainEqual(expect.objectContaining({ kind: "kept", reason: "Watching a PR" }));
+      expect(await exists(fixture.worktree)).toBe(true);
+      await remember(pr, 4);
+      scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    }
+    const run = await apply();
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 1, kept: 0, failed: 0 });
+    expect(await exists(fixture.worktree)).toBe(false);
+    // Eligibility neither dispatches nor retires the watch, and does not unlock.
+    expect(await store.listActiveThreadPrStatusWatches(identity)).toHaveLength(1);
+    expect((await store.getThreadOverlayState(identity))?.lock?.lockedAt).toBe(1);
+  });
+
   it("rechecks managed-root ownership when a reviewed external checkout moves outside through a symlink", async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });

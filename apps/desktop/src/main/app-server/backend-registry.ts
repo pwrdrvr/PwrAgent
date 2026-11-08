@@ -578,6 +578,7 @@ import {
   type ThreadPricingSummary,
   type ThreadUsageLineRecord,
   type PrSummary,
+  type ThreadPullRequestWatchSummary,
   type SetThreadCheckoutHibernationResponse,
   type ThreadHibernatedWorkspace,
   type WorktreeSnapshotSummary,
@@ -841,6 +842,7 @@ import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { isInManagedWorktreeRoot } from "./managed-worktree-ownership";
+import { protectiveMaintenanceWatches, type MaintenancePrObservation } from "./maintenance-pr-watches";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
 import {
@@ -16918,10 +16920,7 @@ export class DesktopBackendRegistry {
     const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
     // One read for every thread a PR watch will wake.
     const activePrWatches = await this.overlayStore.listAllActivePrStatusWatches();
-    const watchedThreadKeys = new Set(
-      activePrWatches.map((watch) =>
-        buildThreadIdentityKey(watch.backend, watch.threadId)),
-    );
+    const savedPrStatuses = activePrWatches.length ? await this.readMaintenancePrStatuses() : [];
     const mergeHeldThreadKeys = this.readMergeHeldThreadKeys();
     const candidates: ThreadArchiveCandidate[] = [];
     // A failed read keeps only the threads it covers, never the whole list.
@@ -16941,8 +16940,9 @@ export class DesktopBackendRegistry {
       } catch (error) { unreadable(error, backend); }
       for (const thread of backendThreads) {
         onProgress?.({ detail: `Resolving ${backend} checkout ownership`, found: candidates.length, root: thread.projectKey });
-        const activePrWatch = watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
-        const watches = activePrWatch ? activePrWatches.filter((watch) => watch.backend === backend && watch.threadId === thread.id) : [];
+        const watches = await this.maintenancePrWatches(activePrWatches.filter((watch) => watch.backend === backend && watch.threadId === thread.id),
+          overlays?.[thread.id], savedPrStatuses);
+        const activePrWatch = watches.length > 0;
         const mergeHeld = mergeHeldThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
         if (!overlays) {
           candidates.push({ thread, activePrWatch, activePrWatches: watches, mergeHeld, unreadable: true });
@@ -17002,6 +17002,29 @@ export class DesktopBackendRegistry {
 
   private async isManagedMaintenanceCheckout(worktreePath: string): Promise<boolean> {
     return await isInManagedWorktreeRoot(worktreePath, await this.managedMaintenanceRoots());
+  }
+
+  private async readMaintenancePrStatuses(): Promise<MaintenancePrObservation[] | null> {
+    try { return Object.values(await this.overlayStore.readPrStatusCache()); }
+    catch (error) {
+      backendRegistryLog.warn("maintenance PR observations unavailable; watches remain protective", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  private async maintenancePrWatches(
+    watches: ThreadPullRequestWatchSummary[],
+    overlay: ThreadOverlayState | undefined,
+    saved?: readonly MaintenancePrObservation[] | null,
+  ): Promise<ThreadPullRequestWatchSummary[]> {
+    if (!watches.length) return [];
+    const cached = saved === undefined ? await this.readMaintenancePrStatuses() : saved;
+    if (cached === null) return watches;
+    return protectiveMaintenanceWatches(watches, [
+      ...(overlay?.prs ?? []).map((pr) => ({ pr, fetchedAt: overlay?.prsFetchedAt ?? 0 })), ...cached,
+    ]);
   }
 
   /** The resolver above established a linked checkout and this thread's
@@ -17655,6 +17678,7 @@ export class DesktopBackendRegistry {
     if (!thread) throw new Error(`Thread metadata was not found: ${threadId}`);
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
     const resolved = await this.maintenanceThreadWorkspace(thread, overlay);
+    const watches = await this.maintenancePrWatches(await this.overlayStore.listActiveThreadPrStatusWatches({ backend, threadId }), overlay);
     return {
       thread: {
         ...candidate.thread,
@@ -17663,7 +17687,8 @@ export class DesktopBackendRegistry {
       overlay,
       managedWorktreePath: await this.managedMaintenanceCheckout(resolved),
       activeSubAgent: await this.hasArchiveActiveSubAgent(backend, threadId),
-      activePrWatch: (await this.overlayStore.listActiveThreadPrStatusWatches({ backend, threadId })).length > 0,
+      activePrWatch: watches.length > 0,
+      activePrWatches: watches,
       mergeHeld: this.readMergeHeldThreadKeys().has(buildThreadIdentityKey(backend, threadId)),
     };
   }
