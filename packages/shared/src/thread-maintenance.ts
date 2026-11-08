@@ -339,7 +339,7 @@ export type ThreadMaintenanceStepResult = {
 };
 
 /** Live stages describe actual work; a completed item retains its outcome. */
-export type ThreadMaintenanceRunStage = "checking" | "snapshotting" | "verifying" | "waiting" | "removing" | "recording";
+export type ThreadMaintenanceRunStage = "checking" | "snapshotting" | "verifying" | "waitingForWorker" | "waiting" | "removing" | "recording";
 
 export type ThreadMaintenanceRunItem = {
   itemId: string;

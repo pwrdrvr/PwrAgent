@@ -54,7 +54,7 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
       }
       return true;
     },
-    removeArchivedCheckouts: async (selection) => await getDesktopBackendRegistry().removeArchivedCheckouts(selection),
+    removeArchivedCheckouts: async (selection, options) => await getDesktopBackendRegistry().removeArchivedCheckouts(selection, options),
     hibernation: checkoutHibernationReviewDeps(getDesktopBackendRegistry),
     isManagedCheckoutPath: isManagedCheckoutRoot,
     trashItem: async (absolutePath) => await shell.trashItem(absolutePath),

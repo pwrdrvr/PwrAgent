@@ -5,6 +5,7 @@ import path from "node:path";
 import type {
   AppServerBackendKind,
   WorktreeSnapshotSummary,
+  ThreadMaintenanceRunStage,
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
@@ -37,6 +38,7 @@ type ArchiveWorktreeParams = {
   maxSnapshotBytes?: number;
   /** Returns a synchronous admission check for the actual removal dispatch. */
   beforeRemove?: () => Promise<() => void>;
+  onStage?: (stage: ThreadMaintenanceRunStage) => void;
 };
 
 type HibernateWorktreeParams = {
@@ -50,6 +52,7 @@ type HibernateWorktreeParams = {
   capSnapshotBytes: number;
   /** Re-runs the hibernation checks and returns a synchronous assert. */
   beforeRemove: () => Promise<() => void>;
+  onStage?: (stage: ThreadMaintenanceRunStage) => void;
 };
 
 type RestoreWorktreeParams = {
@@ -335,6 +338,7 @@ export class WorktreeArchiveService {
       repositoryPath: params.repositoryPath,
       now: params.now,
       beforeRemove: params.beforeRemove,
+      onStage: params.onStage,
     }, {
       capSnapshotBytes: params.capSnapshotBytes,
       verifyTree: async (worktreePath) => await this.readCheckoutTree(worktreePath),
@@ -360,6 +364,7 @@ export class WorktreeArchiveService {
     params: ArchiveWorktreeParams,
     hibernation?: { capSnapshotBytes: number; verifyTree: (worktreePath: string) => Promise<string> },
   ): Promise<Omit<WorktreeSnapshotSummary, "backend">> {
+    params.onStage?.("snapshotting");
     let worktreePath: string;
     try {
       worktreePath = await realpath(path.resolve(params.worktreePath));
@@ -427,6 +432,7 @@ export class WorktreeArchiveService {
       assertRemoval = await params.beforeRemove?.();
       assertRemoval?.();
       if (hibernation) {
+        params.onStage?.("verifying");
         // Check 6: the work about to be removed is exactly what was saved.
         const snapshotTree = trimGitOutput((await this.runGit(repositoryPath, ["rev-parse", `${snapshotCommit}^{tree}`])).stdout);
         if (await hibernation.verifyTree(worktreePath) !== snapshotTree) throw new SnapshotTreeMismatchError(worktreePath);
@@ -440,6 +446,7 @@ export class WorktreeArchiveService {
     }
     try {
       await this.removeCheckout({ worktreePath, gitDirectory, commonDirectory, repositoryPath, head, assertRemoval,
+        onStage: params.onStage,
         onRemovalStarted: () => { removalStarted = true; } });
     } catch (error) {
       if (!hibernation) throw error;
@@ -494,8 +501,10 @@ export class WorktreeArchiveService {
     head: string;
     assertRemoval?: () => void;
     onRemovalStarted: () => void;
+    onStage?: (stage: ThreadMaintenanceRunStage) => void;
   }): Promise<void> {
     const { worktreePath, gitDirectory, commonDirectory, repositoryPath, head, assertRemoval } = params;
+    params.onStage?.("waiting");
     await this.repositoryRemovals.run(commonDirectory, async () => await withWorktreeTerminalsClosed(worktreePath, async () => {
       // Removal admission and terminal teardown can await other work. Recheck
       // Git's lock protection before modifying even ignored link entries.
@@ -515,7 +524,7 @@ export class WorktreeArchiveService {
         // Git for Windows can hand work to another git.exe after the launcher
         // exits. Own that complete process tree atomically and do not report the
         // archive complete until the Job's active-process count reaches zero.
-        { ownProcessTree: true, beforeSpawn: () => { assertRemoval?.(); params.onRemovalStarted(); } },
+        { ownProcessTree: true, beforeSpawn: () => { assertRemoval?.(); params.onStage?.("removing"); params.onRemovalStarted(); } },
       );
     }, assertRemoval));
   }

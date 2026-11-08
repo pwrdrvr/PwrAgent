@@ -698,6 +698,54 @@ describe("Restore now and Keep it awake", () => {
 });
 
 describe("Thread maintenance's hibernate step", () => {
+  it("reads archived fleet membership once for a multi-wave reviewed hibernation batch", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    const targets = [{ ...identity, worktreePath: fixture.worktree }];
+    for (let index = 1; index < 6; index++) {
+      const worktreePath = path.join(fixture.root, ".pwragent", "worktrees", `id-${index}`, "repo");
+      await mkdir(path.dirname(worktreePath), { recursive: true });
+      await git(fixture.repo, ["worktree", "add", "-b", `owned-${index}`, worktreePath]);
+      const threadId = `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`;
+      targets.push({ backend: "codex", threadId, worktreePath });
+      ArchiveWorktreeTransport.threads.push({ id: threadId, cwd: worktreePath, source: "cli", updatedAt: 2, status: { type: "notLoaded" } });
+      await store.addLinkedDirectory({ backend: "codex", threadId,
+        directory: { ...fixture.directory, id: threadId, worktreePath } });
+    }
+    // Unrelated owners share the primary repository, never a target checkout.
+    ArchiveWorktreeTransport.threads.unshift(...Array.from({ length: 220 }, (_, index) => ({
+      id: `unrelated-${index}`, cwd: fixture.repo, source: "cli", updatedAt: 1000 - index, status: { type: "notLoaded" as const },
+    })));
+    const service = maintenance(registry);
+    const scan = await service.scan({ steps: ["hibernate"] });
+    expect(scan.hibernate?.items).toHaveLength(targets.length);
+    ArchiveWorktreeTransport.requests = [];
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+      hibernate: targets.map(({ backend, threadId }) => ({ backend, threadId })) });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: targets.length, kept: 0, failed: 0 });
+    // Archived membership has no per-checkout delta to read. One complete
+    // membership pass per batch is the boundary budget, not one per removal.
+    const membershipReads = ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list"
+      && request.params.archived === true && !request.params.cursor);
+    expect(membershipReads).toHaveLength(1);
+    for (const target of targets) expect(await exists(target.worktreePath)).toBe(false);
+  });
+
+  it("uses shared fleet admission and reports real snapshot-to-deletion stages", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    const candidate = (await registry.listAutoArchiveCandidates())[0]!;
+    const fullDiscovery = vi.spyOn(registry, "listAutoArchiveCandidates");
+    const stages: string[] = [];
+    expect(await registry.hibernateReviewedCheckout(candidate, { ...ON, enabled: true }, (stage) => stages.push(stage))).toBe(true);
+    expect(fullDiscovery).not.toHaveBeenCalled();
+    expect(stages).toEqual(["waitingForWorker", "waiting", "checking", "snapshotting", "checking", "verifying", "waiting", "removing", "recording"]);
+    expect(await exists(fixture.worktree)).toBe(false);
+    const snapshot = (await snapshotOf(store))!;
+    expect(snapshot.state).toBe("hibernated");
+    expect(await git(fixture.repo, ["show", `${snapshot.snapshotRef}:file.txt`])).toBe("original\n");
+  });
+
   it.each(["merged", "closed"] as const)("uses the latest saved PR lifecycle for a locked thread's stale %s watch", async (lifecycleState) => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });

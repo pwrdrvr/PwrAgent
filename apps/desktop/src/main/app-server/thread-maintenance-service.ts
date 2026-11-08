@@ -19,6 +19,8 @@ import {
   type ThreadMaintenanceProject,
   type ThreadMaintenanceRules,
   type ThreadMaintenanceRun,
+  type ThreadMaintenanceRunItem,
+  type ThreadMaintenanceRunStage,
   type ThreadMaintenanceScan,
   type ThreadMaintenanceScanProgress,
   type ThreadMaintenanceScanStep,
@@ -49,6 +51,7 @@ import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import type { CargoBuildOutputCandidate, scanCargoBuildOutputs, removeCargoBuildOutput } from "./maintenance-cargo-output";
 import { MaintenanceCheckoutOwners, maintenanceKeptThread } from "./maintenance-checkout-owners";
 import { candidateCheckoutDirectories } from "./thread-owned-checkouts";
+import { runMaintenanceItems } from "./maintenance-runner";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
 const FAILURE_LIMIT = 50;
@@ -106,7 +109,10 @@ export type ThreadMaintenanceDeps = {
     snapshotLimitBytes?: number;
   }) => Promise<boolean>;
   /** Remove only the listed archived checkouts, plus empty folders when asked. */
-  removeArchivedCheckouts: (selection: { worktreePaths: string[]; emptyFolders: boolean }) => Promise<ArchivedCheckoutRemoval>;
+  removeArchivedCheckouts: (selection: { worktreePaths: string[]; emptyFolders: boolean }, options?: {
+    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    stopped: () => boolean;
+  }) => Promise<ArchivedCheckoutRemoval>;
   /** Legacy dependency retained for callers; never invoked. */
   removeUnreferencedCheckouts?: (worktreePaths: string[]) => Promise<UnreferencedCheckoutRemoval>;
   /** True only inside a worktree root that PwrAgent or Codex manages. */
@@ -131,7 +137,8 @@ export type CheckoutHibernationReviewDeps = {
   inspect: (worktreePath: string, policy: DesktopCheckoutHibernationPolicy, signal: AbortSignal) => Promise<HibernationWorkspaceInspection>;
   /** Re-checks everything, then hibernates. True when hibernated, false when
    * cancelled, or the reason it was kept. */
-  hibernate: (candidate: ThreadArchiveCandidate, policy: DesktopCheckoutHibernationPolicy) => Promise<boolean | string>;
+  hibernate: (candidate: ThreadArchiveCandidate, policy: DesktopCheckoutHibernationPolicy,
+    onStage?: (stage: ThreadMaintenanceRunStage) => void) => Promise<boolean | string>;
 };
 
 /** The registry hooks the hibernate step uses. */
@@ -150,7 +157,7 @@ export function checkoutHibernationReviewDeps(host: () => CheckoutHibernationRev
     inspect: async (worktreePath, policy, signal) => await inspectHibernationWorkspace(worktreePath, {
       signal, limitBytes: policy.maxSnapshotMb * 1024 * 1024, removeRebuildableOutput: policy.removeRebuildableOutput,
     }),
-    hibernate: async (candidate, policy) => await host().hibernateReviewedCheckout(candidate, policy),
+    hibernate: async (candidate, policy, onStage) => await host().hibernateReviewedCheckout(candidate, policy, onStage),
   };
 }
 
@@ -185,6 +192,8 @@ export class ThreadMaintenanceService {
   private revision = 0;
   private running?: Promise<ThreadMaintenanceRun>;
   private readonly abort = new AbortController();
+  private runNoticeTimer?: ReturnType<typeof setTimeout>;
+  private lastRunNoticeAt = 0;
 
   constructor(private readonly deps: ThreadMaintenanceDeps) {}
 
@@ -202,6 +211,8 @@ export class ThreadMaintenanceService {
 
   dispose(): void {
     this.abort.abort();
+    if (this.runNoticeTimer) clearTimeout(this.runNoticeTimer);
+    this.runNoticeTimer = undefined;
   }
 
   /** Reads the requested steps, or every step. `onProgress` hears where the
@@ -739,17 +750,55 @@ export class ThreadMaintenanceService {
   private async execute(request: ThreadMaintenanceApplyRequest, retained: RetainedScan): Promise<ThreadMaintenanceRun> {
     const problems: ThreadMaintenanceProblem[] = [];
     const steps: ThreadMaintenanceStepResult[] = [];
-    const update = (patch: Partial<ThreadMaintenanceRun>) => this.publish({ ...this.run!, ...patch, steps: [...steps], problems: [...problems] });
+    const rows: ThreadMaintenanceRunItem[] = [];
+    const keyOf = (item: { backend: string; threadId: string }) => buildThreadIdentityKey(item.backend as AppServerBackendKind, item.threadId);
+    request.archive.forEach((item, index) => {
+      const entry = retained.families.get(keyOf(item));
+      rows.push({ itemId: `threads:${index}`, step: "threads", action: "archive", object: entry?.row.title ?? item.threadId,
+        backend: item.backend, threadId: item.threadId, path: entry?.row.worktreePath, status: "queued" });
+    });
+    (request.hibernate ?? []).forEach((item, index) => {
+      const entry = retained.hibernate.get(keyOf(item));
+      rows.push({ itemId: `hibernate:${index}`, step: "hibernate", action: "hibernate", object: entry?.row.title ?? item.threadId,
+        backend: item.backend, threadId: item.threadId, path: entry?.row.worktreePath, status: "queued" });
+    });
+    request.removeCheckouts.forEach((item, index) => rows.push({ itemId: `remove:${index}`, step: "checkouts", action: "removeCheckout",
+      object: item.worktreePath, path: item.worktreePath,
+      backend: item.backend, threadId: item.threadId, status: "queued" }));
+    request.trashCheckouts.forEach((item, index) => rows.push({ itemId: `trash:${index}`, step: "checkouts", action: "trashCheckout",
+      object: item.worktreePath, path: item.worktreePath, status: "queued" }));
+    [...new Set((request.removeBuildOutputs ?? []).map((item) => item.outputPath))].forEach((outputPath, index) => rows.push({
+      itemId: `output:${index}`, step: "checkouts", action: "removeBuildOutput", object: outputPath, path: outputPath, status: "queued",
+    }));
+    if (request.removeEmptyFolders) rows.push({ itemId: "empty", step: "checkouts", action: "removeEmptyFolders", object: "Empty worktree folders", status: "queued" });
+    const update = (patch: Partial<ThreadMaintenanceRun> = {}) => this.publish({ ...this.run!, ...patch,
+      steps: steps.map((step) => ({ ...step })), problems: [...problems], items: [...rows] });
+    const change = (id: string, patch: Partial<ThreadMaintenanceRunItem>) => {
+      const index = rows.findIndex((item) => item.itemId === id);
+      const row = { ...rows[index]!, ...patch };
+      rows[index] = row;
+      const stepRows = rows.filter((item) => item.step === row.step);
+      update({ current: { step: row.step, total: stepRows.length,
+        processed: stepRows.filter((item) => item.status !== "queued" && item.status !== "running").length,
+        object: stepRows.filter((item) => item.status === "running").map((item) => item.object).join(" · ") || undefined } });
+    };
+    const begin = (id: string) => change(id, { status: "running", stage: "checking", startedAt: this.now() });
+    const complete = (id: string, allocatedBytesRemoved?: number) => change(id, {
+      status: "done", stage: undefined, finishedAt: this.now(), ...(allocatedBytesRemoved !== undefined ? { allocatedBytesRemoved } : {}),
+    });
     const addProblem = (problem: ThreadMaintenanceProblem) => {
       if (problems.length < FAILURE_LIMIT) problems.push(problem);
+      const row = rows.find((item) => item.step === problem.step && (item.status === "running" || item.status === "queued")
+        && (problem.threadId ? item.threadId === problem.threadId && item.backend === problem.backend : item.path === problem.path));
+      if (row) change(row.itemId, { status: problem.kind, stage: undefined, reason: problem.reason, detail: problem.detail, finishedAt: this.now() });
     };
     const stopped = () => this.run?.stopRequested === true || this.abort.signal.aborted;
+    update();
 
     // Step 1: archive idle threads.
     const threadStep: ThreadMaintenanceStepResult = { step: "threads", ran: request.archive.length > 0, done: 0, kept: 0, failed: 0 };
     steps.push(threadStep);
     // Sub-threads first, so their parent's check below sees them archived.
-    const keyOf = (item: { backend: string; threadId: string }) => buildThreadIdentityKey(item.backend as AppServerBackendKind, item.threadId);
     const ordered = subthreadsFirst(request.archive, (item) => retained.families.get(keyOf(item))?.family[0]);
     // A peer can gain a sub-thread of one of ours after the scan. Count
     // both reads; if this one fails, every parent with a peer sub-thread is
@@ -771,6 +820,8 @@ export class ThreadMaintenanceService {
       const entry = retained.families.get(keyOf(item));
       const object = entry ? entry.row.title : item.threadId;
       update({ current: { step: "threads", processed: index, total: ordered.length, object } });
+      const row = rows.find((row) => row.step === "threads" && row.backend === item.backend && row.threadId === item.threadId && row.status === "queued")!;
+      begin(row.itemId);
       if (!entry) {
         threadStep.failed += 1;
         addProblem({ step: "threads", kind: "failed", object, reason: "Not in this scan", backend: item.backend, threadId: item.threadId });
@@ -800,6 +851,7 @@ export class ThreadMaintenanceService {
         if (outcome === true) {
           threadStep.done += 1;
           archivedKeys.add(keyOf(item));
+          complete(row.itemId);
         } else {
           threadStep.kept += 1;
           addProblem({ step: "threads", kind: "kept", object, reason: outcome, backend: item.backend, threadId: item.threadId });
@@ -817,7 +869,7 @@ export class ThreadMaintenanceService {
     const hibernateItems = request.hibernate ?? [];
     const hibernateStep: ThreadMaintenanceStepResult = { step: "hibernate", ran: hibernateItems.length > 0, done: 0, kept: 0, failed: 0 };
     steps.push(hibernateStep);
-    for (const [index, item] of hibernateItems.entries()) {
+    if (hibernateItems.length) await runMaintenanceItems(hibernateItems, async (item, index) => {
       const entry = retained.hibernate.get(keyOf(item));
       const object = entry?.row.title ?? item.threadId;
       const ids = { backend: item.backend, threadId: item.threadId, ...(entry ? { path: entry.row.worktreePath } : {}),
@@ -826,31 +878,33 @@ export class ThreadMaintenanceService {
         hibernateStep.kept += 1;
         addProblem({ step: "hibernate", kind: "kept", object, reason, ...(detail ? { detail } : {}), ...ids });
       };
-      update({ current: { step: "hibernate", processed: index, total: hibernateItems.length, object } });
+      begin(`hibernate:${index}`);
       if (!entry || !this.deps.hibernation) {
         hibernateStep.failed += 1;
         addProblem({ step: "hibernate", kind: "failed", object, reason: "Not in this scan", ...ids });
-        continue;
+        return;
       }
       if (archivedKeys.has(keyOf(item)) || (entry.row.archiveKey && archivedKeys.has(entry.row.archiveKey))) {
         keepIt("Archived in this run");
-        continue;
+        return;
       }
       if (stopped()) {
         keepIt("Stopped before hibernating");
-        continue;
+        return;
       }
       try {
         const refreshed = await this.deps.refreshCandidate(entry.candidate);
         if (checkoutHibernationLastActivity(refreshed) > entry.row.lastActivityAt) {
           keepIt("New activity during the run");
-          continue;
+          return;
         }
         const outcome = await this.deps.hibernation.hibernate(refreshed,
-          retained.hibernatePolicy ?? { ...this.deps.hibernation.getPolicy(), enabled: true });
+          retained.hibernatePolicy ?? { ...this.deps.hibernation.getPolicy(), enabled: true },
+          (stage) => change(`hibernate:${index}`, { stage }));
         if (outcome === true) {
           hibernateStep.done += 1;
           if (entry.row.space?.allocatedBytes !== undefined) hibernateStep.allocatedBytesRemoved = (hibernateStep.allocatedBytesRemoved ?? 0) + entry.row.space.allocatedBytes;
+          complete(`hibernate:${index}`, entry.row.space?.allocatedBytes);
         }
         else keepIt(outcome === false ? "Hibernation cancelled" : outcome);
       } catch (error) {
@@ -858,7 +912,7 @@ export class ThreadMaintenanceService {
         this.deps.onError?.(error, { step: "hibernate", threadId: item.threadId });
         addProblem({ step: "hibernate", kind: "failed", object, reason: "Hibernation failed", detail: errorMessage(error), ...ids });
       }
-    }
+    });
 
     // Step 3: archived checkouts. One failure never skips the rest.
     const checkoutStep: ThreadMaintenanceStepResult = { step: "checkouts",
@@ -867,11 +921,14 @@ export class ThreadMaintenanceService {
       done: 0, kept: 0, failed: 0 };
     steps.push(checkoutStep);
     const removedPaths = new Set<string>();
-    const removed = (worktreePath: string) => {
+    const removed = (worktreePath: string, trashed = false) => {
       if (removedPaths.has(worktreePath)) return;
       removedPaths.add(worktreePath);
-      const bytes = retained.checkouts.get(worktreePath)?.space?.allocatedBytes;
+      const bytes = trashed ? undefined : retained.checkouts.get(worktreePath)?.space?.allocatedBytes;
       if (bytes !== undefined) checkoutStep.allocatedBytesRemoved = (checkoutStep.allocatedBytesRemoved ?? 0) + bytes;
+      const row = rows.find((item) => item.step === "checkouts" && item.path === worktreePath
+        && (item.action === "removeCheckout" || item.action === "trashCheckout"));
+      if (row) complete(row.itemId, bytes);
     };
     const removable = request.removeCheckouts.filter((item) => retained.checkouts.get(item.worktreePath)?.kind === "removable");
     for (const item of request.removeCheckouts) {
@@ -887,12 +944,24 @@ export class ThreadMaintenanceService {
     if ((removable.length || request.removeEmptyFolders) && stopped()) {
       for (const item of removable) keepStopped(item.worktreePath);
     } else if (removable.length || request.removeEmptyFolders) {
+      if (request.removeEmptyFolders) begin("empty");
       update({ current: { step: "checkouts", processed: 0, total: removable.length, object: removable[0]?.worktreePath } });
       try {
         const removal = await this.deps.removeArchivedCheckouts({
           worktreePaths: removable.map((item) => item.worktreePath), emptyFolders: request.removeEmptyFolders,
-        });
+        }, { stopped, onItem: (item) => {
+          const row = rows.find((row) => row.action === "removeCheckout" && row.path === item.path);
+          if (!row) return;
+          const terminal = item.status !== "running" && item.status !== "queued";
+          change(row.itemId, { ...item, ...(row.startedAt === undefined ? { startedAt: this.now() } : {}),
+            ...(terminal ? { finishedAt: this.now(), stage: undefined } : {}) });
+        } });
         checkoutStep.done += removal.removed.length + removal.emptyFoldersRemoved;
+        if (request.removeEmptyFolders) {
+          if (removal.emptyFoldersFailed.length) change("empty", { status: "failed", reason: "Folder removal failed", finishedAt: this.now() });
+          else if (stopped()) change("empty", { status: "kept", stage: undefined, reason: "Stopped before removing", finishedAt: this.now() });
+          else complete("empty");
+        }
         for (const item of removal.removed) removed(item.worktreePath);
         for (const item of removal.kept) {
           checkoutStep.kept += 1;
@@ -908,13 +977,17 @@ export class ThreadMaintenanceService {
         this.deps.onError?.(error, { step: "checkouts" });
         addProblem({ step: "checkouts", kind: "failed", object: `${removable.length} checkouts`, reason: "Removal failed",
           detail: errorMessage(error) });
+        for (const row of rows.filter((item) => item.action === "removeCheckout" || item.action === "removeEmptyFolders")) {
+          if (row.status === "queued" || row.status === "running") change(row.itemId, { status: "failed", reason: "Removal failed", detail: errorMessage(error), finishedAt: this.now() });
+        }
       }
     }
-    for (const item of request.trashCheckouts) {
+    if (request.trashCheckouts.length) await runMaintenanceItems(request.trashCheckouts, async (item, index) => {
       const checkout = retained.checkouts.get(item.worktreePath);
+      begin(`trash:${index}`);
       if (stopped()) {
         keepStopped(item.worktreePath);
-        continue;
+        return;
       }
       try {
         // Re-check at the moment of the move: only a managed checkout whose
@@ -924,40 +997,46 @@ export class ThreadMaintenanceService {
           checkoutStep.kept += 1;
           addProblem({ step: "checkouts", kind: "kept", object: item.worktreePath, reason: "No longer safe to move",
             detail: "Its repository is back, or it is outside a managed worktree folder.", path: item.worktreePath });
-          continue;
+          return;
         }
+        change(`trash:${index}`, { stage: "removing" });
         await this.deps.trashItem(item.worktreePath);
         checkoutStep.done += 1;
-        removed(item.worktreePath);
+        removed(item.worktreePath, true);
       } catch (error) {
         checkoutStep.failed += 1;
         this.deps.onError?.(error, { step: "checkouts", path: item.worktreePath });
         addProblem({ step: "checkouts", kind: "failed", object: item.worktreePath, reason: "Move to Trash failed",
           detail: errorMessage(error), path: item.worktreePath });
       }
-    }
+    });
     for (const { worktreePath } of request.removeUnreferenced ?? []) {
       checkoutStep.kept += 1;
       addProblem({ step: "checkouts", kind: "kept", object: worktreePath, path: worktreePath,
         reason: "No identified thread owns this checkout" });
     }
-    for (const outputPath of new Set((request.removeBuildOutputs ?? []).map((item) => item.outputPath))) {
+    const outputPaths = [...new Set((request.removeBuildOutputs ?? []).map((item) => item.outputPath))];
+    if (outputPaths.length) await runMaintenanceItems(outputPaths, async (outputPath, index) => {
+      begin(`output:${index}`);
       const candidate = retained.buildOutputs.get(outputPath);
       if (!candidate || !this.deps.buildOutputs) {
         checkoutStep.failed += 1;
         addProblem({ step: "checkouts", kind: "failed", object: outputPath, path: outputPath, reason: "Not in this scan" });
-        continue;
+        return;
       }
-      if ([...removedPaths].some((parent) => outputPath.startsWith(parent + path.sep))) continue;
-      if (stopped()) { keepStopped(outputPath); continue; }
-      update({ current: { step: "checkouts", processed: 0, total: request.removeBuildOutputs!.length, object: outputPath } });
+      if ([...removedPaths].some((parent) => outputPath.startsWith(parent + path.sep))) {
+        change(`output:${index}`, { status: "kept", reason: "Removed with its checkout", finishedAt: this.now() });
+        return;
+      }
+      if (stopped()) { keepStopped(outputPath); return; }
       try {
         if (!await this.stillOwnsBuildOutput(candidate)) {
           checkoutStep.kept += 1;
           addProblem({ step: "checkouts", kind: "kept", object: outputPath, path: outputPath,
             reason: "Thread no longer identifies this checkout" });
-          continue;
+          return;
         }
+        change(`output:${index}`, { stage: "removing" });
         const result = await this.deps.buildOutputs.remove(candidate, this.abort.signal);
         if (result.kept) {
           checkoutStep.kept += 1;
@@ -966,12 +1045,15 @@ export class ThreadMaintenanceService {
         } else if (!result.alreadyGone) {
           checkoutStep.done += 1;
           if (result.allocatedBytesRemoved !== undefined) checkoutStep.allocatedBytesRemoved = (checkoutStep.allocatedBytesRemoved ?? 0) + result.allocatedBytesRemoved;
+          complete(`output:${index}`, result.allocatedBytesRemoved);
+        } else {
+          change(`output:${index}`, { status: "kept", reason: "Already removed", finishedAt: this.now() });
         }
       } catch (error) {
         checkoutStep.failed += 1;
         addProblem({ step: "checkouts", kind: "failed", object: outputPath, path: outputPath, reason: "Build output removal failed", detail: errorMessage(error) });
       }
-    }
+    });
     // Repository-gone checkouts the operator left unselected are kept on
     // purpose. A run that skipped this step reports nothing about them.
     for (const checkout of checkoutStep.ran ? retained.checkouts.values() : []) {
@@ -984,6 +1066,19 @@ export class ThreadMaintenanceService {
     // Step 4: expired archives are deleted by the hourly sweep under the
     // Settings retention period; the reviewed run reports, never deletes.
     steps.push({ step: "expired", ran: false, done: 0, kept: 0, failed: 0 });
+    for (const row of rows) {
+      if (row.status === "queued" || row.status === "running") {
+        const duplicate = rows.some((other) => other !== row && other.step === row.step && row.path !== undefined && other.path === row.path
+          && (other.status === "done" || other.status === "kept"));
+        const status = stopped() || duplicate ? "kept" : "failed";
+        const reason = stopped() ? "Stopped before removing" : duplicate ? "Duplicate selection" : "No removal result reported";
+        rows[rows.indexOf(row)] = { ...row, status, stage: undefined, reason, finishedAt: this.now() };
+        const step = steps.find((step) => step.step === row.step)!;
+        step[status] += 1;
+        addProblem({ step: row.step, kind: status, object: row.object, path: row.path, backend: row.backend, threadId: row.threadId, reason });
+      }
+    }
+    update();
     const finished = { ...this.run!, running: false, finishedAt: this.now(), current: undefined,
       steps: [...steps], problems: [...problems] };
     return this.publish(finished);
@@ -1018,9 +1113,20 @@ export class ThreadMaintenanceService {
   }
 
   private publish(snapshot: ThreadMaintenanceRun): ThreadMaintenanceRun {
+    const immediate = !snapshot.running || snapshot.runId !== this.run?.runId || snapshot.stopRequested !== this.run?.stopRequested;
     const run = { ...snapshot, revision: ++this.revision };
     this.run = run;
-    this.deps.onRun?.(run);
+    const notify = () => {
+      if (this.runNoticeTimer) clearTimeout(this.runNoticeTimer);
+      this.runNoticeTimer = undefined;
+      this.lastRunNoticeAt = Date.now();
+      this.deps.onRun?.(this.run!);
+    };
+    if (immediate || Date.now() - this.lastRunNoticeAt >= 250) notify();
+    else if (!this.runNoticeTimer) {
+      this.runNoticeTimer = setTimeout(notify, Math.max(0, 250 - (Date.now() - this.lastRunNoticeAt)));
+      this.runNoticeTimer.unref?.();
+    }
     return run;
   }
 
