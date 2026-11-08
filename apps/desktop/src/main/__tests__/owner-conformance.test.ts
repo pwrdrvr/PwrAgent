@@ -433,6 +433,52 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   }, 120_000);
 
+  it("returns matching accepted turns through desktop finalization failures without resubmitting", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      const hosts = [desktop, outpost];
+      const identities = await Promise.all(hosts.map((host) => host.client.startThread({
+        backend: "codex", cwd: host.workspace, executionMode: "auto",
+      })));
+      await Promise.all(hosts.map(settle));
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const internal = registry as unknown as {
+        persistStartingTurnOrigin: () => Promise<void>;
+        rememberTurnInputAttachments: () => Promise<void>;
+        reservedCodexStartThreadIds: Set<string>;
+        startingTurnOrigins: Set<unknown>;
+      };
+      const origin = vi.spyOn(internal, "persistStartingTurnOrigin");
+      const retention = vi.spyOn(internal, "rememberTurnInputAttachments");
+      const commands = ["origin", "attachments", ...fc.sample(fc.constantFrom("origin", "attachments"), 4)];
+      for (const command of commands) {
+        const before = OwnerConformanceCodexTransport.requests.filter((request) => request.method === "turn/start").length;
+        (command === "origin" ? origin : retention).mockRejectedValueOnce(new Error(`Fixture ${command} finalization failed`));
+        const turns = await Promise.all(hosts.map((host, index) => host.client.startTurn({
+          backend: "codex", threadId: identities[index].threadId, input: [{ type: "text", text: "slow" }],
+          messageOrigin: { kind: "messaging" },
+        })));
+        for (const [index, turn] of turns.entries()) expect(turn).toMatchObject({
+          backend: "codex", threadId: identities[index].threadId, turnId: turns[0].turnId,
+        });
+        expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "turn/start")).toHaveLength(before + 1);
+        expect(internal.reservedCodexStartThreadIds.has(identities[0].threadId)).toBe(false);
+        expect(internal.startingTurnOrigins.size).toBe(0);
+        expect(desktop.events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
+        const interruptions = await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
+        for (const [index, interruption] of interruptions.entries()) expect(interruption).toMatchObject({
+          threadId: turns[index].threadId, turnId: turns[index].turnId,
+        });
+        await Promise.all(hosts.map(settle));
+      }
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+    }
+  }, 120_000);
+
   it("retires protocol-refused desktop submissions through notification rejection before matching Outpost", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const desktop = await startDesktopOwner();
