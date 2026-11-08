@@ -698,6 +698,15 @@ describe("Restore now and Keep it awake", () => {
 });
 
 describe("Thread maintenance's hibernate step", () => {
+  it("uses fleet membership rather than a missing archive timestamp to ignore an archived co-owner", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads.push({ id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true });
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const candidate = (await registry.listAutoArchiveCandidates()).find((item) => item.thread.id === THREAD_ID)!;
+    expect(await registry.hibernateReviewedCheckout(candidate, { ...ON, enabled: true })).toBe(true);
+    expect(await exists(fixture.worktree)).toBe(false);
+  });
+
   it("reads archived fleet membership once for a multi-wave reviewed hibernation batch", async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });

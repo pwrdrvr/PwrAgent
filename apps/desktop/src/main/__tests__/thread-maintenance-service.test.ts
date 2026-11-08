@@ -914,6 +914,8 @@ describe("hibernate idle checkouts", () => {
     }
     expect(started).toHaveLength(5);
     expect(service.getRun()?.items?.map((item) => item.status)).toEqual(["done", "done", "done", "done", "done", "kept", "kept", "kept", "kept"]);
+    expect(service.getRun()?.items?.find((item) => item.threadId === "1")?.finishedOrder).toBe(1);
+    expect(service.getRun()?.items?.map((item) => item.finishedOrder).sort((a, b) => a! - b!)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(service.getRun()?.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 5, kept: 4, failed: 0 });
   });
 

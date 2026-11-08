@@ -52,7 +52,11 @@ export function runItemView(items: readonly ThreadMaintenanceRunItem[] | undefin
   const pick = (status: ThreadMaintenanceRunItem["status"], order: (a: typeof rows[number], b: typeof rows[number]) => number) =>
     rows.filter(({ item }) => item.status === status).sort(order).map(({ item }) => item);
   const sent = (a: typeof rows[number], b: typeof rows[number]) => a.index - b.index;
-  const finished = byTime((item) => item.finishedAt);
+  const finishedTime = byTime((item) => item.finishedAt);
+  const finished = (a: typeof rows[number], b: typeof rows[number]) =>
+    a.item.finishedOrder !== undefined && b.item.finishedOrder !== undefined
+      ? a.item.finishedOrder - b.item.finishedOrder || a.index - b.index
+      : finishedTime(a, b);
   return {
     active: pick("running", byTime((item) => item.startedAt)),
     waiting: pick("queued", sent),
@@ -90,6 +94,8 @@ export function stageText(item: Pick<ThreadMaintenanceRunItem, "action" | "stage
       return "Waiting for a cleanup worker";
     case "checking":
       return "Checking";
+    case "archiving":
+      return "Archiving thread";
     case "snapshotting":
       return "Saving snapshot";
     case "verifying":

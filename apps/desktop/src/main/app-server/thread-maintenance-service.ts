@@ -751,6 +751,7 @@ export class ThreadMaintenanceService {
     const problems: ThreadMaintenanceProblem[] = [];
     const steps: ThreadMaintenanceStepResult[] = [];
     const rows: ThreadMaintenanceRunItem[] = [];
+    let finishedOrder = 0;
     const keyOf = (item: { backend: string; threadId: string }) => buildThreadIdentityKey(item.backend as AppServerBackendKind, item.threadId);
     request.archive.forEach((item, index) => {
       const entry = retained.families.get(keyOf(item));
@@ -775,7 +776,11 @@ export class ThreadMaintenanceService {
       steps: steps.map((step) => ({ ...step })), problems: [...problems], items: [...rows] });
     const change = (id: string, patch: Partial<ThreadMaintenanceRunItem>) => {
       const index = rows.findIndex((item) => item.itemId === id);
-      const row = { ...rows[index]!, ...patch };
+      const previous = rows[index]!;
+      const wasFinished = previous.status !== "queued" && previous.status !== "running";
+      const isFinished = patch.status !== undefined && patch.status !== "queued" && patch.status !== "running";
+      const row = { ...previous, ...patch,
+        ...(isFinished ? wasFinished ? { finishedAt: previous.finishedAt } : { finishedOrder: ++finishedOrder } : {}) };
       rows[index] = row;
       const stepRows = rows.filter((item) => item.step === row.step);
       update({ current: { step: row.step, total: stepRows.length,
@@ -847,7 +852,7 @@ export class ThreadMaintenanceService {
         continue;
       }
       try {
-        const outcome = await this.archiveReviewed(entry, item.overLimit, retained.scan.rules);
+        const outcome = await this.archiveReviewed(entry, item.overLimit, retained.scan.rules, () => change(row.itemId, { stage: "archiving" }));
         if (outcome === true) {
           threadStep.done += 1;
           archivedKeys.add(keyOf(item));
@@ -1072,7 +1077,7 @@ export class ThreadMaintenanceService {
           && (other.status === "done" || other.status === "kept"));
         const status = stopped() || duplicate ? "kept" : "failed";
         const reason = stopped() ? "Stopped before removing" : duplicate ? "Duplicate selection" : "No removal result reported";
-        rows[rows.indexOf(row)] = { ...row, status, stage: undefined, reason, finishedAt: this.now() };
+        rows[rows.indexOf(row)] = { ...row, status, stage: undefined, reason, finishedAt: this.now(), finishedOrder: ++finishedOrder };
         const step = steps.find((step) => step.step === row.step)!;
         step[status] += 1;
         addProblem({ step: row.step, kind: status, object: row.object, path: row.path, backend: row.backend, threadId: row.threadId, reason });
@@ -1089,6 +1094,7 @@ export class ThreadMaintenanceService {
     entry: { family: ThreadArchiveCandidate[]; row: ThreadMaintenanceIdleThread },
     overLimit: ThreadMaintenanceApplyRequest["archive"][number]["overLimit"],
     rules: ThreadMaintenanceRules,
+    onArchive: () => void,
   ): Promise<true | string> {
     const refreshed = await Promise.all(entry.family.map((item) => this.deps.refreshCandidate(item)));
     if (archiveCandidateLastActivity(refreshed[0]!) > entry.row.lastActivityAt) return "New activity during the run";
@@ -1104,6 +1110,7 @@ export class ThreadMaintenanceService {
         return "Changes grew after the review";
       }
     }
+    onArchive();
     const archived = await this.deps.archiveFamily(refreshed, {
       preserveWorktrees: workspace.kind === "overLimit" && overLimit === "keepCheckout",
       ...(workspace.kind === "overLimit" && overLimit === "snapshotAll"

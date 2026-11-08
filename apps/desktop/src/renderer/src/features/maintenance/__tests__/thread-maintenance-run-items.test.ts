@@ -10,7 +10,7 @@ import {
 } from "../thread-maintenance-run-items";
 
 const ACTIONS = ["archive", "hibernate", "removeCheckout", "trashCheckout", "removeBuildOutput", "removeEmptyFolders"] as const;
-const STAGES = ["waitingForWorker", "checking", "snapshotting", "verifying", "waiting", "removing", "recording"] as const;
+const STAGES = ["waitingForWorker", "checking", "archiving", "snapshotting", "verifying", "waiting", "removing", "recording"] as const;
 const FINAL = ["done", "kept", "failed"] as const;
 
 /**
@@ -62,6 +62,20 @@ const runArb = fc.record({
 const ids = (rows: readonly ThreadMaintenanceRunItem[]) => rows.map((item) => item.itemId);
 
 describe("run items, as a model of main's parallel runner", () => {
+  it("appends completion history across equal timestamps and clock corrections", () => {
+    fc.assert(fc.property(fc.shuffledSubarray([0, 1, 2, 3, 4, 5], { minLength: 6, maxLength: 6 }),
+      fc.array(fc.integer({ min: -3, max: 3 }), { minLength: 6, maxLength: 6 }), (order, clock) => {
+        for (let finished = 1; finished <= order.length; finished++) {
+          const rows: ThreadMaintenanceRunItem[] = Array.from({ length: 6 }, (_, index) => ({
+            itemId: String(index), step: "hibernate", action: "hibernate", object: String(index),
+            status: order.indexOf(index) < finished ? "done" : "queued",
+            finishedAt: 1000 + clock[index]!, finishedOrder: order.indexOf(index) + 1,
+          }));
+          expect(ids(runItemView(rows).done)).toEqual(order.slice(0, finished).map(String));
+        }
+      }));
+  });
+
   it("lists every item exactly once, under its status, and counts add up", () => {
     fc.assert(fc.property(runArb, ({ count, concurrency, choices }) => {
       for (const snapshot of simulate(count, concurrency, choices)) {

@@ -447,7 +447,7 @@ export class WorktreeArchiveService {
     try {
       await this.removeCheckout({ worktreePath, gitDirectory, commonDirectory, repositoryPath, head, assertRemoval,
         onStage: params.onStage,
-        onRemovalStarted: () => { removalStarted = true; } });
+        onRemovalStarted: () => { removalStarted = true; params.onStage?.("removing"); } });
     } catch (error) {
       if (!hibernation) throw error;
       if (!removalStarted) {
@@ -524,7 +524,7 @@ export class WorktreeArchiveService {
         // Git for Windows can hand work to another git.exe after the launcher
         // exits. Own that complete process tree atomically and do not report the
         // archive complete until the Job's active-process count reaches zero.
-        { ownProcessTree: true, beforeSpawn: () => { assertRemoval?.(); params.onStage?.("removing"); params.onRemovalStarted(); } },
+        { ownProcessTree: true, beforeSpawn: () => { assertRemoval?.(); params.onRemovalStarted(); } },
       );
     }, assertRemoval));
   }

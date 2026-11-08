@@ -339,7 +339,7 @@ export type ThreadMaintenanceStepResult = {
 };
 
 /** Live stages describe actual work; a completed item retains its outcome. */
-export type ThreadMaintenanceRunStage = "checking" | "snapshotting" | "verifying" | "waitingForWorker" | "waiting" | "removing" | "recording";
+export type ThreadMaintenanceRunStage = "checking" | "archiving" | "snapshotting" | "verifying" | "waitingForWorker" | "waiting" | "removing" | "recording";
 
 export type ThreadMaintenanceRunItem = {
   itemId: string;
@@ -355,6 +355,9 @@ export type ThreadMaintenanceRunItem = {
   detail?: string;
   startedAt?: number;
   finishedAt?: number;
+  /** Strict completion order within the run, including equal timestamps
+   * and wall-clock corrections. Older owners omit it. */
+  finishedOrder?: number;
   /** Allocation removed, not measured volume space recovered. */
   allocatedBytesRemoved?: number;
 };

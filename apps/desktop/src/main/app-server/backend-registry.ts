@@ -17345,7 +17345,9 @@ export class DesktopBackendRegistry {
               const current = await this.refreshAutoArchiveCandidate(candidate, { deferOwnership: true });
               const inventory = options.context ? await options.context.withInventory!(async () =>
                 await this.readPacedArchiveCleanupInventory({ backend, threadId, context: options.context, ownershipScope: target.worktreePath })) : undefined;
-              const all = inventory ? [...inventory.activeThreads, ...inventory.archivedThreads].map((thread) => ({ thread }))
+              // Membership is authoritative even when an archived provider
+              // row has no archivedAt timestamp. Only active owners hold it.
+              const all = inventory ? inventory.activeThreads.map((thread) => ({ thread }))
                 : await this.listAutoArchiveCandidates();
               current.managedWorktreePath = await this.managedMaintenanceCheckout(current.thread,
                 inventory ?? this.maintenanceOwnershipInventory(all, current));
@@ -41467,6 +41469,7 @@ export class DesktopBackendRegistry {
           onStage: params.onStage,
           maxSnapshotBytes: this.reviewedSnapshotLimitFor(params.backend, params.thread.id),
           beforeRemove: params.context && this.codexClient.listArchiveCleanupThreadsPage ? async () => {
+            params.onStage?.("checking");
             this.archiveWorktreeRemovalAdmissions.add(admission);
             this.archiveWorkspaceOwnership.beginAdmission(scope);
             const current = await this.findThreadForArchiveCleanup({
@@ -41513,6 +41516,7 @@ export class DesktopBackendRegistry {
           } : undefined,
         });
         removedSnapshot = snapshot;
+        params.onStage?.("recording");
         backendRegistryLog.info("archive thread worktree cleanup removed worktree", {
           backend: params.backend,
           threadId: params.thread.id,
