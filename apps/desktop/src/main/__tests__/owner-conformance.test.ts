@@ -84,7 +84,9 @@ type OwnerHost = {
  * registered with the real federation handlers behind a router that enforces
  * the shared capability table. Only Codex is a fixture.
  */
-async function startDesktopOwner(): Promise<OwnerHost> {
+async function startDesktopOwner(
+  threadTitleGenerationService: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
+): Promise<OwnerHost> {
   OwnerConformanceCodexTransport.reset();
   const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-conformance-")));
   const { dbPath, tempDir } = createTempStateDb("pwragent-conformance-db-");
@@ -99,7 +101,7 @@ async function startDesktopOwner(): Promise<OwnerHost> {
   const configStore = new DesktopConfigStore({ configPath });
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
-    threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
+    threadTitleGenerationService, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   desktopOwner.registry = registry;
   // A running desktop has reconciled its window's full navigation snapshot
@@ -272,6 +274,54 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       expect(await desktop.local!.request({ method: "backend.getNavigationLaunchpadConfig", params: launchpad }, "launchpad"))
         .toEqual(await desktop.client.getNavigationLaunchpadConfig(launchpad));
     } finally { await desktop.close(); }
+  });
+
+  it("coordinates helper results and explicit renames through the real desktop owner", async () => {
+    let started!: () => void;
+    let release!: () => void;
+    let blocked = Promise.resolve();
+    let helperTitle = "";
+    const generateTitle = vi.fn(async () => {
+      started();
+      await blocked;
+      return { status: "generated" as const, title: helperTitle };
+    });
+    const desktop = await startDesktopOwner({ generateTitle });
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const operators = fc.sample(fc.boolean(), 6);
+    // Include each side of the precedence rule whatever the generated sample.
+    operators.push(false, true);
+    try {
+      for (const [i, operator] of operators.entries()) {
+        const ready = new Promise<void>((resolve) => { started = resolve; });
+        blocked = new Promise<void>((resolve) => { release = resolve; });
+        helperTitle = `Helper fixture ${i}`;
+        const ref = { backend: "codex" as const, threadId: (await desktop.client.startThread({
+          backend: "codex", cwd: desktop.workspace, executionMode: "auto",
+        })).threadId };
+        await desktop.client.startTurn({ ...ref, input: [{ type: "text", text: "Prompt fixture" }] });
+        await ready;
+        if (operator) await desktop.client.renameThread({ ...ref, name: "Prompt fixture" });
+        release();
+        await registry.whenThreadTitleGenerationSettledForTests();
+        const detail = await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref });
+        const expectedTitle = operator ? "Prompt fixture" : helperTitle;
+        const expectedSource = operator ? "explicit" : "derived";
+        expect(detail.thread).toMatchObject({ title: expectedTitle, titleSource: expectedSource });
+        const names = desktop.events.flatMap((event) => event.notification.method === "thread/name/updated"
+          && event.notification.params.threadId === ref.threadId
+          ? [{ name: event.notification.params.threadName, source: event.notification.params.titleSource }] : []);
+        expect(names).toEqual([
+          { name: "Prompt fixture", source: "derived" },
+          { name: expectedTitle, source: expectedSource },
+        ]);
+      }
+      expect(generateTitle).toHaveBeenCalledTimes(operators.length);
+      await settle(desktop);
+    } finally {
+      release?.();
+      await desktop.close();
+    }
   });
 
   it("keeps generated explicit rename sequences and events equal on both real owners", async () => {
