@@ -138,13 +138,15 @@ it("shares host completion and its failure among all generated duplicate callers
 });
 
 it("never lets retired work evict or overwrite a newer request with the same identity", async () => {
-  await fc.assert(fc.asyncProperty(target, fc.boolean(), fc.boolean(), async (id, providerFailure, clear) => {
+  await fc.assert(fc.asyncProperty(target, fc.constantFrom("provider", "retention", "causal"), fc.boolean(), async (id, stage, clear) => {
     const entered = deferred<void>();
     const gate = deferred<SteerTurnResponse>();
     const params = request(id);
     const submit = vi.fn(async () => ({ response: response(params) }));
     const complete = vi.fn(async () => {});
-    if (providerFailure) submit.mockImplementationOnce(async () => { entered.resolve(); return { response: await gate.promise }; });
+    if (stage === "provider") submit.mockImplementationOnce(async () => { entered.resolve(); return { response: await gate.promise }; });
+    else if (stage === "retention") submit.mockImplementationOnce(async () => ({ response: response(params),
+      complete: async () => { entered.resolve(); await gate.promise; } }));
     else complete.mockImplementationOnce(async () => { entered.resolve(); await gate.promise; });
     const lifecycle = new ThreadSteeringLifecycle({ submit, complete });
     const old = lifecycle.steerTurn(params).catch((error: unknown) => error);

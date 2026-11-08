@@ -334,7 +334,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   });
 
-  it("keeps generated steering responses equal and coalesces desktop retries at the provider boundary", async () => {
+  it("keeps generated steering responses equal and retains desktop acceptance through host effect failures", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
     try {
@@ -344,11 +344,21 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         const { threadId } = await host.client.startThread({ backend: "codex", cwd: host.workspace, executionMode: "auto" });
         return await host.client.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "slow" }] });
       }));
-      const commands = fc.sample(fc.record({ copies: fc.integer({ min: 2, max: 6 }), text: fc.string({ maxLength: 30 }) }), 8);
+      const retain = vi.spyOn(desktopOwner.registry as unknown as {
+        rememberTurnInputAttachments: () => Promise<void>;
+      }, "rememberTurnInputAttachments");
+      const commands = fc.sample(fc.record({ copies: fc.integer({ min: 2, max: 6 }), text: fc.string({ maxLength: 30 }),
+        failures: fc.integer({ min: 1, max: 3 }) }), 8);
       for (const [i, command] of commands.entries()) {
         const requests = turns.map((turn) => ({ backend: "codex" as const, threadId: turn.threadId,
           expectedTurnId: turn.turnId, requestId: `steer-${i}`, input: [{ type: "text" as const, text: `Steer ${command.text}` }] }));
         const before = OwnerConformanceCodexTransport.requests.filter((item) => item.method === "turn/steer").length;
+        for (let failure = 0; failure < command.failures; failure += 1) {
+          retain.mockRejectedValueOnce(new Error("Fixture attachment retention failed"));
+          const attempts = await Promise.allSettled(Array.from({ length: command.copies }, () => desktop.client.steerTurn(requests[0])));
+          expect(attempts.map((attempt) => attempt.status)).toEqual(Array(command.copies).fill("rejected"));
+          expect(OwnerConformanceCodexTransport.requests.filter((item) => item.method === "turn/steer")).toHaveLength(before + 1);
+        }
         const [desktopResults, outpostResult] = await Promise.all([
           Promise.all(Array.from({ length: command.copies }, () => desktop.client.steerTurn(requests[0]))),
           outpost.client.steerTurn(requests[1]),
