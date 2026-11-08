@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
 import { ThreadQueueAutomationRunner } from "../automations/automation-runner";
 import { AutomationScheduler } from "../automations/automation-scheduler";
-import { AutomationStore } from "../automations/automation-store";
+import { AutomationStore } from "../storage/automation-store";
 import type { AutomationGateRunner } from "../automations/automation-gate-runner";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

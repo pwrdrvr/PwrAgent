@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AutomationInspectionBus } from "../automations/automation-inspection-bus";
-import { AutomationStore } from "../automations/automation-store";
+import { AutomationStore } from "../storage/automation-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
