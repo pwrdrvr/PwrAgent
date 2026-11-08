@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import {
   defaultThreadMaintenanceRules,
   normalizeCheckoutHibernationPolicy,
@@ -1487,6 +1487,10 @@ function RunView(props: {
   const failedItems = items ? runItemView(items).failed.length : 0;
   const failed = failedItems + problems.filter((problem) => problem.kind === "failed").length;
   const done = run.steps.reduce((sum, step) => sum + step.done, 0);
+  const problemCards = THREAD_MAINTENANCE_SCAN_STEPS.map((step) => (
+    <ProblemCards key={step} step={step} problems={problems.filter((problem) => problem.step === step)} run={run}
+      onOpenThread={props.onOpenThread} />
+  ));
   return (
     <>
       {run.running ? null : (
@@ -1502,11 +1506,9 @@ function RunView(props: {
         </div>
       )}
       {run.running ? <Rail steps={railSteps} phase="running" run={run} /> : null}
-      {items ? <RunItems run={run} items={items} onOpenThread={props.onOpenThread} /> : null}
-      {THREAD_MAINTENANCE_SCAN_STEPS.map((step) => (
-        <ProblemCards key={step} step={step} problems={problems.filter((problem) => problem.step === step)} run={run}
-          onOpenThread={props.onOpenThread} />
-      ))}
+      {items ? (
+        <RunItems run={run} items={items} onOpenThread={props.onOpenThread}>{problemCards}</RunItems>
+      ) : problemCards}
       {run.running && run.current && !items ? (
         <div className="thread-maintenance__progress-card" role="status">
           <div className="thread-maintenance__progress-top">
@@ -1563,10 +1565,20 @@ const RUN_LEGEND: Record<(typeof RUN_SEGMENTS)[number], string> = {
  * with its directory, stage and time; finished items stay listed by outcome
  * in the order they ended, so a success is still there after later items
  * start. Waiting items fold behind one line, after the results.
+ *
+ * The items in progress stay pinned at the top of the body while the results
+ * scroll under them. `children` (the problem cards) render last, inside the
+ * same section, so the pin holds through them too.
  */
-function RunItems(props: { run: ThreadMaintenanceRun; items: ThreadMaintenanceRunItem[]; onOpenThread?: OpenThread }) {
+function RunItems(props: {
+  run: ThreadMaintenanceRun;
+  items: ThreadMaintenanceRunItem[];
+  onOpenThread?: OpenThread;
+  children?: ReactNode;
+}) {
   const { run } = props;
   const view = runItemView(props.items);
+  const pinnedRef = usePinnedScrollPadding(view.active.length > 0);
   const counts = runItemCounts(view);
   const [showWaiting, setShowWaiting] = useState(false);
   const waitingId = useId();
@@ -1602,7 +1614,8 @@ function RunItems(props: { run: ThreadMaintenanceRun; items: ThreadMaintenanceRu
         ) : null}
       </div>
       {view.active.length ? (
-        <RunItemGroup tone="active" title={`In progress · ${view.active.length}`} items={view.active} onOpenThread={props.onOpenThread} />
+        <RunItemGroup ref={pinnedRef} tone="active" title={`In progress · ${view.active.length}`} items={view.active}
+          onOpenThread={props.onOpenThread} />
       ) : null}
       {view.failed.length ? (
         <RunItemGroup tone="failed" title={`Failed · ${view.failed.length}`} items={view.failed} onOpenThread={props.onOpenThread} />
@@ -1627,18 +1640,46 @@ function RunItems(props: { run: ThreadMaintenanceRun; items: ThreadMaintenanceRu
           </ul>
         </section>
       ) : null}
+      {props.children}
     </section>
   );
 }
 
+/**
+ * Tells the body scroller how tall the pinned rows are, as
+ * `--thread-maintenance-pinned`, so focus moving to a result scrolls it
+ * clear of them instead of under them.
+ */
+function usePinnedScrollPadding(pinned: boolean) {
+  const ref = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    const scroller = element?.closest<HTMLElement>(".thread-maintenance__body");
+    if (!pinned || !element || !scroller || typeof ResizeObserver === "undefined") return;
+    const update = () => {
+      // The gap between the pin and the first result below it.
+      scroller.style.setProperty("--thread-maintenance-pinned", `${Math.ceil(element.getBoundingClientRect().height) + 12}px`);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      scroller.style.removeProperty("--thread-maintenance-pinned");
+    };
+  }, [pinned]);
+  return ref;
+}
+
 function RunItemGroup(props: {
+  ref?: Ref<HTMLElement>;
   tone: "active" | "failed" | "kept" | "done";
   title: string;
   items: ThreadMaintenanceRunItem[];
   onOpenThread?: OpenThread;
 }) {
   return (
-    <section className={`thread-maintenance__run-group is-${props.tone}`} aria-label={props.title}>
+    <section ref={props.ref} className={`thread-maintenance__run-group is-${props.tone}`} aria-label={props.title}>
       <div className="thread-maintenance__run-head">
         <p className="thread-maintenance__eyebrow">{props.title}</p>
       </div>

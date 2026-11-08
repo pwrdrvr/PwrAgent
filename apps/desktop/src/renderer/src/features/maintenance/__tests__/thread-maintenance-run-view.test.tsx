@@ -118,6 +118,29 @@ describe("a parallel run's rows", () => {
     expect(dialog).toHaveTextContent("9 / 89 · 4 in progress");
   });
 
+  // A sticky block stays pinned only within its own container. Every result
+  // the operator scrolls through, problem cards included, must sit in the
+  // same container as the items in progress, after them.
+  it("keeps the items in progress ahead of every later result in one container", async () => {
+    const { dialog, emit } = await startRun();
+    emit(run(items(9, { 2: { status: "failed", reason: "Snapshot failed" } }), {
+      problems: [{ step: "hibernate", kind: "kept", object: "Grok: list flaky specs", reason: "No worktree checkout" }],
+    }));
+    const active = within(dialog).getByRole("region", { name: "In progress · 4" });
+    const container = active.parentElement!;
+    const later = [
+      within(dialog).getByRole("region", { name: "Failed · 1" }),
+      within(dialog).getByRole("region", { name: "Done · 8" }),
+      within(dialog).getByRole("region", { name: "Waiting · 76" }),
+      within(dialog).getByText("Grok: list flaky specs"),
+    ];
+    for (const result of later) {
+      expect(container.contains(result)).toBe(true);
+      expect(active.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(active).toHaveClass("is-active");
+  });
+
   it("says Stop lets every item in progress finish and starts no more", async () => {
     const { dialog, emit } = await startRun();
     emit(run(items(3)));
