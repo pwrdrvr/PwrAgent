@@ -383,9 +383,9 @@ describe("messaging final-reply images at a bound turn end", () => {
         // The screenshot is cached under the profile, which needs no approved
         // roots, so the thread's overlay is never parsed for images.
         imageRootLookups: 0,
-        // turn/completed checks whether a queued message may start; that
-        // admission check reads the overlay once. Image resolution adds none.
-        overlayParses: 1,
+        // No messaging-local work awaits dispatch, so completion must not
+        // parse the overlay to check admission for an empty queue.
+        overlayParses: 0,
         pricingReads: 0,
         toolAccountingReads: 0,
         tokenMiserGateReads: 0,
@@ -742,7 +742,8 @@ describe("messaging final-reply images at a bound turn end on a peer-owned threa
       ownerAdvertisesTurnReply: true,
       peer: "an owner that advertises turn_assistant_reply",
       expected: {
-        peerRequests: { [READ_TURN_REPLY]: 1, [READ_IMAGE]: 2, "backend.resolveThreadAdmissionState": 1 },
+        // An empty messaging-local queue needs no owner admission RPC.
+        peerRequests: { [READ_TURN_REPLY]: 1, [READ_IMAGE]: 2 },
         turnsTransferred: 1,
         ownerProtocolReads: ["readThreadTurn"],
         ownerTurnsNormalized: 1,
@@ -754,7 +755,7 @@ describe("messaging final-reply images at a bound turn end on a peer-owned threa
       peer: "an owner that predates it",
       expected: {
         // The bridge until every peer advertises the request.
-        peerRequests: { [READ_THREAD]: 1, [READ_IMAGE]: 2, "backend.resolveThreadAdmissionState": 1 },
+        peerRequests: { [READ_THREAD]: 1, [READ_IMAGE]: 2 },
         turnsTransferred: 20,
         ownerProtocolReads: ["readThread"],
         ownerTurnsNormalized: 20,
