@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -4974,6 +4975,56 @@ describe("app server ipc", () => {
     await expect(
       handler?.({}, { federationTarget, forceRefresh: true }),
     ).resolves.toBe(snapshot);
+  });
+
+  it("routes every local navigation read through one owner dispatcher with window-owned demand", async () => {
+    const { registerAppServerIpcHandlers, appServerService } = await import("../ipc/app-server");
+    registerAppServerIpcHandlers();
+    const dispatch = handlers.get("owner:request");
+    expect(dispatch).toBeTypeOf("function");
+    for (const channel of ["navigation:get-query-page", "navigation:get-selected-detail",
+      "navigation:get-queue-projection", "navigation:get-launchpad-config"]) {
+      expect(handlers.has(channel)).toBe(false);
+    }
+    const methods = ["getNavigationQueryPage", "getNavigationSelectedDetail", "getNavigationQueueProjection",
+      "getNavigationLaunchpadConfig"] as const;
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 3 }), fc.integer({ min: 100_000, max: 999_999 }),
+      fc.string({ minLength: 1, maxLength: 30 }), async (index, senderId, consumerId) => {
+        const method = methods[index]!;
+        const response = { protocol: 2, revision: consumerId };
+        const read = vi.spyOn(appServerService, method).mockResolvedValue(response as never);
+        try {
+          const request = { protocol: 2, inventory: "viewer", query: { kind: "lens", lens: "inbox" } };
+          const result = await dispatch!({ sender: { id: senderId, once: vi.fn() } },
+            { method: `backend.${method}`, params: request }, consumerId);
+          expect(result).toEqual(response);
+          expect(read).toHaveBeenCalledExactlyOnceWith(request, JSON.stringify([senderId, consumerId]));
+        } finally { read.mockRestore(); }
+      }));
+  });
+
+  it.skipIf(!process.env.PWRAGENT_NAVIGATION_BENCHMARK)("measures local sidebar navigation read latency", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    listThreads.mockResolvedValue(Array.from({ length: 1000 }, (_, index) => ({ id: `benchmark-${index}`,
+      source: "codex", title: `Benchmark thread ${index}`, titleSource: "explicit", updatedAt: index,
+      createdAt: index, linkedDirectories: [] })) as never);
+    registerAppServerIpcHandlers();
+    const read = handlers.get("navigation:get-query-page")!;
+    const event = { sender: { id: 999_999, once: vi.fn() } };
+    for (const scenario of ["warm", "changed-query"] as const) {
+      const samples: number[] = [];
+      for (let index = 0; index < 120; index += 1) {
+        const request = { protocol: 2, consumer: "main-sidebar", inventory: "viewer", backend: "all",
+          query: { kind: "lens", lens: "inbox", ...(scenario === "changed-query" ? { filter: String(index) } : {}) } };
+        const start = performance.now();
+        await read(event, request, "sidebar-benchmark");
+        if (index >= 20) samples.push(performance.now() - start);
+      }
+      samples.sort((a, b) => a - b);
+      console.log(JSON.stringify({ benchmark: "local-sidebar-main-read", scenario, rows: 1000, samples: samples.length,
+        p50Ms: samples[50], p95Ms: samples[95], totalMs: samples.reduce((sum, value) => sum + value, 0) }));
+    }
+    await handlers.get("navigation:release-query")?.(event, "sidebar-benchmark");
   });
 
   it("carries renderer causes across IPC into the physical owner and index reads", async () => {
