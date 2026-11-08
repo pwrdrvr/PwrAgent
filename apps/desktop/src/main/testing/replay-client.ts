@@ -222,6 +222,15 @@ export class ReplayClient {
     };
   }
 
+  async steerTurn(_params: {
+    threadId: string;
+    expectedTurnId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<{ threadId: string; turnId: string }> {
+    await this.ensureInitialized();
+    return this.controller.consumeResponse("turn/steer").result as { threadId: string; turnId: string };
+  }
+
   async startReview(params: {
     threadId: string;
     target: AppServerReviewTarget;
