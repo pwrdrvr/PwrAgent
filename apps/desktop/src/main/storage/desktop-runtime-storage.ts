@@ -1,3 +1,4 @@
+import type { RuntimeLeaseStorage } from "@pwragent/owner-core/runtime-lease-storage";
 import type { AcpAgentStorage, AcpAvailableCommandsStorage, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "../acp/acp-registry-types";
 import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
@@ -6,7 +7,7 @@ import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage
 import { ThreadTodoStore } from "./thread-todo-store";
 import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
-import { getAppStateDb, getAppStateMode, getBootDecision, isAppStateInitialized, getAppScheduledThreadActionStore as getScheduledThreadActionStore } from "../state/app-state";
+import { getAppStateDb, getAppRuntimeInstanceStore, getAppStateMode, getBootDecision, isAppStateInitialized, getAppScheduledThreadActionStore as getScheduledThreadActionStore } from "../state/app-state";
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
 import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
 import { RestartContinuationStore } from "../state/restart-continuation-store";
@@ -75,4 +76,8 @@ export function createThreadTodoStorage(): ThreadTodoStorage {
 
 export function createThreadReviewStorage(): ThreadReviewStorage {
   return new SqliteThreadReviewStorage(getAppStateDb());
+}
+
+export function getDesktopRuntimeLeaseStorage(): RuntimeLeaseStorage {
+  return getAppRuntimeInstanceStore();
 }
