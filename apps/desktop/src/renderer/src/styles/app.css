@@ -54029,6 +54029,154 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   background: var(--accent);
 }
 
+/* A run's per-item rows: what is in progress, then every result by outcome,
+   then what is waiting. Rows never reorder as later work starts. */
+.thread-maintenance__run {
+  display: grid;
+  gap: 12px;
+}
+
+.thread-maintenance__run-bar {
+  display: flex;
+  height: 6px;
+  margin: 9px 0 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-panel-hover);
+}
+
+.thread-maintenance__run-bar > i {
+  display: block;
+  flex-basis: 0;
+}
+
+.thread-maintenance__run-bar > .is-done {
+  background: var(--success-text);
+}
+
+.thread-maintenance__run-bar > .is-kept {
+  background: var(--info-text);
+}
+
+.thread-maintenance__run-bar > .is-failed {
+  background: var(--danger-text);
+}
+
+.thread-maintenance__run-bar > .is-active {
+  background: var(--accent);
+}
+
+.thread-maintenance__run-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.thread-maintenance__run-legend strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.thread-maintenance__run-group {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.thread-maintenance__run-group.is-active {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+.thread-maintenance__run-group.is-failed {
+  border-color: var(--danger-border);
+  background: var(--danger-surface-faint);
+}
+
+.thread-maintenance__run-group.is-kept {
+  border-color: var(--info-border);
+  background: var(--info-soft);
+}
+
+.thread-maintenance__run-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+}
+
+.thread-maintenance__run-head .thread-maintenance__eyebrow {
+  margin: 0;
+}
+
+.thread-maintenance__run-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-maintenance__run-rows li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__run-group.is-active .thread-maintenance__run-rows li {
+  border-top-color: var(--accent-border);
+}
+
+.thread-maintenance__run-group.is-failed .thread-maintenance__run-rows li {
+  border-top-color: var(--danger-border);
+}
+
+.thread-maintenance__run-group.is-kept .thread-maintenance__run-rows li {
+  border-top-color: var(--info-border);
+}
+
+.thread-maintenance__run-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.thread-maintenance__run-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.thread-maintenance__run-meta {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.thread-maintenance__run-meta b {
+  color: var(--success-text);
+  font-weight: 600;
+}
+
+.thread-maintenance__run-rows li.is-kept .thread-maintenance__run-meta b {
+  color: var(--info-text);
+}
+
+.thread-maintenance__run-rows li.is-failed .thread-maintenance__run-meta b {
+  color: var(--danger-text);
+}
+
+.thread-maintenance__run-stage {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
 /* The scan's live status. It keeps one height whatever it says. */
 .thread-maintenance__scan-card {
   padding: 10px 14px;
