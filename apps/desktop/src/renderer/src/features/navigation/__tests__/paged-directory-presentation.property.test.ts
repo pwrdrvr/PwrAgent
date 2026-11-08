@@ -49,6 +49,67 @@ function fixture(projects: number[], parents: number[]) {
   return { rows, directories, resources, threadsByKey: new Map(rows.map((row) => [`codex:${row.id}`, row])) };
 }
 
+function offPageSelection(childCount: number, selectedIndex: number, remote: boolean) {
+  const data = fixture(Array(childCount + 1).fill(0), [-1, ...Array(childCount).fill(0)]);
+  const directory = data.directories[0]!;
+  const parent = data.rows[0]!;
+  const children = data.rows.slice(1);
+  const selected = children[selectedIndex]!;
+  const collection = data.resources.get(`directory:${directory.key}`)!;
+  const childResource = data.resources.get(`children:${navigationIdentityKey(parent.ref)}`)!;
+  if (remote) {
+    for (const row of data.rows) {
+      row.ref.ownerInstanceId = "peer";
+      row.federation = { ref: buildFederatedThreadRef({ backend: row.source, instanceId: "peer", threadId: row.id }),
+        instanceLabel: "Peer", capabilities: [] };
+    }
+    data.threadsByKey = new Map(data.rows.map((row) => [`remote:peer:codex:${row.id}`, row]));
+  }
+  // Only this directory's independently paged siblings are loaded. A retained
+  // global child page would give the selected child an existing slot.
+  data.resources.clear();
+  data.resources.set(collection.id, collection);
+  data.resources.set(childResource.id, childResource);
+  const childPage = childResource.state.page!;
+  const allEntries = childPage.entries;
+  childResource.state.page = { ...childPage, complete: false, nextCursor: "next",
+    entries: allEntries.filter((entry) => entry.row !== selected) };
+  const selection: NavigationWindowResource = { ...collection, id: "selected-context", state: { ...collection.state,
+    request: { protocol: 2, inventory: "owner", consumer: "main-sidebar",
+      ...(remote ? { federationTarget: { scope: "remote", instanceId: "peer" } as const } : {}),
+      query: { kind: "exact", identities: [selected.ref], includeAncestry: true, ancestryScope: "directory" } },
+    page: { ...childPage, selectionDirectory: directory, entries: [
+      collection.state.page!.entries[0]!,
+      { row: selected, placement: { kind: "child", parent: parent.ref }, orderKey: "1", siblingOrder: selectedIndex },
+    ] } } };
+  data.resources.set(selection.id, selection);
+  const render = () => {
+    const model = buildPagedDirectoryPresentation({ ...data, directory });
+    const trays = createSubthreadTrays(model.childThreadsByParentKey, model.unpinnedThreads, model.ownerChildOrder);
+    return trays.subtree(`${remote ? "remote:peer:" : ""}codex:${parent.id}`).map((row) => row.id);
+  };
+  return { children, childResource, allEntries, render };
+}
+
+// Oracle: the owner's complete sibling order. Selecting a child missing from
+// an otherwise current page inserts it in that order, and a refreshed page
+// admitting the same child must preserve the displayed order.
+it("positions an exact-only selection before and after its child page admits it", () => {
+  fc.assert(fc.property(fc.integer({ min: 2, max: 24 }), fc.nat(), fc.boolean(), (count, index, remote) => {
+    const data = offPageSelection(count, index % count, remote);
+    const expected = data.children.map((row) => row.id);
+    expect(data.render()).toEqual(expected);
+    expect(data.childResource.state.page!.nextCursor).toBe("next");
+    expect(data.childResource.state.page!.entries).toHaveLength(count - 1);
+    data.childResource.state.page = { ...data.childResource.state.page!, entries: data.allEntries, complete: true, nextCursor: undefined };
+    expect(data.render()).toEqual(expected);
+  }));
+});
+
+it("places selected A at position zero when only B and C are on the child page", () => {
+  expect(offPageSelection(3, 0, true).render()).toEqual(["thread-1", "thread-2", "thread-3"]);
+});
+
 it("uses the owner's complete unpinned population even when no thread pages are loaded", () => {
   fc.assert(fc.property(fc.integer({ min: 2, max: 1000 }), fc.integer({ min: 1, max: 100 }), (total, roots) => {
     const data = fixture([0], [-1]);
