@@ -24282,6 +24282,7 @@ export class DesktopBackendRegistry {
     let activeTurnMode: ThreadExecutionMode | undefined;
     let codexThreadConfig: CodexThreadStartParams["config"] | undefined;
     let tokenMiserEnabledForThread = false;
+    let codexStartObservation: { sequence: number; previous?: { sequence: number; status: AppServerThreadStatus } } | undefined;
     const { pendingTurnId: syntheticStartedTurnId, context: pendingMessageContextId } = await this.threadStarts.prepareCodex({
       threadId: params.threadId,
       reserve: (pendingTurnId) => {
@@ -24378,7 +24379,11 @@ export class DesktopBackendRegistry {
           connectionConfig,
         );
       },
-      announce: (pendingTurnId) => this.emit(buildTurnStartEvent(params, pendingTurnId)),
+      announce: (pendingTurnId) => {
+        codexStartObservation = { sequence: this.reserveCodexThreadStatusObservationSequence(),
+          previous: this.observedCodexThreadStatuses.get(params.threadId) };
+        return this.emit(buildTurnStartEvent(params, pendingTurnId), codexStartObservation.sequence);
+      },
       rememberInput: () => this.threadTitles.rememberPendingInput(params, input),
       registerContext: () => this.registerPendingThreadMessageContext({
         backend: params.backend,
@@ -24389,7 +24394,7 @@ export class DesktopBackendRegistry {
       }),
       forgetContext: (context) => this.forgetPendingThreadMessageContext(context),
       fail: async (pendingTurnId, error, announced) => {
-        if (announced) await this.emit(buildTurnStartFailureEvent(params, pendingTurnId, error));
+        if (announced) await this.emit(buildTurnStartFailureEvent(params, pendingTurnId, error), codexStartObservation?.sequence);
         else await this.drainPendingReviewStartsForTerminalTurn({
           backend: params.backend,
           threadId: params.threadId,
@@ -24397,20 +24402,8 @@ export class DesktopBackendRegistry {
           method: "turn/failed",
         });
       },
-      retire: (pendingTurnId) => {
-        this.activeCodexTurnCollaborationModes.delete(buildActiveTurnKey(params.backend, params.threadId, pendingTurnId));
-        this.activeCodexTurnModes.delete(buildActiveTurnModeKey(params.threadId, pendingTurnId));
-        this.activeTurnKeys.delete(buildActiveTurnKey(params.backend, params.threadId, pendingTurnId));
-        if (reserveCodexStart) this.reservedCodexStartThreadIds.delete(params.threadId);
-        // A list read during terminal delivery can project the still-reserved
-        // start as active. Once released, restore the latest status observation;
-        // a newer provider status or another real turn retains its authority.
-        const observedStatus = this.observedCodexThreadStatuses.get(params.threadId)?.status;
-        if (reserveCodexStart && observedStatus) this.seedBackendCodexThreadStatus(params.threadId, observedStatus);
-        this.threadTitles.forgetPendingInput(params);
-      },
+      retire: (pendingTurnId) => this.retireCodexTurnStart(params, pendingTurnId, reserveCodexStart, codexStartObservation),
     });
-    let result: { threadId: string; turnId: string };
     const retryableCodexTurnStart: CodexRetryableTurnStart | undefined =
       params.backend === "codex" && !params.invalidIdRecoveryAttempted
         ? {
@@ -24446,8 +24439,10 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       origin: resolveThreadMessageOrigin(params),
     });
-    try {
-      result = await this.withCodexThreadClient(
+    const submitted = await this.threadStarts.submitCodex({
+      identity: params,
+      pendingTurnId: syntheticStartedTurnId,
+      submit: async () => await this.withCodexThreadClient(
         params.threadId,
         async (client, mode) => {
           if (this.closed) {
@@ -24508,59 +24503,39 @@ export class DesktopBackendRegistry {
           return started;
         },
         params.executionMode,
-      );
-    } catch (error) {
-      this.dropStartingTurnOrigin(startingOrigin);
-      await this.emit(buildTurnStartFailureEvent(params, syntheticStartedTurnId, error));
-      this.activeCodexTurnModes.delete(
-        buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
-      );
-      if (reserveCodexStart) {
-        this.reservedCodexStartThreadIds.delete(params.threadId);
-      }
-      this.threadTitles.forgetPendingInput(params);
-      this.forgetPendingThreadMessageContext(pendingMessageContextId);
-      if (
-        retryableCodexTurnStart
-        && this.codexClient.recoverInvalidPersistedResponseMessageIds
-        && isCodexInvalidResponseMessageIdError(error)
-      ) {
-        try {
+      ),
+      activeTurns: () => [...this.activeTurnKeys].flatMap((key) => {
+        const active = parseActiveTurnKey(key);
+        return active ? [active] : [];
+      }),
+      fail: async (error) => {
+        this.dropStartingTurnOrigin(startingOrigin);
+        await this.emit(buildTurnStartFailureEvent(params, syntheticStartedTurnId, error), codexStartObservation?.sequence);
+      },
+      retireFailed: () => {
+        this.retireCodexTurnStart(params, syntheticStartedTurnId, reserveCodexStart, codexStartObservation);
+        this.forgetPendingThreadMessageContext(pendingMessageContextId);
+      },
+      discardRetry: () => {
+        if (retryableCodexTurnStart && this.codexRetryableOperations.get(params.threadId) === retryableCodexTurnStart) {
+          this.codexRetryableOperations.delete(params.threadId);
+        }
+      },
+      recovery: retryableCodexTurnStart && this.codexClient.recoverInvalidPersistedResponseMessageIds ? {
+        accepts: isCodexInvalidResponseMessageIdError,
+        run: async (failureMessage) => {
           const recovery = await this.queueCodexInvalidIdRecovery(
             retryableCodexTurnStart,
-            error instanceof Error ? error.message : String(error),
+            failureMessage,
           );
           this.maybeDrainCodexInvalidIdRecoveries();
           return await recovery.completion;
-        } catch (recoveryError) {
-          await this.emitCodexInvalidIdRecoveryUpdate({
-            failureMessage: error instanceof Error ? error.message : String(error),
-            recoveryError:
-              recoveryError instanceof Error
-                ? recoveryError.message
-                : String(recoveryError),
-            status: "failed",
-            threadId: params.threadId,
-            turnId: syntheticStartedTurnId,
-          });
-        }
-      }
-      if (retryableCodexTurnStart) {
-        this.codexRetryableOperations.delete(params.threadId);
-      }
-      throw error;
-    }
-    if (params.backend === "codex" && result.turnId === syntheticStartedTurnId) {
-      // turn/started can bind the real id before a reply that omitted it.
-      for (const key of this.activeTurnKeys) {
-        const active = parseActiveTurnKey(key);
-        if (active?.backend === "codex" && active.threadId === result.threadId
-          && !active.turnId.startsWith("pending:")) {
-          result = { threadId: result.threadId, turnId: active.turnId };
-          break;
-        }
-      }
-    }
+        },
+        failed: (details) => this.emitCodexInvalidIdRecoveryUpdate(details),
+      } : undefined,
+    });
+    if (submitted.kind === "recovered") return submitted.response;
+    const result = submitted.turn;
     this.bindStartingTurnOrigin(startingOrigin, result);
     if (retryableCodexTurnStart) {
       retryableCodexTurnStart.turnId = result.turnId;
@@ -24575,40 +24550,27 @@ export class DesktopBackendRegistry {
     );
     this.bindPendingThreadMessageContext(pendingMessageContextId, result.turnId);
     await this.persistStartingTurnOrigin(startingOrigin);
-    this.rebindPendingReviewStartsForStartedTurn({
-      backend: params.backend,
-      threadId: params.threadId,
-      pendingTurnId: syntheticStartedTurnId,
-      turnId: result.turnId,
+    this.threadStarts.handoffCodex({
+      identity: params, pendingTurnId: syntheticStartedTurnId, turn: result,
+      terminalObserved: retryableCodexTurnStart?.terminalObserved ?? false,
+      executionMode: activeTurnMode, reserved: reserveCodexStart,
+      bindReview: () => this.rebindPendingReviewStartsForStartedTurn({
+        backend: params.backend, threadId: params.threadId,
+        pendingTurnId: syntheticStartedTurnId, turnId: result.turnId,
+      }),
+      activateCollaboration: () => this.activeCodexTurnCollaborationModes.set(
+        buildActiveTurnKey("codex", result.threadId, result.turnId), params.collaborationMode?.mode ?? "default",
+      ),
+      retirePending: () => {
+        this.activeCodexTurnModes.delete(buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId));
+        this.activeTurnKeys.delete(buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId));
+      },
+      activateExecutionMode: (mode) => this.activeCodexTurnModes.set(buildActiveTurnModeKey(result.threadId, result.turnId), mode),
+      release: () => {
+        this.reservedCodexStartThreadIds.delete(params.threadId);
+        this.maybeDrainCodexInvalidIdRecoveries();
+      },
     });
-    if (params.backend === "codex" && !retryableCodexTurnStart?.terminalObserved) {
-      this.activeCodexTurnCollaborationModes.set(
-        buildActiveTurnKey("codex", result.threadId, result.turnId),
-        params.collaborationMode?.mode ?? "default",
-      );
-    }
-    if (result.turnId !== syntheticStartedTurnId || retryableCodexTurnStart?.terminalObserved) {
-      this.activeCodexTurnModes.delete(
-        buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
-      );
-      this.activeTurnKeys.delete(
-        buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
-      );
-    }
-    if (
-      params.backend === "codex"
-      && activeTurnMode
-      && !retryableCodexTurnStart?.terminalObserved
-    ) {
-      this.activeCodexTurnModes.set(
-        buildActiveTurnModeKey(result.threadId, result.turnId),
-        activeTurnMode,
-      );
-    }
-    if (reserveCodexStart) {
-      this.reservedCodexStartThreadIds.delete(params.threadId);
-      this.maybeDrainCodexInvalidIdRecoveries();
-    }
 
     if (
       turnParams.model !== undefined ||
@@ -24655,6 +24617,30 @@ export class DesktopBackendRegistry {
     }
 
     return response;
+  }
+
+  private retireCodexTurnStart(params: { backend: AppServerBackendKind; threadId: string }, pendingTurnId: string, reserved: boolean,
+    observation?: { sequence: number; previous?: { sequence: number; status: AppServerThreadStatus } },
+  ): void {
+    this.activeCodexTurnCollaborationModes.delete(buildActiveTurnKey(params.backend, params.threadId, pendingTurnId));
+    this.activeCodexTurnModes.delete(buildActiveTurnModeKey(params.threadId, pendingTurnId));
+    this.activeTurnKeys.delete(buildActiveTurnKey(params.backend, params.threadId, pendingTurnId));
+    if (reserved) this.reservedCodexStartThreadIds.delete(params.threadId);
+    // A list read during terminal delivery can project the still-reserved
+    // start as active. Once released, restore the latest status observation;
+    // a newer provider status or another real turn retains its authority.
+    if (reserved && observation && this.observedCodexThreadStatuses.get(params.threadId)?.sequence === observation.sequence) {
+      // Restore only the observation owned by this synthetic start. Genuine
+      // status/turn events have a newer sequence and remain authoritative.
+      if (observation.previous) this.observedCodexThreadStatuses.set(params.threadId, observation.previous);
+      else {
+        this.observedCodexThreadStatuses.delete(params.threadId);
+        this.backendActiveCodexThreadIds.delete(params.threadId);
+      }
+    }
+    const observedStatus = this.observedCodexThreadStatuses.get(params.threadId)?.status;
+    if (reserved && observedStatus) this.seedBackendCodexThreadStatus(params.threadId, observedStatus);
+    this.threadTitles.forgetPendingInput(params);
   }
 
   private async registerPendingThreadMessageContext(params: {
@@ -53727,9 +53713,9 @@ export class DesktopBackendRegistry {
 
   private readonly transcriptImageWork = new Map<string, Promise<void>>();
 
-  private emitWithTranscriptImages(event: AgentEvent): Promise<void> {
+  private emitWithTranscriptImages(event: AgentEvent, codexStatusSequence?: number): Promise<void> {
     const notification = event.notification;
-    if (!("threadId" in notification.params) || typeof notification.params.threadId !== "string") return this.emitEvent(event);
+    if (!("threadId" in notification.params) || typeof notification.params.threadId !== "string") return this.emitEvent(event, codexStatusSequence);
     const threadId = notification.params.threadId;
     const key = `${event.backend}:${threadId}`;
     const previous = this.transcriptImageWork.get(key);
@@ -53742,7 +53728,7 @@ export class DesktopBackendRegistry {
       || notification.method === "thread/status/changed"
       || notification.method.startsWith("item/");
     if (!materializeImages && (!previous || !orderedNotification)) {
-      return this.emitEvent(event);
+      return this.emitEvent(event, codexStatusSequence);
     }
     const work = (async () => {
       await previous?.catch(() => undefined);
@@ -53757,7 +53743,7 @@ export class DesktopBackendRegistry {
         });
         return event;
       }) : event;
-      await this.emitEvent(materialized);
+      await this.emitEvent(materialized, codexStatusSequence);
     })();
     this.transcriptImageWork.set(key, work);
     void work.finally(() => {
@@ -53766,7 +53752,7 @@ export class DesktopBackendRegistry {
     return work;
   }
 
-  private async emit(event: AgentEvent): Promise<void> {
+  private async emit(event: AgentEvent, codexStatusSequence?: number): Promise<void> {
     this.navigationDirectoryScope.invalidate(event);
     const archiveWorkspaceChanged = this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
     if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
@@ -53792,8 +53778,8 @@ export class DesktopBackendRegistry {
     const emitted = event.notification.method === "thread/deleted"
       ? deleteThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })
           .catch((error) => backendRegistryLog.warn("thread asset cleanup failed", { error: error instanceof Error ? error.message : String(error) }))
-          .then(() => this.emitWithTranscriptImages(event))
-      : this.emitWithTranscriptImages(event);
+          .then(() => this.emitWithTranscriptImages(event, codexStatusSequence))
+      : this.emitWithTranscriptImages(event, codexStatusSequence);
     const method = event.notification.method;
     if (
       this.stoppingRunningTurnsForShutdown
@@ -53969,7 +53955,7 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private emitEvent(event: AgentEvent): Promise<void> {
+  private emitEvent(event: AgentEvent, codexStatusSequence?: number): Promise<void> {
     this.trackLiveCodexToolItem(event);
     if (event.backend === "codex" && event.notification.method === "turn/started") {
       const notification = event.notification as {
@@ -54036,6 +54022,7 @@ export class DesktopBackendRegistry {
       event,
       liveThreadUsageWork,
       precedingLiveThreadUsageBarrier,
+      codexStatusSequence,
     );
     return liveThreadUsageWork
       ? emitted.finally(() => {
@@ -54051,6 +54038,7 @@ export class DesktopBackendRegistry {
     event: AgentEvent,
     liveThreadUsageWork: LiveThreadUsageEmitWork | undefined,
     precedingLiveThreadUsageBarrier: Promise<void> | undefined,
+    codexStatusSequence?: number,
   ): Promise<void> {
     await this.forwardManagedReviewActivity(event);
     event = await this.withThreadMessageContext(event);
@@ -54126,6 +54114,7 @@ export class DesktopBackendRegistry {
         this.reconcileBackendCodexThreadStatus(
           notification.params.threadId,
           "active",
+          codexStatusSequence,
         );
       }
       if (!isAcpBackendId(event.backend)) {
@@ -54340,6 +54329,9 @@ export class DesktopBackendRegistry {
         this.reconcileBackendCodexThreadStatus(
           notification.params.threadId,
           "idle",
+          // A synthetic failure belongs to its start's observation. A newer
+          // provider status must not become idle because submission failed.
+          codexStatusSequence,
         );
       }
       const managedReview = turnId
