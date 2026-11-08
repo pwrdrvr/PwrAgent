@@ -5358,6 +5358,10 @@ function DesktopAppShell(props: {
           onSuppressCodexWarning={suppressCodexWarning}
           transientNotices={[
             {
+              notice: navigation.archiveCleanupSummaryNotice,
+              onDismiss: navigation.dismissArchiveCleanupSummaryNotice,
+            },
+            {
               notice: navigation.archiveCleanupProgressNotice,
               onDismiss: navigation.dismissArchiveCleanupProgressNotice,
             },

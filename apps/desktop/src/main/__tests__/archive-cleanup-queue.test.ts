@@ -8,6 +8,35 @@ import {
 afterEach(() => vi.useRealTimers());
 
 describe("archive cleanup scheduling budgets", () => {
+  it("projects only explicit archive work into progress, regardless of scan/recovery interleavings", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.record({ reportProgress: fc.boolean(), cancel: fc.boolean() }), {
+      minLength: 1, maxLength: 30,
+    }), async (commands) => {
+      const queue = new ArchiveCleanupQueue<void>(0);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const jobs = [queue.enqueue("audit", async () => await gate), ...commands.map(({ reportProgress, cancel }, index) => {
+        const key = `job-${index}`;
+        const pending = queue.enqueue(key, async () => await gate, { reportProgress });
+        // Duplicate admission cannot change an existing job's reporting policy.
+        expect(queue.enqueue(key, async () => {}, { reportProgress: !reportProgress })).toBe(pending);
+        const settled = pending.catch(() => {});
+        if (cancel) queue.cancel(key);
+        return settled;
+      })];
+      try {
+        expect(queue.progress(true).total).toBe(commands.filter((job) => job.reportProgress).length);
+        expect(queue.progress(true).completed).toBe(commands.filter((job) => job.reportProgress && job.cancel).length);
+        expect(queue.progress(true).active.every((job) => job.key !== "audit")).toBe(true);
+      } finally {
+        release();
+        await Promise.all(jobs);
+        expect(queue.progress(true).completed).toBe(commands.filter((job) => job.reportProgress).length);
+        await queue.close();
+      }
+    }), { numRuns: 25 });
+  });
+
   it("breaks an opposing nested-scope wait cycle without removing under stale ownership", async () => {
     await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.nat({ max: 100 }), { minLength: 2, maxLength: 2 }), async (ids) => {
       const scopes = ids.map((id) => path.resolve(`/archive-lock-order/${id}`)).sort();

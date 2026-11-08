@@ -2330,6 +2330,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         archivedAt: number;
+        /** Recovery and released references report together, without archive action toasts. */
+        reporting?: "background";
         cleanup: ArchiveThreadCleanupResult[];
         error?: string;
       };

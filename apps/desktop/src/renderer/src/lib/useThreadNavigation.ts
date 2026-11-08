@@ -1,4 +1,5 @@
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
+import { BackgroundArchiveCleanupReport, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS } from "./background-archive-cleanup-report";
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
@@ -3067,6 +3068,8 @@ export function useThreadNavigation(
   archiveThreadNotice?: ArchiveThreadNotice;
   dismissArchiveThreadNotice: () => void;
   archiveCleanupProgressNotice?: AppNoticeToastNotice;
+  archiveCleanupSummaryNotice?: AppNoticeToastNotice;
+  dismissArchiveCleanupSummaryNotice: () => void;
   dismissArchiveCleanupProgressNotice: () => void;
   worktreeArchiveError?: string;
   loading: boolean;
@@ -3539,6 +3542,10 @@ export function useThreadNavigation(
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
   const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
   const [archiveCleanupProgressNotice, setArchiveCleanupProgressNotice] = useState<AppNoticeToastNotice>();
+  const [archiveCleanupSummaryNotice, setArchiveCleanupSummaryNotice] = useState<AppNoticeToastNotice>();
+  const [backgroundCleanupReport] = useState(() => new BackgroundArchiveCleanupReport());
+  const backgroundCleanupReportTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => { window.clearTimeout(backgroundCleanupReportTimer.current); }, []);
   const dismissedArchiveCleanupBatch = useRef<string | undefined>(undefined);
   const [worktreeArchiveError, setWorktreeArchiveError] = useState<string>();
   const [renameThreadError, setRenameThreadError] = useState<string>();
@@ -4739,15 +4746,25 @@ export function useThreadNavigation(
 
       if (method === "thread/archiveCleanup/completed") {
         const completion = event.notification.params as {
-          threadId: string; archivedAt: number; cleanup: ArchiveThreadCleanupResult[]; error?: string;
+          threadId: string; archivedAt: number; cleanup: ArchiveThreadCleanupResult[]; error?: string; reporting?: "background";
         };
-        if (completion.error) setArchiveThreadError(completion.error);
-        const notice = formatArchiveCleanupNotice(completion.cleanup);
+        const background = completion.reporting === "background";
+        if (background && backgroundCleanupReport.record(event.backend, completion) && backgroundCleanupReportTimer.current === undefined) {
+          // A fixed window cannot be postponed indefinitely by a busy queue.
+          // Stable identity also keeps the report out of transient toast history.
+          backgroundCleanupReportTimer.current = window.setTimeout(() => {
+            backgroundCleanupReportTimer.current = undefined;
+            setArchiveCleanupSummaryNotice(backgroundCleanupReport.notice());
+          }, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS);
+        }
+        if (!background && completion.error) setArchiveThreadError(completion.error);
+        const notice = background ? undefined : formatArchiveCleanupNotice(completion.cleanup);
         if (notice) setArchiveThreadNotice(notice);
         const receivedAt = Date.now();
         void desktopApi.logRendererDiagnostic?.({
           level: "info", message: "archive cleanup completion received",
           details: { backend: event.backend, threadId: completion.threadId, archivedAt: completion.archivedAt,
+            reporting: background ? "background-summary" : "archive-action",
             receivedAt, archiveAgeMs: receivedAt - completion.archivedAt, noticeRaised: Boolean(notice), failed: Boolean(completion.error) },
         }).catch(() => {});
         return;
@@ -5325,6 +5342,7 @@ export function useThreadNavigation(
     updateArchivedThreadKey,
     noteDirectoryPatch,
     setSelectedItemKey,
+    backgroundCleanupReport,
   ]);
 
   // Binding chips are projected in row pages but can be mutated outside
@@ -10185,6 +10203,13 @@ export function useThreadNavigation(
     setArchiveCleanupProgressNotice(undefined);
   }, [archiveCleanupProgressNotice]);
 
+  const dismissArchiveCleanupSummaryNotice = useCallback((): void => {
+    backgroundCleanupReport.dismiss();
+    window.clearTimeout(backgroundCleanupReportTimer.current);
+    backgroundCleanupReportTimer.current = undefined;
+    setArchiveCleanupSummaryNotice(undefined);
+  }, [backgroundCleanupReport]);
+
   return {
     browseMode: shownBrowseMode,
     pinnedThreadsOnTop,
@@ -10214,6 +10239,8 @@ export function useThreadNavigation(
     archiveThreadNotice,
     dismissArchiveThreadNotice,
     archiveCleanupProgressNotice,
+    archiveCleanupSummaryNotice,
+    dismissArchiveCleanupSummaryNotice,
     dismissArchiveCleanupProgressNotice,
     worktreeArchiveError,
     loading: state.loading,
