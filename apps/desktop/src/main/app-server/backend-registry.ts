@@ -24165,112 +24165,97 @@ export class DesktopBackendRegistry {
           : params.reasoningEffort ?? overlay?.reasoningEffort,
         reasoningEffortsByModel: overlay?.reasoningEffortsByModel,
       });
-      const reservationKey = buildTurnStartReservationKey(
-        params.backend,
-        params.threadId,
-      );
-      if (this.threadHasActiveTurn(params.threadId, params.backend)) {
-        throw new ThreadAlreadyActiveError("A turn is already active for this thread.");
-      }
-      this.reservedAcpStartThreadKeys.add(reservationKey);
-      let pendingMessageContextId: string | undefined;
-      let startingOrigin: StartingTurnOrigin | undefined;
-      try {
-        const preparedPdfInput = await preparePdfTurnInput({
-          handling: this.resolvePdfTurnInputHandling({
-            backend: params.backend,
-            overlay,
-          }),
-          input: params.input,
-        });
-        // ACP adapters already accept data-URL image parts. Keeping those
-        // intact avoids changing their established image payload contract.
-        const userInput = await ownThreadInputAttachments(
-          await enrichLocalFileInputs(preparedPdfInput.input, {
-            privateStorageRoots: this.localFilePrivateStorageRoots,
-          }),
-          params,
-          this.localFilePrivateStorageRoots,
-        );
-        const input = pendingManagedReviewContexts.length > 0
-          ? [
-              {
-                type: "text" as const,
-                text: buildManagedReviewContextInput(
-                  pendingManagedReviewContexts,
-                ),
-              },
-              ...userInput,
-            ]
-          : userInput;
-        if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
-          await this.flushQueuedExecutionModeIfPresent(
-            params.threadId,
-            params.backend,
+      const identity = { backend: params.backend, threadId: params.threadId };
+      const reservationKey = buildTurnStartReservationKey(params.backend, params.threadId);
+      let preparedPdfInput!: Awaited<ReturnType<typeof preparePdfTurnInput>>;
+      let userInput!: AppServerTurnInputItem[];
+      let input!: AppServerTurnInputItem[];
+      return await this.threadStarts.startAcp({
+        reserve: () => {
+          if (this.threadHasActiveTurn(params.threadId, params.backend)) {
+            throw new ThreadAlreadyActiveError("A turn is already active for this thread.");
+          }
+          this.reservedAcpStartThreadKeys.add(reservationKey);
+        },
+        prepare: async () => {
+          preparedPdfInput = await preparePdfTurnInput({
+            handling: this.resolvePdfTurnInputHandling({
+              backend: params.backend,
+              overlay,
+            }),
+            input: params.input,
+          });
+          // ACP adapters already accept data-URL image parts. Keeping those
+          // intact avoids changing their established image payload contract.
+          userInput = await ownThreadInputAttachments(
+            await enrichLocalFileInputs(preparedPdfInput.input, {
+              privateStorageRoots: this.localFilePrivateStorageRoots,
+            }),
+            params,
+            this.localFilePrivateStorageRoots,
           );
-        }
-        await this.flushQueuedAcpRuntimeOptionIfPresent(
-          params.backend,
-          params.threadId,
-        );
-        pendingMessageContextId = await this.registerPendingThreadMessageContext({
-          backend: params.backend,
-          input,
-          threadId: params.threadId,
+          input = pendingManagedReviewContexts.length > 0
+            ? [
+                {
+                  type: "text" as const,
+                  text: buildManagedReviewContextInput(
+                    pendingManagedReviewContexts,
+                  ),
+                },
+                ...userInput,
+              ]
+            : userInput;
+          if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
+            await this.flushQueuedExecutionModeIfPresent(
+              params.threadId,
+              params.backend,
+            );
+          }
+          await this.flushQueuedAcpRuntimeOptionIfPresent(
+            identity.backend,
+            params.threadId,
+          );
+        },
+        registerContext: () => this.registerPendingThreadMessageContext({
+          ...identity, input,
           origin: resolveThreadMessageOrigin(params),
           text: extractFirstMeaningfulTextInput(params.input),
-        });
-        startingOrigin = this.beginStartingTurnOrigin({
-          backend: params.backend,
-          threadId: params.threadId,
-          origin: resolveThreadMessageOrigin(params),
-        });
-        const result = await this.startAcpTurn({
-          backend: params.backend,
-          threadId: params.threadId,
-          input,
+        }),
+        beginOrigin: () => this.beginStartingTurnOrigin({ ...identity, origin: resolveThreadMessageOrigin(params) }),
+        submit: () => this.startAcpTurn({
+          ...identity, input,
           model: modelSettings.model,
           reasoningEffort: modelSettings.reasoningEffort,
-        });
-        this.bindStartingTurnOrigin(startingOrigin, result);
-        await this.overlayStore.consumeManagedReviewContexts({
-          backend: params.backend,
-          threadId: params.threadId,
-          entryIds: pendingManagedReviewContextEntryIds,
-        });
-        this.pdfAttachmentStore.bindTurn(
-          {
-            backend: params.backend,
-            threadId: result.threadId,
-            turnId: result.turnId,
-          },
+        }),
+        bindOrigin: (origin, result) => this.bindStartingTurnOrigin(origin, result),
+        consumeReviewContexts: () => this.overlayStore.consumeManagedReviewContexts({
+          ...identity, entryIds: pendingManagedReviewContextEntryIds,
+        }),
+        bindPdf: (result) => this.pdfAttachmentStore.bindTurn(
+          { backend: params.backend, threadId: result.threadId, turnId: result.turnId },
           preparedPdfInput.pdfAttachments,
-        );
-        this.scheduleThreadTitleGeneration({
+        ),
+        scheduleTitle: (result) => this.scheduleThreadTitleGeneration({
           backend: params.backend,
           threadId: result.threadId,
           input: userInput,
-        });
-        this.bindPendingThreadMessageContext(
-          pendingMessageContextId,
-          result.turnId,
-        );
-        await this.persistStartingTurnOrigin(startingOrigin);
-        await this.rememberTurnInputAttachments({
+        }),
+        bindContext: (context, result) => this.bindPendingThreadMessageContext(context, result.turnId),
+        persistOrigin: (origin) => this.persistStartingTurnOrigin(origin),
+        retainAttachments: (result) => this.rememberTurnInputAttachments({
           backend: params.backend,
           threadId: result.threadId,
           turnId: result.turnId,
           input: userInput,
-        });
-        this.forgetPendingThreadMessageContext(pendingMessageContextId);
-        return result;
-      } catch (error) {
-        this.forgetPendingThreadMessageContext(pendingMessageContextId);
-        throw error;
-      } finally {
-        this.dropStartingTurnOrigin(startingOrigin);
-        this.reservedAcpStartThreadKeys.delete(reservationKey);
-      }
+        }),
+        forgetContext: (context) => this.forgetPendingThreadMessageContext(context),
+        disposeOrigin: (origin) => this.dropStartingTurnOrigin(origin),
+        release: () => { this.reservedAcpStartThreadKeys.delete(reservationKey); },
+        failed: (stage, error, turn) => backendRegistryLog.warn("acp_turn_start_finalization_failed", {
+          ...identity, turnId: turn?.turnId, stage,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      });
     }
 
     let input: AppServerTurnInputItem[] = [];
