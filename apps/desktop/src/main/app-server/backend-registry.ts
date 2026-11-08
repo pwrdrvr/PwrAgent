@@ -1,3 +1,4 @@
+import { ThreadCreationLifecycle } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
 import { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
 import { ThreadSteeringLifecycle, type ThreadSteeringSubmission } from "@pwragent/owner-core/thread-steering-lifecycle";
@@ -21378,20 +21379,32 @@ export class DesktopBackendRegistry {
       fastMode: modelSettings.fastMode ?? null,
     });
 
-    let result: { threadId: string };
-    try {
-      result = await this.withArchiveWorkspaceWrite([cwd ?? "", ...(resolvedLinkedDirectories ?? []).map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], async () => backend === "claude"
-        ? await this.claudeBackend.startThread({ cwd: cwd!, executionMode: effectiveExecutionMode, model: modelSettings.model, linkedDirectories: resolvedLinkedDirectories })
-        : isAcpBackendId(backend)
-        ? await this.startAcpSession({
-            backend,
-            cwd,
-            executionMode: effectiveExecutionMode,
-            acpRuntime,
-            reasoningEffort: modelSettings.reasoningEffort,
-            mcpRegistration: acpMcpRegistration,
-          })
-        : await (
+    const agentName = request.agent?.name?.trim();
+    let gitBranch: string | undefined;
+    let currentMigration: DesktopProviderThreadModelMigration | undefined;
+    const result = await new ThreadCreationLifecycle().start({
+      backend,
+      systemPlaceholder: !agentName,
+      worktree: effectiveWorkMode === "worktree",
+      tokenMiserOverride,
+      pdfCatalog: Boolean(pdfMcpRegistration) && typeof this.overlayStore.setThreadMessagingPdfToolCatalogVersion === "function",
+      mcpSelection: Boolean(mcpConnectionIds?.length) || mcpProviderServersEnabled === false,
+      agent: Boolean(request.agent),
+      environment: Boolean(codexEnvironmentRuntime),
+      modelSettings,
+      parent: Boolean(parentThreadId?.trim()),
+    }, {
+      providers: {
+        claude: async () => await this.claudeBackend.startThread({ cwd: cwd!, executionMode: effectiveExecutionMode, model: modelSettings.model, linkedDirectories: resolvedLinkedDirectories }),
+        acp: async () => await this.startAcpSession({
+          backend: backend as AcpBackendId,
+          cwd,
+          executionMode: effectiveExecutionMode,
+          acpRuntime,
+          reasoningEffort: modelSettings.reasoningEffort,
+          mcpRegistration: acpMcpRegistration,
+        }),
+        codex: async () => await (
             client ?? this.getClient(backend, effectiveExecutionMode)
           ).startThread({
             ...request,
@@ -21413,218 +21426,100 @@ export class DesktopBackendRegistry {
                 }
               : {}),
             dynamicTools,
-          }));
-    } catch (error) {
-      for (const registration of mcpConnectionRegistrations) {
-        try {
-          registration.revoke();
-        } catch (revokeError) {
-          backendRegistryLog.warn("startThread MCP connection revocation failed", {
-            backend,
-            error:
-              revokeError instanceof Error
-                ? revokeError.message
-                : String(revokeError),
-          });
-        }
-      }
-      await preparedWorkspaceRollback?.().catch((rollbackError) => {
-        backendRegistryLog.warn("startThread workspace rollback failed", {
-          backend,
-          error:
-            rollbackError instanceof Error
-              ? rollbackError.message
-              : String(rollbackError),
-        });
-      });
-      throw userActionableMcpConnectionConfigError(
-        error,
-        mcpConnectionRegistrations,
-      );
-    }
-    pdfMcpRegistration?.bindThread(result.threadId);
-    for (const registration of mcpConnectionRegistrations) {
-      registration.bindThread(result.threadId);
-    }
-    const startedAt = Date.now();
-    const pendingThreadKey = buildThreadIdentityKey(backend, result.threadId);
-    const agentName = request.agent?.name?.trim();
-    const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
-    this.pendingStartedThreads.set(
-      pendingThreadKey,
-      {
-        id: result.threadId,
-        source: backend,
-        title: agentName || "Untitled thread",
-        titleSource: "fallback",
-        projectKey: cwd,
-        createdAt: startedAt,
-        updatedAt: startedAt,
-        executionMode: effectiveExecutionMode,
-        ...modelSettings,
-        acpRuntime,
-        codexEnvironmentRuntime,
-        linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
-          (
-            resolvedLinkedDirectories?.length
-              ? resolvedLinkedDirectories
-              : buildLocalLinkedDirectory(cwd)
-          ).map(normalizeLinkedDirectoryKind),
-        ),
-        gitBranch,
-        ...(tokenMiserOverride !== undefined
-          ? { tokenMiserEnabled: tokenMiserOverride }
-          : {}),
+          }),
       },
-    );
-    if (!agentName) {
-      this.threadNaming.markSystemPlaceholder({ backend, threadId: result.threadId });
-    }
-    if (effectiveWorkMode === "worktree") {
-      await this.recordCodexWorktreeOwnerThread({
-        backend,
-        threadId: result.threadId,
-        worktreePath: cwd,
-      });
-    }
-    this.invalidateThreadListCache(backend, true, result.threadId, cwd ? [cwd] : []);
-
-    if (backend === "claude") {
-      await this.overlayStore.setThreadExecutionMode({ backend, threadId: result.threadId, executionMode: effectiveExecutionMode });
-    }
-    if (backend === "codex") {
-      await this.overlayStore.setThreadExecutionMode({
-        backend,
-        threadId: result.threadId,
-        executionMode: effectiveExecutionMode,
-      });
-      if (tokenMiserOverride !== undefined) {
-        await this.overlayStore.setThreadTokenMiser?.({
-          backend,
-          threadId: result.threadId,
-          enabled: tokenMiserOverride,
-        });
-      }
-      if (
-        pdfMcpRegistration &&
-        typeof this.overlayStore.setThreadMessagingPdfToolCatalogVersion === "function"
-      ) {
-        await this.overlayStore.setThreadMessagingPdfToolCatalogVersion({
-          backend,
-          threadId: result.threadId,
-          version: PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
-        });
-      }
-      await this.updateThreadGitBranchMetadata({
-        backend,
-        threadId: result.threadId,
-        branch: gitBranch,
-      });
-    }
-    await this.overlayStore.setThreadPrAutoDispatchEnabled({
-      backend,
-      threadId: result.threadId,
-      enabled:
-        prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
-    });
-    if (mcpConnectionIds?.length || mcpProviderServersEnabled === false) {
-      await this.overlayStore.setThreadMcpConnectionIds({
-        backend,
-        threadId: result.threadId,
-        connectionIds: mcpConnectionIds ?? [],
-        providerServersEnabled: mcpProviderServersEnabled,
-      });
-    }
-    if (request.agent) {
-      await this.overlayStore.setThreadAgent({
-        backend,
-        threadId: result.threadId,
-        agent: request.agent,
-      });
-      this.invalidateThreadListCache(backend);
-    }
-    if (codexEnvironmentRuntime) {
-      await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
-        backend,
-        threadId: result.threadId,
-        codexEnvironmentRuntime,
-      });
-    }
-    const currentMigration =
-      this.resolveProviderThreadModelMigrationsFn()[backend];
-    if (
-      modelSettings.model !== undefined ||
-      modelSettings.reasoningEffort !== undefined ||
-      modelSettings.serviceTier !== undefined ||
-      modelSettings.fastMode !== undefined ||
-      currentMigration !== undefined
-    ) {
-      await this.overlayStore.setThreadModelSettings({
-        backend,
-        threadId: result.threadId,
-        ...modelSettings,
-        ...(currentMigration
-          ? {
-              modelMigrationRevision: currentMigration.revision,
-            }
-          : {}),
-      });
-    }
-
-    if (parentThreadId?.trim()) {
-      await this.overlayStore.setThreadParent?.({
-        backend,
-        threadId: result.threadId,
-        parentThreadId,
-        parentThreadBackend,
-        parentThreadInstanceId,
-      });
-      await this.emit({
-        backend,
-        notification: {
-          method: "thread/parent/set",
-          params: {
-            threadId: result.threadId,
-            parentThreadId,
-            parentThreadBackend,
-            parentThreadInstanceId,
+      withWorkspaceWrite: async (submit) => await this.withArchiveWorkspaceWrite(
+        [cwd ?? "", ...(resolvedLinkedDirectories ?? []).map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], submit,
+      ),
+      connections: mcpConnectionRegistrations,
+      rollbackWorkspace: async () => { await preparedWorkspaceRollback?.(); },
+      rejection: (error) => userActionableMcpConnectionConfigError(error, mcpConnectionRegistrations),
+      bindPdf: ({ threadId }) => { pdfMcpRegistration?.bindThread(threadId); },
+      rememberPending: async ({ threadId }) => {
+        const startedAt = Date.now();
+        const pendingThreadKey = buildThreadIdentityKey(backend, threadId);
+        gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
+        this.pendingStartedThreads.set(
+          pendingThreadKey,
+          {
+            id: threadId,
+            source: backend,
+            title: agentName || "Untitled thread",
+            titleSource: "fallback",
+            projectKey: cwd,
+            createdAt: startedAt,
+            updatedAt: startedAt,
+            executionMode: effectiveExecutionMode,
+            ...modelSettings,
+            acpRuntime,
+            codexEnvironmentRuntime,
+            linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+              (
+                resolvedLinkedDirectories?.length
+                  ? resolvedLinkedDirectories
+                  : buildLocalLinkedDirectory(cwd)
+              ).map(normalizeLinkedDirectoryKind),
+            ),
+            gitBranch,
+            ...(tokenMiserOverride !== undefined
+              ? { tokenMiserEnabled: tokenMiserOverride }
+              : {}),
           },
-        },
-      });
-    }
-    const visibilityFinalization = await this.finalizeCreatedThreadVisibility({
-      backend,
-      directoryKey,
-      cwd,
-      linkedDirectories:
-        resolvedLinkedDirectories?.length
-          ? resolvedLinkedDirectories
-          : buildLocalLinkedDirectory(cwd),
-      parentThreadBackend,
-      parentThreadId,
-      threadId: result.threadId,
+        );
+      },
+      markPlaceholder: (identity) => { this.threadNaming.markSystemPlaceholder(identity); },
+      recordWorktreeOwner: async (identity) => {
+        await this.recordCodexWorktreeOwnerThread({ ...identity, worktreePath: cwd });
+      },
+      invalidate: ({ threadId }) => { this.invalidateThreadListCache(backend, true, threadId, cwd ? [cwd] : []); },
+      persistExecutionMode: async (identity) => await this.overlayStore.setThreadExecutionMode({ ...identity, executionMode: effectiveExecutionMode }),
+      persistTokenMiser: async (identity) => await this.overlayStore.setThreadTokenMiser?.({ ...identity, enabled: tokenMiserOverride! }),
+      persistPdfCatalog: async (identity) => await this.overlayStore.setThreadMessagingPdfToolCatalogVersion?.({
+        ...identity, version: PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+      }),
+      persistGitBranch: async (identity) => await this.updateThreadGitBranchMetadata({ ...identity, branch: gitBranch }),
+      persistPrAutoDispatch: async (identity) => await this.overlayStore.setThreadPrAutoDispatchEnabled({
+        ...identity, enabled: prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
+      }),
+      persistMcpSelection: async (identity) => await this.overlayStore.setThreadMcpConnectionIds({
+        ...identity, connectionIds: mcpConnectionIds ?? [], providerServersEnabled: mcpProviderServersEnabled,
+      }),
+      persistAgent: async (identity) => {
+        await this.overlayStore.setThreadAgent({ ...identity, agent: request.agent! });
+        this.invalidateThreadListCache(backend);
+      },
+      persistEnvironment: async (identity) => await this.overlayStore.setThreadCodexEnvironmentRuntime?.({ ...identity, codexEnvironmentRuntime: codexEnvironmentRuntime! }),
+      readModelMigration: () => {
+        currentMigration = this.resolveProviderThreadModelMigrationsFn()[backend];
+        return currentMigration !== undefined;
+      },
+      persistModel: async (identity) => await this.overlayStore.setThreadModelSettings({
+        ...identity,
+        ...modelSettings,
+        ...(currentMigration ? { modelMigrationRevision: currentMigration.revision } : {}),
+      }),
+      persistParent: async ({ threadId }) => {
+        await this.overlayStore.setThreadParent?.({ backend, threadId, parentThreadId: parentThreadId!, parentThreadBackend, parentThreadInstanceId });
+        await this.emit({ backend, notification: { method: "thread/parent/set", params: {
+          threadId, parentThreadId: parentThreadId!, parentThreadBackend, parentThreadInstanceId,
+        } } });
+      },
+      finalizeVisibility: async ({ threadId }) => await this.finalizeCreatedThreadVisibility({
+        backend, directoryKey, cwd,
+        linkedDirectories: resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd),
+        parentThreadBackend, parentThreadId, threadId,
+      }),
+      announceStarted: async ({ threadId }) => {
+        await this.emit({ backend, notification: { method: "thread/started", params: { threadId } } });
+      },
+      failed: (stage, error, identity) => {
+        backendRegistryLog.warn("thread creation lifecycle effect failed", {
+          backend, threadId: identity?.threadId, stage,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      },
     });
-    // Codex announces its own threads. Claude and ACP backends do not, so
-    // without this nothing told navigation listeners, such as the owner's PR
-    // primary-repository cache, about a new thread until its turn ended.
-    if (backend !== "codex") {
-      await this.emit({
-        backend,
-        notification: {
-          method: "thread/started",
-          params: { threadId: result.threadId },
-        },
-      });
-    }
-
-    return {
-      backend,
-      threadId: result.threadId,
-      executionMode: effectiveExecutionMode,
-      ...visibilityFinalization,
-      codexEnvironmentRuntime,
-      codexEnvironmentStartupFailure,
-    };
+    return { ...result, executionMode: effectiveExecutionMode, codexEnvironmentRuntime, codexEnvironmentStartupFailure };
   }
 
   private async buildForkedCodexEnvironmentRuntime(params: {

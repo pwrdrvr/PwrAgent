@@ -15986,7 +15986,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  async function assertAcceptedThreadCreationSurvives(backend: AppServerBackendKind, failure: "pr" | "parent" | "event"): Promise<void> {
+  async function assertAcceptedThreadCreationSurvives(backend: AppServerBackendKind, failure: "pr" | "parent" | "event" | "workspace"): Promise<void> {
     const client = new MockBackendClient({ threads: [], startThreadResult: { threadId: "same:thread" } });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, threadTitleGenerationService: null });
@@ -15995,6 +15995,7 @@ describe("DesktopBackendRegistry", () => {
       startAcpSession: () => Promise<{ threadId: string }>;
       emit: (event: AgentEvent) => Promise<void>;
       pendingStartedThreads: Map<string, AppServerThreadSummary>;
+      withArchiveWorkspaceWrite<T>(paths: readonly string[], work: () => Promise<T>): Promise<T>;
     };
     const submit = backend === "claude"
       ? vi.spyOn(internal.claudeBackend, "startThread").mockResolvedValue({ threadId: "same:thread" })
@@ -16005,6 +16006,13 @@ describe("DesktopBackendRegistry", () => {
     const agent = vi.spyOn(overlayStore, "setThreadAgent");
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
+    if (failure === "workspace") {
+      const admit = internal.withArchiveWorkspaceWrite.bind(registry);
+      vi.spyOn(internal, "withArchiveWorkspaceWrite").mockImplementation(async (paths, work) => {
+        await admit(paths, work);
+        throw new Error("creation workspace release rejected");
+      });
+    }
     if (failure === "pr") vi.spyOn(overlayStore, "setThreadPrAutoDispatchEnabled").mockRejectedValueOnce(new Error("creation metadata rejected"));
     if (failure === "parent") parent.mockRejectedValueOnce(new Error("creation parent rejected"));
     if (failure === "event") {
@@ -16028,11 +16036,15 @@ describe("DesktopBackendRegistry", () => {
 
   it("preserves every accepted thread creation through independent host failures", async () => {
     await fc.assert(fc.asyncProperty(fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi"),
-      fc.constantFrom("pr" as const, "parent" as const, "event" as const), assertAcceptedThreadCreationSurvives), { numRuns: 12 });
+      fc.constantFrom("pr" as const, "parent" as const, "event" as const, "workspace" as const), assertAcceptedThreadCreationSurvives), { numRuns: 12 });
   });
 
   it("returns a created Codex thread when its PR metadata write rejects", async () => {
     await assertAcceptedThreadCreationSurvives("codex", "pr");
+  });
+
+  it("returns a created thread when workspace admission release rejects", async () => {
+    await assertAcceptedThreadCreationSurvives("codex", "workspace");
   });
 
   it.each([true, false])("uses a directory disclosure changed after its navigation snapshot (collapsed: %s)", async (collapsed) => {
