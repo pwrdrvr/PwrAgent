@@ -51274,6 +51274,66 @@ script = "printf setup"
     })).toMatchObject({ input: queued.entry.input });
   });
 
+  async function assertPreparedStartOrigin(command: { threadId: string; text: string; providerStarted: boolean; agent: boolean }): Promise<void> {
+    const turnId = "provider-turn";
+    const wireText = `Prepared input: ${command.text}`;
+    const message = { id: "prepared-message", role: "user" as const, text: wireText };
+    const client = new MockBackendClient({ replay: {
+      entries: [{ ...message, type: "message", turn: { id: turnId, status: "completed" } }],
+      messages: [message], pagination: { supportsPagination: false, hasPreviousPage: false },
+    } });
+    const store = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const items: unknown[] = [];
+    registry.onEvent((event) => {
+      const notification = event.notification;
+      if (notification.method === "item/started" || notification.method === "item/completed") items.push(notification.params.item);
+    });
+    const origin: AppServerThreadMessageOrigin = command.agent
+      ? { kind: "agent", sourceThread: { backend: "codex", threadId: "sender" } }
+      : { kind: "messaging" };
+    vi.spyOn(client, "startTurn").mockImplementation(async (params: {
+      threadId: string; onInputTextPrepared?: (text: string | undefined) => void;
+    }) => {
+      if (command.providerStarted) await client.emit({ method: "turn/started", params: {
+        threadId: params.threadId, turnId, turn: { id: turnId, status: "in_progress" },
+      } });
+      params.onInputTextPrepared?.(wireText);
+      // Codex can deliver user items before the start RPC returns, with or
+      // without its own turn/started. Only that provider turn owns the item.
+      for (const method of ["item/started", "item/completed"] as const) await client.emit({ method, params: {
+        threadId: params.threadId, turnId,
+        item: { id: message.id, type: "userMessage", content: [{ type: "text", text: wireText }] },
+      } });
+      return { threadId: params.threadId, turnId };
+    });
+    try {
+      await registry.startTurn({ backend: "codex", threadId: command.threadId,
+        input: [{ type: "text", text: `Review ${command.text}` }], messageOrigin: origin });
+      expect(items).toHaveLength(2);
+      for (const item of items) expect(item).toMatchObject({ id: message.id, origin });
+      expect(store.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+        backend: "codex", threadId: command.threadId, messageId: message.id, origin,
+      });
+      const replay = (await registry.readThread({ backend: "codex", threadId: command.threadId })).replay;
+      expect(replay.entries[0]).toMatchObject({ id: message.id, origin });
+      expect(replay.messages[0]).toMatchObject({ id: message.id, origin });
+    } finally {
+      await registry.close();
+    }
+  }
+
+  it("keeps prepared start provenance with the provider through generated notification orderings", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({
+      threadId: fc.constantFrom("prepared", "same:thread", "pending:source"),
+      text: fc.string({ maxLength: 24 }), providerStarted: fc.boolean(), agent: fc.boolean(),
+    }), assertPreparedStartOrigin), { numRuns: 20 });
+  });
+
+  it("keeps prepared start provenance when user items precede the provider's start reply", async () => {
+    await assertPreparedStartOrigin({ threadId: "prepared", text: "", providerStarted: false, agent: false });
+  });
+
   it.each([
     { operation: "start", fileType: "file" },
     { operation: "start", fileType: "localFile" },
