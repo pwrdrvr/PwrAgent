@@ -207,6 +207,7 @@ describe("checkout hibernation policy normalization", () => {
       // Hibernation is the automatic way to reclaim disk: on by default,
       // upgrades included, and only an explicit `false` turns it off.
       expect(policy.enabled).toBe(raw.enabled !== false);
+      expect(policy.removeRebuildableOutput).toBe(true);
       // Normalizing again changes nothing.
       expect(normalizeCheckoutHibernationPolicy(policy)).toEqual(policy);
     }), { numRuns: 1000 });

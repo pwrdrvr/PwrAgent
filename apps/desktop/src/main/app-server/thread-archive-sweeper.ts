@@ -73,7 +73,6 @@ type SweepPhase = DesktopThreadArchiveSweepFailure["phase"];
 /** Keep reasons Thread Maintenance and hibernation report for a checkout that must stay. */
 export const WORKSPACE_KEEP_REASONS = {
   changes: "Uncommitted changes",
-  ignored: "Ignored files only",
   unretained: "Commits on no branch",
 } as const;
 

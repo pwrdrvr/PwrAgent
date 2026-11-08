@@ -92,6 +92,12 @@ function harness(candidates: ThreadArchiveCandidate[], overrides: Partial<Thread
 }
 
 describe("ThreadMaintenanceService.scan", () => {
+  it("normalizes the retired ignored-file rule so older requests cannot restore the blocker", async () => {
+    const { service } = harness([]);
+    const scan = await service.scan({ rules: { rebuildableOutputIsClean: false } });
+    expect(scan.rules.rebuildableOutputIsClean).toBe(true);
+  });
+
   it("classifies output only in positively owned checkouts, regardless of unrelated inventory paths", async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (unknownCount) => {
       const owner = candidate("owned", { cwd: "/fixture/owned" });
@@ -339,7 +345,7 @@ describe("ThreadMaintenanceService.scan", () => {
       auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
         inventory: { roots: [], paths: [row.checkoutPath], providers: [],
           owners: [{ path: row.checkoutPath, threads: [], candidates: [owner] }] } }),
-      inspectWorkspace: async () => ({ keep: "Other ignored files" }),
+      inspectWorkspace: async () => ({ keep: "Commits on no branch" }),
       buildOutputs: { scan: async () => ({ items: [{ row, identity: "fixture" }], kept: [] }), remove },
     });
     const scan = await service.scan({ steps: ["checkouts"] });
@@ -487,9 +493,9 @@ describe("ThreadMaintenanceService.scan", () => {
       candidate("old", { daysIdle: 40, cwd: "/w/old" }),
       candidate("older", { daysIdle: 60, cwd: "/w/older" }),
       candidate("pinned", { daysIdle: 90, cwd: "/w/pinned", pinned: true }),
-      candidate("env", { daysIdle: 50, cwd: "/w/env" }),
+      candidate("env", { daysIdle: 50, cwd: "/w/unretained" }),
     ]);
-    workspaces.set("/w/env", { keep: "Other ignored files" });
+    workspaces.set("/w/unretained", { keep: "Commits on no branch" });
     workspaces.set("/w/old", { kind: "changes", files: 2, bytes: 40 });
     const scan = await service.scan();
     expect(scan.threads.checked).toBe(5);
@@ -497,7 +503,7 @@ describe("ThreadMaintenanceService.scan", () => {
     const [project] = scan.threads.projects;
     expect(project!.idle.map((row) => row.threadId)).toEqual(["older", "old"]);
     expect(project!.idle[1]!.workspace).toEqual({ kind: "changes", files: 2, bytes: 40 });
-    expect(project!.kept).toEqual({ "Pinned thread": 1, "Other ignored files": 1, "Within the per-project limit": 1 });
+    expect(project!.kept).toEqual({ "Pinned thread": 1, "Commits on no branch": 1, "Within the per-project limit": 1 });
     expect(scan.spaceSource).toBe("none");
   });
 
@@ -1083,9 +1089,30 @@ async function linkedWorktree(root: string): Promise<{ repo: string; worktree: s
 }
 
 describe("inspectMaintenanceWorkspace", () => {
+  it("ignored files never change snapshot eligibility or saved-work size", async () => {
+    const root = await tempRoot();
+    const { repo, worktree } = await linkedWorktree(root);
+    await writeFile(path.join(repo, ".git", "info", "exclude"), "scratch/\n");
+    await writeFile(path.join(worktree, "file.txt"), "edited\n");
+    await writeFile(path.join(worktree, "notes.txt"), "new work\n");
+    const paths = [".env.local", "node_modules/dep/output.bin", "dist/bundle.js", "scratch/custom-output.bin"];
+    await fc.assert(fc.asyncProperty(fc.subarray(paths, { minLength: 1 }), fc.integer({ min: 128, max: 100_000 }), fc.boolean(),
+      async (ignored, bytes, legacyRule) => {
+        for (const entry of [".env.local", "node_modules", "dist", "scratch"]) await rm(path.join(worktree, entry), { recursive: true, force: true });
+        for (const file of ignored) {
+          await mkdir(path.dirname(path.join(worktree, file)), { recursive: true });
+          await writeFile(path.join(worktree, file), Buffer.alloc(bytes));
+        }
+        expect(await inspectMaintenanceWorkspace(worktree, { signal: new AbortController().signal,
+          limitBytes: 64, rebuildableOutputIsClean: legacyRule })).toMatchObject({
+          workspace: { kind: "changes", files: 2, bytes: Buffer.byteLength("edited\nnew work\n") },
+        });
+      }), { numRuns: 12 });
+  });
+
   const options = (rebuildableOutputIsClean: boolean) => ({ signal: new AbortController().signal, limitBytes: 64, rebuildableOutputIsClean });
 
-  it("treats dependency output as clean only when the rule says so, and other ignored files never", async () => {
+  it("describes rebuildable output without treating any ignored files as a blocker", async () => {
     const root = await tempRoot();
     const { worktree } = await linkedWorktree(root);
     expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ workspace: { kind: "clean" } });
@@ -1093,12 +1120,14 @@ describe("inspectMaintenanceWorkspace", () => {
     await writeFile(path.join(worktree, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n");
     expect(await inspectMaintenanceWorkspace(worktree, options(true)))
       .toEqual({ workspace: { kind: "clean", rebuildableOutput: ["node_modules"] } });
-    expect(await inspectMaintenanceWorkspace(worktree, options(false))).toEqual({ keep: "Ignored files only" });
+    expect(await inspectMaintenanceWorkspace(worktree, options(false)))
+      .toEqual({ workspace: { kind: "clean", rebuildableOutput: ["node_modules"] } });
     await writeFile(path.join(worktree, ".env.local"), "TOKEN=secret\n");
-    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ keep: "Other ignored files" });
+    expect(await inspectMaintenanceWorkspace(worktree, options(true)))
+      .toEqual({ workspace: { kind: "clean", rebuildableOutput: ["node_modules"] } });
   });
 
-  it("keeps an ignored secret that sits inside a tracked folder with a rebuildable name", async () => {
+  it("excludes ignored files inside a tracked folder without labelling that folder rebuildable", async () => {
     const root = await tempRoot();
     const { worktree, git } = await linkedWorktree(root);
     await mkdir(path.join(worktree, "src", "build"), { recursive: true });
@@ -1106,7 +1135,7 @@ describe("inspectMaintenanceWorkspace", () => {
     await git("add", ".");
     await git("-c", "commit.gpgsign=false", "commit", "-m", "tracked build folder");
     await writeFile(path.join(worktree, "src", "build", ".env.local"), "TOKEN=secret\n");
-    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ keep: "Other ignored files" });
+    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ workspace: { kind: "clean" } });
   });
 
   it("measures the files a snapshot would hold and flags changes over the limit", async () => {

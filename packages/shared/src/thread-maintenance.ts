@@ -8,13 +8,14 @@ import type { DesktopThreadArchivePolicy } from "./thread-archive-policy";
  */
 
 export type ThreadMaintenanceRules = Pick<DesktopThreadArchivePolicy, "mode" | "keepPerProject" | "inactivityDays"> & {
-  /** Count dependency and build output folders (node_modules, dist, target…)
-   * as clean. Other ignored files still keep the checkout. */
+  /** Legacy wire field, normalized to true. Ignored files never block
+   * checkout removal and are excluded from recovery snapshots. */
   rebuildableOutputIsClean: boolean;
 };
 
-/** Ignored directory names that a package manager or build recreates. Any
- * other ignored path, such as `.env.local`, is treated as operator data. */
+/** Ignored directory names used to describe rebuildable output. Ignored
+ * paths outside this list are also excluded from recovery snapshots and
+ * discarded when a checkout is removed. */
 export const REBUILDABLE_OUTPUT_NAMES: ReadonlySet<string> = new Set([
   "node_modules", ".pnpm-store", "bower_components",
   "dist", "build", "out", "target", "coverage", ".nyc_output",
@@ -25,7 +26,7 @@ export const REBUILDABLE_OUTPUT_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 export type ThreadMaintenanceWorkspace =
-  /** Nothing to save. Commits are on a branch, so removing the checkout loses nothing. */
+  /** No tracked or non-ignored changes to save. Commits are retained on a branch. */
   | { kind: "clean"; rebuildableOutput?: string[] }
   /** Uncommitted changes that fit in a recovery snapshot. */
   | { kind: "changes"; files: number; bytes: number; rebuildableOutput?: string[] }

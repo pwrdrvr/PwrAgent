@@ -16,8 +16,8 @@ export type MaintenanceWorkspaceInspection =
  * Reads one checkout the way a reviewed archive will treat it. It measures the
  * same files a recovery snapshot stages (tracked changes and untracked files
  * that are not ignored), so "changes" and "overLimit" match what archive does.
- * Ignored files are lost when a checkout is removed: rebuildable output is
- * allowed only when the rule says so, and any other ignored path keeps it.
+ * Ignored files are excluded from the snapshot and discarded with a removed
+ * checkout. They never change eligibility or count toward the snapshot limit.
  */
 export async function inspectMaintenanceWorkspace(
   cwd: string,
@@ -58,10 +58,7 @@ export async function inspectMaintenanceWorkspace(
   const rebuildable = new Set<string>();
   for (const entry of ignored) {
     const folder = rebuildableOutputFolder(entry);
-    if (!folder || !options.rebuildableOutputIsClean) {
-      return { keep: options.rebuildableOutputIsClean ? "Other ignored files" : WORKSPACE_KEEP_REASONS.ignored };
-    }
-    rebuildable.add(folder);
+    if (folder) rebuildable.add(folder);
   }
   const retained = (await git(["rev-list", "--count", "HEAD", "--not", "--branches", "--remotes"])).trim();
   if (retained !== "0") return { keep: WORKSPACE_KEEP_REASONS.unretained };

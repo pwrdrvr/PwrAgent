@@ -1062,7 +1062,7 @@ function normalizeRules(rules: ThreadMaintenanceRules): ThreadMaintenanceRules {
     mode: rules.mode === "age" ? "age" : "count",
     keepPerProject: clampInteger(rules.keepPerProject, 0, 10_000),
     inactivityDays: clampInteger(rules.inactivityDays, 0, 3650),
-    rebuildableOutputIsClean: rules.rebuildableOutputIsClean !== false,
+    rebuildableOutputIsClean: true,
   };
 }
 

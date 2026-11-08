@@ -183,18 +183,13 @@ describe("hibernation workspace checks (real Git)", () => {
     expect((await probe(fixture.worktree)).keep).toBeDefined();
   });
 
-  it("keeps ignored files that are not rebuildable output", async () => {
+  it.each([true, false])("ignored files do not keep a checkout with legacy output policy %s", async (legacyPolicy) => {
     const { worktree } = await createFixture();
     await writeFile(path.join(worktree, ".env.local"), "SECRET=1\n");
-    expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.otherIgnored });
-  });
-
-  it("removes node_modules only while the rebuildable output switch is on", async () => {
-    const { worktree } = await createFixture();
     await mkdir(path.join(worktree, "node_modules", "dep"), { recursive: true });
-    await writeFile(path.join(worktree, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
-    expect(await probe(worktree, { removeRebuildableOutput: true })).toEqual({ files: 0, bytes: 0, removedOutput: ["node_modules"] });
-    expect(await probe(worktree, { removeRebuildableOutput: false })).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.ignored });
+    await writeFile(path.join(worktree, "node_modules", "dep", "output.bin"), Buffer.alloc(1024));
+    expect(await probe(worktree, { removeRebuildableOutput: legacyPolicy, limitBytes: 1 }))
+      .toEqual({ files: 0, bytes: 0, removedOutput: ["node_modules"] });
   });
 
   it("keeps a checkout in the middle of a rebase", async () => {
@@ -339,10 +334,11 @@ describe("idle checkout hibernation and restore", () => {
     expectSqliteWriteBudget({ scenario: "checkout-hibernation-idle-sweeps", note: "24 hourly sweeps after the only checkout hibernated", writes });
 
     const kept = await createFixture();
-    await writeFile(path.join(kept.worktree, ".env.local"), "SECRET=1\n");
+    await writeFile(path.join(kept.worktree, "file.txt"), "stashed work\n");
+    await git(kept.worktree, ["stash", "push", "-m", "keep checkout"]);
     const second = kept.open();
     const { writes: keptWrites } = await measureSqliteWrites(async () => {
-      expect(await sweep(second.registry)).toMatchObject({ hibernated: 0, kept: { "Other ignored files": 1 } });
+      expect(await sweep(second.registry)).toMatchObject({ hibernated: 0, kept: { "Stashed changes": 1 } });
     });
     expectSqliteWriteBudget({ scenario: "checkout-hibernation-kept", note: "one sweep that keeps the only checkout", writes: keptWrites });
     expect(await exists(kept.worktree)).toBe(true);
@@ -732,6 +728,38 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await sweep(registry)).toMatchObject({ skipped: "Hibernation is off" });
   });
 
+  it.each(["before scan", "after scan"])("hibernates with ignored files %s and restores only saved work", async (when) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads[0]!.updatedAt = Math.floor(Date.now() / 1000) - 5 * 86_400;
+    await writeFile(path.join(fixture.worktree, "file.txt"), "saved tracked edit\n");
+    await writeFile(path.join(fixture.worktree, "notes.txt"), "saved untracked work\n");
+    const addIgnored = async () => {
+      await writeFile(path.join(fixture.worktree, ".env.local"), "ignored local data\n");
+      await mkdir(path.join(fixture.worktree, "node_modules", "dep"), { recursive: true });
+      await writeFile(path.join(fixture.worktree, "node_modules", "dep", "output.bin"), Buffer.alloc(MB));
+    };
+    if (when === "before scan") await addIgnored();
+    const { registry, store } = fixture.open({ ...ON, enabled: false, removeRebuildableOutput: false });
+    const service = maintenance(registry);
+    const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
+    expect(scan.hibernate?.removeRebuildableOutput).toBe(true);
+    if (when === "after scan") await addIgnored();
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 1, kept: 0, failed: 0 });
+    expect(await exists(fixture.worktree)).toBe(false);
+    const snapshot = (await snapshotOf(store))!;
+    expect(snapshot.ignoredFilesExcluded).toBe(true);
+    const files = await git(fixture.repo, ["ls-tree", "--name-only", "-r", snapshot.snapshotCommit]);
+    expect(files).not.toMatch(/\.env\.local|node_modules/);
+    await registry.restoreWorktree({ ...identity, worktreePath: fixture.worktree, snapshotRef: snapshot.snapshotRef });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("saved tracked edit\n");
+    expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("saved untracked work\n");
+    expect(await exists(path.join(fixture.worktree, ".env.local"))).toBe(false);
+    expect(await exists(path.join(fixture.worktree, "node_modules"))).toBe(false);
+  });
+
   // Oracle: the registry's own rules. Every thread with a checkout lands in
   // exactly one count, the dialog's idle days decide "not idle yet" for the
   // scan and its run, and a hibernated checkout is noted apart from them.
@@ -757,15 +785,15 @@ describe("Thread maintenance's hibernate step", () => {
     expect(after.hibernate).toMatchObject({ checked: 0, notIdleYet: 0, alreadyHibernated: 1, kept: {}, items: [] });
   });
 
-  it("keeps a reviewed checkout that changed since the scan", async () => {
+  it("keeps a reviewed checkout whose saved work grows past the snapshot limit", async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
     const service = maintenance(registry);
     const scan = await service.scan();
-    await writeFile(path.join(fixture.worktree, ".env.local"), "SECRET=1\n");
+    await writeFile(path.join(fixture.worktree, "file.txt"), Buffer.alloc(6 * MB));
     const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
       removeEmptyFolders: false, hibernate: [identity] });
-    expect(run.problems).toEqual([expect.objectContaining({ step: "hibernate", kind: "kept", reason: "Other ignored files" })]);
+    expect(run.problems).toEqual([expect.objectContaining({ step: "hibernate", kind: "kept", reason: "Changes over the snapshot limit" })]);
     expect(await exists(fixture.worktree)).toBe(true);
   });
 });
