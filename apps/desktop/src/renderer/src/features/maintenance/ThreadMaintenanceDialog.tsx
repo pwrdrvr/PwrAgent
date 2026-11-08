@@ -7,6 +7,7 @@ import {
   type DesktopCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type ThreadMaintenanceArchivedCheckout,
+  type ThreadMaintenanceBuildOutput,
   type ThreadMaintenanceCoverage,
   type ThreadMaintenanceHibernateCheckout,
   type ThreadMaintenanceIdleThread,
@@ -29,6 +30,8 @@ import {
   allIdleThreads,
   allocationTotal,
   buildApplyRequest,
+  buildOutputCoveredBy,
+  buildOutputsToClean,
   DEFAULT_THREAD_MAINTENANCE_PLAN,
   defaultSelection,
   formatAge,
@@ -275,7 +278,7 @@ export function ThreadMaintenanceDialog(props: {
                 ? <IdleThreadsReview scan={scan} selection={selection} onSelection={setSelection} />
                 : phase === "hibernate"
                   ? <HibernateReview scan={scan} selection={selection} steps={steps} onSelection={setSelection} />
-                  : <CheckoutsReview scan={scan} selection={selection} onSelection={setSelection} />}
+                  : <CheckoutsReview scan={scan} selection={selection} steps={steps} onSelection={setSelection} />}
             </>
           ) : null}
           {(phase === "running" || phase === "finished") && run ? (
@@ -911,6 +914,7 @@ function IdleRow(props: {
 function CheckoutsReview(props: {
   scan: ThreadMaintenanceScan;
   selection: ThreadMaintenanceSelection;
+  steps: readonly ReviewStep[];
   onSelection: (selection: ThreadMaintenanceSelection) => void;
 }) {
   const { scan, selection } = props;
@@ -933,7 +937,9 @@ function CheckoutsReview(props: {
           <p className="thread-maintenance__summary-title">
             {removable.length ? `${removable.length} archived ${removable.length === 1 ? "checkout is" : "checkouts are"} still on disk`
               : unreferenced.length ? `${unreferenced.length} ${unreferenced.length === 1 ? "checkout has" : "checkouts have"} no thread`
-                : "No archived checkouts to remove"}
+                : scan.checkouts.buildOutputs?.length
+                  ? `${scan.checkouts.buildOutputs.length} build ${scan.checkouts.buildOutputs.length === 1 ? "output" : "outputs"} can be cleaned`
+                  : "No archived checkouts to remove"}
           </p>
           <p className="thread-maintenance__summary-sub">
             {total ? `${formatAllocation(total)} on disk · ` : ""}
@@ -1014,6 +1020,9 @@ function CheckoutsReview(props: {
           </ul>
         </section>
       ) : null}
+      {scan.checkouts.buildOutputs?.length ? (
+        <BuildOutputsReview scan={scan} selection={selection} steps={props.steps} onSelection={props.onSelection} />
+      ) : null}
       {scan.checkouts.emptyFolders ? (
         <Checkbox checked={selection.emptyFolders} label="Remove empty worktree folders"
           onChange={() => props.onSelection({ ...selection, emptyFolders: !selection.emptyFolders })}>
@@ -1021,6 +1030,103 @@ function CheckoutsReview(props: {
         </Checkbox>
       ) : null}
     </>
+  );
+}
+
+/** Build output rows shown before "Show all". */
+const BUILD_OUTPUT_ROWS = 8;
+
+/** `path` relative to `root` when inside it, else `path`. */
+function relativeTo(path: string, root: string): string {
+  const base = root.replace(/[\\/]+$/, "");
+  return path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
+}
+
+/** Build profile folders, reviewed apart from whole checkouts: cleaning one
+ * deletes compiled files only. Offered whatever keeps its checkout, and
+ * never selected by default, since each costs a rebuild. */
+function BuildOutputsReview(props: {
+  scan: ThreadMaintenanceScan;
+  selection: ThreadMaintenanceSelection;
+  steps: readonly ReviewStep[];
+  onSelection: (selection: ThreadMaintenanceSelection) => void;
+}) {
+  const { scan, selection, steps } = props;
+  const [open, setOpen] = useState(false);
+  const rowsId = useId();
+  const outputs = largestFirst(scan.checkouts.buildOutputs ?? []);
+  const chosen = selection.buildOutputs ?? new Set<string>();
+  const covered = (output: ThreadMaintenanceBuildOutput) => buildOutputCoveredBy(scan, selection, steps, output);
+  const offered = outputs.filter((output) => !covered(output));
+  const picked = offered.filter((output) => chosen.has(output.outputPath)).length;
+  const toClean = buildOutputsToClean(scan, selection, steps);
+  const size = allocationTotal(toClean.map((output) => ({ ...output, worktreePath: output.outputPath })));
+  const all = allocationTotal(outputs.map((output) => ({ ...output, worktreePath: output.outputPath })));
+  const shown = open ? outputs : outputs.slice(0, BUILD_OUTPUT_ROWS);
+  const write = (next: Set<string>) => props.onSelection({ ...selection, buildOutputs: next });
+  const toggle = (output: ThreadMaintenanceBuildOutput) => {
+    const next = new Set(chosen);
+    if (next.has(output.outputPath)) next.delete(output.outputPath);
+    else next.add(output.outputPath);
+    write(next);
+  };
+  const selectAll = () => {
+    const next = new Set(chosen);
+    for (const output of offered) {
+      if (picked === offered.length) next.delete(output.outputPath);
+      else next.add(output.outputPath);
+    }
+    write(next);
+  };
+  return (
+    <section className="thread-maintenance__group" aria-label="Cargo build output">
+      <div className="thread-maintenance__group-head">
+        <span className="thread-maintenance__eyebrow">Cargo build output · {outputs.length}</span>
+        {all ? <span className="thread-maintenance__eyebrow thread-maintenance__group-aside">{`${formatAllocation(all)} on disk`}</span> : null}
+      </div>
+      <p className="thread-maintenance__group-note">
+        Deletes the compiled files in each selected build profile folder. The checkout, its source and its thread stay; the next build of that profile compiles again. A folder in use by a build is skipped.
+        {size ? ` Selected: ${formatAllocation(size)} on disk.` : ""}
+      </p>
+      {offered.length > 1 ? (
+        <div className="thread-maintenance__group-select">
+          <Checkbox checked={picked === offered.length} mixed={picked > 0 && picked < offered.length}
+            label="Select every build output" onChange={selectAll}>
+            Select all {offered.length}
+          </Checkbox>
+        </div>
+      ) : null}
+      <ul className="thread-maintenance__rows" id={rowsId}>
+        {shown.map((output) => {
+          const holder = covered(output);
+          return (
+            <li key={output.outputPath} className="thread-maintenance__row">
+              <Checkbox checked={!!holder || chosen.has(output.outputPath)} disabled={!!holder}
+                label={`Clean ${output.outputPath}`} onChange={() => toggle(output)} />
+              <div className="thread-maintenance__row-body">
+                <p className="thread-maintenance__row-title is-path">{output.checkoutPath}</p>
+                <p className="thread-maintenance__row-meta">
+                  {holder
+                    ? <span className="thread-maintenance__lead-text is-muted">Removed with its checkout</span>
+                    : <span className="thread-maintenance__lead-text is-ok">{relativeTo(output.outputPath, output.checkoutPath)}</span>}
+                  {holder ? ` · ${relativeTo(output.outputPath, output.checkoutPath)}` : ""}
+                  {` · ${relativeTo(output.manifestPath, output.checkoutPath)}`}
+                </p>
+              </div>
+              <SizeCell space={output.space} />
+            </li>
+          );
+        })}
+      </ul>
+      {outputs.length > BUILD_OUTPUT_ROWS ? (
+        <div className="thread-maintenance__group-select">
+          <button aria-controls={rowsId} aria-expanded={open} className="thread-maintenance__kept-toggle" type="button"
+            onClick={() => setOpen(!open)}>
+            {open ? "Show fewer" : `Show all ${outputs.length}`}
+          </button>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -1188,7 +1294,8 @@ const STEP_PROGRESS: Record<ThreadMaintenanceStep, string> = {
 /** Whether a request would change nothing. */
 function isEmptyRequest(request: ReturnType<typeof buildApplyRequest>): boolean {
   return request.archive.length + request.removeCheckouts.length + request.trashCheckouts.length
-    + (request.removeUnreferenced?.length ?? 0) + (request.hibernate?.length ?? 0) === 0
+    + (request.removeUnreferenced?.length ?? 0) + (request.hibernate?.length ?? 0)
+    + (request.removeBuildOutputs?.length ?? 0) === 0
     && !request.removeEmptyFolders;
 }
 
@@ -1217,7 +1324,7 @@ function RunView(props: {
                 ? `Maintenance finished with ${failed.length} ${failed.length === 1 ? "problem" : "problems"}`
                 : "Maintenance finished"}
             </p>
-            <p className="thread-maintenance__summary-sub">{receiptLine(run)}{done === 0 ? " · nothing changed" : ""}</p>
+            <p className="thread-maintenance__summary-sub">{receiptLine(run, props.scan)}{done === 0 ? " · nothing changed" : ""}</p>
           </div>
         </div>
       )}
@@ -1265,14 +1372,18 @@ function RunView(props: {
   );
 }
 
-function receiptLine(run: ThreadMaintenanceRun): string {
+function receiptLine(run: ThreadMaintenanceRun, scan?: ThreadMaintenanceScan): string {
   const threads = run.steps.find((step) => step.step === "threads");
   const hibernate = run.steps.find((step) => step.step === "hibernate");
   const checkouts = run.steps.find((step) => step.step === "checkouts");
   return [
     threads?.ran ? `${threads.done} ${threads.done === 1 ? "thread" : "threads"} archived` : undefined,
     hibernate?.ran ? `${hibernate.done} ${hibernate.done === 1 ? "checkout" : "checkouts"} hibernated${removedAllocation(hibernate)}` : undefined,
-    checkouts?.ran ? `${checkouts.done} ${checkouts.done === 1 ? "checkout or folder" : "checkouts and folders"} removed${removedAllocation(checkouts)}` : undefined,
+    checkouts?.ran
+      ? `${checkouts.done} ${scan?.checkouts.buildOutputs?.length
+        ? checkouts.done === 1 ? "checkout, folder or build output" : "checkouts, folders and build outputs"
+        : checkouts.done === 1 ? "checkout or folder" : "checkouts and folders"} removed${removedAllocation(checkouts)}`
+      : undefined,
   ].filter(Boolean).join(" · ") || "No steps ran";
 }
 
@@ -1481,15 +1592,24 @@ function Footer(props: {
   if (props.phase === "checkouts" && scan && selection) {
     const request = buildApplyRequest(scan, selection, steps);
     const checkouts = request.removeCheckouts.length + request.trashCheckouts.length + (request.removeUnreferenced?.length ?? 0);
+    const outputs = request.removeBuildOutputs?.length ?? 0;
     const hibernate = request.hibernate?.length ?? 0;
     const nothing = isEmptyRequest(request);
     const paths = new Set([...request.removeCheckouts, ...request.trashCheckouts, ...request.removeUnreferenced ?? []]
       .map((item) => item.worktreePath));
-    const size = allocationTotal(scan.checkouts.items.filter((item) => paths.has(item.worktreePath)));
+    const cleaned = new Set((request.removeBuildOutputs ?? []).map((item) => item.outputPath));
+    // An output inside a removed checkout is never in the request, so
+    // nothing here is counted twice.
+    const size = allocationTotal([
+      ...scan.checkouts.items.filter((item) => paths.has(item.worktreePath)),
+      ...(scan.checkouts.buildOutputs ?? []).filter((output) => cleaned.has(output.outputPath))
+        .map((output) => ({ space: output.space, worktreePath: output.outputPath })),
+    ]);
     return (
       <>
         <span className="thread-maintenance__footnote">
-          <b>{checkouts} selected</b>
+          <b>{checkouts + outputs} selected</b>
+          {outputs ? ` · ${outputs} build ${outputs === 1 ? "output" : "outputs"}` : ""}
           {size ? ` · ${formatAllocation(size)} on disk` : ""}
           {request.archive.length ? ` · ${request.archive.length} ${request.archive.length === 1 ? "thread" : "threads"} to archive first` : ""}
           {hibernate ? ` · ${hibernate} to hibernate first` : ""}
@@ -1499,7 +1619,7 @@ function Footer(props: {
           <button className="button button--primary thread-maintenance__button" type="button"
             aria-disabled={nothing || undefined}
             onClick={() => { if (!nothing) props.onFinish("checkouts"); }}>
-            {checkouts ? `Remove ${checkouts} and finish` : "Finish"}
+            {checkouts + outputs ? `Remove ${checkouts + outputs} and finish` : "Finish"}
           </button>
         </span>
       </>

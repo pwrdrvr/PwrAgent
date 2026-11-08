@@ -126,6 +126,23 @@ export type ThreadMaintenanceUnreferencedCheckout = {
   space?: ThreadMaintenanceSpace;
 };
 
+/** A build tool's output folder inside a checkout, offered on its own:
+ * cleaning it deletes compiled files only. The checkout, its source, its
+ * branch and its thread stay; the next build recompiles. Offered whether or
+ * not the checkout itself can hibernate or be removed. `checkoutPath` may be
+ * a repository's primary checkout. */
+export type ThreadMaintenanceBuildOutput = {
+  /** One Cargo build profile directory. The owner skips it while a build
+   * holds its lock, keeps the lock file, and deletes only compiled files. */
+  kind: "cargo";
+  checkoutPath: string;
+  /** The profile directory, such as `target/debug` or
+   * `target/<triple>/release`; not the whole target directory. */
+  outputPath: string;
+  manifestPath: string;
+  space?: ThreadMaintenanceSpace;
+};
+
 export type ThreadMaintenanceFailure = {
   step: ThreadMaintenanceStep;
   message: string;
@@ -211,6 +228,9 @@ export type ThreadMaintenanceScan = {
     emptyFolders: number;
     skipped?: string;
     coverage?: ThreadMaintenanceCoverage;
+    /** Build output folders that can be cleaned on their own. Absent from
+     * owners that predate it. */
+    buildOutputs?: ThreadMaintenanceBuildOutput[];
   };
   /** Idle checkouts that can hibernate, from threads this scan does not
    * offer to archive. Absent from owners that predate the step. */
@@ -257,6 +277,9 @@ export type ThreadMaintenanceApplyRequest = {
   removeEmptyFolders: boolean;
   /** Idle checkouts to hibernate. Older callers omit it. */
   hibernate?: { backend: string; threadId: string }[];
+  /** Build output folders to clean, run in the checkouts step. Never one
+   * inside a checkout this request also removes. Older callers omit it. */
+  removeBuildOutputs?: { outputPath: string }[];
 };
 
 export type ThreadMaintenanceProblem = {

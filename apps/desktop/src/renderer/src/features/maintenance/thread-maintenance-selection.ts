@@ -2,6 +2,7 @@ import {
   THREAD_MAINTENANCE_SCAN_STEPS,
   type ThreadMaintenanceApplyRequest,
   type ThreadMaintenanceArchivedCheckout,
+  type ThreadMaintenanceBuildOutput,
   type ThreadMaintenanceHibernateCheckout,
   type ThreadMaintenanceIdleThread,
   type ThreadMaintenanceOverLimitChoice,
@@ -51,6 +52,9 @@ export type ThreadMaintenanceSelection = {
   emptyFolders: boolean;
   /** Idle-thread keys (`backend:threadId`) whose checkout hibernates. */
   hibernate: Set<string>;
+  /** Build output folders (`outputPath`) chosen for cleaning. Absent when
+   * the selection predates them. */
+  buildOutputs?: Set<string>;
 };
 
 /** Idle checkouts a tab offers. A tab that archives does not offer a
@@ -87,7 +91,54 @@ export function defaultSelection(scan: ThreadMaintenanceScan): ThreadMaintenance
     emptyFolders: scan.checkouts.emptyFolders > 0,
     // Every row already passed the snapshot limit and the other checks.
     hibernate: new Set(hibernateItems(scan).map(idleThreadKey)),
+    // Cleaning costs a rebuild, so the operator picks which.
+    buildOutputs: new Set(),
   };
+}
+
+/** Whether `path` is `root` or inside it. */
+function within(path: string, root: string): boolean {
+  const base = root.replace(/[\\/]+$/, "");
+  return path === base || path.startsWith(`${base}/`) || path.startsWith(`${base}\\`);
+}
+
+/** The checkout this request removes that holds `output`, if any: an
+ * archived checkout chosen for removal or the Trash, or an idle checkout
+ * chosen to hibernate when hibernation removes build output. Its output
+ * goes with it, so it is neither sent nor counted again. */
+export function buildOutputCoveredBy(
+  scan: ThreadMaintenanceScan,
+  selection: ThreadMaintenanceSelection,
+  steps: ThreadMaintenanceSteps,
+  output: Pick<ThreadMaintenanceBuildOutput, "outputPath">,
+): string | undefined {
+  if (stepRuns(steps, "checkouts")) {
+    const checkout = scan.checkouts.items.find((item) =>
+      selection.checkouts.has(item.worktreePath) && within(output.outputPath, item.worktreePath));
+    if (checkout) return checkout.worktreePath;
+  }
+  if (stepRuns(steps, "hibernate") && scan.hibernate?.removeRebuildableOutput) {
+    const idle = hibernateItems(scan, selection, steps).find((item) =>
+      selection.hibernate.has(idleThreadKey(item)) && within(output.outputPath, item.worktreePath));
+    if (idle) return idle.worktreePath;
+  }
+  return undefined;
+}
+
+/** Selected build outputs the request sends: chosen, in a checkouts run,
+ * and not inside a checkout the same request removes. */
+export function buildOutputsToClean(
+  scan: ThreadMaintenanceScan,
+  selection: ThreadMaintenanceSelection,
+  steps: ThreadMaintenanceSteps,
+): ThreadMaintenanceBuildOutput[] {
+  if (!stepRuns(steps, "checkouts")) return [];
+  const seen = new Set<string>();
+  return (scan.checkouts.buildOutputs ?? []).filter((output) => {
+    if (!selection.buildOutputs?.has(output.outputPath) || seen.has(output.outputPath)) return false;
+    seen.add(output.outputPath);
+    return !buildOutputCoveredBy(scan, selection, steps, output);
+  });
 }
 
 /** One apply request for every reviewed step. A step that does not run
@@ -111,6 +162,7 @@ export function buildApplyRequest(
     : [];
   const chosen = (item: ThreadMaintenanceArchivedCheckout) => runCheckouts && selection.checkouts.has(item.worktreePath);
   const owned = scan.checkouts.items.filter((item) => item.kind !== "unreferenced");
+  const outputs = buildOutputsToClean(scan, selection, steps).map(({ outputPath }) => ({ outputPath }));
   return {
     scanId: scan.scanId,
     archive,
@@ -125,6 +177,9 @@ export function buildApplyRequest(
       ? hibernateItems(scan, selection, steps).filter((item) => selection.hibernate.has(idleThreadKey(item)))
         .map(({ backend, threadId }) => ({ backend, threadId }))
       : [],
+    // Sent only when there is one, so a request without build outputs
+    // keeps the shape an older owner reads.
+    ...(outputs.length ? { removeBuildOutputs: outputs } : {}),
   };
 }
 

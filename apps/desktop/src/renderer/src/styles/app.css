@@ -54185,6 +54185,30 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-size: 11.5px;
 }
 
+.thread-maintenance__group-note {
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.thread-maintenance__group-note code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.thread-maintenance__group-select {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__rows + .thread-maintenance__group-select {
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 0;
+}
+
 .thread-maintenance__group-aside {
   margin-left: auto;
 }
