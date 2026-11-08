@@ -23,6 +23,7 @@ describe("thread orchestration tool contracts", () => {
       "detach_thread_directory",
       "handoff_task",
       "move_thread_workspace",
+      "register_thread_worktree",
       "stop_thread",
       "steer_thread",
       "send_message_to_thread",

@@ -7,6 +7,38 @@ import {
 } from "../pwragent-thread-orchestration-agent-tools";
 
 describe("pwragent thread orchestration agent tools", () => {
+  it("exposes explicit worktree registration and preserves the trusted caller context", async () => {
+    const handler = vi.fn(async () => ({ ok: true as const, data: {
+      backend: "codex" as const, threadId: "target", worktreePath: "/outside/repo", registered: true, message: "registered",
+    } }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    await router.handleDynamicToolCall({ backend: "codex", call: {
+      threadId: "caller", turnId: "live-turn", callId: "registration", namespace: "pwragent",
+      tool: "register_thread_worktree", arguments: {
+        backend: " codex ", threadId: " target ", worktreePath: " /outside/repo ", action: "inspect",
+      },
+    } });
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ operation: "register_thread_worktree",
+      context: { backend: "codex", threadId: "caller", turnId: "live-turn", callId: "registration" },
+      args: { backend: "codex", threadId: "target", worktreePath: "/outside/repo", action: "inspect" },
+    });
+  });
+
+  it.each([
+    { approved: true }, { profile: "another-profile" }, { action: "force" }, { threadId: "" }, { worktreePath: null },
+  ])("rejects registration overrides %j before dispatch", async (override) => {
+    const handler = vi.fn();
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    const result = await router.handleDynamicToolCall({ backend: "codex", call: {
+      threadId: "caller", turnId: "live-turn", callId: "registration", namespace: "pwragent",
+      tool: "register_thread_worktree", arguments: {
+        backend: "codex", threadId: "target", worktreePath: "/outside/repo", ...override,
+      },
+    } });
+    expect(result).toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("projects handoff_task under the unified pwragent namespace", () => {
     const router = buildPwrAgentThreadOrchestrationToolRouter(undefined);
 

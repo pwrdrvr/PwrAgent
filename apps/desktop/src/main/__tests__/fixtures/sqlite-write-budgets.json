@@ -1612,5 +1612,10 @@
   "checkout-hibernation-restore-with-setup": {"commits": 2, "note": "restore one hibernated checkout and re-run its environment setup", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
   "checkout-hibernation-restore-failed": {"commits": 0, "note": "a refused restore of a hibernated checkout", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "checkout-hibernation-keep-awake-toggle": {"commits": 1, "note": "turn Keep it awake off on an awake thread", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
-  "thread-maintenance-hibernate-one": {"commits": 1, "note": "Thread maintenance hibernates one reviewed checkout", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1}
+  "thread-maintenance-hibernate-one": {"commits": 1, "note": "Thread maintenance hibernates one reviewed checkout", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1},
+  "worktree-registration-card-approve": {"commits": 2, "note": "One native operator registration card, its questionnaire receipt, and the resulting authorization if approved", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
+  "worktree-registration-card-cancel": {"commits": 1, "note": "One native operator registration card, its questionnaire receipt, and the resulting authorization if approved", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "worktree-registration-inspect": {"commits": 0, "note": "Read and revalidate one persisted registration receipt after reopening SQLite", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "worktree-registration-one": {"commits": 1, "note": "One explicitly approved linked-checkout registration; provider inventory and Git validation are read-only", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "worktree-registration-revoke": {"commits": 1, "note": "Revoke one existing checkout authorization", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1}
 }

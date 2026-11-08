@@ -21,7 +21,8 @@ export type ThreadArchiveCandidate = {
   thread: AppServerThreadSummary;
   overlay?: ThreadOverlayState;
   /** This read verified the attached linked checkout inside a canonical
-   * PwrAgent worktree root. Recomputed on the final ownership recheck. */
+   * PwrAgent root or against its explicit operator registration receipt.
+   * Recomputed on the final ownership recheck. */
   managedWorktreePath?: string;
   /** A sub-agent card on the thread is still pending, running or blocked. */
   activeSubAgent?: boolean;

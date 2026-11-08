@@ -5,7 +5,8 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DesktopCheckoutHibernationPolicy, PrSummary, ThreadPullRequestWatchSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type { DesktopCheckoutHibernationPolicy, PrSummary, PwrAgentThreadOrchestrationRequest, PwrAgentThreadOrchestrationResponse,
+  ThreadPullRequestWatchSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "../app-server/thread-maintenance-service";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
@@ -148,6 +149,29 @@ function recreateSpy(registry: DesktopBackendRegistry) {
 
 const probe = (cwd: string, overrides: Partial<{ limitBytes: number; removeRebuildableOutput: boolean }> = {}) =>
   inspectHibernationWorkspace(cwd, { signal: new AbortController().signal, limitBytes: 5 * MB, removeRebuildableOutput: true, ...overrides });
+
+function registrationTool(registry: DesktopBackendRegistry) {
+  const internal = registry as unknown as {
+    isLiveDynamicToolCall: () => boolean;
+    requestThreadMaintenanceConfirmation: (params: { question: string }) => Promise<boolean>;
+    handleThreadOrchestrationRequest: (request: PwrAgentThreadOrchestrationRequest) => Promise<PwrAgentThreadOrchestrationResponse>;
+  };
+  const live = vi.spyOn(internal, "isLiveDynamicToolCall").mockReturnValue(true);
+  const call = (worktreePath: string, action?: "register" | "unregister" | "inspect", threadId = THREAD_ID) =>
+    internal.handleThreadOrchestrationRequest({ operation: "register_thread_worktree",
+      context: { backend: "codex", threadId: "registration-agent", turnId: "registration-turn" },
+      args: { backend: "codex", threadId, worktreePath, ...(action ? { action } : {}) },
+    });
+  return { internal, live, call };
+}
+
+async function outsideRegistrationFixture() {
+  const fixture = await createFixture({ worktreeRoot: ".codex" });
+  const runtime = fixture.open({ ...ON, enabled: false });
+  await runtime.store.replaceWorkspaceLinkedDirectory({ ...identity,
+    directory: { ...fixture.directory, worktreeOwnership: "external" } });
+  return { ...fixture, ...runtime, ...registrationTool(runtime.registry) };
+}
 
 describe("hibernation workspace checks (real Git)", () => {
   it("accepts a clean checkout and one with small uncommitted changes", async () => {
@@ -669,6 +693,210 @@ describe("Thread maintenance's hibernate step", () => {
     expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 0, kept: 1, failed: 0 });
     expect(await readFile(path.join(outside, "file.txt"), "utf8")).toBe("original\n");
     expect(await snapshotOf(store)).toBeUndefined();
+  });
+
+  it("registers an explicitly approved outside linked checkout without weakening snapshot or ownership checks (Git oracle)", async () => {
+    const fixture = await outsideRegistrationFixture();
+    const { registry, store, internal, call } = fixture;
+    await writeFile(path.join(fixture.worktree, "file.txt"), "registered edit\n");
+    await writeFile(path.join(fixture.worktree, "notes.txt"), "registered notes\n");
+    await writeFile(path.join(fixture.worktree, ".env.local"), "invented ignored fixture\n");
+    const service = maintenance(registry);
+    expect((await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 })).hibernate?.items).toEqual([]);
+    const approval = vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    const registered = await measureSqliteWrites(() => call(fixture.worktree));
+    expect(registered.result).toMatchObject({ ok: true });
+    expectSqliteWriteBudget({ scenario: "worktree-registration-one", writes: registered.writes,
+      note: "One explicitly approved linked-checkout registration; provider inventory and Git validation are read-only" });
+    expect(approval).toHaveBeenCalledOnce();
+    const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 1, kept: 0, failed: 0 });
+    expect(await exists(fixture.worktree)).toBe(false);
+    expect((await store.getThreadOverlayState(identity))?.extraLinkedDirectories[0]?.worktreeOwnership).toBe("external");
+    const snapshot = await snapshotOf(store);
+    expect(snapshot).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
+    const recovery = new WorktreeArchiveService();
+    await recovery.restore({ ...identity, worktreePath: fixture.worktree, repositoryPath: fixture.repo,
+      snapshotRef: snapshot!.snapshotRef, snapshotCommit: snapshot!.snapshotCommit, snapshot: snapshot!, restoreSourceCheckout: true });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("registered edit\n");
+    expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("registered notes\n");
+    expect(await exists(path.join(fixture.worktree, ".env.local"))).toBe(false);
+  });
+
+  it.each(["Cancel", "Register worktree"])("requires the exact operator answer in Full Access: %s", async (answer) => {
+    const { registry, store, worktree, call } = await outsideRegistrationFixture();
+    await store.setThreadExecutionMode({ backend: "codex", threadId: "registration-agent", executionMode: "full-access" });
+    const measured = await measureSqliteWrites(async () => {
+      const card = new Promise<import("@pwragent/shared").AppServerToolRequestUserInputNotification>((resolve) => {
+        releases.push(registry.onEvent((event) => {
+          if (event.notification.method === "item/tool/requestUserInput") {
+            resolve(event.notification as import("@pwragent/shared").AppServerToolRequestUserInputNotification);
+          }
+        }));
+      });
+      const pending = call(worktree);
+      const notification = await card;
+      expect(notification.params.questions[0]?.question).toContain(worktree);
+      expect(notification.params.questions[0]?.question).toContain(THREAD_ID);
+      expect(notification.params.questions[0]?.question).toContain("ignored files are deleted without recovery");
+      expect((await store.getThreadOverlayState(identity))?.worktreeRegistrations).toBeUndefined();
+      await registry.submitServerRequest({ backend: "codex", threadId: "registration-agent", turnId: "registration-turn",
+        requestId: notification.params.requestId,
+        response: { answers: { thread_maintenance: { answers: [answer] } } },
+      });
+      return await pending;
+    });
+    expect(measured.result.ok).toBe(answer === "Register worktree");
+    expectSqliteWriteBudget({ scenario: answer === "Cancel" ? "worktree-registration-card-cancel" : "worktree-registration-card-approve",
+      writes: measured.writes, note: "One native operator registration card, its questionnaire receipt, and the resulting authorization if approved" });
+    expect(await exists(worktree)).toBe(true);
+  });
+
+  it.each(["main", "unattached", "unknown", "alias", "ended", "moved-during-review"])("refuses registration for %s", async (scenario) => {
+    const { registry, store, root, repo, worktree, call, internal, live } = await outsideRegistrationFixture();
+    const approval = vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockImplementation(async () => {
+      if (scenario === "moved-during-review") {
+        await git(repo, ["worktree", "move", worktree, path.join(root, "moved")]);
+        await symlink(path.join(root, "moved"), worktree, process.platform === "win32" ? "junction" : "dir");
+      }
+      return true;
+    });
+    let target = worktree;
+    if (scenario === "main") target = repo;
+    if (scenario === "unattached") {
+      target = path.join(root, "spare");
+      await git(repo, ["worktree", "add", "--detach", target]);
+    }
+    if (scenario === "alias") {
+      target = path.join(root, "alias");
+      await symlink(worktree, target, process.platform === "win32" ? "junction" : "dir");
+    }
+    if (scenario === "ended") live.mockReturnValue(false);
+    const measured = await measureSqliteWrites(() => call(target, undefined, scenario === "unknown" ? "unknown-thread" : THREAD_ID));
+    expect(measured.result.ok).toBe(false);
+    expect(measured.writes.commits).toBe(0);
+    expect((await store.getThreadOverlayState(identity))?.worktreeRegistrations).toBeUndefined();
+    if (scenario !== "moved-during-review") expect(approval).not.toHaveBeenCalled();
+    expect(await exists(repo)).toBe(true);
+    expect(await exists(worktree)).toBe(true);
+    await registry.close();
+  });
+
+  it("revokes a reviewed registration and keeps outside external owners protected", async () => {
+    const { registry, store, worktree, call, internal } = await outsideRegistrationFixture();
+    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    expect((await call(worktree)).ok).toBe(true);
+    const service = maintenance(registry);
+    const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    expect(scan.hibernate?.items).toHaveLength(1);
+    const revoke = await measureSqliteWrites(() => call(worktree, "unregister"));
+    expect(revoke.result.ok).toBe(true);
+    expectSqliteWriteBudget({ scenario: "worktree-registration-revoke", writes: revoke.writes, note: "Revoke one existing checkout authorization" });
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 0, kept: 1 });
+    expect(await exists(worktree)).toBe(true);
+    expect(await snapshotOf(store)).toBeUndefined();
+  });
+
+  it("reads a durable receipt after restart but requires current-profile membership", async () => {
+    const fixture = await outsideRegistrationFixture();
+    vi.spyOn(fixture.internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    expect((await fixture.call(fixture.worktree)).ok).toBe(true);
+    const receipt = (await fixture.store.getThreadOverlayState(identity))?.worktreeRegistrations?.[0];
+    expect(receipt).toMatchObject({ worktreePath: fixture.worktree,
+      requestedBy: { backend: "codex", threadId: "registration-agent" }, authorizedAt: expect.any(Number) });
+    await fixture.registry.close();
+    const restarted = fixture.open({ ...ON, enabled: false });
+    const tool = registrationTool(restarted.registry);
+    const observed = await measureSqliteWrites(() => tool.call(fixture.worktree, "inspect"));
+    expect(observed.result).toMatchObject({ ok: true, data: { registered: true, valid: true, registration: receipt } });
+    expectSqliteWriteBudget({ scenario: "worktree-registration-inspect", writes: observed.writes,
+      note: "Read and revalidate one persisted registration receipt after reopening SQLite" });
+    ArchiveWorktreeTransport.threads = [];
+    expect((await tool.call(fixture.worktree, "inspect")).ok).toBe(false);
+    expect(await exists(fixture.worktree)).toBe(true);
+  });
+
+  it("models approval, rejection, observation and revocation without inferring ownership", async () => {
+    const fixture = await outsideRegistrationFixture();
+    const { registry, store, worktree, call, internal } = fixture;
+    const approval = vi.spyOn(internal, "requestThreadMaintenanceConfirmation");
+    type Model = { authorized: boolean };
+    type Real = typeof fixture;
+    class RegistrationCommand implements fc.AsyncCommand<Model, Real> {
+      constructor(readonly operation: "approve" | "cancel" | "revoke" | "observe") {}
+      check = () => true;
+      async run(model: Model, real: Real) {
+        if (this.operation !== "observe") {
+          approval.mockResolvedValue(this.operation !== "cancel");
+          const result = await real.call(real.worktree, this.operation === "revoke" ? "unregister" : "register");
+          expect(result.ok).toBe(this.operation !== "cancel");
+          if (this.operation === "approve") model.authorized = true;
+          if (this.operation === "revoke") model.authorized = false;
+        }
+        const observed = await measureSqliteWrites(() => real.call(real.worktree, "inspect"));
+        expect(observed.result).toMatchObject({ ok: true, data: { registered: model.authorized, valid: model.authorized } });
+        expect(observed.writes.commits).toBe(0);
+        const candidates = await registry.listAutoArchiveCandidates();
+        const owner = candidates.find((item) => item.thread.id === THREAD_ID)!;
+        expect(Boolean(owner.managedWorktreePath)).toBe(model.authorized);
+        expect(await exists(worktree)).toBe(true);
+      }
+      toString() { return this.operation; }
+    }
+    await fc.assert(fc.asyncProperty(fc.commands([
+      fc.constant(new RegistrationCommand("approve")), fc.constant(new RegistrationCommand("cancel")),
+      fc.constant(new RegistrationCommand("revoke")), fc.constant(new RegistrationCommand("observe")),
+    ], { maxCommands: 6 }), async (commands) => {
+      await store.setThreadWorktreeRegistration({ ...identity, worktreePath: worktree });
+      await fc.asyncModelRun(() => ({ model: { authorized: false }, real: fixture }), commands);
+    }), { numRuns: 10 });
+    expect((await call(worktree, "inspect")).ok).toBe(true);
+  });
+
+  it.each(["recent", "active", "shared", "snapshot-limit", "replaced"])("retains %s protection after outside registration and review", async (protection) => {
+    const { registry, store, root, repo, worktree, call, internal } = await outsideRegistrationFixture();
+    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    expect((await call(worktree)).ok).toBe(true);
+    const service = maintenance(registry);
+    const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    expect(scan.hibernate?.items).toHaveLength(1);
+    if (protection === "recent") ArchiveWorktreeTransport.threads[0]!.updatedAt = Math.floor(Date.now() / 1000);
+    if (protection === "active") await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: THREAD_ID, turnId: "active", turn: { id: "active" } },
+    } });
+    if (protection === "shared") ArchiveWorktreeTransport.threads.push({ ...ArchiveWorktreeTransport.threads[0]!, id: "shared-owner" });
+    if (protection === "snapshot-limit") await writeFile(path.join(worktree, "file.txt"), Buffer.alloc(6 * MB));
+    if (protection === "replaced") {
+      await git(repo, ["worktree", "move", worktree, path.join(root, "original")]);
+      await git(repo, ["worktree", "add", "--detach", worktree]);
+    }
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 0, kept: 1 });
+    expect(await exists(worktree)).toBe(true);
+    expect(await snapshotOf(store)).toBeUndefined();
+  });
+
+  it.each(["sole", "active", "external-archived"])("archives a registered outside checkout subject to %s ownership (Git oracle)", async (ownership) => {
+    const { registry, store, repo, worktree, directory, call, internal } = await outsideRegistrationFixture();
+    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    expect((await call(worktree)).ok).toBe(true);
+    await writeFile(path.join(worktree, "file.txt"), "saved archive edit\n");
+    if (ownership !== "sole") {
+      const other = { backend: "codex" as const, threadId: "another-owner" };
+      ArchiveWorktreeTransport.threads.push({ ...ArchiveWorktreeTransport.threads[0]!, id: other.threadId,
+        archived: ownership === "external-archived" });
+      await store.replaceWorkspaceLinkedDirectory({ ...other, directory: { ...directory, worktreeOwnership: "external" } });
+    }
+    const result = await registry.archiveThread(identity);
+    expect(result.cleanup).toContainEqual(expect.objectContaining({ worktreePath: worktree, removedWorktree: ownership === "sole" }));
+    expect(await exists(worktree)).toBe(ownership !== "sole");
+    expect(await exists(repo)).toBe(true);
+    if (ownership === "sole") expect(await snapshotOf(store)).toMatchObject({ worktreePath: worktree });
+    else expect(await readFile(path.join(worktree, "file.txt"), "utf8")).toBe("saved archive edit\n");
   });
 
   it.each([".pwragent", ".codex"] as const)("uses canonical PwrAgent root ownership for an attached external checkout: %s", async (worktreeRoot) => {
