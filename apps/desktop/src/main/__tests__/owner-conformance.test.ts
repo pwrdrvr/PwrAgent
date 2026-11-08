@@ -30,6 +30,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
@@ -93,6 +94,7 @@ type OwnerHost = {
 async function startDesktopOwner(
   threadTitleGenerationService: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
   prepareAcp?: (db: StateDb, workspace: string) => Promise<void>,
+  claudeOptions?: (workspace: string) => NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["claudeBackendOptions"],
 ): Promise<OwnerHost> {
   OwnerConformanceCodexTransport.reset();
   const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-conformance-")));
@@ -110,6 +112,7 @@ async function startDesktopOwner(
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
     ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
+    ...(claudeOptions ? { claudeBackendOptions: claudeOptions(workspace) } : {}),
     threadTitleGenerationService, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   desktopOwner.registry = registry;
@@ -483,6 +486,70 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await desktop.close();
     }
   }, 120_000);
+
+  it("preserves real Claude acceptance, session-owned grants and subsequent starts through origin-port rejection", async () => {
+    const desktop = await startDesktopOwner(null, async (_db, workspace) => {
+      await writeFile(path.join(workspace, "claude.js"), readFileSync(path.join(process.cwd(),
+        "apps/desktop/src/main/__tests__/fixtures/claude-owner-cli.cjs")));
+    }, (workspace) => ({
+      store: new ClaudeSessionStore(path.join(workspace, "sessions")),
+      inspectInstallation: async () => ({ executable: path.join(workspace, "claude.js"), authStatus: "signed-in" }),
+      discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [],
+      getSessionInfo: async () => undefined,
+    }));
+    try {
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const internal = registry as unknown as {
+        persistStartingTurnOrigin: () => Promise<void>;
+        startingTurnOrigins: Set<unknown>;
+        registerMcpConnections: () => Promise<Array<{ server: { name: string; command: string; args: string[]; env: Record<string, string> };
+          bindThread: () => void; revoke: () => void }>>;
+      };
+      const grants: Array<{ held: boolean }> = [];
+      vi.spyOn(internal, "registerMcpConnections").mockImplementation(async () => {
+        const grant = { held: true }; grants.push(grant);
+        return [{ server: { name: "fixture", command: "/fixture/mcp", args: [], env: {} }, bindThread: () => {},
+          revoke: () => { expect(grant.held).toBe(true); grant.held = false; } }];
+      });
+      const persist = internal.persistStartingTurnOrigin.bind(registry);
+      let reject = false;
+      vi.spyOn(internal, "persistStartingTurnOrigin").mockImplementation(async () => {
+        if (reject) throw new Error("Fixture Claude accepted origin port rejected");
+        await persist();
+      });
+      const { threadId } = await desktop.client.startThread({ backend: "claude", cwd: desktop.workspace, executionMode: "auto" });
+      const commands = [true, false, ...fc.sample(fc.boolean(), 3)];
+      for (const [index, fails] of commands.entries()) {
+        reject = fails;
+        let turn: Awaited<ReturnType<typeof desktop.client.startTurn>>;
+        try {
+          turn = await desktop.client.startTurn({ backend: "claude", threadId,
+            input: [{ type: "text", text: `Claude fixture ${index}` }], messageOrigin: { kind: "messaging" } });
+          expect(turn).toMatchObject({ backend: "claude", threadId, turnId: expect.any(String) });
+          expect(internal.startingTurnOrigins.size).toBe(0);
+          expect(grants.at(-1)?.held).toBe(true);
+          // A second invocation while this session is live refuses without
+          // revoking either grant. The backend owns both release callbacks.
+          await expect(registry.startTurn({ backend: "claude", threadId,
+            input: [{ type: "text", text: "Refuse while active" }] })).rejects.toThrow("already active");
+          expect(grants.slice(-2).every((grant) => grant.held)).toBe(true);
+          await vi.waitFor(() => expect(readFileSync(path.join(desktop.workspace, "claude-requests.jsonl"), "utf8")
+            .trim().split("\n")).toHaveLength(index + 1));
+        } finally {
+          // This fixture owns provider completion even when the acceptance
+          // assertion fails on old production code. Drain it before close.
+          await writeFile(path.join(desktop.workspace, `release-${index + 1}`), "");
+          await vi.waitFor(() => expect(desktop.events.filter((event) => event.backend === "claude"
+            && event.notification.method === "turn/completed")).toHaveLength(index + 1));
+          await vi.waitFor(() => expect(grants.every((grant) => !grant.held)).toBe(true));
+        }
+        expect(desktop.events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
+        expect(desktop.events.filter((event) => event.notification.method === "turn/completed"
+          && event.notification.params.turnId === turn.turnId)).toHaveLength(1);
+        expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toBeUndefined();
+      }
+    } finally { await desktop.close(); }
+  });
 
   it("returns real ACP provider acceptance through refused SQLite review-context consumption", async () => {
     const backend = "acp:gemini" as const;
