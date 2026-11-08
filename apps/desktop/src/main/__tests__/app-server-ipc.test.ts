@@ -29,6 +29,8 @@ import type {
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
+  SetDirectoryPinRequest,
+  ReorderDirectoryPinsRequest,
   SetThreadParentRequest,
   ThreadGitWorkingState,
   ThreadPullRequestWatchEvent,
@@ -83,6 +85,9 @@ const wakeHibernatedCheckoutOnOpen = vi.hoisted(() => vi.fn(async (_identity: un
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    setDirectoryPin: vi.fn(async (request: SetDirectoryPinRequest) => ({ directoryKey: request.directoryKey,
+      pinnedRank: request.pinned ? "4096" : undefined })),
+    reorderDirectoryPins: vi.fn(async (request: ReorderDirectoryPinsRequest) => ({ pinnedRanks: { [request.move!.key]: "512" } })),
     manageThreadPrWatchesV1: vi.fn(async (): Promise<ThreadPrWatchesResponse> => ({ ok: true, cancelled: true })),
     continueThreadEnvironmentStartup: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, turnId: "owner-turn" })),
     acknowledgeThreadEnvironmentFailure: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, acknowledged: true })),
@@ -1380,6 +1385,26 @@ const {
 } = await import("../ipc/app-server");
 
 describe("app server ipc", () => {
+  it("routes remote directory pins and moves to the selected owner", async () => {
+    const { NAVIGATION_SET_DIRECTORY_PIN_CHANNEL, NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const federationTarget = { scope: "remote" as const, instanceId: "m2-max" };
+    const directoryKey = "directory:/fixture/git";
+    const pin = handlers.get(NAVIGATION_SET_DIRECTORY_PIN_CHANNEL)!;
+    const reorder = handlers.get(NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL)!;
+    await expect(pin({}, { directoryKey, pinned: true, federationTarget }))
+      .resolves.toEqual({ directoryKey, pinnedRank: "4096" });
+    await expect(reorder({}, { move: { key: directoryKey, direction: "up" }, federationTarget }))
+      .resolves.toEqual({ pinnedRanks: { [directoryKey]: "512" } });
+    await expect(pin({}, { directoryKey, pinned: false, federationTarget }))
+      .resolves.toEqual({ directoryKey, pinnedRank: undefined });
+    expect(federationMock.runtime.remoteBackend.mock.calls).toEqual([[federationTarget], [federationTarget], [federationTarget]]);
+    expect(federationMock.remoteBackend.setDirectoryPin.mock.calls).toEqual([
+      [{ directoryKey, pinned: true }], [{ directoryKey, pinned: false }],
+    ]);
+    expect(federationMock.remoteBackend.reorderDirectoryPins).toHaveBeenCalledExactlyOnceWith({ move: { key: directoryKey, direction: "up" } });
+  });
+
   it("keeps the selected owner and original cause in remote directory mark-read failures", async () => {
     const { appServerService } = await import("../ipc/app-server");
     const target = { scope: "remote" as const, instanceId: "pwr_laptop" };
