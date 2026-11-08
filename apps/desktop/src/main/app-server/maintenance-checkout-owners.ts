@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ThreadMaintenanceKeptThread } from "@pwragent/shared";
 import { archiveCandidateLastActivity, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
+import { candidateCheckoutDirectories } from "./thread-owned-checkouts";
 import { checkoutHibernationLastActivity } from "./checkout-hibernation";
 
 /** Display metadata only. A PR association or a known owner never grants
@@ -62,10 +63,7 @@ export class MaintenanceCheckoutOwners {
     const index = new MaintenanceCheckoutOwners();
     for (const candidate of candidates) {
       const owner = maintenanceKeptThread(candidate, checkoutHibernationLastActivity(candidate));
-      const directories = [...candidate.thread.linkedDirectories, ...candidate.overlay?.extraLinkedDirectories ?? [],
-        ...candidate.overlay?.retainedWorktrees ?? []];
-      const paths = [candidate.thread.projectKey, ...directories.map((directory) => directory.worktreePath ?? directory.path)];
-      for (const target of paths) if (target && path.isAbsolute(target)) index.add(target, owner);
+      for (const target of candidateCheckoutDirectories(candidate)) index.add(target, owner);
     }
     return index;
   }

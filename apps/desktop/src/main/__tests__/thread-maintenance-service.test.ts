@@ -15,8 +15,6 @@ import {
 import { PEER_SUBTHREADS_UNREADABLE, peerSubthreadKey, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import {
   ThreadMaintenanceService,
-  UNREFERENCED_KEEP_PREFIX,
-  unreferencedKeepReason,
   type ArchivedCheckoutAudit,
   type ArchivedCheckoutRemoval,
   type CheckoutHibernationReviewDeps,
@@ -94,6 +92,131 @@ function harness(candidates: ThreadArchiveCandidate[], overrides: Partial<Thread
 }
 
 describe("ThreadMaintenanceService.scan", () => {
+  it("classifies output only in positively owned checkouts, regardless of unrelated inventory paths", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (unknownCount) => {
+      const owner = candidate("owned", { cwd: "/fixture/owned" });
+      const unknown = Array.from({ length: unknownCount }, (_, index) => `/other-profile/checkout-${index}`);
+      const scans: string[] = [];
+      const row = (checkout: string) => ({ kind: "cargo" as const, checkoutPath: checkout,
+        outputPath: `${checkout}/target/debug`, manifestPath: `${checkout}/Cargo.toml`, space: { allocatedBytes: 4096 } });
+      const audit = { candidates: [], kept: {}, emptyFolders: 0, unreferenced: unknown,
+        inventory: { roots: [], paths: ["/fixture/owned", ...unknown], repositories: ["/unrelated-primary"], providers: [],
+          owners: [{ path: "/fixture/owned", threads: [{ backend: "codex", threadId: "owned", title: owner.thread.title }], candidates: [owner] }] } };
+      const { service, deps } = harness([owner], { auditArchivedCheckouts: async () => audit,
+        buildOutputs: { scan: async (roots) => {
+          scans.push(...roots);
+          return { items: [...roots, "/unexpected-detector-result"].map((checkout) => ({ row: row(checkout), identity: "fixture" })), kept: [] };
+        }, remove: async () => ({}) },
+      });
+      const scan = await service.scan({ steps: ["checkouts"] });
+      expect(scans).toEqual(["/fixture/owned"]);
+      expect(scan.checkouts.buildOutputs).toHaveLength(1);
+      expect(scan.checkouts.buildOutputs![0]).toMatchObject({ checkoutPath: "/fixture/owned", threads: [{ backend: "codex", threadId: "owned" }] });
+      expect(scan.checkouts.items.some((item) => item.kind === "unreferenced")).toBe(false);
+      expect(deps.archiveFamily).not.toHaveBeenCalled();
+    }), { numRuns: 8 });
+  });
+
+  it("classifies each shared checkout once, aggregates unique profiles and retains every identified owner", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.option(fc.nat({ max: 1_000_000 }), { nil: undefined }), { minLength: 1, maxLength: 6 }),
+      fc.boolean(), async (sizes, incomplete) => {
+        const active = candidate("active", { cwd: "/fixture/repo" });
+        const archived = candidate("archived", { cwd: "/fixture/repo" });
+        const rows = sizes.map((bytes, index) => ({ row: { kind: "cargo" as const, checkoutPath: "/fixture/repo",
+          outputPath: `/fixture/repo/target/profile-${index}`, manifestPath: "/fixture/repo/Cargo.toml",
+          ...(bytes !== undefined ? { space: { allocatedBytes: bytes } } : {}) }, identity: "fixture" }));
+        const scanOutputs = vi.fn(async () => ({ items: [...rows, rows[0]!],
+          kept: incomplete ? [{ path: "/fixture/repo/target/busy", reason: "Cargo build in progress" }] : [] }));
+        const { service } = harness([active], {
+          hibernation: { getPolicy: () => ({ enabled: true, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+            keepReason: () => ({ target: "/fixture/repo", keep: "Watching a PR" }),
+            inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true },
+          auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+            inventory: { roots: [], paths: ["/fixture/repo"], providers: [],
+              owners: [{ path: "/fixture/repo", threads: [], candidates: [active, archived] }] } }),
+          buildOutputs: { scan: scanOutputs, remove: async () => ({}) },
+        });
+        const scan = await service.scan({ steps: ["hibernate", "checkouts"] });
+        expect(scanOutputs).toHaveBeenCalledTimes(1);
+        expect(scan.checkouts.buildOutputs).toHaveLength(sizes.length);
+        expect(scan.checkouts.buildOutputs!.every((row) => row.threads?.map((thread) => thread.threadId).join() === "active,archived")).toBe(true);
+        const measured = sizes.filter((size) => size !== undefined);
+        expect(scan.hibernate!.coverage!.keptCheckouts![0]!.rebuildableOutput).toEqual([{
+          kind: "cargo", ...(measured.length ? { allocatedBytes: measured.reduce((sum, value) => sum + value, 0) } : {}),
+          ...(incomplete || measured.length !== sizes.length ? { lowerBound: true } : {}),
+        }]);
+        expect(scan.hibernate!.items).toEqual([]);
+      }), { numRuns: 30 });
+  });
+
+  it("matches fresh provider ownership before deleting an output", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("codex" as const, "claude" as const, "acp:grok" as const),
+      fc.constantFrom("same", "descendant", "ancestor", "moved", "unreadable", "missing"), async (backend, state) => {
+        const owner = candidate("owner", { cwd: "/fixture/repo" });
+        owner.thread.source = backend;
+        const row = { kind: "cargo" as const, checkoutPath: "/fixture/repo", outputPath: "/fixture/repo/target/debug",
+          manifestPath: "/fixture/repo/Cargo.toml", space: { allocatedBytes: 1024 } };
+        const remove = vi.fn(async () => ({ allocatedBytesRemoved: 1024 }));
+        const { service } = harness([owner], {
+          auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+            inventory: { roots: [], paths: [row.checkoutPath], providers: [],
+              owners: [{ path: row.checkoutPath, threads: [], candidates: [owner] }] } }),
+          refreshCandidate: async () => {
+            if (state === "missing") throw new Error("Provider no longer has the thread");
+            const cwd = state === "ancestor" ? "/fixture" : state === "moved" ? "/other/repo"
+              : state === "descendant" ? "/fixture/repo/src" : row.checkoutPath;
+            const refreshed = candidate("owner", { cwd });
+            refreshed.thread.source = backend;
+            if (state === "unreadable") refreshed.unreadable = true;
+            return refreshed;
+          },
+          buildOutputs: { scan: async () => ({ items: [{ row, identity: "fixture" }], kept: [] }), remove },
+        });
+        const scan = await service.scan({ steps: ["checkouts"] });
+        const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+          removeBuildOutputs: [{ outputPath: row.outputPath }] });
+        const allowed = state === "same" || state === "descendant";
+        expect(remove).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        expect(run.steps.find((item) => item.step === "checkouts")).toMatchObject({ done: allowed ? 1 : 0, kept: allowed ? 0 : 1, failed: 0 });
+      }), { numRuns: 40 });
+  });
+
+  it("classifies a kept owned checkout during ordinary hibernation review without making it eligible", async () => {
+    const owner = candidate("recent", { cwd: "/fixture/recent" });
+    const output = { kind: "cargo" as const, checkoutPath: "/fixture/recent", outputPath: "/fixture/recent/target/debug",
+      manifestPath: "/fixture/recent/Cargo.toml", space: { allocatedBytes: 9000 } };
+    const { service } = harness([owner], { measureAllocation: async () => ({ allocatedBytes: 10000 }),
+      hibernation: {
+        getPolicy: () => ({ enabled: true, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+        keepReason: () => ({ target: "/fixture/recent", keep: "Recently active" }),
+        inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true,
+      },
+      buildOutputs: { scan: async () => ({ items: [{ row: output, identity: "fixture" }], kept: [] }), remove: async () => ({}) },
+    });
+    const scan = await service.scan({ steps: ["hibernate"] });
+    expect(scan.hibernate!.items).toEqual([]);
+    expect(scan.hibernate!.coverage!.keptCheckouts![0]).toMatchObject({ reason: "Recently active",
+      rebuildableOutput: [{ kind: "cargo", allocatedBytes: 9000 }] });
+  });
+
+  it("revalidates the thread association before clearing a reviewed build output", async () => {
+    const owner = candidate("moved", { cwd: "/fixture/owned" });
+    const row = { kind: "cargo" as const, checkoutPath: "/fixture/owned", outputPath: "/fixture/owned/target/debug",
+      manifestPath: "/fixture/owned/Cargo.toml", space: { allocatedBytes: 4096 } };
+    const remove = vi.fn(async () => ({ allocatedBytesRemoved: 4096 }));
+    const audit = { candidates: [], kept: {}, emptyFolders: 0, inventory: { roots: [], paths: [row.checkoutPath], providers: [],
+      owners: [{ path: row.checkoutPath, threads: [{ backend: "codex", threadId: owner.thread.id, title: owner.thread.title }], candidates: [owner] }] } };
+    const { service } = harness([owner], { auditArchivedCheckouts: async () => audit,
+      refreshCandidate: async () => candidate("moved", { cwd: "/fixture/new-checkout" }),
+      buildOutputs: { scan: async () => ({ items: [{ row, identity: "fixture" }], kept: [] }), remove },
+    });
+    const scan = await service.scan({ steps: ["checkouts"] });
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+      removeBuildOutputs: [{ outputPath: row.outputPath }] });
+    expect(remove).not.toHaveBeenCalled();
+    expect(run.steps.find((item) => item.step === "checkouts")).toMatchObject({ done: 0, kept: 1 });
+  });
+
   it("rechecks work activity rather than view acknowledgements between hibernation review and apply", async () => {
     await fc.assert(fc.asyncProperty(fc.constantFrom("view", "work", "restore"), async (change) => {
       const original = candidate("reviewed", { cwd: "/fixture/reviewed" });
@@ -175,7 +298,8 @@ describe("ThreadMaintenanceService.scan", () => {
     const audit = { candidates: [], kept: {}, emptyFolders: 0, inventory: { roots: ["/worktrees"], paths,
       providers: [{ backend: "claude", threads: 1 }],
       keptPaths: paths.map((target) => ({ path: target, reason: "Used by an active thread" })),
-      owners: [{ path: paths[0]!, threads: [owner] }],
+      owners: paths.map((target, index) => ({ path: target, threads: index === 0 ? [owner] : [],
+        candidates: [candidate(`owner-${index}`, { cwd: target })] })),
     } };
     const { service } = harness([], { auditArchivedCheckouts: async () => audit, measureAllocation: async () => ({ allocatedBytes: 1024 }) });
     const scan = await service.scan({ steps: ["checkouts"] });
@@ -208,7 +332,11 @@ describe("ThreadMaintenanceService.scan", () => {
     const row = { kind: "cargo" as const, checkoutPath: "/fixture/repo", outputPath: "/fixture/repo/target/debug",
       manifestPath: "/fixture/repo/Cargo.toml", space: { allocatedBytes: 32 * 2 ** 30 } };
     const remove = vi.fn(async () => ({ allocatedBytesRemoved: row.space.allocatedBytes }));
-    const { service } = harness([candidate("recent", { daysIdle: 0, cwd: row.checkoutPath })], {
+    const owner = candidate("recent", { daysIdle: 0, cwd: row.checkoutPath });
+    const { service } = harness([owner], {
+      auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+        inventory: { roots: [], paths: [row.checkoutPath], providers: [],
+          owners: [{ path: row.checkoutPath, threads: [], candidates: [owner] }] } }),
       inspectWorkspace: async () => ({ keep: "Other ignored files" }),
       buildOutputs: { scan: async () => ({ items: [{ row, identity: "fixture" }], kept: [] }), remove },
     });
@@ -227,7 +355,12 @@ describe("ThreadMaintenanceService.scan", () => {
       const rows = states.map((_, index) => ({ kind: "cargo" as const, checkoutPath: `/fixture/${index}`,
         outputPath: `/fixture/${index}/target/debug`, manifestPath: `/fixture/${index}/Cargo.toml`, space: { allocatedBytes: (index + 1) * 1024 } }));
       const called: string[] = [];
-      const { service } = harness([], { buildOutputs: {
+      const owners = rows.map((row, index) => candidate(String(index), { cwd: row.checkoutPath }));
+      const { service } = harness(owners, {
+        auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+          inventory: { roots: [], paths: rows.map((row) => row.checkoutPath), providers: [],
+            owners: rows.map((row, index) => ({ path: row.checkoutPath, threads: [], candidates: [owners[index]!] })) } }),
+        buildOutputs: {
         scan: async () => ({ items: rows.map((row) => ({ row, identity: "fixture" })), kept: [] }),
         remove: async ({ row }) => {
           called.push(row.outputPath);
@@ -542,77 +675,22 @@ describe("sub-thread parents", () => {
   });
 });
 
-describe("checkouts no thread refers to", () => {
-  const unreferencedAudit = (paths: string[], extra: Partial<ArchivedCheckoutAudit> = {}) =>
-    vi.fn(async (): Promise<ArchivedCheckoutAudit> => ({ candidates: [], kept: {}, emptyFolders: 0, unreferenced: paths, ...extra }));
-
-  it("lists a clean or snapshot-sized one, and keeps every other with a No thread reason", async () => {
-    const { service, workspaces } = harness([], {
-      auditArchivedCheckouts: unreferencedAudit(["/u/clean", "/u/edits", "/u/commits", "/u/big", "/u/main", "/u/scratch"]),
-    });
-    workspaces.set("/u/edits", { kind: "changes", files: 2, bytes: 40 });
-    workspaces.set("/u/commits", { keep: "Commits on no branch" });
-    workspaces.set("/u/big", { kind: "overLimit", files: 1, bytes: 900, limitBytes: 100, largest: [] });
-    workspaces.set("/u/main", { kind: "inPlace" });
-    workspaces.set("/u/scratch", { kind: "notGit" });
-    const scan = await service.scan();
-    expect(scan.checkouts.items).toEqual([
-      { kind: "unreferenced", worktreePath: "/u/clean", workspace: { kind: "clean" } },
-      { kind: "unreferenced", worktreePath: "/u/edits", workspace: { kind: "changes", files: 2, bytes: 40 } },
-    ]);
-    expect(scan.checkouts.kept).toEqual({
-      [`${UNREFERENCED_KEEP_PREFIX}Commits on no branch`]: 1,
-      [`${UNREFERENCED_KEEP_PREFIX}Changes over the snapshot limit`]: 1,
-      [`${UNREFERENCED_KEEP_PREFIX}Main checkout`]: 1,
-      [`${UNREFERENCED_KEEP_PREFIX}Not a Git checkout`]: 1,
-    });
-  });
-
-  it("says so when they could not be checked", async () => {
-    const { service } = harness([], {
-      auditArchivedCheckouts: unreferencedAudit([], { unreferencedUnavailable: "A thread's folder could not be resolved" }),
-    });
-    const scan = await service.scan();
-    expect(scan.checkouts.kept).toEqual({ [`${UNREFERENCED_KEEP_PREFIX}not checked: A thread's folder could not be resolved`]: 1 });
-  });
-
-  it("removes only selected ones that are still safe, and reports what the registry kept", async () => {
-    const removeUnreferencedCheckouts = vi.fn(async (paths: string[]) => ({
-      removed: paths.filter((value) => value === "/u/clean").map((worktreePath) => ({ worktreePath })),
-      kept: paths.filter((value) => value === "/u/claimed").map((worktreePath) => ({ worktreePath, reason: "A thread uses it now" })),
-      failed: [],
-    }));
-    const { service, workspaces } = harness([], {
-      auditArchivedCheckouts: unreferencedAudit(["/u/clean", "/u/claimed", "/u/later", "/u/unselected"]),
-      removeUnreferencedCheckouts,
-    });
-    const scan = await service.scan();
-    // A commit lands in one checkout between review and removal.
-    workspaces.set("/u/later", { keep: "Commits on no branch" });
-    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
-      removeUnreferenced: ["/u/clean", "/u/claimed", "/u/later", "/u/not-scanned"].map((worktreePath) => ({ worktreePath })),
-      removeEmptyFolders: false });
-    expect(removeUnreferencedCheckouts).toHaveBeenCalledWith(["/u/clean", "/u/claimed"]);
-    expect(run.steps.find((step) => step.step === "checkouts")).toEqual({ step: "checkouts", ran: true, done: 1, kept: 2, failed: 1 });
-    expect(run.problems).toEqual(expect.arrayContaining([
-      expect.objectContaining({ object: "/u/later", kind: "kept", reason: "Changed since the scan", detail: "Commits on no branch" }),
-      expect.objectContaining({ object: "/u/claimed", kind: "kept", reason: "A thread uses it now" }),
-      expect.objectContaining({ object: "/u/not-scanned", kind: "failed", reason: "Not in this scan" }),
-    ]));
-    expect(run.problems.some((problem) => problem.object === "/u/unselected")).toBe(false);
-  });
-
-  it("is removable only for a clean or snapshot-sized checkout", () => {
-    const workspaces: ThreadMaintenanceWorkspace[] = [
-      { kind: "clean" }, { kind: "changes", files: 1, bytes: 1 },
-      { kind: "overLimit", files: 1, bytes: 2, limitBytes: 1, largest: [] },
-      { kind: "notGit" }, { kind: "inPlace" }, { kind: "missing" },
-    ];
-    for (const workspace of workspaces) {
-      const removable = typeof unreferencedKeepReason({ workspace }) !== "string";
-      expect(removable).toBe(workspace.kind === "clean" || workspace.kind === "changes");
-    }
-    expect(unreferencedKeepReason({ keep: "Other ignored files" })).toBe("Other ignored files");
+describe("unattributed checkout requests", () => {
+  it("never offers or removes an unattributed path, even when an older scan supplied it", async () => {
+    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.integer({ min: 0, max: 100 }), { maxLength: 12 }), async (ids) => {
+      const paths = ids.map((id) => `/unknown/${id}`);
+      const removeUnreferencedCheckouts = vi.fn(async () => ({ removed: [], kept: [], failed: [] }));
+      const { service, deps } = harness([], { removeUnreferencedCheckouts,
+        auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0, unreferenced: paths }),
+      });
+      const scan = await service.scan({ steps: ["checkouts"] });
+      expect(scan.checkouts.items).toEqual([]);
+      expect(deps.inspectWorkspace).not.toHaveBeenCalled();
+      const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+        removeUnreferenced: paths.map((worktreePath) => ({ worktreePath })), removeEmptyFolders: false });
+      expect(removeUnreferencedCheckouts).not.toHaveBeenCalled();
+      expect(run.steps.find((step) => step.step === "checkouts")).toMatchObject({ done: 0, kept: paths.length, failed: 0 });
+    }), { numRuns: 20 });
   });
 });
 
@@ -918,7 +996,7 @@ describe("hibernate idle checkouts", () => {
  * removes only linked worktrees, so that is what most cases inspect. */
 describe("scan steps and progress", () => {
   const threadPaths = ["/w/a", "/w/b", "/w/c"];
-  const checkoutPaths = ["/w/x", "/w/u"];
+  const checkoutPaths = ["/w/x"];
   const policy = { enabled: false, idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, restoreOn: "send" as const };
 
   function setup() {
@@ -980,7 +1058,7 @@ describe("scan steps and progress", () => {
     await service.scan({ steps: ["threads", "checkouts"] }, { onProgress: (next) => progress.push(next) });
     expect(progress[0]).toEqual({ steps: ["threads", "checkouts"], step: "threads", stage: "listing", processed: 0, total: 0, inFlight: [] });
     const named = new Set(progress.flatMap((item) => item.inFlight));
-    expect(named).toEqual(new Set(["Thread a", "Thread b", "Thread c", "/w/x", "/w/u"]));
+    expect(named).toEqual(new Set(["Thread a", "Thread b", "Thread c", "/w/x"]));
   });
 
   it("reads every step when none are named, as the agent tool asks", async () => {

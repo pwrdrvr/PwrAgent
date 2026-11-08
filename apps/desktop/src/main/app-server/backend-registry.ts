@@ -19,8 +19,8 @@ import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
-import { isSettledWorktree, listManagedWorktrees, maintenanceWorktreeRoots, nodeWorktreeRootReader, registeredWorktreePaths, unreferencedWorktrees, type MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
-import { maintenanceRepositoryHints, resolveMaintenanceRepositories } from "./maintenance-repositories";
+import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
+import { resolveOwnedMaintenanceCheckouts } from "./thread-owned-checkouts";
 import { mapMaintenanceAudit } from "./maintenance-audit-pool";
 import { ArchiveFleetIndex, type FleetChange, type FleetRow } from "./archive-cleanup-fleet-index";
 import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
@@ -853,7 +853,7 @@ import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from 
 import { hasWorktreeTerminalsOpenIn } from "../terminal/worktree-terminals";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
-import { MaintenanceCheckoutOwners, maintenanceKeptThread } from "./maintenance-checkout-owners";
+import { maintenanceKeptThread } from "./maintenance-checkout-owners";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import { compareBindingsByCreation } from "../messaging/core/messaging-binding-thread-match";
 import { toMessagingThreadBindingSummary } from "../messaging/messaging-bindings-snapshot";
@@ -898,7 +898,6 @@ import {
   getDesktopSettingsService,
 } from "../settings/desktop-settings-singleton";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
-import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import {
   assertProviderDiscoveryPermit,
   type ProviderDiscoveryPermit,
@@ -2592,7 +2591,7 @@ export type ArchivedWorktreeRepairReport = {
   unreferencedUnavailable?: string;
   inventory?: { roots: string[]; paths: string[]; repositories?: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
     keptPaths?: { path: string; reason: string }[];
-    owners?: { path: string; threads: ThreadMaintenanceKeptThread[] }[] };
+    owners?: { path: string; threads: ThreadMaintenanceKeptThread[]; candidates: ThreadArchiveCandidate[] }[] };
 };
 
 /** Checkouts left in place by a repair pass, counted by a short reason. A
@@ -9677,7 +9676,6 @@ export class DesktopBackendRegistry {
   private readonly worktreeContainerService: WorktreeContainerService;
   private readonly acpBackend: AcpBackendAdapter;
   private readonly claudeBackend: ClaudeBackend;
-  private readonly managedWorktreeRootsOverride?: () => Promise<string[]>;
   private readonly claudeAgentToolMcpServer?: AgentToolMcpServerLike;
   private closed = false;
   private shutdownRequested = false;
@@ -12110,7 +12108,6 @@ export class DesktopBackendRegistry {
               })
             : undefined);
     this.claudeAgentToolMcpServer = agentToolMcpServer;
-    this.managedWorktreeRootsOverride = options?.managedWorktreeRoots;
     this.claudeBackend = new ClaudeBackend({
       inspectInstallation: options?.useMachineClaudeDiscovery
         ? async () => inspectClaudeInstallation({ env: await settingsService?.resolveTerminalSpawnEnvAsync() })
@@ -40160,7 +40157,7 @@ export class DesktopBackendRegistry {
   repairArchivedThreadWorktrees(options: {
     dryRun?: boolean;
     /** With dryRun: also list PwrAgent worktrees no thread refers to. */
-    includeUnreferenced?: boolean;
+    includeCheckoutInventory?: boolean;
     /** Limit removal to these reviewed checkouts. Empty folders only when asked. */
     select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
@@ -40192,7 +40189,7 @@ export class DesktopBackendRegistry {
     unreferencedTruncated?: boolean;
     inventory?: ArchivedWorktreeRepairReport["inventory"];
   }> {
-    const report = await this.runArchivedThreadWorktreeRepair({ dryRun: true, includeUnreferenced: true, onDiscoveryProgress: onProgress });
+    const report = await this.runArchivedThreadWorktreeRepair({ dryRun: true, includeCheckoutInventory: true, onDiscoveryProgress: onProgress });
     return {
       candidates: report.candidates,
       kept: archivedWorktreeKeptReasons(report),
@@ -40204,212 +40201,45 @@ export class DesktopBackendRegistry {
     };
   }
 
-  /** PwrAgent's worktree roots: `~/.pwragent/worktrees` and each profile's. */
-  private async managedWorktreeRoots(): Promise<string[]> {
-    if (this.managedWorktreeRootsOverride) return this.managedWorktreeRootsOverride();
-    return await maintenanceWorktreeRoots(userHomeWorktreesRoot(), await this.readActiveCodexMcpHome(), os.homedir());
-  }
-
-  /** Include Git-registered linked checkouts in any location. The returned
-   * set is discovery only; fresh provider ownership and snapshots still gate
-   * every selected removal. A failed repository listing keeps its checkouts. */
-  private async discoverMaintenanceWorktrees(
-    inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
-    onProgress?: (progress: MaintenanceDiscoveryProgress) => void,
-  ): Promise<{ roots: string[]; paths: string[]; repositories: string[]; truncated: boolean; unqueriedRoots: string[]; unavailable?: string }> {
-    const roots = await this.managedWorktreeRoots();
-    const found = await listManagedWorktrees(roots, nodeWorktreeRootReader, undefined, onProgress);
-    const paths = new Set(found.paths);
-    // One registration read per repository, including repositories known only
-    // through an archived or a child thread. No directory-name allowlist.
-    const repositoryHints = new Set<string>();
-    for (const checkout of found.paths) repositoryHints.add(checkout);
-    for (const root of this.managedWorktreeRootsOverride ? [] : roots) {
-      for (const entry of await nodeWorktreeRootReader.listDirectories(root)) repositoryHints.add(path.join(root, entry));
-    }
-    for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) {
-      for (const directory of thread.linkedDirectories) repositoryHints.add(directory.path);
-    }
-    const profileHints = this.managedWorktreeRootsOverride ? { paths: [], incomplete: false }
-      : await maintenanceRepositoryHints(path.dirname(userHomeWorktreesRoot()), onProgress);
-    for (const value of profileHints.paths) repositoryHints.add(value);
-    const repositories = this.managedWorktreeRootsOverride ? [...repositoryHints]
-      : await resolveMaintenanceRepositories([...repositoryHints], onProgress);
-    let unavailable: string | undefined;
-    if (profileHints.incomplete) unavailable = "Some PwrAgent profile repository hints could not be read";
-    for (const repository of repositories) {
-      onProgress?.({ detail: "Reading Git worktree registrations", root: repository, found: paths.size });
-      try {
-        const { stdout } = await runGitCommand(repository, ["worktree", "list", "--porcelain", "-z"], { timeout: 10_000 });
-        for (const checkout of registeredWorktreePaths(stdout)) {
-          if (await nodeWorktreeRootReader.isLinkedWorktree(checkout)) paths.add(path.normalize(checkout));
-        }
-      } catch (_error) {
-        // Missing historical repositories have no additional registrations.
-        // Existing but unreadable ones make the reported coverage incomplete.
-        try { await stat(repository); unavailable = "Some Git worktree registrations could not be read"; }
-        catch (missing) { if ((missing as NodeJS.ErrnoException).code !== "ENOENT") unavailable = "Some repositories could not be read"; }
-      }
-    }
-    const queriedRoots = new Set([userHomeWorktreesRoot(), resolveActiveProfilePath("worktrees"),
-      path.join(await this.readActiveCodexMcpHome(), "worktrees")].map((root) => path.resolve(root)));
-    const unqueriedRoots = this.managedWorktreeRootsOverride ? [] : roots.filter((root) =>
-      /[/\\]profiles[/\\]/.test(root) && !queriedRoots.has(path.resolve(root)));
-    return { roots, paths: [...paths], repositories: [...repositories], truncated: found.truncated, unqueriedRoots, ...(unavailable ? { unavailable } : {}) };
-  }
-
-  /** Canonical paths every active and archived thread refers to, or
-   * undefined when one cannot be resolved. A thread with no folder refers
-   * to nothing; a folder that cannot be resolved fails the whole check. */
-  private async worktreeReferences(
-    inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
-    onReference?: (thread: AppServerThreadSummary, canonicalPath: string) => void,
-  ): Promise<Set<string> | undefined> {
-    const canonical = canonicalWorktreePaths();
-    const keys = new Set<string>();
-    for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) {
-      const values = new Set([...archiveWorkspacePaths(thread), ...inventory.ownershipPaths?.get(thread) ?? []]);
-      for (const value of values) {
-        if (!path.isAbsolute(value)) continue;
-        try {
-          const key = await canonical(value);
-          keys.add(key);
-          onReference?.(thread, key);
-        } catch { return undefined; }
-      }
-    }
-    return keys;
-  }
-
-  private async listUnreferencedWorktrees(
-    inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths" | "overlaysByThreadKey">,
+  /** Report only checkouts positively associated with this profile's provider
+   * inventory. Other folders are neither measured nor offered for removal. */
+  private async describeMaintenanceCheckoutInventory(
+    inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "overlaysByThreadKey">,
     report: ArchivedWorktreeRepairReport,
     onProgress?: (progress: MaintenanceDiscoveryProgress) => void,
   ): Promise<void> {
-    const found = await this.discoverMaintenanceWorktrees(inventory, onProgress);
+    const threads = [...inventory.activeThreads, ...inventory.archivedThreads];
+    const candidates = threads.map((thread) => ({ thread,
+      overlay: inventory.overlaysByThreadKey?.get(buildThreadIdentityKey(thread.source, thread.id)) }));
+    const checkouts = await resolveOwnedMaintenanceCheckouts(candidates, onProgress);
     const providers = new Map<string, number>();
-    for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) providers.set(thread.source, (providers.get(thread.source) ?? 0) + 1);
-    report.inventory = { roots: found.roots, paths: found.paths, repositories: found.repositories,
-      providers: [...providers].map(([backend, threads]) => ({ backend, threads })), keptPaths: [], owners: [] };
-    if (found.unavailable) report.unreferencedUnavailable = found.unavailable;
-    // Reuse the reference read's canonical paths. Display ownership never
-    // guesses from folder names and adds no provider requests or DB writes.
-    const owners = new MaintenanceCheckoutOwners();
-    const displayThreads = new Map<AppServerThreadSummary, ThreadMaintenanceKeptThread>();
-    const references = await this.worktreeReferences(inventory, (thread, target) => {
-      let display = displayThreads.get(thread);
-      if (!display) {
-        display = maintenanceKeptThread({ thread,
-          overlay: inventory.overlaysByThreadKey?.get(buildThreadIdentityKey(thread.source, thread.id)) });
-        displayThreads.set(thread, display);
-      }
-      owners.add(target, display);
-    });
-    if (!references) {
-      report.unreferencedUnavailable = "A thread's folder could not be resolved";
-      return;
-    }
-    const canonical = canonicalWorktreePaths();
-    const byKey = new Map<string, string>();
-    for (const value of found.paths) {
-      // A checkout removed since the listing is simply not reported.
-      try {
-        const key = await canonical(value);
-        byKey.set(key, value);
-        const threads = owners.forPath(key);
-        if (threads.length) report.inventory.owners!.push({ path: value, threads });
-        const ownership = await this.readCanonicalArchiveOwnership(inventory, value);
-        if (ownership.external || ownership.users.length) report.inventory.keptPaths!.push({ path: value,
-          reason: ownership.external ? "Externally managed" : "Used by an active thread" });
-      } catch { /* gone */ }
-    }
-    const settled: string[] = [];
-    for (const key of unreferencedWorktrees([...byKey.keys()], references)) {
-      const checkout = byKey.get(key)!;
-      // Another profile can own a Git-registered checkout anywhere, not just
-      // below its profile folder. Repository hints cannot prove no owner.
-      if (found.unqueriedRoots.length) {
-        report.inventory.keptPaths!.push({ path: checkout, reason: "Other profile ownership not checked" });
-      } else if (found.unavailable) {
-        report.inventory.keptPaths!.push({ path: checkout, reason: "Checkout discovery incomplete" });
-      } else if (await isSettledWorktree(checkout)) settled.push(checkout);
-    }
-    report.unreferencedWorktrees = settled;
-    if (found.truncated) report.unreferencedTruncated = true;
+    for (const thread of threads) providers.set(thread.source, (providers.get(thread.source) ?? 0) + 1);
+    const activeKeys = new Set(inventory.activeThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
+    report.inventory = { roots: [], paths: checkouts.map((item) => item.path),
+      keptPaths: checkouts.flatMap((item) => {
+        const protectedOwner = report.protectedWorktreeDetails.find((row) =>
+          normalizeWorktreePathForComparison(row.worktreePath) === normalizeWorktreePathForComparison(item.path));
+        const reason = protectedOwner?.externallyManaged ? "Externally managed"
+          : item.candidates.some((owner) => activeKeys.has(buildThreadIdentityKey(owner.thread.source, owner.thread.id)))
+            ? "Used by an active thread" : undefined;
+        return reason ? [{ path: item.path, reason }] : [];
+      }),
+      providers: [...providers].map(([backend, count]) => ({ backend, threads: count })),
+      owners: checkouts.map((item) => ({ ...item, threads: item.candidates.map((candidate) =>
+        maintenanceKeptThread(candidate, checkoutHibernationLastActivity(candidate))) })),
+    };
+    report.unreferencedWorktrees = [];
   }
 
-  /** Snapshot and remove reviewed checkouts no thread refers to. Each one is
-   * checked against a fresh read of every thread while holding the same
-   * checkout/container scopes as archive and repair jobs. */
+  /** Legacy callers cannot turn an unidentified folder into a removal. */
   async removeUnreferencedCheckouts(worktreePaths: string[]): Promise<{
     removed: { worktreePath: string }[];
     kept: { worktreePath: string; reason: string }[];
     failed: { worktreePath: string; message: string }[];
   }> {
-    const result = {
-      removed: [] as { worktreePath: string }[],
-      kept: [] as { worktreePath: string; reason: string }[],
-      failed: [] as { worktreePath: string; message: string }[],
-    };
-    if (!worktreePaths.length) return result;
-    await this.archiveCleanupQueue.enqueue(`unreferenced-remove:${++this.archiveWorkspaceWriteSequence}`, async (context) => {
-      const recordError = (worktreePath: string, error: unknown) => {
-        if (error instanceof ArchiveCleanupCancelledError || this.closed || this.stoppingRunningTurnsForShutdown) throw error;
-        if (error instanceof MissingArchiveWorktreeError) result.kept.push({ worktreePath, reason: "No longer on disk" });
-        else if (error instanceof MissingArchiveRepositoryError) result.kept.push({ worktreePath, reason: "Repository no longer exists" });
-        else result.failed.push({ worktreePath, message: error instanceof Error ? error.message : String(error) });
-      };
-      const candidates: string[] = [];
-      const scopeKeys = new Set<string>();
-      const canonicalScope = canonicalWorktreePaths();
-      for (const worktreePath of worktreePaths) {
-        try {
-          const container = await this.worktreeContainerService.containerPath(worktreePath);
-          scopeKeys.add(await canonicalScope(container ?? worktreePath));
-          candidates.push(worktreePath);
-        } catch (error) { recordError(worktreePath, error); }
-      }
-      const remove = async (): Promise<ArchiveThreadResponse> => {
-        const read = async () => await this.readPacedArchiveCleanupInventory({ backend: "codex", threadId: "", context });
-        const inventory = context.withInventory ? await context.withInventory(read) : await read();
-        const references = await this.worktreeReferences(inventory);
-        const canonical = canonicalWorktreePaths();
-        const managed = new Set<string>();
-        const discovery = await this.discoverMaintenanceWorktrees(inventory);
-        for (const value of discovery.paths) {
-          try { managed.add(await canonical(value)); } catch { /* gone */ }
-        }
-        for (const worktreePath of candidates) {
-          await context.checkpoint();
-          context.setWorktreePath?.(worktreePath);
-          try {
-            const key = await canonical(worktreePath);
-            const reason = !references ? "Thread folders could not be checked"
-              : discovery.unqueriedRoots.length ? "Other profile ownership not checked"
-                : discovery.unavailable ? "Checkout discovery incomplete"
-                  : !managed.has(key) ? "Checkout is no longer registered"
-                    : unreferencedWorktrees([key], references).length === 0 ? "A thread uses it now"
-                      : !await isSettledWorktree(worktreePath) ? "Created recently"
-                        : undefined;
-            if (reason) {
-              result.kept.push({ worktreePath, reason });
-              continue;
-            }
-            await this.worktreeArchiveService.archiveUnreferenced({ worktreePath });
-            result.removed.push({ worktreePath });
-          } catch (error) { recordError(worktreePath, error); }
-        }
-        return { backend: "codex", threadId: "", archivedAt: Date.now(), cleanup: [] };
-      };
-      // Lock all selections in a stable order before the single inventory
-      // read. Overlapping requests then recheck after the prior removal,
-      // without rescanning every provider for each selected checkout.
-      const scopes = [...scopeKeys].sort();
-      const locked = async (index: number): Promise<ArchiveThreadResponse> => index === scopes.length || !context.withWorktree
-        ? await remove() : await context.withWorktree(scopes[index]!, async () => await locked(index + 1));
-      return await locked(0);
-    });
-    return result;
+    return { removed: [], failed: [], kept: [...new Set(worktreePaths)].map((worktreePath) => ({
+      worktreePath, reason: "No identified thread owns this checkout",
+    })) };
   }
 
   /** Remove only reviewed archived checkouts. Each removal still takes fresh
@@ -40521,7 +40351,7 @@ export class DesktopBackendRegistry {
 
   private async runArchivedThreadWorktreeRepair(options: {
     dryRun?: boolean;
-    includeUnreferenced?: boolean;
+    includeCheckoutInventory?: boolean;
     select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
     onDiscoveryProgress?: (progress: MaintenanceDiscoveryProgress) => void;
@@ -40697,9 +40527,9 @@ export class DesktopBackendRegistry {
           report.containerCleanup.push(...row.containerCleanup);
         }
       }
-      if (options.dryRun && options.includeUnreferenced) {
+      if (options.dryRun && options.includeCheckoutInventory) {
         await checkpoint();
-        await this.listUnreferencedWorktrees(inventory, report, options.onDiscoveryProgress);
+        await this.describeMaintenanceCheckoutInventory(inventory, report, options.onDiscoveryProgress);
       }
       backendRegistryLog.info("archived worktree repair discovered", {
         archivedThreads: report.archivedThreads, discoveredWorktrees: report.discoveredWorktrees,

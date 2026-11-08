@@ -416,7 +416,7 @@ describe("checkouts no thread refers to", () => {
     { selections: [[0], [0]] },
     { selections: [[0], [0], [0]] },
     { selections: [[0, 1], [1, 0]] },
-  ])("removes each checkout once across overlapping requests: $selections", async ({ selections }) => {
+  ])("refuses every unattributed removal across overlapping requests: $selections", async ({ selections }) => {
     const fixture = await createFixture("claude");
     const checkouts = Array.from({ length: Math.max(...selections.flat()) + 1 }, (_, index) =>
       path.join(fixture.root, ".pwragent", "worktrees", `spare-${index}`, "repo"));
@@ -430,21 +430,16 @@ describe("checkouts no thread refers to", () => {
     const result = await Promise.all(selections.map(async (selection) =>
       await registry.removeUnreferencedCheckouts(selection.map((index) => checkouts[index]!))));
     expect(result.flatMap((row) => row.failed)).toEqual([]);
-    expect(result.flatMap((row) => row.removed).map((row) => row.worktreePath).sort()).toEqual([...checkouts].sort());
-    expect(result.flatMap((row) => row.kept)).toHaveLength(selections.flat().length - checkouts.length);
-    // One active and one archived provider page per request, independent of
-    // its selection size. Scope locking must not add a fleet scan per item.
-    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list")).toHaveLength(2 * selections.length);
-    // Git is the oracle: each registration is gone, with exactly one
-    // recoverable snapshot containing that checkout's distinct dirty data.
+    expect(result.flatMap((row) => row.removed)).toEqual([]);
+    expect(result.flatMap((row) => row.kept)).toHaveLength(selections.flat().length);
+    expect(result.flatMap((row) => row.kept).every((row) => row.reason === "No identified thread owns this checkout")).toBe(true);
+    // A refusal needs no provider inventory or snapshot mutation.
+    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list")).toHaveLength(0);
     const registrations = await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"]);
-    const refs = (await fixture.git(fixture.repo, ["for-each-ref", "--format=%(refname)", "refs/pwragent/snapshots/"])).trim().split("\n");
-    expect(refs).toHaveLength(checkouts.length);
-    const contents = await Promise.all(refs.map(async (ref) => await fixture.git(fixture.repo, ["show", `${ref}:notes.txt`])));
-    expect(contents.sort()).toEqual(checkouts.map((_, index) => `checkout ${index}\n`).sort());
-    for (const checkout of checkouts) {
-      expect(registrations).not.toContain(checkout.replaceAll("\\", "/"));
-      await expect(stat(checkout)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fixture.git(fixture.repo, ["for-each-ref", "--format=%(refname)", "refs/pwragent/snapshots/"])).trim()).toBe("");
+    for (const [index, checkout] of checkouts.entries()) {
+      expect(registrations).toContain(checkout.replaceAll("\\", "/"));
+      expect(await readFile(path.join(checkout, "notes.txt"), "utf8")).toBe(`checkout ${index}\n`);
     }
   });
 
@@ -466,59 +461,22 @@ describe("checkouts no thread refers to", () => {
     expect(await stat(fixture.worktree)).toBeDefined();
   });
 
-  it("keeps checkout ownership unknown across profiles even outside their roots", async () => {
-    const fixture = await createFixture("claude");
-    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    await utimes(path.join(fixture.worktree, ".git"), old, old);
-    const { registry } = fixture.reopen();
-    const boundary = registry as unknown as { discoverMaintenanceWorktrees: (...args: unknown[]) => Promise<{
-      roots: string[]; paths: string[]; repositories: string[]; truncated: boolean; unqueriedRoots: string[];
-    }> };
-    const discover = boundary.discoverMaintenanceWorktrees.bind(boundary);
-    vi.spyOn(boundary, "discoverMaintenanceWorktrees").mockImplementation(async (...args) => ({ ...await discover(...args),
-      unqueriedRoots: [path.join(fixture.root, "elsewhere", "profiles", "other", "worktrees")] }));
-    expect((await registry.auditArchivedCheckouts()).unreferenced).toEqual([]);
-    expect(await registry.removeUnreferencedCheckouts([fixture.worktree])).toEqual({ removed: [], failed: [],
-      kept: [{ worktreePath: fixture.worktree, reason: "Other profile ownership not checked" }] });
-    expect(await stat(fixture.worktree)).toBeDefined();
-    expect(await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"]))
-      .toContain(fixture.worktree.replaceAll("\\", "/"));
-  });
-
-  it("lists only the PwrAgent worktree no thread uses, then snapshots and removes it", async () => {
-    const fixture = await createFixture("claude");
+  it("limits maintenance inventory to identified thread checkouts and never offers a spare folder for removal", async () => {
+    const fixture = await createSharedArchiveFixture("codex", false);
     const spare = path.join(fixture.root, ".pwragent", "worktrees", "spare", "repo");
     await fixture.git(fixture.repo, ["worktree", "add", "-b", "spare", spare]);
-    await writeFile(path.join(spare, "notes.txt"), "left behind\n");
-    // Settled: created two hours ago. A just-made one may be a thread still starting.
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    await utimes(path.join(spare, ".git"), twoHoursAgo, twoHoursAgo);
-    const starting = path.join(fixture.root, ".pwragent", "worktrees", "starting", "repo");
-    await fixture.git(fixture.repo, ["worktree", "add", "-b", "starting", starting]);
-    // A Claude thread still works in the first checkout.
-    await fixture.claudeStore.save({ cwd: fixture.worktree, thread: {
-      id: "11111111-1111-4111-8111-111111111111", source: "claude", title: "Uses the checkout", titleSource: "explicit",
-      linkedDirectories: [fixture.directory],
-    } });
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(path.join(spare, ".git"), old, old);
     const { registry } = fixture.reopen();
-    const { writes } = await measureSqliteWrites(async () => {
-      expect((await registry.auditArchivedCheckouts()).unreferenced).toEqual([spare]);
-      expect(await registry.removeUnreferencedCheckouts([fixture.worktree, starting, spare])).toEqual({
-        removed: [{ worktreePath: spare }],
-        kept: [{ worktreePath: fixture.worktree, reason: "A thread uses it now" },
-          { worktreePath: starting, reason: "Created recently" }],
-        failed: [],
-      });
-    });
-    // Reading every thread and removing through Git persists nothing.
-    expect(writes.commits).toBe(0);
-    await expect(stat(spare)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(stat(fixture.worktree)).resolves.toBeDefined();
-    await expect(stat(starting)).resolves.toBeDefined();
-    const refs = (await fixture.git(fixture.repo, ["for-each-ref", "--format=%(refname)", "refs/pwragent/snapshots/"])).trim().split("\n");
-    expect(refs).toHaveLength(1);
-    expect(await fixture.git(fixture.repo, ["show", `${refs[0]}:notes.txt`])).toBe("left behind\n");
+    const audit = await registry.auditArchivedCheckouts();
+    expect(audit.inventory!.paths).toEqual([fixture.worktree]);
+    expect(audit.unreferenced).toEqual([]);
+    expect(await registry.removeUnreferencedCheckouts([spare])).toEqual({ removed: [], failed: [],
+      kept: [{ worktreePath: spare, reason: "No identified thread owns this checkout" }] });
+    expect(await stat(spare)).toBeDefined();
   });
+
+
 });
 
 it("checks archived owners concurrently with bounded work, ordered results and batch pacing", async () => {
@@ -534,12 +492,12 @@ it("checks archived owners concurrently with bounded work, ordered results and b
     readPacedArchiveCleanupInventory: () => Promise<{ activeThreads: AppServerThreadSummary[]; archivedThreads: AppServerThreadSummary[] }>;
     maintenanceThreadWorkspace: (thread: AppServerThreadSummary) => Promise<AppServerThreadSummary>;
     readCanonicalArchiveOwnership: (_inventory: unknown, target: string) => Promise<Ownership>;
-    listUnreferencedWorktrees: () => Promise<void>;
+    describeMaintenanceCheckoutInventory: () => Promise<void>;
     archiveCleanupQueue: { enqueue: (_key: string, work: (context: ArchiveCleanupContext) => Promise<unknown>) => Promise<unknown> };
   };
   vi.spyOn(boundary, "readPacedArchiveCleanupInventory").mockResolvedValue({ activeThreads: [], archivedThreads: threads });
   vi.spyOn(boundary, "maintenanceThreadWorkspace").mockImplementation(async (thread) => thread);
-  vi.spyOn(boundary, "listUnreferencedWorktrees").mockResolvedValue();
+  vi.spyOn(boundary, "describeMaintenanceCheckoutInventory").mockResolvedValue();
   const checkpoint = vi.fn(async () => {});
   vi.spyOn(boundary.archiveCleanupQueue, "enqueue").mockImplementation(async (_key, work) => await work({
     checkpoint, assertCurrent() {}, settleCheckpoint: async () => {},

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   buildThreadIdentityKey,
@@ -47,7 +47,8 @@ import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor, checkoutHibernationLas
 import { missingWorktreeRepository } from "./worktree-archive-service";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import type { CargoBuildOutputCandidate, scanCargoBuildOutputs, removeCargoBuildOutput } from "./maintenance-cargo-output";
-import { MaintenanceCheckoutOwners } from "./maintenance-checkout-owners";
+import { MaintenanceCheckoutOwners, maintenanceKeptThread } from "./maintenance-checkout-owners";
+import { candidateCheckoutDirectories } from "./thread-owned-checkouts";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
 const FAILURE_LIMIT = 50;
@@ -60,13 +61,13 @@ export type ArchivedCheckoutAudit = {
   candidates: { backend: string; threadId: string; worktreePath: string }[];
   kept: Record<string, number>;
   emptyFolders: number;
-  /** PwrAgent worktrees no thread refers to. */
+  /** Legacy audit fields. Unidentified checkouts are never offered. */
   unreferenced?: string[];
   unreferencedUnavailable?: string;
   unreferencedTruncated?: boolean;
   inventory?: { roots: string[]; paths: string[]; repositories?: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
     keptPaths?: { path: string; reason: string }[];
-    owners?: { path: string; threads: ThreadMaintenanceKeptThread[] }[] };
+    owners?: { path: string; threads: ThreadMaintenanceKeptThread[]; candidates?: ThreadArchiveCandidate[] }[] };
 };
 
 export type UnreferencedCheckoutRemoval = {
@@ -74,10 +75,6 @@ export type UnreferencedCheckoutRemoval = {
   kept: { worktreePath: string; reason: string }[];
   failed: { worktreePath: string; message: string }[];
 };
-
-/** Keep reasons for a checkout no thread refers to start with this, so the
- * review tells them from archived threads' checkouts. */
-export const UNREFERENCED_KEEP_PREFIX = "No thread · ";
 
 export type ArchivedCheckoutRemoval = {
   removed: { worktreePath: string }[];
@@ -110,8 +107,7 @@ export type ThreadMaintenanceDeps = {
   }) => Promise<boolean>;
   /** Remove only the listed archived checkouts, plus empty folders when asked. */
   removeArchivedCheckouts: (selection: { worktreePaths: string[]; emptyFolders: boolean }) => Promise<ArchivedCheckoutRemoval>;
-  /** Snapshot and remove reviewed checkouts no thread refers to. Re-checks
-   * each against every thread first. */
+  /** Legacy dependency retained for callers; never invoked. */
   removeUnreferencedCheckouts?: (worktreePaths: string[]) => Promise<UnreferencedCheckoutRemoval>;
   /** True only inside a worktree root that PwrAgent or Codex manages. */
   isManagedCheckoutPath: (worktreePath: string) => boolean;
@@ -172,7 +168,8 @@ type RetainedScan = {
   subthreads: Map<string, string[]>;
   families: Map<string, { family: ThreadArchiveCandidate[]; row: ThreadMaintenanceIdleThread }>;
   checkouts: Map<string, ThreadMaintenanceArchivedCheckout>;
-  buildOutputs: Map<string, CargoBuildOutputCandidate>;
+  buildOutputs: Map<string, CargoBuildOutputCandidate & { owners: ThreadArchiveCandidate[] }>;
+  outputClassification: Map<string, Promise<NonNullable<ThreadMaintenanceSpace["rebuildableOutput"]>>>;
   allocation: Map<string, Promise<ThreadMaintenanceSpace | undefined>>;
 };
 
@@ -236,7 +233,7 @@ export class ThreadMaintenanceService {
       scan: undefined as unknown as ThreadMaintenanceScan,
       families: new Map(),
       checkouts: new Map(),
-      buildOutputs: new Map(),
+      buildOutputs: new Map(), outputClassification: new Map(),
       subthreads: new Map(),
       projects: new Map(),
       hibernate: new Map(),
@@ -487,7 +484,8 @@ export class ThreadMaintenanceService {
           exclude("Checkout missing");
           return undefined;
         }
-        const space = await this.allocation(listed.target, retained);
+        const space = await this.ownedCheckoutSpace(listed.target, candidates.filter((owner) =>
+          candidateCheckoutDirectories(owner).some((cwd) => cwd === listed.target || cwd.startsWith(listed.target! + path.sep))), retained, progress);
         measuredPaths.set(listed.target, space);
         // A hibernated checkout has nothing on disk, whichever reason keeps it.
         if (listed.keep) { exclude(listed.keep, listed.target); return { keep: listed.keep, hibernated: !!hibernatedSnapshotFor(candidate) }; }
@@ -586,16 +584,18 @@ export class ThreadMaintenanceService {
       return { items: [], kept: {}, emptyFolders: 0, skipped: "Archived checkouts could not be read" };
     }
     const measuredPaths = new Map<string, ThreadMaintenanceSpace | undefined>();
-    const paths = [...new Set(audit.inventory?.paths ?? [...audit.candidates.map((item) => item.worktreePath), ...audit.unreferenced ?? []])];
+    const ownership = new Map(audit.inventory?.owners?.map((item) => [item.path, item]));
+    const paths = [...new Set(audit.inventory?.owners?.filter((item) => item.candidates?.length).map((item) => item.path)
+      ?? audit.candidates.map((item) => item.worktreePath))];
     progress.check("checkouts", paths.length);
     progress.discovery({ detail: "Measuring checkout allocation on disk", found: paths.length });
     await mapLimit(paths, INSPECT_CONCURRENCY, progress.track((target) => target, async (target) => {
-      measuredPaths.set(target, await this.allocation(target, retained));
+      measuredPaths.set(target, await this.ownedCheckoutSpace(target, ownership.get(target)?.candidates ?? [], retained, progress));
     }));
     const inspect = this.deps.inspectWorkspace ?? inspectMaintenanceWorkspace;
     const kept = { ...audit.kept };
     const excludedReasons = new Map(audit.inventory?.keptPaths?.map((item) => [item.path, item.reason]));
-    progress.check("checkouts", audit.candidates.length + (audit.unreferenced?.length ?? 0));
+    progress.check("checkouts", audit.candidates.length);
     const items = await mapLimit(audit.candidates, INSPECT_CONCURRENCY, progress.track((candidate) => candidate.worktreePath, async (candidate): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
       if (this.abort.signal.aborted) return undefined;
       if (projectFilter && await checkoutProjectPath(candidate.worktreePath) !== path.resolve(projectFilter)) return undefined;
@@ -625,36 +625,6 @@ export class ThreadMaintenanceService {
       }
     }));
     const result: ThreadMaintenanceArchivedCheckout[] = items.filter((item) => item !== undefined);
-    const keepUnreferenced = (reason: string) => {
-      const key = UNREFERENCED_KEEP_PREFIX + reason;
-      kept[key] = (kept[key] ?? 0) + 1;
-    };
-    if (audit.unreferencedUnavailable) keepUnreferenced(`not checked: ${audit.unreferencedUnavailable}`);
-    if (audit.unreferencedTruncated) keepUnreferenced("more than could be listed");
-    const unreferenced = await mapLimit(audit.unreferenced ?? [], INSPECT_CONCURRENCY, progress.track((worktreePath) => worktreePath, async (worktreePath): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
-      if (this.abort.signal.aborted) return undefined;
-      if (projectFilter && await checkoutProjectPath(worktreePath) !== path.resolve(projectFilter)) return undefined;
-      try {
-        if (await missingWorktreeRepository(worktreePath)) {
-          keepUnreferenced("repository no longer exists");
-          return undefined;
-        }
-        const reason = unreferencedKeepReason(await inspect(worktreePath, {
-          signal: this.abort.signal, limitBytes: this.deps.snapshotLimitBytes,
-          rebuildableOutputIsClean: rules.rebuildableOutputIsClean,
-        }));
-        if (typeof reason === "string") {
-          keepUnreferenced(reason);
-          excludedReasons.set(worktreePath, reason);
-          return undefined;
-        }
-        return { kind: "unreferenced", worktreePath, workspace: reason };
-      } catch (error) {
-        fail("checkouts", error, { path: worktreePath });
-        return undefined;
-      }
-    }));
-    result.push(...unreferenced.filter((item) => item !== undefined));
     for (const item of result) {
       const space = measuredPaths.get(item.worktreePath);
       if (space) item.space = space;
@@ -667,26 +637,76 @@ export class ThreadMaintenanceService {
       const reason = excludedReasons.get(target) ?? "Protected, referenced, recent or not safe to snapshot";
       excluded.set(reason, [...excluded.get(reason) ?? [], target]);
     }
-    let buildOutputs: ThreadMaintenanceScan["checkouts"]["buildOutputs"];
-    if (this.deps.buildOutputs) {
-      progress.discovery({ detail: "Finding rebuildable Cargo output", found: 0 });
-      const roots = [...new Set([...paths, ...audit.inventory?.repositories ?? []])];
-      try {
-        const outputs = await this.deps.buildOutputs.scan(roots, this.abort.signal, (update) => progress.discovery(update));
-        for (const item of outputs.items) {
-          if (projectFilter && path.resolve(item.row.checkoutPath) !== path.resolve(projectFilter)
-            && await checkoutProjectPath(item.row.checkoutPath) !== path.resolve(projectFilter)) continue;
-          retained.buildOutputs.set(item.row.outputPath, item);
-        }
-        buildOutputs = [...retained.buildOutputs.values()].map((item) => item.row);
-        for (const item of outputs.kept) kept[item.reason] = (kept[item.reason] ?? 0) + 1;
-      } catch (error) { fail("checkouts", error); }
-    }
+    const buildOutputs = [...retained.buildOutputs.values()].filter((item) => paths.includes(item.row.checkoutPath)).map((item) => item.row);
     const owners = new MaintenanceCheckoutOwners();
     for (const row of audit.inventory?.owners ?? []) for (const thread of row.threads) owners.add(row.path, thread);
     return { items: result, kept, emptyFolders: audit.emptyFolders, ...(buildOutputs ? { buildOutputs } : {}),
       coverage: allocationCoverage(measuredPaths, audit.inventory?.providers ?? [], audit.inventory?.roots,
         [...excluded].map(([reason, paths]) => ({ reason, paths, count: paths.length })), this.now(), owners) };
+  }
+
+  /** Classification is attached to an already identified checkout; its size
+   * never changes the thread's idle or protection rules. */
+  private async ownedCheckoutSpace(target: string, owners: ThreadArchiveCandidate[], retained: RetainedScan,
+    progress: ScanProgress): Promise<ThreadMaintenanceSpace | undefined> {
+    const allocation = await this.allocation(target, retained);
+    owners = owners.filter((owner) => !owner.unreadable);
+    if (!owners.length || !this.deps.buildOutputs) return allocation;
+    let classification = retained.outputClassification.get(target);
+    if (!classification) {
+      classification = (async () => {
+        const totals = new Map<"cargo", { kind: "cargo"; allocatedBytes?: number; lowerBound?: boolean }>();
+        try {
+          const outputs = await this.deps.buildOutputs!.scan([target], this.abort.signal, (update) => progress.discovery(update));
+          if (outputs.kept.length) totals.set("cargo", { kind: "cargo", lowerBound: true });
+          const seen = new Set<string>();
+          for (const item of outputs.items) {
+            if (path.resolve(item.row.checkoutPath) !== path.resolve(target) || seen.has(item.row.outputPath)) continue;
+            seen.add(item.row.outputPath);
+            item.row.threads = owners.map((owner) => maintenanceKeptThread(owner, checkoutHibernationLastActivity(owner)));
+            retained.buildOutputs.set(item.row.outputPath, { ...item, owners });
+            let total = totals.get(item.row.kind);
+            if (!total) totals.set(item.row.kind, total = { kind: item.row.kind });
+            if (item.row.space?.allocatedBytes !== undefined) total.allocatedBytes = (total.allocatedBytes ?? 0) + item.row.space.allocatedBytes;
+            if (item.row.space?.allocatedBytes === undefined || item.row.space.lowerBound) total.lowerBound = true;
+          }
+        } catch (error) {
+          this.deps.onError?.(error, { operation: "classify-owned-checkout-output", path: target });
+        }
+        return [...totals.values()];
+      })();
+      retained.outputClassification.set(target, classification);
+    }
+    const rebuildableOutput = await classification;
+    // Later steps can identify more owners of a shared checkout. Reuse the
+    // read-only classification without losing their identity or display data.
+    for (const output of retained.buildOutputs.values()) {
+      if (output.row.checkoutPath !== target) continue;
+      output.owners = [...new Map([...output.owners, ...owners].map((owner) =>
+        [buildThreadIdentityKey(owner.thread.source, owner.thread.id), owner])).values()];
+      output.row.threads = output.owners.map((owner) => maintenanceKeptThread(owner, checkoutHibernationLastActivity(owner)));
+    }
+    return rebuildableOutput.length ? { ...allocation, rebuildableOutput } : allocation;
+  }
+
+  private async stillOwnsBuildOutput(candidate: CargoBuildOutputCandidate & { owners: ThreadArchiveCandidate[] }): Promise<boolean> {
+    const canonical = async (value: string) => {
+      const target = await realpath(value).catch(() => path.resolve(value));
+      return process.platform === "win32" ? target.toLowerCase() : target;
+    };
+    const checkout = await canonical(candidate.row.checkoutPath);
+    for (const owner of candidate.owners) {
+      try {
+        const refreshed = await this.deps.refreshCandidate(owner);
+        if (refreshed.unreadable) continue;
+        if (refreshed.thread.source !== owner.thread.source || refreshed.thread.id !== owner.thread.id) continue;
+        for (const cwd of candidateCheckoutDirectories(refreshed)) {
+          const current = await canonical(cwd);
+          if (current === checkout || current.startsWith(checkout + path.sep)) return true;
+        }
+      } catch { /* A thread that cannot be read is not an ownership grant. */ }
+    }
+    return false;
   }
 
   private allocation(target: string, retained: RetainedScan): Promise<ThreadMaintenanceSpace | undefined> {
@@ -898,7 +918,11 @@ export class ThreadMaintenanceService {
           detail: errorMessage(error), path: item.worktreePath });
       }
     }
-    await this.removeUnreferenced(request, retained, checkoutStep, { stopped, keepStopped, addProblem, update, removed });
+    for (const { worktreePath } of request.removeUnreferenced ?? []) {
+      checkoutStep.kept += 1;
+      addProblem({ step: "checkouts", kind: "kept", object: worktreePath, path: worktreePath,
+        reason: "No identified thread owns this checkout" });
+    }
     for (const outputPath of new Set((request.removeBuildOutputs ?? []).map((item) => item.outputPath))) {
       const candidate = retained.buildOutputs.get(outputPath);
       if (!candidate || !this.deps.buildOutputs) {
@@ -910,6 +934,12 @@ export class ThreadMaintenanceService {
       if (stopped()) { keepStopped(outputPath); continue; }
       update({ current: { step: "checkouts", processed: 0, total: request.removeBuildOutputs!.length, object: outputPath } });
       try {
+        if (!await this.stillOwnsBuildOutput(candidate)) {
+          checkoutStep.kept += 1;
+          addProblem({ step: "checkouts", kind: "kept", object: outputPath, path: outputPath,
+            reason: "Thread no longer identifies this checkout" });
+          continue;
+        }
         const result = await this.deps.buildOutputs.remove(candidate, this.abort.signal);
         if (result.kept) {
           checkoutStep.kept += 1;
@@ -939,69 +969,6 @@ export class ThreadMaintenanceService {
     const finished = { ...this.run!, running: false, finishedAt: this.now(), current: undefined,
       steps: [...steps], problems: [...problems] };
     return this.publish(finished);
-  }
-
-  /** Checkouts no thread refers to: inspected again, then handed to the
-   * registry, which re-checks every thread before it snapshots and removes. */
-  private async removeUnreferenced(
-    request: ThreadMaintenanceApplyRequest,
-    retained: RetainedScan,
-    checkoutStep: ThreadMaintenanceStepResult,
-    run: {
-      stopped: () => boolean;
-      keepStopped: (worktreePath: string) => void;
-      addProblem: (problem: ThreadMaintenanceProblem) => void;
-      update: (patch: Partial<ThreadMaintenanceRun>) => void;
-      removed: (worktreePath: string) => void;
-    },
-  ): Promise<void> {
-    const kept = (worktreePath: string, reason: string, detail?: string) => {
-      checkoutStep.kept += 1;
-      run.addProblem({ step: "checkouts", kind: "kept", object: worktreePath, reason, path: worktreePath, ...(detail ? { detail } : {}) });
-    };
-    const failed = (worktreePath: string, reason: string, detail?: string) => {
-      checkoutStep.failed += 1;
-      run.addProblem({ step: "checkouts", kind: "failed", object: worktreePath, reason, path: worktreePath, ...(detail ? { detail } : {}) });
-    };
-    const ready: string[] = [];
-    const inspect = this.deps.inspectWorkspace ?? inspectMaintenanceWorkspace;
-    for (const { worktreePath } of request.removeUnreferenced ?? []) {
-      if (retained.checkouts.get(worktreePath)?.kind !== "unreferenced") {
-        failed(worktreePath, "Not in this scan");
-        continue;
-      }
-      if (run.stopped()) {
-        run.keepStopped(worktreePath);
-        continue;
-      }
-      try {
-        const reason = unreferencedKeepReason(await inspect(worktreePath, {
-          signal: this.abort.signal, limitBytes: this.deps.snapshotLimitBytes,
-          rebuildableOutputIsClean: retained.scan.rules.rebuildableOutputIsClean,
-        }));
-        if (typeof reason === "string") kept(worktreePath, "Changed since the scan", reason);
-        else ready.push(worktreePath);
-      } catch (error) {
-        this.deps.onError?.(error, { step: "checkouts", path: worktreePath });
-        failed(worktreePath, "Removal failed", errorMessage(error));
-      }
-    }
-    if (!ready.length) return;
-    if (!this.deps.removeUnreferencedCheckouts) {
-      for (const worktreePath of ready) failed(worktreePath, "Removal failed", "Removing checkouts with no thread is unavailable.");
-      return;
-    }
-    run.update({ current: { step: "checkouts", processed: 0, total: ready.length, object: ready[0] } });
-    try {
-      const removal = await this.deps.removeUnreferencedCheckouts(ready);
-      checkoutStep.done += removal.removed.length;
-      for (const item of removal.removed) run.removed(item.worktreePath);
-      for (const item of removal.kept) kept(item.worktreePath, item.reason);
-      for (const item of removal.failed) failed(item.worktreePath, "Removal failed", item.message);
-    } catch (error) {
-      this.deps.onError?.(error, { step: "checkouts" });
-      for (const worktreePath of ready) failed(worktreePath, "Removal failed", errorMessage(error));
-    }
   }
 
   /** True when archived, else the reason it was kept. Throws on failure. */
@@ -1154,6 +1121,7 @@ function allocationCoverage(
     const threads = owners?.forPath(target);
     if (!largestKept.has(target)) largestKept.set(target, { path: target, reason: item.reason,
       ...(threads?.length ? { threads } : {}),
+      ...(paths.get(target)?.rebuildableOutput ? { rebuildableOutput: paths.get(target)!.rebuildableOutput } : {}),
       ...(paths.get(target)?.allocatedBytes !== undefined ? { allocatedBytes: paths.get(target)!.allocatedBytes } : {}) });
   }
   const keptCheckouts = [...largestKept.values()].sort((a, b) => (b.allocatedBytes ?? -1) - (a.allocatedBytes ?? -1));
@@ -1246,23 +1214,4 @@ async function mapLimit<T, R>(items: T[], limit: number, work: (item: T) => Prom
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** The workspace when a checkout no thread refers to can be removed, else the
- * reason it stays. Unlike an archived thread's checkout, a main checkout or a
- * folder that is not Git stays too: nothing here says it is safe to touch. */
-export function unreferencedKeepReason(
-  inspection: MaintenanceWorkspaceInspection,
-): string | Extract<ThreadMaintenanceWorkspace, { kind: "clean" | "changes" }> {
-  if (inspection.keep !== undefined) return inspection.keep;
-  const { workspace } = inspection;
-  switch (workspace.kind) {
-    case "clean":
-    case "changes":
-      return workspace;
-    case "overLimit": return "Changes over the snapshot limit";
-    case "inPlace": return "Main checkout";
-    case "notGit": return "Not a Git checkout";
-    case "missing": return "No longer on disk";
-  }
 }

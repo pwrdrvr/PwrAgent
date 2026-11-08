@@ -142,9 +142,8 @@ export type ThreadMaintenanceOwnedCheckout = {
   space?: ThreadMaintenanceSpace;
 };
 
-/** A checkout under PwrAgent's own worktree root that no thread, active or
- * archived, refers to. Never selected by default and never removed by the
- * hourly sweep. Removing one saves a recovery snapshot first. */
+/** Legacy scan row, retained for wire compatibility. Current scans never
+ * offer a checkout without an identified thread. */
 export type ThreadMaintenanceUnreferencedCheckout = {
   kind: "unreferenced";
   worktreePath: string;
@@ -301,6 +300,7 @@ export type ThreadMaintenanceApplyRequest = {
   trashCheckouts: { worktreePath: string }[];
   /** Checkouts no thread refers to, to snapshot and remove. Never selected
    * by default. Older callers omit it. */
+  /** Legacy request field. Current owners keep these paths without removing them. */
   removeUnreferenced?: { worktreePath: string }[];
   /** Remove empty worktree folders left by earlier cleanups. */
   removeEmptyFolders: boolean;
