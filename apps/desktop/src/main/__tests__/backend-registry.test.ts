@@ -1,4 +1,5 @@
 import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
+import { isolatedGitKeys, isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import { FEDERATION_BACKEND_METHODS, FEDERATION_BACKEND_METHOD_CAPABILITIES, registerFederationBackendHandlers, type FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
 import { PendingEnvironmentLaunchStore } from "../app-server/pending-environment-launch-store";
@@ -423,7 +424,7 @@ const emptyGitConfigPath = path.join(gitConfigDir, "empty.gitconfig");
 writeFileSync(emptyGitConfigPath, "");
 
 const gitTestEnv: NodeJS.ProcessEnv = {
-  ...process.env,
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !isolatedGitKeys.test(key))),
   // A repo-location variable inherited from the outside would redirect every
   // command below at whatever repo the suite was launched from — `git rebase
   // -x`, a pre-push hook, and any npm lifecycle script running inside a git
@@ -3310,10 +3311,16 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 // leaves one running the whole deadline, which is how this file once grew
 // from 10s to 106s on CI. Answer the stop the way the backend does
 // (`answerAcpSessionCancel`, `interruptEndsTurn`).
+let restoreGitEnvironment: () => void;
 beforeEach(() => {
+  // Branch proofs read process.env, while setup Git uses gitTestEnv. Keep
+  // both inside the fixture: inherited config/location overrides correctly
+  // defer a production probe to owned Git, but are not part of these repos.
+  restoreGitEnvironment = isolateProcessGitEnvironment();
   mainLoggerMock.warn.mockClear();
 });
 afterEach(() => {
+  restoreGitEnvironment();
   expect(
     mainLoggerMock.warn.mock.calls.filter(([message]) =>
       message === "running turns still unanswered at the shutdown deadline"
@@ -67772,6 +67779,83 @@ script = "printf setup"
       expect(whole.replay.entries).toHaveLength(6);
     });
   });
+
+  it.each(["scratch", "unborn", "detached worktree"] as const)(
+    "settles the %s branch probe to Git's answer before publishing turn completion",
+    async (layout) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-branch-oracle-"));
+      let cwd = root;
+      if (layout !== "scratch") {
+        await git(root, ["init", "-b", "main"]);
+        if (layout === "detached worktree") {
+          const commit = await git(root, ["commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "seed"]);
+          await git(root, ["update-ref", "refs/remotes/origin/main", commit]);
+          cwd = path.join(root, "linked");
+          await git(root, ["worktree", "add", "--detach", cwd, "origin/main"]);
+        }
+      }
+      // Git owns discovery and HEAD. A failed abbreviation is either an
+      // unborn repository or a directory outside any repository.
+      const oracle = await git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
+        .then((branch) => ({ branch }), () =>
+          git(cwd, ["rev-parse", "--git-dir"])
+            .then(() => ({}), () => gitHeadBranch.NOT_A_GIT_REPOSITORY));
+      const identity = { backend: "codex" as const, threadId: "branch-oracle" };
+      const client = new MockBackendClient({ threads: [{
+        id: identity.threadId, source: "codex", title: "Branch oracle", titleSource: "explicit",
+        linkedDirectories: [{ id: cwd, path: cwd, label: "fixture", kind: "local" }],
+      }] });
+      const registry = new DesktopBackendRegistry({
+        codexClient: client, overlayStore: createOverlayStoreMock(),
+        agentToolMcpServer: null, pdfToolMcpServer: null,
+      });
+      const probeRead = createDeferred<void>();
+      const releaseProbe = createDeferred<void>();
+      const settled: Array<Awaited<ReturnType<typeof gitHeadBranch.probeCurrentGitBranch>>> = [];
+      const probe = gitHeadBranch.probeCurrentGitBranch;
+      const branchProbe = vi.spyOn(gitHeadBranch, "probeCurrentGitBranch").mockImplementation(async (...args) => {
+        const result = await probe(...args);
+        probeRead.resolve();
+        await releaseProbe.promise;
+        settled.push(result);
+        return result;
+      });
+      const gitLaunch = vi.spyOn(gitExecutable, "runGitCommand");
+      let atTerminal: typeof settled = [];
+      let terminalPublished = false;
+      let terminal: Promise<void> | undefined;
+      registry.onEvent((event) => {
+        if (event.notification.method === "turn/completed") {
+          terminalPublished = true;
+          atTerminal = [...settled];
+        }
+      });
+      try {
+        await client.emit({ method: "turn/started", params: {
+          threadId: identity.threadId, turnId: "turn-oracle", turn: { id: "turn-oracle" },
+        } });
+        terminal = client.emit({ method: "turn/completed", params: {
+          threadId: identity.threadId, turn: { id: "turn-oracle", status: "completed", output: [] },
+        } } as unknown as AppServerNotification);
+        await probeRead.promise;
+        expect(terminalPublished).toBe(false);
+        releaseProbe.resolve();
+        await terminal;
+        // Completion is a readiness boundary: listeners see a settled proof,
+        // and ordinary metadata never needs the owned Git fallback.
+        expect(atTerminal).toEqual([oracle]);
+        expect(branchProbe).toHaveBeenCalledWith(cwd, expect.any(AbortSignal));
+        expect(gitLaunch.mock.calls.filter(([, , options]) => options?.ownProcessTree)).toEqual([]);
+      } finally {
+        releaseProbe.resolve();
+        await terminal;
+        await registry.close();
+        branchProbe.mockRestore();
+        gitLaunch.mockRestore();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each(["no PATH Git", "missing selected Git", "not a repository"] as const)(
     "checks branch drift and delivers a terminal event with %s",
