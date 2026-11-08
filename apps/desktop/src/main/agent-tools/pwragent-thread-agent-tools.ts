@@ -309,7 +309,7 @@ function inputSchemaForOperation(
               mode: { type: "string", enum: ["count", "age"], description: "count keeps the newest threads per project. age keeps threads touched recently." },
               keepPerProject: { type: "integer", minimum: 0, description: "Threads kept in each project in count mode." },
               inactivityDays: { type: "integer", minimum: 0, description: "Days without activity before a thread is idle in age mode." },
-              rebuildableOutputIsClean: { type: "boolean", description: "Legacy field, normalized to true. Ignored files never keep a checkout; they are deleted with it and excluded from its recovery snapshot." },
+              rebuildableOutputIsClean: { type: "boolean", description: "Legacy field, always true. Ignored files are deleted with the checkout and excluded from recovery snapshots." },
             },
           },
         },
