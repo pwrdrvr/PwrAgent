@@ -22255,6 +22255,185 @@ describe("MessagingController", () => {
     },
   );
 
+  it.skipIf(!process.env.PWRDISK_APPROVAL_TEST_BINARY)("round trips PwrDisk deletion through fake messaging", async () => {
+    // Opt-in cross-project smoke: real PwrDisk stdio + IPC, real MCP SDK and
+    // messaging controller. Only the native window and the human are fakes.
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+    const { ElicitRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");
+    const { UpstreamElicitationRoutes } = await import("../mcp-connections/mcp-upstream-elicitation");
+    const { createServer } = await import("node:net");
+    const { createInterface } = await import("node:readline");
+    const { readFile, unlink } = await import("node:fs/promises");
+    for (const action of ["accept", "decline"] as const) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwrdisk-messaging-smoke-"));
+      tempDirs.push(root);
+      const candidate = path.join(root, "selected-fixture.txt");
+      const neighbour = path.join(root, "unmarked-neighbour.txt");
+      await writeFile(candidate, "disposable selected fixture");
+      await writeFile(neighbour, "leave this fixture alone");
+      const socketPath = process.platform === "win32"
+        ? `\\\\.\\pipe\\pwrdisk-smoke-${path.basename(root)}` : path.join(root, "window.sock");
+      let writes = 0;
+      let operation: Record<string, unknown> | null = null;
+      const state = () => ({ result: "state", version: 10, app_version: "fixture", root, current: root,
+        screen: operation ? "done" : "explore", scanned: true, scanning: false,
+        marks: [{ path: candidate, bytes: 26, is_dir: false }], estimate: null,
+        space: null, removal: null, tree: null, insights: [], removal_operation: operation });
+      const sockets = new Set<import("node:net").Socket>();
+      const native = createServer((socket) => {
+        sockets.add(socket);
+        socket.on("close", () => sockets.delete(socket));
+        createInterface({ input: socket }).on("line", (line) => {
+          void (async () => {
+            const request = JSON.parse(line) as Record<string, unknown>;
+            let response: Record<string, unknown>;
+            if (request.op === "prepare_removal") {
+              response = { result: "removal_preview", preview_id: "fixture-preview", root,
+                mode: "permanent", paths: [candidate], bytes: 26,
+                estimate: { paths: [candidate], lower: 0, upper: null, on_volume: 0, partial: true, shared: 0 },
+                limit_percent: 5, volumes: [], expires_in_seconds: 300, cleanup: [],
+                confirmation: "PERMANENTLY DELETE", consent: "" };
+            } else if (request.op === "remove") {
+              expect(request).toMatchObject({ preview_id: "fixture-preview", mode: "permanent", paths: [candidate] });
+              expect(writes).toBe(0);
+              writes += 1;
+              await unlink(candidate);
+              operation = { preview_id: "fixture-preview", mode: "permanent", paths: [candidate], finished: true,
+                removed: 1, failed: 0, pending: 0 };
+              response = state();
+            } else if (request.op === "state" || request.op === "hello") {
+              response = state();
+            } else {
+              response = { result: "error", message: "Unsupported fixture request" };
+            }
+            socket.write(`${JSON.stringify(response)}\n`);
+          })().catch((error: unknown) => socket.destroy(error instanceof Error ? error : new Error(String(error))));
+        });
+      });
+      await new Promise<void>((resolve, reject) => { native.once("error", reject); native.listen(socketPath, resolve); });
+      const harness = await createHarness();
+      await bindThread(harness);
+      const shown = createDeferred<void>();
+      const answer = createDeferred<unknown>();
+      harness.submitServerRequest.mockImplementation(async (request: SubmitServerRequestRequest) => {
+        expect(request).toMatchObject({ backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: "native-form" });
+        answer.resolve(request.response);
+      });
+      const client = new Client({ name: "isolated-pwragent-smoke", version: "1" }, { capabilities: { elicitation: { form: {} } } });
+      const routes = new UpstreamElicitationRoutes();
+      const release = routes.track("fixture-grant", client, new AbortController().signal, async (params) => {
+        await harness.controller.handleBackendPendingRequest("codex", {
+          method: "mcpServer/elicitation/request", params: {
+            ...params, threadId: "thread-1", turnId: "turn-1", requestId: "native-form", serverName: "pwrdisk",
+            mode: "form", requestedSchema: "requestedSchema" in params ? params.requestedSchema : undefined, _meta: null,
+          },
+        });
+        shown.resolve();
+        return await answer.promise;
+      });
+      client.setRequestHandler(ElicitRequestSchema, async ({ params }, extra) => await routes.route({
+        token: "fixture-grant", client, request: params, source: { local: true }, signal: extra.signal,
+      }));
+      try {
+        await client.connect(new StdioClientTransport({ command: process.env.PWRDISK_APPROVAL_TEST_BINARY!, args: ["mcp"],
+          env: { PWRDISK_LINK: socketPath } }));
+        const preview = await client.callTool({ name: "pwrdisk_removal_preview", arguments: { mode: "permanent" } });
+        expect(preview.isError).not.toBe(true);
+        const arguments_ = { preview_id: "fixture-preview", mode: "permanent", paths: [candidate], confirmation: "PERMANENTLY DELETE" };
+        const removing = client.callTool({ name: "pwrdisk_remove", arguments: arguments_ });
+        await shown.promise;
+        const prompt = harness.delivered.filter((intent) => intent.kind === "approval").at(-1)!;
+        expect(prompt).toMatchObject({ title: "MCP Confirmation", body: expect.stringContaining("fixture-preview") });
+        expect(prompt.kind === "approval" && prompt.decisions.some((decision) => decision.id === "approval:mcp:accept")).toBe(true);
+        expect(prompt.kind === "approval" && prompt.body).toContain(candidate);
+        expect(await readFile(candidate, "utf8")).toBe("disposable selected fixture");
+        expect(writes).toBe(0);
+        if (action === "accept") {
+          await harness.controller.handleInboundEvent(buildTextEvent("yes"));
+          expect(writes).toBe(0);
+          expect(harness.submitServerRequest).not.toHaveBeenCalled();
+          const phrase = prompt.kind === "approval" ? prompt.decisions.find((decision) => decision.decision === "accept")?.fallbackText : undefined;
+          expect(phrase).toMatch(/^approve [a-f0-9]{12}$/);
+          await harness.controller.handleInboundEvent(buildTextEvent(phrase!));
+        } else {
+          await harness.controller.handleInboundEvent(await approvalCallback(harness, `approval:mcp:${action}`));
+        }
+        const result = await removing;
+        expect(result.isError === true, JSON.stringify(result)).toBe(action === "decline");
+        const retry = await client.callTool({ name: "pwrdisk_remove", arguments: arguments_ });
+        expect(retry.isError === true).toBe(action === "decline");
+        expect(harness.submitServerRequest).toHaveBeenCalledTimes(1);
+        expect(writes).toBe(action === "accept" ? 1 : 0);
+        if (action === "accept") await expect(readFile(candidate)).rejects.toThrow();
+        else expect(await readFile(candidate, "utf8")).toBe("disposable selected fixture");
+        expect(await readFile(neighbour, "utf8")).toBe("leave this fixture alone");
+      } finally {
+        release();
+        await client.close();
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolve) => native.close(() => resolve()));
+      }
+    }
+  }, 30_000);
+
+  it("binds MCP confirmation buttons to the proposal the person saw", async () => {
+    // Model: only the latest card's own actor/channel/surface can answer it.
+    // Replacing a pending proposal must never retarget an old Allow button.
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 4 }), async (count) => {
+      let now = 1000;
+      const harness = await createHarness({ now: () => now });
+      await bindThread(harness);
+      const prompts: MessagingSurfaceIntent[] = [];
+      for (let index = 0; index < count; index += 1) {
+        now += 1;
+        await harness.controller.handleBackendPendingRequest("codex", {
+          method: "mcpServer/elicitation/request",
+          params: { threadId: "thread-1", turnId: "turn-1", requestId: `remove-${index}`,
+            serverName: "pwrdisk", mode: "form", _meta: null,
+            message: `Request: fixture-${index}. Permanently delete /fixture/${index}. Cannot be undone.`,
+            requestedSchema: { type: "object", properties: {} } },
+        });
+        prompts.push(harness.delivered.filter((intent) => intent.kind === "approval").at(-1)!);
+      }
+      const callback = (index: number) => buildCallbackEvent({
+        actionId: "approval:mcp:accept",
+        sourceSurface: { channel: "telegram", id: `surface:${prompts[index]!.id}` },
+      });
+      for (let index = 0; index < count - 1; index += 1) {
+        await harness.controller.handleInboundEvent(callback(index));
+      }
+      expect(harness.submitServerRequest).not.toHaveBeenCalled();
+      // Even a provider that reuses one message surface must not retarget
+      // a durable handle belonging to the earlier card.
+      await harness.store.upsertCallbackHandle({
+        id: "old-card", handle: "old-card-handle", actionId: "approval:mcp:accept",
+        allowedActorIds: ["user-1"], channel: callback(count - 1).channel,
+        createdAt: 1000, updatedAt: 1000, expiresAt: 60_000, pendingIntentId: prompts[0]!.id,
+      });
+      const recycled = callback(count - 1);
+      recycled.interaction.id = "old-card-handle";
+      await harness.controller.handleInboundEvent(recycled);
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "approval:mcp:accept" }));
+      expect(harness.submitServerRequest).not.toHaveBeenCalled();
+      const wrongActor = callback(count - 1);
+      wrongActor.actor = { platformUserId: "someone-else" };
+      await harness.controller.handleInboundEvent(wrongActor);
+      expect(harness.submitServerRequest).not.toHaveBeenCalled();
+      const wrongChannel = callback(count - 1);
+      wrongChannel.channel = { channel: "telegram", conversation: { id: "other-chat", kind: "dm" } };
+      await harness.controller.handleInboundEvent(wrongChannel);
+      expect(harness.submitServerRequest).not.toHaveBeenCalled();
+      await harness.controller.handleInboundEvent(callback(count - 1));
+      expect(harness.submitServerRequest).toHaveBeenCalledExactlyOnceWith({
+        backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: `remove-${count - 1}`,
+        response: { action: "accept", content: {}, _meta: null },
+      });
+      await harness.controller.handleInboundEvent(callback(count - 1));
+      expect(harness.submitServerRequest).toHaveBeenCalledTimes(1);
+    }), { numRuns: 8 });
+  });
+
   it("presents and declines MCP link requests even when Working Updates is None", async () => {
     const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
     await bindThread(harness);
@@ -22283,7 +22462,7 @@ describe("MessagingController", () => {
       .toEqual(["approval:mcp:decline", "approval:mcp:cancel"]);
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:mcp:decline" }),
+      await approvalCallback(harness, "approval:mcp:decline"),
     );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
@@ -23359,7 +23538,7 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:accept" }),
+      await approvalCallback(harness, "approval:accept"),
     );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
@@ -23390,7 +23569,7 @@ describe("MessagingController", () => {
     harness.delivered.length = 0;
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:accept" }),
+      await approvalCallback(harness, "approval:accept"),
     );
 
     expect(harness.delivered).toEqual([
@@ -23426,7 +23605,7 @@ describe("MessagingController", () => {
     harness.readThreadStatus.mockResolvedValue("idle");
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:accept" }),
+      await approvalCallback(harness, "approval:accept"),
     );
 
     expect(harness.submitServerRequest).not.toHaveBeenCalled();
@@ -23468,7 +23647,7 @@ describe("MessagingController", () => {
     const approvalIntent = harness.delivered.find((intent) => intent.kind === "approval");
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:accept" }),
+      await approvalCallback(harness, "approval:accept"),
     );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
@@ -23528,7 +23707,7 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:accept_with_execpolicy_amendment:1" }),
+      await approvalCallback(harness, "approval:accept_with_execpolicy_amendment:1"),
     );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
@@ -23576,7 +23755,7 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:accept_with_execpolicy_amendment:1" }),
+      await approvalCallback(harness, "approval:accept_with_execpolicy_amendment:1"),
     );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
@@ -29984,6 +30163,17 @@ function buildToolCompletedEvent(id: string, command: string): AgentEvent {
       },
     },
   } satisfies AgentEvent;
+}
+
+async function approvalCallback(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  actionId: string,
+): Promise<MessagingInboundCallbackEvent> {
+  const event = buildCallbackEvent({ actionId });
+  const pending = await harness.store.findActivePendingIntentForChannel({
+    actorId: event.actor.platformUserId, channel: event.channel, now: 1000,
+  });
+  return { ...event, sourceSurface: pending?.surface };
 }
 
 function buildCallbackEvent(params: {

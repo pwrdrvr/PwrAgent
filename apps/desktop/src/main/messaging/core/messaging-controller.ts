@@ -7314,6 +7314,18 @@ export class MessagingController {
   ): Promise<MessagingPendingIntentRecord | undefined> {
     const clicked = event.sourceSurface;
     const actionId = event.actionId ?? event.interaction.id;
+    if (actionId.startsWith("approval:")) {
+      if (newest?.intent.kind !== "approval") return undefined;
+      // Action ids (such as approval:mcp:accept) are shared by every card.
+      // A provider's durable handle or the clicked surface must identify
+      // this exact proposal; an old button must never approve a newer one.
+      const handle = await this.resolveCallbackHandleForEvent(event);
+      if (handle?.pendingIntentId) {
+        return handle.pendingIntentId === newest.id ? newest : undefined;
+      }
+      return clicked && newest.surface && isSameMessagingSurface(clicked, newest.surface)
+        ? newest : undefined;
+    }
     if (
       !clicked
       || (newest && isSameMessagingSurface(clicked, newest.surface))

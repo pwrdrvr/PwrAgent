@@ -330,6 +330,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       maxCallbackPayloadBytes: 100,
     },
     text: {
+      supportsApprovalContinuation: true,
       maxLength: 2000,
       encoding: "characters",
       markdownDialect: "discord-markdown",

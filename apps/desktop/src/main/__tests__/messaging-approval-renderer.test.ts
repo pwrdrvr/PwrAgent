@@ -1,7 +1,50 @@
 import { describe, expect, it } from "vitest";
+import fc from "fast-check";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
+import { DeterministicInteractionMapper } from "../messaging/core/deterministic-interaction-mapper";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 
 describe("buildApprovalIntent", () => {
+  it("never offers acceptance when the complete MCP proposal cannot fit", () => {
+    fc.assert(fc.property(fc.integer({ min: 256, max: 512 }), (limit) => {
+      const intent = buildApprovalIntent({ id: "large-proposal", createdAt: 1000,
+        capabilityProfile: { ...PERMISSIVE_CAPABILITY_PROFILE,
+          text: { ...PERMISSIVE_CAPABILITY_PROFILE.text, maxLength: limit } },
+        request: { method: "mcpServer/elicitation/request", params: {
+          threadId: "thread-1", requestId: "large-proposal", serverName: "pwrdisk",
+          mode: "form", message: "é".repeat(limit), requestedSchema: { type: "object", properties: {} }, _meta: null,
+        } },
+      });
+      expect(intent.decisions.some((decision) => decision.decision === "accept")).toBe(false);
+      expect(intent.body).toContain("complete proposal");
+      expect(intent.body).toContain("desktop");
+      expect(intent.fallbackText).not.toContain("approve ");
+    }), { numRuns: 32 });
+  });
+
+  it("binds a textual MCP confirmation to its own card reference", () => {
+    const mapper = new DeterministicInteractionMapper();
+    fc.assert(fc.property(fc.uuid(), fc.uuid(), (first, second) => {
+      fc.pre(first !== second);
+      const build = (id: string) => buildApprovalIntent({ id, createdAt: 1000, request: {
+        method: "mcpServer/elicitation/request", params: {
+          threadId: "thread-1", turnId: "turn-1", requestId: id, serverName: "pwrdisk",
+          mode: "form", _meta: null, message: "Confirm fixture deletion?",
+          requestedSchema: { type: "object", properties: {} },
+        },
+      } });
+      const old = build(first);
+      const current = build(second);
+      for (const text of ["yes", "approve", "Allow", "approval:mcp:accept", old.decisions[0]!.fallbackText!]) {
+        expect(mapper.mapText({ intent: current, text }).kind).not.toBe("matched");
+      }
+      const accept = current.decisions.find((decision) => decision.decision === "accept")!;
+      expect(mapper.mapText({ intent: current, text: accept.fallbackText! })).toMatchObject({
+        kind: "matched", action: { id: accept.id },
+      });
+    }), { numRuns: 32 });
+  });
+
   it.each([
     { label: "with", elicitationId: "elicitation-1" },
     { label: "without", elicitationId: undefined },

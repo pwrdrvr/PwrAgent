@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
@@ -35,16 +36,22 @@ export function buildApprovalIntent(params: {
   });
   const fileContext = approvalContextMarkdown(context);
   const mcpContext = mcpElicitationContext(params.request);
+  // A generic "yes" has no request identity and can arrive after the
+  // proposal was replaced or its conversation rebound to another thread.
+  const textResponseKey = isMcpElicitationRequest(params.request)
+    && mcpElicitationPurpose(params.request.params) === "confirmation"
+    ? createHash("sha256").update(params.id).digest("hex").slice(0, 12) : undefined;
   const decisions = applyActionCapabilityLimits(
-    buildDecisions(params.request),
+    buildDecisions(params.request, textResponseKey),
     params.capabilityProfile,
   );
   const persistentPrefixContext = persistentPrefixMarkdown(decisions);
-  const replyInstruction = approvalReplyInstruction(decisions);
+  const replyInstruction = approvalReplyInstruction(decisions, textResponseKey);
 
-  return {
+  const intent: MessagingApprovalIntent = {
     id: params.id,
     kind: "approval",
+    ...(textResponseKey ? { textResponseKey } : {}),
     createdAt: params.createdAt,
     title: titleForRequest(params.request),
     ...(context ? { context } : {}),
@@ -63,6 +70,21 @@ export function buildApprovalIntent(params: {
     fallbackText: replyInstruction.fallbackText,
     decisions,
   };
+  const text = params.capabilityProfile?.text;
+  // Never offer Allow beside a fragment of a destructive proposal. A
+  // provider may explicitly promise complete delivery across several posts.
+  if (textResponseKey && text && !text.supportsApprovalContinuation
+    && Buffer.byteLength(`${intent.title}\n\n${intent.body}`, "utf8") > (text.maxApprovalLength ?? text.maxLength)) {
+    intent.decisions = intent.decisions.filter((decision) => decision.decision !== "accept");
+    const refusal = approvalReplyInstruction(intent.decisions, textResponseKey);
+    intent.body = [
+      "The complete proposal exceeds this messaging surface's limit. Review and approve it in PwrAgent desktop. You can decline or cancel here.",
+      prompt, mcpContext, refusal.body,
+    ].filter(Boolean).join("\n\n");
+    intent.fallbackText = refusal.fallbackText;
+  }
+  return intent;
+
 }
 
 function titleForRequest(request: AppServerPendingRequestNotification): string {
@@ -85,6 +107,7 @@ function titleForRequest(request: AppServerPendingRequestNotification): string {
 
 function buildDecisions(
   request: AppServerPendingRequestNotification,
+  textResponseKey?: string,
 ): MessagingApprovalIntent["decisions"] {
   if (isMcpElicitationRequest(request)) {
     const canAccept = mcpElicitationCanAcceptWithoutFormInput(request);
@@ -96,7 +119,7 @@ function buildDecisions(
               label: "Allow",
               decision: "accept" as const,
               style: "primary" as const,
-              fallbackText: "yes",
+              fallbackText: textResponseKey ? `approve ${textResponseKey}` : "yes",
               response: {
                 action: "accept",
                 content: {},
@@ -110,7 +133,7 @@ function buildDecisions(
         label: "Decline",
         decision: "decline" as const,
         style: "danger" as const,
-        fallbackText: "no",
+        fallbackText: textResponseKey ? `decline ${textResponseKey}` : "no",
         response: {
           action: "decline",
           content: null,
@@ -122,7 +145,7 @@ function buildDecisions(
         label: "Cancel turn",
         decision: "cancel" as const,
         style: "secondary" as const,
-        fallbackText: "cancel",
+        fallbackText: textResponseKey ? `cancel ${textResponseKey}` : "cancel",
         response: {
           action: "cancel",
           content: null,
@@ -331,6 +354,7 @@ function messagingDecisionFromPendingAction(
 
 function approvalReplyInstruction(
   decisions: MessagingApprovalIntent["decisions"],
+  textResponseKey?: string,
 ): { body: string; fallbackText: string } {
   const examples = new Set<string>();
   for (const decision of decisions) {
@@ -338,7 +362,7 @@ function approvalReplyInstruction(
       examples.add(decision.fallbackText);
     }
   }
-  if (decisions.some((decision) => decision.decision === "accept")) {
+  if (!textResponseKey && decisions.some((decision) => decision.decision === "accept")) {
     examples.add("yes");
   }
   if (decisions.some((decision) => decision.decision === "accept_for_session")) {
@@ -351,10 +375,10 @@ function approvalReplyInstruction(
   ) {
     examples.add("approve and remember");
   }
-  if (decisions.some((decision) => decision.decision === "decline")) {
+  if (!textResponseKey && decisions.some((decision) => decision.decision === "decline")) {
     examples.add("no");
   }
-  if (decisions.some((decision) => decision.decision === "cancel")) {
+  if (!textResponseKey && decisions.some((decision) => decision.decision === "cancel")) {
     examples.add("cancel");
   }
 
