@@ -2,6 +2,7 @@ import type {
   ApplyThreadMaintenanceToolArgs,
   ThreadMaintenanceApplyRequest,
   ThreadMaintenanceOwnedCheckout,
+  ThreadMaintenanceCoverage,
   ThreadMaintenancePlanToolResult,
   ThreadMaintenanceRun,
   ThreadMaintenanceRunToolResult,
@@ -15,6 +16,23 @@ export const THREAD_MAINTENANCE_TOOL_ROW_LIMIT = 200;
 export const THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT = 100;
 const FAILURE_LIMIT = 20;
 const PROBLEM_LIMIT = 50;
+
+function boundedCoverage(coverage: ThreadMaintenanceCoverage): ThreadMaintenanceCoverage {
+  const rows = (items: NonNullable<ThreadMaintenanceCoverage["keptCheckouts"]>) => items
+    .slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({ ...item,
+      ...(item.threads ? { threads: item.threads.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT) } : {}),
+    }));
+  return { ...coverage,
+    ...(coverage.keptCheckouts ? { keptCheckouts: rows(coverage.keptCheckouts) } : {}),
+    ...(coverage.largestKept ? { largestKept: rows(coverage.largestKept) } : {}),
+  };
+}
+
+function coverageTruncated(coverage: ThreadMaintenanceCoverage | undefined): boolean {
+  return [coverage?.keptCheckouts ?? [], coverage?.largestKept ?? []].some((rows) =>
+    rows.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT
+      || rows.some((row) => (row.threads?.length ?? 0) > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT));
+}
 
 export function summarizeThreadMaintenanceScan(
   scan: ThreadMaintenanceScan,
@@ -90,9 +108,10 @@ export function summarizeThreadMaintenanceScan(
       })),
       kept: scan.checkouts.kept,
       emptyFolders: scan.checkouts.emptyFolders,
-      ...(scan.checkouts.coverage ? { coverage: scan.checkouts.coverage } : {}),
+      ...(scan.checkouts.coverage ? { coverage: boundedCoverage(scan.checkouts.coverage) } : {}),
       ...(scan.checkouts.skipped ? { skipped: scan.checkouts.skipped } : {}),
-      truncated: [removable, gone, unreferenced, scan.checkouts.buildOutputs ?? []].some((items) => items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT),
+      truncated: [removable, gone, unreferenced, scan.checkouts.buildOutputs ?? []].some((items) => items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT)
+        || coverageTruncated(scan.checkouts.coverage),
     },
     ...(scan.hibernate ? {
       hibernate: {
@@ -108,9 +127,9 @@ export function summarizeThreadMaintenanceScan(
         ...(scan.hibernate.notIdleYet !== undefined ? { notIdleYet: scan.hibernate.notIdleYet } : {}),
         ...(scan.hibernate.alreadyHibernated !== undefined ? { alreadyHibernated: scan.hibernate.alreadyHibernated } : {}),
         kept: scan.hibernate.kept,
-        ...(scan.hibernate.coverage ? { coverage: scan.hibernate.coverage } : {}),
+        ...(scan.hibernate.coverage ? { coverage: boundedCoverage(scan.hibernate.coverage) } : {}),
         ...(scan.hibernate.skipped ? { skipped: scan.hibernate.skipped } : {}),
-        truncated: scan.hibernate.items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT,
+        truncated: scan.hibernate.items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT || coverageTruncated(scan.hibernate.coverage),
       },
     } : {}),
     expired: scan.expired,

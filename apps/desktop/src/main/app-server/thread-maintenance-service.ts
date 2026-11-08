@@ -12,6 +12,8 @@ import {
   type ThreadMaintenanceCoverage,
   type ThreadMaintenanceFailure,
   type ThreadMaintenanceHibernateCheckout,
+  type ThreadMaintenanceKeptThread,
+  type ThreadMaintenanceKeptCheckout,
   type ThreadMaintenanceIdleThread,
   type ThreadMaintenanceProblem,
   type ThreadMaintenanceProject,
@@ -45,6 +47,7 @@ import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor } from "./checkout-hibe
 import { missingWorktreeRepository } from "./worktree-archive-service";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import type { CargoBuildOutputCandidate, scanCargoBuildOutputs, removeCargoBuildOutput } from "./maintenance-cargo-output";
+import { MaintenanceCheckoutOwners } from "./maintenance-checkout-owners";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
 const FAILURE_LIMIT = 50;
@@ -62,7 +65,8 @@ export type ArchivedCheckoutAudit = {
   unreferencedUnavailable?: string;
   unreferencedTruncated?: boolean;
   inventory?: { roots: string[]; paths: string[]; repositories?: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
-    keptPaths?: { path: string; reason: string }[] };
+    keptPaths?: { path: string; reason: string }[];
+    owners?: { path: string; threads: ThreadMaintenanceKeptThread[] }[] };
 };
 
 export type UnreferencedCheckoutRemoval = {
@@ -534,7 +538,8 @@ export class ThreadMaintenanceService {
     result.notIdleYet = notIdleYet;
     result.alreadyHibernated = alreadyHibernated;
     result.coverage = allocationCoverage(measuredPaths, providerCounts(candidates.map((item) => item.thread.source)), undefined,
-      [...excluded].map(([reason, item]) => ({ reason, count: item.count, paths: [...item.paths] })), now);
+      [...excluded].map(([reason, item]) => ({ reason, count: item.count, paths: [...item.paths] })), now,
+      MaintenanceCheckoutOwners.fromCandidates(candidates));
     // Longest idle first, as the archive review lists its rows.
     result.items.sort((a, b) => a.lastActivityAt - b.lastActivityAt);
     return result;
@@ -677,9 +682,11 @@ export class ThreadMaintenanceService {
         for (const item of outputs.kept) kept[item.reason] = (kept[item.reason] ?? 0) + 1;
       } catch (error) { fail("checkouts", error); }
     }
+    const owners = new MaintenanceCheckoutOwners();
+    for (const row of audit.inventory?.owners ?? []) for (const thread of row.threads) owners.add(row.path, thread);
     return { items: result, kept, emptyFolders: audit.emptyFolders, ...(buildOutputs ? { buildOutputs } : {}),
       coverage: allocationCoverage(measuredPaths, audit.inventory?.providers ?? [], audit.inventory?.roots,
-        [...excluded].map(([reason, paths]) => ({ reason, paths, count: paths.length })), this.now()) };
+        [...excluded].map(([reason, paths]) => ({ reason, paths, count: paths.length })), this.now(), owners) };
   }
 
   private allocation(target: string, retained: RetainedScan): Promise<ThreadMaintenanceSpace | undefined> {
@@ -1113,6 +1120,7 @@ function allocationCoverage(
   scannedRoots: string[] = [],
   exclusions: { reason: string; count: number; paths: string[] }[] = [],
   measuredAt: number,
+  owners?: MaintenanceCheckoutOwners,
 ): ThreadMaintenanceCoverage {
   const roots = new Map<string, ThreadMaintenanceCoverage["roots"][number]>();
   const rootFor = (target: string) => {
@@ -1141,13 +1149,16 @@ function allocationCoverage(
     if (space?.allocatedBytes !== undefined) row.allocatedBytes = (row.allocatedBytes ?? 0) + space.allocatedBytes;
     if (space?.allocatedBytes === undefined || space.lowerBound) row.lowerBound = true;
   }
-  const largestKept = new Map<string, { path: string; reason: string; allocatedBytes?: number }>();
+  const largestKept = new Map<string, ThreadMaintenanceKeptCheckout>();
   for (const item of exclusions) for (const target of item.paths) {
+    const threads = owners?.forPath(target);
     if (!largestKept.has(target)) largestKept.set(target, { path: target, reason: item.reason,
+      ...(threads?.length ? { threads } : {}),
       ...(paths.get(target)?.allocatedBytes !== undefined ? { allocatedBytes: paths.get(target)!.allocatedBytes } : {}) });
   }
+  const keptCheckouts = [...largestKept.values()].sort((a, b) => (b.allocatedBytes ?? -1) - (a.allocatedBytes ?? -1));
   return { roots: [...roots.values()], providers, measuredAt,
-    largestKept: [...largestKept.values()].sort((a, b) => (b.allocatedBytes ?? -1) - (a.allocatedBytes ?? -1)).slice(0, 10),
+    largestKept: keptCheckouts.slice(0, 10), keptCheckouts,
     excluded: exclusions.filter((item) => item.count > 0).map((item) => {
       const measured = item.paths.map((target) => paths.get(target)?.allocatedBytes);
       return { reason: item.reason, count: item.count,

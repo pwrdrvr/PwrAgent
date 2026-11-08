@@ -619,6 +619,30 @@ describe("Restore now and Keep it awake", () => {
 });
 
 describe("Thread maintenance's hibernate step", () => {
+  it("carries the protecting watch's PR into the kept checkout even before a PR chip was cached", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open();
+    const watch = { watchId: "watch-fixture", backend: "codex" as const, threadId: THREAD_ID,
+      prKey: "github.com/example/project/12", prUrl: "https://github.com/example/project/pull/12", prNumber: 12,
+      prTitle: "Fix widget layout", headSha: "head", notifyOn: [], createdAt: Date.now(), failureHandledByAutoFix: false };
+    vi.spyOn(store, "listAllActivePrStatusWatches").mockResolvedValue([watch]);
+    const service = new ThreadMaintenanceService({
+      getPolicy: () => ({ mode: "age", inactivityDays: 7, keepPerProject: 10, retentionDays: 30 }), snapshotLimitBytes: 100,
+      listCandidates: async () => await registry.listAutoArchiveCandidates(), resolveProject: async () => fixture.repo,
+      refreshCandidate: async (row) => row, isBusy: () => false,
+      archiveFamily: async () => { throw new Error("A scan must not archive"); },
+      auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0 }),
+      removeArchivedCheckouts: async () => { throw new Error("A scan must not remove"); },
+      isManagedCheckoutPath: () => true, trashItem: async () => { throw new Error("A scan must not remove"); },
+      isCheckoutOnDisk: async () => true, hibernation: checkoutHibernationReviewDeps(() => registry),
+    });
+    const scan = await service.scan({ steps: ["hibernate"] });
+    const kept = scan.hibernate?.coverage?.keptCheckouts?.find((row) => row.path === fixture.worktree);
+    expect(kept).toMatchObject({ reason: "Watching a PR", threads: [{ backend: "codex", threadId: THREAD_ID,
+      pullRequests: [{ url: watch.prUrl, title: watch.prTitle, number: watch.prNumber }] }] });
+    expect(scan.hibernate?.items).toEqual([]);
+  });
+
   // Provider inventory is the oracle, independently of navigation's source
   // and companion-app filters. A hidden row can still hold real disk space.
   it("includes every provider checkout owner even when navigation hides it", async () => {

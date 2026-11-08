@@ -525,6 +525,7 @@ import {
   type PwrAgentThreadInspectionResponse,
   type ThreadMaintenanceApplyRequest,
   type ThreadMaintenanceCoverage,
+  type ThreadMaintenanceKeptThread,
   type ThreadMaintenanceRules,
   type ThreadMaintenanceRun,
   type ThreadMaintenanceScan,
@@ -851,6 +852,7 @@ import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from 
 import { hasWorktreeTerminalsOpenIn } from "../terminal/worktree-terminals";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, archiveCandidateLastActivity, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
+import { MaintenanceCheckoutOwners, maintenanceKeptThread } from "./maintenance-checkout-owners";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import { compareBindingsByCreation } from "../messaging/core/messaging-binding-thread-match";
 import { toMessagingThreadBindingSummary } from "../messaging/messaging-bindings-snapshot";
@@ -2588,7 +2590,8 @@ export type ArchivedWorktreeRepairReport = {
   /** Why unreferenced checkouts could not be listed this time. */
   unreferencedUnavailable?: string;
   inventory?: { roots: string[]; paths: string[]; repositories?: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
-    keptPaths?: { path: string; reason: string }[] };
+    keptPaths?: { path: string; reason: string }[];
+    owners?: { path: string; threads: ThreadMaintenanceKeptThread[] }[] };
 };
 
 /** Checkouts left in place by a repair pass, counted by a short reason. A
@@ -16893,8 +16896,9 @@ export class DesktopBackendRegistry {
     threads.push(...await this.claudeBackend.listThreads({ archived: false }));
     const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
     // One read for every thread a PR watch will wake.
+    const activePrWatches = await this.overlayStore.listAllActivePrStatusWatches();
     const watchedThreadKeys = new Set(
-      (await this.overlayStore.listAllActivePrStatusWatches()).map((watch) =>
+      activePrWatches.map((watch) =>
         buildThreadIdentityKey(watch.backend, watch.threadId)),
     );
     const mergeHeldThreadKeys = this.readMergeHeldThreadKeys();
@@ -16916,9 +16920,10 @@ export class DesktopBackendRegistry {
       for (const thread of backendThreads) {
         onProgress?.({ detail: `Resolving ${backend} checkout ownership`, found: candidates.length, root: thread.projectKey });
         const activePrWatch = watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
+        const watches = activePrWatch ? activePrWatches.filter((watch) => watch.backend === backend && watch.threadId === thread.id) : [];
         const mergeHeld = mergeHeldThreadKeys.has(buildThreadIdentityKey(backend, thread.id));
         if (!overlays) {
-          candidates.push({ thread, activePrWatch, mergeHeld, unreadable: true });
+          candidates.push({ thread, activePrWatch, activePrWatches: watches, mergeHeld, unreadable: true });
           continue;
         }
         try {
@@ -16926,11 +16931,12 @@ export class DesktopBackendRegistry {
             thread: await this.maintenanceThreadWorkspace(thread, overlays[thread.id], workspaceObservations), overlay: overlays[thread.id],
             activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
             activePrWatch,
+            activePrWatches: watches,
             mergeHeld,
           });
         } catch (error) {
           unreadable(error, backend, thread.id);
-          candidates.push({ thread, overlay: overlays[thread.id], activePrWatch, mergeHeld, unreadable: true });
+          candidates.push({ thread, overlay: overlays[thread.id], activePrWatch, activePrWatches: watches, mergeHeld, unreadable: true });
         }
       }
     }
@@ -40256,6 +40262,7 @@ export class DesktopBackendRegistry {
    * to nothing; a folder that cannot be resolved fails the whole check. */
   private async worktreeReferences(
     inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
+    onReference?: (thread: AppServerThreadSummary, canonicalPath: string) => void,
   ): Promise<Set<string> | undefined> {
     const canonical = canonicalWorktreePaths();
     const keys = new Set<string>();
@@ -40263,14 +40270,18 @@ export class DesktopBackendRegistry {
       const values = new Set([...archiveWorkspacePaths(thread), ...inventory.ownershipPaths?.get(thread) ?? []]);
       for (const value of values) {
         if (!path.isAbsolute(value)) continue;
-        try { keys.add(await canonical(value)); } catch { return undefined; }
+        try {
+          const key = await canonical(value);
+          keys.add(key);
+          onReference?.(thread, key);
+        } catch { return undefined; }
       }
     }
     return keys;
   }
 
   private async listUnreferencedWorktrees(
-    inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
+    inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths" | "overlaysByThreadKey">,
     report: ArchivedWorktreeRepairReport,
     onProgress?: (progress: MaintenanceDiscoveryProgress) => void,
   ): Promise<void> {
@@ -40278,9 +40289,21 @@ export class DesktopBackendRegistry {
     const providers = new Map<string, number>();
     for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) providers.set(thread.source, (providers.get(thread.source) ?? 0) + 1);
     report.inventory = { roots: found.roots, paths: found.paths, repositories: found.repositories,
-      providers: [...providers].map(([backend, threads]) => ({ backend, threads })), keptPaths: [] };
+      providers: [...providers].map(([backend, threads]) => ({ backend, threads })), keptPaths: [], owners: [] };
     if (found.unavailable) report.unreferencedUnavailable = found.unavailable;
-    const references = await this.worktreeReferences(inventory);
+    // Reuse the reference read's canonical paths. Display ownership never
+    // guesses from folder names and adds no provider requests or DB writes.
+    const owners = new MaintenanceCheckoutOwners();
+    const displayThreads = new Map<AppServerThreadSummary, ThreadMaintenanceKeptThread>();
+    const references = await this.worktreeReferences(inventory, (thread, target) => {
+      let display = displayThreads.get(thread);
+      if (!display) {
+        display = maintenanceKeptThread({ thread,
+          overlay: inventory.overlaysByThreadKey?.get(buildThreadIdentityKey(thread.source, thread.id)) });
+        displayThreads.set(thread, display);
+      }
+      owners.add(target, display);
+    });
     if (!references) {
       report.unreferencedUnavailable = "A thread's folder could not be resolved";
       return;
@@ -40290,7 +40313,10 @@ export class DesktopBackendRegistry {
     for (const value of found.paths) {
       // A checkout removed since the listing is simply not reported.
       try {
-        byKey.set(await canonical(value), value);
+        const key = await canonical(value);
+        byKey.set(key, value);
+        const threads = owners.forPath(key);
+        if (threads.length) report.inventory.owners!.push({ path: value, threads });
         const ownership = await this.readCanonicalArchiveOwnership(inventory, value);
         if (ownership.external || ownership.users.length) report.inventory.keptPaths!.push({ path: value,
           reason: ownership.external ? "Externally managed" : "Used by an active thread" });
@@ -40901,7 +40927,7 @@ export class DesktopBackendRegistry {
             overlay,
           );
           const thread: AppServerThreadSummary = {
-            id: row.id, source: backend, title: "", titleSource: "explicit", linkedDirectories: directories,
+            id: row.id, source: backend, title: row.title, titleSource: row.titleSource, updatedAt: row.updatedAt, linkedDirectories: directories,
             projectKey: row.projectKey, gitBranch: row.gitBranch, observedGitBranch: row.observedGitBranch,
           };
           params.removalAdmission?.observeThread(buildThreadIdentityKey(backend, row.id), [

@@ -450,6 +450,22 @@ describe("checkouts no thread refers to", () => {
 
   // Ownership is independent of physical location: a profile not queried
   // could own any registered checkout. Git verifies that it stays intact.
+  it("identifies every known provider owner of a kept checkout without inferring owners for unknown paths", async () => {
+    const fixture = await createSharedArchiveFixture("codex", false);
+    ArchiveWorktreeTransport.threads[0]!.name = "Investigate widget layout";
+    const { registry } = fixture.reopen();
+    const audit = await registry.auditArchivedCheckouts();
+    const owners = audit.inventory?.owners?.find((row) => row.path === fixture.worktree)?.threads ?? [];
+    // Both providers intentionally use the same thread id: identity is not
+    // a title or a path, and must include the provider that owns it.
+    expect(owners.map((owner) => ({ backend: owner.backend, threadId: owner.threadId })).sort((a, b) => a.backend.localeCompare(b.backend)))
+      .toEqual([...fixture.owners].sort((a, b) => a.backend.localeCompare(b.backend)));
+    expect(owners.find((owner) => owner.backend === "codex")?.title).toBe("Investigate widget layout");
+    expect(owners.find((owner) => owner.backend === "claude")?.title).toBe("Shared archive fixture");
+    expect(audit.candidates).toEqual([]);
+    expect(await stat(fixture.worktree)).toBeDefined();
+  });
+
   it("keeps checkout ownership unknown across profiles even outside their roots", async () => {
     const fixture = await createFixture("claude");
     const old = new Date(Date.now() - 2 * 60 * 60 * 1000);

@@ -94,6 +94,73 @@ function harness(candidates: ThreadArchiveCandidate[], overrides: Partial<Thread
 }
 
 describe("ThreadMaintenanceService.scan", () => {
+  it("preserves every kept path's real owners and watch links without offering it for hibernation", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.record({
+      owners: fc.integer({ min: 1, max: 3 }),
+      kept: fc.boolean(),
+      measured: fc.boolean(),
+    }), { minLength: 11, maxLength: 15 }), async (model) => {
+      const rows = model.flatMap((entry, index) => Array.from({ length: entry.owners }, (_, owner) => {
+        const backend = ["codex", "claude", "acp:grok"][owner]! as ThreadArchiveCandidate["thread"]["source"];
+        const row = candidate(`thread-${index}`, { cwd: `/worktrees/${index}/project`, parent: owner ? "remote-parent" : undefined });
+        row.thread.source = backend;
+        row.thread.title = `Project ${index}, owner ${owner}`;
+        row.overlay = { backend, threadId: row.thread.id, extraLinkedDirectories: [],
+          gitBranch: `fix/project-${index}`, lastSeenAt: NOW - DAY,
+          ...(owner ? { parentThreadId: "remote-parent", parentThreadInstanceId: "peer" } : {}),
+        };
+        return Object.assign(row, { activePrWatch: entry.kept, activePrWatches: [{
+          watchId: `watch-${index}-${owner}`, backend, threadId: row.thread.id,
+          prKey: `github.com/example/project/${index + 1}`, prUrl: `https://github.com/example/project/pull/${index + 1}`,
+          prNumber: index + 1, prTitle: `Project ${index} fix`, headSha: "head", notifyOn: [], createdAt: NOW, failureHandledByAutoFix: false,
+        }] });
+      }));
+      const { service, deps } = harness(rows, {
+        measureAllocation: async (target) => model[Number(target.split("/")[2])]!.measured ? { allocatedBytes: 4096 } : undefined,
+        hibernation: {
+          getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+          keepReason: (row) => ({ target: row.thread.linkedDirectories[0]!.worktreePath,
+            ...(row.activePrWatch ? { keep: "Watching a PR" } : {}) }),
+          inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true,
+        },
+      });
+      const scan = await service.scan({ steps: ["hibernate"] });
+      const coverage = scan.hibernate!.coverage!;
+      const kept = coverage.keptCheckouts ?? [];
+      expect(kept.map((row) => row.path).sort()).toEqual(model.flatMap((entry, index) => entry.kept ? [`/worktrees/${index}/project`] : []).sort());
+      for (const row of kept) {
+        const index = Number(row.path.split("/")[2]);
+        expect(row).toMatchObject({ reason: "Watching a PR", ...(model[index]!.measured ? { allocatedBytes: 4096 } : {}) });
+        if (!model[index]!.measured) expect(row.allocatedBytes).toBeUndefined();
+        expect(row.threads).toEqual(rows.filter((owner) => owner.thread.linkedDirectories[0]!.worktreePath === row.path).map((owner) => ({
+          backend: owner.thread.source, threadId: owner.thread.id, title: owner.thread.title,
+          branch: owner.overlay!.gitBranch, lastActivityAt: NOW - DAY,
+          pullRequests: [{ url: owner.activePrWatches[0]!.prUrl, number: index + 1, title: `Project ${index} fix` }],
+        })));
+        expect(scan.hibernate!.items.some((item) => item.worktreePath === row.path)).toBe(false);
+      }
+      expect(coverage.largestKept).toEqual([...kept].sort((a, b) => (b.allocatedBytes ?? -1) - (a.allocatedBytes ?? -1)).slice(0, 10));
+      expect(deps.archiveFamily).not.toHaveBeenCalled();
+      expect(deps.removeArchivedCheckouts).not.toHaveBeenCalled();
+    }), { numRuns: 20 });
+  });
+
+  it("keeps archived-audit owner context for all kept paths, including paths with no known owner", async () => {
+    const owner = { backend: "claude", threadId: "owner", title: "Investigate widget layout", branch: "fix/widget", lastActivityAt: NOW };
+    const paths = Array.from({ length: 12 }, (_, index) => `/worktrees/archived-${index}/project`);
+    const audit = { candidates: [], kept: {}, emptyFolders: 0, inventory: { roots: ["/worktrees"], paths,
+      providers: [{ backend: "claude", threads: 1 }],
+      keptPaths: paths.map((target) => ({ path: target, reason: "Used by an active thread" })),
+      owners: [{ path: paths[0]!, threads: [owner] }],
+    } };
+    const { service } = harness([], { auditArchivedCheckouts: async () => audit, measureAllocation: async () => ({ allocatedBytes: 1024 }) });
+    const scan = await service.scan({ steps: ["checkouts"] });
+    expect(scan.checkouts.coverage!.keptCheckouts).toHaveLength(paths.length);
+    expect(scan.checkouts.coverage!.keptCheckouts![0]).toMatchObject({ path: paths[0], threads: [owner] });
+    expect(scan.checkouts.coverage!.keptCheckouts!.slice(1).every((row) => !row.threads?.length)).toBe(true);
+    expect(scan.checkouts.items).toEqual([]);
+  });
+
   it("allows the agent to plan only reviewed Cargo output and describes cache-only cleanup accurately", async () => {
     const scan = await harness([]).service.scan({ steps: ["checkouts"] });
     scan.checkouts.buildOutputs = [0, 1].map((index) => ({ kind: "cargo", checkoutPath: `/fixture/${index}`,
@@ -176,6 +243,25 @@ describe("ThreadMaintenanceService.scan", () => {
       expect(complete.checkouts.buildOutputSpace?.allocatedBytes).toBe(sizes.reduce((sum, value) => sum + value, 0));
       expect(complete.checkouts.buildOutputs).toHaveLength(Math.min(100, sizes.length));
     }));
+  });
+
+  it("bounds kept-checkout context in agent results while the dialog retains the complete review", async () => {
+    const scan = await harness([]).service.scan({ steps: ["checkouts"] });
+    fc.assert(fc.property(fc.integer({ min: 101, max: 130 }), (count) => {
+      const coverage = { roots: [], keptCheckouts: Array.from({ length: count }, (_, index) => ({
+        path: `/fixture/${index}`, reason: "Watching a PR", allocatedBytes: count - index,
+        threads: [{ backend: "codex", threadId: String(index), title: `Fixture ${index}` }],
+      })) };
+      scan.checkouts.coverage = coverage;
+      scan.hibernate = { idleDays: 3, maxSnapshotMb: 100, removeRebuildableOutput: true,
+        checked: count, items: [], kept: {}, coverage };
+      const summary = summarizeThreadMaintenanceScan(scan);
+      expect(summary.checkouts.coverage?.keptCheckouts).toEqual(coverage.keptCheckouts.slice(0, 100));
+      expect(summary.hibernate?.coverage?.keptCheckouts).toEqual(coverage.keptCheckouts.slice(0, 100));
+      expect(summary.checkouts.truncated).toBe(true);
+      expect(summary.hibernate?.truncated).toBe(true);
+      expect(scan.checkouts.coverage.keptCheckouts).toHaveLength(count);
+    }), { numRuns: 10 });
   });
 
   it("never counts a confirmed missing checkout as space on disk", async () => {

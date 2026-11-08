@@ -9,6 +9,7 @@ import {
   buildThreadIdentityKey,
   isCodexChatsDirectory,
   toolWorktreeRootOwner,
+  type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 
@@ -22,6 +23,8 @@ export type ThreadArchiveCandidate = {
   activeSubAgent?: boolean;
   /** A PR watch (watching or dispatching) will wake the thread. */
   activePrWatch?: boolean;
+  /** The already-read watches, so maintenance can identify the protecting PR. */
+  activePrWatches?: ThreadPullRequestWatchSummary[];
   /** A Continue After wait holds this thread's merge. */
   mergeHeld?: boolean;
   /** Its overlay or sub-agent state could not be read; fail closed. */
