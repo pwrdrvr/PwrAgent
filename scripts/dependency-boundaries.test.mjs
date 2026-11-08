@@ -82,13 +82,13 @@ beforeAll(async () => {
     storageCases.push({ from, to: target });
   }
 
-  for (const area of ["ipc", "ipc/nested", "app-server", "app-server/nested", "federation", "federation/nested", "composer-drafts", "composer-drafts/nested", "operator-requests", "operator-requests/nested", "pr-status", "pr-status/nested", "scheduled-actions", "scheduled-actions/nested", "thread-search", "thread-search/nested", "token-miser", "token-miser/nested", "thread-todos", "thread-todos/nested", "thread-reviews", "thread-reviews/nested", "acp", "acp/nested", "messaging", "messaging/nested", "settings"]) {
+  for (const area of ["ipc", "ipc/nested", "app-server", "app-server/nested", "federation", "federation/nested", "composer-drafts", "composer-drafts/nested", "operator-requests", "operator-requests/nested", "pr-status", "pr-status/nested", "scheduled-actions", "scheduled-actions/nested", "thread-search", "thread-search/nested", "token-miser", "token-miser/nested", "thread-todos", "thread-todos/nested", "thread-reviews", "thread-reviews/nested", "acp", "acp/nested", "messaging", "messaging/nested", "settings", "settings/nested"]) {
     for (const target of ["overlay", "app-state", "nested/store"]) {
       const to = `apps/desktop/src/main/state/${target}.js`;
       const from = `apps/desktop/src/main/${area}/state-${target.replaceAll("/", "-")}.js`;
       source(to, "export const value = 1;\n");
       source(from, `import ${JSON.stringify(relative(dirname(from), to).replaceAll("\\", "/"))};\n`);
-      ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation", "composer-drafts", "operator-requests", "pr-status", "scheduled-actions", "thread-search", "token-miser", "thread-todos", "thread-reviews", "acp", "messaging"].includes(area.split("/")[0]) });
+      ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation", "composer-drafts", "operator-requests", "pr-status", "scheduled-actions", "thread-search", "token-miser", "thread-todos", "thread-reviews", "acp", "messaging", "settings"].includes(area.split("/")[0]) });
     }
   }
 
@@ -99,6 +99,20 @@ beforeAll(async () => {
     .map(target => `import ${JSON.stringify(relative(dirname(settingsService), target).replaceAll("\\", "/"))};`).join("\n"));
   for (const to of settingsTargets) ipcStateCases.push({ from: settingsService, to, forbidden: true });
 
+  for (const [style, statement] of [
+    ["type-import", 'import type { Value } from "../../state/settings-contract";'],
+    ["type-expression", 'export type Value = import("../../state/settings-contract").Value;'],
+    ["type-export", 'export type { Value } from "../../state/settings-contract";'],
+    ["export", 'export * from "../../state/settings-contract";'],
+    ["dynamic", 'export const load = () => import("../../state/settings-contract");'],
+  ]) {
+    const to = "apps/desktop/src/main/state/settings-contract.ts";
+    const from = `apps/desktop/src/main/settings/nested/${style}.ts`;
+    source(to, "export interface Value { value: string; }\n");
+    source(from, statement);
+    ipcStateCases.push({ from, to, forbidden: true });
+  }
+
   // dependency-cruiser normalizes entry paths against cwd, even with baseDir.
   // This suite runs in the desktop-main fork, so the fixture owns its cwd.
   const previousDirectory = process.cwd();
@@ -106,6 +120,7 @@ beforeAll(async () => {
     process.chdir(root);
     ({ output: result } = await cruise(["packages", "apps"], {
       validate: true,
+      tsPreCompilationDeps: true,
       ruleSet: { forbidden: config.forbidden },
       outputType: "json",
     }, {

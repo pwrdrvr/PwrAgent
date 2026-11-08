@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { WriteDesktopSecretsToProfileRequest, WriteDesktopSecretsToProfileResponse } from "@pwragent/shared";
 import { normalizeProfileName, resolveProfileDir } from "../profile";
-import { StateDb } from "../state/state-db";
+import { openProfileSecretStorage } from "../storage/desktop-settings-storage";
 import { isSecretStorageDisabledByEnv } from "./desktop-secret-store";
 import { getMainLogger } from "../log";
 
@@ -74,23 +74,23 @@ export function writeDesktopSecretsToProfile(
   // possible via Settings → Profiles "Create") needs it.
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-  const stateDb = StateDb.open(dbPath, { profileName: profile });
+  const storage = openProfileSecretStorage(dbPath, { profileName: profile });
   const written: string[] = [];
   try {
     for (const [name, value] of Object.entries(request.secrets)) {
       if (typeof name !== "string" || name.length === 0) continue;
       if (typeof value !== "string") continue;
       if (value.length === 0) {
-        stateDb.deleteSecret(name);
+        storage.deleteSecret(name);
         written.push(name);
         continue;
       }
       const ciphertext = safeStorage.encryptString(value);
-      stateDb.setSecret(name, ciphertext);
+      storage.setSecret(name, ciphertext);
       written.push(name);
     }
   } finally {
-    stateDb.close();
+    storage.close();
   }
 
   return { profile, written };

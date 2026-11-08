@@ -16,6 +16,7 @@ import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-per
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { CodexDiscoveryCoordinator } from "../codex-discovery-coordinator";
 import { StateDb } from "../state/state-db";
+import { DurableConfigSnapshotStore } from "../storage/durable-config-snapshot-store";
 import { createTempStateDb } from "./sqlite-test-utils";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -491,7 +492,7 @@ describe("DesktopSettingsService", () => {
     const { dbPath, tempDir } = createTempStateDb("pwragent-settings-db-");
     tempRoots.push(tempDir);
     const db = StateDb.open(dbPath);
-    const configStore = new DesktopConfigStore({ configPath, stateDb: db });
+    const configStore = new DesktopConfigStore({ configPath, storage: new DurableConfigSnapshotStore(db) });
     const automatic = path.join(root, "auto-codex");
     const standalone = path.join(root, "standalone-codex");
     const invalid = path.join(root, "missing-codex");

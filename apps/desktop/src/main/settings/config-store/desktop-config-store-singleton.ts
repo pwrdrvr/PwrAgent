@@ -1,7 +1,6 @@
 import { getMainLogger } from "../../log";
 import { resolveBootstrapProfilePath } from "../../profile";
-import { getAppStateMode } from "../../storage/desktop-runtime-storage";
-import { createDesktopConfigSnapshotStorage } from "../../storage/desktop-settings-storage";
+import { createDesktopConfigSnapshotStorage, getAppStateMode } from "../../storage/desktop-settings-storage";
 import { resolveDesktopConfigPath } from "../desktop-config";
 import { DesktopConfigStore } from "./desktop-config-store";
 
