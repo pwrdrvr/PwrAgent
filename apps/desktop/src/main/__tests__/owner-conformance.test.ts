@@ -441,6 +441,46 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   }, 120_000);
 
+  it("preserves provider-created identities through real desktop metadata refusal and subsequent turns", async () => {
+    let db!: StateDb;
+    const desktop = await startDesktopOwner(null, async (state) => { db = state; });
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      const overlay = new SqliteOverlayStore(db);
+      const failures = [true, false, ...fc.sample(fc.boolean(), 3)];
+      for (const fails of failures) {
+        if (fails) db.raw.exec(`CREATE TRIGGER reject_creation_pr BEFORE INSERT ON threads
+          WHEN json_extract(NEW.payload, '$.backend') = 'codex'
+            AND json_type(NEW.payload, '$.prAutoDispatchEnabled') IS NOT NULL
+          BEGIN SELECT RAISE(ABORT, 'Fixture creation PR metadata refused'); END`);
+        const before = OwnerConformanceCodexTransport.requests.filter((request) => request.method === "thread/start").length;
+        const created = await Promise.all([desktop, outpost].map((host) => host.client.startThread({
+          backend: "codex", cwd: host.workspace, executionMode: "auto",
+        })));
+        for (const result of created) expect(result).toMatchObject({ backend: "codex", threadId: expect.any(String) });
+        expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "thread/start")).toHaveLength(before + 1);
+        expect(OwnerConformanceCodexTransport.threads.has(created[0].threadId)).toBe(true);
+        expect((await overlay.getThreadOverlayState({ backend: "codex", threadId: created[0].threadId }))?.executionMode).toBe("auto");
+        if (fails) {
+          expect((await overlay.getThreadOverlayState({ backend: "codex", threadId: created[0].threadId }))?.prAutoDispatchEnabled).toBeUndefined();
+          db.raw.exec("DROP TRIGGER reject_creation_pr");
+        }
+        const turns = await Promise.all([desktop, outpost].map((host, i) => host.client.startTurn({
+          backend: "codex", threadId: created[i].threadId, input: [{ type: "text", text: "slow" }],
+        })));
+        expect(turns[0]).toMatchObject({ threadId: created[0].threadId, turnId: turns[1].turnId });
+        await Promise.all([desktop, outpost].map((host, i) => host.client.interruptTurn(turns[i])));
+        await Promise.all([desktop, outpost].map(settle));
+        const read = await desktop.client.readThread({ backend: "codex", threadId: created[0].threadId });
+        expect(read).toBeDefined();
+      }
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+    }
+  }, 120_000);
+
   it("returns matching accepted turns through desktop finalization failures without resubmitting", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;

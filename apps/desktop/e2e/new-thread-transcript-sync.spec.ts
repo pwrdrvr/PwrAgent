@@ -1,6 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
+import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { mastheadAction } from "./fixtures/window-chrome";
@@ -411,6 +413,40 @@ async function createNewThreadFocusFixture(): Promise<{
     },
   };
 }
+
+test("completes a new thread after SQLite refuses post-creation PR metadata", async () => {
+  const fixture = await createNewThreadTranscriptFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+  const output: string[] = [];
+  const collect = (chunk: Buffer) => { output.push(chunk.toString()); };
+  app.electronApp.process().stdout?.on("data", collect);
+  app.electronApp.process().stderr?.on("data", collect);
+  const db = new Database(stateDbPathForHomeRoot(app.homeRoot));
+  try {
+    db.exec(`CREATE TRIGGER refuse_creation_pr BEFORE INSERT ON threads
+      WHEN json_extract(NEW.payload, '$.threadId') = 'thread-new'
+        AND json_type(NEW.payload, '$.prAutoDispatchEnabled') IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'Fixture creation PR metadata refused'); END`);
+    await mastheadAction(app.window, "New thread").click();
+    await app.window.getByRole("textbox", { name: "New thread" }).fill("Let's test creating a new thread again");
+    await app.window.getByRole("button", { name: "Start thread" }).click();
+    await app.window.getByRole("region", { name: "Transcript", exact: true }).waitFor();
+    await expect.poll(async () => await app.getLastStartTurn()).toMatchObject({ threadId: "thread-new" });
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await expect.poll(() => output.join("")).toContain("Fixture creation PR metadata refused");
+    expect(output.join("")).toContain("thread creation lifecycle effect failed");
+    expect(output.join("")).toContain("stage=pr");
+    await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "turn-completed-1" });
+    await expect(app.window.getByRole("region", { name: "Transcript" }).getByText("The assistant reply finally showed up.")).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+    await expect(app.window.getByRole("heading", { level: 2, name: "Let's test creating a new thread again" })).toBeVisible();
+  } finally {
+    db.close();
+    await app.close();
+    await fixture.cleanup();
+  }
+});
 
 test("top-level new thread rereads the created thread until the assistant reply is hydrated", async () => {
   const fixture = await createNewThreadTranscriptFixture();
