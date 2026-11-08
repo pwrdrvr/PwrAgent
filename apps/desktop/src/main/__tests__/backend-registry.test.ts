@@ -151,6 +151,10 @@ import type {
 } from "../codex-app-server/desktop-client";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import { MessagingController } from "../messaging/core/messaging-controller";
+import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
+import * as desktopOverlayStore from "../storage/desktop-overlay-store";
 import { isBindingForThread } from "../messaging/core/messaging-binding-thread-match";
 import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
@@ -3322,6 +3326,65 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it.each([false, true])("delivers a text final and dispatches Telegram input through the real lifecycle pipeline (legacy=%s)", async (legacy) => {
+    const overlayStore = createOverlayStoreMock({ executionMode: "default" });
+    const overlay = vi.spyOn(desktopOverlayStore, "getDesktopOverlayStore").mockReturnValue(overlayStore as never);
+    const client = new MockBackendClient({ threads: [], startTurnResults: [
+      { threadId: "thread-1", turnId: "turn-1" },
+      { threadId: "thread-1", turnId: "turn-2" },
+    ] });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const bridge = new DesktopMessagingBackendBridge(registry);
+    if (legacy) Object.defineProperty(bridge, "ownsTurnQueue", { value: false });
+    const db = openInMemoryStateDb();
+    const store = new SqliteMessagingStore(db);
+    const channel = { channel: "telegram" as const, conversation: { id: "fixture-chat", kind: "dm" as const } };
+    const controller = new MessagingController({
+      channel: "telegram", authorizedActorIds: ["fixture-actor"], inputDebounceMs: 0,
+      backend: bridge, store,
+      adapter: { capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE, deliver: async () => ({
+        channel: "telegram", deliveredAt: 1, outcome: "presented", surface: { channel: "telegram", id: "fixture-notice" },
+      }) },
+    });
+    // Match runtime registration order: messaging listens before the viewer.
+    registry.onEvent((event) => controller.handleBackendEvent(event));
+    const viewer: AgentEvent[] = [];
+    registry.onEvent((event) => { viewer.push(event); });
+    const internal = registry as unknown as { emit(event: AgentEvent): Promise<void> };
+    try {
+      await store.upsertBinding({ id: "fixture-binding", backend: "codex", threadId: "thread-1", channel,
+        authorizedActorIds: ["fixture-actor"], createdAt: 1, updatedAt: 1 });
+      for (const [index, text] of ["first", "follow-up"].entries()) {
+        await controller.handleInboundEvent({ kind: "text", id: `fixture-${index}`, text,
+          channel, actor: { platformUserId: "fixture-actor" }, receivedAt: index + 1 });
+      }
+      expect(client.startTurnCalls).toHaveLength(1);
+      if (!legacy) expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "thread-1" })).toHaveLength(1);
+      // Even text-only agentMessage completions enter image materialization.
+      // Queue idle and terminal immediately behind it, as the provider does.
+      const final = internal.emit({ backend: "codex", notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", item: { id: "final", type: "agentMessage", text: "Finished.", phase: "final_answer" },
+      } } });
+      const idle = internal.emit({ backend: "codex", notification: { method: "thread/status/changed", params: {
+        threadId: "thread-1", status: { type: "idle" },
+      } } });
+      const terminal = internal.emit({ backend: "codex", notification: { method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } } });
+      await vi.waitFor(() => expect(viewer.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      await Promise.all([final, idle, terminal]);
+      await vi.waitFor(() => expect(client.startTurnCalls).toHaveLength(2));
+      expect(client.startTurnCalls[1]?.input).toEqual([{ type: "text", text: "follow-up" }]);
+      await emitCompletedTurn(registry, "codex", "thread-1", "turn-2");
+    } finally {
+      controller.dispose();
+      await registry.close();
+      await controller.whenToolUpdatesSettled();
+      db.close();
+      overlay.mockRestore();
+    }
+  });
+
   it("supplies authoritative directory scope and withdraws it before asynchronous membership recording", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),

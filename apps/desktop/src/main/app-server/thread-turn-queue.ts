@@ -10,7 +10,7 @@ import type {
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
-import { transitionQueueAdmission, type QueueAdmission, type QueueAdmissionEvent } from "./queue-admission";
+import { transitionQueueAdmission, type QueueAdmission, type QueueAdmissionEvent } from "@pwragent/owner-core/queue-admission";
 
 export type ThreadTurnQueueOrigin =
   | "manual"

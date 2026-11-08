@@ -8,6 +8,7 @@ import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import { rememberBoundedMap } from "../../bounded-map";
+import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1140,8 +1141,8 @@ export class MessagingController {
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly queuedTurnDrainTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly queuedTurnDrains = new Map<string, Promise<void>>();
-  private readonly sharedQueuedTurnNotices = new Map<string, MessagingQueuedTurnEntry & { noticeReady: boolean }>();
-  private readonly sharedQueuedTurnOutcomes = new Map<string, { status: string; turnId?: string }>();
+  private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
+  private readonly sharedQueueNoticeHistory = new Set<string>();
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
   private readonly pendingFullAccessNewThreadPrompts = new Map<
     string,
@@ -1631,10 +1632,11 @@ export class MessagingController {
     const eventTurnId = turnIdForBackendEvent(event);
     const turnQueueUpdate = turnQueueUpdateForBackendEvent(event);
     if (turnQueueUpdate) {
-      if (turnQueueUpdate.queueEntryId && turnQueueUpdate.status && ["started", "cancelled", "failed"].includes(turnQueueUpdate.status)) {
+      if (turnQueueUpdate.queueEntryId && (turnQueueUpdate.status === "started" || turnQueueUpdate.status === "cancelled" || turnQueueUpdate.status === "failed")) {
         const key = `${threadKeyForBackendEvent(event, threadId)}:${turnQueueUpdate.queueEntryId}`;
-        rememberBoundedMap(this.sharedQueuedTurnOutcomes, key, { status: turnQueueUpdate.status, turnId: turnQueueUpdate.turnId }, 1000);
-        await this.retireSharedQueuedTurnNotice(key, turnQueueUpdate.status, turnQueueUpdate.turnId);
+        await this.applySharedQueueNoticeEvent(key, {
+          type: "ownerOutcome", outcome: { status: turnQueueUpdate.status, turnId: turnQueueUpdate.turnId },
+        });
       }
       await this.reconcileQueuedAgentMessagingOrigin({
         backend: event.backend,
@@ -5299,12 +5301,12 @@ export class MessagingController {
         });
         if (this.options.backend.ownsTurnQueue) {
           const ownerQueueEntryId = started.queueEntryId ?? started.turnId;
-          const entry: MessagingQueuedTurnEntry & { noticeReady: boolean } = {
+          const entry: MessagingQueuedTurnEntry = {
             ...params, id: ownerQueueEntryId, ownerQueueEntryId, status: "queued",
-            createdAt: this.now(), updatedAt: this.now(), noticeReady: false,
+            createdAt: this.now(), updatedAt: this.now(),
           };
           const key = `${params.threadKey}:${ownerQueueEntryId}`;
-          this.sharedQueuedTurnNotices.set(key, entry);
+          await this.applySharedQueueNoticeEvent(key, { type: "accepted", entry });
           try {
             await this.deliverQueuedTurnNotice(entry);
           } catch (error) {
@@ -5314,15 +5316,7 @@ export class MessagingController {
               error: error instanceof Error ? error.message : String(error),
             });
           } finally {
-            entry.noticeReady = true;
-          }
-          const outcome = this.sharedQueuedTurnOutcomes.get(key);
-          if (outcome) {
-            await this.retireSharedQueuedTurnNotice(key, outcome.status, outcome.turnId);
-            await this.reconcileQueuedAgentMessagingOrigin({
-              backend: params.binding.backend, threadId: params.binding.threadId,
-              update: { ...outcome, queueEntryId: ownerQueueEntryId, origin: "messaging" },
-            });
+            await this.applySharedQueueNoticeEvent(key, { type: "noticeReady" });
           }
         }
         return "queued";
@@ -5617,10 +5611,22 @@ export class MessagingController {
     }
   }
 
-  private async retireSharedQueuedTurnNotice(key: string, status: string, turnId?: string): Promise<void> {
-    const entry = this.sharedQueuedTurnNotices.get(key);
-    if (!entry?.noticeReady) return;
-    this.sharedQueuedTurnNotices.delete(key);
+  private async applySharedQueueNoticeEvent(key: string, event: QueueNoticeEvent<MessagingQueuedTurnEntry>): Promise<void> {
+    const transition = transitionQueueNotice(this.sharedQueueNotices.get(key), event);
+    if (!transition.state) return;
+    this.sharedQueueNotices.set(key, transition.state);
+    if (transition.state.phase === "observed" || transition.state.phase === "settled") {
+      this.sharedQueueNoticeHistory.add(key);
+      while (this.sharedQueueNoticeHistory.size > 1000) {
+        const oldest = this.sharedQueueNoticeHistory.values().next().value!;
+        this.sharedQueueNoticeHistory.delete(oldest);
+        this.sharedQueueNotices.delete(oldest);
+      }
+    } else {
+      this.sharedQueueNoticeHistory.delete(key);
+    }
+    if (!transition.retire) return;
+    const { entry, outcome: { status, turnId } } = transition.retire;
     if (status === "started" && turnId) this.pdfAttachmentStore.bindTurn({
       backend: entry.binding.backend, threadId: entry.binding.threadId, turnId,
       sourceInstanceId: entry.binding.federatedThread?.target.scope === "remote"
@@ -5633,6 +5639,10 @@ export class MessagingController {
     await this.retireQueuedTurnNotice(entry, status === "started"
       ? "Queued message sent as the next turn."
       : status === "cancelled" ? "Queued message cancelled." : "Queued message could not start. Check the thread queue.");
+    await this.reconcileQueuedAgentMessagingOrigin({
+      backend: entry.binding.backend, threadId: entry.binding.threadId,
+      update: { status, turnId, queueEntryId: entry.id, origin: "messaging" },
+    });
   }
 
   private async handleQueuedTurnCallback(
@@ -5640,7 +5650,9 @@ export class MessagingController {
     action: QueuedTurnAction,
   ): Promise<void> {
     const entry = this.turnAdmission.findQueuedEntry(action.entryId)
-      ?? [...this.sharedQueuedTurnNotices.values()].find((candidate) => candidate.id === action.entryId);
+      ?? [...this.sharedQueueNotices.values()].flatMap((state) =>
+        state.phase === "announcing" || state.phase === "queued" ? [state.entry] : [],
+      ).find((candidate) => candidate.id === action.entryId);
     if (!entry || entry.status !== "queued") {
       await this.deliver(
         buildErrorIntent({
@@ -5765,7 +5777,9 @@ export class MessagingController {
           throw error;
         }
       }
-      this.sharedQueuedTurnNotices.delete(`${entry.threadKey}:${entry.id}`);
+      await this.applySharedQueueNoticeEvent(`${entry.threadKey}:${entry.id}`, {
+        type: "ownerOutcome", outcome: { status: "cancelled" },
+      });
       await this.retireQueuedTurnNotice(entry, kind === "steer"
         ? "Queued message was sent as a steering message." : "Queued message cancelled.", event);
     } catch (error) {
@@ -8709,8 +8723,8 @@ export class MessagingController {
     this.turnAdmission.dispose();
     for (const timer of this.queuedTurnDrainTimers.values()) clearTimeout(timer);
     this.queuedTurnDrainTimers.clear();
-    this.sharedQueuedTurnNotices.clear();
-    this.sharedQueuedTurnOutcomes.clear();
+    this.sharedQueueNotices.clear();
+    this.sharedQueueNoticeHistory.clear();
     this.admissionStageMarks.clear();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
