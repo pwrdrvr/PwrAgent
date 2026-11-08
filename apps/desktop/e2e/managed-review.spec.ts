@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
-async function createManagedReviewFixture(): Promise<{
+async function createManagedReviewFixture(interruption = false): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
@@ -24,7 +25,7 @@ async function createManagedReviewFixture(): Promise<{
           method: "initialize",
           result: {
             serverInfo: { name: "Replay Codex", version: "1.0.0" },
-            methods: ["thread/list", "thread/read", "skills/list", "thread/start", "turn/start"],
+            methods: ["thread/list", "thread/read", "skills/list", "thread/start", "turn/start", "turn/interrupt"],
           },
         },
         {
@@ -79,18 +80,24 @@ async function createManagedReviewFixture(): Promise<{
             turnId: "managed-review-turn",
           },
         },
+        ...(interruption ? [{
+          id: "managed-review-interrupt",
+          kind: "response",
+          method: "turn/interrupt",
+          result: { threadId: "managed-review-child", turnId: "managed-review-turn" },
+        }] : []),
         {
-          id: "managed-review-child-failed",
+          id: interruption ? "managed-review-child-cancelled" : "managed-review-child-failed",
           kind: "notification",
           notification: {
-            method: "turn/failed",
+            method: interruption ? "turn/cancelled" : "turn/failed",
             params: {
               threadId: "managed-review-child",
               turnId: "managed-review-turn",
               turn: {
                 id: "managed-review-turn",
-                status: "failed",
-                error: { message: "You have 8147 weighted tokens left" },
+                status: interruption ? "cancelled" : "failed",
+                ...(interruption ? {} : { error: { message: "You have 8147 weighted tokens left" } }),
               },
             },
           },
@@ -107,8 +114,8 @@ async function createManagedReviewFixture(): Promise<{
   };
 }
 
-async function launchManagedReviewFixture() {
-  const fixture = await createManagedReviewFixture();
+async function launchManagedReviewFixture(interruption = false) {
+  const fixture = await createManagedReviewFixture(interruption);
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
   });
@@ -159,6 +166,43 @@ test("managed review failure leaves one start marker and clears Stop state", asy
     await expect(transcript).toContainText("Turn failed");
     await expect(transcript).not.toContainText("Code review completed");
     await expect(transcript.getByText("Review changes against main")).toHaveCount(1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("interrupting a managed review targets its child and keeps the parent active until the child terminal", async () => {
+  const fixture = await launchManagedReviewFixture(true);
+  try {
+    const { app } = fixture;
+    await app.window.getByRole("button", { name: /Managed review failure/i }).first().click();
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("/review");
+    await app.window.getByRole("button", { name: "Send", exact: true }).click();
+    const reviewTarget = app.window.getByRole("group", { name: "Review target" });
+    await reviewTarget.getByRole("combobox", { name: "Base branch" }).fill("main");
+    await reviewTarget.getByRole("button", { name: /^Review run mode(?::|$)/, exact: true }).click();
+    await reviewTarget.getByRole("option", { name: "PwrAgent Sub Agent", exact: true }).click();
+    await reviewTarget.getByRole("button", { name: "Start review", exact: true }).click();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await app.window.evaluate(() => {
+      const observed = window as unknown as { pwragent: DesktopApi; reviewCancellations: unknown[] };
+      observed.reviewCancellations = [];
+      observed.pwragent.onAgentEvent!((event) => {
+        if (event.notification.method === "turn/cancelled" && event.notification.params.threadId === "thread-parent") {
+          observed.reviewCancellations.push({ threadId: event.notification.params.threadId,
+            turnId: event.notification.params.turnId });
+        }
+      });
+    });
+    await app.window.getByTestId("composer-stop-turn").click();
+    await expect.poll(() => app.getInterruptTurnCalls()).toEqual([
+      { threadId: "managed-review-child", turnId: "managed-review-turn" },
+    ]);
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await app.advance({ stepId: "managed-review-child-cancelled" });
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+    expect(await app.window.evaluate(() => (window as unknown as { reviewCancellations: unknown[] }).reviewCancellations))
+      .toEqual([{ threadId: "thread-parent", turnId: "managed-review-turn" }]);
   } finally {
     await fixture.close();
   }

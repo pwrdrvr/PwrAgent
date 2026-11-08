@@ -34603,6 +34603,7 @@ command = "pnpm dev"
       const store = new ClaudeSessionStore(path.join(root, "sessions"));
       await store.save({ cwd: "/repo", thread: {
         id: parentId, title: "Review parent", titleSource: "explicit", source: "claude", updatedAt: 1,
+        linkedDirectories: [],
       } });
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["thread/start", "turn/start", "turn/interrupt"] },
