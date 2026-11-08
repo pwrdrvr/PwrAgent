@@ -272,6 +272,14 @@ inside that same queue. Desktop supplies provider effects, Agent metadata
 storage, cache invalidation and event delivery through host ports; the existing
 provider storage sites and notification ordering stay with those effects.
 
+Helper-title admission and completion live in
+`owner-core/thread-title-lifecycle.ts`. It consumes prepared turn input from
+lifecycle confirmation, admits one helper attempt per backend/thread identity,
+and coordinates helper results through the naming lifecycle. Desktop supplies
+helper execution, model resolution, diagnostics and the existing sub-agent and
+usage persistence effects. Completion waits for all admitted work, including
+work admitted by a preceding title event.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or
