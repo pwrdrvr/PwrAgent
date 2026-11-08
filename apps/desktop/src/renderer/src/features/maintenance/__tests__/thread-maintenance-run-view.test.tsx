@@ -90,13 +90,17 @@ const titles = (region: HTMLElement) =>
 describe("a parallel run's rows", () => {
   it("shows all four items in progress with their directory, stage and time, and keeps each success findable", async () => {
     const { dialog, emit } = await startRun();
-    emit(run(items(3)));
+    // Item 6 was accepted but waits for a cleanup worker it shares with
+    // background work: in progress, not deleting.
+    emit(run(items(3, { 6: { stage: "waitingForWorker" } })));
     const active = within(dialog).getByRole("region", { name: "In progress · 4" });
     expect(titles(active)).toEqual(["Thread 3", "Thread 4", "Thread 5", "Thread 6"]);
     const first = within(active).getAllByRole("listitem")[0]!;
     expect(first).toHaveTextContent("/w/3/kiln");
     expect(first).toHaveTextContent("Waiting for its repository");
     expect(within(active).getAllByRole("listitem")[1]).toHaveTextContent("Saving snapshot");
+    expect(within(active).getAllByRole("listitem")[3]).toHaveTextContent("Waiting for a cleanup worker");
+    expect(within(active).getAllByRole("listitem")[3]).not.toHaveTextContent(/Removing|Starting/);
     expect(first.querySelector(".thread-maintenance__elapsed")).not.toBeNull();
     expect(within(dialog).getByRole("region", { name: "Done · 3" })).toHaveTextContent("Hibernated · 2.0 GB allocation removed");
     // The queue is one folded line after the results, not 82 rows.

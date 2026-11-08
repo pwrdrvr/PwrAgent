@@ -79,11 +79,15 @@ export function hasRunItems(items: readonly ThreadMaintenanceRunItem[] | undefin
   return (items?.length ?? 0) > 0;
 }
 
-/** What an active item is doing now, in its own words. Waiting means it
- * is queued behind its repository's removal lock. */
+/** What an active item is doing now, in its own words. An accepted item
+ * may first wait for one of the cleanup workers it shares with background
+ * work. Waiting means it is held by its checkout's scope or its
+ * repository's removal lock. Only removing deletes anything. */
 export function stageText(item: Pick<ThreadMaintenanceRunItem, "action" | "stage">): string {
   const stage: ThreadMaintenanceRunStage | undefined = item.stage;
   switch (stage) {
+    case "waitingForWorker":
+      return "Waiting for a cleanup worker";
     case "checking":
       return "Checking";
     case "snapshotting":
@@ -116,8 +120,8 @@ const DONE_TEXT: Record<ThreadMaintenanceRunItem["action"], string> = {
   removeEmptyFolders: "Folders removed",
 };
 
-/** A finished item's outcome. Allocation removed is what the checkout
- * held, not volume space recovered. */
+/** A finished item's outcome. Allocation removed is what a deletion
+ * removed, not volume space recovered; a Trash move sends no figure. */
 export function outcomeText(item: ThreadMaintenanceRunItem): string {
   if (item.status === "done") {
     return `${DONE_TEXT[item.action]}${item.allocatedBytesRemoved ? ` · ${formatBytes(item.allocatedBytesRemoved)} allocation removed` : ""}`;

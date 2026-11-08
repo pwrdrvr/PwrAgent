@@ -10,7 +10,7 @@ import {
 } from "../thread-maintenance-run-items";
 
 const ACTIONS = ["archive", "hibernate", "removeCheckout", "trashCheckout", "removeBuildOutput", "removeEmptyFolders"] as const;
-const STAGES = ["checking", "snapshotting", "verifying", "waiting", "removing", "recording"] as const;
+const STAGES = ["waitingForWorker", "checking", "snapshotting", "verifying", "waiting", "removing", "recording"] as const;
 const FINAL = ["done", "kept", "failed"] as const;
 
 /**
@@ -103,6 +103,11 @@ describe("run items, as a model of main's parallel runner", () => {
         const text = stageText({ action, ...(stage ? { stage } : {}) });
         expect(text.length).toBeGreaterThan(0);
         if (stage === "waiting") expect(text).toBe("Waiting for its repository");
+        // An accepted item can queue for one of the cleanup workers it
+        // shares with background work. That is neither a repository wait
+        // nor any removal.
+        if (stage === "waitingForWorker") expect(text).toBe("Waiting for a cleanup worker");
+        if (stage !== "removing") expect(text).not.toMatch(/remov|delet|trash/i);
         const done = outcomeText({ itemId: "i", step: "hibernate", action, object: "o", status: "done", allocatedBytesRemoved: bytes });
         expect(done).not.toMatch(/freed|recovered/i);
         if (action !== "trashCheckout") {
@@ -111,6 +116,20 @@ describe("run items, as a model of main's parallel runner", () => {
         }
         if (bytes) expect(done).toMatch(/allocation removed$/);
       }));
+  });
+});
+
+describe("allocation removed, as an oracle", () => {
+  // Only an actual deletion reports allocation removed. A checkout moved to
+  // the Trash still holds its space, and main sends no figure for it.
+  it("says nothing about allocation for a Trash move that sent no figure", () => {
+    fc.assert(fc.property(fc.constantFrom(...ACTIONS), fc.option(fc.nat({ max: 2 ** 40 }), { nil: undefined }), (action, bytes) => {
+      const text = outcomeText({ itemId: "i", step: "checkouts", action, object: "o", status: "done",
+        ...(bytes === undefined ? {} : { allocatedBytesRemoved: bytes }) });
+      expect(/allocation removed/.test(text)).toBe(Boolean(bytes));
+    }));
+    expect(outcomeText({ itemId: "i", step: "checkouts", action: "trashCheckout", object: "o", status: "done" }))
+      .toBe("Moved to the Trash");
   });
 });
 
