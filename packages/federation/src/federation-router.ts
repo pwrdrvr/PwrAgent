@@ -58,7 +58,7 @@ export type FederationBlobChunkHandler = (
 export type FederationRouteResult =
   | { status: "handled"; response?: FederationResponseEnvelope }
   | { status: "relayed"; targetInstanceId: FederationInstanceId }
-  | { status: "rejected"; code: string; message: string };
+  | { status: "rejected"; code: string; message: string; cause?: unknown };
 
 export class FederationRouter {
   private readonly connections = new Map<FederationInstanceId, FederationRouterConnection>();
@@ -317,6 +317,8 @@ export class FederationRouter {
         status: "rejected",
         code: failure.error.code,
         message: failure.error.message,
+        // In-process callers retain typed failures. The wire error above contains no cause.
+        cause: error,
       };
     }
   }

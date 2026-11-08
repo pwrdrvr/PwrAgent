@@ -278,6 +278,10 @@ const readLocalHeadPastPrHead = vi.hoisted(() =>
 );
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+function navigationReadHandler(method: string): (...args: unknown[]) => Promise<unknown> {
+  return (event, params, consumerId) => handlers.get("owner:request")!(event, { method, params }, consumerId);
+}
+
 const getStartupProviderRefreshStatus = vi.fn();
 const isIncompleteThreadList = vi.fn((_threads: unknown) => false);
 const listThreads = vi.fn(async (request?: {
@@ -5003,14 +5007,32 @@ describe("app server ipc", () => {
       }));
   });
 
+  it("admits native demand before allocating an Attention lease", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NavigationAttentionViewLeases } = await import("../app-server/navigation-attention-view-leases");
+    const qualify = vi.spyOn(NavigationAttentionViewLeases.prototype, "qualify");
+    registerAppServerIpcHandlers();
+    try {
+      await fc.assert(fc.asyncProperty(fc.oneof(fc.constant(""), fc.string({ minLength: 129, maxLength: 150 }), fc.integer()), async (consumer) => {
+        await expect(handlers.get("owner:request")!({ sender: { id: 99501, once: vi.fn() } }, {
+          method: "backend.getNavigationQueryPage", params: { protocol: 2, consumer: "main-sidebar",
+            query: { kind: "lens", lens: "attention" }, attentionView: { id: "invalid-demand", promoteOnTurnEnd: true } },
+        }, consumer)).rejects.toThrow("Navigation consumer identity must contain 1 to 128 characters.");
+        expect(qualify).not.toHaveBeenCalled();
+      }));
+    } finally { qualify.mockRestore(); }
+  });
+
   it.skipIf(!process.env.PWRAGENT_NAVIGATION_BENCHMARK)("measures local sidebar navigation read latency", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     listThreads.mockResolvedValue(Array.from({ length: 1000 }, (_, index) => ({ id: `benchmark-${index}`,
       source: "codex", title: `Benchmark thread ${index}`, titleSource: "explicit", updatedAt: index,
       createdAt: index, linkedDirectories: [] })) as never);
     registerAppServerIpcHandlers();
-    const read = handlers.get("navigation:get-query-page")!;
+    const read = process.env.PWRAGENT_NAVIGATION_BENCHMARK_TRANSPORT === "legacy"
+      ? handlers.get("navigation:get-query-page")! : navigationReadHandler("backend.getNavigationQueryPage");
     const event = { sender: { id: 999_999, once: vi.fn() } };
+    const measurements: unknown[] = [];
     for (const scenario of ["warm", "changed-query"] as const) {
       const samples: number[] = [];
       for (let index = 0; index < 120; index += 1) {
@@ -5021,8 +5043,9 @@ describe("app server ipc", () => {
         if (index >= 20) samples.push(performance.now() - start);
       }
       samples.sort((a, b) => a - b);
-      console.log(JSON.stringify({ benchmark: "local-sidebar-main-read", scenario, rows: 1000, samples: samples.length,
-        p50Ms: samples[50], p95Ms: samples[95], totalMs: samples.reduce((sum, value) => sum + value, 0) }));
+      measurements.push({ benchmark: "local-sidebar-main-read", scenario, rows: 1000, samples: samples.length,
+        p50Ms: samples[50], p95Ms: samples[95], totalMs: samples.reduce((sum, value) => sum + value, 0) });
+      await writeFile(`.local/pwr50-navigation-${process.env.PWRAGENT_NAVIGATION_BENCHMARK}.json`, JSON.stringify(measurements, null, 2));
     }
     await handlers.get("navigation:release-query")?.(event, "sidebar-benchmark");
   });
@@ -5030,12 +5053,11 @@ describe("app server ipc", () => {
   it("carries renderer causes across IPC into the physical owner and index reads", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     listThreads.mockResolvedValueOnce([]);
     readNavigationQueryIndex.mockReturnValueOnce({ threads: [], directories: [] });
     registerAppServerIpcHandlers();
     const before = listingDiagnostics.snapshot().recorded;
-    await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90299, once: vi.fn() } }, {
+    await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90299, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" },
       diagnostic: { view: 44, effect: 2, logical: 6, attempt: 1, cause: "turn", trigger: "turn/completed", invalidations: 2 },
     });
@@ -5055,7 +5077,6 @@ describe("app server ipc", () => {
   it("reconciles compact saved pins through the owner cache before projecting viewer Attention", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     const ref = buildFederatedThreadRef({ backend: "codex", threadId: "saved-active", instanceId: "peer-idle" });
     const saved: NavigationThreadSummary = { id: ref.threadId, source: "codex", title: "Saved active", titleSource: "explicit",
       threadStatus: "active", updatedAt: 1, linkedDirectories: [], inbox: { inInbox: false },
@@ -5068,7 +5089,7 @@ describe("app server ipc", () => {
       threads: [idle], refreshed: [{ ref, summary: idle, instanceLabel: "Peer" }], archived: [],
     });
     registerAppServerIpcHandlers();
-    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90201, once: vi.fn() } }, {
+    const page = await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90201, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", inventory: "viewer", query: { kind: "lens", lens: "attention" },
     }) as { counts: { active: number }; entries: unknown[] };
     expect(page.counts.active).toBe(0);
@@ -5082,7 +5103,6 @@ describe("app server ipc", () => {
   it("rescues an existing summaryless mount when its exact owner row loads", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     const ref = buildFederatedThreadRef({ backend: "codex", threadId: "child", instanceId: "peer" });
     const row = { id: "child", source: "codex", title: "Child", titleSource: "explicit", linkedDirectories: [],
       inbox: { inInbox: false }, ref: { backend: "codex", threadId: "child", ownerInstanceId: "peer" },
@@ -5091,7 +5111,7 @@ describe("app server ipc", () => {
       coverage: { state: "complete" } });
     updateRemoteThreadPinSnapshots.mockResolvedValueOnce(true);
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90203, once: vi.fn() } }, {
+    await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90203, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", inventory: "owner", federationTarget: { scope: "remote", instanceId: "peer" },
       query: { kind: "exact", identities: [row.ref], includeAncestry: true },
     });
@@ -5104,7 +5124,6 @@ describe("app server ipc", () => {
   it("projects a mounted remote child beneath its local parent through viewer IPC", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     const parent: NavigationThreadSummary = { id: "local-parent", source: "codex", title: "Parent", titleSource: "explicit",
       linkedDirectories: [], inbox: { inInbox: false } };
     const child: NavigationThreadSummary = { ...parent, id: "remote-child", parentThreadId: parent.id,
@@ -5115,7 +5134,7 @@ describe("app server ipc", () => {
     readRemoteThreadPinNavigationRows.mockResolvedValueOnce([child]);
     federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({ threads: [child], refreshed: [], archived: [] });
     registerAppServerIpcHandlers();
-    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90202, once: vi.fn() } }, {
+    const page = await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90202, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", inventory: "viewer",
       query: { kind: "children", parent: { backend: "codex", threadId: parent.id } },
     }) as import("@pwragent/shared").NavigationQueryPage;
@@ -5126,7 +5145,6 @@ describe("app server ipc", () => {
   it("reads every instance's drafts in one viewer page without waiting on a peer", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     const base = { source: "codex" as const, titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } };
     const localParent: NavigationThreadSummary = { ...base, id: "local-parent", title: "Local parent" };
     const localDraft: NavigationThreadSummary = { ...base, id: "local-draft", title: "Local draft" };
@@ -5153,7 +5171,7 @@ describe("app server ipc", () => {
       { backend: "codex" as const, threadId: "held-draft", ownerInstanceId: "peer-b" },
       { backend: "codex" as const, threadId: "pinned-draft", ownerInstanceId: "peer-a" },
     ];
-    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90204, once: vi.fn() } }, {
+    const page = await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90204, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", inventory: "viewer",
       query: { kind: "exact", identities, includeAncestry: true, resolveFromOwners: true },
     }) as import("@pwragent/shared").NavigationQueryPage;
@@ -5170,7 +5188,6 @@ describe("app server ipc", () => {
   it("resolves a selected peer draft's local project", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     const ref = buildFederatedThreadRef({ backend: "codex", threadId: "peer-draft", instanceId: "peer-a" });
     const peerDraft: NavigationThreadSummary = { source: "codex", id: "peer-draft", title: "Peer draft", titleSource: "explicit",
       linkedDirectories: [{ path: "/peer/src/PwrAgent", label: "PwrAgent", kind: "local" }], inbox: { inInbox: false },
@@ -5181,7 +5198,7 @@ describe("app server ipc", () => {
     readRemoteThreadPinNavigationRows.mockResolvedValueOnce([]);
     federationMock.remoteThreadSummaries.resolveWatchedThreads.mockReturnValueOnce([peerDraft]);
     registerAppServerIpcHandlers();
-    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90206, once: vi.fn() } }, {
+    const page = await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90206, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", inventory: "viewer",
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "peer-draft", ownerInstanceId: "peer-a" }],
         includeAncestry: true, resolveFromOwners: true },
@@ -5192,10 +5209,9 @@ describe("app server ipc", () => {
 
   it("never sends an owner-resolved read to a remote owner", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     federationMock.runtime.remoteNavigationQueryPage.mockClear();
     registerAppServerIpcHandlers();
-    await expect(handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90205, once: vi.fn() } }, {
+    await expect(navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90205, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", inventory: "owner", federationTarget: { scope: "remote", instanceId: "peer-a" },
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "t1" }], resolveFromOwners: true },
     })).rejects.toThrow("Owner-resolved navigation is available only to this machine's viewer inventory.");
@@ -5204,9 +5220,8 @@ describe("app server ipc", () => {
 
   it.each(["FEDERATION_PEER_UNAVAILABLE", "navigation_busy"])("returns expected %s state without rejecting the Electron handler, but still rejects unexpected failures", async (code) => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     registerAppServerIpcHandlers();
-    const handler = handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!;
+    const handler = navigationReadHandler("backend.getNavigationQueryPage")!;
     const event = { sender: { id: 90009, once: vi.fn() } };
     const request = { protocol: 2, consumer: "main-sidebar", federationTarget: { scope: "remote", instanceId: "offline-peer" },
       query: { kind: "directory-index" } };
@@ -5222,13 +5237,12 @@ describe("app server ipc", () => {
 
   it("returns a Federation-wrapped owner read race without rejecting the Electron handler", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     registerAppServerIpcHandlers();
     const error = Object.assign(new Error("handler_failed: [navigation_busy] Navigation changed during its owner read. Refresh the retained range."), {
       code: "handler_failed",
     });
     federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(error);
-    await expect(handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90010, once: vi.fn() } }, {
+    await expect(navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90010, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", federationTarget: { scope: "remote", instanceId: "busy-peer" },
       query: { kind: "directory-index" },
     })).resolves.toEqual({ navigationReadFailure: true, code: "navigation_busy", message: error.message });
@@ -5236,7 +5250,6 @@ describe("app server ipc", () => {
 
   it("overlays only a bounded remote page's viewer directory preferences without accepting owner-only unchanged proof", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = { scope: "remote" as const, instanceId: "peer_v2_disclosure" };
     const directoryKey = "directory:/remote/project";
     readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: true } });
@@ -5249,7 +5262,7 @@ describe("app server ipc", () => {
       ownerEpoch: "owner", countsRevision: "r", counts, coverage: { state: "complete" }, entries: [],
       directories: [directory], selectionDirectory: directory, complete: true });
     registerAppServerIpcHandlers();
-    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)?.({ sender: { id: 90001, once: vi.fn() } }, {
+    const page = await navigationReadHandler("backend.getNavigationQueryPage")?.({ sender: { id: 90001, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", federationTarget, query: { kind: "directory-index" },
       completeBaselineRevision: "owner-only-revision",
     }) as {
@@ -5269,7 +5282,7 @@ describe("app server ipc", () => {
     readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: false } });
     federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({ protocol: 2, queryKey: "directories", generation: "g",
       ownerEpoch: "owner", countsRevision: "r", counts, coverage: { state: "complete" }, entries: [], complete: true, unchanged: true });
-    const refreshed = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)?.({ sender: { id: 90001, once: vi.fn() } }, {
+    const refreshed = await navigationReadHandler("backend.getNavigationQueryPage")?.({ sender: { id: 90001, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", federationTarget, query: { kind: "directory-index" },
     }) as typeof page;
     expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenLastCalledWith(federationTarget,
@@ -5281,7 +5294,6 @@ describe("app server ipc", () => {
 
   it("refreshes viewer federation metadata when unchanged owner pages are expanded", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     const { stampRemoteNavigationQueryPage } = await import("../federation/federation-navigation-query");
     const target: FederationRemoteTarget = { scope: "remote", instanceId: "peer-metadata" };
     let metadata: { instanceLabel: string; capabilities: FederationCapability[];
@@ -5306,7 +5318,7 @@ describe("app server ipc", () => {
       .mockResolvedValueOnce(unchanged)
       .mockResolvedValueOnce(unchanged);
     registerAppServerIpcHandlers();
-    const read = async () => handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90205, once: vi.fn() } }, {
+    const read = async () => navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90205, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", federationTarget: target, query: { kind: "lens", lens: "inbox" },
     }) as Promise<NavigationQueryPage>;
     const first = await read();
@@ -5330,7 +5342,7 @@ describe("app server ipc", () => {
 
   it("shares exact owner reads across native windows and aborts only after the last window releases", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_SELECTED_DETAIL_CHANNEL, NAVIGATION_QUERY_RELEASE_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_QUERY_RELEASE_CHANNEL } = await import("../../shared/ipc");
     let finish!: (value: unknown) => void;
     federationMock.runtime.remoteNavigationSelectedDetail.mockReset().mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     registerAppServerIpcHandlers();
@@ -5338,8 +5350,8 @@ describe("app server ipc", () => {
     const b = { sender: { id: 90012, once: vi.fn() } };
     const request = { protocol: 2, federationTarget: { scope: "remote", instanceId: "exact-owner" },
       ref: { backend: "codex", threadId: "same", ownerInstanceId: "exact-owner" } };
-    const first = handlers.get(NAVIGATION_SELECTED_DETAIL_CHANNEL)!(a, request, "detail");
-    const second = handlers.get(NAVIGATION_SELECTED_DETAIL_CHANNEL)!(b, request, "detail");
+    const first = navigationReadHandler("backend.getNavigationSelectedDetail")!(a, request, "detail");
+    const second = navigationReadHandler("backend.getNavigationSelectedDetail")!(b, request, "detail");
     const settled = Promise.allSettled([first, second]);
     expect(federationMock.runtime.remoteNavigationSelectedDetail).toHaveBeenCalledTimes(1);
     const options = federationMock.runtime.remoteNavigationSelectedDetail.mock.calls[0]![2] as { signal: AbortSignal; deadlineAt: number };
@@ -5358,8 +5370,7 @@ describe("app server ipc", () => {
 
   it.each(["detail", "queue"])("quietly cancels a Star Map %s waiting for owner read capacity", async (kind) => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_SELECTED_DETAIL_CHANNEL, NAVIGATION_QUEUE_PROJECTION_CHANNEL,
-      NAVIGATION_QUERY_RELEASE_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_QUERY_RELEASE_CHANNEL } = await import("../../shared/ipc");
     const finish: Array<() => void> = [];
     federationMock.runtime.remoteNavigationSelectedDetail.mockReset().mockImplementation((_target, request) =>
       new Promise((resolve) => finish.push(() => resolve({ protocol: 2, ref: request.ref,
@@ -5369,11 +5380,11 @@ describe("app server ipc", () => {
     const event = { sender: { id: kind === "detail" ? 90013 : 90014, once: vi.fn() } };
     const request = { protocol: 2, federationTarget: { scope: "remote", instanceId: "busy-map-owner" },
       ref: { backend: "codex", threadId: "waiting" } };
-    const detail = handlers.get(NAVIGATION_SELECTED_DETAIL_CHANNEL)!;
+    const detail = navigationReadHandler("backend.getNavigationSelectedDetail")!;
     const release = handlers.get(NAVIGATION_QUERY_RELEASE_CHANNEL)!;
     const active = Array.from({ length: 8 }, (_, index) => detail(event,
       { ...request, ref: { ...request.ref, threadId: `active-${index}` } }, `active-${index}`));
-    const handler = handlers.get(kind === "detail" ? NAVIGATION_SELECTED_DETAIL_CHANNEL : NAVIGATION_QUEUE_PROJECTION_CHANNEL)!;
+    const handler = navigationReadHandler(kind === "detail" ? "backend.getNavigationSelectedDetail" : "backend.getNavigationQueueProjection")!;
     const waiting = handler(event, request, "unmounted-card");
     const settled = Promise.allSettled([waiting]);
     await release(event, "unmounted-card");

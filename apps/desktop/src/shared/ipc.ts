@@ -378,14 +378,9 @@ export const MCP_CONNECTION_READ_THREAD_CHANNEL =
   "mcp-connection:read-thread";
 export const MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL =
   "mcp-connection:describe-thread";
+export const OWNER_REQUEST_CHANNEL = "owner:request";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
-export const NAVIGATION_QUERY_PAGE_CHANNEL = "navigation:get-query-page";
 export const NAVIGATION_QUERY_RELEASE_CHANNEL = "navigation:release-query";
-export const NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL = "navigation:get-launchpad-config";
-export const NAVIGATION_SELECTED_DETAIL_CHANNEL =
-  "navigation:get-selected-detail";
-export const NAVIGATION_QUEUE_PROJECTION_CHANNEL =
-  "navigation:get-queue-projection";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";
 export const NAVIGATION_SET_RESUME_STATE_CHANNEL = "navigation:set-resume-state";

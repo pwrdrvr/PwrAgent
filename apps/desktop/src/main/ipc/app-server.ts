@@ -1,3 +1,5 @@
+import type { OwnerNavigationRequest } from "../../shared/owner-request";
+import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import { type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
@@ -98,14 +100,6 @@ import {
   type RegisterDirectoryFromDiskResponse,
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
-  type NavigationQueryPage,
-  type NavigationQueryRequest,
-  type NavigationQueueProjection,
-  type NavigationQueueProjectionRequest,
-  type NavigationLaunchpadConfigRequest,
-  type NavigationLaunchpadConfigResponse,
-  type NavigationSelectedDetailRequest,
-  type NavigationSelectedDetailResponse,
   type PrAutoDispatchBudgetStatus,
   type CodexAppServerRestartResult,
   type CodexAppServerRestartStatus,
@@ -316,14 +310,11 @@ import {
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
   NAVIGATION_SET_RESUME_STATE_CHANNEL,
   NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
-  NAVIGATION_QUERY_PAGE_CHANNEL,
+  OWNER_REQUEST_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL,
-  NAVIGATION_QUEUE_PROJECTION_CHANNEL,
   NAVIGATION_REMOVE_DIRECTORY_CHANNEL,
   NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL,
-  NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
-  NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -430,6 +421,12 @@ async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: 
     }
   }
 }
+const ownerNavigationTransport = new LocalOwnerNavigationTransport({
+  getNavigationQueryPage: (request, options) => appServerService.getNavigationQueryPage(request, options?.localConsumerId),
+  getNavigationSelectedDetail: (request, options) => appServerService.getNavigationSelectedDetail(request, options?.localConsumerId),
+  getNavigationQueueProjection: (request, options) => appServerService.getNavigationQueueProjection(request, options?.localConsumerId),
+  getNavigationLaunchpadConfig: (request, options) => appServerService.getNavigationLaunchpadConfig(request, options?.localConsumerId),
+});
 const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request) => appServerService.releaseNavigationAttentionView(request));
 
 /** Sender ids that already have a destroyed-listener reaping their PR focus. */
@@ -1041,19 +1038,19 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(NAVIGATION_SNAPSHOT_CHANNEL, async () => {
     throw new Error("Full navigation snapshots are retired. Upgrade this window and its owning instance to navigation query protocol 2.");
   });
-  ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
-  ipcMain.handle(
-    NAVIGATION_QUERY_PAGE_CHANNEL,
-    async (
-      event,
-      request: NavigationQueryRequest,
-      consumerId?: string,
-    ): Promise<NavigationQueryPage | NavigationReadFailure> => {
-      return listingDiagnostics.trace("ipc", { ...listingRequestFields(request), sender: event.sender.id }, () =>
-        withNavigationConsumer(event, consumerId, (token) =>
-          appServerService.getNavigationQueryPage(navigationAttentionViewLeases.qualify(event.sender.id, request), token)));
-    },
-  );
+  ipcMain.removeHandler(OWNER_REQUEST_CHANNEL);
+  ipcMain.handle(OWNER_REQUEST_CHANNEL, async (event, request: OwnerNavigationRequest, consumerId?: string) => {
+    const query = request.method === "backend.getNavigationQueryPage" ? request.params : undefined;
+    const dispatch = () => withNavigationConsumer(event, consumerId, (token) => {
+      const qualified = request.method === "backend.getNavigationQueryPage"
+        ? { ...request, params: navigationAttentionViewLeases.qualify(event.sender.id, request.params) }
+        : request;
+      return ownerNavigationTransport.request(qualified, token);
+    });
+    return query
+      ? listingDiagnostics.trace("ipc", { ...listingRequestFields(query), sender: event.sender.id }, dispatch)
+      : dispatch();
+  });
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
   ipcMain.handle(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL, async (event, request: NavigationAttentionViewReleaseRequest) =>
     navigationAttentionViewLeases.release(event.sender.id, request));
@@ -1069,36 +1066,6 @@ export function registerAppServerIpcHandlers(): void {
     appServerService.markNavigationDirectorySeen(request));
   ipcMain.handle(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, async (_event, request: RemoveNavigationDirectoryRequest) =>
     appServerService.removeNavigationDirectory(request));
-  ipcMain.removeHandler(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL);
-  ipcMain.handle(
-    NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
-    async (
-      event,
-      request: NavigationLaunchpadConfigRequest,
-      consumerId?: string,
-    ): Promise<NavigationLaunchpadConfigResponse | NavigationReadFailure> =>
-      withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationLaunchpadConfig(request, token)),
-  );
-  ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
-  ipcMain.handle(
-    NAVIGATION_SELECTED_DETAIL_CHANNEL,
-    async (
-      event,
-      request: NavigationSelectedDetailRequest,
-      consumerId?: string,
-    ): Promise<NavigationSelectedDetailResponse | NavigationReadFailure> =>
-      withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationSelectedDetail(request, token)),
-  );
-  ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
-  ipcMain.handle(
-    NAVIGATION_QUEUE_PROJECTION_CHANNEL,
-    async (
-      event,
-      request: NavigationQueueProjectionRequest,
-      consumerId?: string,
-    ): Promise<NavigationQueueProjection | NavigationReadFailure> =>
-      withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationQueueProjection(request, token)),
-  );
   ipcMain.removeHandler(NAVIGATION_SET_RESUME_STATE_CHANNEL);
   ipcMain.handle(NAVIGATION_SET_RESUME_STATE_CHANNEL, (event, state: NavigationResumeState) => {
     if (!federationWindowTargetForWebContents(event.sender)) appServerService.setNavigationResumeState(state);
@@ -2008,11 +1975,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   threadSearchControllers.clear();
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
-  ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
+  ipcMain.removeHandler(OWNER_REQUEST_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REMOVE_DIRECTORY_CHANNEL);
-  ipcMain.removeHandler(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL);
-  ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
-  ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_RESUME_STATE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL);

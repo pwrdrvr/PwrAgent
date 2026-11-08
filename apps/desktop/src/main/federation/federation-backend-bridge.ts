@@ -1,3 +1,4 @@
+import { registerNavigationBackendHandlers, type NavigationBackendOperations } from "./federation-navigation-handlers";
 import type { ManageThreadDependenciesRequest, ManageThreadDependenciesResponse } from "@pwragent/shared";
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
 import {
@@ -585,26 +586,10 @@ export function additionalFederationBackendCapabilities(
   return request?.fallback ? ["scheduled_actions"] : [];
 }
 
-export type FederationBackendOperations = {
-  getNavigationQueryPage?(
-    request: NavigationQueryRequest,
-    rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<NavigationQueryPage>;
+export type FederationBackendOperations = NavigationBackendOperations & {
   releaseNavigationAttentionView?(request: NavigationAttentionViewReleaseRequest, rpcOptions?: FederationRpcRequestOptions): Promise<void>;
   markNavigationDirectorySeen?(request: MarkNavigationDirectorySeenRequest, rpcOptions?: FederationRpcRequestOptions): Promise<MarkNavigationDirectorySeenResponse>;
   removeNavigationDirectory?(request: RemoveNavigationDirectoryRequest, rpcOptions?: FederationRpcRequestOptions): Promise<RemoveNavigationDirectoryResponse>;
-  getNavigationLaunchpadConfig?(
-    request: NavigationLaunchpadConfigRequest,
-    rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<NavigationLaunchpadConfigResponse>;
-  getNavigationSelectedDetail?(
-    request: NavigationSelectedDetailRequest,
-    rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<NavigationSelectedDetailResponse>;
-  getNavigationQueueProjection?(
-    request: NavigationQueueProjectionRequest,
-    rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<NavigationQueueProjection>;
   getProjectPage?(
     request: FederationProjectPageRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -999,19 +984,7 @@ export function registerFederationBackendHandlers(params: {
     }
   };
 
-  if (params.backend.getNavigationQueryPage) {
-    params.router.registerHandler(
-      FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
-      async (envelope) => {
-        const request = envelope.params as NavigationQueryRequest;
-        if (request.inventory === "viewer") throw new Error("Viewer navigation inventory is available only on its local machine.");
-        return await params.backend.getNavigationQueryPage!(request, {
-          deadlineAt: envelope.deadlineAt,
-          requesterInstanceId: envelope.sourceInstanceId,
-        });
-      },
-    );
-  }
+  registerNavigationBackendHandlers(params);
   if (params.backend.releaseNavigationAttentionView) {
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.releaseNavigationAttentionView,
       async (envelope) => params.backend.releaseNavigationAttentionView!(envelope.params as NavigationAttentionViewReleaseRequest,
@@ -1032,42 +1005,6 @@ export function registerFederationBackendHandlers(params: {
       async (envelope) => params.backend.removeNavigationDirectory!({
         ...envelope.params as RemoveNavigationDirectoryRequest, archiveThreads: true, federationTarget: undefined,
       }));
-  }
-  if (params.backend.getNavigationLaunchpadConfig) {
-    params.router.registerHandler(
-      FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig,
-      async (envelope) => await params.backend.getNavigationLaunchpadConfig!(
-        envelope.params as NavigationLaunchpadConfigRequest,
-        {
-          deadlineAt: envelope.deadlineAt,
-          requesterInstanceId: envelope.sourceInstanceId,
-        },
-      ),
-    );
-  }
-  if (params.backend.getNavigationSelectedDetail) {
-    params.router.registerHandler(
-      FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail,
-      async (envelope) => await params.backend.getNavigationSelectedDetail!(
-        envelope.params as NavigationSelectedDetailRequest,
-        {
-          deadlineAt: envelope.deadlineAt,
-          requesterInstanceId: envelope.sourceInstanceId,
-        },
-      ),
-    );
-  }
-  if (params.backend.getNavigationQueueProjection) {
-    params.router.registerHandler(
-      FEDERATION_BACKEND_METHODS.getNavigationQueueProjection,
-      async (envelope) => await params.backend.getNavigationQueueProjection!(
-        envelope.params as NavigationQueueProjectionRequest,
-        {
-          deadlineAt: envelope.deadlineAt,
-          requesterInstanceId: envelope.sourceInstanceId,
-        },
-      ),
-    );
   }
   for (const method of [FEDERATION_BACKEND_METHODS.getNavigationSnapshot, FEDERATION_BACKEND_METHODS.getNavigationDescendantPage]) {
     params.router.registerHandler(method, async () => {
