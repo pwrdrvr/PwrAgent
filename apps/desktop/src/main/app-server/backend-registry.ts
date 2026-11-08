@@ -9995,7 +9995,7 @@ export class DesktopBackendRegistry {
   private readonly threadHandoffReservations = new Set<string>();
   private readonly threadLifecycleLocks = new PerKeyAsyncLock();
   private readonly threadAttachmentAdmissionLocks = new PerKeyAsyncLock();
-  private readonly automaticArchiveReservations = new Map<string, { cancelled: boolean }>();
+  private readonly automaticArchiveReservations = new Map<string, { cancelled: boolean; worktreePath?: string }>();
   private readonly threadLifecycleMutationCounts = new Map<string, number>();
   private readonly handoffTurnStarts = new Map<string, number>();
   /**
@@ -16957,7 +16957,6 @@ export class DesktopBackendRegistry {
           const resolved = await this.maintenanceThreadWorkspace(thread, overlays[thread.id], workspaceObservations);
           candidates.push({
             thread: resolved, overlay: overlays[thread.id],
-            managedWorktreePath: await this.managedMaintenanceCheckout(resolved, overlays[thread.id]),
             activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
             activePrWatch,
             activePrWatches: watches,
@@ -16969,7 +16968,36 @@ export class DesktopBackendRegistry {
         }
       }
     }
+    // Ownership is a checkout-wide decision. Resolve the complete inventory
+    // before admitting any receipt, including external owners already archived.
+    const ownership = this.maintenanceOwnershipInventory(candidates);
+    const observations = new Map<string, Promise<boolean>>();
+    for (const candidate of candidates) {
+      if (candidate.unreadable) continue;
+      try {
+        candidate.managedWorktreePath = await this.managedMaintenanceCheckout(candidate.thread, ownership, observations);
+      } catch (error) {
+        candidate.unreadable = true;
+        unreadable(error, candidate.thread.source, candidate.thread.id);
+      }
+    }
     return candidates;
+  }
+
+  private maintenanceOwnershipInventory(candidates: readonly ThreadArchiveCandidate[], current?: ThreadArchiveCandidate):
+    Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads"> {
+    const owners = new Map(candidates.map((candidate) => [buildThreadIdentityKey(candidate.thread.source, candidate.thread.id), candidate]));
+    if (current) owners.set(buildThreadIdentityKey(current.thread.source, current.thread.id), current);
+    const activeThreads: AppServerThreadSummary[] = [];
+    const archivedThreads: AppServerThreadSummary[] = [];
+    for (const candidate of owners.values()) {
+      const { thread, overlay } = candidate;
+      const linkedDirectories = withRetainedWorktrees(
+        mergeThreadLinkedDirectories([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]), overlay,
+      );
+      (isArchivedCheckoutCandidate(candidate) ? archivedThreads : activeThreads).push({ ...thread, linkedDirectories });
+    }
+    return { activeThreads, archivedThreads };
   }
 
   /** Provider cwd summaries are intentionally minimal. Resolve their current
@@ -17035,12 +17063,20 @@ export class DesktopBackendRegistry {
   /** The resolver above established a linked checkout and this thread's
    * attachment. A legacy external flag cannot veto our canonical root;
    * outside roots, only an explicit, still-valid registration can override it. */
-  private async managedMaintenanceCheckout(thread: AppServerThreadSummary, overlay?: ThreadOverlayState): Promise<string | undefined> {
+  private async managedMaintenanceCheckout(
+    thread: AppServerThreadSummary,
+    ownership?: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads">,
+    observations = new Map<string, Promise<boolean>>(),
+  ): Promise<string | undefined> {
     const directory = primaryThreadWorktree(thread);
     if (!directory || directory.worktreeOwnership !== "external") return undefined;
-    return await this.isManagedMaintenanceCheckout(directory.worktreePath)
-      || await hasWorktreeRegistration(directory.worktreePath, overlay?.worktreeRegistrations)
-      ? directory.worktreePath : undefined;
+    let observation = observations.get(directory.worktreePath);
+    if (!observation) {
+      observation = ownership ? this.isManagedArchiveCheckout(ownership, directory.worktreePath)
+        : this.isManagedMaintenanceCheckout(directory.worktreePath);
+      observations.set(directory.worktreePath, observation);
+    }
+    return await observation ? directory.worktreePath : undefined;
   }
 
   /** Threads a Continue After wait holds from merging; auto-archive keeps them. */
@@ -17340,7 +17376,7 @@ export class DesktopBackendRegistry {
     const { source: backend, id: threadId } = candidate.thread;
     const key = buildThreadIdentityKey(backend, threadId);
     if (this.automaticArchiveReservations.has(key)) return false;
-    const reservation = { cancelled: false };
+    const reservation = { cancelled: false, worktreePath: target.worktreePath };
     this.automaticArchiveReservations.set(key, reservation);
     const policyKey = JSON.stringify(policy);
     const paths = (item: ThreadArchiveCandidate) => JSON.stringify(
@@ -17361,8 +17397,9 @@ export class DesktopBackendRegistry {
             capSnapshotBytes: policy.maxSnapshotMb * 1024 * 1024,
             beforeRemove: async () => {
               // Checks 1 to 5 again, against fresh thread state.
-              const current = await this.refreshAutoArchiveCandidate(candidate);
+              const current = await this.refreshAutoArchiveCandidate(candidate, { deferOwnership: true });
               const all = await this.listAutoArchiveCandidates();
+              current.managedWorktreePath = await this.managedMaintenanceCheckout(current.thread, this.maintenanceOwnershipInventory(all, current));
               const assertCurrent = () => {
                 // A reviewed run uses the policy it was reviewed under, so a
                 // change to Settings does not cancel it; the sweep's does.
@@ -17670,7 +17707,7 @@ export class DesktopBackendRegistry {
     if (runtime) await this.overlayStore.setThreadCodexEnvironmentRuntime?.({ ...identity, codexEnvironmentRuntime: runtime });
   }
 
-  private async refreshAutoArchiveCandidate(candidate: ThreadArchiveCandidate): Promise<ThreadArchiveCandidate> {
+  private async refreshAutoArchiveCandidate(candidate: ThreadArchiveCandidate, options: { deferOwnership?: boolean } = {}): Promise<ThreadArchiveCandidate> {
     const { source: backend, id: threadId } = candidate.thread;
     const thread = isAcpBackendId(backend)
       ? (() => {
@@ -17687,18 +17724,23 @@ export class DesktopBackendRegistry {
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
     const resolved = await this.maintenanceThreadWorkspace(thread, overlay);
     const watches = await this.maintenancePrWatches(await this.overlayStore.listActiveThreadPrStatusWatches({ backend, threadId }), overlay);
-    return {
+    const refreshed: ThreadArchiveCandidate = {
       thread: {
         ...candidate.thread,
         ...resolved,
       },
       overlay,
-      managedWorktreePath: await this.managedMaintenanceCheckout(resolved, overlay),
+      managedWorktreePath: await this.managedMaintenanceCheckout(resolved),
       activeSubAgent: await this.hasArchiveActiveSubAgent(backend, threadId),
       activePrWatch: watches.length > 0,
       activePrWatches: watches,
       mergeHeld: this.readMergeHeldThreadKeys().has(buildThreadIdentityKey(backend, threadId)),
     };
+    if (!options.deferOwnership && !refreshed.managedWorktreePath && primaryThreadWorktree(resolved)?.worktreeOwnership === "external") {
+      const all = await this.listAutoArchiveCandidates();
+      refreshed.managedWorktreePath = await this.managedMaintenanceCheckout(resolved, this.maintenanceOwnershipInventory(all, refreshed));
+    }
+    return refreshed;
   }
 
   /** One partial-index read; finished cards, including every gate card, are not scanned. */
@@ -46484,24 +46526,35 @@ export class DesktopBackendRegistry {
       });
       if (!approved) return threadOrchestrationFailure("forbidden", "The operator declined worktree registration. Do not retry without a new request.");
       if (!live()) return threadOrchestrationFailure("forbidden", "The invoking turn ended before registration was approved.");
-      return await this.withThreadWorkspaceMutation({ backend, threadId }, async () => {
-        const current = await readOwner();
-        if (!unregister && (!attached(current.thread, current.overlay)
-          || !sameRegisteredWorktree(inspected, await inspectRegisterableWorktree(worktreePath)))) {
-          return threadOrchestrationFailure("stale_target", "The thread or checkout changed during review. Nothing was registered.");
-        }
-        if (!live()) return threadOrchestrationFailure("forbidden", "The invoking turn ended before registration could be saved.");
-        const registration = !unregister ? { ...inspected, authorizedAt: Date.now(),
-          requestedBy: { backend: caller.backend, threadId: caller.threadId } } : undefined;
-        await this.withArchiveWorkspaceWrite([worktreePath], async () => {
-          await this.overlayStore.setThreadWorktreeRegistration!({ backend, threadId, worktreePath,
-            ...(registration ? { registration } : {}) });
+      // Cancel every hibernation of this checkout before yielding. Another
+      // archived owner can revoke a receipt the hibernating thread depends on.
+      const hibernations: string[] = [];
+      for (const [key, reservation] of this.automaticArchiveReservations) {
+        if (!reservation.worktreePath || normalizeWorktreePathForComparison(reservation.worktreePath) !== normalizeWorktreePathForComparison(worktreePath)) continue;
+        reservation.cancelled = true;
+        hibernations.push(key);
+      }
+      return await this.withThreadLifecycleMutation({ backend, threadId, worktreePath }, async () => {
+        await Promise.all(hibernations.map(async (key) => await this.threadLifecycleLocks.run(key, async () => {})));
+        return await this.withThreadWorkspaceMutation({ backend, threadId }, async () => {
+          const current = await readOwner();
+          if (!unregister && (!attached(current.thread, current.overlay)
+            || !sameRegisteredWorktree(inspected, await inspectRegisterableWorktree(worktreePath)))) {
+            return threadOrchestrationFailure("stale_target", "The thread or checkout changed during review. Nothing was registered.");
+          }
+          if (!live()) return threadOrchestrationFailure("forbidden", "The invoking turn ended before registration could be saved.");
+          const registration = !unregister ? { ...inspected, authorizedAt: Date.now(),
+            requestedBy: { backend: caller.backend, threadId: caller.threadId } } : undefined;
+          await this.withArchiveWorkspaceWrite([worktreePath], async () => {
+            await this.overlayStore.setThreadWorktreeRegistration!({ backend, threadId, worktreePath,
+              ...(registration ? { registration } : {}) });
+          });
+          return { ok: true, data: { backend, threadId, worktreePath, registered: !unregister,
+            ...(registration ? { valid: true, registration } : {}),
+            message: unregister ? "Revoked this thread's worktree registration."
+              : "Registered this exact checkout for snapshot and cleanup. Existing removal protections still apply.",
+          } };
         });
-        return { ok: true, data: { backend, threadId, worktreePath, registered: !unregister,
-          ...(registration ? { valid: true, registration } : {}),
-          message: unregister ? "Revoked this thread's worktree registration."
-            : "Registered this exact checkout for snapshot and cleanup. Existing removal protections still apply.",
-        } };
       });
     } catch (error) {
       return threadOrchestrationFailure("unsupported_workspace", error instanceof Error ? error.message : String(error));

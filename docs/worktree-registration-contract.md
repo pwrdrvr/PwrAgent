@@ -30,9 +30,11 @@ cannot create receipts. Managed new-worktree creation keeps its existing behavio
 Maintenance and archive admission validate the receipt against Git's worktree
 inventory and administrative backlink. A move, replacement or snapshot restore
 that changes directory identity requires fresh authorization. Registration
-changes enter the existing workspace-mutation guards. Each outside external
-owner must have its own valid registration; active shared owners still block
-removal. Unknown ownership remains protective.
+changes enter the existing lifecycle and workspace-mutation guards. They cancel
+and wait for in-flight hibernation of that checkout before completing, including
+when an archived co-owner revokes a receipt. Both hibernation and archive require
+each outside external owner's valid registration; active shared owners still
+block removal. Unknown ownership remains protective.
 
 The managed-root rule from PR #3476 is independent: a Git-verified linked
 checkout attached to a known thread inside a canonical PwrAgent worktree root
