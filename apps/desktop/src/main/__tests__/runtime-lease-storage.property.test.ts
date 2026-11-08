@@ -33,6 +33,7 @@ it("matches the SQLite oracle across profile switches, live/dead owners, clock c
   await fc.assert(fc.asyncProperty(fc.array(operation, { minLength: 1, maxLength: 25 }), async (operations) => {
     const databases = Array.from({ length: 4 }, () => openInMemoryStateDb());
     const stores = databases.map(db => new AppRuntimeInstanceStore(db));
+    const exited = new Set<string>();
     let now = 100_000;
     let alive = true;
     try {
@@ -52,6 +53,10 @@ it("matches the SQLite oracle across profile switches, live/dead owners, clock c
       }));
       expect(construction.writes.commits).toBe(0);
       for (const op of operations) {
+        const actorKey = `${op.profile}:${op.actor}`;
+        // A stopped process only serves final snapshots, never starts work again.
+        if (exited.has(actorKey) && op.action !== "snapshot") continue;
+        if (op.action === "exit") exited.add(actorKey);
         now += op.delta;
         alive = op.alive;
         // A manager retains its original binding after global state changes.

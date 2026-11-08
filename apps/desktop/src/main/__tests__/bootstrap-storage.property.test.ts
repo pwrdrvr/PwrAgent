@@ -84,7 +84,8 @@ it("projects the recorded boot decision independently of the subsequently select
     fc.record({ kind: fc.constant("missing-default-profile" as const), configuredName: fc.string() }),
     fc.constant({ kind: "no-profile-configured" as const }),
   );
-  fc.assert(fc.property(decision, fc.constantFrom(null, "bootstrap" as const, "active-profile" as const), fc.string({ minLength: 1 }), (boot, mode, profile) => {
+  fc.assert(fc.property(decision, fc.boolean(), fc.stringMatching(/^[a-z][a-z0-9]{0,12}$/), (boot, initialized, profile) => {
+    const mode = !boot || !initialized ? null : boot.kind === "open" ? "active-profile" : "bootstrap";
     active.decision = boot;
     active.mode = mode;
     active.profile = profile;
