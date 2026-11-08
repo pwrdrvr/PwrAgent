@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DesktopCheckoutHibernationPolicy, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type { DesktopCheckoutHibernationPolicy, PrSummary, ThreadPullRequestWatchSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "../app-server/thread-maintenance-service";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
@@ -182,18 +183,13 @@ describe("hibernation workspace checks (real Git)", () => {
     expect((await probe(fixture.worktree)).keep).toBeDefined();
   });
 
-  it("keeps ignored files that are not rebuildable output", async () => {
+  it.each([true, false])("ignored files do not keep a checkout with legacy output policy %s", async (legacyPolicy) => {
     const { worktree } = await createFixture();
     await writeFile(path.join(worktree, ".env.local"), "SECRET=1\n");
-    expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.otherIgnored });
-  });
-
-  it("removes node_modules only while the rebuildable output switch is on", async () => {
-    const { worktree } = await createFixture();
     await mkdir(path.join(worktree, "node_modules", "dep"), { recursive: true });
-    await writeFile(path.join(worktree, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
-    expect(await probe(worktree, { removeRebuildableOutput: true })).toEqual({ files: 0, bytes: 0, removedOutput: ["node_modules"] });
-    expect(await probe(worktree, { removeRebuildableOutput: false })).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.ignored });
+    await writeFile(path.join(worktree, "node_modules", "dep", "output.bin"), Buffer.alloc(1024));
+    expect(await probe(worktree, { removeRebuildableOutput: legacyPolicy, limitBytes: 1 }))
+      .toEqual({ files: 0, bytes: 0, removedOutput: ["node_modules"] });
   });
 
   it("keeps a checkout in the middle of a rebase", async () => {
@@ -338,10 +334,11 @@ describe("idle checkout hibernation and restore", () => {
     expectSqliteWriteBudget({ scenario: "checkout-hibernation-idle-sweeps", note: "24 hourly sweeps after the only checkout hibernated", writes });
 
     const kept = await createFixture();
-    await writeFile(path.join(kept.worktree, ".env.local"), "SECRET=1\n");
+    await writeFile(path.join(kept.worktree, "file.txt"), "stashed work\n");
+    await git(kept.worktree, ["stash", "push", "-m", "keep checkout"]);
     const second = kept.open();
     const { writes: keptWrites } = await measureSqliteWrites(async () => {
-      expect(await sweep(second.registry)).toMatchObject({ hibernated: 0, kept: { "Other ignored files": 1 } });
+      expect(await sweep(second.registry)).toMatchObject({ hibernated: 0, kept: { "Stashed changes": 1 } });
     });
     expectSqliteWriteBudget({ scenario: "checkout-hibernation-kept", note: "one sweep that keeps the only checkout", writes: keptWrites });
     expect(await exists(kept.worktree)).toBe(true);
@@ -618,6 +615,192 @@ describe("Restore now and Keep it awake", () => {
 });
 
 describe("Thread maintenance's hibernate step", () => {
+  it.each(["merged", "closed"] as const)("uses the latest saved PR lifecycle for a locked thread's stale %s watch", async (lifecycleState) => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    const watch: ThreadPullRequestWatchSummary = { ...identity, watchId: "terminal-watch", prKey: "github.com/example/project#12",
+      prUrl: "https://github.com/example/project/pull/12", prNumber: 12, headSha: "head", kind: "terminal",
+      createdAt: 1, notifyOn: ["merged", "closed"], failureHandledByAutoFix: false };
+    const pr: PrSummary = { provider: "github.com", org: "example", repo: "project", number: 12,
+      state: "passing", lifecycleState, headSha: "head", url: watch.prUrl };
+    await store.registerThreadPrStatusWatch({ watch, now: 1 });
+    await store.setThreadLock({ ...identity, lock: { source: "operator", lockedAt: 1, note: "Handed off" } });
+    await store.setThreadPullRequests({ ...identity, prs: [pr], fetchedAt: 2 });
+    const remember = async (value: PrSummary, fetchedAt: number) => await store.writePrStatusCacheEntries([
+      { prKey: watch.prKey, provider: value.provider, pr: value, fetchedAt },
+    ]);
+    await remember(pr, 2);
+    const service = maintenance(registry);
+    const measured = await measureSqliteWrites(async () => await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 }));
+    expect(measured.writes.commits).toBe(0);
+    let scan = measured.result;
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
+    const apply = async () => await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    if (lifecycleState === "closed") {
+      // A later cached reopening wins over the older attached terminal row.
+      await remember({ ...pr, lifecycleState: "open" }, 3);
+      const kept = await apply();
+      expect(kept.problems).toContainEqual(expect.objectContaining({ kind: "kept", reason: "Watching a PR" }));
+      expect(await exists(fixture.worktree)).toBe(true);
+      await remember(pr, 4);
+      scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    }
+    const run = await apply();
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 1, kept: 0, failed: 0 });
+    expect(await exists(fixture.worktree)).toBe(false);
+    // Eligibility neither dispatches nor retires the watch, and does not unlock.
+    expect(await store.listActiveThreadPrStatusWatches(identity)).toHaveLength(1);
+    expect((await store.getThreadOverlayState(identity))?.lock?.lockedAt).toBe(1);
+  });
+
+  it("rechecks managed-root ownership when a reviewed external checkout moves outside through a symlink", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    await store.replaceWorkspaceLinkedDirectory({ ...identity, directory: { ...fixture.directory, worktreeOwnership: "external" } });
+    const service = maintenance(registry);
+    const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
+    const outside = path.join(fixture.root, "outside-checkout");
+    await git(fixture.repo, ["worktree", "move", fixture.worktree, outside]);
+    await symlink(outside, fixture.worktree, process.platform === "win32" ? "junction" : "dir");
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 0, kept: 1, failed: 0 });
+    expect(await readFile(path.join(outside, "file.txt"), "utf8")).toBe("original\n");
+    expect(await snapshotOf(store)).toBeUndefined();
+  });
+
+  it.each([".pwragent", ".codex"] as const)("uses canonical PwrAgent root ownership for an attached external checkout: %s", async (worktreeRoot) => {
+    const fixture = await createFixture({ worktreeRoot });
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    await store.replaceWorkspaceLinkedDirectory({ ...identity, directory: { ...fixture.directory, worktreeOwnership: "external" } });
+    const service = maintenance(registry);
+    const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    if (worktreeRoot === ".codex") {
+      expect(scan.hibernate?.items).toEqual([]);
+      expect(await exists(fixture.worktree)).toBe(true);
+      return;
+    }
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 1, kept: 0, failed: 0 });
+    expect(await exists(fixture.worktree)).toBe(false);
+    expect(await snapshotOf(store)).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
+    expect((await store.getThreadOverlayState(identity))?.extraLinkedDirectories[0]?.worktreeOwnership).toBe("external");
+  });
+
+  it("does not confuse a persisted archive with an archive operation still in flight", async () => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const candidate = (await registry.listAutoArchiveCandidates())[0]!;
+    const cache = (registry as unknown as { threadInfoStore: { get: () => { archived: boolean } | undefined } }).threadInfoStore;
+    vi.spyOn(cache, "get").mockReturnValue({ archived: true });
+    expect(registry.isArchiveCandidateBusy(candidate)).toBe(true);
+    for (const archiveState of [{ archiveTombstonedAt: 1 }, { archiveRetentionStartedAt: 1 }]) {
+      expect(registry.isArchiveCandidateBusy({ ...candidate, overlay: { ...candidate.overlay!, ...archiveState } })).toBe(false);
+    }
+    expect(registry.isArchiveCandidateBusy({ ...candidate, thread: { ...candidate.thread, archivedAt: 1 } })).toBe(false);
+  });
+
+  it("discovers a provider-archived checkout, saves its work and leaves its conversation archived", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads[0]!.archived = true;
+    ArchiveWorktreeTransport.threads[0]!.updatedAt = Math.floor(Date.now() / 1000) - 5 * 86_400;
+    await writeFile(path.join(fixture.worktree, "file.txt"), "saved archived edit\n");
+    await writeFile(path.join(fixture.worktree, "notes.txt"), "saved archived notes\n");
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    const service = maintenance(registry);
+    const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 1, kept: 0, failed: 0 });
+    expect(await exists(fixture.worktree)).toBe(false);
+    expect(ArchiveWorktreeTransport.threads[0]!.archived).toBe(true);
+    const snapshot = (await snapshotOf(store))!;
+    await registry.restoreWorktree({ ...identity, worktreePath: fixture.worktree, snapshotRef: snapshot.snapshotRef });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("saved archived edit\n");
+    expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("saved archived notes\n");
+    expect(ArchiveWorktreeTransport.threads[0]!.archived).toBe(true);
+  });
+
+  it("allows inspecting a reviewed thread through the final snapshot admission without restarting its idle clock", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open();
+    const candidate = (await registry.listAutoArchiveCandidates())[0]!;
+    await store.markThreadSeen({ ...identity, seenUpdatedAt: candidate.thread.updatedAt });
+    expect(await registry.hibernateReviewedCheckout(candidate, ON)).toBe(true);
+    expect(await exists(fixture.worktree)).toBe(false);
+    expect(await snapshotOf(store)).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
+  });
+
+  it("carries the protecting watch's PR into the kept checkout even before a PR chip was cached", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open();
+    const watch = { watchId: "watch-fixture", backend: "codex" as const, threadId: THREAD_ID,
+      prKey: "github.com/example/project/12", prUrl: "https://github.com/example/project/pull/12", prNumber: 12,
+      prTitle: "Fix widget layout", headSha: "head", notifyOn: [], createdAt: Date.now(), failureHandledByAutoFix: false };
+    vi.spyOn(store, "listAllActivePrStatusWatches").mockResolvedValue([watch]);
+    const service = new ThreadMaintenanceService({
+      getPolicy: () => ({ mode: "age", inactivityDays: 7, keepPerProject: 10, retentionDays: 30 }), snapshotLimitBytes: 100,
+      listCandidates: async () => await registry.listAutoArchiveCandidates(), resolveProject: async () => fixture.repo,
+      refreshCandidate: async (row) => row, isBusy: () => false,
+      archiveFamily: async () => { throw new Error("A scan must not archive"); },
+      auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0 }),
+      removeArchivedCheckouts: async () => { throw new Error("A scan must not remove"); },
+      isManagedCheckoutPath: () => true, trashItem: async () => { throw new Error("A scan must not remove"); },
+      isCheckoutOnDisk: async () => true, hibernation: checkoutHibernationReviewDeps(() => registry),
+    });
+    const scan = await service.scan({ steps: ["hibernate"] });
+    const kept = scan.hibernate?.coverage?.keptCheckouts?.find((row) => row.path === fixture.worktree);
+    expect(kept).toMatchObject({ reason: "Watching a PR", threads: [{ backend: "codex", threadId: THREAD_ID,
+      pullRequests: [{ url: watch.prUrl, title: watch.prTitle, number: watch.prNumber }] }] });
+    expect(scan.hibernate?.items).toEqual([]);
+  });
+
+  // Provider inventory is the oracle, independently of navigation's source
+  // and companion-app filters. A hidden row can still hold real disk space.
+  it("includes every provider checkout owner even when navigation hides it", async () => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open();
+    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.constantFrom("cli", "vscode", "exec", "appServer"), { minLength: 1 }), async (sources) => {
+      ArchiveWorktreeTransport.threads = sources.map((source, index) => ({
+        id: `owner-${index}`, cwd: fixture.worktree, source, name: "PwrSnap Capture Metadata Worker", status: { type: "notLoaded" },
+      }));
+      const found = await registry.listAutoArchiveCandidates();
+      expect(found.map((row) => row.thread.id).sort()).toEqual(ArchiveWorktreeTransport.threads.map((row) => row.id).sort());
+    }), { numRuns: 12 });
+  });
+
+  // Git is the oracle for workspace kind. A provider's minimal cwd summary
+  // must not turn a real linked checkout into a plain directory on recheck.
+  it("revalidates provider cwd summaries against Git instead of losing their checkout", async () => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open();
+    const listed = (await registry.listAutoArchiveCandidates())[0]!;
+    const client = (registry as unknown as { codexClient: CodexAppServerClient }).codexClient;
+    vi.spyOn(client, "readThreadSummary").mockResolvedValue({
+      ...listed.thread,
+      projectKey: fixture.worktree,
+      linkedDirectories: [{ id: fixture.worktree, path: fixture.worktree, kind: "local", label: "repo" }],
+    });
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 4 }), async (depth) => {
+      // Equivalent Git spellings must produce the same native review paths.
+      // Windows Git's forward slashes are covered by this real-Git oracle
+      // there; dot segments exercise the normalization on every platform.
+      const suffix = `${path.sep}.`.repeat(depth);
+      Object.assign(registry, { acpWorktreeRepositoryResolver: async () => ({
+        ...listed.thread.linkedDirectories[0]!, path: fixture.repo + suffix, worktreePath: fixture.worktree + suffix,
+      }) });
+      const refreshed = await registry.refreshArchiveCandidate(listed);
+      expect(refreshed.thread.linkedDirectories).toEqual([expect.objectContaining({
+        kind: "worktree", worktreePath: fixture.worktree, path: fixture.repo,
+      })]);
+    }), { numRuns: 8, examples: [[1]] });
+  });
+
   function maintenance(registry: DesktopBackendRegistry) {
     return new ThreadMaintenanceService({
       getPolicy: () => registry.getThreadArchivePolicy(),
@@ -656,6 +839,38 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await sweep(registry)).toMatchObject({ skipped: "Hibernation is off" });
   });
 
+  it.each(["before scan", "after scan"])("hibernates with ignored files %s and restores only saved work", async (when) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads[0]!.updatedAt = Math.floor(Date.now() / 1000) - 5 * 86_400;
+    await writeFile(path.join(fixture.worktree, "file.txt"), "saved tracked edit\n");
+    await writeFile(path.join(fixture.worktree, "notes.txt"), "saved untracked work\n");
+    const addIgnored = async () => {
+      await writeFile(path.join(fixture.worktree, ".env.local"), "ignored local data\n");
+      await mkdir(path.join(fixture.worktree, "node_modules", "dep"), { recursive: true });
+      await writeFile(path.join(fixture.worktree, "node_modules", "dep", "output.bin"), Buffer.alloc(MB));
+    };
+    if (when === "before scan") await addIgnored();
+    const { registry, store } = fixture.open({ ...ON, enabled: false, removeRebuildableOutput: false });
+    const service = maintenance(registry);
+    const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+    expect(scan.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
+    expect(scan.hibernate?.removeRebuildableOutput).toBe(true);
+    if (when === "after scan") await addIgnored();
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 1, kept: 0, failed: 0 });
+    expect(await exists(fixture.worktree)).toBe(false);
+    const snapshot = (await snapshotOf(store))!;
+    expect(snapshot.ignoredFilesExcluded).toBe(true);
+    const files = await git(fixture.repo, ["ls-tree", "--name-only", "-r", snapshot.snapshotCommit]);
+    expect(files).not.toMatch(/\.env\.local|node_modules/);
+    await registry.restoreWorktree({ ...identity, worktreePath: fixture.worktree, snapshotRef: snapshot.snapshotRef });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("saved tracked edit\n");
+    expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("saved untracked work\n");
+    expect(await exists(path.join(fixture.worktree, ".env.local"))).toBe(false);
+    expect(await exists(path.join(fixture.worktree, "node_modules"))).toBe(false);
+  });
+
   // Oracle: the registry's own rules. Every thread with a checkout lands in
   // exactly one count, the dialog's idle days decide "not idle yet" for the
   // scan and its run, and a hibernated checkout is noted apart from them.
@@ -681,15 +896,15 @@ describe("Thread maintenance's hibernate step", () => {
     expect(after.hibernate).toMatchObject({ checked: 0, notIdleYet: 0, alreadyHibernated: 1, kept: {}, items: [] });
   });
 
-  it("keeps a reviewed checkout that changed since the scan", async () => {
+  it("keeps a reviewed checkout whose saved work grows past the snapshot limit", async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
     const service = maintenance(registry);
     const scan = await service.scan();
-    await writeFile(path.join(fixture.worktree, ".env.local"), "SECRET=1\n");
+    await writeFile(path.join(fixture.worktree, "file.txt"), Buffer.alloc(6 * MB));
     const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
       removeEmptyFolders: false, hibernate: [identity] });
-    expect(run.problems).toEqual([expect.objectContaining({ step: "hibernate", kind: "kept", reason: "Other ignored files" })]);
+    expect(run.problems).toEqual([expect.objectContaining({ step: "hibernate", kind: "kept", reason: "Changes over the snapshot limit" })]);
     expect(await exists(fixture.worktree)).toBe(true);
   });
 });

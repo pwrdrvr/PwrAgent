@@ -1189,7 +1189,8 @@ describe("archive cleanup pipeline", () => {
     }]);
     // The resolver is otherwise a real Git subprocess that fake time cannot
     // finish. Give the fixture its canonical directory without host I/O.
-    Object.assign(fixture.registry, { acpWorktreeRepositoryResolver: async () => archived[2]!.linkedDirectories[0] });
+    Object.assign(fixture.registry, { acpWorktreeRepositoryResolver: async (cwd: string) =>
+      archived.find((thread) => thread.linkedDirectories[0]?.worktreePath === cwd)?.linkedDirectories[0] });
     vi.mocked(stat).mockImplementation(async () => ({ isDirectory: () => true }) as Awaited<ReturnType<typeof stat>>);
     const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
     await vi.advanceTimersByTimeAsync(100_000);
@@ -1200,8 +1201,8 @@ describe("archive cleanup pipeline", () => {
     for (let index = 0; index < 3; index++) {
       expect(result.candidates.map((item) => item.worktreePath)).not.toContain(path.normalize(`/contrived/worktree-${index}`));
     }
-    expect(pages).toHaveLength(22);
-    expect(Math.max(...pages)).toBe(25);
+    expect(pages).toHaveLength(7);
+    expect(Math.max(...pages)).toBe(100);
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
     expect(fixture.client.archiveThread).not.toHaveBeenCalled();
   });

@@ -9,11 +9,11 @@ import {
   type WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import { hibernationKeepReason } from "../app-server/checkout-hibernation";
-import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
+import { archiveCandidateKeepReason, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 
 /**
- * Model test. `eligible` below restates the approved design (section 10 of
- * the Thread Maintenance UX review) as one predicate, written apart from the
+ * Model test. `eligible` below states checkout eligibility as one predicate,
+ * independently of the conversation's archived state and apart from the
  * implementation's ordered keep reasons. Every generated candidate must get
  * the same yes/no from both, and pinning must never change the answer.
  */
@@ -51,7 +51,7 @@ const scenario = fc.record({
   unreadable: rarely,
   threadStatus: usually<AppServerThreadSummary["threadStatus"] | undefined>("notLoaded", "idle", "active", undefined),
   idleFor: fc.integer({ min: 0, max: 90 * DAY }),
-  seenLater: fc.integer({ min: 0, max: 10 * DAY }),
+  viewedAgo: fc.integer({ min: 0, max: 10 * DAY }),
   snapshot: usually("none", "hibernated", "archivedPending", "archivedRestored", "restored"),
   keepAwake: rarely,
   busy: rarely,
@@ -80,7 +80,7 @@ function build(input: Scenario): { candidate: ThreadArchiveCandidate; policy: De
     id: "t", source: input.source as AppServerThreadSummary["source"], title: "Fixture", titleSource: "explicit",
     linkedDirectories: worktreePath ? [{ id: "d", kind: "worktree", label: "repo", path: "/Users/fixture/repo", worktreePath,
       ...(input.external ? { worktreeOwnership: "external" as const } : {}) }] : [],
-    // A Claude thread outside a PwrAgent worktree is already kept by archive's rules.
+    // Provider cwd and the resolved linked checkout describe the same workspace.
     projectKey: worktreePath,
     updatedAt,
     threadStatus: input.threadStatus,
@@ -89,7 +89,7 @@ function build(input: Scenario): { candidate: ThreadArchiveCandidate; policy: De
     ...(input.remote ? { codexEnvironmentRuntime: { executionTarget: "remote" } as AppServerThreadSummary["codexEnvironmentRuntime"] } : {}),
   };
   const overlay: ThreadOverlayState = {
-    lastSeenAt: updatedAt - input.seenLater,
+    lastSeenAt: NOW - input.viewedAgo,
     worktreeSnapshots: snapshots,
     ...(input.pinned === "rank" ? { pinnedRank: 1 } : {}),
     ...(input.keepAwake ? { keepCheckoutAwake: true } : {}),
@@ -107,13 +107,8 @@ function build(input: Scenario): { candidate: ThreadArchiveCandidate; policy: De
 
 /** The design, as one predicate. */
 function eligible(input: Scenario): boolean {
-  const pwragentRoot = input.root === "pwragent" || input.root === "pwragentProfile";
-  // Codex never removes a checkout in ~/.codex/worktrees, so it hibernates
-  // too. A Claude thread's checkout there is not one PwrAgent made for it.
-  const toolRoot = pwragentRoot || (input.root === "codex" && input.source !== "claude");
   const idleDays = input.idleFor / DAY;
   return input.enabled
-    && input.archived === "no"
     // Keep it awake exempts the thread until the operator turns it off.
     && !input.keepAwake
     && !input.unreadable
@@ -121,15 +116,61 @@ function eligible(input: Scenario): boolean {
     && !input.agent && !input.mergeHeld && !input.pendingWork && !input.prWatch && !input.scheduled && !input.remote
     && !input.activeSubAgent
     && (input.threadStatus === "idle" || input.threadStatus === "notLoaded")
-    // Only PwrAgent's and Codex's own, unborrowed worktrees.
-    && toolRoot && !input.external
+    // A resolved linked checkout, independently of path or provider.
+    && input.root !== "none" && !input.external
     && input.snapshot !== "hibernated" && input.snapshot !== "archivedPending"
-    && !(input.source === "claude" && idleDays > 30)
+    && !(input.archived === "no" && input.source === "claude" && idleDays > 30)
     && idleDays >= input.idleDays
     && !input.busy && !input.sharedPath;
 }
 
 describe("checkout hibernation keep rules", () => {
+  it("uses the idle window and protections, not archived status, for archived checkout cleanup", () => {
+    fc.assert(fc.property(fc.constantFrom("provider", "tombstone", "retention"),
+      fc.constantFrom("codex", "claude", "acp:kimi"), fc.integer({ min: 1, max: 60 }), (archived, source, idleDays) => {
+        const { candidate, policy } = build({ enabled: true, idleDays, source, root: "pwragent", external: false,
+          archived, pinned: "no", agent: false, mergeHeld: false, pendingWork: false, prWatch: false, scheduled: false,
+          remote: false, activeSubAgent: false, unreadable: false, threadStatus: "notLoaded", idleFor: (idleDays + 1) * DAY,
+          viewedAgo: 0, snapshot: "none", keepAwake: false, busy: false, sharedPath: false });
+        const context = { busy: false, sharedPath: false };
+        expect(hibernationKeepReason(candidate, NOW, policy, context)).toBeUndefined();
+        candidate.thread.updatedAt = NOW - (idleDays - 1) * DAY;
+        expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Recently active");
+        candidate.thread.updatedAt = NOW - (idleDays + 1) * DAY;
+        candidate.activePrWatch = true;
+        expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Watching a PR");
+        candidate.activePrWatch = false;
+        expect(hibernationKeepReason(candidate, NOW, policy, { ...context, sharedPath: true })).toBe("Shared with another thread");
+      }));
+  });
+
+  it("does not turn inspection of an idle thread into checkout work, while real work and restores still protect it", () => {
+    fc.assert(fc.property(fc.integer({ min: 1, max: 20 }), fc.integer({ min: 0, max: DAY - 1 }), (idleDays, viewedAgo) => {
+      const old = NOW - (idleDays + 1) * DAY;
+      const candidate: ThreadArchiveCandidate = { thread: {
+        id: "inspection", title: "Inspect a watched checkout", titleSource: "explicit", source: "codex", threadStatus: "idle", updatedAt: old,
+        linkedDirectories: [{ id: "repo", label: "repo", kind: "worktree", path: "/fixture/repo", worktreePath: "/fixture/worktree" }],
+      }, overlay: { backend: "codex", threadId: "inspection", extraLinkedDirectories: [], lastSeenAt: NOW - viewedAgo } };
+      const policy = normalizeCheckoutHibernationPolicy({ enabled: true, idleDays });
+      const context = { busy: false, sharedPath: false };
+      // Viewing is still relevant when archiving the conversation itself.
+      expect(archiveCandidateKeepReason(candidate, NOW, { mode: "age", inactivityDays: idleDays, keepPerProject: 1, retentionDays: 30 }))
+        .toBe("Recently active");
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBeUndefined();
+      candidate.thread.updatedAt = NOW;
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Recently active");
+      candidate.thread.updatedAt = old;
+      candidate.overlay!.archiveRestoredAt = NOW;
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Recently active");
+      delete candidate.overlay!.archiveRestoredAt;
+      expect(hibernationKeepReason(candidate, NOW, policy, { busy: true, sharedPath: false })).toBe("Busy");
+      candidate.activePrWatch = true;
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBe("Watching a PR");
+      candidate.activePrWatch = false;
+      expect(hibernationKeepReason(candidate, NOW, policy, context)).toBeUndefined();
+    }));
+  });
+
   it("agree with the design for every candidate, pinned or not", () => {
     fc.assert(fc.property(scenario, (input) => {
       const { candidate, policy } = build(input);
@@ -143,8 +184,7 @@ describe("checkout hibernation keep rules", () => {
   });
 
   it("treats a checkout under Codex's worktree root like one under PwrAgent's", () => {
-    const notClaude = scenario.filter((input) => input.source !== "claude");
-    fc.assert(fc.property(notClaude, (input) => {
+    fc.assert(fc.property(scenario, (input) => {
       const codex = build({ ...input, root: "codex" });
       const pwragent = build({ ...input, root: "pwragent" });
       const options = { busy: input.busy, sharedPath: input.sharedPath };
@@ -153,10 +193,13 @@ describe("checkout hibernation keep rules", () => {
     }), { numRuns: 2000 });
   });
 
-  it("keeps a Claude thread's checkout under Codex's worktree root", () => {
+  it("applies the same protections to an owned checkout outside tool roots", () => {
     fc.assert(fc.property(scenario, (input) => {
-      const { candidate, policy } = build({ ...input, source: "claude", root: "codex" });
-      expect(hibernationKeepReason(candidate, NOW, policy, { busy: input.busy, sharedPath: input.sharedPath })).toBeDefined();
+      const arbitrary = build({ ...input, root: "inRepo" });
+      const managed = build({ ...input, root: "pwragent" });
+      const context = { busy: input.busy, sharedPath: input.sharedPath };
+      expect(hibernationKeepReason(arbitrary.candidate, NOW, arbitrary.policy, context))
+        .toBe(hibernationKeepReason(managed.candidate, NOW, managed.policy, context));
     }));
   });
 });
@@ -182,6 +225,7 @@ describe("checkout hibernation policy normalization", () => {
       // Hibernation is the automatic way to reclaim disk: on by default,
       // upgrades included, and only an explicit `false` turns it off.
       expect(policy.enabled).toBe(raw.enabled !== false);
+      expect(policy.removeRebuildableOutput).toBe(true);
       // Normalizing again changes nothing.
       expect(normalizeCheckoutHibernationPolicy(policy)).toEqual(policy);
     }), { numRuns: 1000 });

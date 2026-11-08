@@ -8,13 +8,14 @@ import type { DesktopThreadArchivePolicy } from "./thread-archive-policy";
  */
 
 export type ThreadMaintenanceRules = Pick<DesktopThreadArchivePolicy, "mode" | "keepPerProject" | "inactivityDays"> & {
-  /** Count dependency and build output folders (node_modules, dist, target…)
-   * as clean. Other ignored files still keep the checkout. */
+  /** Legacy wire field, normalized to true. Ignored files never block
+   * checkout removal and are excluded from recovery snapshots. */
   rebuildableOutputIsClean: boolean;
 };
 
-/** Ignored directory names that a package manager or build recreates. Any
- * other ignored path, such as `.env.local`, is treated as operator data. */
+/** Ignored directory names used to describe rebuildable output. Ignored
+ * paths outside this list are also excluded from recovery snapshots and
+ * discarded when a checkout is removed. */
 export const REBUILDABLE_OUTPUT_NAMES: ReadonlySet<string> = new Set([
   "node_modules", ".pnpm-store", "bower_components",
   "dist", "build", "out", "target", "coverage", ".nyc_output",
@@ -25,7 +26,7 @@ export const REBUILDABLE_OUTPUT_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 export type ThreadMaintenanceWorkspace =
-  /** Nothing to save. Commits are on a branch, so removing the checkout loses nothing. */
+  /** No tracked or non-ignored changes to save. Commits are retained on a branch. */
   | { kind: "clean"; rebuildableOutput?: string[] }
   /** Uncommitted changes that fit in a recovery snapshot. */
   | { kind: "changes"; files: number; bytes: number; rebuildableOutput?: string[] }
@@ -38,14 +39,67 @@ export type ThreadMaintenanceWorkspace =
   /** The folder no longer exists. */
   | { kind: "missing" };
 
-/** Reserved for the space-first view: filled only by a disk accounting
- * provider (PwrDisk). Electron never measures checkouts itself. */
+/** What a checkout takes on disk. Neither figure is a promise of space
+ * recovered: APFS clones, snapshots and open files can keep extents
+ * allocated after removal. Only a volume's measured free-space change says
+ * what was actually freed. Separate from snapshot bytes, which count what a
+ * recovery snapshot stores. */
 export type ThreadMaintenanceSpace = {
-  /** Bytes freed if this item alone is removed. */
-  privateBytes: number;
-  /** True when measurement stopped early and privateBytes is a lower bound. */
+  /** Blocks allocated under the checkout (du-style), shared extents included. */
+  allocatedBytes?: number;
+  /** Allocation no other file shares (APFS private allocation). Removing
+   * the checkout may still not free it. */
+  privateBytes?: number;
+  /** True when measurement stopped early and the figures are lower bounds. */
   lowerBound?: boolean;
   largest?: { name: string; bytes: number }[];
+  /** Positively identified rebuildable output inside this owned checkout.
+   * Classification does not make the checkout eligible for hibernation. */
+  rebuildableOutput?: { kind: ThreadMaintenanceBuildOutput["kind"]; allocatedBytes?: number; lowerBound?: boolean }[];
+};
+
+/** A known owner of a kept checkout. Identity comes from the provider and
+ * PwrAgent's overlay, never from guessing a thread from its checkout name. */
+export type ThreadMaintenanceKeptThread = {
+  backend: string;
+  threadId: string;
+  title: string;
+  branch?: string;
+  lastActivityAt?: number;
+  pullRequests?: { url: string; title?: string; number?: number }[];
+};
+
+export type ThreadMaintenanceKeptCheckout = {
+  path: string;
+  reason: string;
+  allocatedBytes?: number;
+  /** All known owners, including a native child sharing its parent's checkout. */
+  threads?: ThreadMaintenanceKeptThread[];
+  rebuildableOutput?: ThreadMaintenanceSpace["rebuildableOutput"];
+};
+
+/** Which roots and threads a scan step read, so the review can say what it
+ * covered and what it left out. */
+export type ThreadMaintenanceCoverage = {
+  roots: {
+    path: string;
+    owner: "pwragent" | "codex" | "claude" | "other";
+    checkouts: number;
+    allocatedBytes?: number;
+    lowerBound?: boolean;
+  }[];
+  /** Checkouts the step saw but did not offer, by reason. */
+  excluded?: { reason: string; count: number; allocatedBytes?: number }[];
+  /** Threads read per backend (codex, claude, an ACP agent…). */
+  providers?: { backend: string; threads: number }[];
+  /** The largest checkouts the step kept, by allocation, unmeasured last:
+   * at most ten unique paths, each with its stable keep reason. Shown so the
+   * operator can see what holds the space; never offered for removal. */
+  largestKept?: ThreadMaintenanceKeptCheckout[];
+  /** Every kept checkout on disk seen by this step, once per path. The
+   * dialog can inspect these without another scan. Never a removal offer. */
+  keptCheckouts?: ThreadMaintenanceKeptCheckout[];
+  measuredAt?: number;
 };
 
 export type ThreadMaintenanceIdleThread = {
@@ -89,13 +143,32 @@ export type ThreadMaintenanceOwnedCheckout = {
   space?: ThreadMaintenanceSpace;
 };
 
-/** A checkout under PwrAgent's own worktree root that no thread, active or
- * archived, refers to. Never selected by default and never removed by the
- * hourly sweep. Removing one saves a recovery snapshot first. */
+/** Legacy scan row, retained for wire compatibility. Current scans never
+ * offer a checkout without an identified thread. */
 export type ThreadMaintenanceUnreferencedCheckout = {
   kind: "unreferenced";
   worktreePath: string;
   workspace: Extract<ThreadMaintenanceWorkspace, { kind: "clean" | "changes" }>;
+  space?: ThreadMaintenanceSpace;
+};
+
+/** A build tool's output folder inside a checkout, offered on its own:
+ * cleaning it deletes compiled files only. The checkout, its source, its
+ * branch and its thread stay; the next build recompiles. Offered whether or
+ * not the checkout itself can hibernate or be removed. `checkoutPath` may be
+ * a repository's primary checkout. */
+export type ThreadMaintenanceBuildOutput = {
+  /** One Cargo build profile directory. The owner skips it while a build
+   * holds its lock, keeps the lock file, and deletes only compiled files. */
+  kind: "cargo";
+  /** Provider-identified threads using this checkout. Current owners never
+   * offer independent output cleanup without a positively identified thread. */
+  threads?: ThreadMaintenanceKeptThread[];
+  checkoutPath: string;
+  /** The profile directory, such as `target/debug` or
+   * `target/<triple>/release`; not the whole target directory. */
+  outputPath: string;
+  manifestPath: string;
   space?: ThreadMaintenanceSpace;
 };
 
@@ -128,6 +201,12 @@ export type ThreadMaintenanceScanProgress = {
   total: number;
   /** What is being checked now: thread titles, or checkout paths. */
   inFlight: string[];
+  /** What the step is doing now, in words, e.g. "Listing worktrees". */
+  detail?: string;
+  /** Items found so far while the stage is "listing". */
+  found?: number;
+  /** The root being read now. */
+  root?: string;
 };
 
 /** An idle thread whose checkout can hibernate: removed after its changes
@@ -148,6 +227,8 @@ export type ThreadMaintenanceHibernateCheckout = {
   /** The idle-thread key (`backend:threadId`) of the archive row that also
    * takes this thread. Archiving it in the same run keeps this row. */
   archiveKey?: string;
+  /** The checkout's allocation on disk, when measured. */
+  space?: ThreadMaintenanceSpace;
 };
 
 export type ThreadMaintenanceScan = {
@@ -160,8 +241,9 @@ export type ThreadMaintenanceScan = {
   /** The steps this scan read. Absent: every step. A step it did not read
    * comes back empty. */
   steps?: ThreadMaintenanceScanStep[];
-  /** "none" until a disk accounting provider is connected. */
-  spaceSource: "none" | "pwrdisk";
+  /** Native filesystem allocation is distinct from PwrDisk's private and
+   * shared-block accounting. Neither is observed recovered space. */
+  spaceSource: "none" | "filesystem" | "pwrdisk";
   threads: {
     checked: number;
     projects: ThreadMaintenanceProject[];
@@ -174,6 +256,10 @@ export type ThreadMaintenanceScan = {
     kept: Record<string, number>;
     emptyFolders: number;
     skipped?: string;
+    coverage?: ThreadMaintenanceCoverage;
+    /** Build output folders that can be cleaned on their own. Absent from
+     * owners that predate it. */
+    buildOutputs?: ThreadMaintenanceBuildOutput[];
   };
   /** Idle checkouts that can hibernate, from threads this scan does not
    * offer to archive. Absent from owners that predate the step. */
@@ -195,6 +281,7 @@ export type ThreadMaintenanceScan = {
     alreadyHibernated?: number;
     kept: Record<string, number>;
     skipped?: string;
+    coverage?: ThreadMaintenanceCoverage;
   };
   expired: {
     enabled: boolean;
@@ -214,11 +301,15 @@ export type ThreadMaintenanceApplyRequest = {
   trashCheckouts: { worktreePath: string }[];
   /** Checkouts no thread refers to, to snapshot and remove. Never selected
    * by default. Older callers omit it. */
+  /** Legacy request field. Current owners keep these paths without removing them. */
   removeUnreferenced?: { worktreePath: string }[];
   /** Remove empty worktree folders left by earlier cleanups. */
   removeEmptyFolders: boolean;
   /** Idle checkouts to hibernate. Older callers omit it. */
   hibernate?: { backend: string; threadId: string }[];
+  /** Build output folders to clean, run in the checkouts step. Never one
+   * inside a checkout this request also removes. Older callers omit it. */
+  removeBuildOutputs?: { outputPath: string }[];
 };
 
 export type ThreadMaintenanceProblem = {
@@ -232,6 +323,8 @@ export type ThreadMaintenanceProblem = {
   backend?: string;
   threadId?: string;
   path?: string;
+  /** The checkout's allocated bytes, when measured. */
+  bytes?: number;
 };
 
 export type ThreadMaintenanceStepResult = {
@@ -240,6 +333,9 @@ export type ThreadMaintenanceStepResult = {
   done: number;
   kept: number;
   failed: number;
+  /** Summed allocation of the checkouts this step removed. Shared extents
+   * may stay allocated, so this is not space freed. */
+  allocatedBytesRemoved?: number;
 };
 
 export type ThreadMaintenanceRun = {

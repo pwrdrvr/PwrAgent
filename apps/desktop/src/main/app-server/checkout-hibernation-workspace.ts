@@ -13,8 +13,6 @@ export const HIBERNATION_WORKSPACE_KEEP_REASONS = {
   operation: "Git operation in progress",
   stash: "Stashed changes",
   locked: "Locked worktree",
-  ignored: WORKSPACE_KEEP_REASONS.ignored,
-  otherIgnored: "Other ignored files",
   unretained: WORKSPACE_KEEP_REASONS.unretained,
 } as const;
 
@@ -55,8 +53,8 @@ export function stashBelongsToCheckout(entry: { firstParent?: string; subject: s
 /**
  * Checks 1 to 4 of hibernation, plus the worktree lock from check 5, for one
  * checkout. Any reason to keep it wins; otherwise the size of the snapshot.
- * Ignored files are lost on removal, so only rebuildable output may be, and
- * only when the policy says so.
+ * Ignored files are excluded from the recovery snapshot and removed with the
+ * checkout; their presence does not prevent hibernation.
  */
 export async function inspectHibernationWorkspace(
   cwd: string,
@@ -65,11 +63,9 @@ export async function inspectHibernationWorkspace(
   const inspected = await inspectMaintenanceWorkspace(cwd, {
     signal: options.signal,
     limitBytes: options.limitBytes,
-    rebuildableOutputIsClean: options.removeRebuildableOutput,
+    rebuildableOutputIsClean: true,
   });
-  if (inspected.keep !== undefined) {
-    return { keep: inspected.keep === "Other ignored files" ? HIBERNATION_WORKSPACE_KEEP_REASONS.otherIgnored : inspected.keep };
-  }
+  if (inspected.keep !== undefined) return { keep: inspected.keep };
   const workspace = inspected.workspace;
   if (workspace.kind === "missing") return { keep: HIBERNATION_WORKSPACE_KEEP_REASONS.missing };
   if (workspace.kind === "notGit") return { keep: HIBERNATION_WORKSPACE_KEEP_REASONS.notGit };

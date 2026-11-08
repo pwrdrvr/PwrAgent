@@ -1,6 +1,8 @@
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 
+export type MaintenanceDiscoveryProgress = { detail?: string; found?: number; root?: string };
+
 /** Discovery reads at most this many checkouts, so a huge root cannot stall a scan. */
 export const MAX_DISCOVERED_WORKTREES = 1_000;
 

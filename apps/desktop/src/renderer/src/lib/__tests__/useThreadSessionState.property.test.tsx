@@ -283,6 +283,15 @@ it.each([
     new LedgerCommand("read"), new LedgerCommand("start"), new LedgerCommand("item", 0, true),
     new LedgerCommand("older"), new LedgerCommand("complete"), new LedgerCommand("start"),
   ] },
+  { name: "an outstanding compaction read and message redelivery", commands: [
+    new LedgerCommand("compact"), new LedgerCommand("start"), new LedgerCommand("item"),
+    new LedgerCommand("resolve"), new LedgerCommand("item"), new LedgerCommand("redeliver"),
+  ] },
+  { name: "an acknowledged empty turn and message redelivery", commands: [
+    new LedgerCommand("send"), new LedgerCommand("start"), new LedgerCommand("complete"),
+    new LedgerCommand("start"), new LedgerCommand("item"), new LedgerCommand("resolve"),
+    new LedgerCommand("item"), new LedgerCommand("redeliver"),
+  ] },
 ])("retains provider order after $name", async ({ commands }) => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   const model = initialModel();

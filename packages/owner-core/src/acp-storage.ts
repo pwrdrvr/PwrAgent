@@ -42,6 +42,8 @@ export type AcpSessionMetadata = {
 };
 
 export interface AcpSessionStorage {
+  /** Stored sessions retain ownership even after an agent is uninstalled. */
+  listBackendIds?(): AcpBackendId[];
   upsertSession(metadata: AcpSessionMetadata): void;
   listSessions(
     backendId: AcpBackendId,
