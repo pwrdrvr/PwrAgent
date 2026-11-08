@@ -280,6 +280,15 @@ helper execution, model resolution, diagnostics and the existing sub-agent and
 usage persistence effects. Completion waits for all admitted work, including
 work admitted by a preceding title event.
 
+Steer-request admission lives in `owner-core/thread-steering-lifecycle.ts`.
+It qualifies request ids by backend, thread and expected turn, fences changed
+input/origin/delivery, and shares completion across concurrent retries. Provider
+rejection permits another submission; an accepted provider result survives a
+host completion failure so retry repeats only that completion. Provider terminal
+events retire that turn's admissions. Desktop supplies provider execution and
+causal-origin merging/persistence through host ports, retaining their existing
+locks, storage sites and event order. The core does not infer active turns.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or
