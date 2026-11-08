@@ -1,7 +1,92 @@
 import { describe, expect, it } from "vitest";
+import fc from "fast-check";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
+import { DeterministicInteractionMapper } from "../messaging/core/deterministic-interaction-mapper";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 
 describe("buildApprovalIntent", () => {
+  it("preserves unrelated instructions while matching only the current approval code", () => {
+    fc.assert(fc.property(fc.uuid(), fc.constantFrom(
+      "actually leave those files alone",
+      "also check the logs",
+      "stop deleting and explain the plan",
+    ), (id, text) => {
+      const intent = buildApprovalIntent({ id, createdAt: 1000, request: {
+        method: "mcpServer/elicitation/request", params: {
+          threadId: "thread-1", requestId: id, serverName: "fixture",
+          mode: "form", message: "Confirm?", requestedSchema: { type: "object", properties: {} }, _meta: null,
+        },
+      } });
+      const mapper = new DeterministicInteractionMapper();
+      expect(mapper.mapText({ intent, text })).toEqual({ kind: "pass_through", text });
+      for (const reply of ["yes", "Allow", "approve", "approve deadbeef0000"]) {
+        expect(mapper.mapText({ intent, text: reply }).kind).toBe("ambiguous");
+      }
+    }));
+  });
+
+  it("uses the provider encoding as the oracle for complete approval length", () => {
+    fc.assert(fc.property(fc.constantFrom("utf8-bytes", "utf16-units", "characters"),
+      fc.constantFrom("界", "é", "💾"), fc.integer({ min: 500, max: 3000 }), (encoding, character, count) => {
+        const request = { method: "mcpServer/elicitation/request" as const, params: {
+          threadId: "thread-1", requestId: "unicode", serverName: "fixture", mode: "form" as const,
+          message: character.repeat(count), requestedSchema: { type: "object", properties: {} }, _meta: null,
+        } };
+        const unrestricted = buildApprovalIntent({ id: "unicode", createdAt: 1000, request });
+        const proposal = `${unrestricted.title}\n\n${unrestricted.body}`;
+        // Existing character-counted adapters clamp JavaScript string length.
+        const length = encoding === "utf8-bytes" ? Buffer.byteLength(proposal, "utf8") : proposal.length;
+        for (const limit of [length - 1, length, length + 1]) {
+          const intent = buildApprovalIntent({ id: "unicode", createdAt: 1000, request,
+            capabilityProfile: { ...PERMISSIVE_CAPABILITY_PROFILE, text: {
+              ...PERMISSIVE_CAPABILITY_PROFILE.text, encoding, maxLength: limit + 100, maxApprovalLength: limit,
+            } },
+          });
+          expect(intent.decisions.some((decision) => decision.decision === "accept")).toBe(length <= limit);
+        }
+      }));
+  });
+
+  it("never offers acceptance when the complete MCP proposal cannot fit", () => {
+    fc.assert(fc.property(fc.integer({ min: 256, max: 512 }), (limit) => {
+      const intent = buildApprovalIntent({ id: "large-proposal", createdAt: 1000,
+        capabilityProfile: { ...PERMISSIVE_CAPABILITY_PROFILE,
+          text: { ...PERMISSIVE_CAPABILITY_PROFILE.text, maxLength: limit } },
+        request: { method: "mcpServer/elicitation/request", params: {
+          threadId: "thread-1", requestId: "large-proposal", serverName: "pwrdisk",
+          mode: "form", message: "é".repeat(limit), requestedSchema: { type: "object", properties: {} }, _meta: null,
+        } },
+      });
+      expect(intent.decisions.some((decision) => decision.decision === "accept")).toBe(false);
+      expect(intent.body).toContain("complete proposal");
+      expect(intent.body).toContain("desktop");
+      expect(intent.fallbackText).not.toContain("approve ");
+    }), { numRuns: 32 });
+  });
+
+  it("binds a textual MCP confirmation to its own card reference", () => {
+    const mapper = new DeterministicInteractionMapper();
+    fc.assert(fc.property(fc.uuid(), fc.uuid(), (first, second) => {
+      fc.pre(first !== second);
+      const build = (id: string) => buildApprovalIntent({ id, createdAt: 1000, request: {
+        method: "mcpServer/elicitation/request", params: {
+          threadId: "thread-1", turnId: "turn-1", requestId: id, serverName: "pwrdisk",
+          mode: "form", _meta: null, message: "Confirm fixture deletion?",
+          requestedSchema: { type: "object", properties: {} },
+        },
+      } });
+      const old = build(first);
+      const current = build(second);
+      for (const text of ["yes", "approve", "Allow", "approval:mcp:accept", old.decisions[0]!.fallbackText!]) {
+        expect(mapper.mapText({ intent: current, text }).kind).not.toBe("matched");
+      }
+      const accept = current.decisions.find((decision) => decision.decision === "accept")!;
+      expect(mapper.mapText({ intent: current, text: accept.fallbackText! })).toMatchObject({
+        kind: "matched", action: { id: accept.id },
+      });
+    }), { numRuns: 32 });
+  });
+
   it.each([
     { label: "with", elicitationId: "elicitation-1" },
     { label: "without", elicitationId: undefined },

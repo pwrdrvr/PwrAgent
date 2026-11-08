@@ -1320,6 +1320,8 @@ function isMessagingQuestionnairePhase(
 
 export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
   kind: "approval";
+  /** Text replies must exactly match an action's per-card fallback, never a synonym. */
+  textResponseKey?: string;
   title: string;
   body: string;
   context?: PendingRequestApprovalContext;
@@ -2057,6 +2059,10 @@ export type MessagingMarkdownDialect =
 
 export type MessagingTextCapabilities = {
   maxLength: number;
+  /** Full approval proposals can span messages; controls appear only after all chunks. */
+  supportsApprovalContinuation?: boolean;
+  /** A rich approval card may have a smaller limit than an ordinary message. */
+  maxApprovalLength?: number;
   encoding: MessagingTextEncoding;
   markdownDialect: MessagingMarkdownDialect;
   supportsCodeBlocks: boolean;

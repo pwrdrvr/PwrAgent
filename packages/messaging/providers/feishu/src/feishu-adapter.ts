@@ -286,6 +286,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       maxCallbackPayloadBytes: FEISHU_BUTTON_VALUE_LIMIT,
     },
     text: {
+      maxApprovalLength: FEISHU_CARD_TEXT_LIMIT,
       maxLength: 30_000,
       encoding: "characters",
       markdownDialect: "feishu-md",
