@@ -54,6 +54,25 @@ export type ThreadMaintenanceSpace = {
   largest?: { name: string; bytes: number }[];
 };
 
+/** A known owner of a kept checkout. Identity comes from the provider and
+ * PwrAgent's overlay, never from guessing a thread from its checkout name. */
+export type ThreadMaintenanceKeptThread = {
+  backend: string;
+  threadId: string;
+  title: string;
+  branch?: string;
+  lastActivityAt?: number;
+  pullRequests?: { url: string; title?: string; number?: number }[];
+};
+
+export type ThreadMaintenanceKeptCheckout = {
+  path: string;
+  reason: string;
+  allocatedBytes?: number;
+  /** All known owners, including a native child sharing its parent's checkout. */
+  threads?: ThreadMaintenanceKeptThread[];
+};
+
 /** Which roots and threads a scan step read, so the review can say what it
  * covered and what it left out. */
 export type ThreadMaintenanceCoverage = {
@@ -71,7 +90,10 @@ export type ThreadMaintenanceCoverage = {
   /** The largest checkouts the step kept, by allocation, unmeasured last:
    * at most ten unique paths, each with its stable keep reason. Shown so the
    * operator can see what holds the space; never offered for removal. */
-  largestKept?: { path: string; reason: string; allocatedBytes?: number }[];
+  largestKept?: ThreadMaintenanceKeptCheckout[];
+  /** Every kept checkout on disk seen by this step, once per path. The
+   * dialog can inspect these without another scan. Never a removal offer. */
+  keptCheckouts?: ThreadMaintenanceKeptCheckout[];
   measuredAt?: number;
 };
 
