@@ -41768,7 +41768,13 @@ export class DesktopBackendRegistry {
             removalSiblings = await this.archivedWorktreeSiblings({ archivedThreadId: params.thread.id, archivedThreads: current.archivedThreads,
               ownershipPaths: current.ownershipPaths, backend: params.backend, worktreePath: candidate.worktreePath });
             const ownership = await this.readCanonicalArchiveOwnership(current, candidate.worktreePath);
-            const managedCheckout = await this.isManagedMaintenanceCheckout(candidate.worktreePath);
+            const key = normalizeWorktreePathForComparison(candidate.worktreePath);
+            const hasExternalMarker = () => current.worktreeEvidence?.externalPaths.has(key)
+              || (!current.worktreeEvidence && [current.thread, ...current.activeThreads, ...current.archivedThreads].some((thread) =>
+                thread.linkedDirectories.some((directory) => directory.worktreeOwnership === "external"
+                  && normalizeWorktreePathForComparison(linkedDirectoryWorktreePath(directory) ?? "") === key),
+              ));
+            const managedCheckout = hasExternalMarker() && await this.isManagedMaintenanceCheckout(candidate.worktreePath);
             if (ownership.users.some((owner) => owner.id !== params.thread.id || owner.source !== params.backend)) {
               await this.retainDeferredArchiveWorktree({ ...params, activeThreads: current.activeThreads }, candidate,
                 ownership.users.filter((owner) => owner.id !== params.thread.id || owner.source !== params.backend)
@@ -41778,7 +41784,6 @@ export class DesktopBackendRegistry {
           const check = () => {
             params.context!.assertCurrent();
             scope.assertCurrent(this.archiveWorkspaceMutations());
-              const key = normalizeWorktreePathForComparison(candidate.worktreePath);
               for (const owner of this.archivedAcpWorktreeOwners(key, current)) {
                 if (isAcpBackendId(owner.source)) this.acpBackend.assertWorktreeArchiveReleased(owner.source, owner.id);
               }
@@ -41786,11 +41791,7 @@ export class DesktopBackendRegistry {
                 const worktreePath = linkedDirectoryWorktreePath(directory);
                 return worktreePath && normalizeWorktreePathForComparison(worktreePath) === key;
               })) throw new Error("The archived thread no longer owns this worktree; the checkout was kept.");
-              if (!managedCheckout
-                && (current.worktreeEvidence?.externalPaths.has(key) || (!current.worktreeEvidence && [current.thread, ...current.activeThreads, ...current.archivedThreads].some((thread) =>
-                thread.linkedDirectories.some((directory) => directory.worktreeOwnership === "external"
-                  && normalizeWorktreePathForComparison(linkedDirectoryWorktreePath(directory) ?? "") === key),
-              )))) throw new Error("Externally managed worktree; thread archive leaves this checkout in place.");
+              if (!managedCheckout && hasExternalMarker()) throw new Error("Externally managed worktree; thread archive leaves this checkout in place.");
               if (ownership.external) throw new Error("Externally managed worktree; the checkout was kept.");
               const users = ownership.users.filter((thread) => thread.id !== params.thread.id || thread.source !== params.backend);
               if (users.length) throw new Error("Worktree is still used by another active thread; the checkout was kept.");
