@@ -175,9 +175,6 @@ type ThreadPricingLedgerRead = {
 // shared by more than 2 lines; one migration stamp was shared by 7,251.
 const THREAD_USAGE_BULK_REWRITE_MIN_LINES = 64;
 
-// How far the loop check follows parent links. Lenses stop at 32 levels.
-const MAX_THREAD_PARENT_WALK = 64;
-
 // PwrAgent recorded no turn usage before 2026.
 const EARLIEST_USAGE_TURN_START = Date.UTC(2026, 0, 1);
 // Set once the one-time ledger turn time repair has run.
@@ -5795,7 +5792,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const loop = new Error("A thread cannot become a sub-thread of its own sub-thread.");
     const seen = new Set<string>();
     let key: string | undefined = parentKey;
-    while (key && !seen.has(key) && seen.size < MAX_THREAD_PARENT_WALK) {
+    // Validate the complete ancestry; visited keys also terminate legacy cycles.
+    while (key && !seen.has(key)) {
       if (key === threadKey) throw loop;
       seen.add(key);
       const overlay = this.readStoredThread(key);
