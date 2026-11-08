@@ -1,9 +1,11 @@
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 
-export const STORAGE_HISTORY_DEFAULT = false;
-export const STORAGE_MIN_BYTES = 100 * 1024 * 1024;
-export const STORAGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+import { STORAGE_INTERVAL_MS } from "@pwragent/owner-core/storage-maintenance-storage";
+import type { StorageMaintenanceRecord, StorageThreadIdentity } from "@pwragent/owner-core/storage-maintenance-storage";
+export { STORAGE_HISTORY_DEFAULT, STORAGE_MIN_BYTES, STORAGE_INTERVAL_MS, storageHistoryPolicy, storageMaintenanceDue } from "@pwragent/owner-core/storage-maintenance-storage";
+export type { StorageMaintenanceRecord, StorageThreadIdentity } from "@pwragent/owner-core/storage-maintenance-storage";
+
 export const STORAGE_GRACE_MS = 7 * STORAGE_INTERVAL_MS;
 export const STORAGE_MAINTENANCE_KEY = "storage_maintenance_v1";
 export const STORAGE_RETENTION_SCHEMA = `
@@ -14,14 +16,6 @@ CREATE TABLE IF NOT EXISTS thread_storage_retention (
   PRIMARY KEY (backend, thread_id)
 );
 `;
-export type StorageMaintenanceRecord = {
-  /** Explicit checkbox override; absence follows the application default. */
-  historyEnabled?: boolean;
-  attemptedAt?: number;
-  completedAt?: number;
-  ownerPid?: number;
-};
-
 export function readStorageMaintenance(db: Database.Database): StorageMaintenanceRecord {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(STORAGE_MAINTENANCE_KEY) as { value: string } | undefined;
   try {
@@ -39,14 +33,6 @@ export function readStorageMaintenance(db: Database.Database): StorageMaintenanc
 export function writeStorageMaintenance(db: Database.Database, state: StorageMaintenanceRecord): void {
   db.prepare("INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     .run(STORAGE_MAINTENANCE_KEY, JSON.stringify(state));
-}
-
-export function storageHistoryPolicy(record: StorageMaintenanceRecord, defaultEnabled = STORAGE_HISTORY_DEFAULT) {
-  const historyEnabled = record.historyEnabled ?? defaultEnabled;
-  return {
-    historyEnabled,
-    automatic: record.historyEnabled !== undefined || record.attemptedAt !== undefined || historyEnabled,
-  };
 }
 
 export function setStorageHistoryPreference(db: Database.Database, historyEnabled: boolean): void {
@@ -87,13 +73,6 @@ export function fenceStorageRetention(db: Database.Database, identity: StorageTh
     .run(createHash("sha256").update(identity.threadId).digest("hex"), randomUUID());
 }
 
-export function storageMaintenanceDue(input: {
-  existingDatabase: boolean; onboardingCompleted: boolean; bytes: number; attemptedAt?: number; now: number;
-}): boolean {
-  return input.existingDatabase && input.onboardingCompleted && input.bytes >= STORAGE_MIN_BYTES
-    && (input.attemptedAt === undefined || input.now - input.attemptedAt >= STORAGE_INTERVAL_MS);
-}
-
 /** Only lifecycle events or positive provider observations may call this. */
 export function observeStorageArchive(db: Database.Database, backend: string, threadId: string, archived: boolean, now = Date.now(), verifiedArchiveTime = false): void {
   if (archived) {
@@ -108,8 +87,6 @@ export function observeStorageArchive(db: Database.Database, backend: string, th
     db.prepare("DELETE FROM thread_storage_retention WHERE backend=? AND thread_id=?").run(backend, threadId);
   }
 }
-
-export type StorageThreadIdentity = { backend: string; threadId: string; archivedAt?: number };
 
 export function eligibleStorageThreads(db: Database.Database, archived: StorageThreadIdentity[], now: number): StorageThreadIdentity[] {
   // Archive receipts preserve the grace period, not a permanent cleanup queue.

@@ -1,10 +1,10 @@
 import type { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
-import type { StateDb } from "../state/state-db";
+import type { StorageMaintenanceStorage } from "@pwragent/owner-core/storage-maintenance-storage";
 import type { StorageMaintenanceCommand, StorageMaintenanceStatus } from "../../shared/storage-maintenance";
 import { STORAGE_MAINTENANCE_CHANNEL } from "../../shared/storage-maintenance";
 import { app } from "electron";
-import * as storage from "../state/storage-maintenance";
+import * as storagePolicy from "@pwragent/owner-core/storage-maintenance-storage";
 
 type FakeWindow = EventEmitter & {
   webContents: { send: (...args: unknown[]) => void };
@@ -56,11 +56,17 @@ vi.mock("../native-appearance", () => ({ themedWindowBackgroundColor: () => "bla
 import { runStartupStorageMaintenance, STORAGE_WINDOW_LOAD_TIMEOUT_MS } from "../storage-maintenance";
 
 const write = vi.fn((_key: string, value: string) => { fixture.record = JSON.parse(value); });
-const state = { raw: {
-  pragma: (name: string) => name === "page_count" ? 40000 : 4096,
-  prepare: () => ({ get: () => ({ value: JSON.stringify(fixture.record) }), all: () => [], run: write }),
-} } as unknown as StateDb;
-const run = (discover = async () => ({ archived: [], active: [] })) => runStartupStorageMaintenance({ state, existingDatabase: true, onboardingCompleted: true, discover });
+const storage: StorageMaintenanceStorage = {
+  read: () => fixture.record,
+  write: (record) => write("storage_maintenance_v1", JSON.stringify(record)),
+  setHistoryPreference: (historyEnabled) => {
+    if (fixture.record.historyEnabled !== historyEnabled) write("storage_maintenance_v1", JSON.stringify({ ...fixture.record, historyEnabled }));
+  },
+  readBytes: () => 40000 * 4096,
+  listRunningProcessIds: () => [],
+  observeArchive: vi.fn(),
+};
+const run = (discover = async () => ({ archived: [], active: [] })) => runStartupStorageMaintenance({ storage, existingDatabase: true, onboardingCompleted: true, discover });
 const command = (value: StorageMaintenanceCommand) => fixture.handlers.get(STORAGE_MAINTENANCE_CHANNEL)!({ sender: fixture.windows[0].webContents }, value);
 async function started() {
   vi.useFakeTimers();
@@ -176,8 +182,8 @@ it("persists an explicit on-then-off choice even when it matches the default", a
 
 it.each([undefined, false, true])("a future default applies only without an explicit override (%s)", async (override) => {
   fixture.record = override === undefined ? {} : { historyEnabled: override };
-  const policy = storage.storageHistoryPolicy;
-  vi.spyOn(storage, "storageHistoryPolicy").mockImplementation((record) => policy(record, true));
+  const policy = storagePolicy.storageHistoryPolicy;
+  vi.spyOn(storagePolicy, "storageHistoryPolicy").mockImplementation((record) => policy(record, true));
   const { done, worker } = await started();
   expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ historyEnabled: override ?? true }));
   await command({ action: "cancel" });
@@ -198,8 +204,8 @@ it("Not now writes attempt bookkeeping without materializing the default", async
 
 it("failed automatic discovery does not save the effective default as a preference", async () => {
   fixture.record = {};
-  const policy = storage.storageHistoryPolicy;
-  vi.spyOn(storage, "storageHistoryPolicy").mockImplementation((record) => policy(record, true));
+  const policy = storagePolicy.storageHistoryPolicy;
+  vi.spyOn(storagePolicy, "storageHistoryPolicy").mockImplementation((record) => policy(record, true));
   vi.useFakeTimers();
   await run(async () => { throw new Error("Unavailable"); });
   expect((await command({ action: "status" })).phase).toBe("error");

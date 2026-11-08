@@ -1,3 +1,4 @@
+import type { NavigationPreferencesStorage } from "@pwragent/owner-core/navigation-preferences-storage";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import type { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { getAppOverlayStore } from "../state/app-state";
@@ -28,4 +29,9 @@ export function resetDesktopOverlayStoreForTests(): void {
 
 export function setDesktopOverlayStoreForTests(store: DesktopOwnerStorage): void {
   overlayStoreOverride = store;
+}
+
+/** Read the active profile on each bootstrap read; do not capture its handle. */
+export function getDesktopNavigationPreferencesStorage(): NavigationPreferencesStorage {
+  return getAppOverlayStore();
 }

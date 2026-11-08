@@ -1,17 +1,17 @@
 import os from "node:os";
-import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "./state/app-runtime-instance-store";
+import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
 import {
   getProcessRuntimeIdentity,
   isProfileRuntimeIdentityLive,
   resolveActiveProfileName,
 } from "./profile";
-import { getAppRuntimeInstanceStore } from "./state/app-state";
+import { getDesktopRuntimeLeaseStorage } from "./storage/desktop-runtime-storage";
 import type {
   AppRuntimeInstanceRecord,
-  AppRuntimeInstanceStore,
+  RuntimeLeaseStorage,
   AppRuntimeMessagingDisabledReason,
   MessagingRuntimeLeaseRecord,
-} from "./state/app-runtime-instance-store";
+} from "@pwragent/owner-core/runtime-lease-storage";
 
 export const PWRAGENT_INSTANCE_ROOT_ENV = "PWRAGENT_INSTANCE_ROOT";
 const RUNTIME_BOOT_TIME_TOLERANCE_MS = 5_000;
@@ -42,7 +42,7 @@ export type RuntimeLeaseManagerOptions = {
   startedAt?: number;
   cwd?: string;
   now?: () => number;
-  store?: AppRuntimeInstanceStore;
+  store?: RuntimeLeaseStorage;
   env?: NodeJS.ProcessEnv;
   processIsAlive?: (processId: number) => boolean;
   runtimeIdentityIsAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
@@ -70,7 +70,7 @@ export class RuntimeLeaseManager {
   private readonly startedAt: number;
   private readonly cwd: string;
   private readonly now: () => number;
-  private readonly store: AppRuntimeInstanceStore;
+  private readonly store: RuntimeLeaseStorage;
   private readonly runtimeIdentityIsAlive: (
     owner: AppRuntimeInstanceRecord,
   ) => boolean;
@@ -93,7 +93,7 @@ export class RuntimeLeaseManager {
       ?? options.env?.[PWRAGENT_INSTANCE_ROOT_ENV]
       ?? process.env[PWRAGENT_INSTANCE_ROOT_ENV]
       ?? process.cwd();
-    this.store = options.store ?? getAppRuntimeInstanceStore();
+    this.store = options.store ?? getDesktopRuntimeLeaseStorage();
     this.systemBootedAt =
       options.systemBootedAt
       ?? this.now() - os.uptime() * 1_000;

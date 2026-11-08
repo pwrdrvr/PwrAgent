@@ -14,8 +14,8 @@ import {
 } from "./app-server/backend-registry";
 import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from "./storage-maintenance";
 import { removeRetiredCiArtifactStore } from "./pr-status/forge-artifact-download";
-import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
-import { observeStorageArchive } from "./state/storage-maintenance";
+import { hadExistingAppStateDatabase } from "./storage/desktop-state-lifecycle";
+import { getDesktopStorageMaintenanceStorage } from "./storage/desktop-storage-maintenance";
 import { getDesktopOverlayStore } from "./storage/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import type {
@@ -210,12 +210,12 @@ import {
 } from "./settings/provider-discovery-permit";
 import {
   disposeAppState,
-  initializeAppState,
+  initializeDesktopState,
   isAppStateInitialized,
   recordBootDecision,
   stopProfileRuntimeHeartbeatRefresh,
-} from "./state/app-state";
-import type { AutoVacuumConversion } from "./state/state-db";
+} from "./storage/desktop-state-lifecycle";
+import type { AutoVacuumConversion } from "./storage/desktop-state-lifecycle";
 import {
   createMainWindow,
   getRendererEntry,
@@ -276,7 +276,7 @@ import {
 import {
   SQLITE_WRITE_METRICS_ENV,
   SQLITE_WRITE_METRICS_FILE_ENV,
-} from "./state/sqlite-write-metrics";
+} from "./storage/desktop-state-lifecycle";
 import {
   isUpdateInstallInProgress,
   isUpdateInstallUpdaterQuitReady,
@@ -1651,7 +1651,7 @@ export function bootstrapApp(): void {
         bootMode,
       },
     });
-    reportAutoVacuumConversion(initializeAppState(bootMode).autoVacuum);
+    reportAutoVacuumConversion(initializeDesktopState(bootMode).autoVacuum);
     getDesktopConfigStore();
     if (bootMode === "active-profile") {
       const registry = getDesktopBackendRegistry();
@@ -1660,11 +1660,11 @@ export function bootstrapApp(): void {
         const method = event.notification.method;
         if (method === "thread/archived" || method === "thread/unarchived") {
           await interruptStartupStorageMaintenance();
-          observeStorageArchive(getAppStateDb().raw, event.backend, event.notification.params.threadId, method === "thread/archived");
+          getDesktopStorageMaintenanceStorage().observeArchive(event.backend, event.notification.params.threadId, method === "thread/archived");
         }
       });
       await runStartupStorageMaintenance({
-        state: getAppStateDb(),
+        storage: getDesktopStorageMaintenanceStorage(),
         existingDatabase: hadExistingAppStateDatabase(),
         onboardingCompleted: getDesktopConfigStore().read("onboarding").completed === true,
         discover: async () => {

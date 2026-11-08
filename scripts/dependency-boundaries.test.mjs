@@ -113,6 +113,24 @@ beforeAll(async () => {
     ipcStateCases.push({ from, to, forbidden: true });
   }
 
+  // Every root application module uses ports, including future consumers.
+  for (const consumer of ["index", "navigation-browse-mode-bootstrap", "profile-service", "runtime-lease-manager", "runtime-messaging-lease", "storage-maintenance", "future-root-service"]) {
+    for (const [style, statement] of [
+      ["static", 'import { value } from "./state/root-contract"; export { value };'],
+      ["type-import", 'import type { Value } from "./state/root-contract"; export type { Value };'],
+      ["type-expression", 'export type Value = import("./state/root-contract").Value;'],
+      ["type-export", 'export type { Value } from "./state/root-contract";'],
+      ["export", 'export * from "./state/root-contract";'],
+      ["dynamic", 'export const load = () => import("./state/root-contract");'],
+    ]) {
+      const to = "apps/desktop/src/main/state/root-contract.ts";
+      const from = `apps/desktop/src/main/${consumer}-${style}.ts`;
+      source(to, "export interface Value { value: string; }\nexport const value = 1;\n");
+      source(from, statement);
+      ipcStateCases.push({ from, to, forbidden: true });
+    }
+  }
+
   // dependency-cruiser normalizes entry paths against cwd, even with baseDir.
   // This suite runs in the desktop-main fork, so the fixture owns its cwd.
   const previousDirectory = process.cwd();

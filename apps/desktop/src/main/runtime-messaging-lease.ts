@@ -1,6 +1,6 @@
 import type {
   AppRuntimeMessagingDisabledReason,
-} from "./state/app-runtime-instance-store";
+} from "@pwragent/owner-core/runtime-lease-storage";
 import type {
   DesktopMessagingConfig,
 } from "./messaging/messaging-config";
