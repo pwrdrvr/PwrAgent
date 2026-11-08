@@ -12,7 +12,7 @@ import type {
   InboundPreviewMessage,
 } from "@pwragent/shared";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
-import type { AutomationRecord } from "./automation-store.js";
+import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";
 
 const MAX_SOURCE_TEXT_CHARS = 4_000;
 

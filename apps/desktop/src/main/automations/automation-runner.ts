@@ -11,7 +11,7 @@ import type {
 } from "../app-server/thread-turn-queue.js";
 import { getMainLogger } from "../log.js";
 import { buildAutomationTurnInput } from "./automation-prompt.js";
-import type { AutomationRecord } from "./automation-store.js";
+import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";
 
 const automationRunnerLog = getMainLogger("pwragent:automation-runner");
 
