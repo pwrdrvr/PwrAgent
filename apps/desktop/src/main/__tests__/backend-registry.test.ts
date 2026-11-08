@@ -32909,6 +32909,54 @@ command = "pnpm dev"
     }), { numRuns: 10 });
   });
 
+  describe("steering submission acceptance", () => {
+    // Provider acceptance is authoritative even if a later host effect fails.
+    // Retry completes that effect; it must never submit the input again.
+    async function recoverAcceptedSubmission(backend: "codex" | "claude", failures: number, copies: number): Promise<void> {
+      const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/steer"] } });
+      const registry = new DesktopBackendRegistry({ codexClient,
+        overlayStore: createOverlayStoreMock({ executionMode: "full-access" }), threadTitleGenerationService: null });
+      const host = registry as unknown as {
+        claudeBackend: ClaudeBackend;
+        rememberTurnInputAttachments: () => Promise<void>;
+        persistThreadMessageOrigin: () => Promise<void>;
+      };
+      const claudeSteer = vi.spyOn(host.claudeBackend, "steerTurn").mockResolvedValue({
+        threadId: "thread-1", turnId: "turn-1", messageId: "message-1",
+      });
+      const completion = backend === "codex"
+        ? vi.spyOn(host, "rememberTurnInputAttachments")
+        : vi.spyOn(host, "persistThreadMessageOrigin");
+      for (let index = 0; index < failures; index += 1) completion.mockRejectedValueOnce(new Error("Host effect failed"));
+      completion.mockResolvedValue(undefined);
+      const request = { backend, threadId: "thread-1", expectedTurnId: "turn-1", requestId: "accepted",
+        input: [{ type: "text" as const, text: "Deliver once" }] };
+      try {
+        for (let index = 0; index < failures; index += 1) {
+          const outcomes = await Promise.allSettled(Array.from({ length: copies }, () => registry.steerTurn(request)));
+          expect(outcomes.map((outcome) => outcome.status)).toEqual(Array(copies).fill("rejected"));
+        }
+        const results = await Promise.all(Array.from({ length: copies }, () => registry.steerTurn(request)));
+        expect(results).toEqual(Array(copies).fill({ backend, threadId: "thread-1", turnId: "turn-1", disposition: "steered" }));
+        expect(backend === "codex" ? codexClient.steerTurnCallCount : claudeSteer.mock.calls.length).toBe(1);
+        expect(completion).toHaveBeenCalledTimes(failures + 1);
+        await expect(registry.steerTurn({ ...request, input: [{ type: "text", text: "Different input" }] }))
+          .rejects.toThrow("reused with different input");
+      } finally {
+        await registry.close();
+      }
+    }
+
+    it("retains provider acceptance through generated post-delivery failures and duplicate retries", async () => {
+      await fc.assert(fc.asyncProperty(fc.constantFrom("codex" as const, "claude" as const),
+        fc.integer({ min: 1, max: 4 }), fc.integer({ min: 2, max: 5 }), recoverAcceptedSubmission), { numRuns: 12 });
+    });
+
+    it("does not resend a Codex steer when attachment retention fails once", async () => {
+      await recoverAcceptedSubmission("codex", 1, 2);
+    });
+  });
+
   it("attributes a messaging steer to its own completed user item", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
