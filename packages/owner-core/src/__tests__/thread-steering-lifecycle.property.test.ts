@@ -23,18 +23,21 @@ const deferred = <T>() => {
 it("matches the admission, failure recovery and retirement model across generated commands", async () => {
   await fc.assert(fc.asyncProperty(fc.array(fc.record({ id: target,
     action: fc.constantFrom("send", "send", "retire", "clear"), payload: fc.boolean(),
-    providerFails: fc.boolean(), completionFails: fc.boolean(), queued: fc.boolean(),
+    providerFails: fc.boolean(), retentionFails: fc.boolean(), completionFails: fc.boolean(), queued: fc.boolean(),
   }), { minLength: 1, maxLength: 80 }), async (operations) => {
-    const model: Array<{ id: typeof operations[number]["id"]; payload: boolean; complete: boolean;
+    const model: Array<{ id: typeof operations[number]["id"]; payload: boolean; retained: boolean; complete: boolean;
       result: SteerTurnResponse }> = [];
     let current = operations[0];
+    const retain = vi.fn(async () => { if (current.retentionFails) throw new Error("retention"); });
     const submit = vi.fn(async (params: SteerTurnRequest) => {
       if (current.providerFails) throw new Error("provider");
-      return { ...response(params), disposition: current.queued ? "queued" as const : "steered" as const };
+      return { response: { ...response(params), disposition: current.queued ? "queued" as const : "steered" as const },
+        complete: retain };
     });
     const complete = vi.fn(async () => { if (current.completionFails) throw new Error("completion"); });
     const lifecycle = new ThreadSteeringLifecycle({ submit, complete });
     let submissions = 0;
+    let retentions = 0;
     let completions = 0;
     for (const op of operations) {
       current = op;
@@ -57,22 +60,55 @@ it("matches the admission, failure recovery and retirement model across generate
           submissions += 1;
           if (op.providerFails) error = "provider";
           else {
-            entry = { id: op.id, payload: op.payload, complete: false,
+            entry = { id: op.id, payload: op.payload, retained: false, complete: false,
               result: { ...response(params), disposition: op.queued ? "queued" : "steered" } };
             model.push(entry);
           }
         }
         if (entry) {
-          completions += 1;
-          if (op.completionFails) error = "completion";
-          else entry.complete = true;
+          if (!entry.retained) {
+            retentions += 1;
+            if (op.retentionFails) error = "retention";
+            else entry.retained = true;
+          }
+          if (!error) {
+            completions += 1;
+            if (op.completionFails) error = "completion";
+            else entry.complete = true;
+          }
         }
       }
       if (error) await expect(lifecycle.steerTurn(params)).rejects.toThrow(error);
       else expect(await lifecycle.steerTurn(params)).toEqual(entry!.result);
       expect(submit).toHaveBeenCalledTimes(submissions);
+      expect(retain).toHaveBeenCalledTimes(retentions);
       expect(complete).toHaveBeenCalledTimes(completions);
     }
+  }));
+});
+
+it("shares pending provider retention before causal completion across duplicate callers", async () => {
+  await fc.assert(fc.asyncProperty(target, fc.integer({ min: 2, max: 8 }), fc.boolean(), async (id, copies, fail) => {
+    const gate = deferred<void>();
+    const entered = deferred<void>();
+    const retain = vi.fn(async () => { entered.resolve(); await gate.promise; });
+    const submit = vi.fn(async (params: SteerTurnRequest) => ({ response: response(params), complete: retain }));
+    const complete = vi.fn(async () => {});
+    const lifecycle = new ThreadSteeringLifecycle({ submit, complete });
+    let settled = 0;
+    const calls = Array.from({ length: copies }, () => lifecycle.steerTurn(request(id)).finally(() => { settled += 1; }));
+    const outcomes = Promise.allSettled(calls);
+    await entered.promise;
+    expect(settled).toBe(0);
+    expect(complete).not.toHaveBeenCalled();
+    if (fail) gate.reject(new Error("retention"));
+    else gate.resolve();
+    expect((await outcomes).map((item) => item.status)).toEqual(Array(copies).fill(fail ? "rejected" : "fulfilled"));
+    retain.mockResolvedValue(undefined);
+    expect(await lifecycle.steerTurn(request(id))).toEqual(response(request(id)));
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(retain).toHaveBeenCalledTimes(fail ? 2 : 1);
+    expect(complete).toHaveBeenCalledTimes(1);
   }));
 });
 
@@ -80,7 +116,7 @@ it("shares host completion and its failure among all generated duplicate callers
   await fc.assert(fc.asyncProperty(target, fc.integer({ min: 2, max: 10 }), fc.boolean(), async (id, copies, fail) => {
     const gate = deferred<void>();
     const entered = deferred<void>();
-    const submit = vi.fn(async (params: SteerTurnRequest) => response(params));
+    const submit = vi.fn(async (params: SteerTurnRequest) => ({ response: response(params) }));
     const complete = vi.fn(async () => { entered.resolve(); await gate.promise; });
     const lifecycle = new ThreadSteeringLifecycle({ submit, complete });
     let settled = 0;
@@ -106,9 +142,9 @@ it("never lets retired work evict or overwrite a newer request with the same ide
     const entered = deferred<void>();
     const gate = deferred<SteerTurnResponse>();
     const params = request(id);
-    const submit = vi.fn(async () => response(params));
+    const submit = vi.fn(async () => ({ response: response(params) }));
     const complete = vi.fn(async () => {});
-    if (providerFailure) submit.mockImplementationOnce(async () => { entered.resolve(); return await gate.promise; });
+    if (providerFailure) submit.mockImplementationOnce(async () => { entered.resolve(); return { response: await gate.promise }; });
     else complete.mockImplementationOnce(async () => { entered.resolve(); await gate.promise; });
     const lifecycle = new ThreadSteeringLifecycle({ submit, complete });
     const old = lifecycle.steerTurn(params).catch((error: unknown) => error);
@@ -128,7 +164,7 @@ it("admits before a synchronous host can reenter with the same request", async (
   let duplicate: Promise<SteerTurnResponse> | undefined;
   const submit = vi.fn(async () => {
     duplicate = lifecycle.steerTurn(params);
-    return response(params);
+    return { response: response(params) };
   });
   const lifecycle = new ThreadSteeringLifecycle({ submit, complete: async () => {} });
   expect(await lifecycle.steerTurn(params)).toEqual(response(params));
@@ -138,7 +174,7 @@ it("admits before a synchronous host can reenter with the same request", async (
 
 it("ignores optional ancestry on retries while fencing every meaningful input, origin and delivery change", async () => {
   await fc.assert(fc.asyncProperty(target, fc.string(), fc.string(), async (id, turnId, rootTurnId) => {
-    const submit = vi.fn(async (params: SteerTurnRequest) => response(params));
+    const submit = vi.fn(async (params: SteerTurnRequest) => ({ response: response(params) }));
     const lifecycle = new ThreadSteeringLifecycle({ submit, complete: async () => {} });
     const params = request(id);
     const origin: AppServerThreadMessageOrigin = { kind: "agent", sourceThread: { backend: "codex", threadId: "sender" } };

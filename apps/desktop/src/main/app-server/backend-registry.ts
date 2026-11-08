@@ -1,5 +1,6 @@
 import { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
-import { ThreadSteeringLifecycle } from "@pwragent/owner-core/thread-steering-lifecycle";
+import { ThreadSteeringLifecycle, type ThreadSteeringSubmission } from "@pwragent/owner-core/thread-steering-lifecycle";
+import { ThreadSteerSubmissionLifecycle, type PreparedAcpSteer, type PreparedCodexSteer } from "@pwragent/owner-core/thread-steer-submission-lifecycle";
 import { ThreadTitleLifecycle, extractFirstMeaningfulTextInput } from "@pwragent/owner-core/thread-title-lifecycle";
 import { ThreadNamingLifecycle, isPromptPlaceholderTitle, isInjectedContextPlaceholderTitle, type ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
@@ -27252,21 +27253,14 @@ export class DesktopBackendRegistry {
   private async submitSteerTurn(
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
-  ): Promise<SteerTurnResponse> {
-    // Refuse before any attachment is copied into private storage.
-    if (params.delivery === "now" && params.backend !== "claude") {
-      throw new Error("This backend cannot interrupt a running response. Steer or queue the message instead.");
-    }
-    await this.assertThreadNotLocked(params.backend, params.threadId);
-    // While the restart gate is shut, a steer that did not come from the
-    // operator (messaging, another thread, a monitor) waits in the queue
-    // like any other automatic message. The quiet restart's own steer and
-    // the operator's go through.
-    if (
-      this.isRestartGateClosed()
-      && messageOrigin
-      && messageOrigin.systemReason !== "app-restart"
-    ) {
+  ): Promise<ThreadSteeringSubmission> {
+    return await this.threadSteerSubmission.submit(params, messageOrigin);
+  }
+
+  private readonly threadSteerSubmission = new ThreadSteerSubmissionLifecycle({
+    assertUnlocked: (request) => this.assertThreadNotLocked(request.backend, request.threadId),
+    isRestartGateClosed: () => this.isRestartGateClosed(),
+    queue: async (params, messageOrigin, origin) => {
       const queued = await this.admitThreadAttachments(
         { backend: params.backend, threadId: params.threadId, input: params.input },
         (input, onAdmission) => this.threadTurnQueue.submitSteer({
@@ -27274,100 +27268,84 @@ export class DesktopBackendRegistry {
           threadId: params.threadId,
           input,
           messageOrigin,
-          origin: messageOrigin.kind === "messaging" ? "messaging" : "manual",
+          origin,
         }, { onAdmission }),
       );
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        turnId: params.expectedTurnId,
-        disposition: "queued",
-        queueEntryId: queued.entry.id,
-        queueEntryCreatedAt: queued.entry.createdAt,
-      };
-    }
-    const review = this.findReviewForParentTurn({
-      backend: params.backend,
-      parentThreadId: params.threadId,
-    });
-    if (review?.mode === "native") {
-      throw new Error("Native review steering is unsupported; queue a follow-up instead.");
-    }
-    const input = await ownThreadInputAttachments(
+      return queued.entry;
+    },
+    reviewMode: (params) => this.findReviewForParentTurn({
+      backend: params.backend, parentThreadId: params.threadId,
+    })?.mode,
+    prepareInput: async (params) => await ownThreadInputAttachments(
       await enrichLocalFileInputs(params.input, {
         privateStorageRoots: this.localFilePrivateStorageRoots,
       }),
       params,
       this.localFilePrivateStorageRoots,
-    );
-    if (params.backend === "claude") {
-      const result = await this.claudeBackend.steerTurn({ ...params, input, messageOrigin });
+    ),
+    steerClaude: (params, input, messageOrigin) => this.claudeBackend.steerTurn({ ...params, input, messageOrigin }),
+    retainClaude: async (params, messageId, messageOrigin) => {
       await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
-        messageId: result.messageId, origin: messageOrigin });
-      return { backend: "claude", threadId: result.threadId, turnId: result.turnId, disposition: "steered" };
+        messageId, origin: messageOrigin });
+    },
+    prepareAcp: (params, input, origin) => this.prepareAcpSteer(params, input, origin),
+    prepareCodex: (params, input, origin) => this.prepareCodexSteer(params, input, origin),
+  });
+
+  private async prepareAcpSteer(
+    params: SteerTurnRequest & { backend: AcpBackendId },
+    input: AppServerTurnInputItem[],
+    messageOrigin?: AppServerThreadMessageOrigin,
+  ): Promise<PreparedAcpSteer> {
+    const acpBackend = params.backend;
+    const promptPayload = await inputToAcpPrompt(input, {
+      owner: { backend: acpBackend, threadId: params.threadId },
+      privateStorageRoots: this.localFilePrivateStorageRoots,
+    });
+    if (!promptPayload) {
+      throw new Error("ACP steering requires text or image input");
     }
-    if (isAcpBackendId(params.backend)) {
-      const acpBackend = params.backend;
-      const promptPayload = await inputToAcpPrompt(input, {
-        owner: { backend: acpBackend, threadId: params.threadId },
-        privateStorageRoots: this.localFilePrivateStorageRoots,
-      });
-      if (!promptPayload) {
-        throw new Error("ACP steering requires text or image input");
-      }
-      const pendingMessageContextId = await this.registerPendingThreadMessageContext({
-        backend: params.backend,
-        input,
-        threadId: params.threadId,
-        origin: messageOrigin,
-        text: extractFirstMeaningfulTextInput(params.input),
-        retainAttachments: true,
-      });
-      const text = promptPayload.prompt
-        || promptPayload.promptContent.flatMap((block) =>
-          block.type === "text" && block.text.trim() ? [block.text] : []
-        )[0]
-        || "Additional image context.";
-      let result: { delivery: "currentTurn" | "nextTurn" };
-      try {
-        result = await this.acpSessionPromptLocks.run(
-          executionModeQueueKey(acpBackend, params.threadId),
-          async () => {
-            this.assertExpectedAcpSteerTurn({
-              backend: acpBackend,
-              threadId: params.threadId,
-              expectedTurnId: params.expectedTurnId,
-            });
-            return await this.acpBackend.steerSession({
-              backend: acpBackend,
-              content: promptPayload.promptContent,
-              interjectionId: params.requestId,
-              sessionId: params.threadId,
-              text,
-            });
-          },
-        );
-      } catch (error) {
-        this.forgetPendingThreadMessageContext(pendingMessageContextId);
-        throw error;
-      }
-      if (result.delivery === "currentTurn") {
-        this.bindPendingThreadMessageContext(
-          pendingMessageContextId,
-          params.expectedTurnId,
-        );
-      }
-      // A next-turn steer has no turn id yet. Leave its message context
-      // unbound so the next turn/started or matching user item can claim its
-      // origin and image parts instead of attaching them to the finished turn.
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        turnId: params.expectedTurnId,
-        disposition:
-          result.delivery === "nextTurn" ? "queued" : "steered",
-      };
-    }
+    const pendingMessageContextId = await this.registerPendingThreadMessageContext({
+      backend: params.backend,
+      input,
+      threadId: params.threadId,
+      origin: messageOrigin,
+      text: extractFirstMeaningfulTextInput(params.input),
+      retainAttachments: true,
+    });
+    const text = promptPayload.prompt
+      || promptPayload.promptContent.flatMap((block) =>
+        block.type === "text" && block.text.trim() ? [block.text] : []
+      )[0]
+      || "Additional image context.";
+    return {
+      submit: () => this.acpSessionPromptLocks.run(
+        executionModeQueueKey(acpBackend, params.threadId),
+        async () => {
+          this.assertExpectedAcpSteerTurn({
+            backend: acpBackend,
+            threadId: params.threadId,
+            expectedTurnId: params.expectedTurnId,
+          });
+          return await this.acpBackend.steerSession({
+            backend: acpBackend,
+            content: promptPayload.promptContent,
+            interjectionId: params.requestId,
+            sessionId: params.threadId,
+            text,
+          });
+        },
+      ),
+      forget: () => this.forgetPendingThreadMessageContext(pendingMessageContextId),
+      bindCurrentTurn: () => this.bindPendingThreadMessageContext(pendingMessageContextId, params.expectedTurnId),
+    };
+  }
+
+  private async prepareCodexSteer(
+    params: SteerTurnRequest,
+    input: AppServerTurnInputItem[],
+    messageOrigin?: AppServerThreadMessageOrigin,
+  ): Promise<PreparedCodexSteer> {
     const pendingMessageContextId = await this.registerPendingThreadMessageContext({
       backend: params.backend,
       input,
@@ -27376,47 +27354,31 @@ export class DesktopBackendRegistry {
       origin: messageOrigin,
       text: extractFirstMeaningfulTextInput(params.input),
     });
-    const steerWithClient = async (
-      client: BackendClient,
-    ): Promise<{ threadId: string; turnId: string }> => {
-      if (!client.steerTurn) {
-        throw new Error("Selected backend does not support turn/steer");
-      }
-      return await client.steerTurn({
-        threadId: params.threadId,
-        input,
-        ...(pendingMessageContextId ? {
-          onInputTextPrepared: (text: string | undefined) => {
-            this.updatePendingThreadMessageText(pendingMessageContextId, text);
-          },
-        } : {}),
-        expectedTurnId: params.expectedTurnId,
-      });
-    };
-
-    let result: { threadId: string; turnId: string };
-    try {
-      result = await this.withActiveCodexThreadClient(
-        params.threadId,
-        steerWithClient,
-      );
-    } catch (error) {
-      this.forgetPendingThreadMessageContext(pendingMessageContextId);
-      throw error;
-    }
-
-    await this.rememberTurnInputAttachments({
-      backend: params.backend,
-      threadId: result.threadId,
-      turnId: result.turnId,
-      input,
-    });
-
     return {
-      backend: params.backend,
-      threadId: result.threadId,
-      turnId: result.turnId,
-      disposition: "steered",
+      submit: () => this.withActiveCodexThreadClient(params.threadId, async (client) => {
+        if (!client.steerTurn) {
+          throw new Error("Selected backend does not support turn/steer");
+        }
+        return await client.steerTurn({
+          threadId: params.threadId,
+          input,
+          ...(pendingMessageContextId ? {
+            onInputTextPrepared: (text: string | undefined) => {
+              this.updatePendingThreadMessageText(pendingMessageContextId, text);
+            },
+          } : {}),
+          expectedTurnId: params.expectedTurnId,
+        });
+      }),
+      forget: () => this.forgetPendingThreadMessageContext(pendingMessageContextId),
+      retain: async (result) => {
+        await this.rememberTurnInputAttachments({
+          backend: params.backend,
+          threadId: result.threadId,
+          turnId: result.turnId,
+          input,
+        });
+      },
     };
   }
 
