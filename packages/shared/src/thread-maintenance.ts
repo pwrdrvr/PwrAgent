@@ -52,6 +52,9 @@ export type ThreadMaintenanceSpace = {
   /** True when measurement stopped early and the figures are lower bounds. */
   lowerBound?: boolean;
   largest?: { name: string; bytes: number }[];
+  /** Positively identified rebuildable output inside this owned checkout.
+   * Classification does not make the checkout eligible for hibernation. */
+  rebuildableOutput?: { kind: ThreadMaintenanceBuildOutput["kind"]; allocatedBytes?: number; lowerBound?: boolean }[];
 };
 
 /** A known owner of a kept checkout. Identity comes from the provider and
@@ -157,6 +160,9 @@ export type ThreadMaintenanceBuildOutput = {
   /** One Cargo build profile directory. The owner skips it while a build
    * holds its lock, keeps the lock file, and deletes only compiled files. */
   kind: "cargo";
+  /** Provider-identified threads using this checkout. Current owners never
+   * offer independent output cleanup without a positively identified thread. */
+  threads?: ThreadMaintenanceKeptThread[];
   checkoutPath: string;
   /** The profile directory, such as `target/debug` or
    * `target/<triple>/release`; not the whole target directory. */
