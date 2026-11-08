@@ -44,6 +44,7 @@ import { inspectHibernationWorkspace, type HibernationWorkspaceInspection } from
 import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor } from "./checkout-hibernation";
 import { missingWorktreeRepository } from "./worktree-archive-service";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
+import type { CargoBuildOutputCandidate, scanCargoBuildOutputs, removeCargoBuildOutput } from "./maintenance-cargo-output";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
 const FAILURE_LIMIT = 50;
@@ -60,7 +61,7 @@ export type ArchivedCheckoutAudit = {
   unreferenced?: string[];
   unreferencedUnavailable?: string;
   unreferencedTruncated?: boolean;
-  inventory?: { roots: string[]; paths: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
+  inventory?: { roots: string[]; paths: string[]; repositories?: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
     keptPaths?: { path: string; reason: string }[] };
 };
 
@@ -96,6 +97,7 @@ export type ThreadMaintenanceDeps = {
   /** Allocation only, never snapshot size or predicted space recovery. */
   measureAllocation?: (checkout: string, signal: AbortSignal) => Promise<ThreadMaintenanceSpace | undefined>;
   isCheckoutOnDisk?: (checkout: string) => Promise<boolean>;
+  buildOutputs?: { scan: typeof scanCargoBuildOutputs; remove: typeof removeCargoBuildOutput };
   /** Archive one reviewed family as an operator archive. Resolves false when cancelled. */
   archiveFamily: (family: ThreadArchiveCandidate[], options: {
     preserveWorktrees: boolean;
@@ -166,6 +168,7 @@ type RetainedScan = {
   subthreads: Map<string, string[]>;
   families: Map<string, { family: ThreadArchiveCandidate[]; row: ThreadMaintenanceIdleThread }>;
   checkouts: Map<string, ThreadMaintenanceArchivedCheckout>;
+  buildOutputs: Map<string, CargoBuildOutputCandidate>;
   allocation: Map<string, Promise<ThreadMaintenanceSpace | undefined>>;
 };
 
@@ -229,6 +232,7 @@ export class ThreadMaintenanceService {
       scan: undefined as unknown as ThreadMaintenanceScan,
       families: new Map(),
       checkouts: new Map(),
+      buildOutputs: new Map(),
       subthreads: new Map(),
       projects: new Map(),
       hibernate: new Map(),
@@ -658,7 +662,22 @@ export class ThreadMaintenanceService {
       const reason = excludedReasons.get(target) ?? "Protected, referenced, recent or not safe to snapshot";
       excluded.set(reason, [...excluded.get(reason) ?? [], target]);
     }
-    return { items: result, kept, emptyFolders: audit.emptyFolders,
+    let buildOutputs: ThreadMaintenanceScan["checkouts"]["buildOutputs"];
+    if (this.deps.buildOutputs) {
+      progress.discovery({ detail: "Finding rebuildable Cargo output", found: 0 });
+      const roots = [...new Set([...paths, ...audit.inventory?.repositories ?? []])];
+      try {
+        const outputs = await this.deps.buildOutputs.scan(roots, this.abort.signal, (update) => progress.discovery(update));
+        for (const item of outputs.items) {
+          if (projectFilter && path.resolve(item.row.checkoutPath) !== path.resolve(projectFilter)
+            && await checkoutProjectPath(item.row.checkoutPath) !== path.resolve(projectFilter)) continue;
+          retained.buildOutputs.set(item.row.outputPath, item);
+        }
+        buildOutputs = [...retained.buildOutputs.values()].map((item) => item.row);
+        for (const item of outputs.kept) kept[item.reason] = (kept[item.reason] ?? 0) + 1;
+      } catch (error) { fail("checkouts", error); }
+    }
+    return { items: result, kept, emptyFolders: audit.emptyFolders, ...(buildOutputs ? { buildOutputs } : {}),
       coverage: allocationCoverage(measuredPaths, audit.inventory?.providers ?? [], audit.inventory?.roots,
         [...excluded].map(([reason, paths]) => ({ reason, paths, count: paths.length })), this.now()) };
   }
@@ -799,9 +818,16 @@ export class ThreadMaintenanceService {
     // Step 3: archived checkouts. One failure never skips the rest.
     const checkoutStep: ThreadMaintenanceStepResult = { step: "checkouts",
       ran: request.removeCheckouts.length > 0 || request.trashCheckouts.length > 0
-        || (request.removeUnreferenced?.length ?? 0) > 0 || request.removeEmptyFolders,
+        || (request.removeUnreferenced?.length ?? 0) > 0 || (request.removeBuildOutputs?.length ?? 0) > 0 || request.removeEmptyFolders,
       done: 0, kept: 0, failed: 0 };
     steps.push(checkoutStep);
+    const removedPaths = new Set<string>();
+    const removed = (worktreePath: string) => {
+      if (removedPaths.has(worktreePath)) return;
+      removedPaths.add(worktreePath);
+      const bytes = retained.checkouts.get(worktreePath)?.space?.allocatedBytes;
+      if (bytes !== undefined) checkoutStep.allocatedBytesRemoved = (checkoutStep.allocatedBytesRemoved ?? 0) + bytes;
+    };
     const removable = request.removeCheckouts.filter((item) => retained.checkouts.get(item.worktreePath)?.kind === "removable");
     for (const item of request.removeCheckouts) {
       if (retained.checkouts.get(item.worktreePath)?.kind !== "removable") {
@@ -822,6 +848,7 @@ export class ThreadMaintenanceService {
           worktreePaths: removable.map((item) => item.worktreePath), emptyFolders: request.removeEmptyFolders,
         });
         checkoutStep.done += removal.removed.length + removal.emptyFoldersRemoved;
+        for (const item of removal.removed) removed(item.worktreePath);
         for (const item of removal.kept) {
           checkoutStep.kept += 1;
           addProblem({ step: "checkouts", kind: "kept", object: item.worktreePath, reason: item.reason, path: item.worktreePath });
@@ -856,6 +883,7 @@ export class ThreadMaintenanceService {
         }
         await this.deps.trashItem(item.worktreePath);
         checkoutStep.done += 1;
+        removed(item.worktreePath);
       } catch (error) {
         checkoutStep.failed += 1;
         this.deps.onError?.(error, { step: "checkouts", path: item.worktreePath });
@@ -863,7 +891,32 @@ export class ThreadMaintenanceService {
           detail: errorMessage(error), path: item.worktreePath });
       }
     }
-    await this.removeUnreferenced(request, retained, checkoutStep, { stopped, keepStopped, addProblem, update });
+    await this.removeUnreferenced(request, retained, checkoutStep, { stopped, keepStopped, addProblem, update, removed });
+    for (const outputPath of new Set((request.removeBuildOutputs ?? []).map((item) => item.outputPath))) {
+      const candidate = retained.buildOutputs.get(outputPath);
+      if (!candidate || !this.deps.buildOutputs) {
+        checkoutStep.failed += 1;
+        addProblem({ step: "checkouts", kind: "failed", object: outputPath, path: outputPath, reason: "Not in this scan" });
+        continue;
+      }
+      if ([...removedPaths].some((parent) => outputPath.startsWith(parent + path.sep))) continue;
+      if (stopped()) { keepStopped(outputPath); continue; }
+      update({ current: { step: "checkouts", processed: 0, total: request.removeBuildOutputs!.length, object: outputPath } });
+      try {
+        const result = await this.deps.buildOutputs.remove(candidate, this.abort.signal);
+        if (result.kept) {
+          checkoutStep.kept += 1;
+          addProblem({ step: "checkouts", kind: "kept", object: outputPath, path: outputPath, reason: result.kept,
+            ...(candidate.row.space?.allocatedBytes !== undefined ? { bytes: candidate.row.space.allocatedBytes } : {}) });
+        } else if (!result.alreadyGone) {
+          checkoutStep.done += 1;
+          if (result.allocatedBytesRemoved !== undefined) checkoutStep.allocatedBytesRemoved = (checkoutStep.allocatedBytesRemoved ?? 0) + result.allocatedBytesRemoved;
+        }
+      } catch (error) {
+        checkoutStep.failed += 1;
+        addProblem({ step: "checkouts", kind: "failed", object: outputPath, path: outputPath, reason: "Build output removal failed", detail: errorMessage(error) });
+      }
+    }
     // Repository-gone checkouts the operator left unselected are kept on
     // purpose. A run that skipped this step reports nothing about them.
     for (const checkout of checkoutStep.ran ? retained.checkouts.values() : []) {
@@ -892,6 +945,7 @@ export class ThreadMaintenanceService {
       keepStopped: (worktreePath: string) => void;
       addProblem: (problem: ThreadMaintenanceProblem) => void;
       update: (patch: Partial<ThreadMaintenanceRun>) => void;
+      removed: (worktreePath: string) => void;
     },
   ): Promise<void> {
     const kept = (worktreePath: string, reason: string, detail?: string) => {
@@ -934,6 +988,7 @@ export class ThreadMaintenanceService {
     try {
       const removal = await this.deps.removeUnreferencedCheckouts(ready);
       checkoutStep.done += removal.removed.length;
+      for (const item of removal.removed) run.removed(item.worktreePath);
       for (const item of removal.kept) kept(item.worktreePath, item.reason);
       for (const item of removal.failed) failed(item.worktreePath, "Removal failed", item.message);
     } catch (error) {

@@ -93,6 +93,20 @@ export async function maintenanceWorktreeRoots(
     const profiles = path.join(toolHome, "profiles");
     for (const name of await reader.listDirectories(profiles)) roots.add(path.join(profiles, name, "worktrees"));
   }
+  // Workspace containers are not confined to provider homes. Discover the
+  // conventional worktree folders beneath every top-level workspace (not a
+  // list of project directory names); Git registrations cover arbitrary names.
+  for (const parent of [home, ...(await reader.listDirectories(home)).filter((name) => !name.startsWith(".")).map((name) => path.join(home, name))]) {
+    let names: string[];
+    try { names = await reader.listDirectories(parent); }
+    catch (error) {
+      if (["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
+      throw error;
+    }
+    for (const name of names) {
+      if (["worktrees", ".worktrees", "claude-worktrees"].includes(name)) roots.add(path.join(parent, name));
+    }
+  }
   return [...roots];
 }
 

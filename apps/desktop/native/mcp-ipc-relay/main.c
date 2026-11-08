@@ -2,6 +2,7 @@
  * One verified local connection, never a listener. stdout is a one-byte
  * readiness marker followed by opaque HTTP bytes. No input is read until
  * identity verification succeeds. Process termination owns all pending I/O.
+ * --maintenance-lock instead holds an existing advisory lock until stdin EOF.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -13,6 +14,7 @@
 #include <windows.h>
 #include <aclapi.h>
 #include <wchar.h>
+#include "maintenance-lock.h"
 
 static void fail(const char *message) {
   fprintf(stderr, "MCP IPC: %s (Windows error %lu)\n", message, GetLastError());
@@ -122,6 +124,7 @@ static DWORD WINAPI copy_bytes(void *arg) {
 }
 
 int wmain(int argc, wchar_t **argv) {
+  if (argc == 3 && !wcscmp(argv[1], L"--maintenance-lock")) return maintenance_lock(argv[2]);
   if (argc != 2) fail("expected one endpoint");
   HANDLE pipe = verified_pipe(argv[1]);
   HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -143,6 +146,7 @@ int wmain(int argc, wchar_t **argv) {
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include "maintenance-lock.h"
 #ifdef __APPLE__
 #include <sys/acl.h>
 #endif
@@ -307,6 +311,7 @@ static void transfer_write(int fd, Buffer *buffer) {
   buffer->start += (size_t)n;
 }
 int main(int argc, char **argv) {
+  if (argc == 3 && !strcmp(argv[1], "--maintenance-lock")) return maintenance_lock(argv[2]);
   if (argc != 2) { errno = EINVAL; fail("expected one endpoint"); }
   signal(SIGPIPE, SIG_IGN);
   int fd = verified_socket(argv[1]);

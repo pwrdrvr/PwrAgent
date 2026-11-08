@@ -24,7 +24,7 @@ import {
   type ThreadMaintenanceDeps,
 } from "../app-server/thread-maintenance-service";
 import { inspectMaintenanceWorkspace, rebuildableOutputFolder } from "../app-server/thread-maintenance-workspace";
-import { summarizeThreadMaintenanceScan } from "../agent-tools/thread-maintenance-tool-results";
+import { planThreadMaintenanceApply, summarizeThreadMaintenanceScan, threadMaintenanceConfirmationQuestion } from "../agent-tools/thread-maintenance-tool-results";
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
@@ -94,6 +94,71 @@ function harness(candidates: ThreadArchiveCandidate[], overrides: Partial<Thread
 }
 
 describe("ThreadMaintenanceService.scan", () => {
+  it("allows the agent to plan only reviewed Cargo output and describes cache-only cleanup accurately", async () => {
+    const scan = await harness([]).service.scan({ steps: ["checkouts"] });
+    scan.checkouts.buildOutputs = [0, 1].map((index) => ({ kind: "cargo", checkoutPath: `/fixture/${index}`,
+      outputPath: `/fixture/${index}/target/debug`, manifestPath: `/fixture/${index}/Cargo.toml` }));
+    fc.assert(fc.property(fc.array(fc.nat({ max: 3 }), { minLength: 1, maxLength: 10 }), (selection) => {
+      const plan = planThreadMaintenanceApply({ scanId: scan.scanId,
+        removeBuildOutputs: selection.map((index) => ({ outputPath: `/fixture/${index}/target/debug` })) }, scan, { backend: "codex", threadId: "caller" });
+      if (selection.some((index) => index >= 2)) expect(plan).toHaveProperty("error");
+      else {
+        expect(plan).not.toHaveProperty("error");
+        if ("error" in plan) throw new Error(plan.error);
+        expect(plan.request.removeBuildOutputs).toHaveLength(new Set(selection).size);
+        const question = threadMaintenanceConfirmationQuestion(plan.summary);
+        expect(question).toContain("Only compiled Cargo output");
+        expect(question).not.toContain("recovery snapshots");
+      }
+    }));
+  });
+
+  it("offers build output independently of whole-checkout eligibility and retains reviewed targets", async () => {
+    const row = { kind: "cargo" as const, checkoutPath: "/fixture/repo", outputPath: "/fixture/repo/target/debug",
+      manifestPath: "/fixture/repo/Cargo.toml", space: { allocatedBytes: 32 * 2 ** 30 } };
+    const remove = vi.fn(async () => ({ allocatedBytesRemoved: row.space.allocatedBytes }));
+    const { service } = harness([candidate("recent", { daysIdle: 0, cwd: row.checkoutPath })], {
+      inspectWorkspace: async () => ({ keep: "Other ignored files" }),
+      buildOutputs: { scan: async () => ({ items: [{ row, identity: "fixture" }], kept: [] }), remove },
+    });
+    const scan = await service.scan({ steps: ["checkouts"] });
+    expect(scan.checkouts.items).toEqual([]);
+    expect(scan.checkouts.buildOutputs).toEqual([row]);
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, removeBuildOutputs: [{ outputPath: row.outputPath }, { outputPath: row.outputPath }] });
+    expect(remove).toHaveBeenCalledOnce();
+    expect(run.steps.find((step) => step.step === "checkouts"))
+      .toMatchObject({ done: 1, failed: 0, allocatedBytesRemoved: row.space.allocatedBytes });
+  });
+
+  it("matches the selected-profile model for duplicates, missing, busy and failed output", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("done", "missing", "busy", "error"), { maxLength: 8 }), fc.array(fc.nat({ max: 10 }), { maxLength: 14 }), async (states, selection) => {
+      const rows = states.map((_, index) => ({ kind: "cargo" as const, checkoutPath: `/fixture/${index}`,
+        outputPath: `/fixture/${index}/target/debug`, manifestPath: `/fixture/${index}/Cargo.toml`, space: { allocatedBytes: (index + 1) * 1024 } }));
+      const called: string[] = [];
+      const { service } = harness([], { buildOutputs: {
+        scan: async () => ({ items: rows.map((row) => ({ row, identity: "fixture" })), kept: [] }),
+        remove: async ({ row }) => {
+          called.push(row.outputPath);
+          const index = rows.findIndex((item) => item.outputPath === row.outputPath);
+          if (states[index] === "error") throw new Error("fixture error");
+          if (states[index] === "missing") return { alreadyGone: true };
+          if (states[index] === "busy") return { kept: "Cargo build in progress" };
+          return { allocatedBytesRemoved: rows[index]!.space.allocatedBytes };
+        },
+      } });
+      const scan = await service.scan({ steps: ["checkouts"] });
+      const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+        removeBuildOutputs: selection.map((index) => ({ outputPath: `/fixture/${index}/target/debug` })) });
+      const selected = [...new Set(selection)];
+      const count = (state: string) => selected.filter((index) => states[index] === state).length;
+      const step = run.steps.find((item) => item.step === "checkouts")!;
+      expect(step).toMatchObject({ done: count("done"), kept: count("busy"), failed: count("error") + selected.filter((index) => index >= states.length).length });
+      expect(step.allocatedBytesRemoved ?? 0).toBe(selected.filter((index) => states[index] === "done").reduce((total, index) => total + rows[index]!.space.allocatedBytes, 0));
+      expect(called).toEqual(selected.filter((index) => index < states.length).map((index) => rows[index]!.outputPath));
+    }), { numRuns: 20 });
+  });
+
   it("keeps measured allocation and coverage in bounded agent tool results", async () => {
     const scan = await harness([]).service.scan({ steps: ["checkouts"] });
     fc.assert(fc.property(fc.array(fc.nat({ max: 1_000_000 }), { maxLength: 140 }), (sizes) => {
@@ -104,6 +169,12 @@ describe("ThreadMaintenanceService.scan", () => {
       const summary = summarizeThreadMaintenanceScan(scan);
       expect(summary.hibernate?.coverage).toEqual(scan.hibernate.coverage);
       expect(summary.hibernate?.items.map((item) => item.space)).toEqual(scan.hibernate.items.slice(0, 100).map((item) => item.space));
+      scan.checkouts.buildOutputs = sizes.map((bytes, index) => ({ kind: "cargo", checkoutPath: `/fixture/${index}`,
+        outputPath: `/fixture/${index}/target/debug`, manifestPath: `/fixture/${index}/Cargo.toml`, space: { allocatedBytes: bytes } }));
+      const complete = summarizeThreadMaintenanceScan(scan);
+      expect(complete.checkouts.buildOutputCount).toBe(sizes.length);
+      expect(complete.checkouts.buildOutputSpace?.allocatedBytes).toBe(sizes.reduce((sum, value) => sum + value, 0));
+      expect(complete.checkouts.buildOutputs).toHaveLength(Math.min(100, sizes.length));
     }));
   });
 

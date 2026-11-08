@@ -8,6 +8,7 @@ import { MAX_WORKTREE_SNAPSHOT_BYTES } from "./app-server/worktree-archive-servi
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getMainLogger } from "./log";
 import { measureMaintenanceAllocation } from "./app-server/maintenance-disk-usage";
+import { scanCargoBuildOutputs, removeCargoBuildOutput } from "./app-server/maintenance-cargo-output";
 
 const maintenanceLog = getMainLogger("pwragent:thread-maintenance");
 
@@ -27,6 +28,7 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
     isBusy: (candidate) => getDesktopBackendRegistry().isArchiveCandidateBusy(candidate),
     auditArchivedCheckouts: async (onProgress) => await getDesktopBackendRegistry().auditArchivedCheckouts(onProgress),
     measureAllocation: measureMaintenanceAllocation,
+    buildOutputs: { scan: scanCargoBuildOutputs, remove: removeCargoBuildOutput },
     isCheckoutOnDisk: async (checkout) => {
       try { return (await stat(checkout)).isDirectory(); }
       catch (error) {

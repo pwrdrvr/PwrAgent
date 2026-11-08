@@ -20,6 +20,7 @@ import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFami
 import { runGitCommand } from "./git-executable";
 import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
 import { isSettledWorktree, listManagedWorktrees, maintenanceWorktreeRoots, nodeWorktreeRootReader, registeredWorktreePaths, unreferencedWorktrees, type MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
+import { maintenanceRepositoryHints, resolveMaintenanceRepositories } from "./maintenance-repositories";
 import { ArchiveFleetIndex, type FleetChange, type FleetRow } from "./archive-cleanup-fleet-index";
 import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
@@ -2585,7 +2586,7 @@ export type ArchivedWorktreeRepairReport = {
   unreferencedTruncated?: boolean;
   /** Why unreferenced checkouts could not be listed this time. */
   unreferencedUnavailable?: string;
-  inventory?: { roots: string[]; paths: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
+  inventory?: { roots: string[]; paths: string[]; repositories?: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
     keptPaths?: { path: string; reason: string }[] };
 };
 
@@ -40207,17 +40208,27 @@ export class DesktopBackendRegistry {
   private async discoverMaintenanceWorktrees(
     inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "archivedThreads" | "ownershipPaths">,
     onProgress?: (progress: MaintenanceDiscoveryProgress) => void,
-  ): Promise<{ roots: string[]; paths: string[]; truncated: boolean; unqueriedRoots: string[]; unavailable?: string }> {
+  ): Promise<{ roots: string[]; paths: string[]; repositories: string[]; truncated: boolean; unqueriedRoots: string[]; unavailable?: string }> {
     const roots = await this.managedWorktreeRoots();
     const found = await listManagedWorktrees(roots, nodeWorktreeRootReader, undefined, onProgress);
     const paths = new Set(found.paths);
     // One registration read per repository, including repositories known only
     // through an archived or a child thread. No directory-name allowlist.
-    const repositories = new Set<string>();
-    for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) {
-      for (const directory of thread.linkedDirectories) repositories.add(directory.path);
+    const repositoryHints = new Set<string>();
+    for (const checkout of found.paths) repositoryHints.add(checkout);
+    for (const root of this.managedWorktreeRootsOverride ? [] : roots) {
+      for (const entry of await nodeWorktreeRootReader.listDirectories(root)) repositoryHints.add(path.join(root, entry));
     }
+    for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) {
+      for (const directory of thread.linkedDirectories) repositoryHints.add(directory.path);
+    }
+    const profileHints = this.managedWorktreeRootsOverride ? { paths: [], incomplete: false }
+      : await maintenanceRepositoryHints(path.dirname(userHomeWorktreesRoot()), onProgress);
+    for (const value of profileHints.paths) repositoryHints.add(value);
+    const repositories = this.managedWorktreeRootsOverride ? [...repositoryHints]
+      : await resolveMaintenanceRepositories([...repositoryHints], onProgress);
     let unavailable: string | undefined;
+    if (profileHints.incomplete) unavailable = "Some PwrAgent profile repository hints could not be read";
     for (const repository of repositories) {
       onProgress?.({ detail: "Reading Git worktree registrations", root: repository, found: paths.size });
       try {
@@ -40234,8 +40245,9 @@ export class DesktopBackendRegistry {
     }
     const queriedRoots = new Set([userHomeWorktreesRoot(), resolveActiveProfilePath("worktrees"),
       path.join(await this.readActiveCodexMcpHome(), "worktrees")].map((root) => path.resolve(root)));
-    const unqueriedRoots = this.managedWorktreeRootsOverride ? [] : roots.filter((root) => !queriedRoots.has(path.resolve(root)));
-    return { roots, paths: [...paths], truncated: found.truncated, unqueriedRoots, ...(unavailable ? { unavailable } : {}) };
+    const unqueriedRoots = this.managedWorktreeRootsOverride ? [] : roots.filter((root) =>
+      /[/\\]profiles[/\\]/.test(root) && !queriedRoots.has(path.resolve(root)));
+    return { roots, paths: [...paths], repositories: [...repositories], truncated: found.truncated, unqueriedRoots, ...(unavailable ? { unavailable } : {}) };
   }
 
   /** Canonical paths every active and archived thread refers to, or
@@ -40264,7 +40276,8 @@ export class DesktopBackendRegistry {
     const found = await this.discoverMaintenanceWorktrees(inventory, onProgress);
     const providers = new Map<string, number>();
     for (const thread of [...inventory.activeThreads, ...inventory.archivedThreads]) providers.set(thread.source, (providers.get(thread.source) ?? 0) + 1);
-    report.inventory = { roots: found.roots, paths: found.paths, providers: [...providers].map(([backend, threads]) => ({ backend, threads })), keptPaths: [] };
+    report.inventory = { roots: found.roots, paths: found.paths, repositories: found.repositories,
+      providers: [...providers].map(([backend, threads]) => ({ backend, threads })), keptPaths: [] };
     if (found.unavailable) report.unreferencedUnavailable = found.unavailable;
     const references = await this.worktreeReferences(inventory);
     if (!references) {
@@ -40285,8 +40298,12 @@ export class DesktopBackendRegistry {
     const settled: string[] = [];
     for (const key of unreferencedWorktrees([...byKey.keys()], references)) {
       const checkout = byKey.get(key)!;
-      if (found.unqueriedRoots.some((root) => checkout === root || checkout.startsWith(root + path.sep))) {
+      // Another profile can own a Git-registered checkout anywhere, not just
+      // below its profile folder. Repository hints cannot prove no owner.
+      if (found.unqueriedRoots.length) {
         report.inventory.keptPaths!.push({ path: checkout, reason: "Other profile ownership not checked" });
+      } else if (found.unavailable) {
+        report.inventory.keptPaths!.push({ path: checkout, reason: "Checkout discovery incomplete" });
       } else if (await isSettledWorktree(checkout)) settled.push(checkout);
     }
     report.unreferencedWorktrees = settled;
@@ -40340,11 +40357,12 @@ export class DesktopBackendRegistry {
           try {
             const key = await canonical(worktreePath);
             const reason = !references ? "Thread folders could not be checked"
-              : discovery.unqueriedRoots.some((root) => worktreePath === root || worktreePath.startsWith(root + path.sep)) ? "Other profile ownership not checked"
-              : !managed.has(key) ? "Checkout is no longer registered"
-                : unreferencedWorktrees([key], references).length === 0 ? "A thread uses it now"
-                  : !await isSettledWorktree(worktreePath) ? "Created recently"
-                    : undefined;
+              : discovery.unqueriedRoots.length ? "Other profile ownership not checked"
+                : discovery.unavailable ? "Checkout discovery incomplete"
+                  : !managed.has(key) ? "Checkout is no longer registered"
+                    : unreferencedWorktrees([key], references).length === 0 ? "A thread uses it now"
+                      : !await isSettledWorktree(worktreePath) ? "Created recently"
+                        : undefined;
             if (reason) {
               result.kept.push({ worktreePath, reason });
               continue;

@@ -2,7 +2,7 @@ import { lstat, link, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "no
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { measureMaintenanceAllocation } from "../app-server/maintenance-disk-usage";
+import { measureMaintenanceAllocation, measureMaintenanceAllocationPaths } from "../app-server/maintenance-disk-usage";
 
 describe.skipIf(process.platform === "win32")("maintenance allocation", () => {
   // Filesystem oracle: allocated blocks, counting each inode once without
@@ -25,6 +25,9 @@ describe.skipIf(process.platform === "win32")("maintenance allocation", () => {
       }
       expect(await measureMaintenanceAllocation(checkout, new AbortController().signal))
         .toEqual({ allocatedBytes: Math.ceil(bytes / 1024) * 1024 });
+      const source = await lstat(path.join(checkout, "source"));
+      expect(await measureMaintenanceAllocationPaths([path.join(checkout, "source"), path.join(checkout, "same-inode")], new AbortController().signal))
+        .toEqual({ allocatedBytes: Math.ceil(source.blocks * 512 / 1024) * 1024 });
       expect(await measureMaintenanceAllocation(path.join(root, "missing"), new AbortController().signal)).toBeUndefined();
     } finally { await rm(root, { recursive: true, force: true }); }
   });

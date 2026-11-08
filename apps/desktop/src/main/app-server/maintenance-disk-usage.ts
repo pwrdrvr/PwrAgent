@@ -27,3 +27,16 @@ export async function measureMaintenanceAllocation(
     return undefined;
   }
 }
+
+/** One du process counts hardlinks once across all selected children. */
+export async function measureMaintenanceAllocationPaths(paths: string[], signal: AbortSignal): Promise<ThreadMaintenanceSpace | undefined> {
+  if (!paths.length) return { allocatedBytes: 0 };
+  if (process.platform === "win32" || paths.length > 1000) return undefined;
+  try {
+    const { stdout } = await execute("/usr/bin/du", ["-skc", ...paths.map((value) => path.resolve(value))], {
+      signal, timeout: 30_000, maxBuffer: 256 * 1024, env: { ...process.env, BLOCK_SIZE: "1024", LC_ALL: "C" },
+    });
+    const total = Number(/(?:^|\n)([0-9]+)\s+total\s*$/.exec(stdout)?.[1]);
+    return Number.isSafeInteger(total) && total >= 0 ? { allocatedBytes: total * 1024 } : undefined;
+  } catch { return undefined; }
+}

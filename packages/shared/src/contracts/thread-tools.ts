@@ -208,6 +208,7 @@ export type ApplyThreadMaintenanceToolArgs = {
   archive?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["archive"];
   removeCheckouts?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["removeCheckouts"];
   trashCheckouts?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["trashCheckouts"];
+  removeBuildOutputs?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["removeBuildOutputs"];
   removeEmptyFolders?: boolean;
   /** Idle checkouts to hibernate, from the scan's hibernate list. */
   hibernate?: import("../thread-maintenance").ThreadMaintenanceApplyRequest["hibernate"];
@@ -252,6 +253,11 @@ export type ThreadMaintenanceScanToolResult = {
     truncated: boolean;
   };
   checkouts: {
+    /** Largest reviewed Cargo profiles, capped independently of checkout rows. */
+    buildOutputs?: import("../thread-maintenance").ThreadMaintenanceBuildOutput[];
+    /** Complete count and allocation, including rows omitted by the cap. */
+    buildOutputCount?: number;
+    buildOutputSpace?: import("../thread-maintenance").ThreadMaintenanceSpace;
     removable: Array<{ backend: string; threadId: ThreadIdentifier; worktreePath: string; workspace?: string; space?: import("../thread-maintenance").ThreadMaintenanceSpace }>;
     repositoryGone: Array<{ worktreePath: string; missingRepositoryPath?: string; space?: import("../thread-maintenance").ThreadMaintenanceSpace }>;
     /** PwrAgent checkouts no thread refers to. Review them in the dialog. */
@@ -322,6 +328,7 @@ export type ThreadMaintenancePlanToolResult = {
   archive: number;
   removeCheckouts: number;
   trashCheckouts: number;
+  removeBuildOutputs?: number;
   removeEmptyFolders: boolean;
   hibernate: number;
   snapshotApprovals: Array<{ threadId: ThreadIdentifier; title: string; bytes: number }>;

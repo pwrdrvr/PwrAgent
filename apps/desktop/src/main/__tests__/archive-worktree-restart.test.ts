@@ -445,6 +445,27 @@ describe("checkouts no thread refers to", () => {
     }
   });
 
+  // Ownership is independent of physical location: a profile not queried
+  // could own any registered checkout. Git verifies that it stays intact.
+  it("keeps checkout ownership unknown across profiles even outside their roots", async () => {
+    const fixture = await createFixture("claude");
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(path.join(fixture.worktree, ".git"), old, old);
+    const { registry } = fixture.reopen();
+    const boundary = registry as unknown as { discoverMaintenanceWorktrees: (...args: unknown[]) => Promise<{
+      roots: string[]; paths: string[]; repositories: string[]; truncated: boolean; unqueriedRoots: string[];
+    }> };
+    const discover = boundary.discoverMaintenanceWorktrees.bind(boundary);
+    vi.spyOn(boundary, "discoverMaintenanceWorktrees").mockImplementation(async (...args) => ({ ...await discover(...args),
+      unqueriedRoots: [path.join(fixture.root, "elsewhere", "profiles", "other", "worktrees")] }));
+    expect((await registry.auditArchivedCheckouts()).unreferenced).toEqual([]);
+    expect(await registry.removeUnreferencedCheckouts([fixture.worktree])).toEqual({ removed: [], failed: [],
+      kept: [{ worktreePath: fixture.worktree, reason: "Other profile ownership not checked" }] });
+    expect(await stat(fixture.worktree)).toBeDefined();
+    expect(await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"]))
+      .toContain(fixture.worktree.replaceAll("\\", "/"));
+  });
+
   it("lists only the PwrAgent worktree no thread uses, then snapshots and removes it", async () => {
     const fixture = await createFixture("claude");
     const spare = path.join(fixture.root, ".pwragent", "worktrees", "spare", "repo");
