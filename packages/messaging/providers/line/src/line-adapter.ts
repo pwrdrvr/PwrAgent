@@ -819,9 +819,10 @@ export class LineAdapter implements LineProviderAdapter {
       routingState,
       interaction: {
         channel: "line",
-        id: record.actionId,
+        id: signed.handle,
         state: record.surface?.state ?? routingState,
       },
+      ...(record.surface ? { sourceSurface: record.surface } : {}),
       actionId: record.actionId,
       ...(record.value !== undefined ? { value: record.value } : {}),
     });

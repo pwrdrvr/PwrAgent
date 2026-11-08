@@ -15,6 +15,7 @@ import type {
 } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
+  measureMessageText,
   type MessagingCapabilityProfile,
 } from "@pwragent/messaging-interface";
 import { redactCommandText } from "../../util/redact-command-text";
@@ -71,10 +72,12 @@ export function buildApprovalIntent(params: {
     decisions,
   };
   const text = params.capabilityProfile?.text;
+  const proposalLength = measureMessageText(`${intent.title}\n\n${intent.body}`,
+    text?.encoding === "utf8-bytes" ? "bytes" : "chars");
   // Never offer Allow beside a fragment of a destructive proposal. A
   // provider may explicitly promise complete delivery across several posts.
   if (textResponseKey && text && !text.supportsApprovalContinuation
-    && Buffer.byteLength(`${intent.title}\n\n${intent.body}`, "utf8") > (text.maxApprovalLength ?? text.maxLength)) {
+    && proposalLength > (text.maxApprovalLength ?? text.maxLength)) {
     intent.decisions = intent.decisions.filter((decision) => decision.decision !== "accept");
     const refusal = approvalReplyInstruction(intent.decisions, textResponseKey);
     intent.body = [

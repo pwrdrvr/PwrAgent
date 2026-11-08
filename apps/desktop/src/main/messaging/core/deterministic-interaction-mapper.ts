@@ -46,7 +46,8 @@ export class DeterministicInteractionMapper implements MessagingInteractionMappe
     if (params.intent.kind === "approval" && params.intent.textResponseKey) {
       const action = actions.find((candidate) => candidate.fallbackText
         && normalizeText(candidate.fallbackText) === normalized);
-      return action ? { kind: "matched", action } : { kind: "ambiguous", text };
+      if (action) return { kind: "matched", action };
+      return looksLikeNewInstruction(text) ? { kind: "pass_through", text } : { kind: "ambiguous", text };
     }
     const exactMatch = actions.find((action) =>
       actionTokens(action).some((token) => token === normalized),

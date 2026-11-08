@@ -5,6 +5,48 @@ import { DeterministicInteractionMapper } from "../messaging/core/deterministic-
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 
 describe("buildApprovalIntent", () => {
+  it("preserves unrelated instructions while matching only the current approval code", () => {
+    fc.assert(fc.property(fc.uuid(), fc.constantFrom(
+      "actually leave those files alone",
+      "also check the logs",
+      "stop deleting and explain the plan",
+    ), (id, text) => {
+      const intent = buildApprovalIntent({ id, createdAt: 1000, request: {
+        method: "mcpServer/elicitation/request", params: {
+          threadId: "thread-1", requestId: id, serverName: "fixture",
+          mode: "form", message: "Confirm?", requestedSchema: { type: "object", properties: {} }, _meta: null,
+        },
+      } });
+      const mapper = new DeterministicInteractionMapper();
+      expect(mapper.mapText({ intent, text })).toEqual({ kind: "pass_through", text });
+      for (const reply of ["yes", "Allow", "approve", "approve deadbeef0000"]) {
+        expect(mapper.mapText({ intent, text: reply }).kind).toBe("ambiguous");
+      }
+    }));
+  });
+
+  it("uses the provider encoding as the oracle for complete approval length", () => {
+    fc.assert(fc.property(fc.constantFrom("utf8-bytes", "utf16-units", "characters"),
+      fc.constantFrom("界", "é", "💾"), fc.integer({ min: 500, max: 3000 }), (encoding, character, count) => {
+        const request = { method: "mcpServer/elicitation/request" as const, params: {
+          threadId: "thread-1", requestId: "unicode", serverName: "fixture", mode: "form" as const,
+          message: character.repeat(count), requestedSchema: { type: "object", properties: {} }, _meta: null,
+        } };
+        const unrestricted = buildApprovalIntent({ id: "unicode", createdAt: 1000, request });
+        const proposal = `${unrestricted.title}\n\n${unrestricted.body}`;
+        // Existing character-counted adapters clamp JavaScript string length.
+        const length = encoding === "utf8-bytes" ? Buffer.byteLength(proposal, "utf8") : proposal.length;
+        for (const limit of [length - 1, length, length + 1]) {
+          const intent = buildApprovalIntent({ id: "unicode", createdAt: 1000, request,
+            capabilityProfile: { ...PERMISSIVE_CAPABILITY_PROFILE, text: {
+              ...PERMISSIVE_CAPABILITY_PROFILE.text, encoding, maxLength: limit + 100, maxApprovalLength: limit,
+            } },
+          });
+          expect(intent.decisions.some((decision) => decision.decision === "accept")).toBe(length <= limit);
+        }
+      }));
+  });
+
   it("never offers acceptance when the complete MCP proposal cannot fit", () => {
     fc.assert(fc.property(fc.integer({ min: 256, max: 512 }), (limit) => {
       const intent = buildApprovalIntent({ id: "large-proposal", createdAt: 1000,

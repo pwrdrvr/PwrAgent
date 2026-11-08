@@ -12,6 +12,7 @@ import type {
   AppServerBackendKind,
   AppServerListSkillsResponse,
   AppServerPendingRequestNotification,
+  AppServerTurnInputItem,
   BackendSummary,
   CancelThreadExecutionModeQueueRequest,
   EnsureDirectoryLaunchpadRequest,
@@ -160,6 +161,7 @@ async function settleHarnessWork(): Promise<void> {
   for (const controller of harnessControllers.splice(0)) {
     controller.dispose();
     await controller.whenToolUpdatesSettled();
+    await controller.whenQueuedTurnActionsSettled();
   }
   await Promise.all(tempStores.splice(0).map((store) => store.whenIdle()));
 }
@@ -17415,6 +17417,7 @@ describe("MessagingController", () => {
       harness.steerTurn.mockRejectedValue(new Error("Steer rejected"));
       const { writes } = await measureSqliteWrites(async () => {
         await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "queued-turn:steer:owner-entry" }));
+        await harness.controller.whenQueuedTurnActionsSettled();
         const notice = harness.delivered.filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued").at(-1);
         const retry = notice && "actions" in notice ? notice.actions?.find((action) => action.id.startsWith("queued-turn:retry:")) : undefined;
         expect(retry).toBeDefined();
@@ -17483,6 +17486,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildCallbackEvent({
       actionId: `queued-turn:${action === "cancel" ? "cancel" : "steer"}:owner-entry`,
     }));
+    await harness.controller.whenQueuedTurnActionsSettled();
     expect(cancelQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({ queueEntryId: "owner-entry", expectedContentHash: "owner-hash" }));
     if (action === "steer") expect(harness.steerTurn).toHaveBeenCalledWith(expect.objectContaining({ input: [{ type: "text", text: "edited in desktop" }] }));
     else expect(harness.steerTurn).not.toHaveBeenCalled();
@@ -17519,6 +17523,7 @@ describe("MessagingController", () => {
         await harness.controller.handleInboundEvent(buildTextEvent("original input"));
         harness.steerTurn.mockRejectedValue(new Error("Steer rejected"));
         await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "queued-turn:steer:owner-entry" }));
+        await harness.controller.whenQueuedTurnActionsSettled();
         const retryNotice = harness.delivered.filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued").at(-1);
         const retry = retryNotice && "actions" in retryNotice
           ? retryNotice.actions?.find((action) => action.id.startsWith("queued-turn:retry:")) : undefined;
@@ -17944,6 +17949,7 @@ describe("MessagingController", () => {
       }),
     );
 
+    await harness.controller.whenQueuedTurnActionsSettled();
     expect(harness.steerTurn).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -18126,6 +18132,7 @@ describe("MessagingController", () => {
       }),
     );
 
+    await harness.controller.whenQueuedTurnActionsSettled();
     expect(harness.steerTurn).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -18180,6 +18187,181 @@ describe("MessagingController", () => {
     expect(harness.startTurn).toHaveBeenCalledTimes(1);
   });
 
+  it.each((["mcp", "command"] as const).flatMap((kind) =>
+    (["accept", "decline", "cancel"] as const).flatMap((decision) =>
+      [false, true].map((ownsTurnQueue) => ({ kind, decision, ownsTurnQueue }))),
+  ))("keeps messaging $kind $decision escalation and queued cancellation live while a steer awaits approval (owner FIFO: $ownsTurnQueue)", async ({ kind, decision, ownsTurnQueue }) => {
+    // Model: ingress is sequential, as in Telegram polling. A provider's
+    // pending steer must not own ingress needed to answer its escalation.
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (cancelFirst) => {
+      const permissions = new Set<MessagingPermissionId>(["thread.resume", "message.reply", "thread.status.view"]);
+      const ownerStarted: { id: string; input: AppServerTurnInputItem[]; turnId: string }[] = [];
+      const owner = new ThreadTurnQueue({ startTurn: async (entry) => {
+        const turnId = `turn-${ownerStarted.length + 1}`;
+        ownerStarted.push({ id: entry.id, input: entry.input, turnId });
+        return { backend: entry.backend, threadId: entry.threadId, turnId };
+      } });
+      const harness = await createHarness({
+        ...(ownsTurnQueue ? {
+          backendOverrides: { ownsTurnQueue: true,
+            readQueuedTurn: async (request) => {
+              const entry = owner.getQueuedEntries(request).find((candidate) => candidate.id === request.queueEntryId);
+              if (!entry) throw new Error("No owner entry");
+              return { queueEntryId: entry.id, input: entry.input, contentHash: JSON.stringify(entry.input), messageOrigin: entry.messageOrigin };
+            },
+            cancelQueuedTurn: async (request) => {
+              const entry = owner.getAllQueuedEntries().find((candidate) => candidate.id === request.queueEntryId);
+              if (entry && JSON.stringify(entry.input) !== request.expectedContentHash) return { queueEntryId: request.queueEntryId, cancelled: false };
+              const result = owner.cancelEntryWithDisposition(request.queueEntryId);
+              if (result.disposition === "cancelled") await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+                method: "thread/turnQueue/updated", params: { threadId: "thread-1", queueEntryId: request.queueEntryId, origin: "messaging", status: "cancelled" },
+              } });
+              return { queueEntryId: request.queueEntryId, cancelled: result.disposition === "cancelled" };
+            },
+          },
+          startTurn: async (request: StartTurnRequest) => {
+            const result = await owner.submit({ ...request, origin: "messaging" });
+            return { backend: request.backend, threadId: request.threadId,
+              turnId: result.status === "started" ? result.turnId : result.entry.id,
+              queueStatus: result.status, queueEntryId: result.entry.id };
+          },
+        } : {}),
+        rbacPolicy: {
+        isEnforcing: () => true,
+        resolve: () => ({ permissions, roleIds: ["fixture"], matchedSubjects: [], rejected: false }),
+      } });
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
+      const queue = async (text: string) => {
+        await harness.controller.handleInboundEvent(buildTextEvent(text));
+        const notice = harness.delivered.filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued").at(-1)!;
+        if (notice.kind !== "confirmation") throw new Error("missing queued notice");
+        return notice.actions;
+      };
+      const first = await queue("also check the logs");
+      const second = await queue("cancel this queued message");
+      const third = await queue("keep this queued message");
+      const action = (actions: MessagingSurfaceAction[], kind: string) =>
+        buildCallbackEvent({ actionId: actions.find((candidate) => candidate.id.startsWith(`queued-turn:${kind}:`))!.id });
+      const shown = createDeferred<void>();
+      const response = createDeferred<void>();
+      harness.steerTurn.mockImplementation(async (request: SteerTurnRequest) => {
+        await harness.controller.handleBackendPendingRequest("codex", kind === "mcp" ? {
+          method: "mcpServer/elicitation/request", params: { threadId: "thread-1", turnId: "turn-1",
+            requestId: "steer-escalation", serverName: "fixture", mode: "form", _meta: null,
+            message: "Confirm the steering proposal?", requestedSchema: { type: "object", properties: {} } },
+        } : { method: "item/commandExecution/requestApproval", params: {
+          threadId: "thread-1", turnId: "turn-1", requestId: "steer-escalation", command: "fixture", prompt: "Allow fixture command?",
+        } });
+        shown.resolve();
+        await response.promise;
+        return { backend: "codex", threadId: request.threadId, turnId: request.expectedTurnId };
+      });
+      harness.submitServerRequest.mockImplementation(async () => { response.resolve(); });
+      let returned = false;
+      const click = harness.controller.handleInboundEvent(action(first, "steer")).then(() => { returned = true; });
+      try {
+        await shown.promise;
+        // One event-loop boundary observes whether ingress returned without
+        // resolving the backend gate; no timeout or retry can satisfy this.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(returned).toBe(true);
+        expect(harness.submitServerRequest).not.toHaveBeenCalled();
+        const cancel = () => harness.controller.handleInboundEvent(action(second, "cancel"));
+        if (cancelFirst) await cancel();
+        await harness.controller.handleInboundEvent(action(first, "steer"));
+        expect(harness.steerTurn).toHaveBeenCalledTimes(1);
+        await harness.controller.handleInboundEvent(action(first, "cancel"));
+        expect(harness.delivered.at(-1)).toMatchObject({ title: "Queued message unavailable" });
+        const approval = await approvalCallback(harness, kind === "mcp" ? `approval:mcp:${decision}` : `approval:${decision}`);
+        await harness.controller.handleInboundEvent(approval);
+        expect(harness.submitServerRequest).not.toHaveBeenCalled();
+        permissions.add("approval.respond.escalation");
+        await harness.controller.handleInboundEvent(approval);
+        expect(harness.submitServerRequest).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          requestId: "steer-escalation", response: expect.objectContaining(kind === "mcp" ? { action: decision } : { decision }),
+        }));
+        if (!cancelFirst) await cancel();
+        await harness.controller.whenQueuedTurnActionsSettled();
+        await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+          method: "turn/completed", params: { threadId: "thread-1", turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: [] } },
+        } });
+        if (ownsTurnQueue) {
+          await owner.releaseThread({ backend: "codex", threadId: "thread-1", turnId: "turn-1", status: "turn/completed" });
+          expect(ownerStarted.map((entry) => entry.input)).toEqual([
+            [{ type: "text", text: "start the task" }], [{ type: "text", text: "keep this queued message" }],
+          ]);
+          const started = ownerStarted.at(-1)!;
+          await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+            method: "thread/turnQueue/updated", params: { threadId: "thread-1", queueEntryId: started.id,
+              origin: "messaging", status: "started", turnId: started.turnId },
+          } });
+          expect(owner.getAllQueuedEntries()).toHaveLength(0);
+        } else {
+          await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+          expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+            input: [{ type: "text", text: "keep this queued message" }],
+          }));
+        }
+        await harness.controller.handleInboundEvent(action(second, "cancel"));
+        await harness.controller.handleInboundEvent(action(third, "steer"));
+        expect(harness.steerTurn).toHaveBeenCalledTimes(1);
+      } finally {
+        response.resolve();
+        await click;
+      }
+    }), { numRuns: 6 });
+  });
+
+  it("releases the remaining queue when completion overtakes a steer acknowledgement", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (reject) => {
+      const harness = await createHarness();
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
+      const queued: MessagingSurfaceAction[][] = [];
+      for (const text of ["steer this message", "cancel this message", "keep this message"]) {
+        await harness.controller.handleInboundEvent(buildTextEvent(text));
+        const notice = harness.delivered.filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued").at(-1)!;
+        if (notice.kind !== "confirmation") throw new Error("missing queue");
+        queued.push(notice.actions);
+      }
+      const callback = (index: number, kind: string) => buildCallbackEvent({
+        actionId: queued[index]!.find((candidate) => candidate.id.startsWith(`queued-turn:${kind}:`))!.id,
+      });
+      const entered = createDeferred<void>();
+      const acknowledgement = createDeferred<void>();
+      harness.steerTurn.mockImplementation(async (request: SteerTurnRequest) => {
+        entered.resolve();
+        await acknowledgement.promise;
+        if (reject) throw new Error("fixture rejected steer");
+        return { backend: "codex", threadId: request.threadId, turnId: request.expectedTurnId };
+      });
+      try {
+        await harness.controller.handleInboundEvent(callback(0, "steer"));
+        await entered.promise;
+        await harness.controller.handleInboundEvent(callback(0, "steer"));
+        await harness.controller.handleInboundEvent(callback(1, "cancel"));
+        harness.readThreadStatus.mockResolvedValue("idle");
+        await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+          method: "turn/completed", params: { threadId: "thread-1", turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: [] } },
+        } });
+        expect(harness.startTurn).toHaveBeenCalledTimes(1);
+        expect(harness.steerTurn).toHaveBeenCalledTimes(1);
+        acknowledgement.resolve();
+        await harness.controller.whenQueuedTurnActionsSettled();
+        expect(harness.startTurn).toHaveBeenCalledTimes(2);
+        expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+          input: [{ type: "text", text: reject ? "steer this message" : "keep this message" }],
+        }));
+      } finally {
+        acknowledgement.resolve();
+        await harness.controller.whenQueuedTurnActionsSettled();
+      }
+    }), { numRuns: 6 });
+  });
+
   it("keeps queued follow-ups available when backend steering is rejected", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -18212,6 +18394,7 @@ describe("MessagingController", () => {
       }),
     );
 
+    await harness.controller.whenQueuedTurnActionsSettled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "error",
       title: "Steer failed",
@@ -18272,6 +18455,7 @@ describe("MessagingController", () => {
       }),
     );
 
+    await harness.controller.whenQueuedTurnActionsSettled();
     expect(harness.steerTurn).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "error",
