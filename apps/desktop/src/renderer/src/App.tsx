@@ -89,6 +89,8 @@ import { flyBetween } from "./lib/fly-between";
 import { ContinueAfterDialog } from "./features/thread-dependencies/ContinueAfterDialog";
 import { ThreadMaintenanceDialog } from "./features/maintenance/ThreadMaintenanceDialog";
 import { ThreadMaintenanceLauncherContext } from "./features/maintenance/thread-maintenance-launcher";
+import { ThreadMaintenanceMinimizedNotice } from "./features/maintenance/ThreadMaintenanceMinimizedNotice";
+import { useThreadMaintenanceSession } from "./features/maintenance/thread-maintenance-session";
 import {
   ThreadDependencyIndicatorsContext,
   useThreadDependencyIndicators,
@@ -3402,18 +3404,21 @@ function DesktopAppShell(props: {
   }>();
   // Thread maintenance: File → Thread Maintenance…, Settings → Review…, or
   // an agent. It works on this machine's threads, so a remote window has none.
-  const [threadMaintenance, setThreadMaintenance] = useState<{ projectKey?: string }>();
+  // One session per window: each launch reopens it, minimized or not, and only
+  // the dialog's Close or the notice's Discard ends it.
+  const threadMaintenance = useThreadMaintenanceSession();
+  const launchThreadMaintenance = threadMaintenance.launch;
   const canMaintainThreads = Boolean(desktopApi?.scanThreadMaintenance) && !readRendererFederationTarget();
   const openThreadMaintenance = useCallback((request: { projectKey?: string } = {}) => {
-    if (canMaintainThreads) setThreadMaintenance(request);
-  }, [canMaintainThreads]);
+    if (canMaintainThreads) launchThreadMaintenance(request);
+  }, [canMaintainThreads, launchThreadMaintenance]);
   useEffect(() => {
     if (!canMaintainThreads || !desktopApi?.onOpenThreadMaintenanceRequested) return;
     return desktopApi.onOpenThreadMaintenanceRequested((request) => {
       closeThreadJump();
-      setThreadMaintenance(request);
+      launchThreadMaintenance(request);
     });
-  }, [canMaintainThreads, closeThreadJump, desktopApi]);
+  }, [canMaintainThreads, closeThreadJump, desktopApi, launchThreadMaintenance]);
   // The hourly sweep stopped archiving threads. A profile it used to archive
   // in is told once; the state DB records the dismissal. A window fronting a
   // peer shows the peer's threads, not this profile's.
@@ -4747,17 +4752,23 @@ function DesktopAppShell(props: {
           onClose={() => setContinueAfter(undefined)}
         />
       ) : null}
-      {threadMaintenance ? (
+      {threadMaintenance.session ? (
+        // Mounted for the whole session, hidden while minimized, so a scan or
+        // run that ends meanwhile lands in it.
         <ThreadMaintenanceDialog
+          key={threadMaintenance.session.id}
           desktopApi={desktopApi}
           policy={settings.snapshot?.worktrees?.archive}
           hibernationPolicy={settings.snapshot?.worktrees?.hibernate}
-          {...(threadMaintenance.projectKey ? { projectKey: threadMaintenance.projectKey } : {})}
+          {...(threadMaintenance.session.projectKey ? { projectKey: threadMaintenance.session.projectKey } : {})}
+          minimized={threadMaintenance.session.minimized}
+          onMinimize={threadMaintenance.minimize}
+          onStatus={threadMaintenance.report}
           onOpenThread={(thread) => {
-            setThreadMaintenance(undefined);
+            threadMaintenance.minimize();
             showThreadFromLink({ backend: thread.backend as AppServerBackendKind, threadId: thread.threadId });
           }}
-          onClose={() => setThreadMaintenance(undefined)}
+          onClose={threadMaintenance.discard}
         />
       ) : null}
       {codexLoginProfile ? (
@@ -5372,6 +5383,7 @@ function DesktopAppShell(props: {
           ]}
         >
           <QuitBlockerQueueToast desktopApi={desktopApi} />
+          <ThreadMaintenanceMinimizedNotice controller={threadMaintenance} />
           <AgentThreadRenameNotice desktopApi={desktopApi} onOpenThread={showThreadFromLink} />
           <AppUpdateBanner
             desktopApi={desktopApi}

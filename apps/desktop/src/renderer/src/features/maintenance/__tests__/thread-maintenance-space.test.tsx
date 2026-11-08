@@ -245,7 +245,7 @@ describe("ThreadMaintenanceDialog sizes and progress", () => {
     expect(coverage).toHaveTextContent("2 outside a worktree root (3.0 GB)");
   });
 
-  it("names the largest kept checkouts and why, largest first, without offering them", async () => {
+  it("groups an older owner's largest kept checkouts by reason, largest first, without offering or inventing owners", async () => {
     const kept = sizedScan();
     // Scrambled on purpose: the order on screen is the dialog's.
     kept.hibernate!.coverage!.largestKept = [
@@ -258,19 +258,29 @@ describe("ThreadMaintenanceDialog sizes and progress", () => {
       { path: "/w/d", reason: "Running or blocked", allocatedBytes: 12 * GB },
     ];
     const { api: desktopApi } = api({ scanThreadMaintenance: vi.fn(async () => kept) });
-    render(<ThreadMaintenanceDialog desktopApi={desktopApi} onClose={vi.fn()} />);
+    render(<ThreadMaintenanceDialog desktopApi={desktopApi} onClose={vi.fn()} onOpenThread={vi.fn()} />);
     const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
-    const list = await within(dialog).findByRole("list", { name: "Largest kept checkouts" });
-    const rows = () => within(list).getAllByRole("listitem").map((row) => row.textContent);
-    // Oracle: sorted by hand, unmeasured last.
-    expect(rows()).toEqual([
-      "/w/aActive in the last 3 days90 GB", "/w/bOther ignored files41 GB", "/w/cWatching a PR30 GB",
-      "/w/dRunning or blocked12 GB", "/w/eKept awake4.0 GB",
+    const section = await within(dialog).findByRole("region", { name: "Kept checkouts" });
+    expect(section).toHaveTextContent("Largest kept");
+    expect(section).toHaveTextContent("This scan sent only the largest, without their threads.");
+    // Oracle, sorted by hand: groups by what they hold, rows largest first, unmeasured last.
+    const groups = within(section).getAllByRole("list").map((list) => [
+      list.getAttribute("aria-label"),
+      ...within(list).getAllByRole("listitem").map((row) => row.textContent),
     ]);
-    expect(within(list).queryByRole("checkbox")).toBeNull();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Show all 7" }));
-    expect(rows().slice(5)).toEqual(["/w/fShared checkout2.0 GB", "/w/unknownOther ignored files—"]);
+    expect(groups).toEqual([
+      ["Kept: Active in the last 3 days", "/w/a90 GB"],
+      ["Kept: Other ignored files", "/w/b41 GB", "/w/unknown—"],
+      ["Kept: Watching a PR", "/w/c30 GB"],
+      ["Kept: Running or blocked", "/w/d12 GB"],
+      ["Kept: Kept awake", "/w/e4.0 GB"],
+      ["Kept: Shared checkout", "/w/f2.0 GB"],
+    ]);
+    // Nothing to select, and no thread the owner did not name.
+    expect(within(section).queryByRole("checkbox")).toBeNull();
+    expect(within(section).queryByRole("button", { name: /^Open thread/ })).toBeNull();
+    expect(section).not.toHaveTextContent("Thread not identified in this scan");
   });
 
   it("says what a checking step is doing beside the items in flight", () => {

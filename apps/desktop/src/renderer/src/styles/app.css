@@ -54264,43 +54264,130 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-size: 11.5px;
 }
 
-.thread-maintenance__largest-kept {
+/* Kept checkouts: one group per reason, its guidance once, then each
+   checkout with the threads that own it. Titles lead; paths are secondary. */
+.thread-maintenance__kept {
   display: grid;
-  gap: 4px;
-  padding-top: 6px;
+  gap: 8px;
+  padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
 }
 
-.thread-maintenance__largest-kept-rows {
+.thread-maintenance__kept-note,
+.thread-maintenance__kept-guidance {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.thread-maintenance__kept-group {
   display: grid;
   gap: 4px;
+}
+
+.thread-maintenance__kept-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+
+.thread-maintenance__kept-reason {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.thread-maintenance__kept-rows {
+  display: grid;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.thread-maintenance__largest-kept-rows li {
+.thread-maintenance__kept-rows > li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 14px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.thread-maintenance__largest-kept-rows .thread-maintenance__path {
-  margin: 0;
-  font-size: 11.5px;
+.thread-maintenance__kept-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
-.thread-maintenance__largest-kept-why {
+.thread-maintenance__kept-owner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thread-maintenance__kept-owner-text {
+  min-width: 0;
+}
+
+.thread-maintenance__kept-owner .thread-maintenance__row-title {
+  overflow-wrap: anywhere;
+}
+
+.thread-maintenance__kept-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
   margin: 0;
   color: var(--text-secondary);
   font-size: 11.5px;
 }
 
-.thread-maintenance__largest-kept > .thread-maintenance__kept-toggle {
+.thread-maintenance__pr-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  color: var(--accent-bright);
+  text-decoration: none;
+}
+
+.thread-maintenance__pr-link:hover {
+  text-decoration: underline;
+}
+
+.thread-maintenance__pr-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-maintenance__kept-shared {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-style: italic;
+}
+
+/* A path names a checkout the operator may need to find on disk, so it
+   wraps rather than losing its distinguishing tail. */
+.thread-maintenance__kept-rows .thread-maintenance__path {
+  margin: 0;
+  font-size: 11px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.thread-maintenance__kept-group > .thread-maintenance__kept-toggle {
   justify-self: start;
   min-height: 24px;
   font-size: 11.5px;
+}
+
+/* A minimized session stays mounted; nothing of it may show or take input. */
+.thread-maintenance-modal[hidden] {
+  display: none;
 }
 
 .thread-maintenance__coverage-line {
