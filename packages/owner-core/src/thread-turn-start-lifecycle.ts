@@ -1,4 +1,4 @@
-import { buildThreadIdentityKey, type AgentEvent, type AppServerBackendKind, type ThreadExecutionMode } from "@pwragent/shared";
+import { buildThreadIdentityKey, isAcpBackendId, type AgentEvent, type AppServerBackendKind, type SetThreadModelSettingsRequest, type ThreadExecutionMode } from "@pwragent/shared";
 
 export type TurnStartIdentity = { backend: AppServerBackendKind; threadId: string };
 
@@ -67,6 +67,32 @@ export interface CodexTurnStartHandoffHost {
   retirePending(): void;
   activateExecutionMode(mode: ThreadExecutionMode): void;
   release(): void;
+}
+
+export type CodexTurnHandoffStage = "review" | "collaboration" | "retire-pending" | "execution-ownership" | "release";
+export type CodexTurnFinalizationStage = CodexTurnHandoffStage
+  | "origin" | "retry" | "pdf" | "context" | "persist-origin" | "dispose-origin"
+  | "model" | "execution" | "attachments" | "replay" | "forget-title-input" | "title";
+
+export interface CodexTurnFinalizationHost {
+  identity: TurnStartIdentity;
+  turn: StartedTurn;
+  settings: Pick<SetThreadModelSettingsRequest, "model" | "reasoningEffort" | "serviceTier" | "fastMode">;
+  executionMode?: ThreadExecutionMode;
+  bindOrigin(): void;
+  bindRetry(): void;
+  bindPdf(): void;
+  bindContext(): void;
+  persistOrigin(): Promise<void>;
+  disposeOrigin(): void;
+  handoff: CodexTurnStartHandoffHost;
+  persistModel(): Promise<unknown>;
+  persistExecutionMode(): Promise<unknown>;
+  retainAttachments(): Promise<void>;
+  scheduleReplay(): void;
+  forgetTitleInput(): void;
+  scheduleTitle(): void;
+  failed(stage: CodexTurnFinalizationStage, error: unknown): void;
 }
 
 /** Owns start admission, not provider active-turn identity. */
@@ -179,13 +205,53 @@ export class ThreadTurnStartLifecycle {
     return { kind: "started", turn };
   }
 
-  handoffCodex(host: CodexTurnStartHandoffHost): void {
-    host.bindReview();
-    if (host.identity.backend === "codex" && !host.terminalObserved) host.activateCollaboration();
-    if (host.turn.turnId !== host.pendingTurnId || host.terminalObserved) host.retirePending();
-    if (host.identity.backend === "codex" && host.executionMode && !host.terminalObserved) {
-      host.activateExecutionMode(host.executionMode);
+  async finalizeCodex(host: CodexTurnFinalizationHost): Promise<TurnStartIdentity & { turnId: string }> {
+    // Submission has already succeeded. No host metadata failure can turn
+    // that acceptance into a retryable provider rejection. Attempt independent
+    // effects in the established order, without adding request/retry state.
+    const report = (stage: CodexTurnFinalizationStage, error: unknown) => {
+      try { host.failed(stage, error); } catch { /* Reporting cannot reject an accepted turn either. */ }
+    };
+    const effect = (stage: CodexTurnFinalizationStage, work: () => void) => {
+      try { work(); } catch (error) { report(stage, error); }
+    };
+    const persist = async (stage: CodexTurnFinalizationStage, work: () => Promise<unknown>) => {
+      try { await work(); } catch (error) { report(stage, error); }
+    };
+    effect("origin", () => host.bindOrigin());
+    effect("retry", () => host.bindRetry());
+    effect("pdf", () => host.bindPdf());
+    effect("context", () => host.bindContext());
+    await persist("persist-origin", () => host.persistOrigin());
+    effect("dispose-origin", () => host.disposeOrigin());
+    // Read terminal ownership after persistence yields, never at acceptance.
+    this.handoffCodex(host.handoff, effect);
+    const settings = host.settings;
+    if (settings.model !== undefined || settings.reasoningEffort !== undefined
+      || settings.serviceTier !== undefined || settings.fastMode !== undefined) {
+      await persist("model", () => host.persistModel());
     }
-    if (host.reserved) host.release();
+    if (host.identity.backend === "codex" && host.executionMode) {
+      await persist("execution", () => host.persistExecutionMode());
+    }
+    await persist("attachments", () => host.retainAttachments());
+    effect("replay", () => host.scheduleReplay());
+    if (!isAcpBackendId(host.identity.backend)) {
+      effect("forget-title-input", () => host.forgetTitleInput());
+      effect("title", () => host.scheduleTitle());
+    }
+    return { backend: host.identity.backend, threadId: host.turn.threadId, turnId: host.turn.turnId };
+  }
+
+  handoffCodex(host: CodexTurnStartHandoffHost,
+    effect: (stage: CodexTurnHandoffStage, work: () => void) => void = (_stage, work) => work(),
+  ): void {
+    effect("review", () => host.bindReview());
+    if (host.identity.backend === "codex" && !host.terminalObserved) effect("collaboration", () => host.activateCollaboration());
+    if (host.turn.turnId !== host.pendingTurnId || host.terminalObserved) effect("retire-pending", () => host.retirePending());
+    if (host.identity.backend === "codex" && host.executionMode && !host.terminalObserved) {
+      effect("execution-ownership", () => host.activateExecutionMode(host.executionMode!));
+    }
+    if (host.reserved) effect("release", () => host.release());
   }
 }
