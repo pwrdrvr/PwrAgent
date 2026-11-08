@@ -54204,6 +54204,11 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.thread-maintenance__group-select > .thread-maintenance__kept-toggle {
+  min-height: 24px;
+  font-size: 12px;
+}
+
 .thread-maintenance__rows + .thread-maintenance__group-select {
   border-top: 1px solid var(--border-subtle);
   border-bottom: 0;
