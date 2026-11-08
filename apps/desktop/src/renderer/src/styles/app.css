@@ -54340,6 +54340,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .thread-maintenance__kept-meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0 8px;
   margin: 0;
   color: var(--text-secondary);

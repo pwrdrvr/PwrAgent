@@ -51,9 +51,9 @@ describe("kept checkout groups, as a model", () => {
 describe("kept guidance", () => {
   it("names the scan's own idle threshold for Recently active", () => {
     expect(keptGuidance("Recently active", { step: "hibernate", idleDays: 7, inactivityDays: 30 }))
-      .toContain("within the last 7 days, this scan's idle threshold");
+      .toContain("Worked in or restored within the last 7 days, this scan's idle threshold");
     expect(keptGuidance("Recently active", { step: "threads", idleDays: 7, inactivityDays: 30 }))
-      .toContain("within the last 30 days");
+      .toContain("Active within the last 30 days");
   });
 
   it("never promises a recently active checkout will be offered later", () => {

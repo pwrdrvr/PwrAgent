@@ -735,7 +735,7 @@ function KeptReasonGroup(props: { group: KeptGroup; context: KeptContext & { ste
   );
 }
 
-function KeptRow(props: { row: ThreadMaintenanceKeptCheckout; context: KeptContext; complete: boolean }) {
+function KeptRow(props: { row: ThreadMaintenanceKeptCheckout; context: KeptContext & { step: ReviewStep }; complete: boolean }) {
   const { row, context } = props;
   const threads = row.threads ?? [];
   return (
@@ -748,7 +748,8 @@ function KeptRow(props: { row: ThreadMaintenanceKeptCheckout; context: KeptConte
               <p className="thread-maintenance__kept-meta">
                 {[thread.backend, thread.branch,
                   thread.lastActivityAt !== undefined && context.scanAt !== undefined
-                    ? `active ${formatAge(thread.lastActivityAt, context.scanAt)}` : undefined]
+                    // Hibernation judges work and restores, not views.
+                    ? `${context.step === "hibernate" ? "last work" : "active"} ${formatAge(thread.lastActivityAt, context.scanAt)}` : undefined]
                   .filter(Boolean).join(" · ")}
                 {(thread.pullRequests ?? []).map((pr) => {
                   const href = pullRequestHref(pr.url);

@@ -78,7 +78,7 @@ describe("kept checkouts a person can act on", () => {
     const group = within(section).getByRole("list", { name: "Kept: Watching a PR" });
     const row = within(group).getByRole("listitem");
     expect(within(row).getByText("Port the renderer to Rust", { selector: ".thread-maintenance__row-title" })).toBeInTheDocument();
-    expect(row).toHaveTextContent("codex · kiln/rust-renderer · active 2 days ago");
+    expect(row).toHaveTextContent("codex · kiln/rust-renderer · last work 2 days ago");
     // Only the web link is offered.
     const links = within(row).getAllByRole("link");
     expect(links.map((link) => link.getAttribute("href"))).toEqual(["https://forge.example/acme/kiln/pull/412"]);
@@ -96,7 +96,7 @@ describe("kept checkouts a person can act on", () => {
   it("opens each owner's thread, and says a shared checkout stays while any owner keeps it", async () => {
     const { section, onOpenThread } = await openReview();
     const group = within(section).getByRole("list", { name: "Kept: Recently active" });
-    expect(section).toHaveTextContent("Used within the last 7 days, this scan's idle threshold");
+    expect(section).toHaveTextContent("Worked in or restored within the last 7 days, this scan's idle threshold");
     const sharedRow = within(group).getAllByRole("listitem")[0]!;
     expect(sharedRow).toHaveTextContent("Shared by 2 threads. Any one of them can keep it, so it stays until none does.");
     fireEvent.click(within(sharedRow).getByRole("button", { name: "Open thread Check the ranking fixtures" }));

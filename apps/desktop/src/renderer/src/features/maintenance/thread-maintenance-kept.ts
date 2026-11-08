@@ -68,9 +68,10 @@ export function keptGuidance(reason: string, context: KeptGuidanceContext): stri
     case "Recently active": {
       const threshold = context.step === "hibernate" ? context.idleDays : context.inactivityDays;
       return threshold === undefined
-        ? "Used recently enough that this scan's idle rule keeps it. A later scan considers it again."
-        : `Used within the last ${days(threshold)}, this scan's idle threshold, so it is not considered yet. `
-          + "Other protections may still keep it later. To consider it sooner, lower the days in the plan and re-scan.";
+        ? "Recent enough that this scan's idle rule keeps it. A later scan considers it again."
+        : `${context.step === "hibernate" ? "Worked in or restored" : "Active"} within the last ${days(threshold)}, `
+          + "this scan's idle threshold, so it is not considered yet. Other protections may still keep it later. "
+          + "To consider it sooner, lower the days in the plan and re-scan.";
     }
     case "Already archived":
       return context.step === "hibernate"
