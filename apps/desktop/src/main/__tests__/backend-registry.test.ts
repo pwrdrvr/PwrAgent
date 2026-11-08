@@ -15986,6 +15986,65 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  async function assertRejectedCreationPreparationCleansUp(failingRevokes: boolean[], failure: "isolation" | "config" | "inventory"): Promise<void> {
+    const effects: string[] = [];
+    const client = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const internal = registry as unknown as {
+      gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
+      registerMcpConnections: () => Promise<unknown[]>;
+      readConfiguredCodexMcpServerNames: () => Promise<string[] | undefined>;
+      buildSupportedCodexTokenMiserConfig: () => Promise<undefined>;
+    };
+    const registrations = failingRevokes.map((reject, i) => ({
+      server: { name: `fixture-${i}`, url: "http://127.0.0.1:1/mcp", headers: {} },
+      bindThread: vi.fn(),
+      revoke: vi.fn(() => { effects.push(`revoke:${i}`); if (reject) throw new Error("fixture revoke refused"); }),
+    }));
+    const rollback = vi.fn(async () => { effects.push("rollback"); });
+    vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockResolvedValue({ cwd: process.cwd(), workMode: "worktree", rollback });
+    const connections = createDeferred<unknown[]>();
+    const inventory = createDeferred<string[] | undefined>();
+    vi.spyOn(internal, "registerMcpConnections").mockImplementation(async () => await connections.promise);
+    vi.spyOn(internal, "readConfiguredCodexMcpServerNames").mockImplementation(async () => {
+      effects.push("inventory");
+      return await inventory.promise;
+    });
+    const refusal = new Error(`fixture ${failure} preparation refused`);
+    if (failure === "config") vi.spyOn(internal, "buildSupportedCodexTokenMiserConfig").mockRejectedValue(refusal);
+    const provider = vi.spyOn(client, "startThread");
+    try {
+      const outcome = registry.startThread({ backend: "codex", cwd: process.cwd(), workMode: "worktree", mcpConnectionIds: ["fixture"], mcpProviderServersEnabled: false })
+        .then(() => undefined, (error: unknown) => error);
+      await waitForCondition(() => effects.includes("inventory"));
+      if (failure === "inventory") inventory.reject(refusal);
+      else inventory.resolve(failure === "isolation" ? undefined : []);
+      // A sibling refusal cannot release the workspace before late grants settle.
+      expect(rollback).not.toHaveBeenCalled();
+      effects.push("acquired");
+      connections.resolve(registrations);
+      const error = await outcome;
+      if (failure === "isolation") expect(error).toBeInstanceOf(Error);
+      else expect(error).toBe(refusal);
+      expect(provider).not.toHaveBeenCalled();
+      expect(effects.slice(-registrations.length - 1)).toEqual([...registrations.map((_, i) => `revoke:${i}`), "rollback"]);
+      expect(rollback).toHaveBeenCalledOnce();
+      for (const registration of registrations) {
+        expect(registration.revoke).toHaveBeenCalledOnce();
+        expect(registration.bindThread).not.toHaveBeenCalled();
+      }
+    } finally { await registry.close(); }
+  }
+
+  it("releases every acquired creation resource after rejected preparation", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }),
+      fc.constantFrom("isolation" as const, "config" as const, "inventory" as const), assertRejectedCreationPreparationCleansUp), { numRuns: 12 });
+  });
+
+  it("revokes a late MCP grant before rolling back an isolated creation refusal", async () => {
+    await assertRejectedCreationPreparationCleansUp([true, false], "isolation");
+  });
+
   async function assertAcceptedThreadCreationSurvives(backend: AppServerBackendKind, failure: "pr" | "parent" | "event" | "workspace"): Promise<void> {
     const client = new MockBackendClient({ threads: [], startThreadResult: { threadId: "same:thread" } });
     const overlayStore = createOverlayStoreMock();
