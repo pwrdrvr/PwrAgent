@@ -5274,15 +5274,14 @@ describe("DesktopBackendRegistry", () => {
       activeTurnKeys: Set<string>;
       activeCodexTurnModes: Map<string, unknown>;
       codexRetryableOperations: Map<string, { turnId: string }>;
-      emit: (event: AgentEvent) => Promise<void>;
     };
     const reject = () => { throw new Error(`finalization ${failure}`); };
     vi.spyOn(internal, "persistStartingTurnOrigin").mockImplementation(async () => {
       // A provider terminal arriving while host persistence awaits is still
       // authoritative when accepted identity handover eventually runs.
-      if (terminal) await internal.emit({ backend: "codex", notification: {
-        method: "turn/completed", params: { threadId, turnId: "turn-1", turn: { id: "turn-1", status: "completed" } },
-      } });
+      if (terminal) await client.emit({
+        method: "turn/completed", params: { threadId, turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } },
+      });
       if (failure === "origin") reject();
     });
     if (failure === "model") vi.spyOn(overlay, "setThreadModelSettings").mockRejectedValueOnce(new Error("finalization model"));

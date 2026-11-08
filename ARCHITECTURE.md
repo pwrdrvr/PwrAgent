@@ -324,8 +324,15 @@ submission failure retirement, optional recovery, and backend-qualified response
 identity resolution from provider events. Retirement and retry disposal run even
 if failure notification rejects. Synthetic start/failure share an observation
 sequence, so a newer provider status retains authority through failure and
-navigation projection. Provider calls, repair execution/registry and successful
-turn finalization remain host effects at their existing lifecycle sites.
+navigation projection. Accepted Codex finalization also lives in this lifecycle:
+it binds origin/context/attachments and retry identity, hands over provider
+ownership, selects model/execution persistence, and schedules replay and titles
+in their established order. A rejected host effect is reported by stage and
+does not reject the accepted provider response or prevent independent later
+effects. Origin disposal and handover still run, with terminal ownership read
+after origin persistence yields. This adds no request identity or retry state.
+Provider calls, repair execution/registry, logging, attachment handling and all
+persistence remain host effects at their existing lifecycle sites.
 
 ### Transcript invariants
 
