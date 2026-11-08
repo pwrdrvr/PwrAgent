@@ -212,6 +212,14 @@ The generated ownership, reference, restart and snapshot model lives in
 
 ### Display reads and federation
 
+- Native navigation pages, selected detail, queue projections and launchpad
+  configuration use the same registered `backend.*` handlers and capability
+  table as remote viewers. The in-process transport gives the local operator
+  every capability without starting federation or acquiring its profile lease.
+  IPC still owns window consumer cancellation and Attention view lifetimes.
+  Only transport-owned local context admits viewer inventory; a remote request
+  cannot read this machine's viewer inventory by claiming that context in its
+  payload. Both paths retain the navigation pool's response byte budgets.
 - Desktop transcripts use `readThread` with `display.resource = "transcript"`.
   The owning main process prepares completed-turn usage activities and compact
   pricing totals. It sends each transcript message once in `replay.entries`;

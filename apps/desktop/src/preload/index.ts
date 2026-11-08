@@ -1088,14 +1088,11 @@ import {
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
-  NAVIGATION_QUERY_PAGE_CHANNEL,
+  OWNER_REQUEST_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL,
-  NAVIGATION_QUEUE_PROJECTION_CHANNEL,
   NAVIGATION_REMOVE_DIRECTORY_CHANNEL,
   NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL,
-  NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
-  NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -2779,7 +2776,7 @@ const desktopApi = Object.freeze({
     request: NavigationQueryRequest,
     consumerId?: string,
   ): Promise<NavigationQueryPage> =>
-    unwrapNavigationRead(await ipcRenderer.invoke(NAVIGATION_QUERY_PAGE_CHANNEL, request, consumerId)),
+    unwrapNavigationRead(await ipcRenderer.invoke(OWNER_REQUEST_CHANNEL, { method: "backend.getNavigationQueryPage", params: request }, consumerId)),
   releaseNavigationQuery: async (consumerId: string): Promise<void> =>
     await ipcRenderer.invoke(NAVIGATION_QUERY_RELEASE_CHANNEL, consumerId),
   releaseNavigationAttentionView: async (request: NavigationAttentionViewReleaseRequest): Promise<void> =>
@@ -2792,17 +2789,17 @@ const desktopApi = Object.freeze({
     request: NavigationLaunchpadConfigRequest,
     consumerId?: string,
   ): Promise<NavigationLaunchpadConfigResponse> =>
-    unwrapNavigationRead(await ipcRenderer.invoke(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL, request, consumerId)),
+    unwrapNavigationRead(await ipcRenderer.invoke(OWNER_REQUEST_CHANNEL, { method: "backend.getNavigationLaunchpadConfig", params: request }, consumerId)),
   getNavigationSelectedDetail: async (
     request: NavigationSelectedDetailRequest,
     consumerId?: string,
   ): Promise<NavigationSelectedDetailResponse> =>
-    unwrapNavigationRead(await ipcRenderer.invoke(NAVIGATION_SELECTED_DETAIL_CHANNEL, request, consumerId)),
+    unwrapNavigationRead(await ipcRenderer.invoke(OWNER_REQUEST_CHANNEL, { method: "backend.getNavigationSelectedDetail", params: request }, consumerId)),
   getNavigationQueueProjection: async (
     request: NavigationQueueProjectionRequest,
     consumerId?: string,
   ): Promise<NavigationQueueProjection> =>
-    unwrapNavigationRead(await ipcRenderer.invoke(NAVIGATION_QUEUE_PROJECTION_CHANNEL, request, consumerId)),
+    unwrapNavigationRead(await ipcRenderer.invoke(OWNER_REQUEST_CHANNEL, { method: "backend.getNavigationQueueProjection", params: request }, consumerId)),
   getNavigationSnapshotTransport: async (
     request: GetNavigationSnapshotTransportRequest,
   ): Promise<NavigationSnapshotTransportResponse> =>
