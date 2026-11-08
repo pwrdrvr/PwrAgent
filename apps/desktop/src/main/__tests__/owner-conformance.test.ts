@@ -369,6 +369,49 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   }, 120_000);
 
+  it("interrupts generated live turns through both real owners and preserves provider terminal order", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      const hosts = [desktop, outpost];
+      const identities = await Promise.all(hosts.map((host) => host.client.startThread({
+        backend: "codex", cwd: host.workspace, executionMode: "auto",
+      })));
+      for (const turnsToRun of fc.sample(fc.integer({ min: 1, max: 3 }), 3)) {
+        for (let i = 0; i < turnsToRun; i += 1) {
+          const offsets = hosts.map((host) => host.events.length);
+          const turns = await Promise.all(hosts.map((host, index) => host.client.startTurn({
+            backend: "codex", threadId: identities[index].threadId, input: [{ type: "text", text: "slow" }],
+          })));
+          const replies = await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
+          await Promise.all(hosts.map(settle));
+          for (const [index, host] of hosts.entries()) {
+            expect(replies[index]).toEqual({ backend: "codex", threadId: turns[index].threadId, turnId: turns[index].turnId });
+            const lifecycle = host.events.slice(offsets[index]).flatMap((event) => {
+              const notification = event.notification;
+              if (notification.method !== "turn/started" && notification.method !== "turn/completed") return [];
+              const turn = notification.params.turn as { id?: string; status?: string } | undefined;
+              if (notification.params.threadId !== turns[index].threadId
+                || (notification.params.turnId ?? turn?.id) !== turns[index].turnId) return [];
+              return [{ method: notification.method, status: turn?.status }];
+            });
+            // The unchanged conformance baseline already records Outpost's
+            // missing start event. Both owners must deliver exactly one terminal.
+            expect(lifecycle.map((notification) => notification.method)).toEqual(host.name === "desktop"
+              ? ["turn/started", "turn/completed"] : ["turn/completed"]);
+            expect(lifecycle.at(-1)?.status).toBe("interrupted");
+          }
+          const delivered = OwnerConformanceCodexTransport.requests.filter((item) => item.method === "turn/interrupt");
+          expect(delivered.at(-1)?.params).toMatchObject({ threadId: turns[0].threadId, turnId: turns[0].turnId });
+        }
+      }
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+    }
+  }, 120_000);
+
   it("keeps generated explicit rename sequences and events equal on both real owners", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
