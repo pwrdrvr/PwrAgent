@@ -5104,6 +5104,46 @@ describe("DesktopBackendRegistry", () => {
     expect(await overlayStore.getThreadOverlayState(thread)).not.toHaveProperty("lock");
   });
 
+  async function assertFailedTurnPreparationRetires(threadId: string, text: string): Promise<void> {
+    const client = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const internal = registry as unknown as {
+      registerPendingThreadMessageContext: () => Promise<string | undefined>;
+      threadHasActiveTurn: (threadId: string, backend: AppServerBackendKind) => boolean;
+    };
+    // Inject a host-port rejection after the optimistic start. Ordinary
+    // attachment helpers retain their existing best-effort I/O handling.
+    vi.spyOn(internal, "registerPendingThreadMessageContext").mockRejectedValueOnce(new Error("context rejected"));
+    const request = { backend: "codex" as const, threadId, input: [{ type: "text" as const, text }] };
+    try {
+      await expect(registry.startTurn(request)).rejects.toThrow("context rejected");
+      expect(client.startTurnCallCount).toBe(0);
+      expect(events.filter((event) => event.notification.method.startsWith("turn/")).map((event) => ({
+        method: event.notification.method,
+        turnId: (event.notification.params as { turnId: string }).turnId,
+      }))).toEqual([
+        { method: "turn/started", turnId: `pending:${threadId}` },
+        { method: "turn/failed", turnId: `pending:${threadId}` },
+      ]);
+      expect(internal.threadHasActiveTurn(threadId, "codex")).toBe(false);
+      await expect(registry.startTurn(request)).resolves.toMatchObject({ backend: "codex", threadId, turnId: "turn-1" });
+      expect(client.startTurnCallCount).toBe(1);
+    } finally {
+      await registry.close();
+    }
+  }
+
+  it("retires every announced start whose pending context preparation rejects", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("preparing", "same:thread", "pending:source"), fc.string({ minLength: 1, maxLength: 24 }),
+      assertFailedTurnPreparationRetires), { numRuns: 8 });
+  });
+
+  it("allows another turn after the announced start's context registration rejects", async () => {
+    await assertFailedTurnPreparationRetires("preparing", "Continue");
+  });
+
   it("rejects handoff while a turn start is awaiting its provider", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
