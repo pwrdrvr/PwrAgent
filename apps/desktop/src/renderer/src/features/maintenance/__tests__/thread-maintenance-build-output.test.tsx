@@ -96,7 +96,8 @@ describe("build output requests, as a model", () => {
         const inside = (path: string, root: string) => path === root || path.startsWith(`${root}/`);
         const removed = [
           ...(steps.includes("checkouts") ? archivedChosen : []),
-          ...(steps.includes("hibernate") && rebuildable ? idleChosen : []),
+          // Hibernation deletes every ignored file, whatever an older scan's field says.
+          ...(steps.includes("hibernate") ? idleChosen : []),
         ];
         const owned = new Set(outputs.filter((item) => (item.threads?.length ?? 0) > 0).map((item) => item.outputPath));
         const expected = steps.includes("checkouts")
@@ -110,7 +111,7 @@ describe("build output requests, as a model", () => {
         const { removeBuildOutputs: _ignored, ...rest } = request;
         expect(rest).toEqual(without);
       },
-    ));
+    ), { numRuns: 500 });
   });
 });
 

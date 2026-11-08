@@ -104,8 +104,9 @@ function within(path: string, root: string): boolean {
 
 /** The checkout this request removes that holds `output`, if any: an
  * archived checkout chosen for removal or the Trash, or an idle checkout
- * chosen to hibernate when hibernation removes build output. Its output
- * goes with it, so it is neither sent nor counted again. */
+ * chosen to hibernate. Every ignored file goes with a removed checkout,
+ * whatever an older scan says about rebuildable output, so its output is
+ * neither sent nor counted again. */
 export function buildOutputCoveredBy(
   scan: ThreadMaintenanceScan,
   selection: ThreadMaintenanceSelection,
@@ -117,7 +118,7 @@ export function buildOutputCoveredBy(
       selection.checkouts.has(item.worktreePath) && within(output.outputPath, item.worktreePath));
     if (checkout) return checkout.worktreePath;
   }
-  if (stepRuns(steps, "hibernate") && scan.hibernate?.removeRebuildableOutput) {
+  if (stepRuns(steps, "hibernate")) {
     const idle = hibernateItems(scan, selection, steps).find((item) =>
       selection.hibernate.has(idleThreadKey(item)) && within(output.outputPath, item.worktreePath));
     if (idle) return idle.worktreePath;

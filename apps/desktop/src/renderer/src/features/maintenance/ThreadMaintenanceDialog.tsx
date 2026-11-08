@@ -204,7 +204,9 @@ export function ThreadMaintenanceDialog(props: {
     setError(undefined);
     try {
       const next = await api.scanThreadMaintenance({
-        rules, steps, progressId, ...(props.projectKey ? { projectKey: props.projectKey } : {}),
+        // Ignored files never keep a checkout; an older owner reads this field.
+        rules: { ...rules, rebuildableOutputIsClean: true }, steps, progressId,
+        ...(props.projectKey ? { projectKey: props.projectKey } : {}),
         ...(steps.includes("hibernate") ? { hibernateIdleDays: clampIdleDays(hibernateIdleDays, hibernationPolicy.idleDays) } : {}),
       });
       if (progressIdRef.current !== progressId) return;
@@ -415,10 +417,10 @@ function PlanView(props: {
   const description = (step: ReviewStep): string => {
     switch (step) {
       case "threads":
-        return "Threads past each project's keep count, or untouched for the chosen days. Their worktrees are removed after any changes are saved.";
+        return `Threads past each project's keep count, or untouched for the chosen days. ${SAVED_AND_DELETED}`;
       case "hibernate": {
         const days = clampIdleDays(props.hibernateIdleDays, props.hibernationPolicy.idleDays);
-        return `Threads idle ${days} ${days === 1 ? "day" : "days"}${steps.includes("threads") ? " that aren't being archived" : ""}. Their checkouts are removed after any changes are saved; each comes back when you send it a message.`;
+        return `Threads idle ${days} ${days === 1 ? "day" : "days"}${steps.includes("threads") ? " that aren't being archived" : ""}. ${SAVED_AND_DELETED} Each checkout comes back when you send its thread a message.`;
       }
       case "checkouts":
         return "Worktrees still on disk for this profile's archived threads, empty worktree folders, checkouts whose repository is gone, and Cargo build output in checkouts a known thread uses.";
@@ -473,11 +475,6 @@ function PlanView(props: {
                     </label>
                   )}
                 </div>
-                <Checkbox checked={rules.rebuildableOutputIsClean} label="Count dependencies and build output as clean"
-                  onChange={() => props.onRules({ ...rules, rebuildableOutputIsClean: !rules.rebuildableOutputIsClean })}>
-                  Count dependencies and build output as clean
-                  <span className="thread-maintenance__hint">node_modules, dist, target… Other ignored files, like .env.local, still keep the checkout.</span>
-                </Checkbox>
               </div>
             ) : null}
             {step === "hibernate" && on ? (
@@ -520,12 +517,16 @@ function PlanView(props: {
         <dl>
           <dt>threads</dt><dd>Pinned, Agent, running or blocked, watching a PR, scheduled, or running remotely</dd>
           <dt>checkouts</dt><dd>A main checkout, a locked worktree, one another thread still uses, or changes over the snapshot limit you have not approved</dd>
-          <dt>files</dt><dd>Ignored files other than dependencies and build output, and anything outside a managed worktree folder</dd>
+          <dt>files</dt><dd>Anything outside a managed worktree folder</dd>
         </dl>
       </div>
     </>
   );
 }
+
+/** What a removed checkout keeps and loses, said the same way everywhere. */
+const SAVED_AND_DELETED = "Tracked and non-ignored changes are saved to a snapshot first. Ignored files are deleted and are not in the snapshot.";
+const IGNORED_RULE = "ignored files are deleted, not saved";
 
 /** The idle days a scan sends: a whole number from 1 to 3650, or Settings'
  * value while the field is empty or invalid. */
@@ -955,9 +956,9 @@ function IdleThreadsReview(props: {
       </div>
       <div className="thread-maintenance__rules-strip">
         <span className="thread-maintenance__eyebrow">Rules</span>
-        <span>{ruleText} · snapshots up to the limit · {scan.rules.rebuildableOutputIsClean ? "dependencies and build output count as clean" : "any ignored file keeps the checkout"}</span>
+        <span>{ruleText} · snapshots up to the limit · {IGNORED_RULE}</span>
         <span className="thread-maintenance__eyebrow">Never</span>
-        <span className="thread-maintenance__never-inline">pinned · Agent · running or blocked · watching a PR · other ignored files</span>
+        <span className="thread-maintenance__never-inline">pinned · Agent · running or blocked · watching a PR</span>
       </div>
       {decidable.length ? (
         <Checkbox checked={chosen === decidable.length} mixed={chosen > 0 && chosen < decidable.length}
@@ -1376,8 +1377,7 @@ function HibernateReview(props: {
       <div className="thread-maintenance__rules-strip">
         <span className="thread-maintenance__eyebrow">Rules</span>
         <span>
-          {`Idle ${section.idleDays} ${section.idleDays === 1 ? "day" : "days"} · snapshots up to ${section.maxSnapshotMb} MB · `}
-          {section.removeRebuildableOutput ? "dependencies and build output are removed" : "any ignored file keeps the checkout"}
+          {`Idle ${section.idleDays} ${section.idleDays === 1 ? "day" : "days"} · snapshots up to ${section.maxSnapshotMb} MB · ${IGNORED_RULE}`}
         </span>
         <span className="thread-maintenance__eyebrow">Never</span>
         <span className="thread-maintenance__never-inline">kept awake · Agent · running or blocked · watching a PR · shared checkouts</span>

@@ -79,12 +79,11 @@ export function keptGuidance(reason: string, context: KeptGuidanceContext): stri
           ? "The thread is archived, so its checkout is reviewed in the Archived checkouts step, not hibernated."
           : "The thread is archived, so its checkout is reviewed under Archived checkouts, not hibernated. Scan that tab to review it."
         : "Already archived.";
+    // Sent only by an older owner. Ignored files no longer keep a checkout.
     case "Other ignored files":
-      return "The checkout holds ignored files that are not known build output, such as local settings or data, and "
-        + "hibernating would lose them. Open the thread to look at them, and move anything worth keeping, then re-scan.";
     case "Ignored files only":
-      return "The checkout holds ignored files, and this scan keeps any checkout that has them. Turning on Remove "
-        + "rebuildable output in Settings → Worktrees lets hibernation clear known build output; other ignored files still keep it.";
+      return "An older PwrAgent kept this for its ignored files. Ignored files no longer keep a checkout: they are "
+        + "deleted with it and are not in its snapshot. Re-scan with an updated PwrAgent to consider it again.";
     case "Commits on no branch":
       return "The checkout has commits that no branch or tag holds, and removing it would lose them. Open the thread "
         + "and put any you want on a branch, then re-scan.";

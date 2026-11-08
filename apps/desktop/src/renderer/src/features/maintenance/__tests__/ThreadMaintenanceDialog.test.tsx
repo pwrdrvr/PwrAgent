@@ -159,7 +159,7 @@ describe("ThreadMaintenanceDialog", () => {
     expect(screen.getByRole("checkbox", { name: "Archive idle threads" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Hibernate idle checkouts" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Remove archived checkouts" })).toBeChecked();
-    expect(screen.getByText(/^Threads idle 5 days\. Their checkouts/)).toBeInTheDocument();
+    expect(screen.getByText(/^Threads idle 5 days\. Tracked and non-ignored changes are saved/)).toBeInTheDocument();
     expect(screen.getByText("Stops twice for you")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "Archive idle threads" }));
     expect(screen.getByText(/^Threads idle 5 days that aren't being archived\./)).toBeInTheDocument();
@@ -299,7 +299,7 @@ describe("ThreadMaintenanceDialog", () => {
     expect(days).toHaveValue(7);
     expect(within(dialog).getByText(/The hourly sweep uses 7 days, set in Settings → Worktrees\./)).toBeInTheDocument();
     fireEvent.change(days, { target: { value: "3" } });
-    expect(within(dialog).getByText(/^Threads idle 3 days\. Their checkouts/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Threads idle 3 days\. Tracked and non-ignored changes are saved/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
     expect(vi.mocked(api.scanThreadMaintenance!).mock.calls[0]![0]).toMatchObject({ steps: ["hibernate", "checkouts"], hibernateIdleDays: 3 });
 
@@ -611,7 +611,7 @@ describe("ThreadMaintenanceDialog", () => {
     const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
     fireEvent.click(within(dialog).getByRole("radio", { name: "Idle checkouts" }));
     expect(within(dialog).queryByRole("heading", { name: "Archive idle threads" })).toBeNull();
-    expect(within(dialog).getByText(/^Threads idle 7 days\. Their checkouts/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Threads idle 7 days\. Tracked and non-ignored changes are saved/)).toBeInTheDocument();
     expect(within(dialog).getByText("Stops once for you")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
     fireEvent.click(await within(dialog).findByRole("checkbox", { name: "Hibernate Stream progress to the TTY" }));
