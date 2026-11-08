@@ -902,7 +902,7 @@ export type MessagingControllerDeliveryBudgetEvent = {
 
 type QueuedTurnAction = {
   entryId: string;
-  kind: "cancel" | "steer";
+  kind: "cancel" | "steer" | "retry";
 };
 
 type PrivateReplyAction =
@@ -5304,6 +5304,7 @@ export class MessagingController {
           const entry: MessagingQueuedTurnEntry = {
             ...params, id: ownerQueueEntryId, ownerQueueEntryId, status: "queued",
             createdAt: this.now(), updatedAt: this.now(),
+            pdfSourceRequest: startingOrigin?.source?.ref,
           };
           const key = `${params.threadKey}:${ownerQueueEntryId}`;
           await this.applySharedQueueNoticeEvent(key, { type: "accepted", entry });
@@ -5539,8 +5540,13 @@ export class MessagingController {
       capabilityProfile: this.capabilityProfile,
       createdAt: this.now(),
       title: "Message queued",
-      body: buildQueuedTurnNoticeBody(entry.preview, canSteer),
+      body: buildQueuedTurnNoticeBody(entry.preview, canSteer, entry.manualRetryRequired),
       actions: [
+        ...(entry.manualRetryRequired ? [{
+          id: `queued-turn:retry:${entry.id}`,
+          label: "Retry",
+          style: "primary" as const,
+        }] : []),
         {
           id: `queued-turn:steer:${entry.id}`,
           label: "Steer",
@@ -5625,16 +5631,17 @@ export class MessagingController {
     } else {
       this.sharedQueueNoticeHistory.delete(key);
     }
+    if (transition.started) {
+      const { entry, turnId } = transition.started;
+      this.pdfAttachmentStore.bindTurn({
+        backend: entry.binding.backend, threadId: entry.binding.threadId, turnId,
+        sourceInstanceId: entry.binding.federatedThread?.target.scope === "remote"
+          ? entry.binding.federatedThread.target.instanceId : undefined,
+        sourceRequest: entry.pdfSourceRequest,
+      }, entry.pdfAttachments ?? []);
+    }
     if (!transition.retire) return;
     const { entry, outcome: { status, turnId } } = transition.retire;
-    if (status === "started" && turnId) this.pdfAttachmentStore.bindTurn({
-      backend: entry.binding.backend, threadId: entry.binding.threadId, turnId,
-      sourceInstanceId: entry.binding.federatedThread?.target.scope === "remote"
-        ? entry.binding.federatedThread.target.instanceId : undefined,
-      sourceRequest: this.queuedAgentMessagingOriginsByQueueKey.get(
-        agentMessagingQueueKey(entry.binding.backend, entry.binding.threadId, entry.id),
-      )?.source?.ref,
-    }, entry.pdfAttachments ?? []);
     entry.status = status === "started" ? "submitted" : status === "cancelled" ? "cancelled" : "failed";
     await this.retireQueuedTurnNotice(entry, status === "started"
       ? "Queued message sent as the next turn."
@@ -5665,6 +5672,25 @@ export class MessagingController {
         undefined,
         event,
       );
+      return;
+    }
+
+    if (action.kind === "retry") {
+      if (!entry.manualRetryRequired
+        || !(await this.requirePermission(event, "message.reply", "queued-turn:retry"))
+        || !(await this.requireRemoteScopeForBinding(event, entry.binding, "queued-turn:retry:remote-instance"))
+        || this.turnAdmission.findQueuedEntry(entry.id)?.status !== "queued"
+        || this.turnAdmission.isStarting(entry.threadKey)) return;
+      const result = await this.startPreparedInput({
+        binding: entry.binding, event: entry.event, input: entry.input,
+        pdfAttachments: entry.pdfAttachments, privateResponseRequested: entry.privateResponseRequested,
+        preview: entry.preview, threadKey: entry.threadKey, queueOnConcurrentStart: false,
+      });
+      if (result === "failed") return;
+      this.turnAdmission.removeQueuedEntry(entry);
+      await this.retireQueuedTurnNotice(entry, result === "queued"
+        ? "Queued message handed to the thread queue."
+        : "Queued message sent as the next turn.", event);
       return;
     }
 
@@ -5748,7 +5774,7 @@ export class MessagingController {
   private async handleSharedQueuedTurnCallback(
     entry: MessagingQueuedTurnEntry,
     event: MessagingInboundCallbackEvent,
-    kind: QueuedTurnAction["kind"],
+    kind: "cancel" | "steer",
   ): Promise<void> {
     const backend = this.options.backend;
     const target = federationTargetForBinding(entry.binding);
@@ -5773,7 +5799,24 @@ export class MessagingController {
         } catch (error) {
           // Cancellation succeeded, so restore the owner's current content
           // through normal admission if the turn ended before steering.
-          await this.startPreparedInput({ ...entry, input: content.input });
+          const restored = await this.startPreparedInput({
+            binding: entry.binding, event: entry.event, input: content.input,
+            pdfAttachments: entry.pdfAttachments, privateResponseRequested: entry.privateResponseRequested,
+            preview: entry.preview, threadKey: entry.threadKey, queueOnConcurrentStart: false,
+          });
+          if (restored === "failed") {
+            // The owner no longer has this input. Retain a separate recovery
+            // entry until an operator's Retry is accepted; idle events must
+            // not repeatedly submit it while the owner is unavailable.
+            const recovery = this.turnAdmission.enqueue({
+              binding: entry.binding, event: entry.event, input: content.input,
+              pdfAttachments: entry.pdfAttachments,
+              privateResponseRequested: entry.privateResponseRequested,
+              preview: buildQueuedInputPreview(content.input.flatMap((item) => item.type === "text" ? [item.text] : [])) || entry.preview,
+              threadKey: entry.threadKey, manualRetryRequired: true,
+            });
+            await this.deliverQueuedTurnNotice(recovery);
+          }
           throw error;
         }
       }
@@ -5792,8 +5835,9 @@ export class MessagingController {
 
   private scheduleNextQueuedTurn(binding: MessagingBindingRecord): void {
     const key = this.threadKeyForBinding(binding);
+    const entry = this.turnAdmission.peekNextQueued(key);
     if (this.disposed || this.queuedTurnDrainTimers.has(key)
-      || this.queuedTurnDrains.has(key) || !this.turnAdmission.peekNextQueued(key)) return;
+      || this.queuedTurnDrains.has(key) || !entry || entry.manualRetryRequired) return;
     // A start emits ordered lifecycle events. It cannot acknowledge while
     // the event that released it is still awaiting this listener. Leave the
     // delivery stack before draining, and coalesce terminal + idle releases.
@@ -5824,7 +5868,7 @@ export class MessagingController {
     }
 
     const entry = this.turnAdmission.peekNextQueued(threadKey);
-    if (!entry) {
+    if (!entry || entry.manualRetryRequired) {
       return;
     }
 
@@ -21483,6 +21527,11 @@ function readQueuedTurnAction(
     };
   }
 
+  const retryPrefix = "queued-turn:retry:";
+  if (actionId.startsWith(retryPrefix)) {
+    return { kind: "retry", entryId: actionId.slice(retryPrefix.length) };
+  }
+
   const cancelPrefix = "queued-turn:cancel:";
   if (actionId.startsWith(cancelPrefix)) {
     return {
@@ -23812,11 +23861,12 @@ function buildQueuedInputPreview(parts: string[]): string {
   return preview || "[attachment]";
 }
 
-function buildQueuedTurnNoticeBody(preview: string, canSteer: boolean): string {
+function buildQueuedTurnNoticeBody(preview: string, canSteer: boolean, manualRetryRequired = false): string {
   const quotedPreview = truncateText(preview, 500)
     .split("\n")
     .map((line) => `> ${line}`)
     .join("\n");
+  if (manualRetryRequired) return `${quotedPreview}\n\nThe message is still queued. Choose Retry to send it, or Cancel to discard it.`;
   const steeringSentence = canSteer
     ? " To submit it as a steering message, click Steer."
     : "";

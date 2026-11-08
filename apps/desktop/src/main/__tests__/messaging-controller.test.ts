@@ -17084,6 +17084,68 @@ describe("MessagingController", () => {
     } finally { db.close(); }
   });
 
+  it.each(["before acceptance", "during notice", "after notice"] as const)("authorizes queued remote PDFs when owner start arrives %s", async (order) => {
+    const db = StateDb.open(":memory:");
+    const releaseNotice = createDeferred<void>();
+    const noticeEntered = createDeferred<void>();
+    let pending: Promise<void> | undefined;
+    let controller: MessagingController | undefined;
+    try {
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const navigation = buildNavigationSnapshot();
+      const target = buildFederatedThreadRef({ backend: "codex", instanceId: "pwr_pdf_outpost", threadId: "thread-1" });
+      navigation.threads[0]!.federation = { ref: target, instanceLabel: "Fixture owner", peerStatus: "connected" };
+      const pdfData = Buffer.from("%PDF-1.7\nfixture");
+      vi.mocked(inspectPdfDocument).mockResolvedValueOnce({ pageCount: 1,
+        firstPage: { width: 612, height: 792, renderWidth: 612, renderHeight: 792 } });
+      const started: AgentEvent = { backend: "codex", federationTarget: target.target, notification: {
+        method: "thread/turnQueue/updated", params: { threadId: "thread-1", queueEntryId: "pdf-entry", origin: "manual", status: "started", turnId: "pdf-turn" },
+      } };
+      let calls = 0;
+      const harness = await createHarness({ navigation, requestStore: requests, authorizeRetainedSource: () => true,
+        backendOverrides: { ownsTurnQueue: true }, supportsMessagingPdfTools: async () => true,
+        downloadAttachment: async ({ attachment }) => ({ data: pdfData, fileName: attachment.name, mimeType: attachment.mimeType, sizeBytes: pdfData.length }),
+        startTurn: async () => {
+          if (++calls === 1) return { backend: "codex", threadId: "thread-1", turnId: "turn-1" };
+          if (order === "before acceptance") await harness.controller.handleBackendEvent(started);
+          return { backend: "codex", threadId: "thread-1", turnId: "pdf-entry", queueEntryId: "pdf-entry", queueStatus: "queued" };
+        },
+        deliver: async (intent) => {
+          if (intent.kind === "confirmation" && intent.title === "Message queued" && intent.delivery?.mode !== "update") {
+            noticeEntered.resolve();
+            await releaseNotice.promise;
+          }
+          return { channel: "telegram", deliveredAt: 1_000, outcome: "presented", surface: { channel: "telegram", id: "notice" } };
+        },
+      });
+      controller = harness.controller;
+      const event = { ...buildTextEvent("queued remote PDF"), kind: "media" as const, disposition: "available" as const,
+        attachments: [{ id: "fixture-pdf", kind: "file" as const, name: "fixture.pdf", disposition: "available" as const, mimeType: "application/pdf", sizeBytes: pdfData.length }] };
+      await harness.store.upsertBinding({ id: "pdf-outpost-binding", backend: "codex", threadId: "thread-1", targetKind: "thread", federatedThread: target,
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      await controller.handleInboundEvent(buildTextEvent("first"));
+      pending = controller.handleInboundEvent(event);
+      await noticeEntered.promise;
+      if (order === "after notice") { releaseNotice.resolve(); await pending; }
+      if (order !== "before acceptance") await controller.handleBackendEvent(started);
+      const source = harness.startTurn.mock.calls[1]![0].messageOrigin!.causalMessagingSource;
+      const context = { backend: "codex" as const, threadId: "thread-1", turnId: "pdf-turn", causalMessagingSource: source, requestingInstanceId: "pwr_pdf_outpost" };
+      // The owner has started: a provider notice cannot delay authorization.
+      expect(await controller.handlePwrAgentMessagingRequest({ operation: "inspect_messaging_pdfs", context, args: {} }))
+        .toMatchObject({ ok: true, data: { attachments: [expect.objectContaining({ name: "fixture.pdf" })] } });
+      releaseNotice.resolve(); await pending;
+      expect(await controller.handlePwrAgentMessagingRequest({ operation: "inspect_messaging_pdfs", context, args: {} })).toMatchObject({ ok: true });
+      for (const wrong of [{ requestingInstanceId: "wrong-owner" }, { turnId: "wrong-turn" },
+        { causalMessagingSource: { ...source!, requestId: "wrong-request" } }]) {
+        expect(await controller.handlePwrAgentMessagingRequest({ operation: "inspect_messaging_pdfs", context: { ...context, ...wrong }, args: {} }))
+          .toMatchObject({ ok: false, error: { code: "forbidden" } });
+      }
+    } finally {
+      releaseNotice.resolve(); await pending;
+      controller?.dispose(); db.close();
+    }
+  });
+
   it("leaves messaging PDFs as normal file input when PDF analysis is disabled", async () => {
     const pdfData = new TextEncoder().encode("%PDF-1.7\n/pass through\n");
     const supportsMessagingPdfTools = vi.fn(async () => true);
@@ -17319,6 +17381,54 @@ describe("MessagingController", () => {
     }
   });
 
+  it("budgets recovery after steering and fallback fail, through an accepted manual retry", async () => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const { tempDir, dbPath } = createTempStateDb("pwragent-queue-recovery-writes-");
+    tempDirs.push(tempDir);
+    const db = StateDb.open(dbPath);
+    let controller: MessagingController | undefined;
+    try {
+      let calls = 0;
+      const harness = await createHarness({ store: new SqliteMessagingStore(db),
+        backendOverrides: {
+          ownsTurnQueue: true,
+          readQueuedTurn: async () => ({ queueEntryId: "owner-entry", contentHash: "hash", input: [{ type: "text", text: "owner input" }] }),
+          cancelQueuedTurn: async () => {
+            await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+              method: "thread/turnQueue/updated", params: { threadId: "thread-1", queueEntryId: "owner-entry", origin: "messaging", status: "cancelled" },
+            } });
+            return { queueEntryId: "owner-entry", cancelled: true };
+          },
+        },
+        startTurn: async () => {
+          if (++calls === 1) return { backend: "codex", threadId: "thread-1", turnId: "turn-1" };
+          if (calls === 3) throw new Error("Owner disconnected");
+          const queueEntryId = calls === 2 ? "owner-entry" : "retry-entry";
+          return { backend: "codex", threadId: "thread-1", turnId: queueEntryId, queueEntryId, queueStatus: "queued" };
+        },
+      });
+      controller = harness.controller;
+      await bindThread(harness);
+      await controller.handleInboundEvent(buildTextEvent("first"));
+      await controller.handleInboundEvent(buildTextEvent("queued"));
+      harness.steerTurn.mockRejectedValue(new Error("Steer rejected"));
+      const { writes } = await measureSqliteWrites(async () => {
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "queued-turn:steer:owner-entry" }));
+        const notice = harness.delivered.filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued").at(-1);
+        const retry = notice && "actions" in notice ? notice.actions?.find((action) => action.id.startsWith("queued-turn:retry:")) : undefined;
+        expect(retry).toBeDefined();
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id }));
+      });
+      expectSqliteWriteBudget({ scenario: "messaging-owner-queue-recovery",
+        note: "One failed steer and failed fallback retained for manual Retry, then accepted by the owner queue: 6 commits, ~91 KB WAL; ~0.91 MB/day at 10 recoveries/day, no idle/automatic retry writes.", writes });
+    } finally {
+      controller?.dispose(); await controller?.whenToolUpdatesSettled(); db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
+  });
+
   it("admits busy-thread messaging input to the owner's FIFO in arrival order", async () => {
     await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("follow up", "same message", "check status"), {
       minLength: 1, maxLength: 4,
@@ -17377,6 +17487,63 @@ describe("MessagingController", () => {
     if (action === "steer") expect(harness.steerTurn).toHaveBeenCalledWith(expect.objectContaining({ input: [{ type: "text", text: "edited in desktop" }] }));
     else expect(harness.steerTurn).not.toHaveBeenCalled();
     if (action === "edited") expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("changed or has already been admitted") });
+  });
+
+  it("preserves owner input until a retry is admitted after failed steering and fallback", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 0, max: 2 }), async (queueRetry, failedRetries) => {
+      let calls = 0;
+      const harness = await createHarness({
+        backendOverrides: {
+          ownsTurnQueue: true,
+          readQueuedTurn: async () => ({ queueEntryId: "owner-entry", contentHash: "owner-hash", input: [{ type: "text", text: "owner-edited input" }] }),
+          cancelQueuedTurn: async () => {
+            await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+              method: "thread/turnQueue/updated", params: { threadId: "thread-1", queueEntryId: "owner-entry", origin: "messaging", status: "cancelled" },
+            } });
+            return { queueEntryId: "owner-entry", cancelled: true };
+          },
+        },
+        startTurn: async () => {
+          calls += 1;
+          if (calls === 1) return { backend: "codex", threadId: "thread-1", turnId: "turn-1" };
+          if (calls === 2) return { backend: "codex", threadId: "thread-1", turnId: "owner-entry", queueEntryId: "owner-entry", queueStatus: "queued" };
+          if (calls <= 3 + failedRetries) throw new Error("Owner disconnected");
+          return queueRetry
+            ? { backend: "codex", threadId: "thread-1", turnId: "retry-entry", queueEntryId: "retry-entry", queueStatus: "queued" }
+            : { backend: "codex", threadId: "thread-1", turnId: "turn-2" };
+        },
+      });
+      try {
+        await bindThread(harness);
+        await harness.controller.handleInboundEvent(buildTextEvent("first"));
+        await harness.controller.handleInboundEvent(buildTextEvent("original input"));
+        harness.steerTurn.mockRejectedValue(new Error("Steer rejected"));
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "queued-turn:steer:owner-entry" }));
+        const retryNotice = harness.delivered.filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued").at(-1);
+        const retry = retryNotice && "actions" in retryNotice
+          ? retryNotice.actions?.find((action) => action.id.startsWith("queued-turn:retry:")) : undefined;
+        expect(retry).toBeDefined();
+        expect(retryNotice).toMatchObject({ body: expect.stringContaining("owner-edited input") });
+        const beforeIdle = calls;
+        await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+          method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+        } });
+        expect(calls).toBe(beforeIdle);
+        for (let index = 0; index < failedRetries; index += 1) {
+          await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id }));
+        }
+        await Promise.all([
+          harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id })),
+          harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id })),
+        ]);
+        expect(harness.startTurn.mock.calls.slice(2).map(([request]) => request.input))
+          .toEqual(Array.from({ length: failedRetries + 2 }, () => [{ type: "text", text: "owner-edited input" }]));
+        const acceptedCalls = calls;
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id }));
+        expect(calls).toBe(acceptedCalls);
+        expect(harness.delivered.at(-1)).toMatchObject({ body: "That queued message is no longer waiting." });
+      } finally { harness.controller.dispose(); }
+    }), { numRuns: 8, examples: [[false, 0], [true, 1]] });
   });
 
   it.each([false, true])("keeps owner acceptance authoritative when queue notice fails=%s", async (failNotice) => {
