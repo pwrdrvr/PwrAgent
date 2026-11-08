@@ -242,8 +242,7 @@ export function ThreadMaintenanceDialog(props: {
             : undefined;
 
   return (
-    <div className="thread-maintenance-modal"
-      onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
+    <div className="thread-maintenance-modal">
       <div ref={dialogRef} aria-labelledby="thread-maintenance-title" aria-modal="true"
         className="thread-maintenance" role="dialog" tabIndex={-1}>
         <div className="thread-maintenance__head">

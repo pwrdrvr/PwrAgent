@@ -431,15 +431,62 @@ describe("ThreadMaintenanceDialog", () => {
     expect(description).toBeInTheDocument();
   });
 
-  it("closes on a click outside the dialog", () => {
-    const { api } = fixtureApi();
+  const backdropPhases = ["plan", "scanning", "threads", "hibernate", "checkouts", "running", "finished"] as const;
+  it.each(backdropPhases)("ignores backdrop interactions during %s", async (phase) => {
+    let finishScan!: (scan: ThreadMaintenanceScan) => void;
+    const { api, emit, scan } = fixtureApi({
+      scanThreadMaintenance: vi.fn(() => new Promise<ThreadMaintenanceScan>((resolve) => { finishScan = resolve; })),
+    } as Partial<DesktopApi>);
     const onClose = vi.fn();
     render(<ThreadMaintenanceDialog desktopApi={api} onClose={onClose} />);
     const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
-    fireEvent.mouseDown(dialog);
-    expect(onClose).not.toHaveBeenCalled();
-    fireEvent.mouseDown(dialog.parentElement!);
+    const phaseIndex = backdropPhases.indexOf(phase);
+    if (phaseIndex >= 1) {
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: "Archive idle threads" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+    }
+    if (phaseIndex >= 2) {
+      await act(async () => { finishScan(scan); });
+      await within(dialog).findByText("3 idle threads");
+    }
+    if (phaseIndex >= 3) fireEvent.click(within(dialog).getByRole("button", { name: "Archive 2 and continue" }));
+    if (phaseIndex >= 4) fireEvent.click(within(dialog).getByRole("button", { name: "Hibernate 2 and continue" }));
+    if (phaseIndex >= 5) {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Remove 1 and finish" }));
+      await within(dialog).findByRole("button", { name: "Stop after this item" });
+    }
+    if (phaseIndex >= 6) {
+      emit({ runId: "run-1", revision: REV(), scanId: scan.scanId, running: false,
+        startedAt: NOW, finishedAt: NOW + 1_000, steps: [], problems: [] });
+    }
+    const scanCalls = vi.mocked(api.scanThreadMaintenance!).mock.calls.length;
+    const applyCalls = vi.mocked(api.applyThreadMaintenance!).mock.calls.length;
+    // Model: backdrop and drag gestures are identity transitions in every
+    // workflow phase. Only an explicit close or stop changes that intent.
+    fc.assert(fc.property(fc.array(fc.constantFrom("backdrop", "drag-out", "drag-in"), { maxLength: 8 }), (gestures) => {
+      const backdrop = dialog.parentElement!;
+      for (const gesture of ["backdrop", ...gestures]) {
+        fireEvent.mouseDown(gesture === "drag-out" ? dialog : backdrop);
+        fireEvent.mouseUp(gesture === "drag-in" ? dialog : backdrop);
+        fireEvent.click(gesture === "drag-in" ? dialog : backdrop);
+      }
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Thread maintenance" })).toBe(dialog);
+      expect(api.stopThreadMaintenance).not.toHaveBeenCalled();
+      expect(api.scanThreadMaintenance).toHaveBeenCalledTimes(scanCalls);
+      expect(api.applyThreadMaintenance).toHaveBeenCalledTimes(applyCalls);
+    }), { numRuns: 10 });
+    if (phase === "scanning") {
+      await act(async () => { finishScan(scan); });
+      expect(await within(dialog).findByText("3 idle threads")).toBeInTheDocument();
+    } else if (phase === "running") {
+      emit({ runId: "run-1", revision: REV(), scanId: scan.scanId, running: false,
+        startedAt: NOW, finishedAt: NOW + 1_000, steps: [], problems: [] });
+      expect(within(dialog).getByText("Maintenance finished")).toBeInTheDocument();
+    }
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close thread maintenance" }));
     expect(onClose).toHaveBeenCalledOnce();
+    expect(api.stopThreadMaintenance).not.toHaveBeenCalled();
   });
 
   it("finishes with a red card for failures and a blue card for what was kept", async () => {
