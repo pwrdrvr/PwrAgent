@@ -74,6 +74,7 @@ export type ThreadMaintenanceKeptCheckout = {
   allocatedBytes?: number;
   /** All known owners, including a native child sharing its parent's checkout. */
   threads?: ThreadMaintenanceKeptThread[];
+  rebuildableOutput?: ThreadMaintenanceSpace["rebuildableOutput"];
 };
 
 /** Which roots and threads a scan step read, so the review can say what it
