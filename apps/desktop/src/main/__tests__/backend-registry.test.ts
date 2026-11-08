@@ -5316,6 +5316,66 @@ describe("DesktopBackendRegistry", () => {
     await assertAcceptedTurnSurvivesFinalizationFailure("accepted", "origin", false);
   });
 
+  async function assertAcceptedAcpTurnSurvivesFinalizationFailure(
+    backend: AcpBackendId,
+    threadId: string,
+    failure: "review" | "origin" | "title" | "context" | "attachments",
+  ): Promise<void> {
+    const overlay = createOverlayStoreMock();
+    const { registry, startPrompt } = createKimiAcpRegistry({ acpBackendId: backend, sessionId: threadId,
+      overlayStore: overlay, sessions: [{ backendId: backend, sessionId: threadId, title: "Accepted ACP",
+        createdAt: 1000, updatedAt: 1000, executionMode: "default", status: "idle" }] });
+    const internal = registry as unknown as {
+      persistStartingTurnOrigin: () => Promise<void>;
+      rememberTurnInputAttachments: () => Promise<void>;
+      scheduleThreadTitleGeneration: () => void;
+      bindPendingThreadMessageContext: () => void;
+      registerPendingThreadMessageContext: () => Promise<string>;
+      forgetPendingThreadMessageContext: (id: string) => void;
+      reservedAcpStartThreadKeys: Set<string>;
+      startingTurnOrigins: Set<unknown>;
+    };
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const reject = () => { throw new Error(`ACP finalization ${failure}`); };
+    vi.spyOn(internal, "registerPendingThreadMessageContext").mockResolvedValue("accepted-context");
+    const forgot = vi.spyOn(internal, "forgetPendingThreadMessageContext");
+    const review = vi.spyOn(overlay, "consumeManagedReviewContexts");
+    const origin = vi.spyOn(internal, "persistStartingTurnOrigin").mockResolvedValue();
+    const title = vi.spyOn(internal, "scheduleThreadTitleGeneration").mockImplementation(() => {});
+    const context = vi.spyOn(internal, "bindPendingThreadMessageContext").mockImplementation(() => {});
+    const attachments = vi.spyOn(internal, "rememberTurnInputAttachments").mockResolvedValue();
+    if (failure === "review") review.mockImplementationOnce(async () => reject());
+    if (failure === "origin") origin.mockImplementationOnce(async () => reject());
+    if (failure === "title") title.mockImplementationOnce(reject);
+    if (failure === "context") context.mockImplementationOnce(reject);
+    if (failure === "attachments") attachments.mockImplementationOnce(async () => reject());
+    try {
+      await expect(registry.startTurn({ backend, threadId, input: [{ type: "text", text: "Continue accepted ACP" }],
+        messageOrigin: { kind: "messaging" },
+      })).resolves.toEqual({ backend, threadId, turnId: "turn-1" });
+      expect(startPrompt).toHaveBeenCalledOnce();
+      expect(events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
+      expect(internal.startingTurnOrigins.size).toBe(0);
+      expect(internal.reservedAcpStartThreadKeys.size).toBe(0);
+      expect(forgot).toHaveBeenCalledExactlyOnceWith("accepted-context");
+      for (const effect of [review, origin, title, context, attachments]) expect(effect).toHaveBeenCalledOnce();
+    } finally {
+      await registry.close();
+    }
+  }
+
+  it("returns ACP acceptance through generated post-acceptance host failures", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("acp:kimi" as AcpBackendId, "acp:gemini" as AcpBackendId),
+      fc.constantFrom("accepted", "same:thread", "pending:source"),
+      fc.constantFrom("review" as const, "origin" as const, "title" as const, "context" as const, "attachments" as const),
+      assertAcceptedAcpTurnSurvivesFinalizationFailure), { numRuns: 20 });
+  });
+
+  it("returns an accepted ACP turn when managed-review context consumption rejects", async () => {
+    await assertAcceptedAcpTurnSurvivesFinalizationFailure("acp:kimi" as AcpBackendId, "accepted", "review");
+  });
+
   it("rejects handoff while a turn start is awaiting its provider", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
