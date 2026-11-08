@@ -11,7 +11,7 @@ import {
 } from "../profile";
 import fs from "node:fs";
 import { AppRuntimeInstanceStore } from "./app-runtime-instance-store.js";
-import { AutomationStore } from "../automations/automation-store.js";
+import { AutomationStore } from "../storage/automation-store.js";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store.js";
 import { SqliteMessagingStore } from "./messaging-store-sqlite.js";
 import { SqliteOverlayStore } from "./overlay-store-sqlite.js";
