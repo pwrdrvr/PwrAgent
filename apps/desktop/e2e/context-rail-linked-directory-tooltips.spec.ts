@@ -36,16 +36,19 @@ test("shows linked directory path tooltips in the context rail", async () => {
     await expect(
       contextRail.getByLabel("Path for PwrAgent", { exact: true })
     ).toBeVisible();
+    await expect(
+      contextRail.getByText("/repo/PwrAgent/.worktrees/feature-context-tooltips", { exact: true })
+    ).toBeVisible();
 
     await contextRail.getByLabel("Path for PwrAgent", { exact: true }).focus();
-    await expectVisibleTooltip(app.window, "/repo/PwrAgent");
+    await expectVisibleTooltip(app.window, "/repo/PwrAgent/.worktrees/feature-context-tooltips");
 
     await contextRail
       .getByRole("button", { name: "Copy path for PwrAgent", exact: true })
       .focus();
     await expectVisibleTooltip(
       app.window,
-      "/repo/PwrAgent\nClick to copy to clipboard"
+      "/repo/PwrAgent/.worktrees/feature-context-tooltips\nClick to copy to clipboard"
     );
 
     await contextRail.getByLabel("Path for worktree PwrAgent", { exact: true }).focus();
