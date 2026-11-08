@@ -6,8 +6,13 @@ import type {
   SteerTurnResponse,
 } from "@pwragent/shared";
 
+export type ThreadSteeringSubmission = {
+  response: SteerTurnResponse;
+  complete?: () => Promise<void>;
+};
+
 export interface ThreadSteeringLifecycleHost {
-  submit(params: SteerTurnRequest, origin?: AppServerThreadMessageOrigin): Promise<SteerTurnResponse>;
+  submit(params: SteerTurnRequest, origin?: AppServerThreadMessageOrigin): Promise<ThreadSteeringSubmission>;
   complete(params: SteerTurnRequest, result: SteerTurnResponse, origin?: AppServerThreadMessageOrigin): Promise<void>;
 }
 
@@ -15,7 +20,7 @@ type AcceptedSteer = {
   params: SteerTurnRequest;
   origin?: AppServerThreadMessageOrigin;
   signature: string;
-  result?: SteerTurnResponse;
+  submission?: ThreadSteeringSubmission;
   completion?: Promise<SteerTurnResponse>;
 };
 
@@ -70,9 +75,9 @@ export class ThreadSteeringLifecycle {
       const admittedRequests = requests;
       // Admit before invoking the host, including synchronous reentrant calls.
       const completion = Promise.resolve().then(async () => {
-        if (!entry.result) {
+        if (!entry.submission) {
           try {
-            entry.result = await this.host.submit(entry.params, entry.origin);
+            entry.submission = await this.host.submit(entry.params, entry.origin);
           } catch (error) {
             // A late failure must never evict a newer admission after retirement.
             if (admittedRequests.get(params.requestId) === entry) {
@@ -82,8 +87,12 @@ export class ThreadSteeringLifecycle {
             throw error;
           }
         }
-        await this.host.complete(entry.params, entry.result, entry.origin);
-        return entry.result;
+        // Acceptance precedes host retention/persistence. A failure here must
+        // retry this effect, never the provider. Clear only a completed effect.
+        await entry.submission.complete?.();
+        entry.submission.complete = undefined;
+        await this.host.complete(entry.params, entry.submission.response, entry.origin);
+        return entry.submission.response;
       });
       entry.completion = completion;
       // An accepted provider result survives host completion failure. A retry

@@ -298,6 +298,16 @@ terminal event. Desktop supplies MCP cancellation, provider execution, ACP
 prompt locking, runtime selection, logging and active-mode retirement through
 host ports. Active-turn identity maps and persistence remain host-owned.
 
+Steer submission lives in `owner-core/thread-steer-submission-lifecycle.ts`.
+It owns delivery refusal, restart-gate queue admission, native-review admission,
+provider selection and response/effect sequencing. The existing steering
+lifecycle records provider acceptance before Claude origin persistence or Codex
+attachment retention. Failed host effects remain pending on that acceptance;
+retries share their completion and never resend the accepted provider input.
+Successful retention is not repeated if later causal-origin completion fails.
+Desktop supplies attachment preparation, provider calls, ACP prompt locking,
+pending-message context and persistence at their existing lifecycle sites.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or
