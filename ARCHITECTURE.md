@@ -289,6 +289,15 @@ events retire that turn's admissions. Desktop supplies provider execution and
 causal-origin merging/persistence through host ports, retaining their existing
 locks, storage sites and event order. The core does not infer active turns.
 
+Interruption target coordination lives in
+`owner-core/thread-interruption-lifecycle.ts`. It resolves the reviewer that
+owns a visible parent turn before dispatching to a provider, including reviews
+of Claude parents, and applies the host's native-review interrupt alias. Review
+interrupts return the parent's identity and retain ownership until the provider
+terminal event. Desktop supplies MCP cancellation, provider execution, ACP
+prompt locking, runtime selection, logging and active-mode retirement through
+host ports. Active-turn identity maps and persistence remain host-owned.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or
