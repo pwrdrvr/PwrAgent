@@ -1,3 +1,4 @@
+import { ThreadSteeringLifecycle } from "@pwragent/owner-core/thread-steering-lifecycle";
 import { ThreadTitleLifecycle, extractFirstMeaningfulTextInput } from "@pwragent/owner-core/thread-title-lifecycle";
 import { ThreadNamingLifecycle, isPromptPlaceholderTitle, isInjectedContextPlaceholderTitle, type ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
@@ -9114,11 +9115,6 @@ function contentHasRenderableImage(content: unknown[]): boolean {
   });
 }
 
-type AcceptedSteerRequest = {
-  promise: Promise<SteerTurnResponse>;
-  signature: string;
-};
-
 type AcceptedThreadControlRequest = {
   promise: Promise<PwrAgentThreadOrchestrationResponse>;
   signature: string;
@@ -9198,37 +9194,6 @@ const MCP_DEFAULTS_READ_BUDGET_MS = 2_000;
  */
 function toForwardSlashes(value: string): string {
   return value.replace(/\\/g, "/");
-}
-
-function buildSteerRequestKey(params: SteerTurnRequest): string {
-  return [
-    params.backend,
-    params.threadId,
-    params.expectedTurnId,
-    params.requestId,
-  ].join("\u0000");
-}
-
-function buildSteerTurnKeyPrefix(params: {
-  backend: AppServerBackendKind;
-  threadId: string;
-  turnId: string;
-}): string {
-  return [params.backend, params.threadId, params.turnId, ""].join("\u0000");
-}
-
-function buildSteerRequestSignature(
-  params: SteerTurnRequest,
-  messageOrigin?: AppServerThreadMessageOrigin,
-): string {
-  return createHash("sha256")
-    .update(JSON.stringify({
-      input: params.input,
-      messageOrigin: withoutTurnAttribution(messageOrigin) ?? null,
-      // An interrupt and a steer of the same text are different requests.
-      ...(params.delivery === "now" ? { delivery: "now" } : {}),
-    }))
-    .digest("hex");
 }
 
 type CodexRetryableTurnStart = {
@@ -9773,13 +9738,6 @@ export class DesktopBackendRegistry {
    * first, so that call is gated like the rest of the turn. Memory only.
    */
   private readonly startingTurnOrigins = new Set<StartingTurnOrigin>();
-  // Keep accepted requests through the active turn, not just while the RPC is
-  // in flight. The backend can acknowledge a steer before its user item is
-  // observed, and completion signals in that window must not resubmit it.
-  private readonly acceptedSteerRequests = new Map<
-    string,
-    AcceptedSteerRequest
-  >();
   private readonly acceptedThreadControlRequests = new Map<
     string,
     AcceptedThreadControlRequest
@@ -27046,42 +27004,32 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
-    const requestKey = buildSteerRequestKey(params);
-    const signature = buildSteerRequestSignature(params, messageOrigin);
-    const accepted = this.acceptedSteerRequests.get(requestKey);
-    if (accepted) {
-      if (accepted.signature !== signature) {
-        throw new Error(
-          `Steer request id ${params.requestId} was reused with different input`,
-        );
-      }
-      return await accepted.promise;
-    }
+    return await this.threadSteering.steerTurn(params, messageOrigin);
+  }
 
-    const promise = this.submitSteerTurn(params, messageOrigin);
-    this.acceptedSteerRequests.set(requestKey, { promise, signature });
-    try {
-      const result = await promise;
-      if (result.disposition === "steered" && messageOrigin) {
-        const turn = { backend: params.backend, threadId: params.threadId, turnId: result.turnId };
-        // Read-modify-write: overlapping steers must merge, not overwrite.
-        await this.turnCausalContextLocks.run(`${turn.backend}:${turn.threadId}:${turn.turnId}`, async () => {
-          const previous = await this.readTurnCausalMessagingOrigin(turn);
-          if (isCausalMessagingContext(previous) || isCausalMessagingContext(messageOrigin)) {
-            // `user:<turnId>` is also the first prompt's displayed origin, and
-            // the steerer did not write that prompt. Keep routing in its own row.
-            await this.persistThreadMessageOrigin({ backend: turn.backend, threadId: turn.threadId,
-              messageId: buildTurnCausalMessagingContextId(turn.turnId),
-              origin: { kind: messageOrigin.kind, ...mergeCausalMessagingContext([previous, messageOrigin]) } });
-          }
-        });
-      }
-      return result;
-    } catch (error) {
-      if (this.acceptedSteerRequests.get(requestKey)?.promise === promise) {
-        this.acceptedSteerRequests.delete(requestKey);
-      }
-      throw error;
+  private readonly threadSteering = new ThreadSteeringLifecycle({
+    submit: (params, origin) => this.submitSteerTurn(params, origin),
+    complete: (params, result, origin) => this.completeSteerTurn(params, result, origin),
+  });
+
+  private async completeSteerTurn(
+    params: SteerTurnRequest,
+    result: SteerTurnResponse,
+    messageOrigin?: AppServerThreadMessageOrigin,
+  ): Promise<void> {
+    if (result.disposition === "steered" && messageOrigin) {
+      const turn = { backend: params.backend, threadId: params.threadId, turnId: result.turnId };
+      // Read-modify-write: overlapping steers must merge, not overwrite.
+      await this.turnCausalContextLocks.run(`${turn.backend}:${turn.threadId}:${turn.turnId}`, async () => {
+        const previous = await this.readTurnCausalMessagingOrigin(turn);
+        if (isCausalMessagingContext(previous) || isCausalMessagingContext(messageOrigin)) {
+          // `user:<turnId>` is also the first prompt's displayed origin, and
+          // the steerer did not write that prompt. Keep routing in its own row.
+          await this.persistThreadMessageOrigin({ backend: turn.backend, threadId: turn.threadId,
+            messageId: buildTurnCausalMessagingContextId(turn.turnId),
+            origin: { kind: messageOrigin.kind, ...mergeCausalMessagingContext([previous, messageOrigin]) } });
+        }
+      });
     }
   }
 
@@ -31978,7 +31926,7 @@ export class DesktopBackendRegistry {
     // entry, so waiting it cannot miss work still deriving its sqlite row.
     const liveThreadUsageEmitBarrier =
       this.waitForLiveThreadUsageEmitWork();
-    this.acceptedSteerRequests.clear();
+    this.threadSteering.clear();
     this.acceptedThreadControlRequests.clear();
     this.acceptedHandoffTaskRequests.clear();
     this.acceptedDynamicToolCalls.clear();
@@ -54586,16 +54534,11 @@ export class DesktopBackendRegistry {
           );
         }
         this.clearAcceptedToolCallsForEndedTurn(event.backend, notification.params.threadId, turnId);
-        const steerKeyPrefix = buildSteerTurnKeyPrefix({
+        this.threadSteering.retireTurn({
           backend: event.backend,
           threadId: notification.params.threadId,
           turnId,
         });
-        for (const key of this.acceptedSteerRequests.keys()) {
-          if (key.startsWith(steerKeyPrefix)) {
-            this.acceptedSteerRequests.delete(key);
-          }
-        }
       }
       if ((event.backend === "claude" && hadMatchingGenericActiveTurn)
         || (isAcpBackendId(event.backend) && hadGenericActiveTurn)) {
