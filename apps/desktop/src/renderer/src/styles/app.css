@@ -54096,9 +54096,9 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   background: var(--danger-surface-faint);
 }
 
+/* Border only: muted paths and eyebrows fail contrast on --info-soft. */
 .thread-maintenance__run-group.is-kept {
   border-color: var(--info-border);
-  background: var(--info-soft);
 }
 
 .thread-maintenance__run-head {

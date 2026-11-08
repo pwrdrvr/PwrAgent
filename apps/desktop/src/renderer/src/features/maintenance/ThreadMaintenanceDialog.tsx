@@ -596,13 +596,13 @@ function ScanStatus(props: { steps: readonly ReviewStep[]; progress?: ThreadMain
 
 /** Time since `since`, counting up once a second, so a long step reads as
  * working rather than stuck. Outside the live region: it is not announced. */
-function Elapsed(props: { since: number }) {
+function Elapsed(props: { since: number; prefix?: string }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
-  return <span className="thread-maintenance__elapsed">{` · ${formatElapsed(now - props.since)}`}</span>;
+  return <span className="thread-maintenance__elapsed">{`${props.prefix ?? " · "}${formatElapsed(now - props.since)}`}</span>;
 }
 
 /** Roots listed before "N more roots". */
@@ -1581,7 +1581,7 @@ function RunItems(props: { run: ThreadMaintenanceRun; items: ThreadMaintenanceRu
               : `${counts.finished} of ${counts.total} finished${counts.waiting ? ` · ${counts.waiting} not started` : ""}`}
           </span>
           <span className="thread-maintenance__mono">
-            {run.running ? <Elapsed since={run.startedAt} /> : took ? `took ${took}` : null}
+            {run.running ? <Elapsed since={run.startedAt} prefix="" /> : took ? `took ${took}` : null}
           </span>
         </div>
         <div aria-hidden="true" className="thread-maintenance__run-bar">
