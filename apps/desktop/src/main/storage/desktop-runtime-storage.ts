@@ -6,7 +6,7 @@ import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage
 import { ThreadTodoStore } from "./thread-todo-store";
 import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
-import { getAppStateDb, getAppStateMode, isAppStateInitialized, getAppScheduledThreadActionStore as getScheduledThreadActionStore } from "../state/app-state";
+import { getAppStateDb, getAppStateMode, getBootDecision, isAppStateInitialized, getAppScheduledThreadActionStore as getScheduledThreadActionStore } from "../state/app-state";
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
 import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
 import { RestartContinuationStore } from "../state/restart-continuation-store";
@@ -33,7 +33,7 @@ export type ThreadDependencyStorage = Pick<ThreadDependencyStore, keyof ThreadDe
 
 // Bind each store at its existing construction boundary, without caching a
 // database in this module or giving callers access to its handle.
-export { getAppStateMode, isAppStateInitialized };
+export { getAppStateMode, getBootDecision, isAppStateInitialized };
 export function getAppScheduledThreadActionStore(): ScheduledThreadActionStorage {
   return getScheduledThreadActionStore();
 }

@@ -7,10 +7,9 @@
  * through IPC, avoiding an "Inbox first, then jump" startup path.
  */
 
-import { normalizeNavigationResumeState, type NavigationBrowseMode, type NavigationResumeState } from "@pwragent/shared";
+import { normalizeNavigationBrowseMode, normalizeNavigationResumeState, type NavigationBrowseMode, type NavigationResumeState } from "@pwragent/shared";
 import { getExistingDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";
-import { getAppOverlayStore } from "./state/app-state";
-import { normalizeNavigationBrowseMode } from "./state/overlay-store-sqlite";
+import { getDesktopNavigationPreferencesStorage } from "./storage/desktop-overlay-store";
 
 export type BootstrapNavigationPreferences = {
   browseMode: NavigationBrowseMode;
@@ -30,7 +29,7 @@ export const BOOTSTRAP_NAVIGATION_ARG_PREFIX =
 export function readBootstrapNavigationPreferences(): BootstrapNavigationPreferences {
   const pinnedThreadsOnTop = readPinnedThreadsOnTop();
   try {
-    const store = getAppOverlayStore();
+    const store = getDesktopNavigationPreferencesStorage();
     return {
       browseMode: store.getNavigationBrowseModeSync(),
       resumeState: store.getNavigationResumeStateSync(),

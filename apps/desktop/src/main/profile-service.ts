@@ -1,6 +1,6 @@
 import type { DesktopBootInfo } from "@pwragent/shared";
 import { assertUnreachableProfileBootDecision, resolveActiveProfileName } from "./profile";
-import { getAppStateMode, getBootDecision } from "./state/app-state";
+import { getAppStateMode, getBootDecision } from "./storage/desktop-runtime-storage";
 
 export function isBootstrapProfile(): boolean {
   return getAppStateMode() === "bootstrap";
