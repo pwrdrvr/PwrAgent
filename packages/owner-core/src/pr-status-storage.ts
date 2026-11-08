@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  PrSummary,
   PrAutoDispatchBudgetConfig,
   PrAutoDispatchBudgetStatus,
   ThreadOverlayState,
@@ -45,7 +46,10 @@ export type PrAutoDispatchBudgetCompletionResult = {
 export type PrStatusWatchClaim = {
   attemptCount: number;
   watch: ThreadPullRequestWatchSummary;
+  terminalObservation?: PrTerminalWatchObservation;
 };
+
+export type PrTerminalWatchObservation = { pr: PrSummary; observedAt: number };
 
 /** A thread whose PR watches changed, for `thread/prWatches/updated`. */
 export type PrStatusWatchThreadRef = {
@@ -228,7 +232,7 @@ export interface PrStatusWatchStorage {
     now: number;
     spendAttempt: boolean;
     maxAttempts: number;
-  }): Promise<"watching" | "failed" | undefined>;
+  }): Promise<"watching" | "pending_terminal" | "failed" | undefined>;
   renewThreadPrStatusWatchLease(params: {
     watchId: string;
     ownerId: string;
@@ -244,12 +248,17 @@ export interface PrStatusWatchStorage {
   }): Promise<PrStatusWatchAdvanceResult>;
   claimThreadPrTerminalWatches(params: {
     prKey: string;
-    outcome: "merged" | "closed";
     now: number;
     ownerId: string;
     leaseExpiresAt: number;
     maxAttempts: number;
   }): Promise<PrStatusWatchClaim[]>;
+  observeThreadPrTerminalWatches(params: {
+    pr: PrSummary;
+    observedAt: number;
+    outcome: "merged" | "closed";
+    now: number;
+  }): Promise<PrStatusWatchThreadRef[]>;
   finishThreadPrTerminalWatch(params: {
     watchId: string;
     ownerId: string;

@@ -7423,7 +7423,8 @@ class DesktopAppServerService {
         appServerLog.info("background PR polling started", {
           trackedPrCount: this.collectPrPollTargets().length,
         });
-        void this.resolveRenamedPrWatchRepositories()
+        void this.retryPendingPrTerminalWatches()
+          .then(() => this.resolveRenamedPrWatchRepositories())
           .catch((error) => {
             appServerLog.warn("pr watch repository resolve failed", {
               error: error instanceof Error ? error.message : String(error),
@@ -10328,7 +10329,8 @@ class DesktopAppServerService {
         .catch((error) => appServerLog.warn("archived thread repair cancellation failed", { error: String(error) }));
       return;
     }
-    const settled = notification.method === "turn/completed"
+    const settled = (notification.method === "thread/lock/updated" && !notification.params.lock)
+      || notification.method === "turn/completed"
       || notification.method === "turn/failed"
       || notification.method === "turn/cancelled"
       || (
@@ -10360,15 +10362,36 @@ class DesktopAppServerService {
   ): Promise<void> {
     if (!this.backgroundPrPollingEnabled) return;
     await this.syncPrStatusWatchKeys();
+    // An undelivered event owns its observation. Cache eviction or reopening
+    // the PR must not erase a terminal notification held by a thread lock.
+    const saved = await this.getOverlayStore().listPendingPrTerminalWatchObservations(thread ?? {});
+    const coordinator = this.getPrStatusWatchCoordinator();
+    for (const observation of saved) {
+      await coordinator.handleTerminalSnapshot(observation.pr, observation.observedAt, { fromSavedObservation: true, pendingOnly: true });
+    }
     const prKeys = await this.getOverlayStore()
-      .listPendingPrTerminalWatchPrKeys(thread ?? {});
+      .listPendingPrTerminalWatchPrKeys({ ...thread, unobservedOnly: true });
     if (prKeys.length === 0) return;
     await this.loadPrStatusRegistry();
+    // Old attachments can predate the durable status registry. Use their
+    // saved lifecycle only when no authoritative status observation exists.
+    const fallbacks = new Map<string, { pr: PrSummary; fetchedAt: number }>();
+    if (prKeys.some((key) => !this.prStatusRegistry.has(key))) {
+      const watches = await this.getOverlayStore().listAllActiveThreadPrStatusWatches();
+      for (const watch of watches) {
+        if (!prKeys.includes(watch.prKey) || this.prStatusRegistry.has(watch.prKey)) continue;
+        const overlay = await this.getOverlayStore().getThreadOverlayState(watch);
+        const fetchedAt = overlay?.prsFetchedAt ?? 0;
+        const pr = this.canonicalizePrs(overlay?.prs ?? []).find((row) => getPrStatusKey(row) === watch.prKey);
+        if (pr && (!fallbacks.has(watch.prKey) || fetchedAt > fallbacks.get(watch.prKey)!.fetchedAt)) {
+          fallbacks.set(watch.prKey, { pr, fetchedAt });
+        }
+      }
+    }
     for (const prKey of prKeys) {
-      const pr = this.prStatusRegistry.get(prKey)?.pr;
-      if (!pr || !isTerminalPullRequest(pr)) continue;
-      const dispatched = await this.getPrStatusWatchCoordinator()
-        .handleTerminalSnapshot(pr, this.nextPrObservationTimestamp());
+      const cached = this.prStatusRegistry.get(prKey) ?? fallbacks.get(prKey);
+      if (!cached || !isTerminalPullRequest(cached.pr)) continue;
+      const dispatched = await coordinator.handleTerminalSnapshot(cached.pr, cached.fetchedAt, { fromSavedObservation: true });
       if (dispatched > 0) {
         appServerLog.info("pr terminal watch completed", {
           prKey,

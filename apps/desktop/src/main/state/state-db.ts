@@ -2439,7 +2439,7 @@ export class StateDb {
       this.db
         .prepare(
           `DELETE FROM pr_status_watches
-           WHERE status NOT IN ('watching', 'dispatching')
+           WHERE status NOT IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
              AND updated_at < ?`,
         )
         .run(now - PR_STATUS_WATCH_HISTORY_RETENTION_MS);

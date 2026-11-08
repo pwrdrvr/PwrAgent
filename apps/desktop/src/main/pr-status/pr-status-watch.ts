@@ -145,15 +145,18 @@ export class PrStatusWatchCoordinator {
   async handleTerminalSnapshot(
     pr: PrSummary,
     observedAt: number,
+    options: { fromSavedObservation?: boolean; pendingOnly?: boolean } = {},
   ): Promise<number> {
     if (this.options.isBackgroundPollingEnabled?.() === false) return 0;
     const outcome = terminalOutcomeOf(pr);
     if (!outcome) return 0;
     await this.options.prepareClaims?.();
     const now = this.now();
+    const retired = options.pendingOnly ? []
+      : await this.options.store.observeThreadPrTerminalWatches({ pr, observedAt, outcome, now });
+    await this.notifyWatchesChanged(retired);
     const claimed = await this.options.store.claimThreadPrTerminalWatches({
       prKey: buildPullRequestStatusKey(pr),
-      outcome,
       now,
       ownerId: this.ownerId,
       leaseExpiresAt: now + PR_STATUS_WATCH_LEASE_MS,
@@ -183,20 +186,27 @@ export class PrStatusWatchCoordinator {
       this.startLeaseHeartbeat(claim.watch.watchId)
     );
     try {
-      const details = await this.resolveTerminalDetails(pr);
-      // Each thread's sandbox cleanup can wait on a remote MCP, so prepare
-      // every wake at once rather than one thread after another.
-      const extraLines = details
-        ? await Promise.all(claims.map((claim) => this.prepareTerminalWake(claim, pr)))
-        : [];
+      const detailReads = new Map<string, Promise<PullRequestTerminalDetails | undefined>>();
+      const wakes = await Promise.all(claims.map(async (claim) => {
+        const observation = claim.terminalObservation ?? { pr, observedAt };
+        const key = JSON.stringify(observation);
+        let read = detailReads.get(key);
+        if (!read) {
+          const newlyObserved = retired.some((thread) =>
+            thread.backend === claim.watch.backend && thread.threadId === claim.watch.threadId
+          );
+          read = options.fromSavedObservation || !newlyObserved
+            ? Promise.resolve(fallbackTerminalDetails(observation.pr, "Using the saved terminal observation."))
+            : this.resolveTerminalDetails(observation.pr);
+          detailReads.set(key, read);
+        }
+        const details = await read;
+        const extraLines = details ? await this.prepareTerminalWake(claim, observation.pr) : [];
+        return { observation, details, extraLines };
+      }));
       for (const [index, claim] of claims.entries()) {
-        await this.dispatchTerminalClaim(
-          claim,
-          pr,
-          details,
-          observedAt,
-          extraLines[index] ?? [],
-        );
+        const { observation, details, extraLines } = wakes[index]!;
+        await this.dispatchTerminalClaim(claim, observation.pr, details, observation.observedAt, extraLines);
       }
     } finally {
       for (const stop of stopHeartbeats) stop();
