@@ -2,8 +2,7 @@ import { setGitCommandResolver, setManagedGitSelectionResolver } from "../git-co
 import { codexAuthState } from "../codex-auth-state";
 import { app, safeStorage } from "electron";
 import { DesktopSettingsService } from "./desktop-settings-service";
-import { DbBackedSafeStorageSecretStore } from "../state/secret-store-sqlite";
-import { getAppStateDb, getAppStateMode } from "../state/app-state";
+import { createDesktopSecretStorage, getAppStateMode } from "../storage/desktop-settings-storage";
 import { broadcastAppearanceChange } from "../appearance-broadcast";
 import { syncThemedDockIcon } from "../themed-dock-icon";
 import { resolveBootstrapProfilePath } from "../profile";
@@ -63,7 +62,7 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       app.isPackaged,
     )
       ? new MemoryDesktopSecretStore()
-      : new DbBackedSafeStorageSecretStore(safeStorage, getAppStateDb());
+      : createDesktopSecretStorage(safeStorage);
     desktopSettingsService = new DesktopSettingsService({
       defaultDeveloperMode: app.isPackaged === true ? false : true,
       configStore,
