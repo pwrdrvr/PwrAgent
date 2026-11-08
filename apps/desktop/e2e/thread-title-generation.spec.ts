@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
 const PROMPT =
   "Run `npm view dive` - You'll need to ask to leave the network sandbox";
@@ -157,6 +158,14 @@ test("applies a generated title even when the latest title lookup has not caught
         threadId: "thread-title",
         name: "Dive package lookup",
       });
+
+    await app.window.evaluate(async () => {
+      await (window as unknown as { pwragent: DesktopApi }).pwragent.renameThread!({
+        backend: "codex", threadId: "thread-title", name: "Operator fixture title",
+      });
+    });
+    await expect(app.window.getByRole("heading", { level: 2, name: "Operator fixture title", exact: true })).toBeVisible();
+    expect(await app.getLastRenameThread()).toEqual({ threadId: "thread-title", name: "Operator fixture title" });
   } finally {
     await app.close();
     await fixture.cleanup();
