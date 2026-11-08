@@ -17006,6 +17006,7 @@ export class DesktopBackendRegistry {
         this.codexClient.listThreads({ archived, enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true }, { callerReason: "auto-archive" }),
         this.codexClient.listNativeSubAgentThreads!({ all: true, archived }, { callerReason: "auto-archive" }),
         this.listAllInstalledAcpThreads(undefined, archived),
+        this.claudeBackend.listThreads({ archived, requireComplete: true }),
       ]);
       return lists.flat().map((thread) => ({ ...thread, archivedAt: archived ? thread.archivedAt ?? 1 : undefined }));
     }));
@@ -17025,6 +17026,11 @@ export class DesktopBackendRegistry {
       observeArchives: async (threads, now) => await this.observeArchivedThreads(
         threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), now),
       confirmAbsent: async (state) => {
+        if (state.backend === "claude") {
+          const absent = await this.claudeBackend.confirmThreadAbsent(state.threadId);
+          if (absent) await deleteThreadAssets(state);
+          return absent;
+        }
         if (isAcpBackendId(state.backend)) {
           const absent = !this.acpBackend.getSession(state.backend, state.threadId);
           if (absent) await deleteThreadAssets(state);
@@ -17095,6 +17101,8 @@ export class DesktopBackendRegistry {
           this.acpBackend.deleteStoredSession(backend, threadId);
           await this.emit({ backend, notification: { method: "thread/deleted", params: { threadId } } });
         });
+      } else if (root.source === "claude") {
+        await run(async (threadId) => await this.claudeBackend.deleteThread(threadId));
       } else {
         await this.withCodexThreadClient(root.id, async (client) => {
           if (!client.deleteThread) throw new Error("This provider does not support permanent thread deletion.");

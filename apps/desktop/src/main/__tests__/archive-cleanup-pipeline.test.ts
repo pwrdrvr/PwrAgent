@@ -127,6 +127,9 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
   // Keep this fake-timer harness independent of filesystem session discovery.
   const claudeStore = new ClaudeSessionStore("/contrived/claude");
   vi.spyOn(claudeStore, "list").mockResolvedValue([]);
+  // Reads and writes below are contrived, so no filesystem admission is needed.
+  // Real-store concurrency tests exercise the shared-profile mutation lock.
+  vi.spyOn(claudeStore, "withMutation").mockImplementation(async (_id, work) => await work());
   const registry = new DesktopBackendRegistry({ codexClient: client as never, overlayStore: store as never,
     claudeBackendOptions: { store: claudeStore },
     archiveCleanupCheckpointStore: checkpoint, runtimeInstanceId: "cleanup-fixture", resolveLiveProfileRuntimeInstanceIds: () => ["cleanup-fixture"],
