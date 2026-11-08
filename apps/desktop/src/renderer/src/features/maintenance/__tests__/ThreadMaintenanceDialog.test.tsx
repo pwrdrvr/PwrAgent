@@ -222,7 +222,6 @@ describe("ThreadMaintenanceDialog", () => {
       ],
       removeCheckouts: [{ backend: "codex", threadId: "a-1", worktreePath: "/home/.pwragent/worktrees/q8d2/kiln-cli" }],
       trashCheckouts: [],
-      removeUnreferenced: [],
       removeEmptyFolders: true,
       hibernate: [{ backend: "codex", threadId: "h-changes" }, { backend: "codex", threadId: "h-clean" }],
     });
@@ -541,23 +540,20 @@ describe("ThreadMaintenanceDialog", () => {
     expect(onOpenThread).toHaveBeenCalledWith({ backend: "codex", threadId: "t-changes" });
   });
 
-  it("shows checkouts no thread refers to as their own unselected group", async () => {
+  it("never offers a checkout no thread refers to, even from an older owner's scan", async () => {
     const scan = fixtureScan();
     scan.checkouts.items.push({ kind: "unreferenced", worktreePath: "/home/.pwragent/worktrees/z9/kiln-old",
-      workspace: { kind: "changes", files: 2, bytes: 4_000 } });
+      workspace: { kind: "changes", files: 2, bytes: 4_000 }, space: { allocatedBytes: 40 * 1024 ** 3 } });
     const { api } = fixtureApi({ scanThreadMaintenance: vi.fn(async () => scan) } as Partial<DesktopApi>);
     render(<ThreadMaintenanceDialog desktopApi={api} onClose={vi.fn()} />);
     const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
     fireEvent.click(within(dialog).getByRole("radio", { name: "Archived checkouts" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
-    const group = await within(dialog).findByRole("region", { name: "No thread" });
-    const checkbox = within(group).getByRole("checkbox", { name: "Remove /home/.pwragent/worktrees/z9/kiln-old" });
-    expect(checkbox).not.toBeChecked();
-    fireEvent.click(checkbox);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Remove 2 and finish" }));
-    await waitFor(() => expect(api.applyThreadMaintenance).toHaveBeenCalledOnce());
-    expect(vi.mocked(api.applyThreadMaintenance!).mock.calls[0]![0].removeUnreferenced)
-      .toEqual([{ worktreePath: "/home/.pwragent/worktrees/z9/kiln-old" }]);
+    await within(dialog).findByRole("button", { name: "Remove 1 and finish" });
+    expect(within(dialog).queryByRole("region", { name: "No thread" })).toBeNull();
+    expect(dialog).not.toHaveTextContent("/home/.pwragent/worktrees/z9/kiln-old");
+    expect(dialog).not.toHaveTextContent(/no thread/i);
+    expect(within(dialog).queryByRole("checkbox", { name: /kiln-old/ })).toBeNull();
   });
 
   it("runs only the archived checkouts step from its tab", async () => {
@@ -622,7 +618,7 @@ describe("ThreadMaintenanceDialog", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Hibernate 1 checkout" }));
     await waitFor(() => expect(api.applyThreadMaintenance).toHaveBeenCalledOnce());
     expect(vi.mocked(api.applyThreadMaintenance!).mock.calls[0]![0]).toEqual({
-      scanId: "scan-1", archive: [], removeCheckouts: [], trashCheckouts: [], removeUnreferenced: [],
+      scanId: "scan-1", archive: [], removeCheckouts: [], trashCheckouts: [],
       removeEmptyFolders: false, hibernate: [{ backend: "codex", threadId: "h-changes" }],
     });
     expect(onClose).not.toHaveBeenCalled();
@@ -679,16 +675,24 @@ describe("thread maintenance selection", () => {
     expect(request.removeCheckouts).toHaveLength(1);
   });
 
-  it("never selects a checkout no thread refers to until the operator does", () => {
+  // Property: a checkout no thread refers to never becomes a removal
+  // request, whatever the selection holds, including one restored from an
+  // older scan that still names its path.
+  it("never sends a removal for a checkout no thread refers to", () => {
     const scan = fixtureScan();
-    scan.checkouts.items.push({ kind: "unreferenced", worktreePath: "/home/.pwragent/worktrees/z9/kiln-old", workspace: { kind: "clean" } });
-    const selection = defaultSelection(scan);
-    expect(buildApplyRequest(scan, selection, "combined").removeUnreferenced).toEqual([]);
-    selection.checkouts.add("/home/.pwragent/worktrees/z9/kiln-old");
-    const request = buildApplyRequest(scan, selection, "checkouts");
-    expect(request.removeUnreferenced).toEqual([{ worktreePath: "/home/.pwragent/worktrees/z9/kiln-old" }]);
-    expect(request.removeCheckouts.map((item) => item.worktreePath)).not.toContain("/home/.pwragent/worktrees/z9/kiln-old");
-    expect(buildApplyRequest(scan, selection, "threads").removeUnreferenced).toEqual([]);
+    const orphans = ["/home/.pwragent/worktrees/z9/kiln-old", "/home/.codex/worktrees/y1/harbor-web"];
+    for (const worktreePath of orphans) {
+      scan.checkouts.items.push({ kind: "unreferenced", worktreePath, workspace: { kind: "clean" } });
+    }
+    const paths = scan.checkouts.items.map((item) => item.worktreePath);
+    const modes = ["combined", "threads", "hibernate", "checkouts"] as const;
+    fc.assert(fc.property(fc.constantFrom(...modes), fc.subarray(paths), fc.boolean(), (mode, chosen, emptyFolders) => {
+      const selection = { ...defaultSelection(scan), checkouts: new Set(chosen), emptyFolders };
+      const request = buildApplyRequest(scan, selection, mode);
+      expect(request).not.toHaveProperty("removeUnreferenced");
+      const sent = JSON.stringify(request);
+      for (const orphan of orphans) expect(sent).not.toContain(orphan);
+    }), { numRuns: 300 });
   });
 
   it("sends no checkout work from the idle threads tab", () => {
@@ -743,7 +747,7 @@ describe("thread maintenance selection", () => {
           threads: request.archive.length,
           hibernate: request.hibernate?.length ?? 0,
           checkouts: request.removeCheckouts.length + request.trashCheckouts.length
-            + (request.removeUnreferenced?.length ?? 0) + (request.removeEmptyFolders ? 1 : 0),
+            + (request.removeEmptyFolders ? 1 : 0),
         };
         for (const [step, count] of Object.entries(fields)) {
           if (!plan[step as ThreadMaintenanceScanStep]) expect(count, `unticked ${step} sent work`).toBe(0);
@@ -773,7 +777,7 @@ describe("thread maintenance selection", () => {
           threads: request.archive.length,
           hibernate: request.hibernate?.length ?? 0,
           checkouts: request.removeCheckouts.length + request.trashCheckouts.length
-            + (request.removeUnreferenced?.length ?? 0) + (request.removeEmptyFolders ? 1 : 0),
+            + (request.removeEmptyFolders ? 1 : 0),
         };
         for (const [step, count] of Object.entries(fields)) {
           if (!runs(step)) expect(count, `${mode} sent ${step} work`).toBe(0);

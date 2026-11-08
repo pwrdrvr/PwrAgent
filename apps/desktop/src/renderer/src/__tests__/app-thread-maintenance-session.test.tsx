@@ -27,7 +27,11 @@ function scan(): ThreadMaintenanceScan {
     rules: { mode: "count", keepPerProject: 20, inactivityDays: 7, rebuildableOutputIsClean: true },
     spaceSource: "filesystem",
     threads: { checked: 0, projects: [], kept: {} },
-    checkouts: { items: [], kept: {}, emptyFolders: 0 },
+    checkouts: { items: [], kept: {}, emptyFolders: 0, buildOutputs: [
+      { kind: "cargo", checkoutPath: "/home/.pwragent/worktrees/m3x9/kiln", outputPath: "/home/.pwragent/worktrees/m3x9/kiln/target/debug",
+        manifestPath: "/home/.pwragent/worktrees/m3x9/kiln/Cargo.toml", space: { allocatedBytes: 9 * GB },
+        threads: [{ backend: "codex", threadId: "t-kiln", title: "Port the renderer to Rust" }] },
+    ] },
     hibernate: {
       idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: false, checked: 2, notIdleYet: 0,
       kept: { "Watching a PR": 1 },
@@ -177,6 +181,27 @@ describe("thread maintenance session in App", () => {
     const back = await screen.findByRole("dialog", { name: "Thread maintenance" });
     expect(within(back).getByRole("region", { name: "Kept checkouts" })).toBeInTheDocument();
     expect(within(back).getByRole("checkbox", { name: /Tidy the README/ })).toBeChecked();
+    expect(api.scanThreadMaintenance).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a picked build output through Open thread from its row and File → Thread Maintenance…", async () => {
+    const api = installDesktopApi();
+    render(<App />);
+    await api.launch();
+    const shown = await screen.findByRole("dialog", { name: "Thread maintenance" });
+    fireEvent.click(within(shown).getByRole("radio", { name: "Archived checkouts" }));
+    fireEvent.click(within(shown).getByRole("button", { name: "Scan" }));
+    await api.finishScan();
+    const outputs = await within(shown).findByRole("region", { name: "Build output" });
+    fireEvent.click(within(outputs).getByRole("checkbox", { name: "Clean /home/.pwragent/worktrees/m3x9/kiln/target/debug" }));
+    fireEvent.click(within(outputs).getByRole("button", { name: "Open thread Port the renderer to Rust" }));
+    expect(dialog()).toBeNull();
+    expect(notice()).toHaveTextContent("Review ready");
+
+    await api.launch();
+    const back = await screen.findByRole("dialog", { name: "Thread maintenance" });
+    expect(within(within(back).getByRole("region", { name: "Build output" }))
+      .getByRole("checkbox", { name: "Clean /home/.pwragent/worktrees/m3x9/kiln/target/debug" })).toBeChecked();
     expect(api.scanThreadMaintenance).toHaveBeenCalledOnce();
   });
 

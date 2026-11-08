@@ -125,8 +125,16 @@ export function buildOutputCoveredBy(
   return undefined;
 }
 
-/** Selected build outputs the request sends: chosen, in a checkouts run,
- * and not inside a checkout the same request removes. */
+/** Whether the scan named a thread that uses this output's checkout. Output
+ * with no identified thread is never offered: a checkout nobody is known to
+ * use is not this review's to clean. */
+export function buildOutputOwned(output: Pick<ThreadMaintenanceBuildOutput, "threads">): boolean {
+  return (output.threads?.length ?? 0) > 0;
+}
+
+/** Selected build outputs the request sends: chosen, owned by an identified
+ * thread, in a checkouts run, and not inside a checkout the same request
+ * removes. */
 export function buildOutputsToClean(
   scan: ThreadMaintenanceScan,
   selection: ThreadMaintenanceSelection,
@@ -135,7 +143,7 @@ export function buildOutputsToClean(
   if (!stepRuns(steps, "checkouts")) return [];
   const seen = new Set<string>();
   return (scan.checkouts.buildOutputs ?? []).filter((output) => {
-    if (!selection.buildOutputs?.has(output.outputPath) || seen.has(output.outputPath)) return false;
+    if (!buildOutputOwned(output) || !selection.buildOutputs?.has(output.outputPath) || seen.has(output.outputPath)) return false;
     seen.add(output.outputPath);
     return !buildOutputCoveredBy(scan, selection, steps, output);
   });
@@ -161,6 +169,8 @@ export function buildApplyRequest(
     })
     : [];
   const chosen = (item: ThreadMaintenanceArchivedCheckout) => runCheckouts && selection.checkouts.has(item.worktreePath);
+  // A checkout no thread refers to is never sent, even when a selection
+  // restored from an older scan still holds its path.
   const owned = scan.checkouts.items.filter((item) => item.kind !== "unreferenced");
   const outputs = buildOutputsToClean(scan, selection, steps).map(({ outputPath }) => ({ outputPath }));
   return {
@@ -169,8 +179,6 @@ export function buildApplyRequest(
     removeCheckouts: owned.filter((item) => item.kind === "removable" && chosen(item))
       .map(({ backend, threadId, worktreePath }) => ({ backend, threadId, worktreePath })),
     trashCheckouts: owned.filter((item) => item.kind === "repositoryGone" && chosen(item))
-      .map(({ worktreePath }) => ({ worktreePath })),
-    removeUnreferenced: scan.checkouts.items.filter((item) => item.kind === "unreferenced" && chosen(item))
       .map(({ worktreePath }) => ({ worktreePath })),
     removeEmptyFolders: runCheckouts && selection.emptyFolders,
     hibernate: runHibernate
@@ -292,6 +300,29 @@ export function allocationTotal(
   }
   if (!measured) return undefined;
   return { bytes, measured, lowerBound: lowerBound || measured < rows };
+}
+
+const BUILD_OUTPUT_TYPES: Record<ThreadMaintenanceBuildOutput["kind"], string> = { cargo: "Cargo" };
+
+/** The detected build tool's name, such as "Cargo". */
+export function buildOutputType(kind: ThreadMaintenanceBuildOutput["kind"]): string {
+  return BUILD_OUTPUT_TYPES[kind] ?? kind;
+}
+
+/** "Cargo output · 9 GB" for each detected type inside an owned checkout.
+ * A description only: it never makes a checkout eligible or changes which
+ * rows a step offers. */
+export function rebuildableOutputLabels(output: ThreadMaintenanceSpace["rebuildableOutput"]): string[] {
+  const kinds = new Map<ThreadMaintenanceBuildOutput["kind"], { space?: ThreadMaintenanceSpace }[]>();
+  for (const item of output ?? []) {
+    const rows = kinds.get(item.kind) ?? [];
+    rows.push({ space: item.allocatedBytes === undefined ? undefined : { allocatedBytes: item.allocatedBytes, lowerBound: item.lowerBound } });
+    kinds.set(item.kind, rows);
+  }
+  return [...kinds].map(([kind, rows]) => {
+    const total = allocationTotal(rows);
+    return `${buildOutputType(kind)} output${total ? ` · ${formatAllocation(total)}` : ""}`;
+  });
 }
 
 /** "≥ 12 GB" for a lower bound. */

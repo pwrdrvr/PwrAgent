@@ -117,8 +117,8 @@ describe("kept checkouts a person can act on", () => {
     expect(within(section).queryByRole("checkbox")).toBeNull();
   });
 
-  it("says Cargo build output in a kept checkout is reviewed on its own", async () => {
+  it("says Cargo output in a kept checkout is reviewed on its own", async () => {
     const { section } = await openReview();
-    expect(section).toHaveTextContent("Cargo build output inside a kept checkout is reviewed on its own, in the Archived checkouts step.");
+    expect(section).toHaveTextContent("Cargo output inside a kept checkout is reviewed on its own, in the Archived checkouts step.");
   });
 });

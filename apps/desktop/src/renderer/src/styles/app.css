@@ -54337,6 +54337,17 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   overflow-wrap: anywhere;
 }
 
+/* "Cargo output · 9 GB": describes an owned checkout; never a control. */
+.thread-maintenance__output-class {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
 .thread-maintenance__kept-meta {
   display: flex;
   flex-wrap: wrap;
