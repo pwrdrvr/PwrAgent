@@ -3464,13 +3464,16 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { level: 3, name: "Linked projects" })
     ).toBeInTheDocument();
+    expect(
+      within(context).getByText("/Users/fixture-user/.codex/worktrees/0f38/PwrAgent")
+    ).toBeVisible();
     fireEvent.click(
       within(context).getByRole("button", { name: "Copy path for PwrAgent" })
     );
     fireEvent.click(
       within(context).getByRole("button", { name: "Copy path for worktree PwrAgent" })
     );
-    expect(copyText).toHaveBeenNthCalledWith(1, "/Users/fixture-user/pwrdrvr/PwrAgent");
+    expect(copyText).toHaveBeenNthCalledWith(1, "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent");
     expect(copyText).toHaveBeenNthCalledWith(2, "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent");
     expect(screen.getAllByText("Codex app server").length).toBeGreaterThan(0);
     fireEvent.click(within(context).getByRole("tab", { name: "Thread info" }));

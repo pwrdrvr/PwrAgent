@@ -4325,7 +4325,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByText(REVEALED_SIGNAL)).not.toBeInTheDocument();
   });
 
-  it("shows path tooltips on linked directory labels and kind badges", () => {
+  it("shows checkout path tooltips on linked directory labels and path rows", () => {
     renderPanel({
       activeTab: "projects",
       pinned: true,
@@ -4352,7 +4352,7 @@ describe("ThreadContextPanel", () => {
 
     fireEvent.mouseEnter(screen.getByLabelText("Path for PwrAgent"));
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "/Users/fixture-user/github/PwrAgent",
+      "launchpad-pwragent-main-molpnvyk",
     );
 
     fireEvent.mouseLeave(screen.getByLabelText("Path for PwrAgent"));
