@@ -28,6 +28,7 @@ import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
@@ -376,6 +377,59 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally {
       await outpost?.close();
       await desktop.close();
+    }
+  }, 120_000);
+
+  it("retires rejected desktop preparations before subsequent starts agree with the real Outpost", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      const hosts = [desktop, outpost];
+      const identities = await Promise.all(hosts.map((host) => host.client.startThread({
+        backend: "codex", cwd: host.workspace, executionMode: "auto",
+      })));
+      await Promise.all(hosts.map(settle));
+      const register = vi.spyOn(desktopOwner.registry as unknown as {
+        registerPendingThreadMessageContext: () => Promise<string | undefined>;
+      }, "registerPendingThreadMessageContext");
+      for (const failures of fc.sample(fc.integer({ min: 1, max: 3 }), 5)) {
+        const before = OwnerConformanceCodexTransport.requests.filter((request) => request.method === "turn/start").length;
+        for (let i = 0; i < failures; i += 1) {
+          const offset = desktop.events.length;
+          register.mockRejectedValueOnce(new Error("Fixture context preparation rejected"));
+          const { writes } = await measureSqliteWrites(async () => {
+            await expect(desktop.client.startTurn({ backend: "codex", threadId: identities[0].threadId,
+              input: [{ type: "text", text: "slow" }] })).rejects.toThrow("Fixture context preparation rejected");
+          });
+          // Thread creation and its asynchronous metadata effects are setup.
+          // Rejected preparation and reservation retirement write no SQLite.
+          expect(writes, JSON.stringify(writes)).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0 });
+          expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "turn/start")).toHaveLength(before);
+          const pendingTurnId = `pending:${identities[0].threadId}`;
+          const lifecycle = desktop.events.slice(offset).filter((event) => {
+            const notification = event.notification;
+            return (notification.method === "turn/started" || notification.method === "turn/failed")
+              && notification.params.threadId === identities[0].threadId
+              && notification.params.turnId === pendingTurnId;
+          });
+          expect(lifecycle.map((event) => event.notification.method)).toEqual([]);
+        }
+        const turns = await Promise.all(hosts.map((host, index) => host.client.startTurn({
+          backend: "codex", threadId: identities[index].threadId, input: [{ type: "text", text: "slow" }],
+        })));
+        expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "turn/start")).toHaveLength(before + 1);
+        for (const [index, turn] of turns.entries()) expect(turn).toMatchObject({
+          backend: "codex", threadId: identities[index].threadId, turnId: turns[0].turnId,
+        });
+        await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
+        await Promise.all(hosts.map(settle));
+      }
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+      vi.unstubAllEnvs();
     }
   }, 120_000);
 
