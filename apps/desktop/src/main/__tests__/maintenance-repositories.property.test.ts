@@ -53,7 +53,7 @@ describe("maintenance repository coverage", () => {
     const repositories = await resolveMaintenanceRepositories([path.join(primary, "source"), outside, outside, path.join(root, "gone")]);
     expect(new Set(repositories)).toEqual(new Set([primary, sibling]));
     const registration = await git(primary, "worktree", "list", "--porcelain", "-z");
-    expect(registeredWorktreePaths(registration.stdout)).toContain(outside);
+    expect(registeredWorktreePaths(registration.stdout).map((value) => path.normalize(value))).toContain(outside);
   });
 
   // The model unions PwrAgent-owned metadata across profiles. Reading the
